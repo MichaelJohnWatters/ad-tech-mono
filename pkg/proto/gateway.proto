@@ -1,0 +1,222 @@
+syntax = "proto3";
+
+package adtech.gateway;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// AccountService handles authentication and account management.
+service AccountService {
+  rpc CreateAccount(Account) returns (AccountResponse);
+  rpc Authenticate(Credentials) returns (Token);
+  rpc RefreshToken(Token) returns (Token);
+  rpc Authorize(AuthRequest) returns (AuthResult);
+  rpc GetOnboardingStatus(AccountID) returns (OnboardingStatus);
+  rpc CompleteOnboardingStep(OnboardingStep) returns (OnboardingStatus);
+}
+
+// AuditService provides access to the immutable audit trail.
+service AuditService {
+  rpc QueryAuditLog(AuditFilter) returns (AuditEventList);
+  rpc GetResourceHistory(ResourceRequest) returns (AuditEventList);
+  rpc GetUserActivity(UserRequest) returns (AuditEventList);
+  rpc ExportAuditLog(ExportFilter) returns (ExportResponse);
+}
+
+// IdentityService manages the identity graph and privacy operations.
+service IdentityService {
+  rpc GetIdentityGraph(UserRequest) returns (IdentityGraph);
+  rpc OptOut(OptOutRequest) returns (OptOutResponse);
+  rpc RequestDeletion(DeletionRequest) returns (DeletionResponse);
+}
+
+// ConfigService manages live runtime configuration.
+service ConfigService {
+  rpc GetConfig(ConfigFilter) returns (ConfigList);
+  rpc UpdateConfig(ConfigUpdate) returns (ConfigResponse);
+  rpc ResetConfig(ConfigKey) returns (ConfigResponse);
+  rpc GetConfigHistory(ConfigKey) returns (ConfigHistoryList);
+}
+
+// --- Account Messages ---
+
+message AccountID { string id = 1; }
+
+message Account {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  string type = 4;      // advertiser, publisher, agency, staff, admin
+  string currency = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message AccountResponse { Account account = 1; }
+
+message Credentials {
+  string email = 1;
+  string password = 2;
+}
+
+message Token {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+  string account_id = 4;
+  string account_type = 5;
+  string role = 6;
+  repeated string permissions = 7;
+  repeated string managed_accounts = 8; // for agency accounts
+}
+
+message AuthRequest {
+  string token = 1;
+  string permission = 2;
+}
+
+message AuthResult {
+  bool allowed = 1;
+  string reason = 2;
+}
+
+message OnboardingStatus {
+  string account_id = 1;
+  int32 current_step = 2;
+  int32 total_steps = 3;
+  repeated string completed_steps = 4;
+}
+
+message OnboardingStep {
+  string account_id = 1;
+  string step = 2;
+}
+
+// --- Audit Messages ---
+
+message AuditFilter {
+  string account_id = 1;
+  string resource_type = 2;
+  string resource_id = 3;
+  string actor_id = 4;
+  string action = 5;
+  adtech.common.DateRange date_range = 6;
+  adtech.common.Pagination pagination = 7;
+}
+
+message AuditEventList {
+  repeated AuditEvent events = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message AuditEvent {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string actor_id = 3;
+  string actor_ip = 4;
+  string action = 5;
+  string resource_type = 6;
+  string resource_id = 7;
+  repeated Change changes = 8;
+  string reason = 9;
+}
+
+message Change {
+  string field = 1;
+  string old_value = 2;
+  string new_value = 3;
+}
+
+message ResourceRequest {
+  string resource_type = 1;
+  string resource_id = 2;
+}
+
+message UserRequest { string user_id = 1; }
+
+message ExportFilter {
+  string account_id = 1;
+  adtech.common.DateRange date_range = 2;
+  string format = 3; // csv, json
+}
+
+message ExportResponse {
+  bytes data = 1;
+  string content_type = 2;
+}
+
+// --- Identity Messages ---
+
+message IdentityGraph {
+  string user_id = 1;
+  repeated IdentityEdge edges = 2;
+}
+
+message IdentityEdge {
+  string linked_id = 1;
+  string source = 2;    // publisher, hashed_email, device, probabilistic
+  string link_type = 3;  // cross_publisher, cross_device, crm_match
+  double confidence = 4;
+}
+
+message OptOutRequest {
+  string user_id = 1;
+  int32 level = 2;  // 1=no_personalisation, 2=no_tracking
+  string source = 3;
+}
+
+message OptOutResponse { bool success = 1; }
+
+message DeletionRequest {
+  string user_id = 1;
+  string verification = 2; // email_confirmed, gdpr_request, ccpa_request
+}
+
+message DeletionResponse {
+  string deletion_id = 1;
+  string status = 2; // queued, processing, completed
+}
+
+// --- Config Messages ---
+
+message ConfigFilter {
+  string service = 1; // filter by service name, or empty for all
+}
+
+message ConfigList {
+  repeated ConfigEntry entries = 1;
+}
+
+message ConfigEntry {
+  string key = 1;
+  string value = 2;       // JSON value
+  string service = 3;
+  string description = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string updated_by = 6;
+}
+
+message ConfigUpdate {
+  string key = 1;
+  string value = 2;
+}
+
+message ConfigResponse {
+  ConfigEntry entry = 1;
+}
+
+message ConfigKey { string key = 1; }
+
+message ConfigHistoryList {
+  repeated ConfigHistoryEntry entries = 1;
+}
+
+message ConfigHistoryEntry {
+  string key = 1;
+  string old_value = 2;
+  string new_value = 3;
+  string changed_by = 4;
+  google.protobuf.Timestamp changed_at = 5;
+}

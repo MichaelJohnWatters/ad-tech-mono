@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package adtech.events;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// Events published to NATS JetStream.
+// schema_version is always field 1 in every message.
+
+// AuctionWinEvent is the SINGLE SOURCE OF TRUTH for cost.
+// All billing, budget, and reporting derive from this event.
+message AuctionWinEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string auction_id = 3;
+  string strategy_type = 4;     // single_winner, pod, relevance_weighted, batch, timeslot
+  string winner_dsp_id = 5;
+  string campaign_id = 6;       // line_item_id
+  string insertion_order_id = 7;
+  string creative_id = 8;
+  string placement_id = 9;
+  string publisher_id = 10;
+  double clearing_price = 11;
+  string clearing_currency = 12;
+  double clearing_price_usd = 13;
+  string bid_model = 14;        // cpm, cpc, cpa, vcpm, cpcv, cpi
+  int32 position = 15;          // for retail (1,2,3) or pod slot or timeslot
+  int32 duration_seconds = 16;  // for video/audio ads
+  string channel = 17;          // display, video, audio, dooh, retail, ingame
+  google.protobuf.Timestamp timestamp = 18;
+}
+
+// AuctionCompleteEvent records the full auction for analytics.
+message AuctionCompleteEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string auction_id = 3;
+  string placement_id = 4;
+  string strategy_type = 5;
+  int32 num_bids = 6;
+  double winning_bid = 7;
+  double clearing_price = 8;
+  int32 duration_ms = 9;
+  string channel = 10;
+  repeated BidSummary bids = 11;
+  google.protobuf.Timestamp timestamp = 12;
+}
+
+message BidSummary {
+  string dsp_id = 1;
+  string campaign_id = 2;
+  double bid_price = 3;
+  bool won = 4;
+  int32 loss_reason = 5; // 0=won, 100=below_floor, 102=outbid, 103=blocked, 104=creative_rejected, 2=timeout
+}
+
+// ImpressionEvent records an ad impression.
+message ImpressionEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string campaign_id = 3;
+  string insertion_order_id = 4;
+  string creative_id = 5;
+  string placement_id = 6;
+  string publisher_id = 7;
+  string user_id = 8;
+  string geo_country = 9;
+  string geo_region = 10;
+  string device_type = 11;
+  double cost = 12;
+  string cost_currency = 13;
+  double cost_usd = 14;
+  double fraud_score = 15;
+  google.protobuf.Timestamp timestamp = 16;
+}
+
+// ClickEvent records an ad click.
+message ClickEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string campaign_id = 3;
+  string creative_id = 4;
+  string placement_id = 5;
+  string user_id = 6;
+  string landing_url = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+// ViewabilityEvent records viewability measurement.
+message ViewabilityEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string campaign_id = 3;
+  string placement_id = 4;
+  string user_id = 5;
+  int32 duration_ms = 6;
+  int32 percent_visible = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+// ConversionEvent records a conversion (purchase, signup, etc).
+message ConversionEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string campaign_id = 3;
+  string user_id = 4;
+  string conversion_type = 5;
+  double revenue = 6;
+  string attribution_type = 7; // click_through, view_through, cross_device
+  string attributed_trace_id = 8; // trace_id of the impression/click that gets credit
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+// VideoEvent records video ad events (start, quartiles, complete, skip).
+message VideoEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string session_id = 3;
+  string campaign_id = 4;
+  string creative_id = 5;
+  string placement_id = 6;
+  string event_type = 7; // start, firstQuartile, midpoint, thirdQuartile, complete, skip, mute, pause
+  int32 duration_watched_ms = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+// AudioEvent records audio ad events.
+message AudioEvent {
+  int32 schema_version = 1;
+  string trace_id = 2;
+  string campaign_id = 3;
+  string creative_id = 4;
+  string event_type = 5; // start, firstQuartile, midpoint, thirdQuartile, complete, skip
+  int32 listen_duration_ms = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+// BudgetDepletedEvent signals a campaign has exhausted its budget.
+message BudgetDepletedEvent {
+  int32 schema_version = 1;
+  string campaign_id = 2;
+  string insertion_order_id = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// OptOutEvent signals a user opt-out (level 1 or 2).
+message OptOutEvent {
+  int32 schema_version = 1;
+  string user_id = 2;
+  int32 level = 3; // 1=no_personalisation, 2=no_tracking
+  string source = 4; // cmp, platform_page, device_setting
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// DeletionEvent requests full user data deletion (level 3).
+message DeletionEvent {
+  int32 schema_version = 1;
+  string user_id = 2;
+  string verification = 3; // email_confirmed, gdpr_request, ccpa_request
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// CampaignStateEvent records campaign lifecycle transitions.
+message CampaignStateEvent {
+  int32 schema_version = 1;
+  string campaign_id = 2;
+  string previous_state = 3;
+  string new_state = 4;
+  string triggered_by = 5; // user_id or "system"
+  google.protobuf.Timestamp timestamp = 6;
+}

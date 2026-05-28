@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package adtech.adserver;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// AdService handles creative storage, serving, and review.
+service AdService {
+  rpc ServeAd(ServeAdRequest) returns (ServeAdResponse);
+  rpc GetCreative(CreativeID) returns (Creative);
+  rpc ListCreatives(CreativeFilter) returns (CreativeList);
+  rpc UploadCreative(CreativeUpload) returns (CreativeResponse);
+  rpc UpdateCreative(CreativeUpdate) returns (CreativeResponse);
+  rpc DeleteCreative(CreativeID) returns (adtech.common.DeleteResponse);
+  rpc UpdateCreativeStatus(CreativeStatusUpdate) returns (CreativeResponse);
+}
+
+message CreativeID { string id = 1; }
+
+message ServeAdRequest {
+  string trace_id = 1;
+  string campaign_id = 2;
+  string creative_id = 3;
+  string placement_id = 4;
+  string user_id = 5;
+  double clearing_price = 6;
+  string clearing_currency = 7;
+  string auction_id = 8;
+}
+
+message ServeAdResponse {
+  string html = 1;                      // rendered creative HTML with macros substituted
+  string impression_url = 2;            // platform impression pixel URL
+  string click_url = 3;                 // platform click tracking URL
+  string viewability_url = 4;           // viewability beacon URL
+  repeated string third_party_pixels = 5; // third-party tracking pixels
+  string vast_xml = 6;                  // VAST XML (if video)
+  string daast_xml = 7;                 // DAAST XML (if audio)
+  NativeResponse native = 8;           // native ad structured data (if native)
+}
+
+message NativeResponse {
+  string title = 1;
+  string description = 2;
+  string sponsored = 3;
+  string icon_url = 4;
+  string main_image_url = 5;
+  string cta = 6;
+  string click_url = 7;
+  repeated string impression_trackers = 8;
+  repeated string click_trackers = 9;
+}
+
+message Creative {
+  string id = 1;
+  string account_id = 2;
+  string name = 3;
+  string format = 4;           // display, native, video, audio
+  int32 width = 5;
+  int32 height = 6;
+  string asset_url = 7;        // Minio/S3 URL
+  string html_content = 8;     // HTML content (for HTML creatives)
+  string review_status = 9;    // uploaded, transcoding, auto_scanning, pending_review, approved, rejected
+  string rejection_reason = 10;
+  string landing_url = 11;
+  int32 duration_seconds = 12; // for video/audio
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message CreativeUpload {
+  string account_id = 1;
+  string name = 2;
+  string format = 3;
+  int32 width = 4;
+  int32 height = 5;
+  bytes asset_data = 6;       // file content
+  string asset_filename = 7;
+  string html_content = 8;
+  string landing_url = 9;
+}
+
+message CreativeResponse { Creative creative = 1; }
+message CreativeUpdate { string id = 1; Creative creative = 2; }
+message CreativeFilter { string account_id = 1; string format = 2; string review_status = 3; adtech.common.Pagination pagination = 4; }
+message CreativeList { repeated Creative creatives = 1; adtech.common.PaginatedResult pagination = 2; }
+
+message CreativeStatusUpdate {
+  string id = 1;
+  string new_status = 2;   // approved, rejected
+  string reason = 3;       // rejection reason
+  string reviewed_by = 4;  // user_id of reviewer
+}
