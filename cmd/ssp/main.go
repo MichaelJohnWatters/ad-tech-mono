@@ -3,9 +3,7 @@
 package main
 
 import (
-	"context"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -36,19 +34,6 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	lc.OnShutdown("http-server", func(ctx context.Context) error {
-		return server.Shutdown(ctx)
-	})
-
 	slog.Info("ssp starting", "port", port)
-	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	if err := lc.Wait(30 * time.Second); err != nil {
-		slog.Error("shutdown error", "error", err)
-	}
+	lifecycle.ServeHTTP(lc, server, slog, 30*time.Second)
 }
