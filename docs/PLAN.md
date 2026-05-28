@@ -788,6 +788,7 @@ ad-tech-mono/
     dooh/             # DOOH audience estimation, proof-of-play verification
     retail/           # Product catalog sync, relevance scoring, keyword bidding, catalog creatives
     simulator/        # Programmable simulator Go library (used by tests and CLI)
+    chaos/            # Chaos testing - pod kill, network injection, latency injection, verification
     openrtb/          # OpenRTB 2.6 request/response types (pinned version) - site, app, regs, native
     currency/         # Multi-currency conversion, exchange rates, daily rate updates
     adserving/        # Macro substitution, third-party pixel piggybacking, frequency cap checks, VAST/VMAP generation
@@ -841,6 +842,9 @@ ad-tech-mono/
       replay.yaml     # Replay captured bid request sequences - regression testing
     fraud/              # Fraud detection configuration
       rules.yaml        # Fraud scoring thresholds, weights, blocklists
+    chaos/              # Chaos test scenarios
+      redis_failure.yaml
+      cascade_failure.yaml
   migrations/         # Database migrations
   k8s/
     base/               # Plain K8s manifests (deployments, services, configmaps)
@@ -10824,6 +10828,211 @@ This means **no code change that affects bidding, targeting, or scoring can merg
 | Metrics comparison | `cmd/reporting --mode=ab-compare` - collects v1 vs v2 metrics, outputs comparison |
 | CI A/B workflow | `.github/workflows/ab-test.yml` |
 | Pass criteria config | `profiles/ab-tests/{service}.yaml` - per-service pass/fail thresholds |
+
+### Chaos Testing
+
+Chaos testing proves the system handles failures gracefully in practice, not just in theory. Combined with A/B testing: "does the new code perform better AND survive failures?"
+
+#### Testing Modes
+
+| Mode | What it does | When to run |
+|---|---|---|
+| **Normal A/B** | Compare v1 vs v2 under normal conditions | Every PR with algorithm changes |
+| **Chaos A/B** | Compare v1 vs v2 while injecting failures | Before promoting to prod, nightly |
+| **Chaos regression** | Run stable code with chaos to verify resilience baseline | Nightly, after infra changes |
+
+```
+Normal A/B test:
+    Simulation (steady, 5min) -> compare v1 vs v2 -> v2 wins on metrics
+
+Chaos A/B test (same simulation + failures):
+    Simulation (steady, 5min)
+        + Kill Redis at t=60s, restore at t=90s
+        + Kill one NATS node at t=120s
+        + Add 200ms latency to DSP at t=180s
+    -> compare v1 vs v2
+    -> "v2 is faster, AND recovers from Redis failure in 8s (v1 took 15s)"
+```
+
+#### Chaos Scenarios
+
+| Scenario | What it injects | What it tests | How |
+|---|---|---|---|
+| **Pod kill** | Randomly kill a service pod | Graceful shutdown, K8s restart, zero event loss | `kubectl delete pod {random}` |
+| **Redis failure** | Kill Redis for 30s | Budget fallback to Postgres, frequency cap degradation, cache recovery via NATS replay | `kubectl delete pod redis-0` |
+| **NATS partition** | Block NATS network for 30s | Event buffering in Tracker, consumer catch-up, no data slippage | Network policy injection |
+| **Postgres standby failure** | Kill read replica | Read traffic failover to primary via PgBouncer | `kubectl delete pod postgres-standby-0` |
+| **DSP latency** | Add 200ms latency to DSP responses | Exchange timeout handling, auction completes without slow DSP | `tc qdisc add` on DSP pod |
+| **CPU throttle** | Limit a service to 10% CPU | Pacing under resource pressure, HPA response time | K8s resource limit patch |
+| **Minio/S3 failure** | Make object storage unavailable | Creative fallback/default ads served, pipeline queues backpressure | `kubectl delete pod minio-0` |
+| **Exchange channel failure** | Kill one exchange instance (e.g. video) | Other channels unaffected, traffic for that channel errors gracefully | `kubectl scale deployment exchange-video --replicas=0` |
+| **Reporting crash mid-processing** | Kill reporting pod during event consumption | Idempotent replay on restart, no double-billing, no event loss | `kubectl delete pod reporting-0` |
+| **Full infra restart** | Restart all infra (Postgres, NATS, Redis) simultaneously | Full system recovery, budget reconstruction, consumer catch-up | Script kills all infra pods |
+
+#### Pass/Fail Criteria
+
+| Metric | Normal test | Chaos test | Why different |
+|---|---|---|---|
+| Event loss | 0% | 0% | This is the whole point - zero data slippage even under failure |
+| Error rate | < 0.1% | < 5% during failure, < 0.1% after recovery | Some errors OK during failure, must recover fully |
+| Recovery time | N/A | < 30 seconds after failure ends | System must self-heal quickly |
+| Budget accuracy | Exact match | Within 0.1% | Minor drift during Redis recovery, corrected by NATS replay |
+| Impression tracking | 100% | > 99.5% during failure, 100% after NATS replay catches up | JetStream guarantees eventual delivery |
+| Double-billing | 0% | 0% | Idempotent consumers must prevent this even during chaos |
+| Latency (post-recovery) | Normal p99 | Within 20% of normal p99 within 60s of recovery | System shouldn't stay degraded |
+
+#### Chaos Profiles
+
+Like simulation profiles, chaos scenarios are configurable YAML files:
+
+```yaml
+# profiles/chaos/redis_failure.yaml
+name: "Redis Failure and Recovery"
+steps:
+  - at: 30s
+    action: kill_pod
+    target: redis-0
+    description: "Kill Redis primary"
+  - at: 60s
+    action: verify
+    check: "dsp_budget_fallback_active == true"
+    description: "Verify DSP fell back to Postgres for budgets"
+  - at: 90s
+    action: restore_pod
+    target: redis-0
+    description: "Redis comes back"
+  - at: 120s
+    action: verify
+    check: "redis_budget_recovery_completed == true"
+    description: "Verify budget recovery via NATS replay"
+  - at: 150s
+    action: verify
+    check: "all_metrics_within_normal_range == true"
+    description: "System fully recovered"
+
+pass_criteria:
+  event_loss: 0%
+  budget_accuracy: 99.9%
+  recovery_time_max: 30s
+  double_billing: 0%
+```
+
+```yaml
+# profiles/chaos/cascade_failure.yaml
+name: "Cascading Infrastructure Failure"
+steps:
+  - at: 30s
+    action: kill_pod
+    target: redis-0
+    description: "Redis fails"
+  - at: 60s
+    action: kill_pod
+    target: postgres-standby-0
+    description: "Postgres standby fails (while Redis is still down)"
+  - at: 90s
+    action: inject_latency
+    target: nats
+    latency_ms: 500
+    description: "NATS gets slow"
+  - at: 120s
+    action: restore_all
+    description: "Everything comes back"
+  - at: 180s
+    action: verify
+    check: "full_system_healthy"
+    description: "Complete recovery verified"
+
+pass_criteria:
+  event_loss: 0%
+  recovery_time_max: 60s
+```
+
+#### Running Chaos Tests
+
+**Locally (Tilt buttons):**
+
+```
+Tilt Dashboard:
+    [Kill Redis]  [Kill NATS Node]  [Add DSP Latency]  [Restore All]
+
+    Chaos status: Redis killed at 14:32:05, recovered at 14:32:35 (30s)
+    Budget recovery: completed via NATS replay (1,247 events replayed)
+    Event loss: 0%
+```
+
+**In CI (nightly):**
+
+```yaml
+# .github/workflows/chaos-test.yml
+name: Chaos Regression Test
+on:
+  schedule:
+    - cron: '0 3 * * *'  # nightly at 3am
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start k3s + deploy
+        run: make setup-ci && make deploy
+      - name: Seed data
+        run: make seed profile=standard
+      - name: Run chaos + simulation
+        run: |
+          # Start simulation in background
+          make simulate profile=steady duration=5m &
+          # Run chaos scenario
+          make chaos profile=redis_failure
+          make chaos profile=cascade_failure
+          # Wait for simulation to finish
+          wait
+      - name: Verify chaos pass criteria
+        run: make chaos-verify
+      - name: Report results
+        run: make chaos-report >> $GITHUB_STEP_SUMMARY
+```
+
+**Combined with A/B testing:**
+
+```
+make ab-test service=dsp chaos=redis_failure
+
+This runs:
+    1. Deploy stable + canary
+    2. Start simulation
+    3. At t=60s: kill Redis (chaos)
+    4. At t=90s: restore Redis
+    5. Compare v1 vs v2 metrics during AND after chaos
+    6. Report: "v2 recovered in 8s (v1 took 15s). v2 lost 0 events (v1 lost 3)."
+```
+
+#### What Chaos Validates Per Feature
+
+| Feature | What chaos proves |
+|---|---|
+| **Redis budget recovery** | NATS replay reconstructs exact budget after Redis failure |
+| **Idempotent consumers** | No double-billing after NATS redelivery during chaos |
+| **Circuit breakers** | DSP stops calling Redis when it's down, falls back to Postgres |
+| **Graceful shutdown** | Killed pods drain in-flight requests, flush buffers |
+| **NATS JetStream persistence** | Events survive consumer crashes, replayed on restart |
+| **PgBouncer failover** | Reads shift to primary when standby is killed |
+| **HPA scaling** | New pods spin up when existing pods are killed |
+| **Cache invalidation** | L1 caches rebuild correctly after Redis recovery |
+| **DuckDB single-writer** | Reporting pod restart doesn't corrupt DuckDB file |
+| **Pacing under pressure** | Budget pacing stays correct even during CPU throttle |
+
+#### Implementation
+
+| Component | Location |
+|---|---|
+| Chaos runner | `pkg/chaos/` - pod kill, network injection, latency injection, restore |
+| Chaos profiles | `profiles/chaos/*.yaml` - scenario definitions |
+| Chaos CLI | `cmd/simulator --chaos=redis_failure` - run chaos alongside simulation |
+| Chaos Tilt buttons | Tiltfile - manual chaos injection buttons |
+| Chaos verification | `pkg/chaos/verify.go` - check pass criteria after chaos run |
+| CI chaos workflow | `.github/workflows/chaos-test.yml` |
+| Chaos + A/B combo | `make ab-test service=dsp chaos=redis_failure` |
 
 ---
 
