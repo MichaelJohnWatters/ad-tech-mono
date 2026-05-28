@@ -8,6 +8,9 @@
 dev_mode = os.getenv('DEV_MODE', 'fast')
 profile = os.getenv('PROFILE', 'full')
 
+# Kill orphaned processes from previous sessions by port
+local('for port in 8080 8081 8082 8083 8084 8085; do lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null; done; sleep 1; echo "ports cleared"')
+
 # ============================================================
 # Infrastructure (always runs in K8s)
 # ============================================================
