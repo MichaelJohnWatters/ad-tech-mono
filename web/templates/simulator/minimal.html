@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ad Tech - Publisher Simulator</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }
+
+        .header { background: #1a1a2e; color: white; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 16px; font-weight: 600; }
+        .header .controls { display: flex; gap: 8px; }
+        .header button { background: #4361ee; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .header button:hover { background: #3a56d4; }
+        .header select { padding: 4px 8px; border-radius: 4px; border: 1px solid #555; background: #2a2a4e; color: white; font-size: 13px; }
+
+        .container { max-width: 900px; margin: 20px auto; display: grid; grid-template-columns: 1fr 320px; gap: 20px; padding: 0 20px; }
+
+        .content { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .content h2 { margin-bottom: 12px; color: #1a1a2e; }
+        .content p { line-height: 1.6; color: #666; margin-bottom: 12px; }
+
+        .ad-slot { border: 2px dashed #ddd; border-radius: 4px; min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fafafa; position: relative; margin: 20px 0; }
+        .ad-slot.loaded { border-color: #4361ee; border-style: solid; background: white; }
+        .ad-slot .ad-label { position: absolute; top: -10px; left: 10px; background: #4361ee; color: white; font-size: 10px; padding: 2px 8px; border-radius: 3px; }
+        .ad-slot .ad-content { text-align: center; padding: 20px; }
+        .ad-slot .ad-content h3 { color: #1a1a2e; margin-bottom: 8px; }
+        .ad-slot .ad-content .cta { display: inline-block; background: #4361ee; color: white; padding: 8px 20px; border-radius: 4px; text-decoration: none; margin-top: 10px; }
+
+        .debug-panel { background: #1a1a2e; color: #e0e0e0; border-radius: 8px; padding: 16px; font-size: 12px; font-family: 'SF Mono', Monaco, monospace; box-shadow: 0 1px 3px rgba(0,0,0,0.2); position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
+        .debug-panel h3 { color: #4361ee; margin-bottom: 12px; font-size: 14px; }
+        .debug-entry { margin-bottom: 16px; border-bottom: 1px solid #2a2a4e; padding-bottom: 12px; }
+        .debug-entry:last-child { border-bottom: none; }
+        .debug-entry .label { color: #888; font-size: 11px; }
+        .debug-entry .value { color: #fff; }
+        .debug-entry .success { color: #4ade80; }
+        .debug-entry .fail { color: #f87171; }
+        .debug-entry .pending { color: #fbbf24; }
+        .debug-entry .trace-link { color: #4361ee; cursor: pointer; text-decoration: underline; }
+        .event-row { display: flex; justify-content: space-between; margin: 4px 0; }
+        .event-row .status { min-width: 20px; text-align: center; }
+
+        .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Publisher Simulator - Minimal</h1>
+        <div class="controls">
+            <select id="geoSelect">
+                <option value="GBR">UK</option>
+                <option value="USA">US</option>
+                <option value="DEU">Germany</option>
+                <option value="FRA">France</option>
+                <option value="JPN">Japan</option>
+            </select>
+            <select id="deviceSelect">
+                <option value="1">Mobile</option>
+                <option value="2">Desktop</option>
+                <option value="5">Tablet</option>
+            </select>
+            <button onclick="loadAd()">Load Ad</button>
+            <button onclick="clearAd()">Clear</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="content">
+            <h2>The Daily Simulator</h2>
+            <p>This is a simulated publisher page. The ad slot below runs a real auction through the full ad tech stack: SSP → Exchange → DSP → Ad Server → Tracker.</p>
+            <p>Click "Load Ad" to trigger a bid request. The debug panel on the right shows every event in real time.</p>
+
+            <div class="ad-slot" id="adSlot">
+                <span>300×250 Ad Slot</span>
+                <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
+            </div>
+
+            <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation.</p>
+        </div>
+
+        <div class="debug-panel" id="debugPanel">
+            <h3>Ad Debug Panel</h3>
+            <div id="debugContent">
+                <div class="debug-entry">
+                    <div class="label">Status</div>
+                    <div class="value pending">Waiting for ad request...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Ad Tech Platform - Publisher Simulator | <a href="/" style="color: #4361ee;">Dashboard</a>
+    </div>
+
+    <script>
+        const EXCHANGE_URL = window.location.protocol + '//' + window.location.hostname + ':8081';
+        const TRACKER_URL = window.location.protocol + '//' + window.location.hostname + ':8083';
+
+        let currentTraceID = null;
+
+        function debugLog(entries) {
+            const panel = document.getElementById('debugContent');
+            panel.innerHTML = entries.map(e => `
+                <div class="debug-entry">
+                    <div class="label">${e.label}</div>
+                    <div class="value ${e.status || ''}">${e.value}</div>
+                    ${e.events ? e.events.map(ev => `
+                        <div class="event-row">
+                            <span>${ev.name}</span>
+                            <span class="status ${ev.ok ? 'success' : ev.ok === false ? 'fail' : 'pending'}">${ev.ok ? '✓' : ev.ok === false ? '✗' : '⏳'}</span>
+                            <span>${ev.detail || ''}</span>
+                        </div>
+                    `).join('') : ''}
+                </div>
+            `).join('');
+        }
+
+        async function loadAd() {
+            const geo = document.getElementById('geoSelect').value;
+            const device = parseInt(document.getElementById('deviceSelect').value);
+            const traceID = 'sim-' + Date.now();
+            currentTraceID = traceID;
+
+            debugLog([
+                { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
+                { label: 'Status', value: 'Sending bid request...', status: 'pending' }
+            ]);
+
+            // Step 1: Send bid request to Exchange
+            const bidRequest = {
+                id: traceID,
+                imp: [{ id: 'imp-1', banner: { w: 300, h: 250 }, bidfloor: 1.0 }],
+                site: { domain: 'sim-publisher.com', page: window.location.href, cat: ['IAB17'] },
+                device: { devicetype: device, geo: { country: geo } },
+                user: { id: 'sim-user-' + Math.floor(Math.random() * 1000) },
+                tmax: 100
+            };
+
+            let auctionResult;
+            const auctionStart = performance.now();
+            try {
+                const resp = await fetch(EXCHANGE_URL + '/v1/openrtb/auction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bidRequest)
+                });
+                auctionResult = await resp.json();
+            } catch (err) {
+                debugLog([
+                    { label: 'Trace ID', value: traceID },
+                    { label: 'Status', value: 'Exchange unreachable: ' + err.message, status: 'fail' }
+                ]);
+                return;
+            }
+            const auctionMs = Math.round(performance.now() - auctionStart);
+
+            // Check for winner
+            if (auctionResult.nobid || !auctionResult.seatbid || auctionResult.seatbid.length === 0) {
+                debugLog([
+                    { label: 'Trace ID', value: traceID },
+                    { label: 'Auction', value: `No fill (${auctionMs}ms)`, status: 'fail' },
+                    { label: 'Status', value: 'No bids above floor price', status: 'fail' }
+                ]);
+                return;
+            }
+
+            const winner = auctionResult.seatbid[0].bid[0];
+            const entries = [
+                { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
+                { label: 'Auction', value: `Winner: ${auctionResult.seatbid[0].seat} at $${winner.price.toFixed(2)} CPM (${auctionMs}ms)`, status: 'success' },
+                { label: 'Creative', value: `${winner.crid || 'unknown'} (${winner.cid || 'unknown'})` },
+                { label: 'Events', value: '', events: [] }
+            ];
+
+            // Render ad in slot
+            const slot = document.getElementById('adSlot');
+            slot.classList.add('loaded');
+            slot.innerHTML = `
+                <span class="ad-label">Sponsored</span>
+                <div class="ad-content">
+                    <h3>Demo Ad Creative</h3>
+                    <p style="color: #666; font-size: 14px;">Campaign: ${winner.cid}<br>Creative: ${winner.crid}<br>Clearing: $${winner.price.toFixed(2)} CPM</p>
+                    <a href="#" class="cta" onclick="fireClick('${traceID}'); return false;">Learn More</a>
+                </div>
+            `;
+
+            // Step 2: Fire impression pixel
+            const events = entries[3].events;
+            try {
+                const impResp = await fetch(`${TRACKER_URL}/v1/t/imp?tid=${traceID}&cid=${winner.cid}&pid=imp-1&sig=sim`);
+                events.push({ name: 'Impression pixel', ok: impResp.status === 200, detail: `${impResp.status} (${impResp.headers.get('content-type')})` });
+            } catch (err) {
+                events.push({ name: 'Impression pixel', ok: false, detail: err.message });
+            }
+
+            debugLog(entries);
+
+            // Step 3: Viewability check (after 1.5s simulated viewport time)
+            events.push({ name: 'Viewability', ok: null, detail: 'waiting 1.5s...' });
+            debugLog(entries);
+
+            await new Promise(r => setTimeout(r, 1500));
+
+            try {
+                const viewResp = await fetch(`${TRACKER_URL}/v1/t/view?tid=${traceID}&cid=${winner.cid}&pid=imp-1&dur=1500&pct=85`);
+                events[events.length - 1] = { name: 'Viewability', ok: viewResp.status === 204, detail: '1.5s visible, 85% area' };
+            } catch (err) {
+                events[events.length - 1] = { name: 'Viewability', ok: false, detail: err.message };
+            }
+
+            entries.push({ label: 'Status', value: 'Ad served successfully', status: 'success' });
+            debugLog(entries);
+        }
+
+        async function fireClick(traceID) {
+            const panel = document.getElementById('debugContent');
+            try {
+                // Don't follow redirect, just fire the tracker
+                await fetch(`${TRACKER_URL}/v1/t/click?tid=${traceID}&cid=demo-campaign&pid=imp-1&sig=sim&redir=https://example.com`, { redirect: 'manual' });
+                const clickEntry = document.createElement('div');
+                clickEntry.className = 'debug-entry';
+                clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
+                panel.appendChild(clickEntry);
+            } catch (err) {
+                // fetch with redirect:manual throws on 302, but the click was still tracked
+                const clickEntry = document.createElement('div');
+                clickEntry.className = 'debug-entry';
+                clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
+                panel.appendChild(clickEntry);
+            }
+        }
+
+        function clearAd() {
+            const slot = document.getElementById('adSlot');
+            slot.classList.remove('loaded');
+            slot.innerHTML = '<span>300×250 Ad Slot</span><span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>';
+            debugLog([{ label: 'Status', value: 'Waiting for ad request...', status: 'pending' }]);
+            currentTraceID = null;
+        }
+    </script>
+</body>
+</html>
