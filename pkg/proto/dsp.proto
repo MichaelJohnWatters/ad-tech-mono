@@ -1,0 +1,319 @@
+syntax = "proto3";
+
+package adtech.dsp;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// CampaignService manages line items (campaigns) in the DSP.
+// "Campaign" = Line Item in our hierarchy (IO > Line Item > Creative).
+service CampaignService {
+  rpc CreateCampaign(Campaign) returns (CampaignResponse);
+  rpc GetCampaign(CampaignID) returns (Campaign);
+  rpc ListCampaigns(CampaignFilter) returns (CampaignList);
+  rpc UpdateCampaign(CampaignUpdate) returns (CampaignResponse);
+  rpc DeleteCampaign(CampaignID) returns (adtech.common.DeleteResponse);
+  rpc TransitionState(StateTransition) returns (CampaignResponse);
+  rpc UpdateBudget(BudgetUpdate) returns (BudgetResponse);
+  rpc GetTargeting(CampaignID) returns (TargetingRules);
+  rpc UpdateTargeting(TargetingUpdate) returns (TargetingResponse);
+  rpc GetSchedule(CampaignID) returns (Schedule);
+  rpc UpdateSchedule(ScheduleUpdate) returns (ScheduleResponse);
+  rpc AttachCreative(CreativeLink) returns (LinkResponse);
+  rpc DetachCreative(CreativeLink) returns (LinkResponse);
+  rpc SetCreativeWeight(CreativeWeight) returns (WeightResponse);
+  rpc GetTargetingOptions(adtech.common.Empty) returns (TargetingOptions);
+  rpc GetRecommendations(CampaignID) returns (RecommendationList);
+  rpc ApplyRecommendation(RecommendationAction) returns (CampaignResponse);
+}
+
+// InsertionOrderService manages IOs (budget containers above line items).
+service InsertionOrderService {
+  rpc CreateIO(InsertionOrder) returns (IOResponse);
+  rpc GetIO(IOID) returns (InsertionOrder);
+  rpc ListIOs(IOFilter) returns (IOList);
+  rpc UpdateIO(IOUpdate) returns (IOResponse);
+  rpc DeleteIO(IOID) returns (adtech.common.DeleteResponse);
+  rpc GetIOLineItems(IOID) returns (CampaignList);
+  rpc GetIOBudgetStatus(IOID) returns (BudgetStatus);
+}
+
+// AudienceService manages audience segments and CRM data.
+service AudienceService {
+  rpc UploadAudience(AudienceUpload) returns (AudienceResponse);
+  rpc ListAudiences(AudienceFilter) returns (AudienceList);
+  rpc CreateSegment(SegmentRules) returns (SegmentResponse);
+  rpc GetSegment(SegmentID) returns (Segment);
+  rpc UpdateSegment(SegmentUpdate) returns (SegmentResponse);
+  rpc DeleteSegment(SegmentID) returns (adtech.common.DeleteResponse);
+  rpc GetSegmentSize(SegmentID) returns (SizeResponse);
+  rpc CreateLookalike(LookalikeRequest) returns (AudienceResponse);
+}
+
+// --- Messages ---
+
+message CampaignID {
+  string id = 1;
+}
+
+message IOID {
+  string id = 1;
+}
+
+message SegmentID {
+  string id = 1;
+}
+
+message Campaign {
+  string id = 1;
+  string account_id = 2;
+  string insertion_order_id = 3;
+  string name = 4;
+  string status = 5;        // draft, submitted, in_review, approved, live, paused, ended, archived
+  string bid_strategy = 6;  // cpm, cpc, cpa, vcpm, cpcv
+  double base_bid = 7;
+  string pacing_mode = 8;   // even, asap, front_loaded
+  string format = 9;        // display, native, video, audio
+  adtech.common.Money sub_budget = 10;
+  adtech.common.Money daily_budget = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+message CampaignUpdate {
+  string id = 1;
+  Campaign campaign = 2;
+}
+
+message CampaignResponse {
+  Campaign campaign = 1;
+}
+
+message CampaignFilter {
+  string account_id = 1;
+  string insertion_order_id = 2;
+  string status = 3;
+  adtech.common.Pagination pagination = 4;
+}
+
+message CampaignList {
+  repeated Campaign campaigns = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message StateTransition {
+  string campaign_id = 1;
+  string new_state = 2;
+  string reason = 3;
+}
+
+message BudgetUpdate {
+  string campaign_id = 1;
+  double amount = 2;
+  string operation = 3; // decrby, incrby, set
+}
+
+message BudgetResponse {
+  double remaining = 1;
+}
+
+message BudgetStatus {
+  double total_budget = 1;
+  double spent = 2;
+  double remaining = 3;
+  double daily_budget = 4;
+  double daily_spent = 5;
+  double pacing_ratio = 6; // actual/target (1.0 = on pace)
+}
+
+message TargetingRules {
+  string campaign_id = 1;
+  TargetingSet include = 2;
+  TargetingSet exclude = 3;
+}
+
+message TargetingSet {
+  repeated string geo = 1;
+  repeated string device = 2;
+  repeated string os = 3;
+  repeated string segments = 4;
+  repeated string domains = 5;
+  repeated string app_bundles = 6;
+  repeated string categories = 7;
+  repeated string placement_ids = 8;
+  repeated string languages = 9;
+  repeated string inventory_type = 10; // site, app
+  map<string, string> custom = 11;
+}
+
+message TargetingUpdate {
+  string campaign_id = 1;
+  TargetingRules rules = 2;
+}
+
+message TargetingResponse {
+  TargetingRules rules = 1;
+}
+
+message TargetingOptions {
+  repeated string geos = 1;
+  repeated string devices = 2;
+  repeated string os_list = 3;
+  repeated string segments = 4;
+  repeated string categories = 5;
+  repeated string languages = 6;
+}
+
+message Schedule {
+  string campaign_id = 1;
+  google.protobuf.Timestamp start_date = 2;
+  google.protobuf.Timestamp end_date = 3;
+  repeated DaypartRule dayparting = 4;
+  repeated string active_days = 5; // mon, tue, wed, etc.
+  string timezone = 6;
+}
+
+message DaypartRule {
+  string start_time = 1; // HH:MM
+  string end_time = 2;
+}
+
+message ScheduleUpdate {
+  string campaign_id = 1;
+  Schedule schedule = 2;
+}
+
+message ScheduleResponse {
+  Schedule schedule = 1;
+}
+
+message CreativeLink {
+  string campaign_id = 1;
+  string creative_id = 2;
+}
+
+message LinkResponse {
+  bool success = 1;
+}
+
+message CreativeWeight {
+  string campaign_id = 1;
+  string creative_id = 2;
+  int32 weight = 3;
+}
+
+message WeightResponse {
+  bool success = 1;
+}
+
+message InsertionOrder {
+  string id = 1;
+  string account_id = 2;
+  string name = 3;
+  adtech.common.Money budget = 4;
+  adtech.common.Money daily_budget = 5;
+  google.protobuf.Timestamp start_date = 6;
+  google.protobuf.Timestamp end_date = 7;
+  string status = 8;
+  string objective = 9;  // brand_awareness, performance, retargeting
+  string currency = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message IOResponse {
+  InsertionOrder io = 1;
+}
+
+message IOFilter {
+  string account_id = 1;
+  string status = 2;
+  adtech.common.Pagination pagination = 3;
+}
+
+message IOList {
+  repeated InsertionOrder ios = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message IOUpdate {
+  string id = 1;
+  InsertionOrder io = 2;
+}
+
+message RecommendationList {
+  repeated Recommendation recommendations = 1;
+}
+
+message Recommendation {
+  string id = 1;
+  string type = 2;    // targeting_too_narrow, budget_exhausting, creative_fatigue, bid_too_low, etc.
+  string message = 3;
+  string action = 4;  // suggested change
+  string severity = 5; // info, warning, critical
+}
+
+message RecommendationAction {
+  string campaign_id = 1;
+  string recommendation_id = 2;
+  string action = 3; // apply, dismiss
+}
+
+message AudienceUpload {
+  string account_id = 1;
+  string name = 2;
+  repeated string hashed_ids = 3;
+  string segment_label = 4;
+  bool suppression = 5;
+}
+
+message AudienceResponse {
+  string audience_id = 1;
+  int32 matched_count = 2;
+}
+
+message AudienceFilter {
+  string account_id = 1;
+  adtech.common.Pagination pagination = 2;
+}
+
+message AudienceList {
+  repeated Segment segments = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message Segment {
+  string id = 1;
+  string name = 2;
+  string type = 3;   // first_party, behavioral, lookalike, suppression, retargeting, composite
+  int64 size = 4;
+  string status = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message SegmentRules {
+  string account_id = 1;
+  string name = 2;
+  string logic_json = 3; // JSON boolean expression for composite segments
+}
+
+message SegmentResponse {
+  Segment segment = 1;
+}
+
+message SegmentUpdate {
+  string id = 1;
+  Segment segment = 2;
+}
+
+message SizeResponse {
+  int64 estimated_size = 1;
+  string accuracy = 2; // exact, hll_approximate
+}
+
+message LookalikeRequest {
+  string seed_audience_id = 1;
+  string expansion = 2; // 1%, 5%, 10%
+  string name = 3;
+}

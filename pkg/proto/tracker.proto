@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package adtech.tracker;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// TrackerService allows internal services to push events directly via gRPC
+// (in addition to the HTTP pixel endpoints hit by browsers).
+service TrackerService {
+  rpc RecordEvent(EventRequest) returns (EventResponse);
+}
+
+message EventRequest {
+  string trace_id = 1;
+  string event_type = 2;  // impression, click, conversion, viewability, video, audio, dooh, reward, install
+  string campaign_id = 3;
+  string creative_id = 4;
+  string placement_id = 5;
+  string user_id = 6;
+  double cost = 7;
+  string cost_currency = 8;
+  map<string, string> metadata = 9; // additional event-specific data
+  google.protobuf.Timestamp timestamp = 10;
+}
+
+message EventResponse {
+  bool accepted = 1;
+  double fraud_score = 2;
+  string rejection_reason = 3; // if not accepted: bot, rate_limited, invalid_signature, etc.
+}

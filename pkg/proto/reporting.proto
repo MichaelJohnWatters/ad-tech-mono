@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+package adtech.reporting;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// ReportingService handles analytics queries and custom reports.
+// Also hosts BillingService methods (unified service).
+service ReportingService {
+  rpc QueryMetrics(MetricsRequest) returns (MetricsResponse);
+  rpc GetTraceEvents(TraceRequest) returns (TraceEventList);
+  rpc RunCustomReport(ReportQuery) returns (ReportResult);
+  rpc GetBuilderOptions(adtech.common.Empty) returns (BuilderOptions);
+  rpc SaveReport(SavedReport) returns (SavedReportResponse);
+  rpc ListSavedReports(AccountRequest) returns (SavedReportList);
+  rpc UpdateSavedReport(SavedReport) returns (SavedReportResponse);
+  rpc DeleteSavedReport(ReportID) returns (adtech.common.DeleteResponse);
+}
+
+// BillingService handles financial queries (hosted by reporting service).
+service BillingService {
+  rpc GetBalance(AccountRequest) returns (BalanceResponse);
+  rpc GetInvoices(InvoiceFilter) returns (InvoiceList);
+  rpc GetInvoiceDetail(InvoiceID) returns (InvoiceDetail);
+  rpc GetPayouts(PayoutFilter) returns (PayoutList);
+  rpc CreateAdjustment(Adjustment) returns (AdjustmentResponse);
+  rpc GetReconciliation(ReconciliationRequest) returns (ReconciliationReport);
+}
+
+// --- Reporting Messages ---
+
+message MetricsRequest {
+  string account_id = 1;
+  repeated string metrics = 2;    // impressions, clicks, ctr, conversions, spend, ecpm, roas
+  repeated string dimensions = 3; // campaign, creative, placement, geo, device, day, hour
+  adtech.common.DateRange date_range = 4;
+  map<string, string> filters = 5;
+}
+
+message MetricsResponse {
+  repeated MetricRow rows = 1;
+}
+
+message MetricRow {
+  map<string, string> dimensions = 1;
+  map<string, double> metrics = 2;
+}
+
+message TraceRequest {
+  string trace_id = 1;
+}
+
+message TraceEventList {
+  repeated TraceEvent events = 1;
+}
+
+message TraceEvent {
+  string service = 1;
+  string event_type = 2;
+  string message = 3;
+  map<string, string> data = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message ReportQuery {
+  string account_id = 1;
+  repeated string metrics = 2;
+  repeated string dimensions = 3;
+  adtech.common.DateRange date_range = 4;
+  map<string, string> filters = 5;
+  string format = 6; // table, csv, json
+}
+
+message ReportResult {
+  repeated MetricRow rows = 1;
+  int32 total_rows = 2;
+}
+
+message BuilderOptions {
+  repeated string available_metrics = 1;
+  repeated string available_dimensions = 2;
+  repeated string available_filters = 3;
+}
+
+message SavedReport {
+  string id = 1;
+  string account_id = 2;
+  string name = 3;
+  ReportQuery query = 4;
+  string schedule = 5; // cron expression or empty for manual
+  string delivery = 6; // email, webhook, none
+}
+
+message SavedReportResponse { SavedReport report = 1; }
+message SavedReportList { repeated SavedReport reports = 1; }
+message ReportID { string id = 1; }
+message AccountRequest { string account_id = 1; }
+
+// --- Billing Messages ---
+
+message BalanceResponse {
+  adtech.common.Money balance = 1;
+  adtech.common.Money daily_spend = 2;
+  adtech.common.Money lifetime_spend = 3;
+}
+
+message InvoiceFilter {
+  string account_id = 1;
+  adtech.common.DateRange date_range = 2;
+  adtech.common.Pagination pagination = 3;
+}
+
+message InvoiceList {
+  repeated Invoice invoices = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message InvoiceID { string id = 1; }
+
+message Invoice {
+  string id = 1;
+  string account_id = 2;
+  adtech.common.Money total = 3;
+  string status = 4; // pending, paid, overdue
+  google.protobuf.Timestamp period_start = 5;
+  google.protobuf.Timestamp period_end = 6;
+  google.protobuf.Timestamp due_date = 7;
+}
+
+message InvoiceDetail {
+  Invoice invoice = 1;
+  repeated InvoiceLineItem line_items = 2;
+}
+
+message InvoiceLineItem {
+  string campaign_id = 1;
+  string campaign_name = 2;
+  int64 impressions = 3;
+  int64 clicks = 4;
+  adtech.common.Money spend = 5;
+}
+
+message PayoutFilter {
+  string account_id = 1;
+  adtech.common.DateRange date_range = 2;
+  adtech.common.Pagination pagination = 3;
+}
+
+message PayoutList {
+  repeated Payout payouts = 1;
+  adtech.common.PaginatedResult pagination = 2;
+}
+
+message Payout {
+  string id = 1;
+  string publisher_id = 2;
+  adtech.common.Money amount = 3;
+  string status = 4; // pending, processing, paid
+  google.protobuf.Timestamp period_start = 5;
+  google.protobuf.Timestamp period_end = 6;
+}
+
+message Adjustment {
+  string account_id = 1;
+  adtech.common.Money amount = 2;
+  string type = 3;   // credit, debit
+  string reason = 4; // fraud_refund, billing_error, dispute_resolution
+}
+
+message AdjustmentResponse {
+  string adjustment_id = 1;
+  adtech.common.Money new_balance = 2;
+}
+
+message ReconciliationRequest {
+  string date = 1; // YYYY-MM-DD
+}
+
+message ReconciliationReport {
+  string date = 1;
+  int64 exchange_events = 2;
+  int64 dsp_decrements = 3;
+  int64 reporting_rows = 4;
+  bool reconciled = 5;
+  repeated Discrepancy discrepancies = 6;
+}
+
+message Discrepancy {
+  string campaign_id = 1;
+  string type = 2; // missing_in_dsp, missing_in_reporting
+  int32 count = 3;
+  repeated string trace_ids = 4;
+}

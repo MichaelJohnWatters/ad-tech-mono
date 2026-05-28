@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package adtech.common;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// Shared types used across all services.
+
+// Empty response for delete/void operations.
+message Empty {}
+
+// DeleteResponse confirms deletion.
+message DeleteResponse {
+  bool success = 1;
+}
+
+// Pagination for list requests.
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+// PaginatedResult wraps list responses with pagination metadata.
+message PaginatedResult {
+  int32 total = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+  bool has_more = 4;
+}
+
+// Money represents a monetary amount with currency.
+message Money {
+  double amount = 1;
+  string currency = 2; // ISO 4217 (USD, GBP, EUR, etc.)
+}
+
+// DateRange for filtering queries.
+message DateRange {
+  google.protobuf.Timestamp from = 1;
+  google.protobuf.Timestamp to = 2;
+}

@@ -1,0 +1,205 @@
+syntax = "proto3";
+
+package adtech.ssp;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// InventoryService manages publisher inventory (publishers and placements).
+service InventoryService {
+  rpc RegisterPublisher(Publisher) returns (PublisherResponse);
+  rpc GetPublisher(PublisherID) returns (Publisher);
+  rpc ListPublishers(PublisherFilter) returns (PublisherList);
+  rpc UpdatePublisher(PublisherUpdate) returns (PublisherResponse);
+  rpc DeletePublisher(PublisherID) returns (adtech.common.DeleteResponse);
+  rpc RegisterPlacement(Placement) returns (PlacementResponse);
+  rpc GetPlacement(PlacementID) returns (Placement);
+  rpc ListPlacements(PlacementFilter) returns (PlacementList);
+  rpc UpdatePlacement(PlacementUpdate) returns (PlacementResponse);
+  rpc DeletePlacement(PlacementID) returns (adtech.common.DeleteResponse);
+  rpc SetFloorPrices(FloorPriceConfig) returns (FloorPriceResponse);
+  rpc GetFloorRecommendations(PlacementID) returns (FloorRecommendations);
+  rpc GetForecast(ForecastRequest) returns (ForecastResponse);
+  rpc GetPlacementHealth(PlacementID) returns (HealthResponse);
+  rpc GenerateAdTag(PlacementID) returns (AdTagResponse);
+}
+
+// QualityControlService manages publisher ad quality controls.
+service QualityControlService {
+  rpc ListQualityControls(PublisherID) returns (QualityControlList);
+  rpc AddQualityControl(QualityControl) returns (QualityControlResponse);
+  rpc UpdateQualityControl(QualityControlUpdate) returns (QualityControlResponse);
+  rpc DeleteQualityControl(QualityControlID) returns (adtech.common.DeleteResponse);
+  rpc SyncQualityControls(QualityControlSync) returns (SyncResponse);
+}
+
+// DealService manages deals (PMP, PG, preferred).
+service DealService {
+  rpc CreateDeal(Deal) returns (DealResponse);
+  rpc GetDeal(DealID) returns (Deal);
+  rpc ListDeals(DealFilter) returns (DealList);
+  rpc UpdateDeal(DealUpdate) returns (DealResponse);
+  rpc DeleteDeal(DealID) returns (adtech.common.DeleteResponse);
+  rpc GetDealPerformance(DealID) returns (DealPerformance);
+}
+
+// DemandSourceService manages external DSP connections.
+service DemandSourceService {
+  rpc RegisterDemandSource(DemandSource) returns (DemandSourceResponse);
+  rpc UpdateDemandSource(DemandSourceUpdate) returns (DemandSourceResponse);
+  rpc DeleteDemandSource(DemandSourceID) returns (adtech.common.DeleteResponse);
+  rpc ListDemandSources(PublisherID) returns (DemandSourceList);
+  rpc GetDemandSourcePerformance(DemandSourceID) returns (DemandSourcePerformance);
+}
+
+// --- Messages ---
+
+message PublisherID { string id = 1; }
+message PlacementID { string id = 1; }
+message DealID { string id = 1; }
+message QualityControlID { string id = 1; }
+message DemandSourceID { string id = 1; }
+
+message Publisher {
+  string id = 1;
+  string account_id = 2;
+  string name = 3;
+  string domain = 4;
+  string currency = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message PublisherResponse { Publisher publisher = 1; }
+message PublisherUpdate { string id = 1; Publisher publisher = 2; }
+message PublisherFilter { string account_id = 1; adtech.common.Pagination pagination = 2; }
+message PublisherList { repeated Publisher publishers = 1; adtech.common.PaginatedResult pagination = 2; }
+
+message Placement {
+  string id = 1;
+  string publisher_id = 2;
+  string name = 3;
+  string format = 4;      // banner, native, video, audio
+  int32 width = 5;
+  int32 height = 6;
+  double floor_price = 7;
+  string floor_currency = 8;
+  string page_url_pattern = 9;
+  string status = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message PlacementResponse { Placement placement = 1; }
+message PlacementUpdate { string id = 1; Placement placement = 2; }
+message PlacementFilter { string publisher_id = 1; string format = 2; adtech.common.Pagination pagination = 3; }
+message PlacementList { repeated Placement placements = 1; adtech.common.PaginatedResult pagination = 2; }
+
+message FloorPriceConfig {
+  string placement_id = 1;
+  double static_floor = 2;
+  repeated TimeBasedFloor time_floors = 3;
+  map<string, double> device_floors = 4;
+  map<string, double> geo_floors = 5;
+}
+
+message TimeBasedFloor {
+  string start_time = 1;
+  string end_time = 2;
+  double floor = 3;
+}
+
+message FloorPriceResponse { bool success = 1; }
+message FloorRecommendations {
+  double recommended_floor = 1;
+  double current_fill_rate = 2;
+  double projected_fill_rate = 3;
+  double projected_revenue_change_pct = 4;
+}
+
+message ForecastRequest {
+  string placement_id = 1;
+  int32 days = 2;
+}
+
+message ForecastResponse {
+  int64 estimated_daily_impressions = 1;
+  int64 estimated_daily_uniques = 2;
+  double confidence = 3;
+}
+
+message HealthResponse {
+  string placement_id = 1;
+  google.protobuf.Timestamp last_request = 2;
+  double fill_rate = 3;
+  int32 errors_last_24h = 4;
+  string status = 5; // healthy, degraded, no_traffic
+}
+
+message AdTagResponse {
+  string js_tag = 1;
+  string server_tag = 2;
+}
+
+message QualityControl {
+  string id = 1;
+  string publisher_id = 2;
+  string type = 3;    // advertiser_blocklist, category_blocklist, creative_blocklist, advertiser_allowlist, domain_blocklist
+  repeated string values = 4;
+}
+
+message QualityControlResponse { QualityControl control = 1; }
+message QualityControlUpdate { string id = 1; QualityControl control = 2; }
+message QualityControlList { repeated QualityControl controls = 1; }
+message QualityControlSync { string publisher_id = 1; repeated QualityControl controls = 2; }
+message SyncResponse { int32 added = 1; int32 updated = 2; int32 removed = 3; }
+
+message Deal {
+  string id = 1;
+  string publisher_id = 2;
+  string deal_type = 3;      // open, pmp, pg, preferred
+  string name = 4;
+  double price = 5;
+  string price_currency = 6;
+  repeated string advertiser_ids = 7;
+  repeated string placement_ids = 8;
+  google.protobuf.Timestamp start_date = 9;
+  google.protobuf.Timestamp end_date = 10;
+  string status = 11;
+  int64 guaranteed_volume = 12; // for PG deals
+}
+
+message DealResponse { Deal deal = 1; }
+message DealUpdate { string id = 1; Deal deal = 2; }
+message DealFilter { string publisher_id = 1; string deal_type = 2; adtech.common.Pagination pagination = 3; }
+message DealList { repeated Deal deals = 1; adtech.common.PaginatedResult pagination = 2; }
+message DealPerformance {
+  string deal_id = 1;
+  int64 impressions = 2;
+  double revenue = 3;
+  double fill_rate = 4;
+  int64 volume_delivered = 5;
+  int64 volume_committed = 6;
+}
+
+message DemandSource {
+  string id = 1;
+  string publisher_id = 2;
+  string name = 3;
+  string endpoint_url = 4;
+  string api_key = 5;
+  int32 timeout_ms = 6;
+  string status = 7;
+}
+
+message DemandSourceResponse { DemandSource source = 1; }
+message DemandSourceUpdate { string id = 1; DemandSource source = 2; }
+message DemandSourceList { repeated DemandSource sources = 1; }
+message DemandSourcePerformance {
+  string source_id = 1;
+  double avg_response_ms = 2;
+  double timeout_rate = 3;
+  double win_rate = 4;
+  double avg_bid = 5;
+}

@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package adtech.exchange;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// AuctionService handles real-time auction execution.
+// Called by SSP via gRPC to initiate an auction for a placement.
+service AuctionService {
+  // RunAuction initiates an auction for a given placement.
+  // The exchange evaluates all eligible DSP bids and returns the winner.
+  rpc RunAuction(AuctionRequest) returns (AuctionResponse);
+}
+
+message AuctionRequest {
+  string request_id = 1;
+  string placement_id = 2;
+  string publisher_id = 3;
+  string page_request_id = 4; // groups multiple slots on same page (competitive separation)
+  string channel = 5;         // display, video, audio, dooh, retail, ingame
+
+  // Placement details
+  string format = 6;          // banner, native, video, audio
+  int32 width = 7;
+  int32 height = 8;
+  double floor_price = 9;
+  string floor_currency = 10;
+
+  // Site/app context
+  SiteContext site = 11;
+  AppContext app = 12;
+
+  // Device info
+  DeviceInfo device = 13;
+
+  // User info (may be empty if no consent)
+  UserInfo user = 14;
+
+  // Regulatory signals
+  RegsInfo regs = 15;
+
+  // Video-specific (if channel=video/audio)
+  VideoContext video = 16;
+
+  // Deal IDs (if placement has active deals)
+  repeated string deal_ids = 17;
+
+  google.protobuf.Timestamp timestamp = 18;
+}
+
+message SiteContext {
+  string domain = 1;
+  string page = 2;
+  repeated string categories = 3; // IAB content categories
+  repeated string keywords = 4;
+}
+
+message AppContext {
+  string bundle = 1;
+  string name = 2;
+  string store_url = 3;
+  repeated string categories = 4;
+  string version = 5;
+}
+
+message DeviceInfo {
+  string user_agent = 1;
+  string ip = 2;
+  string device_type = 3;  // mobile, desktop, tablet, ctv
+  string os = 4;
+  string os_version = 5;
+  string make = 6;
+  string model = 7;
+  string connection_type = 8; // wifi, cellular, ethernet
+  string ifa = 9;            // device advertising ID (IDFA/GAID)
+  int32 lmt = 10;           // limit ad tracking
+  GeoInfo geo = 11;
+}
+
+message GeoInfo {
+  string country = 1;  // ISO 3166-1 alpha-3
+  string region = 2;
+  string city = 3;
+  double lat = 4;
+  double lon = 5;
+  string postal_code = 6;
+}
+
+message UserInfo {
+  string id = 1;              // platform user ID
+  string publisher_user_id = 2;
+  string hashed_email = 3;
+  repeated string segments = 4;
+  map<string, string> demographics = 5; // age_range, gender, etc.
+  map<string, bool> consent = 6;        // gdpr, ccpa, etc.
+}
+
+message RegsInfo {
+  bool coppa = 1;
+  bool gdpr = 2;
+  string us_privacy = 3;
+  string tcf_consent_string = 4;
+  string data_residency = 5; // eu, us, etc.
+}
+
+message VideoContext {
+  repeated string mimes = 1;
+  int32 min_duration = 2;
+  int32 max_duration = 3;
+  int32 width = 4;
+  int32 height = 5;
+  string placement_type = 6; // instream, outstream
+  int32 start_delay = 7;     // 0=pre-roll, >0=mid-roll offset, -1=generic mid, -2=post
+  bool skippable = 8;
+  int32 skip_after = 9;
+  string break_position = 10; // preroll, midroll, postroll
+  bool is_live = 11;
+}
+
+message AuctionResponse {
+  string auction_id = 1;
+  bool has_winner = 2;
+  AuctionWinner winner = 3;
+  string no_fill_reason = 4; // no_bids, all_below_floor, all_blocked, timeout
+}
+
+message AuctionWinner {
+  string dsp_id = 1;
+  string campaign_id = 2;
+  string creative_id = 3;
+  double clearing_price = 4;
+  string clearing_currency = 5;
+  string bid_model = 6;
+  int32 position = 7;
+  string trace_id = 8;
+}
