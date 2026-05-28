@@ -12854,13 +12854,77 @@ This means seed can run independently, but simulator requires all services to be
 
 ### Programmable Simulator
 
-The simulator is usable three ways: CLI, Go library (for tests), and HTTP API (for CI/Tilt).
+The simulator is a **CLI tool** (`cmd/simulator`) with subcommands, a **Go library** (`pkg/simulator`) for tests, and **Tilt resources** for dashboard control.
 
-**As CLI (manual):**
+#### CLI Tool (`cmd/simulator`)
+
+Proper subcommands with flags:
+
+```bash
+# Run a simulation profile
+simulator run --profile steady --duration 5m
+
+# Run with custom overrides (profile as base, flags override)
+simulator run --profile steady --rps 100 --geo UK,DE --format display,native
+
+# Run for a specific number of requests then stop
+simulator run --profile trickle --requests 10
+
+# Run with custom exchange/tracker endpoints
+simulator run --profile steady --exchange-url http://localhost:8081 --tracker-url http://localhost:8083
+
+# List available profiles
+simulator profiles
+
+# Show what a profile contains without running
+simulator profiles show steady
+
+# Check if services are reachable before running
+simulator check
+
+# Fire a single request (useful for debugging)
+simulator single --geo UK --device mobile --format display
 ```
-go run ./cmd/simulator --profile steady --duration 5m
-go run ./cmd/simulator --profile burst --requests 10000
+
+**Tilt resources** wrap the CLI for dashboard control:
+
+```python
+# Tiltfile - simulator as controllable Tilt resources
+
+# One-click simulation buttons
+local_resource('sim-trickle',
+    cmd='go run ./cmd/simulator run --profile trickle --duration 2m',
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['simulation'],
+    auto_init=False)
+
+local_resource('sim-steady',
+    cmd='go run ./cmd/simulator run --profile steady --duration 5m',
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['simulation'],
+    auto_init=False)
+
+local_resource('sim-burst',
+    cmd='go run ./cmd/simulator run --profile burst --duration 1m',
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['simulation'],
+    auto_init=False)
+
+local_resource('sim-single',
+    cmd='go run ./cmd/simulator single --geo UK --device mobile',
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['simulation'],
+    auto_init=False)
+
+# Tilt shows these as buttons in the dashboard sidebar.
+# Click to start, click the X to stop. Logs stream in the panel.
 ```
+
+**Key design:** Tilt resources are just thin wrappers around CLI commands. The CLI is the real tool. Tilt gives it a GUI.
+
+#### Go Library (`pkg/simulator`)
+
+For programmatic use in tests and CI:
 
 **As Go library (in test code):**
 ```go
