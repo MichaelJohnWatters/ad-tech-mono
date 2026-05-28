@@ -68,7 +68,7 @@ func ServeHTTP(lc *Lifecycle, server *http.Server, log *slog.Logger, gracePeriod
 	})
 
 	go func() {
-		if err := ListenAndServeWithRetry(server, log, 5, 1*time.Second); err != nil && err != http.ErrServerClosed {
+		if err := ListenAndServeWithRetry(server, log, 30, 1*time.Second); err != nil && err != http.ErrServerClosed {
 			log.Error("server error", "error", err)
 		}
 	}()
