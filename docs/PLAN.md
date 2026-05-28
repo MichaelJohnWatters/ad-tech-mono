@@ -13766,92 +13766,133 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 
 ### Phase 1: Foundation
 1. Initialise Go module, monorepo directory structure, Makefile
-2. Set up Buf config, define core protobuf messages and gRPC services (including InsertionOrderService)
-3. Set up Colima + k3s, Tiltfile, base K8s manifests (Postgres, NATS, Redis, Minio)
-4. Write database migrations (goose) - all 29+ migrations including IO, line items, RLS policies
-5. Implement `pkg/config/`, `pkg/logger/`, `pkg/health/`, `pkg/lifecycle/` shared packages
-6. Implement `pkg/events/` interface + NATS JetStream implementation
-7. Implement `pkg/store/postgres/` with multi-tenancy (RLS)
-8. Implement `pkg/cache/` (L1 in-process + L2 Redis)
-9. Implement `pkg/currency/` - multi-currency conversion, exchange rate storage
+2. Implement `pkg/clock/` - clock interface (Real + Fake) before any time-dependent code
+3. Set up Buf config, define core protobuf messages and gRPC services (all services including InsertionOrderService, SSAIService, CleanRoomService, etc.)
+4. Set up Colima + k3s, Tiltfile (fast mode with `go run` default), base K8s manifests (Postgres, PgBouncer, NATS, Redis, Minio)
+5. Write database migrations (goose) - all 29+ migrations including IO, line items, RLS policies
+6. Implement `pkg/config/`, `pkg/logger/`, `pkg/health/`, `pkg/lifecycle/` shared packages
+7. Implement `pkg/events/` interface + NATS JetStream implementation with **idempotent consumer wrapper** (mandatory dedup)
+8. Implement `pkg/store/postgres/` with multi-tenancy (RLS) + PgBouncer read/write split
+9. Implement `pkg/cache/` (L1 in-process + L2 Redis) with **Redis budget recovery from NATS replay**
+10. Implement `pkg/currency/` - multi-currency conversion, exchange rate storage
+11. Implement `pkg/auth/` - JWT, RBAC, permissions, account types (advertiser/publisher/agency/staff/admin)
 
 ### Phase 2: Core Ad Serving
-10. Build the Exchange - first-price auction engine (`pkg/auction/`), deal priority, competitive separation, OpenRTB endpoints (including loss notices)
-11. Build the DSP - IO/line item hierarchy, targeting evaluation with exclusions, bid modifiers, bid shading, budget management (reserve/settle)
-12. Build the SSP - placement management, bid request generation (site + app objects, regs/consent signals)
-13. Build the Ad Server - display + native creative serving, VAST XML generation, macro substitution, third-party pixel piggybacking, frequency capping (multi-dimensional)
-14. Build the Tracker - impression/click/conversion/viewability/video event endpoints, NATS publishing, real-time fraud checks
-15. Build the Gateway - auth (JWT/RBAC), API proxying, HTMX dashboard skeleton, Swagger UI
-16. Wire up end-to-end: SSP -> Exchange -> DSP -> Ad Server -> Tracker -> Reporting
-17. First end-to-end test: trace a single ad request through all services
+12. Build the Exchange - first-price auction engine (`pkg/auction/`), 5 auction strategies (single winner, pod, relevance-weighted, batch, time-slot), deal priority, competitive separation, OpenRTB endpoints (win + loss notices)
+13. Build the DSP - IO/line item hierarchy, targeting with exclusions, bid modifiers (11 dimensions), bid shading with win-rate curves, pacing (even/ASAP/front-loaded), budget management (reserve/settle)
+14. Build the SSP - placement management, bid request generation (site + app + regs objects), quality controls, deals (PMP/PG/preferred), floor prices (static + dynamic)
+15. Build the Ad Server - display + native creative serving, macro substitution (26 macros), third-party pixel piggybacking, frequency capping (multi-dimensional), DCO template engine, sequential messaging
+16. Build the Tracker - impression/click/conversion/viewability/video/audio event endpoints, NATS publishing, real-time fraud checks, data collection pixels
+17. Build the Gateway - auth (JWT/RBAC/SSO), API proxying, HTMX dashboard (role-gated), Swagger UI
+18. Implement loss notification processing + win-rate feedback loop (`pkg/auction/feedback.go`, `pkg/auction/winrate.go`)
+19. Implement contextual targeting classification engine (`pkg/targeting/contextual.go`)
+20. Wire up end-to-end: SSP -> Exchange -> DSP -> Ad Server -> Tracker -> Reporting
+21. First end-to-end test: trace a single ad request through all services
+22. Implement day boundary job (`cmd/reporting --mode=day-boundary`) - daily budget resets, flight automation
 
 ### Phase 3: Data and Reporting
-18. Implement `pkg/store/analytics/` (DuckDB + ClickHouse interface)
-19. Build the Reporting service - NATS consumer, analytics writes, query API
-20. Implement universal rollup framework (`pkg/store/rollup/`) - events, auctions, bids, fraud, budget
-21. Build the custom report builder (`pkg/reporting/builder.go`) with reach/frequency (HyperLogLog)
-22. Build the data pipeline (`cmd/pipeline/`) - ingest, validate, normalise, enrich
-23. Implement Parquet/Delta Lake storage (`pkg/store/datalake/`)
+23. Implement `pkg/store/analytics/` (DuckDB + ClickHouse interface) with **dual-write for migration readiness**
+24. Build the Reporting service (unified with billing) - NATS consumer, analytics writes + billing accrual atomically
+25. Implement universal rollup framework (`pkg/store/rollup/`) - events, auctions, bids, fraud, budget, publisher data
+26. Build the custom report builder (`pkg/reporting/builder.go`) with reach/frequency (HyperLogLog)
+27. Implement reach/frequency forecasting (`pkg/reporting/forecast.go`) - campaign planning tools
+28. Build the data pipeline (`cmd/pipeline/`) - ingest, validate, normalise, enrich, schema drift detection
+29. Implement Parquet/Delta Lake storage (`pkg/store/datalake/`) with analytics schema evolution strategy
 
 ### Phase 4: Billing and Finance
-24. Build the Billing service - AuctionWinEvent consumer, spend accrual, reserve/settle for CPC/CPA/vCPM
-25. Implement view-through conversion attribution (`pkg/billing/attribution.go`)
-26. Implement variable margin/revenue share models (`pkg/billing/revshare.go`)
-27. Implement reconciliation job (daily verification)
-28. Invoice and payout generation with multi-currency
-29. Billing dashboard views
+30. Implement billing in reporting service - AuctionWinEvent consumer, spend accrual, reserve/settle for CPM/CPC/CPA/vCPM/CPCV
+31. Implement double-entry accounting ledger (`pkg/billing/ledger.go`)
+32. Implement view-through conversion attribution (`pkg/billing/attribution.go`) with configurable windows
+33. Implement variable margin/revenue share models (`pkg/billing/revshare.go`) - fixed, tiered, guaranteed minimum, deal-type
+34. Implement reconciliation verification (simplified - single consumer writes both stores)
+35. Invoice and payout generation with multi-currency
+36. Billing dashboard views
 
-### Phase 5: Identity, Privacy, and Targeting
-30. Implement `pkg/identity/` - platform ID, identity graph, cross-device linking
-31. Implement `pkg/audience/` - CRM upload, segment matching, suppression lists
-32. Build `web/static/adtech.js` - publisher ad tag SDK (platform ID, user data, viewability, native rendering)
-33. Implement `pkg/privacy/` - consent checking (regs object), opt-out system (3 levels)
-34. Build `cmd/privacy-delete/` and `cmd/privacy-verify/` - deletion job + daily verification CronJob
-35. Privacy compliance dashboard
+### Phase 5: Identity, Privacy, and Audience
+37. Implement `pkg/identity/` - platform ID, identity graph, cross-device linking
+38. Implement unified audience store (`pkg/audience/store/`) - Redis + Postgres, access-controlled, normalised
+39. Implement audience management - segments, lookalike audiences, composite segments, retargeting builders
+40. Build `web/static/adtech.js` - publisher ad tag SDK (platform ID, user data, viewability, native rendering, contextual signals)
+41. Implement `pkg/privacy/` - consent checking (regs object), opt-out system (3 levels), deletion propagation
+42. Build `cmd/privacy-delete/` and `cmd/privacy-verify/` - deletion job + daily verification CronJob
+43. Privacy compliance dashboard
+44. Implement inventory quality scoring (`pkg/targeting/quality.go`) - composite score per placement
 
 ### Phase 6: Fraud and Quality
-36. Implement real-time fraud checks (`pkg/fraud/realtime.go`) - bot detection, IP blocklist, rate limiting
-37. Implement fraud scoring (`pkg/fraud/scoring.go`)
-38. Build batch fraud detection (`cmd/fraud/` CronJob)
-39. Build ads.txt / app-ads.txt crawler (`cmd/adstxt/`) and verification
-40. Implement publisher quality controls and creative review workflow
-41. Serve `sellers.json` from Gateway
+45. Implement real-time fraud checks (`pkg/fraud/realtime.go`) - bot detection, IP blocklist, rate limiting
+46. Implement fraud scoring (`pkg/fraud/scoring.go`)
+47. Build batch fraud detection (`cmd/fraud/` CronJob) - click fraud, impression stacking, device anomalies
+48. Build ads.txt / app-ads.txt crawler (`cmd/adstxt/`) and verification
+49. Implement publisher quality controls and creative review workflow (display + video + audio + native)
+50. Serve `sellers.json` from Gateway
 
 ### Phase 7: Optimisation
-42. Build bid optimisation pipeline (`cmd/optimise/`)
-43. Implement placement scoring, creative performance (A/B rotation), budget reallocation
-44. Build smart routing phases 2 and 3 in Exchange (`pkg/auction/router.go`)
-45. Set up Python training environment for ML models (`python/`)
+51. Build bid optimisation pipeline (`cmd/optimise/`) - bid shading curve updates, placement scoring
+52. Implement creative performance - multi-arm bandit rotation, DCO component-level optimisation
+53. Implement auto-optimisation - budget reallocation across line items within IO
+54. Build smart routing phases 2 and 3 in Exchange (`pkg/auction/router.go`)
+55. Implement campaign recommendations engine
+56. Set up Python training environment for ML models (`python/`) - bidding, fraud, audience, contextual
 
-### Phase 8: Developer Tools and Operations
-46. Build Trace Explorer - Grafana dashboard + custom HTMX live trace page with SSE
-47. Build Publisher Simulator - fake publisher pages, debug overlay, interactive controls
-48. Build the operations UI - A/B testing, canary management, deployment overview
-49. Implement webhooks dispatcher (`cmd/webhooks/`)
-50. Implement email sending (`pkg/email/`) + Mailpit for local dev
-51. Build configuration management UI (live config dashboard)
-52. Build audit log dashboard
-53. Implement seed data profiles and simulation profiles
-54. Set up observability stack (Prometheus, Grafana dashboards, Loki, Jaeger)
+### Phase 8: Developer Tools and Testing
+57. Build Trace Explorer - Grafana dashboard + custom HTMX live trace page with SSE
+58. Build Publisher Simulator - 13 templates (all channels), debug overlay, interactive controls
+59. Build programmable simulator (`pkg/simulator/`) - Go library + HTTP API + CLI
+60. Implement k6 performance test scripts (`tests/k6/`)
+61. Implement chaos testing framework (`pkg/chaos/`) with chaos profiles
+62. Build the operations UI - A/B testing, canary management, deployment overview, deployment ledger
+63. Implement local canary/A/B testing workflow with Tilt buttons
+64. Implement webhooks dispatcher (`cmd/webhooks/`)
+65. Implement email sending (`pkg/email/`) + Mailpit for local dev
+66. Build configuration management UI (live config dashboard)
+67. Build audit log dashboard
+68. Implement seed data profiles and simulation profiles
+69. Set up observability stack (Prometheus, Grafana dashboards, Loki, Promtail, Jaeger)
 
-### Phase 9: Video and SSAI
-55. Add OpenRTB `video` object to bid requests
-56. Implement VAST 4.2 XML generation (`pkg/adserving/vast.go`)
-57. Implement VMAP with pre-roll/mid-roll/post-roll scheduling
-58. Build ad pod auction logic (`pkg/auction/pods.go`)
-59. Build SSAI manifest manipulator (`cmd/ssai/`) - HLS/DASH rewriting
-60. Implement server-side beacon firing for SSAI
-61. CTV bid request handling and household targeting
+### Phase 9: Video, Audio, and Extended Channels
+70. Add OpenRTB `video` and `audio` objects to bid requests
+71. Implement VAST 4.2 XML generation + DAAST for audio
+72. Implement VMAP with pre-roll/mid-roll/post-roll scheduling
+73. Build ad pod auction logic (`pkg/auction/pods.go`)
+74. Build video transcoder service (`cmd/transcoder/`) - variant matrix, audio normalisation, creative conditioning
+75. Build SSAI manifest manipulator (`cmd/ssai/`) - HLS/DASH rewriting, session manager, server-side beacons
+76. Implement SSAI production features - CDN integration, failover/slate, bumpers, ABR, DVR/time-shift
+77. CTV bid request handling and household targeting
+78. Audio: podcast dynamic insertion, streaming radio SSAI, DAAST serving
+79. DOOH: screen management, proof-of-play tracking, time-slot auctions, audience estimation
+80. Retail media: product catalog sync, relevance-weighted auctions, keyword bidding
+81. In-game: rewarded ad verification, intrinsic billboard viewability, batch auctions
 
-### Phase 10: CI/CD and Production Readiness
-62. Set up GitHub Actions (lint, test, build, integration tests on k3s, route testing)
-63. Set up change detection rules and image tagging
-64. Configure staging auto-deploy and prod manual promotion
-65. Set up SOPS for secret management in staging/prod
-66. Configure HPA autoscaling per service
-67. Set up backup CronJobs (Postgres, DuckDB)
-68. Write OpenAPI spec (`docs/openapi.yaml`) and serve Swagger UI
-69. Final end-to-end testing with all simulation profiles
+### Phase 10: Clean Rooms and Data Marketplace
+82. Build clean room computation engine (`pkg/cleanroom/`) - overlap, expansion, composition
+83. Build clean room isolated job runner (`cmd/cleanroom/`) - K8s Job, network-isolated
+84. Build data marketplace - listings, expansion estimates, purchase flow
+85. Implement data bartering - proposals, fairness scoring, mutual activation
+86. Marketplace billing - CPM surcharge tracking, data provider payouts
+
+### Phase 11: Business Operations
+87. Implement account closure and data export workflow
+88. Build adtech.js SDK versioning and CDN deployment pipeline
+89. Set up public status page (self-hosted or third-party)
+90. Implement customer support / dispute resolution workflow
+91. Build API changelog system (`docs/CHANGELOG.md` + dashboard + notifications)
+92. Implement SSO (SAML 2.0 + OIDC) for enterprise accounts
+93. Implement data residency controls
+94. Build external partner onboarding portal (sandbox, test endpoint, certification suite)
+
+### Phase 12: CI/CD and Production Readiness
+95. Build `ci.yml` - PR pipeline (lint, test, build, e2e, conditional A/B)
+96. Build `nightly.yml` - full nightly (build, test, perf, chaos, security, summary report)
+97. Build `deploy-staging.yml` - auto-deploy on merge with smoke tests
+98. Build `deploy-prod.yml` - manual with approval gate and pre-deploy backup
+99. Build `perf-test.yml` and `chaos-test.yml` - nightly regression pipelines
+100. Set up SOPS for secret management in staging/prod
+101. Configure HPA autoscaling per service
+102. Set up backup CronJobs (Postgres WAL, DuckDB, pre-migration snapshots)
+103. Implement deployment ledger + Grafana annotations
+104. Write OpenAPI spec (`docs/openapi.yaml`) and serve Swagger UI
+105. Generate system diagrams (D2 architecture diagram + Mermaid diagrams)
+106. Final end-to-end testing with all simulation profiles + chaos scenarios
 
 ---
 
