@@ -177,3 +177,73 @@ local_resource('test-unit',
 local_resource('test-e2e',
     cmd='./tests/e2e_smoke_test.sh',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False)
+
+# ============================================================
+# Quick Reference
+# ============================================================
+
+local_resource('endpoints',
+    cmd="""echo '
+============================================================
+  AD TECH PLATFORM - ENDPOINT REFERENCE
+============================================================
+
+  DASHBOARDS & UI
+  ─────────────────────────────────────────────────────────
+  Dashboard            http://localhost:8080
+  Publisher Simulator   http://localhost:8080/dev/publisher-simulator
+  Tilt Dashboard       http://localhost:10350
+  NATS Monitoring      http://localhost:8222
+  Minio Console        http://localhost:9001  (adtech / adtech-local-dev)
+
+  GATEWAY (:8080) - API entry point
+  ─────────────────────────────────────────────────────────
+  GET  /healthz                          Liveness probe
+  GET  /readyz                           Readiness probe
+  GET  /dev/publisher-simulator          Publisher simulator with debug overlay
+
+  EXCHANGE (:8081) - Auctions
+  ─────────────────────────────────────────────────────────
+  POST /v1/openrtb/auction               Submit bid request, run auction
+  GET  /v1/openrtb/win?price=&bid_id=    Win notice to DSP
+  GET  /v1/openrtb/loss?bid_id=&reason=  Loss notice to DSP
+
+  DSP (:8082) - Bidding
+  ─────────────────────────────────────────────────────────
+  POST /v1/openrtb/bid                   Evaluate bid request, return bid
+
+  TRACKER (:8083) - Event pixels (browser-facing)
+  ─────────────────────────────────────────────────────────
+  GET  /v1/t/imp?tid=&cid=&pid=&sig=     Impression pixel (1x1 GIF)
+  GET  /v1/t/click?tid=&redir=&sig=      Click redirect (302)
+  GET  /v1/t/conv?tid=&type=&sig=        Conversion pixel (1x1 GIF)
+  GET  /v1/t/view?tid=&dur=&pct=         Viewability beacon (204)
+  GET  /v1/t/video?tid=&event=           Video event (204)
+  GET  /v1/t/audio?tid=&event=           Audio event (204)
+
+  SSP (:8084) - Publisher inventory
+  ─────────────────────────────────────────────────────────
+  GET  /healthz                          Liveness (gRPC services coming)
+
+  AD SERVER (:8085) - Creative serving
+  ─────────────────────────────────────────────────────────
+  GET  /healthz                          Liveness (gRPC services coming)
+
+  INFRA (K8s pods)
+  ─────────────────────────────────────────────────────────
+  Postgres             localhost:5432     (adtech / adtech-local-dev / adtech)
+  NATS JetStream       localhost:4222     (3-node cluster)
+  Redis                localhost:6379
+  Minio S3             localhost:9000     (adtech / adtech-local-dev)
+
+  QUICK TEST
+  ─────────────────────────────────────────────────────────
+  Single auction:   go run ./cmd/simulator single --geo GBR --device mobile
+  Trickle sim:      go run ./cmd/simulator run --profile trickle --requests 5
+  Steady sim:       go run ./cmd/simulator run --profile steady --duration 1m
+  List profiles:    go run ./cmd/simulator profiles
+  Health check:     curl http://localhost:8080/healthz
+
+============================================================
+'""",
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['info'], auto_init=False)
