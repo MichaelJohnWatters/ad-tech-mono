@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: adtech
+
+resources:
+  - namespace.yaml
+  # Infrastructure
+  - postgres/statefulset.yaml
+  - nats/statefulset.yaml
+  - redis/deployment.yaml
+  - minio/deployment.yaml
+  # Services will be added as they are built in Phase 2+

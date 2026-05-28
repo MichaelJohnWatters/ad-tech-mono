@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: adtech
+  labels:
+    app: nats
+spec:
+  serviceName: nats
+  replicas: 3 # 3-node JetStream cluster (HA by default)
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args:
+            - "--name=$(POD_NAME)"
+            - "--cluster_name=adtech-nats"
+            - "--js"
+            - "--sd=/data/jetstream"
+            - "--cluster=nats://0.0.0.0:6222"
+            - "--routes=nats://nats-0.nats.adtech.svc:6222,nats://nats-1.nats.adtech.svc:6222,nats://nats-2.nats.adtech.svc:6222"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 4222 # client
+              name: client
+            - containerPort: 6222 # cluster
+              name: cluster
+            - containerPort: 8222 # monitoring
+              name: monitor
+          volumeMounts:
+            - name: nats-data
+              mountPath: /data/jetstream
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz?js-enabled-only=true
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: nats-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: adtech
+spec:
+  selector:
+    app: nats
+  ports:
+    - port: 4222
+      targetPort: 4222
+      name: client
+    - port: 8222
+      targetPort: 8222
+      name: monitor
+  clusterIP: None
