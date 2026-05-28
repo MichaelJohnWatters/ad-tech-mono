@@ -906,6 +906,14 @@ ad-tech-mono/
   python/
     fraud/              # Fraud ML model training scripts
     optimisation/       # Optimisation model training (audience clustering, bid models)
+  .github/
+    workflows/
+      ci.yml            # PR pipeline (lint, test, build, e2e, A/B)
+      nightly.yml       # Full nightly (build, test, perf, chaos, security, summary)
+      deploy-staging.yml # Auto-deploy to staging on merge
+      deploy-prod.yml   # Manual prod deploy with approval gate
+      perf-test.yml     # k6 performance regression
+      chaos-test.yml    # Chaos resilience regression
   tests/
     k6/                 # k6 performance/load test scripts
       tracker-load.js
@@ -13348,6 +13356,253 @@ All images are tagged with the git SHA of the commit that built them. No semver,
 - **Prod is always manual:** No auto-deploy to production. A human approves every prod release
 - **k3s in CI:** Integration tests run on real K8s in the GitHub Actions runner, same manifests as local dev
 - **Local builds stay local:** During development, images are built and deployed within Colima - nothing leaves the machine
+
+### GitHub Actions Workflow Files
+
+All workflow files live in `.github/workflows/`. Here's each file and what it does:
+
+#### 1. `ci.yml` - PR Pipeline (every PR)
+
+```
+Trigger: PR opened / updated / synchronized
+
+Jobs (parallel where possible):
+
+┌─ lint ──────────────────────────────────────────┐
+│  golangci-lint run ./...                        │
+│  buf lint (proto files)                         │
+│  buf breaking (proto backwards compatibility)   │
+└─────────────────────────────────────────────────┘
+
+┌─ test ──────────────────────────────────────────┐
+│  go test ./pkg/... (unit tests)                 │
+│  go test ./cmd/... -tags=integration            │
+│    (testcontainers: real Postgres/Redis/NATS)   │
+└─────────────────────────────────────────────────┘
+
+┌─ build ─────────────────────────────────────────┐
+│  Detect changed paths -> build affected images  │
+│  Verify Dockerfiles build successfully          │
+└─────────────────────────────────────────────────┘
+
+┌─ e2e (depends on build) ────────────────────────┐
+│  Start k3s in CI runner                         │
+│  Apply kustomize overlays/local                 │
+│  Run migrations                                 │
+│  Seed minimal profile                           │
+│  Run e2e test suite (trace single request)      │
+│  Verify: route tests (all endpoints have gRPC)  │
+└─────────────────────────────────────────────────┘
+
+┌─ ab-test (conditional) ─────────────────────────┐
+│  Only runs if: pkg/auction/**, pkg/targeting/**, │
+│    pkg/pacing/**, cmd/dsp/**, cmd/exchange/**    │
+│  Deploy stable (from main) + canary (from PR)   │
+│  Run simulation (steady, 5min)                  │
+│  Compare metrics, assert pass criteria          │
+│  Report results as PR comment                   │
+└─────────────────────────────────────────────────┘
+
+Summary: posted as PR check with pass/fail per job
+```
+
+#### 2. `nightly.yml` - Full Nightly Pipeline
+
+```
+Trigger: cron '0 2 * * *' (2am UTC daily)
+
+Jobs (sequential):
+
+1. FULL BUILD
+   - Build ALL service images (not just changed)
+   - Push to ghcr.io with tag: nightly-{date}
+
+2. FULL TEST SUITE
+   - Start k3s cluster in CI
+   - Deploy all services
+   - Run migrations
+   - Seed standard profile
+   - Unit tests: go test ./...
+   - Integration tests: go test ./... -tags=integration
+   - E2E tests: full ad request trace
+   - Route tests: all endpoints mapped
+
+3. PERFORMANCE TESTS
+   - Seed stress profile
+   - k6 tracker load test (ramp to 5000 VUs)
+   - k6 exchange load test (ramp to 2000 VUs)
+   - k6 gateway API test (ramp to 500 VUs)
+   - Assert all thresholds pass
+
+4. CHAOS TESTS
+   - Seed standard profile
+   - Run simulation (steady, 5min) + chaos:
+     a. redis_failure scenario
+     b. nats_partition scenario
+     c. pod_kill scenario
+   - Verify: 0% event loss, recovery < 30s, no double-billing
+
+5. A/B REGRESSION
+   - Deploy current main as stable
+   - Deploy previous release as canary
+   - Run simulation, verify no regression from previous release
+
+6. SECURITY SCAN
+   - go vuln check (dependency vulnerabilities)
+   - Docker image scan (Trivy or Grype)
+   - Buf breaking change check against last release
+
+7. SUMMARY REPORT
+   - Aggregate all results into a summary
+   - Post to Slack channel
+   - Store in GitHub Actions artifacts
+   - If any failures: create GitHub Issue automatically
+
+Summary format:
+┌─────────────────────────────────────────────────┐
+│  Nightly Build Report - 2026-05-28              │
+│                                                  │
+│  Build:       ✓ All 21 binaries built           │
+│  Unit tests:  ✓ 1,247 passed, 0 failed          │
+│  Integration: ✓ 89 passed, 0 failed             │
+│  E2E:         ✓ Full trace verified             │
+│  Routes:      ✓ All 130+ endpoints mapped       │
+│                                                  │
+│  Performance:                                    │
+│    Tracker:   ✓ p99=22ms (threshold <50ms)      │
+│    Exchange:  ✓ p99=85ms (threshold <100ms)     │
+│    Gateway:   ✓ p99=45ms (threshold <100ms)     │
+│                                                  │
+│  Chaos:                                          │
+│    Redis:     ✓ Recovery 8s, 0 events lost       │
+│    NATS:      ✓ Recovery 12s, 0 events lost      │
+│    Pod kill:  ✓ Recovery 5s, 0 events lost       │
+│                                                  │
+│  Security:                                       │
+│    Vulns:     ✓ 0 critical, 2 low               │
+│    Images:    ✓ No CVEs above medium             │
+│                                                  │
+│  Overall: PASS                                   │
+└─────────────────────────────────────────────────┘
+```
+
+#### 3. `deploy-staging.yml` - Deploy to Staging (merge to main)
+
+```
+Trigger: push to main branch
+
+Jobs:
+
+1. BUILD + PUSH
+   - Detect changed paths
+   - Build affected images (git SHA tag)
+   - Push to ghcr.io
+
+2. PRE-DEPLOY BACKUP
+   - pg_dump of staging Postgres
+
+3. MIGRATE
+   - Run goose up against staging Postgres
+   - If migration fails: stop, alert, don't deploy
+
+4. DEPLOY
+   - kustomize build overlays/staging
+   - Update image tags to new git SHA
+   - kubectl apply
+   - Wait for rollout complete
+
+5. SMOKE TEST
+   - Seed minimal profile (if fresh)
+   - Fire single ad request, verify full trace
+   - Check all health endpoints return 200
+
+6. NOTIFY
+   - Post to Slack: "Staging deployed: {git SHA}, {PR title}"
+   - Record in deployment ledger
+   - Push Grafana annotation
+```
+
+#### 4. `deploy-prod.yml` - Deploy to Production (manual)
+
+```
+Trigger: workflow_dispatch (manual) with required inputs:
+  - git_sha: which image tag to deploy (must exist in ghcr.io)
+  - confirm: "yes" (typed confirmation)
+
+Jobs:
+
+1. VALIDATE
+   - Verify image tag exists in ghcr.io
+   - Verify this SHA passed nightly tests
+   - Verify this SHA is currently running in staging
+
+2. PRE-DEPLOY BACKUP
+   - pg_dump of prod Postgres
+   - Snapshot DuckDB/ClickHouse
+
+3. MIGRATE
+   - Run goose up against prod Postgres
+   - If fails: stop, alert, don't deploy
+
+4. DEPLOY (with approval gate)
+   - GitHub environment protection: requires manual approval
+   - kustomize build overlays/prod
+   - Update image tags
+   - kubectl apply
+   - Wait for rollout complete
+
+5. VERIFY
+   - Health check all services
+   - Fire synthetic ad request, verify trace
+   - Check Prometheus: error rate not spiking
+   - Check deployment ledger: record this deploy
+
+6. NOTIFY
+   - Post to Slack: "PROD deployed: {git SHA}, {deployer}"
+   - Push Grafana annotation (appears on all dashboards)
+   - Record in deployment ledger
+```
+
+#### 5. `perf-test.yml` - Performance Regression (nightly + on-demand)
+
+```
+Trigger:
+  - schedule: nightly
+  - pull_request: paths ['cmd/tracker/**', 'cmd/exchange/**', 'pkg/auction/**']
+
+Jobs:
+  - Start k3s, deploy, seed stress profile
+  - Run k6 tests (tracker, exchange, gateway, SSAI)
+  - Assert thresholds
+  - Post results as PR comment (if PR) or Slack (if nightly)
+```
+
+#### 6. `chaos-test.yml` - Chaos Regression (nightly)
+
+```
+Trigger: schedule nightly (after perf-test)
+
+Jobs:
+  - Start k3s, deploy, seed standard profile
+  - Run simulation + chaos scenarios (redis, nats, pod kill, cascade)
+  - Verify pass criteria (0% event loss, recovery time, no double-billing)
+  - Post results to Slack
+```
+
+### Workflow File Directory
+
+```
+.github/
+    workflows/
+        ci.yml              # PR pipeline (lint, test, build, e2e, conditional A/B)
+        nightly.yml         # Full nightly (build, test, perf, chaos, security, summary)
+        deploy-staging.yml  # Auto-deploy to staging on merge to main
+        deploy-prod.yml     # Manual prod deploy with approval gate
+        perf-test.yml       # k6 performance regression
+        chaos-test.yml      # Chaos resilience regression
+```
+
+Added to monorepo directory structure.
 
 ---
 
