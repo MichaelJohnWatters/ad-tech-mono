@@ -1,0 +1,7 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: adtech
+spec:
+  replicas: 1 # single instance in lite mode (no standby)
