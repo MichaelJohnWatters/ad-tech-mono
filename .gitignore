@@ -27,6 +27,29 @@ go.work.sum
 # env file
 .env
 
+# Build output
+bin/
+
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+*.enc.yaml.dec
+secrets.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# k6 results
+k6-results/
