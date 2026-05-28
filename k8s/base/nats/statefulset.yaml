@@ -7,7 +7,7 @@ metadata:
     app: nats
 spec:
   serviceName: nats
-  replicas: 3 # 3-node JetStream cluster (HA by default)
+  replicas: 1
   selector:
     matchLabels:
       app: nats
@@ -20,34 +20,24 @@ spec:
         - name: nats
           image: nats:2.10-alpine
           args:
-            - "--name=$(POD_NAME)"
-            - "--cluster_name=adtech-nats"
+            - "--name=nats-0"
             - "--js"
             - "--sd=/data/jetstream"
-            - "--cluster=nats://0.0.0.0:6222"
-            - "--routes=nats://nats-0.nats.adtech.svc:6222,nats://nats-1.nats.adtech.svc:6222,nats://nats-2.nats.adtech.svc:6222"
-          env:
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
           ports:
-            - containerPort: 4222 # client
+            - containerPort: 4222
               name: client
-            - containerPort: 6222 # cluster
-              name: cluster
-            - containerPort: 8222 # monitoring
+            - containerPort: 8222
               name: monitor
           volumeMounts:
             - name: nats-data
               mountPath: /data/jetstream
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "100m"
+              memory: "256Mi"
             limits:
-              cpu: "1000m"
-              memory: "2Gi"
+              cpu: "500m"
+              memory: "1Gi"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -56,7 +46,7 @@ spec:
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /healthz?js-enabled-only=true
+              path: /healthz
               port: 8222
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -67,7 +57,7 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 10Gi
+            storage: 5Gi
 ---
 apiVersion: v1
 kind: Service
