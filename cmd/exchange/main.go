@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -47,19 +46,9 @@ func main() {
 	mux.HandleFunc("/v1/openrtb/loss", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	server := &http.Server{Addr: ":" + port, Handler: mux, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
-	lc.OnShutdown("http-server", func(ctx context.Context) error { return server.Shutdown(ctx) })
 
 	log.Info("exchange starting", "port", port, "channel", channel, "dsps", dspEndpoints)
-	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	if err := lc.Wait(30 * time.Second); err != nil {
-		log.Error("shutdown error", "error", err)
-	}
+	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
 func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, dspEndpoints []string, channel string) http.HandlerFunc {
