@@ -1,3 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: adtech
+data:
+  nats.conf: |
+    server_name: $SERVER_NAME
+    listen: 0.0.0.0:4222
+    http_port: 8222
+
+    jetstream {
+      store_dir: /data/jetstream
+      max_mem: 256MB
+      max_file: 4GB
+    }
+
+    cluster {
+      name: adtech-nats
+      listen: 0.0.0.0:6222
+      routes: [
+        nats-route://nats-0.nats.adtech.svc.cluster.local:6222
+        nats-route://nats-1.nats.adtech.svc.cluster.local:6222
+        nats-route://nats-2.nats.adtech.svc.cluster.local:6222
+      ]
+      connect_retries: 30
+    }
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -7,7 +35,8 @@ metadata:
     app: nats
 spec:
   serviceName: nats
-  replicas: 1
+  replicas: 3
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: nats
@@ -19,16 +48,25 @@ spec:
       containers:
         - name: nats
           image: nats:2.10-alpine
-          args:
-            - "--name=nats-0"
-            - "--js"
-            - "--sd=/data/jetstream"
+          command:
+            - nats-server
+            - --config
+            - /etc/nats/nats.conf
+          env:
+            - name: SERVER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           ports:
             - containerPort: 4222
               name: client
+            - containerPort: 6222
+              name: cluster
             - containerPort: 8222
               name: monitor
           volumeMounts:
+            - name: nats-config
+              mountPath: /etc/nats
             - name: nats-data
               mountPath: /data/jetstream
           resources:
@@ -42,14 +80,20 @@ spec:
             httpGet:
               path: /healthz
               port: 8222
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8222
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 5
+            failureThreshold: 10
+      volumes:
+        - name: nats-config
+          configMap:
+            name: nats-config
   volumeClaimTemplates:
     - metadata:
         name: nats-data
@@ -71,7 +115,11 @@ spec:
     - port: 4222
       targetPort: 4222
       name: client
+    - port: 6222
+      targetPort: 6222
+      name: cluster
     - port: 8222
       targetPort: 8222
       name: monitor
   clusterIP: None
+  publishNotReadyAddresses: true  # DNS must work before pods are ready (cluster bootstrap)
