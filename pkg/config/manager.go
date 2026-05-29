@@ -200,19 +200,38 @@ func (m *Manager) Set(ctx context.Context, key, value string) error {
 	return nil
 }
 
-// Rollback reverts a config key to its previous value using the change history.
+// Rollback reverts a config key to its previous value.
+// Checks persistent audit log (Postgres) first, falls back to in-memory history.
 func (m *Manager) Rollback(ctx context.Context, key string) error {
 	m.mu.RLock()
+	source := m.source
+	m.mu.RUnlock()
+
 	var previousValue string
 	found := false
-	for i := len(m.history) - 1; i >= 0; i-- {
-		if m.history[i].Key == key {
-			previousValue = m.history[i].OldValue
+
+	// Try persistent history from Postgres audit log first
+	if pgSource, ok := source.(*PostgresSource); ok {
+		history, err := pgSource.History(ctx, key, 2)
+		if err == nil && len(history) >= 1 {
+			// history[0] is the most recent change, its OldValue is what we want
+			previousValue = history[0].OldValue
 			found = true
-			break
 		}
 	}
-	m.mu.RUnlock()
+
+	// Fall back to in-memory history
+	if !found {
+		m.mu.RLock()
+		for i := len(m.history) - 1; i >= 0; i-- {
+			if m.history[i].Key == key {
+				previousValue = m.history[i].OldValue
+				found = true
+				break
+			}
+		}
+		m.mu.RUnlock()
+	}
 
 	if !found {
 		return fmt.Errorf("no history for key %q", key)
@@ -222,17 +241,48 @@ func (m *Manager) Rollback(ctx context.Context, key string) error {
 		return m.Remove(ctx, key)
 	}
 
-	// Bypass validation for rollback (restoring known-good value)
-	m.mu.RLock()
-	source := m.source
-	m.mu.RUnlock()
+	// Write the rollback to Postgres with action type
 	if source != nil {
-		if err := source.Update(ctx, key, previousValue); err != nil {
-			return err
+		if pgSource, ok := source.(*PostgresSource); ok {
+			if err := pgSource.UpdateWithAction(ctx, key, previousValue, "config_rollback"); err != nil {
+				return err
+			}
+		} else {
+			if err := source.Update(ctx, key, previousValue); err != nil {
+				return err
+			}
 		}
 	}
 	m.applyChanges(map[string]string{key: previousValue}, "rollback")
 	return nil
+}
+
+// ResetToDefault resets a config key back to its schema default value.
+func (m *Manager) ResetToDefault(ctx context.Context, key string) error {
+	for _, entry := range Schema() {
+		if entry.Key == key {
+			if entry.Default == "" {
+				return m.Remove(ctx, key)
+			}
+			m.mu.RLock()
+			source := m.source
+			m.mu.RUnlock()
+			if source != nil {
+				if pgSource, ok := source.(*PostgresSource); ok {
+					if err := pgSource.UpdateWithAction(ctx, key, entry.Default, "config_reset"); err != nil {
+						return err
+					}
+				} else {
+					if err := source.Update(ctx, key, entry.Default); err != nil {
+						return err
+					}
+				}
+			}
+			m.applyChanges(map[string]string{key: entry.Default}, "reset")
+			return nil
+		}
+	}
+	return fmt.Errorf("key %q not in schema", key)
 }
 
 // Remove deletes a config value.
@@ -299,6 +349,18 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 		switch r.Method {
 		case http.MethodGet:
 			if r.URL.Query().Get("history") == "true" {
+				// Per-key history from Postgres audit log
+				key := r.URL.Query().Get("key")
+				if key != "" {
+					if pgSource, ok := m.source.(*PostgresSource); ok {
+						history, err := pgSource.History(r.Context(), key, 20)
+						if err == nil {
+							json.NewEncoder(w).Encode(history)
+							return
+						}
+					}
+				}
+				// Fall back to in-memory history
 				json.NewEncoder(w).Encode(m.History(50))
 				return
 			}
@@ -308,14 +370,40 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 				type entry struct {
 					SchemaEntry
 					CurrentValue string `json:"current_value"`
+					Status       string `json:"status"` // active, orphaned, new
 				}
+
+				// Build lookup of schema keys
+				schemaKeys := make(map[string]bool)
 				var result []entry
 				for _, s := range schema {
+					schemaKeys[s.Key] = true
 					result = append(result, entry{
 						SchemaEntry:  s,
 						CurrentValue: m.cfg.Get(s.Key, s.Default),
+						Status:       "active",
 					})
 				}
+
+				// Add orphaned keys from Postgres that aren't in current schema
+				allValues := m.All()
+				for key, val := range allValues {
+					if !schemaKeys[key] {
+						result = append(result, entry{
+							SchemaEntry: SchemaEntry{
+								Key:         key,
+								Type:        "string",
+								Default:     "",
+								Description: "Not in current schema (orphaned from previous version)",
+								Service:     "unknown",
+								Deprecated:  true,
+							},
+							CurrentValue: val,
+							Status:       "orphaned",
+						})
+					}
+				}
+
 				// Filter by service if requested
 				svc := r.URL.Query().Get("service")
 				if svc != "" {
@@ -337,6 +425,15 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 					return
 				}
 				json.NewEncoder(w).Encode(map[string]string{"key": key, "status": "rolled_back"})
+				return
+			}
+			if r.URL.Query().Get("reset") != "" {
+				key := r.URL.Query().Get("reset")
+				if err := m.ResetToDefault(r.Context(), key); err != nil {
+					http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]string{"key": key, "status": "reset_to_default"})
 				return
 			}
 			key := r.URL.Query().Get("key")
