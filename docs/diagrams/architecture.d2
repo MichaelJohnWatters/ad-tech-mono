@@ -1,0 +1,222 @@
+# Ad Tech Platform - System Architecture
+# Render: d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg
+
+direction: right
+
+# ============================================================
+# External
+# ============================================================
+
+browser: Browser {
+  shape: person
+  style.fill: "#94a3b8"
+}
+
+advertiser: Advertiser {
+  shape: person
+  style.fill: "#818cf8"
+}
+
+publisher: Publisher {
+  shape: person
+  style.fill: "#34d399"
+}
+
+# ============================================================
+# Gateway (entry point)
+# ============================================================
+
+gateway: Gateway :8080 {
+  style.fill: "#4361ee"
+  style.font-color: "#fff"
+
+  dashboard: HTMX Dashboard
+  swagger: Swagger UI
+  auth: JWT Auth + RBAC
+  proxy: API Proxy
+  sellers: sellers.json
+}
+
+browser -> gateway: HTTP/HTMX
+advertiser -> gateway: REST API + JWT
+publisher -> gateway: REST API + JWT
+
+# ============================================================
+# Auction Pipeline
+# ============================================================
+
+ssp: SSP :8084 {
+  style.fill: "#34d399"
+  placements: 5 Placements
+  bidgen: Bid Request Generator
+}
+
+exchange: Exchange :8081 {
+  style.fill: "#818cf8"
+  auction: First-Price Auction
+  fanout: 3-DSP Fan-out
+  winloss: Win/Loss Notifications
+}
+
+dsp_internal: DSP Internal :8082 {
+  style.fill: "#22d3ee"
+  campaigns: 4 Campaigns (YAML)
+  targeting: 11-Dim Targeting
+  pacing: Even/ASAP/Front-loaded
+  shading: Bid Shading (win-rate curves)
+}
+
+dsp_comp1: DSP Competitor1 :8089 {
+  style.fill: "#fb923c"
+  noise: "±30% noise, 20% no-bid"
+}
+
+dsp_comp2: DSP Competitor2 :8090 {
+  style.fill: "#f472b6"
+  noise: "±40% noise, 15% no-bid"
+}
+
+adserver: Ad Server :8085 {
+  style.fill: "#a78bfa"
+  macros: 20 Macros
+  pixels: Pixel URL Generator
+  creatives: 4 Seed Creatives
+}
+
+tracker: Tracker :8083 {
+  style.fill: "#fbbf24"
+  imp: /v1/t/imp (1x1 GIF)
+  click: /v1/t/click (302)
+  conv: /v1/t/conv (1x1 GIF)
+  view: /v1/t/view (204)
+}
+
+gateway -> ssp: placement request
+ssp -> exchange: OpenRTB bid request
+exchange -> dsp_internal: OpenRTB HTTP
+exchange -> dsp_comp1: OpenRTB HTTP
+exchange -> dsp_comp2: OpenRTB HTTP
+exchange -> adserver: serve creative
+browser -> tracker: pixel requests
+
+# ============================================================
+# NATS JetStream (async event bus)
+# ============================================================
+
+nats: NATS JetStream {
+  shape: queue
+  style.fill: "#22c55e"
+
+  stream: "Stream: adtech"
+  subjects: |md
+    adtech.events.impression
+    adtech.events.click
+    adtech.events.conversion
+    adtech.auction.win
+    adtech.auction.complete
+  |
+}
+
+tracker -> nats: publish events
+exchange -> nats: publish auction.win + auction.complete
+
+# ============================================================
+# Reporting + Billing (unified consumer)
+# ============================================================
+
+reporting: Reporting :8086 {
+  style.fill: "#60a5fa"
+  consumer: NATS Consumer
+  analytics: Analytics Store (Memory/DuckDB)
+  billing: Billing Engine
+  ledger: Double-Entry Ledger
+  query: Query API
+}
+
+nats -> reporting: consume events
+
+pipeline: Pipeline :8087 {
+  style.fill: "#a78bfa"
+  ingest: CSV/TSV Ingest
+  validate: Validate + Normalise
+  enrich: Enrich
+}
+
+dayboundary: Day Boundary Job {
+  shape: hexagon
+  style.fill: "#f59e0b"
+  budget: Daily Budget Reset
+  flights: Flight Transitions
+}
+
+# ============================================================
+# Infrastructure (K8s)
+# ============================================================
+
+postgres: PostgreSQL {
+  shape: cylinder
+  style.fill: "#336791"
+  style.font-color: "#fff"
+}
+
+redis: Redis {
+  shape: cylinder
+  style.fill: "#dc382d"
+  style.font-color: "#fff"
+}
+
+minio: Minio (S3) {
+  shape: cylinder
+  style.fill: "#c72e49"
+  style.font-color: "#fff"
+}
+
+dsp_internal -> redis: budget counters
+dsp_internal -> postgres: campaigns (future)
+reporting -> postgres: billing tables (future)
+adserver -> minio: creative assets (future)
+
+# ============================================================
+# Observability
+# ============================================================
+
+grafana: Grafana :3000 {
+  style.fill: "#f46800"
+  style.font-color: "#fff"
+  dashboards: 3 Dashboards
+}
+
+prometheus: Prometheus :9090 {
+  shape: cylinder
+  style.fill: "#e6522c"
+  style.font-color: "#fff"
+}
+
+loki: Loki :3100 {
+  shape: cylinder
+  style.fill: "#f4b400"
+}
+
+jaeger: Jaeger :16686 {
+  style.fill: "#66d3f8"
+}
+
+promtail: Promtail {
+  style.fill: "#f4b400"
+}
+
+grafana -> prometheus: metrics
+grafana -> loki: logs
+grafana -> jaeger: traces
+promtail -> loki: ship logs
+
+# ============================================================
+# Gateway proxies to all services
+# ============================================================
+
+gateway -> exchange: /v1/openrtb/*
+gateway -> dsp_internal: /v1/dsp/*
+gateway -> ssp: /v1/ssp/*
+gateway -> adserver: /v1/ad/*
+gateway -> reporting: /v1/reporting/* + /v1/billing/*
+gateway -> tracker: /v1/t/*

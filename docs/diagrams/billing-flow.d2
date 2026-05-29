@@ -1,0 +1,71 @@
+# Billing Flow - how money moves through the system
+# Render: d2 docs/diagrams/billing-flow.d2 docs/diagrams/billing-flow.svg
+
+direction: down
+
+# ============================================================
+# CPM (bill on impression)
+# ============================================================
+
+cpm: CPM - Bill Immediately {
+  style.fill: "#166534"
+  style.font-color: "#fff"
+
+  win: AuctionWinEvent {shape: parallelogram}
+  report: Write to Analytics Store
+  bill: Double-Entry Ledger (debit advertiser, credit publisher)
+
+  win -> report
+  report -> bill: atomic (same consumer)
+}
+
+# ============================================================
+# CPC (reserve on impression, settle on click)
+# ============================================================
+
+cpc: CPC - Reserve then Settle {
+  style.fill: "#1e3a5f"
+  style.font-color: "#fff"
+
+  imp: Impression arrives
+  reserve: Reserve (debit advertiser, credit escrow)
+  click: Click arrives
+  settle: Settle (debit escrow, credit publisher)
+  no_click: No click (24h timeout)
+  release: Release (debit escrow, credit advertiser refund)
+
+  imp -> reserve
+  reserve -> click: user clicks
+  click -> settle
+  reserve -> no_click: timeout
+  no_click -> release
+}
+
+# ============================================================
+# Revenue Share Models
+# ============================================================
+
+revenue: Revenue Share Models {
+  style.fill: "#581c87"
+  style.font-color: "#fff"
+
+  fixed: Fixed 20% fee
+  tiered: Tiered (volume brackets)
+  guaranteed: Guaranteed Min CPM
+  deal: Deal-Type modifiers
+}
+
+# ============================================================
+# Invoice / Payout
+# ============================================================
+
+output: Output {
+  invoice: Advertiser Invoice (monthly)
+  payout: Publisher Payout (net-30)
+  reconciliation: Daily Reconciliation Check
+}
+
+cpm -> output.invoice
+cpc -> output.invoice
+revenue -> output.payout
+output.payout -> output.reconciliation: daily verify

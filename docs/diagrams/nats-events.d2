@@ -1,0 +1,197 @@
+# NATS Event Flow - What goes on the queue
+# Render: d2 docs/diagrams/nats-events.d2 docs/diagrams/nats-events.svg
+
+direction: down
+
+title: NATS JetStream Event Flow {
+  shape: text
+  style.font-size: 24
+}
+
+# ============================================================
+# Publishers (services that produce events)
+# ============================================================
+
+publishers: Publishers {
+  style.fill: "#1a1a2e"
+  style.font-color: "#fff"
+
+  tracker: Tracker :8083 {
+    style.fill: "#fbbf24"
+    style.font-color: "#000"
+  }
+
+  exchange: Exchange :8081 {
+    style.fill: "#818cf8"
+    style.font-color: "#fff"
+  }
+
+  dsp: DSP :8082 {
+    style.fill: "#22d3ee"
+    style.font-color: "#000"
+  }
+
+  gateway: Gateway :8080 {
+    style.fill: "#4361ee"
+    style.font-color: "#fff"
+  }
+}
+
+# ============================================================
+# NATS Stream
+# ============================================================
+
+nats: NATS JetStream Cluster (3 nodes) {
+  shape: queue
+  style.fill: "#22c55e"
+  style.font-color: "#000"
+
+  stream: |md
+    **Stream: adtech**
+    Subjects: adtech.>
+    Retention: Interest (delete after all consumers ack)
+    Storage: File
+    Max Age: 24h
+  |
+}
+
+# ============================================================
+# Subjects
+# ============================================================
+
+subjects: Subjects {
+  style.fill: "#0f0f1a"
+  style.font-color: "#e0e0e0"
+
+  imp: adtech.events.impression {
+    style.fill: "#166534"
+    style.font-color: "#fff"
+  }
+  click: adtech.events.click {
+    style.fill: "#166534"
+    style.font-color: "#fff"
+  }
+  conv: adtech.events.conversion {
+    style.fill: "#166534"
+    style.font-color: "#fff"
+  }
+  view: adtech.events.view {
+    style.fill: "#166534"
+    style.font-color: "#fff"
+  }
+  win: adtech.auction.win {
+    style.fill: "#1e3a5f"
+    style.font-color: "#fff"
+  }
+  complete: adtech.auction.complete {
+    style.fill: "#1e3a5f"
+    style.font-color: "#fff"
+  }
+  budget: adtech.budget.depleted {
+    style.fill: "#7c2d12"
+    style.font-color: "#fff"
+  }
+  state: adtech.campaign.state_changed {
+    style.fill: "#7c2d12"
+    style.font-color: "#fff"
+  }
+  optout: adtech.privacy.opt_out {
+    style.fill: "#581c87"
+    style.font-color: "#fff"
+  }
+  deletion: adtech.privacy.deletion_requested {
+    style.fill: "#581c87"
+    style.font-color: "#fff"
+  }
+  cache: adtech.cache.invalidate.* {
+    style.fill: "#374151"
+    style.font-color: "#fff"
+  }
+}
+
+# ============================================================
+# Consumers
+# ============================================================
+
+consumers: Consumers {
+  style.fill: "#1a1a2e"
+  style.font-color: "#fff"
+
+  reporting: Reporting :8086 {
+    style.fill: "#60a5fa"
+    style.font-color: "#000"
+    what: |md
+      Analytics Store write
+      + Billing ledger write
+      (atomic, single consumer)
+    |
+  }
+
+  dsp_consumer: DSP {
+    style.fill: "#22d3ee"
+    style.font-color: "#000"
+    what: Budget decrement on win
+  }
+
+  webhooks: Webhooks {
+    style.fill: "#a78bfa"
+    style.font-color: "#000"
+    what: HTTP POST to registered URLs
+  }
+
+  all_services: All Services {
+    style.fill: "#374151"
+    style.font-color: "#fff"
+    what: L1 cache invalidation
+  }
+
+  privacy_job: Privacy Delete Job {
+    style.fill: "#581c87"
+    style.font-color: "#fff"
+    what: Purge user data from all systems
+  }
+}
+
+# ============================================================
+# Publish arrows
+# ============================================================
+
+publishers.tracker -> subjects.imp: pixel fired
+publishers.tracker -> subjects.click: click redirect
+publishers.tracker -> subjects.conv: conversion pixel
+publishers.tracker -> subjects.view: viewability beacon
+
+publishers.exchange -> subjects.win: auction winner
+publishers.exchange -> subjects.complete: all bids + timing
+
+publishers.dsp -> subjects.budget: campaign exhausted
+publishers.dsp -> subjects.state: live/paused/ended
+
+publishers.gateway -> subjects.optout: user opt-out
+publishers.gateway -> subjects.deletion: GDPR deletion
+publishers.gateway -> subjects.cache: config changed
+
+# ============================================================
+# Consume arrows
+# ============================================================
+
+subjects.imp -> consumers.reporting
+subjects.click -> consumers.reporting
+subjects.conv -> consumers.reporting
+subjects.view -> consumers.reporting
+subjects.win -> consumers.reporting
+subjects.win -> consumers.dsp_consumer
+subjects.complete -> consumers.reporting
+subjects.budget -> consumers.reporting
+subjects.state -> consumers.reporting
+subjects.state -> consumers.webhooks
+subjects.optout -> consumers.all_services
+subjects.deletion -> consumers.privacy_job
+subjects.cache -> consumers.all_services
+
+# ============================================================
+# NATS sits between publishers and subjects
+# ============================================================
+
+publishers -> nats: publish (JSON)
+nats -> subjects: route by subject

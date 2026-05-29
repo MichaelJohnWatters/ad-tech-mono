@@ -45,7 +45,6 @@
         <input type="text" id="traceInput" placeholder="Enter trace_id (e.g. req-abc123-def456)" />
         <button class="btn btn-primary" onclick="lookupTrace()">Trace</button>
         <button class="btn btn-success" onclick="fireSingleRequest()">Fire Single Request</button>
-        <button class="btn btn-ghost" onclick="fireDemoRequest()">Demo (Simulated)</button>
     </div>
 
     <div class="page-content" id="content">
@@ -194,12 +193,7 @@
         }
         const pixelMs = Math.round(performance.now() - t2);
         steps.push({ time: '+' + pixelMs + 'ms', service: 'tracker', cls: 'active', msg: 'Impression pixel fired', detail: `pixel URL has full context (campaign, creative, publisher, price)` });
-        steps.push({ time: '+0ms', service: 'tracker', cls: 'active', msg: 'Event forwarded to reporting service', detail: 'HTTP bridge (NATS in production)' });
-
-        // Future steps (not yet wired - shown as pending)
-        steps.push({ time: '—', service: 'tracker', cls: 'nobid', msg: 'Fraud scoring', detail: 'Phase 6 - not yet implemented' });
-        steps.push({ time: '—', service: 'nats', cls: 'nobid', msg: 'NATS JetStream publish', detail: 'Using HTTP bridge until wired' });
-        steps.push({ time: '—', service: 'billing', cls: 'nobid', msg: `$${bid.price.toFixed(2)} billing accrual`, detail: 'Phase 4 - not yet implemented' });
+        steps.push({ time: '+0ms', service: 'nats', cls: 'active', msg: 'Event published to NATS JetStream', detail: 'subject: adtech.events.impression (falls back to HTTP if NATS unavailable)' });
 
         renderSteps('Waiting for analytics store write...');
 
@@ -271,108 +265,6 @@
         content.innerHTML = html;
     }
 
-    // Demo mode: simulated trace with hardcoded timings (illustrative, not real data)
-    async function fireDemoRequest() {
-        const traceId = 'demo-' + Date.now();
-        document.getElementById('traceInput').value = traceId;
-
-        try {
-            const resp = await fetch(window.location.protocol + '//' + window.location.hostname + ':8080/v1/openrtb/auction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    id: traceId,
-                    imp: [{ id: "imp-1", banner: { w: 300, h: 250 }, bidfloor: 0.50 }],
-                    site: { domain: "demo.local", page: "/test" },
-                    device: { ua: navigator.userAgent, geo: { country: "GBR" } }
-                })
-            });
-            const result = await resp.json();
-            showTrace(traceId, result);
-        } catch (e) {
-            showTrace(traceId, null, e.message);
-        }
-    }
-
-    function showTrace(traceId, auctionResult, error, lookupData) {
-        const content = document.getElementById('content');
-        const hasWinner = auctionResult && !auctionResult.nobid && auctionResult.seatbid;
-
-        let nodes = [];
-
-        if (lookupData) {
-            // Lookup mode: we found events in the analytics store
-            nodes.push({ time: '—', service: 'reporting', cls: 'active', msg: `Found ${lookupData.impressions} impression(s) for this trace`, detail: `total cost: $${lookupData.cost.toFixed(2)} USD` });
-            nodes.push({ time: '—', service: 'exchange', cls: 'active', msg: 'Auction was run (historical)', detail: `trace_id: ${traceId}` });
-            nodes.push({ time: '—', service: 'tracker', cls: 'active', msg: 'Impression recorded', detail: '' });
-            nodes.push({ time: '—', service: 'reporting', cls: 'active', msg: 'Event persisted to analytics store', detail: '' });
-            nodes.push({ time: '—', service: 'billing', cls: 'active', msg: `$${lookupData.cost.toFixed(2)} accrued`, detail: '' });
-        } else if (!auctionResult && !error) {
-            // Lookup mode: no events found
-            nodes.push({ time: '—', service: 'reporting', cls: 'warn', msg: `No events found for trace_id: ${traceId}`, detail: 'Trace may have expired, or the reporting service has no data for this ID' });
-        } else {
-            // Live fire mode
-            nodes.push({ time: '0ms', service: 'exchange', cls: 'active', msg: `Auction started`, detail: `trace_id: ${traceId}` });
-
-            if (error) {
-                nodes.push({ time: '1ms', service: 'exchange', cls: 'error', msg: `Exchange unreachable: ${error}`, detail: 'Ensure exchange is running on :8081' });
-            } else if (auctionResult) {
-                nodes.push({ time: '2ms', service: 'exchange', cls: 'active', msg: 'Bid request fanned out to DSPs', detail: '' });
-
-                if (hasWinner) {
-                    const seat = auctionResult.seatbid[0];
-                    const bid = seat.bid[0];
-                    nodes.push({ time: '5ms', service: 'dsp', cls: 'active', msg: `Bid received: $${bid.price.toFixed(2)} CPM`, detail: `dsp: ${seat.seat}, creative: ${bid.crid || 'n/a'}` });
-                    nodes.push({ time: '15ms', service: 'exchange', cls: 'active', msg: `Auction complete: winner at $${bid.price.toFixed(2)}`, detail: `clearing_price: $${bid.price.toFixed(2)} (first-price)` });
-                    nodes.push({ time: '18ms', service: 'adserver', cls: 'active', msg: 'Creative served to browser', detail: `creative_id: ${bid.crid || 'n/a'}` });
-                    nodes.push({ time: '20ms', service: 'browser', cls: 'active', msg: 'Ad rendered in viewport', detail: '' });
-                    nodes.push({ time: '1200ms', service: 'tracker', cls: 'active', msg: 'Impression pixel received', detail: 'fraud_score: 0.02' });
-                    nodes.push({ time: '1201ms', service: 'nats', cls: 'active', msg: 'ImpressionEvent published', detail: 'subject: adtech.events.impression' });
-                    nodes.push({ time: '1205ms', service: 'reporting', cls: 'active', msg: 'Event written to analytics store', detail: 'DuckDB insert: impressions table' });
-                    nodes.push({ time: '1206ms', service: 'billing', cls: 'active', msg: `$${bid.price.toFixed(2)} accrued (CPM, immediate billing)`, detail: 'advertiser_spend + publisher_revenue' });
-                    nodes.push({ time: '2300ms', service: 'tracker', cls: 'active', msg: 'Viewability beacon: 2.3s visible, 85% area', detail: 'IAB viewable: yes' });
-                } else {
-                    nodes.push({ time: '5ms', service: 'dsp', cls: 'nobid', msg: 'No bids returned', detail: 'All DSPs declined or timed out' });
-                    nodes.push({ time: '10ms', service: 'exchange', cls: 'warn', msg: 'Auction complete: no winner', detail: 'No valid bids above floor price' });
-                }
-            }
-        }
-
-        let html = '<div class="demo-note">Trace ID: <code>' + traceId + '</code> &mdash; ';
-        if (lookupData) {
-            html += 'Found in analytics store. Showing recorded events.';
-        } else if (hasWinner) {
-            html += 'Auction won. Full trace shown below.';
-        } else if (!auctionResult && !error) {
-            html += 'No events found for this trace ID. Try "Fire Single Request" to create a new trace.';
-        } else {
-            html += 'No winning bid.';
-        }
-        html += ' In production, this view streams live from Loki via SSE.</div>';
-
-        html += '<div class="flow">';
-        for (const node of nodes) {
-            html += `<div class="node ${node.cls}">
-                <span class="time">${node.time}</span>
-                <span class="service ${node.service}">[${node.service.charAt(0).toUpperCase() + node.service.slice(1)}]</span>
-                <span class="msg">${node.msg}${node.detail ? ' <span class="detail">' + node.detail + '</span>' : ''}</span>
-            </div>`;
-        }
-        html += '</div>';
-
-        // Panels
-        if (hasWinner) {
-            const bid = auctionResult.seatbid[0].bid[0];
-            html += '<div class="panels">';
-            html += `<div class="panel"><h3>Clearing Price</h3><div class="metric green">$${bid.price.toFixed(2)}</div><div class="label">CPM (first-price)</div></div>`;
-            html += `<div class="panel"><h3>Winner</h3><div class="metric blue">${auctionResult.seatbid[0].seat}</div><div class="label">DSP ID</div></div>`;
-            html += `<div class="panel"><h3>Creative</h3><div class="metric yellow">${bid.crid || 'n/a'}</div><div class="label">Creative ID</div></div>`;
-            html += `<div class="panel"><h3>Trace Events</h3><div class="metric purple">${nodes.length}</div><div class="label">Total hops tracked</div></div>`;
-            html += '</div>';
-        }
-
-        content.innerHTML = html;
-    }
     </script>
 </body>
 </html>

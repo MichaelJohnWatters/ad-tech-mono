@@ -1,10 +1,11 @@
 // cmd/tracker records ad events (impressions, clicks, conversions, viewability).
 // Internet-facing - hit by end-user browsers via pixel URLs.
-// Routed directly by Traefik (bypasses Gateway for performance).
+// Publishes events to NATS JetStream. Falls back to HTTP bridge if NATS unavailable.
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -35,22 +38,43 @@ func main() {
 	lc := lifecycle.New(log)
 
 	port := cfg.Get("tracker.port", "8083")
+	natsURL := cfg.Get("tracker.nats_url", "nats://localhost:4222")
 	reportingURL := cfg.Get("tracker.reporting_url", "http://localhost:8086")
+
+	// Try NATS first, fall back to HTTP bridge
+	var bus events.EventBus
+	natsBus, err := natsbus.New(natsURL, "tracker", log)
+	if err != nil {
+		log.Warn("nats unavailable, using HTTP bridge to reporting", "error", err)
+		bus = nil // will use HTTP fallback
+	} else {
+		// Ensure the adtech stream exists
+		ctx := context.Background()
+		if err := natsBus.EnsureStream(ctx, "adtech", []string{"adtech.>"}); err != nil {
+			log.Warn("failed to create stream, using HTTP bridge", "error", err)
+			natsBus.Close()
+			bus = nil
+		} else {
+			bus = natsBus
+			lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
+			log.Info("nats connected, publishing events to JetStream")
+		}
+	}
+
+	publisher := &eventPublisher{bus: bus, reportingURL: reportingURL, log: log}
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", hlth.LivenessHandler())
 	mux.Handle("/readyz", hlth.ReadinessHandler())
 
-	// Impression pixel - all context comes from URL params (set by ad server macros)
+	// Impression pixel
 	mux.HandleFunc("/v1/t/imp", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
-
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 
 		price, _ := strconv.ParseFloat(q.Get("price"), 64)
-
 		reqLog.Info("impression",
 			"campaign_id", q.Get("cid"),
 			"creative_id", q.Get("crid"),
@@ -59,27 +83,23 @@ func main() {
 			"price", price,
 		)
 
-		// Forward to reporting service
-		go forwardEvent(reportingURL, analytics.Event{
-			Type: analytics.EventImpression,
-			Impression: &analytics.ImpressionEvent{
-				TraceID:          traceID,
-				CampaignID:       q.Get("cid"),
-				CreativeID:       q.Get("crid"),
-				PlacementID:      q.Get("pid"),
-				PublisherID:      q.Get("pubid"),
-				AccountID:        q.Get("advid"),
-				Geo:              q.Get("geo"),
-				Device:           q.Get("dev"),
-				Channel:          "display",
-				ClearingPrice:    price,
-				ClearingCurrency: q.Get("cur"),
-				ClearingPriceUSD: price, // TODO: convert if not USD
-				BidModel:         "cpm",
-				DealID:           q.Get("deal"),
-				SchemaVersion:    1,
-				Timestamp:        time.Now().UTC(),
-			},
+		go publisher.publishImpression(ctx, analytics.ImpressionEvent{
+			TraceID:          traceID,
+			CampaignID:       q.Get("cid"),
+			CreativeID:       q.Get("crid"),
+			PlacementID:      q.Get("pid"),
+			PublisherID:      q.Get("pubid"),
+			AccountID:        q.Get("advid"),
+			Geo:              q.Get("geo"),
+			Device:           q.Get("dev"),
+			Channel:          "display",
+			ClearingPrice:    price,
+			ClearingCurrency: q.Get("cur"),
+			ClearingPriceUSD: price,
+			BidModel:         "cpm",
+			DealID:           q.Get("deal"),
+			SchemaVersion:    1,
+			Timestamp:        time.Now().UTC(),
 		}, reqLog)
 
 		w.Header().Set("Content-Type", "image/gif")
@@ -92,27 +112,19 @@ func main() {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		redir := q.Get("redir")
-
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
-		reqLog.Info("click",
-			"campaign_id", q.Get("cid"),
-			"creative_id", q.Get("crid"),
-			"redirect", redir,
-		)
+		reqLog.Info("click", "campaign_id", q.Get("cid"), "redirect", redir)
 
-		go forwardEvent(reportingURL, analytics.Event{
-			Type: analytics.EventClick,
-			Click: &analytics.ClickEvent{
-				TraceID:     traceID,
-				CampaignID:  q.Get("cid"),
-				CreativeID:  q.Get("crid"),
-				PlacementID: q.Get("pid"),
-				PublisherID: q.Get("pubid"),
-				AccountID:   q.Get("advid"),
-				LandingURL:  redir,
-				Timestamp:   time.Now().UTC(),
-			},
+		go publisher.publishClick(ctx, analytics.ClickEvent{
+			TraceID:     traceID,
+			CampaignID:  q.Get("cid"),
+			CreativeID:  q.Get("crid"),
+			PlacementID: q.Get("pid"),
+			PublisherID: q.Get("pubid"),
+			AccountID:   q.Get("advid"),
+			LandingURL:  redir,
+			Timestamp:   time.Now().UTC(),
 		}, reqLog)
 
 		if redir == "" {
@@ -128,25 +140,21 @@ func main() {
 		traceID := q.Get("tid")
 		convType := q.Get("type")
 		revenue, _ := strconv.ParseFloat(q.Get("rev"), 64)
-
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("conversion", "type", convType, "revenue", revenue)
 
-		go forwardEvent(reportingURL, analytics.Event{
-			Type: analytics.EventConversion,
-			Conversion: &analytics.ConversionEvent{
-				TraceID:        traceID,
-				CampaignID:     q.Get("cid"),
-				CreativeID:     q.Get("crid"),
-				PlacementID:    q.Get("pid"),
-				AccountID:      q.Get("advid"),
-				ConversionType: convType,
-				Revenue:        revenue,
-				Currency:       q.Get("cur"),
-				RevenueUSD:     revenue,
-				Timestamp:      time.Now().UTC(),
-			},
+		go publisher.publishConversion(ctx, analytics.ConversionEvent{
+			TraceID:        traceID,
+			CampaignID:     q.Get("cid"),
+			CreativeID:     q.Get("crid"),
+			PlacementID:    q.Get("pid"),
+			AccountID:      q.Get("advid"),
+			ConversionType: convType,
+			Revenue:        revenue,
+			Currency:       q.Get("cur"),
+			RevenueUSD:     revenue,
+			Timestamp:      time.Now().UTC(),
 		}, reqLog)
 
 		w.Header().Set("Content-Type", "image/gif")
@@ -158,65 +166,89 @@ func main() {
 	mux.HandleFunc("/v1/t/view", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
-
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
-		reqLog.Info("viewability",
-			"duration_ms", q.Get("dur"),
-			"percent_visible", q.Get("pct"),
-			"campaign_id", q.Get("cid"),
-		)
-
+		reqLog.Info("viewability", "duration_ms", q.Get("dur"), "percent_visible", q.Get("pct"), "campaign_id", q.Get("cid"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Video event
+	// Video/Audio events
 	mux.HandleFunc("/v1/t/video", func(w http.ResponseWriter, r *http.Request) {
-		traceID := r.URL.Query().Get("tid")
-		eventType := r.URL.Query().Get("event")
-
-		ctx := logger.WithTraceID(r.Context(), traceID)
-		reqLog := logger.WithContext(log, ctx)
-		reqLog.Info("video_event", "event_type", eventType)
+		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
+		logger.WithContext(log, ctx).Info("video_event", "event_type", r.URL.Query().Get("event"))
 		w.WriteHeader(http.StatusNoContent)
 	})
-
-	// Audio event
 	mux.HandleFunc("/v1/t/audio", func(w http.ResponseWriter, r *http.Request) {
-		traceID := r.URL.Query().Get("tid")
-		eventType := r.URL.Query().Get("event")
-
-		ctx := logger.WithTraceID(r.Context(), traceID)
-		reqLog := logger.WithContext(log, ctx)
-		reqLog.Info("audio_event", "event_type", eventType)
+		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
+		logger.WithContext(log, ctx).Info("audio_event", "event_type", r.URL.Query().Get("event"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 
 	handler := middleware.CORS(mux)
-	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      handler,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
+	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
-	log.Info("tracker starting", "port", port, "reporting_url", reportingURL)
+	mode := "NATS JetStream"
+	if bus == nil {
+		mode = "HTTP bridge"
+	}
+	log.Info("tracker starting", "port", port, "mode", mode)
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
-// forwardEvent sends an event to the reporting service over HTTP.
-// Runs in a goroutine - fire and forget, don't block the pixel response.
-// This bridges the gap until NATS is wired end-to-end.
-func forwardEvent(reportingURL string, event analytics.Event, log *slog.Logger) {
-	body, err := json.Marshal([]analytics.Event{event})
-	if err != nil {
-		log.Warn("failed to marshal event for reporting", "error", err)
+// eventPublisher handles publishing to NATS or falling back to HTTP.
+type eventPublisher struct {
+	bus          events.EventBus
+	reportingURL string
+	log          *slog.Logger
+}
+
+func (p *eventPublisher) publishImpression(ctx context.Context, e analytics.ImpressionEvent, log *slog.Logger) {
+	if p.publish(ctx, events.SubjectImpression, e, log) {
 		return
 	}
+	p.httpFallback(analytics.Event{Type: analytics.EventImpression, Impression: &e}, log)
+}
 
-	resp, err := http.Post(reportingURL+"/v1/reporting/events", "application/json", bytes.NewReader(body))
+func (p *eventPublisher) publishClick(ctx context.Context, e analytics.ClickEvent, log *slog.Logger) {
+	if p.publish(ctx, events.SubjectClick, e, log) {
+		return
+	}
+	p.httpFallback(analytics.Event{Type: analytics.EventClick, Click: &e}, log)
+}
+
+func (p *eventPublisher) publishConversion(ctx context.Context, e analytics.ConversionEvent, log *slog.Logger) {
+	if p.publish(ctx, events.SubjectConversion, e, log) {
+		return
+	}
+	p.httpFallback(analytics.Event{Type: analytics.EventConversion, Conversion: &e}, log)
+}
+
+// publish marshals and publishes to NATS. Returns true if successful.
+func (p *eventPublisher) publish(ctx context.Context, subject string, payload interface{}, log *slog.Logger) bool {
+	if p.bus == nil {
+		return false
+	}
+	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Warn("failed to forward event to reporting", "error", err)
+		log.Warn("marshal failed", "subject", subject, "error", err)
+		return false
+	}
+	if err := p.bus.Publish(ctx, subject, data); err != nil {
+		log.Warn("nats publish failed, falling back to HTTP", "subject", subject, "error", err)
+		return false
+	}
+	return true
+}
+
+func (p *eventPublisher) httpFallback(event analytics.Event, log *slog.Logger) {
+	body, err := json.Marshal([]analytics.Event{event})
+	if err != nil {
+		log.Warn("marshal for http fallback failed", "error", err)
+		return
+	}
+	resp, err := http.Post(p.reportingURL+"/v1/reporting/events", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Warn("http fallback failed", "error", err)
 		return
 	}
 	resp.Body.Close()

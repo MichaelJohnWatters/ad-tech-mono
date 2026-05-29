@@ -13,7 +13,11 @@ proto: ## Regenerate Go code from proto files (via Buf)
 	@echo "Proto generation complete."
 
 diagrams: ## Regenerate SVG diagrams from D2 source files
-	d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg
+	@for f in docs/diagrams/*.d2; do \
+		name=$$(basename "$$f" .d2); \
+		echo "Rendering $$name..."; \
+		d2 "$$f" "docs/diagrams/$${name}.svg"; \
+	done
 	@echo "Diagrams regenerated."
 
 # --- Testing ---

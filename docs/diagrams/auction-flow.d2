@@ -1,0 +1,42 @@
+# Auction Request Flow
+# Render: d2 docs/diagrams/auction-flow.d2 docs/diagrams/auction-flow.svg
+
+direction: right
+
+browser: Browser {shape: person}
+ssp: SSP :8084
+exchange: Exchange :8081
+dsp_int: DSP Internal :8082
+dsp_c1: DSP Competitor1 :8089
+dsp_c2: DSP Competitor2 :8090
+adserver: Ad Server :8085
+tracker: Tracker :8083
+nats: NATS {shape: queue}
+reporting: Reporting :8086
+
+# Flow
+browser -> ssp: 1. Ad tag requests ad
+ssp -> exchange: 2. OpenRTB bid request
+
+exchange -> dsp_int: 3a. Fan-out (parallel)
+exchange -> dsp_c1: 3b. Fan-out (parallel)
+exchange -> dsp_c2: 3c. Fan-out (parallel)
+
+dsp_int -> exchange: 4a. Bid 2.50 CPM
+dsp_c1 -> exchange: 4b. Bid 4.73 CPM
+dsp_c2 -> exchange: 4c. Bid 5.50 CPM
+
+exchange -> adserver: 5. Winner - serve creative
+adserver -> browser: 6. HTML + pixel URLs (macros substituted)
+
+browser -> tracker: 7. Impression pixel (1x1 GIF)
+browser -> tracker: 8. Viewability beacon (204)
+
+tracker -> nats: 9. Publish events
+exchange -> nats: 10. Publish auction.win + auction.complete
+
+nats -> reporting: 11. Consume - analytics + billing
+
+exchange -> dsp_int: 12a. Loss notification
+exchange -> dsp_c1: 12b. Loss notification
+exchange -> dsp_c2: 12c. Win notification

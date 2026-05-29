@@ -1,0 +1,123 @@
+# Data Pipeline - how events become queryable analytics
+# Render: d2 docs/diagrams/data-pipeline.d2 docs/diagrams/data-pipeline.svg
+
+direction: right
+
+# ============================================================
+# Event Sources
+# ============================================================
+
+sources: Event Sources {
+  browser: Browser Pixels
+  exchange: Exchange Auctions
+}
+
+# ============================================================
+# NATS
+# ============================================================
+
+nats: NATS JetStream {
+  shape: queue
+  style.fill: "#22c55e"
+}
+
+sources.browser -> nats: impression/click/conv/view
+sources.exchange -> nats: auction.win/complete
+
+# ============================================================
+# Reporting Service (unified consumer)
+# ============================================================
+
+reporting: Reporting Service :8086 {
+  style.fill: "#60a5fa"
+
+  consumer: NATS Consumer
+  analytics: Analytics Store {
+    shape: cylinder
+    tables: |md
+      impressions
+      clicks
+      conversions
+      auctions
+    |
+  }
+  billing: Billing Engine {
+    ledger: Double-Entry Ledger {shape: cylinder}
+  }
+
+  consumer -> analytics: write event
+  consumer -> billing: bill atomically
+}
+
+nats -> reporting.consumer
+
+# ============================================================
+# Rollup Chain
+# ============================================================
+
+rollups: Rollup Chain {
+  style.fill: "#1e1e3a"
+  style.font-color: "#fff"
+
+  raw: Raw Events {style.fill: "#dc2626"; note: "retained 24-48h"}
+  minute: Minute Rollups {style.fill: "#ea580c"; note: "retained 7d"}
+  hourly: Hourly Rollups {style.fill: "#d97706"; note: "retained 90d"}
+  daily: Daily Rollups {style.fill: "#65a30d"; note: "retained 2y"}
+  monthly: Monthly Rollups {style.fill: "#0891b2"; note: "retained forever"}
+
+  raw -> minute: every minute
+  minute -> hourly: every hour
+  hourly -> daily: daily at 00:30 UTC
+  daily -> monthly: 1st of month
+}
+
+reporting.analytics -> rollups.raw
+
+# ============================================================
+# Query Layer
+# ============================================================
+
+query: Query Layer {
+  builder: Report Builder {
+    templates: |md
+      Campaign Performance
+      Creative Performance
+      Geo Breakdown
+      Publisher Yield
+    |
+  }
+  hll: HLL Reach/Frequency
+  forecast: Forecasting
+  auto_tier: Auto Tier Select {
+    note: |md
+      ≤30min → Minute
+      ≤24h → Hourly
+      ≤90d → Daily
+      else → Monthly
+    |
+  }
+}
+
+rollups -> query.auto_tier: read from right tier
+query -> gateway: REST API / dashboard
+
+gateway: Gateway :8080 {
+  style.fill: "#4361ee"
+  style.font-color: "#fff"
+}
+
+# ============================================================
+# Publisher Data Pipeline
+# ============================================================
+
+pipeline: Pipeline :8087 {
+  style.fill: "#a78bfa"
+
+  ingest: Ingest (CSV/TSV)
+  validate: Validate
+  normalise: Normalise (field mapping)
+  enrich: Enrich (geo, device)
+  datalake: Delta Lake {shape: cylinder}
+
+  ingest -> validate -> normalise -> enrich -> datalake
+}

@@ -1,0 +1,26 @@
+# Ad Tech Platform - Python ML/Data Science Dependencies
+# Used for model training only. Inference happens in Go.
+
+# Core
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+scipy>=1.12
+
+# Fraud detection
+xgboost>=2.0
+
+# Contextual classification
+# onnxruntime>=1.17  # for Go inference of trained models
+
+# Notebooks
+jupyter>=1.0
+matplotlib>=3.8
+seaborn>=0.13
+
+# Data
+pyarrow>=15.0  # Parquet read/write
+duckdb>=0.10   # local analytics queries
+
+# Export
+onnx>=1.15     # model export format for Go inference

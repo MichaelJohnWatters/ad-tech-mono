@@ -14,6 +14,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -61,6 +62,25 @@ func main() {
 
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
+
+	// Connect to NATS for event consumption
+	natsURL := cfg.Get("reporting.nats_url", "nats://localhost:4222")
+	natsBus, err := natsbus.New(natsURL, "reporting", log)
+	if err != nil {
+		log.Warn("nats unavailable, events only via HTTP endpoint", "error", err)
+	} else {
+		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
+		// Ensure stream exists before subscribing
+		ctx := context.Background()
+		if err := natsBus.EnsureStream(ctx, "adtech", []string{"adtech.>"}); err != nil {
+			log.Warn("failed to ensure stream", "error", err)
+		}
+		if err := consumer.RegisterNATSSubscriptions(natsBus); err != nil {
+			log.Error("failed to register NATS subscriptions", "error", err)
+		} else {
+			log.Info("consuming events from NATS JetStream")
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", hlth.LivenessHandler())
@@ -111,10 +131,10 @@ func NewEventConsumer(log *slog.Logger, store analytics.Store, billingEngine *bi
 // Called when NATS is available.
 func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 	subjects := map[string]events.Handler{
-		"adtech.events.impression": c.handleImpression,
-		"adtech.events.click":     c.handleClick,
-		"adtech.events.conversion": c.handleConversion,
-		"adtech.auction.complete":  c.handleAuction,
+		events.SubjectImpression:     c.handleImpression,
+		events.SubjectClick:          c.handleClick,
+		events.SubjectConversion:     c.handleConversion,
+		events.SubjectAuctionComplete: c.handleAuction,
 	}
 
 	ctx := context.Background()
