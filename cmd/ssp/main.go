@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
@@ -32,28 +34,29 @@ type Placement struct {
 }
 
 func main() {
-	cfg := config.Load()
-	log := logger.New("ssp")
+	log := logger.New(constants.ServiceSSP)
+	sc := config.Setup(constants.ServiceSSP, log)
+	cfg := sc.Cfg
+	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("ssp.port", "8084")
-	exchangeURL := cfg.Get("ssp.exchange_url", "http://localhost:8081")
+	port := cfg.Get("ssp.port", routes.PortSSP)
+	exchangeURL := cfg.Get("ssp.exchange_url", routes.DefaultExchangeURL)
 
 	placements := seedPlacements()
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
 	// List placements
-	mux.HandleFunc("/v1/ssp/placements", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc(routes.SSPPlacements, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(placements)
 	})
 
-	// Request an ad for a placement - generates a bid request and sends to exchange
-	mux.HandleFunc("/v1/ssp/request", requestAdHandler(log, placements, exchangeURL))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placements, exchangeURL))
 
 	handler := middleware.CORS(mux)
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -131,7 +134,7 @@ func requestAdHandler(log *slog.Logger, placements []Placement, exchangeURL stri
 
 		// Send to exchange
 		body, _ := json.Marshal(bidReq)
-		resp, err := http.Post(exchangeURL+"/v1/openrtb/auction", "application/json", bytes.NewReader(body))
+		resp, err := http.Post(exchangeURL+routes.OpenRTBAuction, constants.ContentTypeJSON, bytes.NewReader(body))
 		if err != nil {
 			reqLog.Error("exchange call failed", "error", err)
 			http.Error(w, "exchange unavailable", http.StatusBadGateway)
@@ -153,7 +156,7 @@ func requestAdHandler(log *slog.Logger, placements []Placement, exchangeURL stri
 			"bid_response": bidResp,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(result)
 	}
 }

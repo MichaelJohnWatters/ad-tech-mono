@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 )
 
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
@@ -38,8 +40,8 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 		// Inject account_id from auth claims for multi-tenancy
 		claims := ClaimsFromContext(r.Context())
 		if claims != nil {
-			upstreamReq.Header.Set("X-Account-ID", claims.AccountID)
-			upstreamReq.Header.Set("X-User-ID", claims.UserID)
+			upstreamReq.Header.Set(constants.HeaderAccountID, claims.AccountID)
+			upstreamReq.Header.Set(constants.HeaderUserID, claims.UserID)
 		}
 
 		// Forward

@@ -15,6 +15,8 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auction"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -23,27 +25,38 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 func main() {
 	clk := clock.Real{}
-	cfg := config.Load()
-	log := logger.New("exchange")
+	log := logger.New(constants.ServiceExchange)
+	sc := config.Setup(constants.ServiceExchange, log)
+	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("exchange.port", "8081")
-	channel := cfg.Get("exchange.channel", "all")
+	port := cfg.Get("exchange.port", routes.PortExchange)
+	channel := cfg.Get("exchange.channel", constants.ChannelAll)
 	bidTimeout := cfg.GetDuration("exchange.bid_timeout", 100*time.Millisecond)
-	dspEndpoints := strings.Split(cfg.Get("exchange.dsp_endpoints", "http://localhost:8082,http://localhost:8089,http://localhost:8090"), ",")
+	dspEndpoints := strings.Split(cfg.Get("exchange.dsp_endpoints", routes.DefaultDSPURL+",http://localhost:"+routes.PortDSPComp1+",http://localhost:"+routes.PortDSPComp2), ",")
 
 	engine := auction.NewEngine(clk)
 	httpClient := &http.Client{Timeout: bidTimeout}
 
+	// React to live config changes
+	sc.Manager.OnChange("exchange.bid_timeout", func(_, _, newVal string) {
+		if d, err := time.ParseDuration(newVal); err == nil {
+			httpClient.Timeout = d
+			log.Info("bid timeout updated live", "new", newVal)
+		}
+	})
+	adsTxtCache := fraud.NewAdsTxtCache()
+
 	// Connect to NATS for auction event publishing
-	natsURL := cfg.Get("exchange.nats_url", "nats://localhost:4222")
+	natsURL := cfg.Get("exchange.nats_url", routes.DefaultNATSURL)
 	var pub *events.Publisher
-	natsBus, err := natsbus.New(natsURL, "exchange", log)
+	natsBus, err := natsbus.New(natsURL, constants.ServiceExchange, log)
 	if err != nil {
 		log.Warn("nats unavailable, auction events will not be published", "error", err)
 	} else {
@@ -53,15 +66,18 @@ func main() {
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 	}
 
+	metrics := middleware.NewMetrics(constants.ServiceExchange)
+
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.HandleFunc(routes.Metrics, metrics.Handler())
 
-	mux.HandleFunc("/v1/openrtb/auction", auctionHandler(log, clk, engine, httpClient, dspEndpoints, channel, pub))
-	mux.HandleFunc("/v1/openrtb/win", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	mux.HandleFunc("/v1/openrtb/loss", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc(routes.OpenRTBAuction, auctionHandler(log, clk, engine, httpClient, dspEndpoints, channel, pub, adsTxtCache))
+	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
-	handler := middleware.CORS(mux)
+	handler := metrics.Wrap(middleware.CORS(mux))
 
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
@@ -69,7 +85,7 @@ func main() {
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, dspEndpoints []string, channel string, pub *events.Publisher) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, dspEndpoints []string, channel string, pub *events.Publisher, adsTxt *fraud.AdsTxtCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -93,7 +109,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		bids, bidRecords := fanOutToDSPs(ctx, client, dspEndpoints, bidReq, reqLog)
 
 		if len(bids) == 0 {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 			reqLog.Info("auction complete", "result", "no_bids", "duration_ms", clk.Since(start).Milliseconds())
 			return
@@ -110,7 +126,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 
 		result, err := engine.RunAuction(ctx, bids, auctionReq)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 			reqLog.Info("auction complete", "result", "no_winner", "error", err.Error(), "duration_ms", clk.Since(start).Milliseconds())
 			return
@@ -132,7 +148,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			}},
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 
 		reqLog.Info("auction complete",
@@ -250,12 +266,12 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		go func() {
 			body, _ := json.Marshal(bidReq)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-				endpoint+"/v1/openrtb/bid", bytes.NewReader(body))
+				endpoint+routes.OpenRTBBid, bytes.NewReader(body))
 			if err != nil {
 				ch <- dspResult{dspID: dspID, err: err}
 				return
 			}
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
 
 			start := time.Now()
 			resp, err := client.Do(req)

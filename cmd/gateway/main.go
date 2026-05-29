@@ -11,38 +11,42 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 func main() {
-	cfg := config.Load()
-	log := logger.New("gateway")
+	log := logger.New(constants.ServiceGateway)
+	sc := config.Setup(constants.ServiceGateway, log)
+	cfg := sc.Cfg
+	cfgMgr := sc.Manager
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("gateway.port", "8080")
-	signingKey := cfg.Get("gateway.jwt_signing_key", "") // empty = dev mode (no auth required)
+	port := cfg.Get("gateway.port", routes.PortGateway)
+	signingKey := cfg.Get("gateway.jwt_signing_key", "")
 
-	// Internal service URLs
-	dspURL := cfg.Get("gateway.dsp_url", "http://localhost:8082")
-	sspURL := cfg.Get("gateway.ssp_url", "http://localhost:8084")
-	adserverURL := cfg.Get("gateway.adserver_url", "http://localhost:8085")
-	reportingURL := cfg.Get("gateway.reporting_url", "http://localhost:8086")
-	exchangeURL := cfg.Get("gateway.exchange_url", "http://localhost:8081")
-	trackerURL := cfg.Get("gateway.tracker_url", "http://localhost:8083")
+	// Internal service URLs (configurable for staging/prod)
+	dspURL := cfg.Get("gateway.dsp_url", routes.DefaultDSPURL)
+	sspURL := cfg.Get("gateway.ssp_url", routes.DefaultSSPURL)
+	adserverURL := cfg.Get("gateway.adserver_url", routes.DefaultAdServerURL)
+	reportingURL := cfg.Get("gateway.reporting_url", routes.DefaultReportingURL)
+	exchangeURL := cfg.Get("gateway.exchange_url", routes.DefaultExchangeURL)
+	trackerURL := cfg.Get("gateway.tracker_url", routes.DefaultTrackerURL)
 
 	authMiddleware := middleware.Auth(signingKey, log)
 
 	mux := http.NewServeMux()
 
 	// Health (no auth)
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
 	// Static files (no auth)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
@@ -66,7 +70,7 @@ func main() {
 			{SellerID: "pub-sports-daily", Name: "Sports Daily", Domain: "sports-daily.com", SellerType: "PUBLISHER"},
 			{SellerID: "pub-shoppers-hub", Name: "Shoppers Hub", Domain: "shoppers-hub.com", SellerType: "PUBLISHER"},
 		})
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(sellers)
 	})
 
@@ -77,45 +81,45 @@ func main() {
 			http.Error(w, "spec not found", http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "application/yaml")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeYAML)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Write(data)
 	})
 	mux.HandleFunc("/docs", swaggerUIHandler())
 	mux.HandleFunc("/docs/", swaggerUIHandler())
 
-	// Auth endpoint - issue tokens (no auth required obviously)
-	mux.HandleFunc("/v1/auth/token", tokenHandler(signingKey))
+	// Config management API
+	mux.HandleFunc(routes.Config, cfgMgr.HTTPHandler())
+	mux.HandleFunc(routes.ProxyConfig, cfgMgr.HTTPHandler())
 
-	// API routes (auth required) - proxy to internal services with path rewriting
-	// /v1/api/campaigns/* -> DSP /v1/dsp/campaigns
-	mux.Handle("/v1/api/campaigns/", authMiddleware(
+	// Auth endpoint
+	mux.HandleFunc(routes.AuthToken, tokenHandler(signingKey))
+
+	// API routes (auth required) - proxy to internal services
+	mux.Handle(routes.APICampaigns, authMiddleware(
 		middleware.RequirePermission("campaigns:read")(
-			middleware.StripPrefix("/v1/api/campaigns", middleware.ReverseProxy(dspURL+"/v1/dsp/campaigns", log)))))
+			middleware.StripPrefix(routes.APICampaigns, middleware.ReverseProxy(dspURL+routes.DSPCampaigns, log)))))
 
-	// /v1/api/placements/* -> SSP /v1/ssp/placements
-	mux.Handle("/v1/api/placements/", authMiddleware(
+	mux.Handle(routes.APIPlacements, authMiddleware(
 		middleware.RequirePermission("placements:read")(
-			middleware.StripPrefix("/v1/api/placements", middleware.ReverseProxy(sspURL+"/v1/ssp/placements", log)))))
+			middleware.StripPrefix(routes.APIPlacements, middleware.ReverseProxy(sspURL+routes.SSPPlacements, log)))))
 
-	// /v1/api/creatives/* -> Ad Server /v1/ad/creatives
-	mux.Handle("/v1/api/creatives/", authMiddleware(
+	mux.Handle(routes.APICreatives, authMiddleware(
 		middleware.RequirePermission("creatives:read")(
-			middleware.StripPrefix("/v1/api/creatives", middleware.ReverseProxy(adserverURL+"/v1/ad/creatives", log)))))
+			middleware.StripPrefix(routes.APICreatives, middleware.ReverseProxy(adserverURL+routes.AdCreatives, log)))))
 
-	// /v1/api/reports/* -> Reporting /v1/reporting/query
-	mux.Handle("/v1/api/reports/", authMiddleware(
+	mux.Handle(routes.APIReports, authMiddleware(
 		middleware.RequirePermission("reports:read")(
-			middleware.StripPrefix("/v1/api/reports", middleware.ReverseProxy(reportingURL+"/v1/reporting", log)))))
+			middleware.StripPrefix(routes.APIReports, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log)))))
 
-	// Pass-through proxies (so Swagger try-it-out works from :8080)
-	mux.Handle("/v1/reporting/", middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
-	mux.Handle("/v1/openrtb/", middleware.CORS(middleware.ReverseProxy(exchangeURL, log)))
-	mux.Handle("/v1/t/", middleware.CORS(middleware.ReverseProxy(trackerURL, log)))
-	mux.Handle("/v1/ad/", middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
-	mux.Handle("/v1/ssp/", middleware.CORS(middleware.ReverseProxy(sspURL, log)))
-	mux.Handle("/v1/dsp/", middleware.CORS(middleware.ReverseProxy(dspURL, log)))
-	mux.Handle("/v1/billing/", middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
+	// Pass-through proxies (Swagger try-it-out, dev tools)
+	mux.Handle(routes.ProxyReporting, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
+	mux.Handle(routes.ProxyOpenRTB, middleware.CORS(middleware.ReverseProxy(exchangeURL, log)))
+	mux.Handle(routes.ProxyTracker, middleware.CORS(middleware.ReverseProxy(trackerURL, log)))
+	mux.Handle(routes.ProxyAdServer, middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
+	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
+	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
+	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 
 	// Dashboard home (no auth in dev mode)
 	mux.HandleFunc("/", dashboardHandler())
@@ -189,7 +193,7 @@ func tokenHandler(signingKey string) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"token":        token,
 			"expires_at":   claims.ExpiresAt,
@@ -207,7 +211,7 @@ func dashboardHandler() http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeHTML)
 		w.Write([]byte(`<!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
@@ -328,7 +332,7 @@ function toggleTheme(){var h=document.documentElement,n=h.classList.contains('da
 
 func swaggerUIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeHTML)
 		w.Write([]byte(`<!DOCTYPE html>
 <html>
 <head>

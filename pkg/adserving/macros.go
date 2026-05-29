@@ -87,8 +87,8 @@ func BuildImpressionURL(ctx MacroContext) string {
 	if ctx.DealID != "" {
 		params.Set("deal", ctx.DealID)
 	}
-	params.Set("sig", "TODO") // HMAC signature
-	return ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
+	rawURL := ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
+	return SignURL(rawURL, DefaultSigningKey)
 }
 
 // BuildClickURL builds the click tracking URL.
@@ -99,8 +99,8 @@ func BuildClickURL(ctx MacroContext) string {
 	params.Set("crid", ctx.CreativeID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
-	params.Set("sig", "TODO")
-	return ctx.TrackerURL + "/v1/t/click?" + params.Encode()
+	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
+	return SignURL(rawURL, DefaultSigningKey)
 }
 
 // BuildViewabilityURL builds the viewability beacon URL.
@@ -110,6 +110,6 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	params.Set("cid", ctx.CampaignID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
-	params.Set("sig", "TODO")
-	return ctx.TrackerURL + "/v1/t/view?" + params.Encode()
+	rawURL := ctx.TrackerURL + "/v1/t/view?" + params.Encode()
+	return SignURL(rawURL, DefaultSigningKey)
 }

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 )
 
@@ -58,7 +59,7 @@ func main() {
 	dateStr := flag.String("date", "", "date to process (YYYY-MM-DD), defaults to today UTC")
 	flag.Parse()
 
-	log := logger.New("dayboundary")
+	log := logger.New("dayboundary") // not a long-running service, no constants entry needed
 
 	var processDate time.Time
 	if *dateStr != "" {
@@ -101,7 +102,7 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 
 	// Step 1: Daily budget resets
 	for _, li := range lineItems {
-		if li.Status == "live" && li.DailyBudget > 0 {
+		if li.Status == constants.StatusLive && li.DailyBudget > 0 {
 			// Snapshot today's spend
 			log.Info("budget reset",
 				"line_item", li.ID,
@@ -117,7 +118,7 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 	yesterday := date.AddDate(0, 0, -1)
 	for _, li := range lineItems {
 		// Start campaigns whose start_date is today
-		if li.Status == "approved" && !li.StartDate.After(date) {
+		if li.Status == constants.StatusApproved && !li.StartDate.After(date) {
 			log.Info("campaign started",
 				"line_item", li.ID,
 				"start_date", li.StartDate.Format("2006-01-02"),
@@ -127,7 +128,7 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 		}
 
 		// End campaigns whose end_date was yesterday
-		if li.Status == "live" && !li.EndDate.IsZero() && li.EndDate.Before(date) && !li.EndDate.Before(yesterday) {
+		if li.Status == constants.StatusLive && !li.EndDate.IsZero() && li.EndDate.Before(date) && !li.EndDate.Before(yesterday) {
 			log.Info("campaign ended",
 				"line_item", li.ID,
 				"end_date", li.EndDate.Format("2006-01-02"),
@@ -138,7 +139,7 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 
 	// Step 3: IO budget and flight checks
 	for _, io := range ios {
-		if io.Status == "active" && io.TotalSpend >= io.TotalBudget {
+		if io.Status == constants.StatusLive && io.TotalSpend >= io.TotalBudget {
 			log.Info("IO budget depleted",
 				"io", io.ID,
 				"spend", io.TotalSpend,
@@ -147,7 +148,7 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 			result.IOsDepleted++
 		}
 
-		if io.Status == "active" && !io.EndDate.IsZero() && io.EndDate.Before(date) {
+		if io.Status == constants.StatusLive && !io.EndDate.IsZero() && io.EndDate.Before(date) {
 			log.Info("IO ended",
 				"io", io.ID,
 				"end_date", io.EndDate.Format("2006-01-02"),
@@ -164,22 +165,22 @@ func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoun
 func demoLineItems(today time.Time) []LineItemState {
 	return []LineItemState{
 		{
-			ID: "li-001", IOId: "io-001", Status: "live",
+			ID: "li-001", IOId: "io-001", Status: constants.StatusLive,
 			StartDate: today.AddDate(0, 0, -7), EndDate: today.AddDate(0, 0, 23),
 			DailyBudget: 500, TotalBudget: 10000, TotalSpend: 2100, DailySpend: 350,
 		},
 		{
-			ID: "li-002", IOId: "io-001", Status: "live",
+			ID: "li-002", IOId: "io-001", Status: constants.StatusLive,
 			StartDate: today.AddDate(0, 0, -3), EndDate: today.AddDate(0, 0, 27),
 			DailyBudget: 1000, TotalBudget: 25000, TotalSpend: 2500, DailySpend: 850,
 		},
 		{
-			ID: "li-new", IOId: "io-002", Status: "approved",
+			ID: "li-new", IOId: "io-002", Status: constants.StatusApproved,
 			StartDate: today, EndDate: today.AddDate(0, 1, 0),
 			DailyBudget: 300, TotalBudget: 5000, TotalSpend: 0, DailySpend: 0,
 		},
 		{
-			ID: "li-ending", IOId: "io-003", Status: "live",
+			ID: "li-ending", IOId: "io-003", Status: constants.StatusLive,
 			StartDate: today.AddDate(0, -1, 0), EndDate: today.AddDate(0, 0, -1),
 			DailyBudget: 200, TotalBudget: 3000, TotalSpend: 2800, DailySpend: 180,
 		},
@@ -188,10 +189,10 @@ func demoLineItems(today time.Time) []LineItemState {
 
 func demoIOs(today time.Time) []IOState {
 	return []IOState{
-		{ID: "io-001", Status: "active", EndDate: today.AddDate(0, 1, 0), TotalBudget: 35000, TotalSpend: 4600},
-		{ID: "io-002", Status: "active", EndDate: today.AddDate(0, 1, 0), TotalBudget: 5000, TotalSpend: 0},
-		{ID: "io-003", Status: "active", EndDate: today.AddDate(0, 0, -1), TotalBudget: 3000, TotalSpend: 2800},
-		{ID: "io-depleted", Status: "active", EndDate: today.AddDate(0, 1, 0), TotalBudget: 1000, TotalSpend: 1000},
+		{ID: "io-001", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 35000, TotalSpend: 4600},
+		{ID: "io-002", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 5000, TotalSpend: 0},
+		{ID: "io-003", Status: constants.StatusLive, EndDate: today.AddDate(0, 0, -1), TotalBudget: 3000, TotalSpend: 2800},
+		{ID: "io-depleted", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 1000, TotalSpend: 1000},
 	}
 }
 

@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
 
@@ -109,8 +111,8 @@ func runSimulation() {
 	profileName := getFlag("--profile", "trickle")
 	duration := parseDuration(getFlag("--duration", "1m"))
 	maxRequests := parseInt(getFlag("--requests", "0"))
-	exchangeURL := getFlag("--exchange-url", "http://localhost:8081")
-	trackerURL := getFlag("--tracker-url", "http://localhost:8083")
+	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
+	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
 
 	p, ok := profiles[profileName]
 	if !ok {
@@ -205,8 +207,8 @@ func runSimulation() {
 func runSingle() {
 	geo := getFlag("--geo", "GBR")
 	device := getFlag("--device", "mobile")
-	exchangeURL := getFlag("--exchange-url", "http://localhost:8081")
-	trackerURL := getFlag("--tracker-url", "http://localhost:8083")
+	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
+	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
 
 	traceID := fmt.Sprintf("single-%d", time.Now().UnixMilli())
 	bidReq := openrtb.BidRequest{
@@ -252,14 +254,14 @@ func listProfiles() {
 }
 
 func checkServices() {
-	exchangeURL := getFlag("--exchange-url", "http://localhost:8081")
-	trackerURL := getFlag("--tracker-url", "http://localhost:8083")
-	dspURL := "http://localhost:8082"
+	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
+	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
+	dspURL := routes.DefaultDSPURL
 
 	services := map[string]string{
-		"Exchange": exchangeURL + "/healthz",
-		"DSP":      dspURL + "/healthz",
-		"Tracker":  trackerURL + "/healthz",
+		"Exchange": exchangeURL + routes.Healthz,
+		"DSP":      dspURL + routes.Healthz,
+		"Tracker":  trackerURL + routes.Healthz,
 	}
 
 	allOK := true
@@ -311,7 +313,7 @@ func generateBidRequest(traceID string, p profile) openrtb.BidRequest {
 
 func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest) (bool, error) {
 	body, _ := json.Marshal(bidReq)
-	resp, err := client.Post(exchangeURL+"/v1/openrtb/auction", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(exchangeURL+routes.OpenRTBAuction, constants.ContentTypeJSON, bytes.NewReader(body))
 	if err != nil {
 		return false, err
 	}

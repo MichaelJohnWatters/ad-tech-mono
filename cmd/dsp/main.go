@@ -14,7 +14,9 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/bidshading"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -68,12 +70,14 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 
 func main() {
 	clk := clock.Real{}
-	cfg := config.Load()
-	log := logger.New("dsp")
+	log := logger.New(constants.ServiceDSP)
+	sc := config.Setup(constants.ServiceDSP, log)
+	cfg := sc.Cfg
+	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("dsp.port", "8082")
+	port := cfg.Get("dsp.port", routes.PortDSP)
 	profile := cfg.Get("dsp.profile", "internal")
 
 	// Load campaigns from YAML profile
@@ -97,28 +101,28 @@ func main() {
 	noBidRate := dspProfile.NoBidRate
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
-	mux.HandleFunc("/v1/openrtb/bid", bidHandler(log, clk, campaigns, budget, isCompetitor, noisePct, noBidRate))
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaigns, budget, isCompetitor, noisePct, noBidRate))
 
 	// Win/loss notification endpoints
-	mux.HandleFunc("/v1/openrtb/win", winHandler(log, budget, shadingTracker))
-	mux.HandleFunc("/v1/openrtb/loss", lossHandler(log, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
 
 	// Win-rate stats endpoint for debugging
-	mux.HandleFunc("/v1/dsp/shading", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
 		placements := shadingTracker.AllPlacements()
 		result := make(map[string]bidshading.PlacementStats)
 		for _, pid := range placements {
 			result[pid] = shadingTracker.Stats(pid)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(result)
 	})
 
 	// Campaign list endpoint for debugging
-	mux.HandleFunc("/v1/dsp/campaigns", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc(routes.DSPCampaigns, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(campaigns)
 	})
 
@@ -156,6 +160,15 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns []Campaign, budget 
 		if bidReq.Site != nil {
 			tReq.Domain = bidReq.Site.Domain
 			tReq.Categories = bidReq.Site.Cat
+			// Contextual classification: if publisher didn't declare categories,
+			// classify from URL pattern or keywords
+			if len(tReq.Categories) == 0 {
+				classifier := targeting.NewClassifier()
+				tReq.Categories = classifier.Classify(
+					bidReq.Site.Domain, bidReq.Site.Page,
+					nil, nil,
+				)
+			}
 		}
 		if bidReq.User != nil && bidReq.User.Ext != nil {
 			tReq.Segments = bidReq.User.Ext.Segments
@@ -173,7 +186,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns []Campaign, budget 
 
 		for i := range campaigns {
 			c := &campaigns[i]
-			if c.Status != "live" {
+			if c.Status != constants.StatusLive {
 				continue
 			}
 
@@ -244,7 +257,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns []Campaign, budget 
 		}
 
 		if bestBid == nil {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 			reqLog.Info("no bid", "reason", "no eligible campaigns")
 			return
@@ -260,7 +273,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns []Campaign, budget 
 			}},
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 
 		reqLog.Info("bid submitted",
@@ -292,7 +305,7 @@ func internalCampaigns() []Campaign {
 			IOId: "io-001", Name: "Acme Shoes - UK Mobile",
 			CreativeID: "cr-shoes-001", CreativeDomain: "acme-shoes.com",
 			BaseBid: 2.50, Currency: "USD", DailyBudget: 500, TotalBudget: 10000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Geo: []string{"GBR"}, Device: []string{"mobile"}},
 			},
@@ -302,7 +315,7 @@ func internalCampaigns() []Campaign {
 			IOId: "io-001", Name: "Acme Shoes - US All Devices",
 			CreativeID: "cr-shoes-002", CreativeDomain: "acme-shoes.com",
 			BaseBid: 3.00, Currency: "USD", DailyBudget: 1000, TotalBudget: 25000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Geo: []string{"USA"}},
 			},
@@ -315,7 +328,7 @@ func internalCampaigns() []Campaign {
 			IOId: "io-002", Name: "Globex Tech - Desktop Worldwide",
 			CreativeID: "cr-tech-001", CreativeDomain: "globex-tech.com",
 			BaseBid: 1.80, Currency: "USD", DailyBudget: 300, TotalBudget: 5000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Device: []string{"desktop"}},
 			},
@@ -328,7 +341,7 @@ func internalCampaigns() []Campaign {
 			IOId: "io-003", Name: "Initech SaaS - Run of Network",
 			CreativeID: "cr-saas-001", CreativeDomain: "initech.io",
 			BaseBid: 1.20, Currency: "USD", DailyBudget: 200, TotalBudget: 3000,
-			BidModel: "cpm", PacingMode: "asap", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingASAP, Status: constants.StatusLive,
 			Targeting: targeting.Rules{},
 			Modifiers: targeting.Modifiers{
 				Device:     map[string]float64{"mobile": 25},
@@ -346,7 +359,7 @@ func competitor1Campaigns() []Campaign {
 			IOId: "c1-io-001", Name: "MegaStore Summer Blowout",
 			CreativeID: "c1-cr-001", CreativeDomain: "megastore.com",
 			BaseBid: 3.50, Currency: "USD", DailyBudget: 5000, TotalBudget: 100000,
-			BidModel: "cpm", PacingMode: "asap", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingASAP, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Geo: []string{"GBR", "USA", "DEU", "FRA"}},
 			},
@@ -360,7 +373,7 @@ func competitor1Campaigns() []Campaign {
 			IOId: "c1-io-002", Name: "LuxAuto - Premium Desktop",
 			CreativeID: "c1-cr-002", CreativeDomain: "luxauto.com",
 			BaseBid: 8.00, Currency: "USD", DailyBudget: 2000, TotalBudget: 50000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Device: []string{"desktop"}, Geo: []string{"GBR", "USA"}},
 			},
@@ -370,7 +383,7 @@ func competitor1Campaigns() []Campaign {
 			IOId: "c1-io-003", Name: "QuickBite App Install",
 			CreativeID: "c1-cr-003", CreativeDomain: "quickbite.app",
 			BaseBid: 1.50, Currency: "USD", DailyBudget: 3000, TotalBudget: 60000,
-			BidModel: "cpm", PacingMode: "front_loaded", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingFrontLoaded, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Device: []string{"mobile", "tablet"}},
 			},
@@ -389,7 +402,7 @@ func competitor2Campaigns() []Campaign {
 			IOId: "c2-io-001", Name: "VPN Plus - Global RON",
 			CreativeID: "c2-cr-001", CreativeDomain: "vpnplus.com",
 			BaseBid: 0.80, Currency: "USD", DailyBudget: 10000, TotalBudget: 200000,
-			BidModel: "cpm", PacingMode: "asap", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingASAP, Status: constants.StatusLive,
 			Targeting: targeting.Rules{}, // run of network
 			Modifiers: targeting.Modifiers{
 				Device:     map[string]float64{"mobile": 10, "desktop": 5},
@@ -401,7 +414,7 @@ func competitor2Campaigns() []Campaign {
 			IOId: "c2-io-002", Name: "CryptoEx - High Value Geo",
 			CreativeID: "c2-cr-002", CreativeDomain: "cryptoex.io",
 			BaseBid: 5.00, Currency: "USD", DailyBudget: 1000, TotalBudget: 20000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Geo: []string{"USA", "GBR"}, Device: []string{"desktop"}},
 			},
@@ -411,7 +424,7 @@ func competitor2Campaigns() []Campaign {
 			IOId: "c2-io-003", Name: "Epic Quest - Mobile Gamers",
 			CreativeID: "c2-cr-003", CreativeDomain: "epicquest.game",
 			BaseBid: 4.00, Currency: "USD", DailyBudget: 4000, TotalBudget: 80000,
-			BidModel: "cpm", PacingMode: "asap", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingASAP, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Device: []string{"mobile"}},
 			},
@@ -424,7 +437,7 @@ func competitor2Campaigns() []Campaign {
 			IOId: "c2-io-004", Name: "CloudCRM - B2B Desktop",
 			CreativeID: "c2-cr-004", CreativeDomain: "cloudcrm.io",
 			BaseBid: 6.50, Currency: "USD", DailyBudget: 800, TotalBudget: 15000,
-			BidModel: "cpm", PacingMode: "even", Status: "live",
+			BidModel: constants.BidModelCPM, PacingMode: constants.PacingEven, Status: constants.StatusLive,
 			Targeting: targeting.Rules{
 				Include: targeting.TargetingSet{Device: []string{"desktop"}},
 			},
