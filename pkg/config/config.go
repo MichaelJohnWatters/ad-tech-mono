@@ -20,14 +20,14 @@ import (
 	"time"
 )
 
-// Config holds configuration values loaded from all three layers.
+// Config holds configuration values loaded from all layers.
+// Lookup order: live config (Postgres) -> env var -> code default.
+// All pods of a service share the same config. Use env vars for pod-specific overrides.
 type Config struct {
 	values map[string]string
 }
 
-// Load creates a new Config populated from environment variables.
-// Live config (Postgres layer) is added later via SetLive() when
-// the database connection is established.
+// Load creates a new Config.
 func Load() *Config {
 	return &Config{
 		values: make(map[string]string),
@@ -36,11 +36,9 @@ func Load() *Config {
 
 // Get returns a config value. Checks: live config -> env var -> default.
 func (c *Config) Get(key string, defaultValue string) string {
-	// Check live config first
 	if v, ok := c.values[key]; ok {
 		return v
 	}
-	// Check environment variable (dots replaced with underscores, uppercased)
 	envKey := envKeyFromConfigKey(key)
 	if v := os.Getenv(envKey); v != "" {
 		return v
