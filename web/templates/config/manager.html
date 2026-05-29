@@ -52,6 +52,9 @@
     <!-- Service filter pills -->
     <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
 
+    <!-- Alerts -->
+    <div id="alerts" class="mb-4"></div>
+
     <!-- Pod overview -->
     <div id="podOverview" class="mb-4"></div>
 
@@ -91,6 +94,7 @@ async function loadData() {
     services = await svcResp.json() || [];
     schema = await schemaResp.json() || [];
     storeOriginalValues();
+    renderAlerts();
     renderPills();
     renderPodOverview();
     filterConfig();
@@ -153,6 +157,47 @@ function renderPodOverview() {
     `;
 }
 
+function renderAlerts() {
+    const el = document.getElementById('alerts');
+    const allPods = services.flatMap(g => g.pods || []);
+    const staleTimeout = 120000; // 2 minutes
+
+    const stalePods = allPods.filter(p =>
+        p.status === 'running' && (Date.now() - new Date(p.last_ping_at).getTime()) > staleTimeout
+    );
+    const stoppedPods = allPods.filter(p => p.status === 'stopped');
+    const orphanedKeys = schema.filter(k => k.status === 'orphaned');
+
+    if (stalePods.length === 0 && stoppedPods.length === 0 && orphanedKeys.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+
+    el.innerHTML = `
+        ${stalePods.length > 0 ? `
+            <div class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm mb-2">
+                <div class="text-red-500 font-medium mb-1">&#9888; ${stalePods.length} stale pod${stalePods.length > 1 ? 's' : ''} (not polling)</div>
+                <div class="flex flex-wrap gap-1">
+                    ${stalePods.map(p => `<button onclick="viewPodConfig('${p.service}','${p.pod_id}')" class="px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/40 text-red-500 text-xs font-mono hover:ring-1 hover:ring-red-400 cursor-pointer">${p.service}/${p.pod_id} (${timeAgo(p.last_ping_at)})</button>`).join('')}
+                </div>
+            </div>
+        ` : ''}
+        ${stoppedPods.length > 0 ? `
+            <div class="px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-sm mb-2">
+                <div class="text-amber-500 font-medium mb-1">&#9724; ${stoppedPods.length} stopped pod${stoppedPods.length > 1 ? 's' : ''}</div>
+                <div class="flex flex-wrap gap-1">
+                    ${stoppedPods.map(p => `<button onclick="viewPodConfig('${p.service}','${p.pod_id}')" class="px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-500 text-xs font-mono hover:ring-1 hover:ring-amber-400 cursor-pointer">${p.service}/${p.pod_id}</button>`).join('')}
+                </div>
+            </div>
+        ` : ''}
+        ${orphanedKeys.length > 0 ? `
+            <div class="px-4 py-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 text-sm mb-2">
+                <div class="text-purple-500 font-medium">&#128268; ${orphanedKeys.length} orphaned config key${orphanedKeys.length > 1 ? 's' : ''} from previous versions</div>
+            </div>
+        ` : ''}
+    `;
+}
+
 function viewPodConfig(service, podId) {
     // Show pod-specific overrides alongside service config
     selectedService = service;
@@ -197,9 +242,19 @@ function filterConfig() {
     const query = document.getElementById('searchInput').value;
     let filtered = schema;
 
-    // Service filter
+    // Service/pod filter: show keys this service uses (service-specific + platform)
     if (selectedService !== 'all') {
-        filtered = filtered.filter(e => e.Service === selectedService);
+        const group = services.find(g => g.service === selectedService);
+        // Use the pod's config_keys if available (includes platform keys)
+        const pod = selectedPod
+            ? group?.pods?.find(p => p.pod_id === selectedPod)
+            : group?.pods?.[0]; // any pod has the same key list
+        if (pod?.config_keys?.length) {
+            filtered = filtered.filter(e => pod.config_keys.includes(e.Key));
+        } else {
+            // Fallback: show service + platform keys
+            filtered = filtered.filter(e => e.Service === selectedService || e.Service === 'platform');
+        }
     }
 
     // Fuzzy search across key, description, service, value, type
@@ -236,13 +291,22 @@ function renderTable(entries) {
         <div class="mb-6">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">${svc}</h3>
             <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
-                ${keys.map(k => `
+                ${keys.map(k => {
+                    // Check if this key has a pod-specific override
+                    const podKey = selectedPod ? podScopedKey(k.Key, selectedPod) : null;
+                    const podOverride = podKey ? schema.find(s => s.Key === podKey) : null;
+                    const hasPodOverride = !!podOverride;
+                    return `
                     <div class="px-4 py-3" id="row-${cssId(k.Key)}">
                         <div class="flex items-center justify-between mb-1">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <span class="font-mono text-sm">${k.Key}</span>
                                 <span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${k.Type}</span>
                                 <span class="text-[10px] text-gray-400">${k.Since}</span>
+                                ${selectedPod ? (hasPodOverride
+                                    ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-brand/20 text-brand">pod override</span>'
+                                    : '<span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-400">service value</span>')
+                                : ''}
                                 ${k.status === 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">orphaned</span>' : ''}
                                 ${k.Deprecated && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">deprecated</span>' : ''}
                                 ${k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
@@ -266,9 +330,10 @@ function renderTable(entries) {
                             </span>
                             <span id="dirty-${cssId(k.Key)}" class="hidden text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 whitespace-nowrap">unsaved</span>
                         </div>
+                        ${!selectedPod ? renderPodSubRows(k, svc) : ''}
                         <div id="history-${cssId(k.Key)}" class="hidden mt-2 text-xs border-t border-gray-100 dark:border-gray-800 pt-2"></div>
-                    </div>
-                `).join('')}
+                    </div>`;
+                }).join('')}
             </div>
         </div>
     `).join('');
@@ -279,48 +344,119 @@ async function saveKey(key, forceAllPods) {
     const value = input.value != null ? input.value : input.selectedOptions?.[0]?.value;
     const original = originalValues[key] || '';
 
-    if (value === original) {
+    // Check if any pods have checkboxes (multi-pod mode)
+    const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
+    const hasSubRows = checkboxes.length > 0;
+
+    // Only skip if value unchanged AND we're not targeting specific pods with overrides
+    if (value === original && !hasSubRows && !selectedPod) {
         toast('No changes to save', 'info');
         return;
     }
 
-    // If a pod is selected and not forcing all pods, save as pod-specific key
-    let saveKey = key;
     if (selectedPod && !forceAllPods) {
-        // Build pod-scoped key: exchange.bid_timeout -> exchange.pod-abc.bid_timeout
-        const dotIdx = key.indexOf('.');
-        if (dotIdx > -1) {
-            saveKey = key.substring(0, dotIdx) + '.pod-' + selectedPod + key.substring(dotIdx);
+        // Single pod save
+        const podKey = podScopedKey(key, selectedPod);
+        const resp = await fetch(GW + '/v1/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: podKey, value })
+        });
+        if (resp.ok) {
+            clearDirty(key);
+            toast(`${key} → "${value}" (pod ${selectedPod.substring(0, 15)})`, 'success');
+        } else {
+            const r = await resp.json();
+            toast(`Failed: ${r.error || 'unknown'}`, 'error');
         }
-    }
-
-    const resp = await fetch(GW + '/v1/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: saveKey, value })
-    });
-    const result = await resp.json();
-
-    if (resp.ok) {
-        clearDirty(key);
-        const target = selectedPod && !forceAllPods ? `pod ${selectedPod.substring(0, 15)}` : 'all pods';
-        toast(`${key} → "${value}" (${target})`, 'success');
-        setTimeout(() => loadData(), 500);
     } else {
-        toast(`Failed: ${result.error || 'unknown'}`, 'error');
+        // Check which pods are ticked
+        const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
+        const checked = [...checkboxes].filter(cb => cb.checked);
+        const unchecked = [...checkboxes].filter(cb => !cb.checked);
+
+        if (unchecked.length > 0 && checkboxes.length > 0) {
+            // Some pods unticked: write pod-specific keys for checked pods ONLY
+            // Do NOT write service-level key (that would affect unchecked pods too)
+            let ok = true;
+            for (const cb of checked) {
+                const podKey = podScopedKey(key, cb.dataset.pod);
+                const resp = await fetch(GW + '/v1/config', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: podKey, value })
+                });
+                if (!resp.ok) ok = false;
+            }
+            if (ok) {
+                toast(`${key} → "${value}" (${checked.length} pod${checked.length !== 1 ? 's' : ''}, ${unchecked.length} skipped)`, 'success');
+            } else {
+                toast('Some pod updates failed', 'error');
+            }
+        } else {
+            // All pods ticked (or no sub-rows): write service-level key
+            if (value === original && !hasSubRows) {
+                toast('No changes to save', 'info');
+                return;
+            }
+            const resp = await fetch(GW + '/v1/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key, value })
+            });
+            if (resp.ok) {
+                toast(`${key} → "${value}" (all pods)`, 'success');
+            } else {
+                const r = await resp.json();
+                toast(`Failed: ${r.error || 'unknown'}`, 'error');
+            }
+        }
+
+        clearDirty(key);
     }
+
+    setTimeout(() => loadData(), 500);
 }
 
 async function rollbackKey(key) {
-    const resp = await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(key));
-    if (resp.ok) {
-        toast(`${key} reverted to previous value`, 'info');
-        clearDirty(key);
-        loadData();
+    if (selectedPod) {
+        // Undo for specific pod
+        const podKey = podScopedKey(key, selectedPod);
+        const resp = await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(podKey));
+        if (resp.ok) {
+            toast(`${key} reverted for pod ${selectedPod}`, 'info');
+        } else {
+            // No pod override to undo, try service-level
+            const resp2 = await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(key));
+            if (resp2.ok) toast(`${key} reverted (service-level)`, 'info');
+            else toast('No history to undo', 'error');
+        }
     } else {
-        const r = await resp.json();
-        toast(r.error || 'No history for this key', 'error');
+        // Check which pods are ticked
+        const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
+        const unchecked = [...checkboxes].filter(cb => !cb.checked);
+
+        if (unchecked.length > 0 && checkboxes.length > 0) {
+            // Some unticked: only undo for checked pods
+            const checked = [...checkboxes].filter(cb => cb.checked);
+            if (checked.length === 0) {
+                toast('No pods selected to undo', 'info');
+                return;
+            }
+            for (const cb of checked) {
+                const podKey = podScopedKey(key, cb.dataset.pod);
+                await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(podKey));
+            }
+            toast(`${key} reverted for ${checked.length} pod(s)`, 'info');
+        } else {
+            // All ticked or no sub-rows: undo service-level
+            const resp = await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(key));
+            if (resp.ok) toast(`${key} reverted (all pods)`, 'info');
+            else toast('No history to undo', 'error');
+        }
     }
+    clearDirty(key);
+    loadData();
 }
 
 async function toggleKeyHistory(key) {
@@ -337,18 +473,45 @@ async function toggleKeyHistory(key) {
     el.innerHTML = '<span class="text-gray-400">Loading...</span>';
     el.classList.remove('hidden');
 
+    // Fetch service-level history
     const resp = await fetch(GW + '/v1/config?history=true&key=' + encodeURIComponent(key));
-    const history = await resp.json() || [];
+    let history = await resp.json() || [];
+
+    // Also fetch pod-specific history if pods exist for this service
+    const svc = schema.find(s => s.Key === key)?.Service;
+    const group = services.find(g => g.service === svc);
+    if (group?.pods?.length > 0) {
+        for (const p of group.pods) {
+            const podKey = podScopedKey(key, p.pod_id);
+            const podResp = await fetch(GW + '/v1/config?history=true&key=' + encodeURIComponent(podKey));
+            const podHistory = await podResp.json() || [];
+            // Tag each entry with the pod
+            podHistory.forEach(h => { h._pod = p.pod_id; h.key = podKey; });
+            history = history.concat(podHistory);
+        }
+    }
+
+    // Sort all entries by timestamp descending
+    history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     if (history.length === 0) {
         el.innerHTML = '<span class="text-gray-400">No changes recorded</span>';
         return;
     }
 
+    // Get unique targets for filter pills
+    const targets = ['all', ...new Set(history.map(h => h._pod || 'all pods'))];
+
     el.innerHTML = `
+        <div class="flex gap-1 mb-2 flex-wrap">
+            ${targets.map(t => `<button onclick="filterHistory('${cssId(key)}','${t}')"
+                class="history-filter-${cssId(key)} px-2 py-0.5 text-[10px] rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 hover:bg-brand/20 hover:text-brand"
+                data-target="${t}">${t}</button>`).join('')}
+        </div>
         <table class="w-full text-xs">
             <thead><tr class="text-gray-400">
                 <td class="pr-2 py-1">ID</td>
+                <td class="pr-2 py-1">Target</td>
                 <td class="pr-2 py-1">Action</td>
                 <td class="pr-2 py-1">When</td>
                 <td class="pr-2 py-1">Old</td>
@@ -356,14 +519,20 @@ async function toggleKeyHistory(key) {
                 <td class="py-1">By</td>
             </tr></thead>
             <tbody>
-                ${history.map(h => `<tr class="border-t border-gray-100 dark:border-gray-800">
+                ${history.map(h => {
+                    const target = h._pod || 'all pods';
+                    return `<tr class="border-t border-gray-100 dark:border-gray-800 history-row-${cssId(key)}" data-target="${target}">
                     <td class="pr-2 py-1 text-gray-400 font-mono" title="${h.id}">${(h.id || '').substring(0, 8)}</td>
+                    <td class="pr-2 py-1">${h._pod
+                        ? `<span class="px-1 py-0.5 text-[9px] rounded bg-brand/20 text-brand font-mono">${h._pod}</span>`
+                        : '<span class="px-1 py-0.5 text-[9px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">all pods</span>'
+                    }</td>
                     <td class="pr-2 py-1">${actionBadge(h.action)}</td>
                     <td class="pr-2 py-1 text-gray-400 whitespace-nowrap">${new Date(h.timestamp).toLocaleString()}</td>
                     <td class="pr-2 py-1 font-mono text-red-400">${escHtml(h.old_value || '(empty)')}</td>
                     <td class="pr-2 py-1 font-mono text-green-400">${escHtml(h.new_value)}</td>
                     <td class="py-1 text-gray-500">${h.actor}</td>
-                </tr>`).join('')}
+                </tr>`;}).join('')}
             </tbody>
         </table>
     `;
@@ -380,15 +549,43 @@ function reopenHistories() {
 }
 
 async function resetKey(key) {
-    const resp = await fetch(GW + '/v1/config?reset=' + encodeURIComponent(key));
-    if (resp.ok) {
-        toast(`${key} reset to default: ${defaultVal}`, 'info');
-        clearDirty(key);
-        loadData();
+    const entry = schema.find(e => e.Key === key);
+    const defaultVal = entry ? entry.Default : '';
+
+    if (selectedPod) {
+        // Reset pod override by deleting the pod-scoped key
+        const podKey = podScopedKey(key, selectedPod);
+        const resp = await fetch(GW + '/v1/config', { method: 'DELETE', headers: {'Content-Type':'application/json'} });
+        // Actually just reset the pod key via the reset endpoint
+        await fetch(GW + '/v1/config?reset=' + encodeURIComponent(podKey));
+        toast(`${key} reset for pod ${selectedPod}`, 'info');
     } else {
-        const r = await resp.json();
-        toast(r.error || 'Reset failed', 'error');
+        const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
+        const unchecked = [...checkboxes].filter(cb => !cb.checked);
+
+        if (unchecked.length > 0 && checkboxes.length > 0) {
+            const checked = [...checkboxes].filter(cb => cb.checked);
+            if (checked.length === 0) {
+                toast('No pods selected to reset', 'info');
+                return;
+            }
+            for (const cb of checked) {
+                const podKey = podScopedKey(key, cb.dataset.pod);
+                await fetch(GW + '/v1/config?reset=' + encodeURIComponent(podKey));
+            }
+            toast(`${key} reset for ${checked.length} pod(s)`, 'info');
+        } else {
+            const resp = await fetch(GW + '/v1/config?reset=' + encodeURIComponent(key));
+            if (resp.ok) {
+                toast(`${key} reset to default: ${defaultVal}`, 'info');
+            } else {
+                const r = await resp.json();
+                toast(r.error || 'Reset failed', 'error');
+            }
+        }
     }
+    clearDirty(key);
+    loadData();
 }
 
 async function showHistory() {
@@ -451,6 +648,7 @@ function inputForType(k) {
 const originalValues = {};
 const dirtyKeys = new Set();
 const openHistories = new Set();
+const uncheckedPods = JSON.parse(localStorage.getItem('configUncheckedPods') || '{}'); // {key: [podId, ...]}
 
 function storeOriginalValues() {
     schema.forEach(k => { originalValues[k.Key] = k.current_value; });
@@ -502,6 +700,87 @@ function toast(message, type) {
         t.classList.add('translate-y-2', 'opacity-0');
         setTimeout(() => t.remove(), 300);
     }, 3000);
+}
+
+function renderPodSubRows(k, svc) {
+    // Find all pods for this service
+    const group = services.find(g => g.service === svc);
+    if (!group || !group.pods || group.pods.length <= 1) return '';
+
+    const pods = group.pods;
+    return `
+        <div class="mt-2 border-t border-gray-100 dark:border-gray-800 pt-2">
+            <div class="text-[10px] text-gray-400 mb-1">Per-pod values (${pods.length} pods)</div>
+            ${pods.map(p => {
+                const hasKey = p.config_keys?.includes(k.Key);
+                const podKey = podScopedKey(k.Key, p.pod_id);
+                const podOverride = schema.find(s => s.Key === podKey);
+                const effectiveValue = podOverride ? podOverride.current_value : k.current_value;
+                const isOverridden = !!podOverride;
+
+                if (!hasKey) {
+                    return `<div class="flex items-center gap-2 py-0.5 text-xs text-gray-400 italic">
+                        <span class="w-2 h-2 rounded-full ${p.status === 'running' ? 'bg-green-500' : 'bg-red-400'}"></span>
+                        <span class="font-mono">${p.pod_id}</span>
+                        <span>does not use this key</span>
+                    </div>`;
+                }
+
+                const isUnchecked = (uncheckedPods[k.Key] || []).includes(p.pod_id);
+                return `<div class="flex items-center gap-2 py-0.5 text-xs">
+                    <input type="checkbox" ${isUnchecked ? '' : 'checked'} data-pod="${p.pod_id}" data-key="${k.Key}"
+                        onchange="togglePodCheck('${k.Key}','${p.pod_id}', this.checked)"
+                        class="pod-checkbox rounded border-gray-300 dark:border-gray-600 text-brand focus:ring-brand w-3 h-3"
+                        title="Include ${p.pod_id} in save">
+                    <span class="w-2 h-2 rounded-full ${p.status === 'running' ? 'bg-green-500' : 'bg-red-400'}"></span>
+                    <button onclick="viewPodConfig('${svc}','${p.pod_id}')" class="font-mono text-brand hover:underline">${p.pod_id}</button>
+                    <span class="font-mono ${isOverridden ? 'text-brand font-medium' : 'text-gray-500'}">${escHtml(effectiveValue)}</span>
+                    ${isOverridden ? '<span class="px-1 py-0.5 text-[9px] rounded bg-brand/20 text-brand">override</span>' : ''}
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+function filterHistory(keyCssId, target) {
+    // Highlight selected filter
+    document.querySelectorAll(`.history-filter-${keyCssId}`).forEach(btn => {
+        if (btn.dataset.target === target) {
+            btn.classList.add('bg-brand', 'text-white');
+            btn.classList.remove('bg-gray-100', 'dark:bg-gray-800', 'text-gray-500');
+        } else {
+            btn.classList.remove('bg-brand', 'text-white');
+            btn.classList.add('bg-gray-100', 'dark:bg-gray-800', 'text-gray-500');
+        }
+    });
+
+    // Show/hide rows - "all pods" entries always show (they affect every pod)
+    document.querySelectorAll(`.history-row-${keyCssId}`).forEach(row => {
+        if (target === 'all' || row.dataset.target === target || row.dataset.target === 'all pods') {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+function togglePodCheck(key, podId, checked) {
+    if (!uncheckedPods[key]) uncheckedPods[key] = [];
+    if (checked) {
+        uncheckedPods[key] = uncheckedPods[key].filter(id => id !== podId);
+        if (uncheckedPods[key].length === 0) delete uncheckedPods[key];
+    } else {
+        if (!uncheckedPods[key].includes(podId)) uncheckedPods[key].push(podId);
+    }
+    localStorage.setItem('configUncheckedPods', JSON.stringify(uncheckedPods));
+}
+
+function podScopedKey(key, podId) {
+    const dotIdx = key.indexOf('.');
+    if (dotIdx > -1) {
+        return key.substring(0, dotIdx) + '.pod-' + podId + key.substring(dotIdx);
+    }
+    return 'pod-' + podId + '.' + key;
 }
 
 function timeAgo(ts) {
