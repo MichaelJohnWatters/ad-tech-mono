@@ -47,7 +47,7 @@ if dev_mode == 'fast':
 
     local_resource('gateway',
         cmd='go build -o ./bin/gateway ./cmd/gateway',
-        serve_cmd='./bin/gateway',
+        serve_cmd='POD_NAME=gateway-0 ./bin/gateway',
         serve_dir='.',
         deps=['cmd/gateway', 'pkg/', 'web/'],
         labels=['services'],
@@ -56,7 +56,7 @@ if dev_mode == 'fast':
 
     local_resource('exchange',
         cmd='go build -o ./bin/exchange ./cmd/exchange',
-        serve_cmd='./bin/exchange',
+        serve_cmd='POD_NAME=exchange-0 ./bin/exchange',
         serve_dir='.',
         deps=['cmd/exchange', 'pkg/'],
         labels=['services'],
@@ -64,7 +64,7 @@ if dev_mode == 'fast':
 
     local_resource('dsp',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='./bin/dsp',
+        serve_cmd='POD_NAME=dsp-internal-0 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
@@ -72,7 +72,7 @@ if dev_mode == 'fast':
 
     local_resource('dsp-competitor1',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 ./bin/dsp',
+        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 POD_NAME=dsp-competitor1 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
@@ -80,7 +80,7 @@ if dev_mode == 'fast':
 
     local_resource('dsp-competitor2',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 ./bin/dsp',
+        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 POD_NAME=dsp-competitor2 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
@@ -88,7 +88,7 @@ if dev_mode == 'fast':
 
     local_resource('tracker',
         cmd='go build -o ./bin/tracker ./cmd/tracker',
-        serve_cmd='./bin/tracker',
+        serve_cmd='POD_NAME=tracker-0 ./bin/tracker',
         serve_dir='.',
         deps=['cmd/tracker', 'pkg/'],
         labels=['services'],
@@ -96,7 +96,7 @@ if dev_mode == 'fast':
 
     local_resource('ssp',
         cmd='go build -o ./bin/ssp ./cmd/ssp',
-        serve_cmd='./bin/ssp',
+        serve_cmd='POD_NAME=ssp-0 ./bin/ssp',
         serve_dir='.',
         deps=['cmd/ssp', 'pkg/'],
         labels=['services'],
@@ -104,7 +104,7 @@ if dev_mode == 'fast':
 
     local_resource('adserver',
         cmd='go build -o ./bin/adserver ./cmd/adserver',
-        serve_cmd='./bin/adserver',
+        serve_cmd='POD_NAME=adserver-0 ./bin/adserver',
         serve_dir='.',
         deps=['cmd/adserver', 'pkg/'],
         labels=['services'],
@@ -112,7 +112,7 @@ if dev_mode == 'fast':
 
     local_resource('reporting',
         cmd='go build -o ./bin/reporting ./cmd/reporting',
-        serve_cmd='./bin/reporting',
+        serve_cmd='POD_NAME=reporting-0 ./bin/reporting',
         serve_dir='.',
         deps=['cmd/reporting', 'pkg/'],
         labels=['services'],

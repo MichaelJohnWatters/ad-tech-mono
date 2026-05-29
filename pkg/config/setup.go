@@ -64,12 +64,13 @@ func Setup(serviceName string, log *slog.Logger) *ServiceConfig {
 		mgr.SetSource(NewMemorySource(DefaultValues()))
 	}
 
-	// Register service and seed its config keys
+	// Register pod and seed its config keys
 	var registry *Registry
 	if db != nil {
 		registry = NewRegistry(db, log)
 		port := cfg.Get(serviceName+".port", "")
 		registry.Register(context.Background(), serviceName, AppVersion, port)
+		mgr.SetRegistry(registry, serviceName)
 	}
 
 	// Start polling in background

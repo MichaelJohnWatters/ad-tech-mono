@@ -52,6 +52,9 @@
     <!-- Service filter pills -->
     <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
 
+    <!-- Pod overview -->
+    <div id="podOverview" class="mb-4"></div>
+
     <!-- Stats bar -->
     <div id="statsBar" class="text-xs text-gray-400 mb-4"></div>
 
@@ -78,16 +81,18 @@ const GW = '';
 let services = [];
 let schema = [];
 let selectedService = 'all';
+let selectedPod = null;
 
 async function loadData() {
     const [svcResp, schemaResp] = await Promise.all([
-        fetch(GW + '/v1/services'),
+        fetch(GW + '/v1/services?grouped=true'),
         fetch(GW + '/v1/config?schema=true')
     ]);
     services = await svcResp.json() || [];
     schema = await schemaResp.json() || [];
     storeOriginalValues();
     renderPills();
+    renderPodOverview();
     filterConfig();
     reopenHistories();
 }
@@ -102,19 +107,66 @@ function renderPills() {
         </button>
         ${svcNames.map(s => {
             const count = schema.filter(e => e.Service === s).length;
-            const svc = services.find(sv => sv.service === s);
-            const status = svc ? (svc.status === 'running' ? '●' : '○') : '';
+            const group = services.find(g => g.service === s);
+            const podCount = group ? group.pods.length : 0;
+            const runningCount = group ? group.pods.filter(p => p.status === 'running').length : 0;
+            const dot = runningCount > 0 ? '●' : '○';
             return `<button onclick="selectService('${s}')"
                 class="px-3 py-1 text-xs rounded-full transition-colors ${selectedService === s ? 'bg-brand text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}">
-                ${status} ${s} (${count})
+                ${dot} ${s} (${count} keys, ${podCount} pod${podCount !== 1 ? 's' : ''})
             </button>`;
         }).join('')}
     `;
 }
 
+function renderPodOverview() {
+    const el = document.getElementById('podOverview');
+    if (!services.length) { el.innerHTML = ''; return; }
+
+    const filtered = selectedService === 'all' ? services : services.filter(g => g.service === selectedService);
+    if (!filtered.length) { el.innerHTML = ''; return; }
+
+    el.innerHTML = `
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">Running Pods</h2>
+        <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800 mb-6">
+            ${filtered.map(g => `
+                <div class="px-4 py-2">
+                    <div class="font-medium text-sm mb-1">${g.service} <span class="text-xs text-gray-400">(${g.pods.length} pod${g.pods.length !== 1 ? 's' : ''})</span></div>
+                    <div class="flex flex-wrap gap-2">
+                        ${g.pods.map(p => {
+                            const ago = timeAgo(p.last_ping_at);
+                            const stale = (Date.now() - new Date(p.last_ping_at).getTime()) > 120000; // >2min = stale
+                            return `
+                            <div class="flex items-center gap-1.5 px-2 py-1 rounded text-xs bg-gray-50 dark:bg-gray-900 border ${selectedPod === p.pod_id ? 'border-brand' : 'border-gray-200 dark:border-gray-700'}">
+                                <span class="${p.status === 'running' ? 'text-green-500' : 'text-red-400'}">●</span>
+                                <span class="font-mono">${p.pod_id.length > 20 ? p.pod_id.substring(0, 20) + '…' : p.pod_id}</span>
+                                <span class="text-gray-400">${p.version}</span>
+                                ${p.port ? `<span class="text-gray-400">:${p.port}</span>` : ''}
+                                <span class="${stale ? 'text-red-400' : 'text-gray-400'}" title="Last polled: ${new Date(p.last_ping_at).toLocaleString()}">polled ${ago}</span>
+                                <button onclick="viewPodConfig('${g.service}', '${p.pod_id}')" class="text-brand hover:underline ml-1">config</button>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function viewPodConfig(service, podId) {
+    // Show pod-specific overrides alongside service config
+    selectedService = service;
+    selectedPod = podId;
+    renderPills();
+    renderPodOverview();
+    filterConfig();
+}
+
 function selectService(name) {
     selectedService = name;
+    selectedPod = null;
     renderPills();
+    renderPodOverview();
     filterConfig();
 }
 
@@ -157,10 +209,11 @@ function filterConfig() {
         );
     }
 
-    document.getElementById('statsBar').textContent =
+    document.getElementById('statsBar').innerHTML =
         `Showing ${filtered.length} of ${schema.length} keys` +
         (query ? ` matching "${query}"` : '') +
-        (selectedService !== 'all' ? ` in ${selectedService}` : '');
+        (selectedService !== 'all' ? ` in ${selectedService}` : '') +
+        (selectedPod ? ` <span class="text-brand font-medium">pod: ${selectedPod.substring(0, 20)}</span> <button onclick="selectedPod=null;filterConfig();renderPodOverview()" class="text-xs text-gray-400 hover:text-red-400">✕ clear</button>` : '');
 
     renderTable(filtered);
 }
@@ -195,7 +248,11 @@ function renderTable(entries) {
                                 ${k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
                             </div>
                             <div class="flex gap-1">
-                                <button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover">Save</button>
+                                <button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover"
+                                    title="${selectedPod ? 'Save for pod ' + selectedPod : 'Save for all pods'}">
+                                    ${selectedPod ? 'Save (pod)' : 'Save'}
+                                </button>
+                                ${selectedPod ? `<button onclick="saveKey('${k.Key}', true)" class="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500" title="Save for ALL pods of this service">Save All</button>` : ''}
                                 <button onclick="rollbackKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
                                 <button onclick="resetKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>
                                 <button onclick="toggleKeyHistory('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-brand" title="Change history">&darr; History</button>
@@ -217,7 +274,7 @@ function renderTable(entries) {
     `).join('');
 }
 
-async function saveKey(key) {
+async function saveKey(key, forceAllPods) {
     const input = document.getElementById('input-' + cssId(key));
     const value = input.value != null ? input.value : input.selectedOptions?.[0]?.value;
     const original = originalValues[key] || '';
@@ -227,16 +284,27 @@ async function saveKey(key) {
         return;
     }
 
+    // If a pod is selected and not forcing all pods, save as pod-specific key
+    let saveKey = key;
+    if (selectedPod && !forceAllPods) {
+        // Build pod-scoped key: exchange.bid_timeout -> exchange.pod-abc.bid_timeout
+        const dotIdx = key.indexOf('.');
+        if (dotIdx > -1) {
+            saveKey = key.substring(0, dotIdx) + '.pod-' + selectedPod + key.substring(dotIdx);
+        }
+    }
+
     const resp = await fetch(GW + '/v1/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, value })
+        body: JSON.stringify({ key: saveKey, value })
     });
     const result = await resp.json();
 
     if (resp.ok) {
         clearDirty(key);
-        toast(`${key} updated to "${value}"`, 'success');
+        const target = selectedPod && !forceAllPods ? `pod ${selectedPod.substring(0, 15)}` : 'all pods';
+        toast(`${key} → "${value}" (${target})`, 'success');
         setTimeout(() => loadData(), 500);
     } else {
         toast(`Failed: ${result.error || 'unknown'}`, 'error');
@@ -434,6 +502,16 @@ function toast(message, type) {
         t.classList.add('translate-y-2', 'opacity-0');
         setTimeout(() => t.remove(), 300);
     }, 3000);
+}
+
+function timeAgo(ts) {
+    if (!ts) return 'never';
+    const ms = Date.now() - new Date(ts).getTime();
+    if (ms < 1000) return 'just now';
+    if (ms < 60000) return Math.floor(ms / 1000) + 's ago';
+    if (ms < 3600000) return Math.floor(ms / 60000) + 'm ago';
+    if (ms < 86400000) return Math.floor(ms / 3600000) + 'h ago';
+    return Math.floor(ms / 86400000) + 'd ago';
 }
 
 function actionBadge(action) {
