@@ -1,0 +1,90 @@
+# Internal DSP - our platform's advertisers.
+# Bids are deterministic (no randomisation). We control these campaigns.
+name: internal
+competitor: false
+
+campaigns:
+  - id: li-001
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-001
+    name: "Acme Shoes - UK Mobile"
+    creative_id: cr-shoes-001
+    creative_domain: acme-shoes.com
+    base_bid: 2.50
+    currency: USD
+    daily_budget: 500
+    total_budget: 10000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        geo: [GBR]
+        device: [mobile]
+
+  - id: li-002
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-001
+    name: "Acme Shoes - US All Devices"
+    creative_id: cr-shoes-002
+    creative_domain: acme-shoes.com
+    base_bid: 3.00
+    currency: USD
+    daily_budget: 1000
+    total_budget: 25000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        geo: [USA]
+    modifiers:
+      device:
+        mobile: 15
+        tablet: -10
+
+  - id: li-003
+    account_id: adv-globex
+    advertiser_id: adv-globex
+    io_id: io-002
+    name: "Globex Tech - Desktop Worldwide"
+    creative_id: cr-tech-001
+    creative_domain: globex-tech.com
+    base_bid: 1.80
+    currency: USD
+    daily_budget: 300
+    total_budget: 5000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        device: [desktop]
+    modifiers:
+      geo_country:
+        USA: 20
+        GBR: 10
+
+  - id: li-004
+    account_id: adv-initech
+    advertiser_id: adv-initech
+    io_id: io-003
+    name: "Initech SaaS - Run of Network"
+    creative_id: cr-saas-001
+    creative_domain: initech.io
+    base_bid: 1.20
+    currency: USD
+    daily_budget: 200
+    total_budget: 3000
+    bid_model: cpm
+    pacing_mode: asap
+    status: live
+    modifiers:
+      device:
+        mobile: 25
+      geo_country:
+        USA: 15
+        GBR: 10
+        DEU: 5

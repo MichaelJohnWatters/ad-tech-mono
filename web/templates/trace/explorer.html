@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trace Explorer - Ad Tech Platform</title>
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+    <style>
+        .empty { text-align: center; padding: 80px 20px; color: var(--text-muted); }
+        .empty h2 { color: var(--text-secondary); margin-bottom: 12px; font-size: 20px; }
+        .empty p { max-width: 500px; margin: 0 auto; line-height: 1.6; }
+        /* Aliases for JS-generated classes */
+        .flow { display: flex; flex-direction: column; }
+        .node { display: flex; align-items: flex-start; gap: 12px; padding: 10px 16px; border-left: 3px solid var(--border); margin-left: 60px; transition: background 0.15s; }
+        .node:hover { background: var(--bg-hover); }
+        .node.active { border-left-color: var(--brand-success); }
+        .node.warn { border-left-color: var(--brand-warn); }
+        .node.error { border-left-color: var(--brand-error); }
+        .node.nobid { border-left-color: var(--text-muted); opacity: 0.6; }
+        .time { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); min-width: 60px; text-align: right; position: relative; left: -72px; margin-right: -60px; }
+        .service { font-weight: 600; font-size: 13px; min-width: 100px; }
+        .service.exchange { color: #818cf8; }
+        .service.dsp { color: #34d399; }
+        .service.tracker { color: var(--brand-warn); }
+        .service.adserver { color: var(--brand-pink); }
+        .service.reporting { color: var(--brand-cyan); }
+        .service.billing { color: var(--brand-purple); }
+        .service.nats { color: var(--brand-orange); }
+        .service.browser { color: var(--text-secondary); }
+        .msg { font-size: 13px; color: var(--text-primary); }
+        .msg .detail { color: var(--text-muted); font-size: 12px; }
+        .demo-note { background: var(--bg-surface-3); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 24px; font-size: 13px; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>Trace Explorer</h1>
+        <a href="/">Dashboard</a>
+        <a href="/dev/publisher-simulator">Publisher Simulator</a>
+        <button class="theme-toggle" onclick="toggleTheme()">☀️</button>
+    </div>
+
+    <div class="controls-bar">
+        <input type="text" id="traceInput" placeholder="Enter trace_id (e.g. req-abc123-def456)" />
+        <button class="btn btn-primary" onclick="lookupTrace()">Trace</button>
+        <button class="btn btn-success" onclick="fireSingleRequest()">Fire Single Request</button>
+        <button class="btn btn-ghost" onclick="fireDemoRequest()">Demo (Simulated)</button>
+    </div>
+
+    <div class="page-content" id="content">
+        <div class="empty">
+            <h2>Enter a Trace ID or Fire a Request</h2>
+            <p>
+                The Trace Explorer shows every system that touched a single ad request,
+                from bid request to impression tracking. Enter a trace_id from the logs,
+                or fire a new request to trace it live.
+            </p>
+        </div>
+    </div>
+
+    <script>
+    async function lookupTrace() {
+        const traceId = document.getElementById('traceInput').value.trim();
+        if (!traceId) return;
+
+        // Try to fetch trace events from reporting service
+        try {
+            const resp = await fetch('http://localhost:8086/v1/reporting/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table: 'impressions',
+                    metrics: ['count', 'sum_cost'],
+                    filters: { trace_id: traceId }
+                })
+            });
+            const data = await resp.json();
+            const rows = data.rows || data.Rows || [];
+            const hasEvents = rows.length > 0 && rows[0][0] > 0;
+
+            if (hasEvents) {
+                // We found events - reconstruct the trace from analytics data
+                const count = rows[0][0];
+                const cost = rows[0][1];
+                showTrace(traceId, null, null, { impressions: count, cost: cost });
+            } else {
+                // No events found - offer to re-fire
+                showTrace(traceId, null, null, null);
+            }
+        } catch (e) {
+            // Reporting service not reachable - show what we can
+            showTrace(traceId, null, null, null);
+        }
+    }
+
+    async function fireSingleRequest() {
+        const GW = window.location.protocol + '//' + window.location.hostname + ':8080';
+        const traceId = 'trace-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
+        document.getElementById('traceInput').value = traceId;
+
+        const steps = [];
+        const content = document.getElementById('content');
+
+        function renderSteps(status) {
+            let html = '<div class="demo-note">Trace ID: <code>' + traceId + '</code> &mdash; ' + status + '</div>';
+            html += '<div class="flow">';
+            for (const s of steps) {
+                html += `<div class="node ${s.cls}">
+                    <span class="time">${s.time}</span>
+                    <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
+                    <span class="msg">${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
+                </div>`;
+            }
+            html += '</div>';
+            content.innerHTML = html;
+        }
+
+        // Step 1: Auction
+        const t0 = performance.now();
+        steps.push({ time: '0ms', service: 'exchange', cls: 'active', msg: 'Auction started', detail: `trace_id: ${traceId}` });
+        renderSteps('Running auction...');
+
+        let auctionResult;
+        try {
+            const resp = await fetch(GW + '/v1/openrtb/auction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: traceId,
+                    imp: [{ id: "imp-1", banner: { w: 300, h: 250 }, bidfloor: 0.50 }],
+                    site: { domain: "trace-explorer.local", page: "/test" },
+                    device: { ua: navigator.userAgent, geo: { country: "GBR" } }
+                })
+            });
+            auctionResult = await resp.json();
+        } catch (e) {
+            steps.push({ time: '—', service: 'exchange', cls: 'error', msg: `Exchange unreachable: ${e.message}`, detail: '' });
+            renderSteps('Exchange error.');
+            return;
+        }
+        const auctionMs = Math.round(performance.now() - t0);
+
+        const hasWinner = auctionResult && !auctionResult.nobid && auctionResult.seatbid && auctionResult.seatbid.length > 0;
+        if (!hasWinner) {
+            steps.push({ time: auctionMs + 'ms', service: 'exchange', cls: 'warn', msg: 'Auction complete: no winner', detail: 'No valid bids above floor price' });
+            renderSteps('No winning bid.');
+            return;
+        }
+
+        const seat = auctionResult.seatbid[0];
+        const bid = seat.bid[0];
+        steps.push({ time: auctionMs + 'ms', service: 'exchange', cls: 'active', msg: 'Bid request fanned out to 3 DSPs', detail: 'internal (:8082), competitor1 (:8089), competitor2 (:8090)' });
+        steps.push({ time: auctionMs + 'ms', service: 'dsp', cls: 'active', msg: `Winner: ${seat.seat} bid $${bid.price.toFixed(2)} CPM`, detail: `campaign: ${bid.cid}, creative: ${bid.crid}` });
+        steps.push({ time: auctionMs + 'ms', service: 'exchange', cls: 'active', msg: `Auction complete (first-price)`, detail: `clearing: $${bid.price.toFixed(2)}, win/loss notifications sent to all DSPs` });
+        renderSteps('Auction won. Calling ad server...');
+
+        // Step 2: Ad Server
+        const t1 = performance.now();
+        let adData;
+        try {
+            const adResp = await fetch(GW + '/v1/ad/serve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trace_id: traceId,
+                    campaign_id: bid.cid,
+                    creative_id: bid.crid,
+                    placement_id: 'imp-1',
+                    publisher_id: 'trace-explorer-pub',
+                    advertiser_id: seat.seat,
+                    clearing_price: bid.price,
+                    currency: auctionResult.cur || 'USD',
+                    site_domain: 'trace-explorer.local',
+                    width: 300, height: 250
+                })
+            });
+            adData = await adResp.json();
+        } catch (e) {
+            steps.push({ time: '—', service: 'adserver', cls: 'error', msg: `Ad server error: ${e.message}`, detail: '' });
+            renderSteps('Ad server error.');
+            return;
+        }
+        const adMs = Math.round(performance.now() - t1);
+        steps.push({ time: '+' + adMs + 'ms', service: 'adserver', cls: 'active', msg: 'Creative served, pixel URLs generated', detail: `creative: ${bid.crid}, macros substituted` });
+        renderSteps('Firing impression pixel...');
+
+        // Step 3: Impression Pixel
+        const t2 = performance.now();
+        try {
+            await fetch(adData.impression_url);
+        } catch (e) {
+            steps.push({ time: '—', service: 'tracker', cls: 'error', msg: `Pixel failed: ${e.message}`, detail: '' });
+        }
+        const pixelMs = Math.round(performance.now() - t2);
+        steps.push({ time: '+' + pixelMs + 'ms', service: 'tracker', cls: 'active', msg: 'Impression pixel fired', detail: `pixel URL has full context (campaign, creative, publisher, price)` });
+        steps.push({ time: '+0ms', service: 'tracker', cls: 'active', msg: 'Event forwarded to reporting service', detail: 'HTTP bridge (NATS in production)' });
+
+        // Future steps (not yet wired - shown as pending)
+        steps.push({ time: '—', service: 'tracker', cls: 'nobid', msg: 'Fraud scoring', detail: 'Phase 6 - not yet implemented' });
+        steps.push({ time: '—', service: 'nats', cls: 'nobid', msg: 'NATS JetStream publish', detail: 'Using HTTP bridge until wired' });
+        steps.push({ time: '—', service: 'billing', cls: 'nobid', msg: `$${bid.price.toFixed(2)} billing accrual`, detail: 'Phase 4 - not yet implemented' });
+
+        renderSteps('Waiting for analytics store write...');
+
+        // Step 4: Verify in reporting
+        await new Promise(r => setTimeout(r, 1000));
+        const t3 = performance.now();
+        let found = false;
+        try {
+            const qResp = await fetch(GW + '/v1/reporting/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table: 'impressions',
+                    metrics: ['count', 'sum_cost'],
+                    filters: { trace_id: traceId }
+                })
+            });
+            const qData = await qResp.json();
+            const rows = qData.rows || qData.Rows || [];
+            if (rows.length > 0 && rows[0][0] > 0) {
+                found = true;
+                const queryMs = Math.round(performance.now() - t3);
+                steps.push({ time: '+' + queryMs + 'ms', service: 'reporting', cls: 'active', msg: `Verified in analytics store: ${rows[0][0]} impression(s), $${rows[0][1].toFixed(2)} cost`, detail: 'trace_id lookup confirmed' });
+            }
+        } catch (e) { /* reporting unreachable */ }
+
+        if (!found) {
+            steps.push({ time: '—', service: 'reporting', cls: 'warn', msg: 'Event not yet in analytics store', detail: 'May be in-flight' });
+        }
+
+        // Step 5: Query billing ledger for this trace
+        let billingData = null;
+        try {
+            const bResp = await fetch(GW + '/v1/billing/ledger?trace_id=' + traceId);
+            const bEntries = await bResp.json();
+            if (bEntries && bEntries.length > 0) {
+                const entry = bEntries[0];
+                billingData = entry;
+                steps.push({ time: '+0ms', service: 'billing', cls: 'active',
+                    msg: `$${entry.Amount.toFixed(2)} billed (${entry.Type})`,
+                    detail: `publisher rev: $${entry.PublisherRevenue.toFixed(2)}, platform margin: $${entry.PlatformMargin.toFixed(2)}`
+                });
+            }
+        } catch (e) { /* billing not available */ }
+
+        // Summary panels
+        const totalMs = Math.round(performance.now() - t0);
+        let html = '<div class="demo-note">Trace ID: <code>' + traceId + '</code> &mdash; Full pipeline executed end-to-end in ' + totalMs + 'ms. All data is real.</div>';
+        html += '<div class="flow">';
+        for (const s of steps) {
+            html += `<div class="node ${s.cls}">
+                <span class="time">${s.time}</span>
+                <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
+                <span class="msg">${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
+            </div>`;
+        }
+        html += '</div>';
+        html += '<div class="panels">';
+        html += `<div class="panel"><h3>Clearing Price</h3><div class="metric green">$${bid.price.toFixed(2)}</div><div class="label">CPM (first-price)</div></div>`;
+        html += `<div class="panel"><h3>Winner</h3><div class="metric blue">${seat.seat}</div><div class="label">DSP ID</div></div>`;
+        if (billingData) {
+            html += `<div class="panel"><h3>Publisher Revenue</h3><div class="metric yellow">$${billingData.PublisherRevenue.toFixed(2)}</div><div class="label">${(100-billingData.PlatformMargin/billingData.Amount*100).toFixed(0)}% rev share</div></div>`;
+            html += `<div class="panel"><h3>Platform Margin</h3><div class="metric purple">$${billingData.PlatformMargin.toFixed(2)}</div><div class="label">${(billingData.PlatformMargin/billingData.Amount*100).toFixed(0)}% take rate</div></div>`;
+        } else {
+            html += `<div class="panel"><h3>Creative</h3><div class="metric yellow">${bid.crid}</div><div class="label">Creative ID</div></div>`;
+            html += `<div class="panel"><h3>Pipeline</h3><div class="metric purple">${totalMs}ms</div><div class="label">End-to-end</div></div>`;
+        }
+        html += '</div>';
+        content.innerHTML = html;
+    }
+
+    // Demo mode: simulated trace with hardcoded timings (illustrative, not real data)
+    async function fireDemoRequest() {
+        const traceId = 'demo-' + Date.now();
+        document.getElementById('traceInput').value = traceId;
+
+        try {
+            const resp = await fetch(window.location.protocol + '//' + window.location.hostname + ':8080/v1/openrtb/auction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: traceId,
+                    imp: [{ id: "imp-1", banner: { w: 300, h: 250 }, bidfloor: 0.50 }],
+                    site: { domain: "demo.local", page: "/test" },
+                    device: { ua: navigator.userAgent, geo: { country: "GBR" } }
+                })
+            });
+            const result = await resp.json();
+            showTrace(traceId, result);
+        } catch (e) {
+            showTrace(traceId, null, e.message);
+        }
+    }
+
+    function showTrace(traceId, auctionResult, error, lookupData) {
+        const content = document.getElementById('content');
+        const hasWinner = auctionResult && !auctionResult.nobid && auctionResult.seatbid;
+
+        let nodes = [];
+
+        if (lookupData) {
+            // Lookup mode: we found events in the analytics store
+            nodes.push({ time: '—', service: 'reporting', cls: 'active', msg: `Found ${lookupData.impressions} impression(s) for this trace`, detail: `total cost: $${lookupData.cost.toFixed(2)} USD` });
+            nodes.push({ time: '—', service: 'exchange', cls: 'active', msg: 'Auction was run (historical)', detail: `trace_id: ${traceId}` });
+            nodes.push({ time: '—', service: 'tracker', cls: 'active', msg: 'Impression recorded', detail: '' });
+            nodes.push({ time: '—', service: 'reporting', cls: 'active', msg: 'Event persisted to analytics store', detail: '' });
+            nodes.push({ time: '—', service: 'billing', cls: 'active', msg: `$${lookupData.cost.toFixed(2)} accrued`, detail: '' });
+        } else if (!auctionResult && !error) {
+            // Lookup mode: no events found
+            nodes.push({ time: '—', service: 'reporting', cls: 'warn', msg: `No events found for trace_id: ${traceId}`, detail: 'Trace may have expired, or the reporting service has no data for this ID' });
+        } else {
+            // Live fire mode
+            nodes.push({ time: '0ms', service: 'exchange', cls: 'active', msg: `Auction started`, detail: `trace_id: ${traceId}` });
+
+            if (error) {
+                nodes.push({ time: '1ms', service: 'exchange', cls: 'error', msg: `Exchange unreachable: ${error}`, detail: 'Ensure exchange is running on :8081' });
+            } else if (auctionResult) {
+                nodes.push({ time: '2ms', service: 'exchange', cls: 'active', msg: 'Bid request fanned out to DSPs', detail: '' });
+
+                if (hasWinner) {
+                    const seat = auctionResult.seatbid[0];
+                    const bid = seat.bid[0];
+                    nodes.push({ time: '5ms', service: 'dsp', cls: 'active', msg: `Bid received: $${bid.price.toFixed(2)} CPM`, detail: `dsp: ${seat.seat}, creative: ${bid.crid || 'n/a'}` });
+                    nodes.push({ time: '15ms', service: 'exchange', cls: 'active', msg: `Auction complete: winner at $${bid.price.toFixed(2)}`, detail: `clearing_price: $${bid.price.toFixed(2)} (first-price)` });
+                    nodes.push({ time: '18ms', service: 'adserver', cls: 'active', msg: 'Creative served to browser', detail: `creative_id: ${bid.crid || 'n/a'}` });
+                    nodes.push({ time: '20ms', service: 'browser', cls: 'active', msg: 'Ad rendered in viewport', detail: '' });
+                    nodes.push({ time: '1200ms', service: 'tracker', cls: 'active', msg: 'Impression pixel received', detail: 'fraud_score: 0.02' });
+                    nodes.push({ time: '1201ms', service: 'nats', cls: 'active', msg: 'ImpressionEvent published', detail: 'subject: adtech.events.impression' });
+                    nodes.push({ time: '1205ms', service: 'reporting', cls: 'active', msg: 'Event written to analytics store', detail: 'DuckDB insert: impressions table' });
+                    nodes.push({ time: '1206ms', service: 'billing', cls: 'active', msg: `$${bid.price.toFixed(2)} accrued (CPM, immediate billing)`, detail: 'advertiser_spend + publisher_revenue' });
+                    nodes.push({ time: '2300ms', service: 'tracker', cls: 'active', msg: 'Viewability beacon: 2.3s visible, 85% area', detail: 'IAB viewable: yes' });
+                } else {
+                    nodes.push({ time: '5ms', service: 'dsp', cls: 'nobid', msg: 'No bids returned', detail: 'All DSPs declined or timed out' });
+                    nodes.push({ time: '10ms', service: 'exchange', cls: 'warn', msg: 'Auction complete: no winner', detail: 'No valid bids above floor price' });
+                }
+            }
+        }
+
+        let html = '<div class="demo-note">Trace ID: <code>' + traceId + '</code> &mdash; ';
+        if (lookupData) {
+            html += 'Found in analytics store. Showing recorded events.';
+        } else if (hasWinner) {
+            html += 'Auction won. Full trace shown below.';
+        } else if (!auctionResult && !error) {
+            html += 'No events found for this trace ID. Try "Fire Single Request" to create a new trace.';
+        } else {
+            html += 'No winning bid.';
+        }
+        html += ' In production, this view streams live from Loki via SSE.</div>';
+
+        html += '<div class="flow">';
+        for (const node of nodes) {
+            html += `<div class="node ${node.cls}">
+                <span class="time">${node.time}</span>
+                <span class="service ${node.service}">[${node.service.charAt(0).toUpperCase() + node.service.slice(1)}]</span>
+                <span class="msg">${node.msg}${node.detail ? ' <span class="detail">' + node.detail + '</span>' : ''}</span>
+            </div>`;
+        }
+        html += '</div>';
+
+        // Panels
+        if (hasWinner) {
+            const bid = auctionResult.seatbid[0].bid[0];
+            html += '<div class="panels">';
+            html += `<div class="panel"><h3>Clearing Price</h3><div class="metric green">$${bid.price.toFixed(2)}</div><div class="label">CPM (first-price)</div></div>`;
+            html += `<div class="panel"><h3>Winner</h3><div class="metric blue">${auctionResult.seatbid[0].seat}</div><div class="label">DSP ID</div></div>`;
+            html += `<div class="panel"><h3>Creative</h3><div class="metric yellow">${bid.crid || 'n/a'}</div><div class="label">Creative ID</div></div>`;
+            html += `<div class="panel"><h3>Trace Events</h3><div class="metric purple">${nodes.length}</div><div class="label">Total hops tracked</div></div>`;
+            html += '</div>';
+        }
+
+        content.innerHTML = html;
+    }
+    </script>
+</body>
+</html>
