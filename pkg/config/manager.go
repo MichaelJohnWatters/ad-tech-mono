@@ -34,6 +34,8 @@ type Manager struct {
 	globalCBs    []ChangeCallback
 	history      []ChangeRecord
 	source       ConfigSource
+	registry     *Registry
+	serviceName  string
 	stopCh       chan struct{}
 }
 
@@ -76,6 +78,14 @@ func (m *Manager) SetPollInterval(d time.Duration) {
 	defer m.mu.Unlock()
 	m.pollInterval = d
 	m.log.Info("config poll interval changed", "interval", d)
+}
+
+// SetRegistry links the registry for heartbeat pings during polling.
+func (m *Manager) SetRegistry(registry *Registry, serviceName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registry = registry
+	m.serviceName = serviceName
 }
 
 // SetSource sets the backing store for live config.
@@ -135,6 +145,8 @@ func (m *Manager) Stop() {
 func (m *Manager) poll(ctx context.Context) {
 	m.mu.RLock()
 	source := m.source
+	registry := m.registry
+	serviceName := m.serviceName
 	m.mu.RUnlock()
 
 	if source == nil {
@@ -148,6 +160,11 @@ func (m *Manager) poll(ctx context.Context) {
 	}
 
 	m.applyChanges(values, "poll")
+
+	// Heartbeat ping so the registry shows when this pod last polled
+	if registry != nil && serviceName != "" {
+		registry.Ping(ctx, serviceName)
+	}
 }
 
 func (m *Manager) applyChanges(newValues map[string]string, source string) {
