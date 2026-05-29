@@ -16,6 +16,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auction"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -38,11 +40,24 @@ func main() {
 	engine := auction.NewEngine(clk)
 	httpClient := &http.Client{Timeout: bidTimeout}
 
+	// Connect to NATS for auction event publishing
+	natsURL := cfg.Get("exchange.nats_url", "nats://localhost:4222")
+	var pub *events.Publisher
+	natsBus, err := natsbus.New(natsURL, "exchange", log)
+	if err != nil {
+		log.Warn("nats unavailable, auction events will not be published", "error", err)
+	} else {
+		ctx := context.Background()
+		natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects})
+		pub = events.NewPublisher(natsBus, log)
+		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", hlth.LivenessHandler())
 	mux.Handle("/readyz", hlth.ReadinessHandler())
 
-	mux.HandleFunc("/v1/openrtb/auction", auctionHandler(log, clk, engine, httpClient, dspEndpoints, channel))
+	mux.HandleFunc("/v1/openrtb/auction", auctionHandler(log, clk, engine, httpClient, dspEndpoints, channel, pub))
 	mux.HandleFunc("/v1/openrtb/win", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("/v1/openrtb/loss", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
@@ -54,7 +69,7 @@ func main() {
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, dspEndpoints []string, channel string) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, dspEndpoints []string, channel string, pub *events.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -130,6 +145,49 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 
 		// Send win/loss notifications asynchronously
 		go sendWinLossNotifications(client, bidRecords, winner.Bid.DSPID, winner.ClearingPrice, bidReq.Imp[0].BidFloor, reqLog)
+
+		// Publish auction events to NATS
+		if pub != nil {
+			go func() {
+				// AuctionWinEvent - single source of truth for cost
+				pub.AuctionWin(ctx, events.AuctionWinEvent{
+					TraceID:       traceID,
+					AuctionID:     traceID,
+					WinnerDSP:     winner.Bid.DSPID,
+					CampaignID:    winner.Bid.CampaignID,
+					CreativeID:    winner.Bid.CreativeID,
+					PlacementID:   bidReq.Imp[0].ID,
+					ClearingPrice: winner.ClearingPrice,
+					Currency:      "USD",
+					BidModel:      winner.Bid.BidModel,
+					Channel:       channel,
+					Timestamp:     clk.Now(),
+				})
+
+				// AuctionCompleteEvent - all bids for analytics
+				var bidSummaries []events.BidSummary
+				for _, b := range bids {
+					bidSummaries = append(bidSummaries, events.BidSummary{
+						DSPID:      b.DSPID,
+						CampaignID: b.CampaignID,
+						Price:      b.Price,
+						Won:        b.DSPID == winner.Bid.DSPID,
+					})
+				}
+				pub.AuctionComplete(ctx, events.AuctionCompleteEvent{
+					TraceID:       traceID,
+					PlacementID:   bidReq.Imp[0].ID,
+					Channel:       channel,
+					NumBids:       len(bids),
+					WinnerDSP:     winner.Bid.DSPID,
+					ClearingPrice: winner.ClearingPrice,
+					FloorPrice:    bidReq.Imp[0].BidFloor,
+					DurationMs:    clk.Since(start).Milliseconds(),
+					Bids:          bidSummaries,
+					Timestamp:     clk.Now(),
+				})
+			}()
+		}
 	}
 }
 
