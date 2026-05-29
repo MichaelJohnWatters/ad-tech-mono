@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Config Manager - Ad Tech Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: { colors: { brand: { DEFAULT: '#4361ee', hover: '#3a56d4' }, surface: { dark: '#1a1a2e', page: '#0f0f1a' } } } }
+    }
+    </script>
+    <script>
+    (function(){var s=localStorage.getItem('theme');if(s)document.documentElement.className=s})();
+    function toggleTheme(){var h=document.documentElement,n=h.classList.contains('dark')?'light':'dark';h.className=n;localStorage.setItem('theme',n)}
+    </script>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-200 min-h-screen">
+
+<nav class="bg-white dark:bg-surface-dark border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center gap-4">
+    <a href="/" class="font-semibold text-lg text-gray-900 dark:text-white">Ad Tech</a>
+    <div class="flex gap-3 text-sm">
+        <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
+        <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
+        <a href="/dev/config-manager" class="text-brand font-medium">Config</a>
+        <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
+    </div>
+    <button onclick="toggleTheme()" class="ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">&#9728;&#65039;</button>
+</nav>
+
+<main class="max-w-5xl mx-auto px-5 py-6">
+    <div class="flex items-center justify-between mb-4">
+        <h1 class="text-xl font-semibold">Config Manager</h1>
+        <div class="flex gap-2">
+            <button onclick="loadData()" class="px-3 py-1.5 text-sm bg-brand text-white rounded hover:bg-brand-hover">Refresh</button>
+            <button onclick="showHistory()" class="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600">History</button>
+        </div>
+    </div>
+
+    <!-- Search -->
+    <div class="mb-4 flex gap-2">
+        <input id="searchInput" type="text" placeholder="Search keys, services, descriptions..."
+            oninput="filterConfig()"
+            class="flex-1 px-3 py-2 text-sm font-mono bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:border-brand focus:outline-none">
+        <button id="searchModeBtn" onclick="toggleSearchMode()"
+            class="px-3 py-2 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 whitespace-nowrap">
+            Fuzzy
+        </button>
+    </div>
+
+    <!-- Service filter pills -->
+    <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
+
+    <!-- Stats bar -->
+    <div id="statsBar" class="text-xs text-gray-400 mb-4"></div>
+
+    <!-- Config table -->
+    <div id="configTable"></div>
+
+    <!-- Toast container -->
+    <div id="toastContainer" class="fixed bottom-4 right-4 flex flex-col gap-2 z-50"></div>
+
+    <!-- History modal -->
+    <div id="historyModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick="if(event.target===this)this.classList.add('hidden')">
+        <div class="bg-white dark:bg-surface-dark rounded-lg p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto border border-gray-200 dark:border-gray-800">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-semibold">Change History</h2>
+                <button onclick="document.getElementById('historyModal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+            </div>
+            <div id="historyContent"></div>
+        </div>
+    </div>
+</main>
+
+<script>
+const GW = '';
+let services = [];
+let schema = [];
+let selectedService = 'all';
+
+async function loadData() {
+    const [svcResp, schemaResp] = await Promise.all([
+        fetch(GW + '/v1/services'),
+        fetch(GW + '/v1/config?schema=true')
+    ]);
+    services = await svcResp.json() || [];
+    schema = await schemaResp.json() || [];
+    storeOriginalValues();
+    renderPills();
+    filterConfig();
+    reopenHistories();
+}
+
+function renderPills() {
+    const svcNames = [...new Set(schema.map(e => e.Service))].sort();
+    const el = document.getElementById('servicePills');
+    el.innerHTML = `
+        <button onclick="selectService('all')"
+            class="px-3 py-1 text-xs rounded-full transition-colors ${selectedService === 'all' ? 'bg-brand text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}">
+            All (${schema.length})
+        </button>
+        ${svcNames.map(s => {
+            const count = schema.filter(e => e.Service === s).length;
+            const svc = services.find(sv => sv.service === s);
+            const status = svc ? (svc.status === 'running' ? '●' : '○') : '';
+            return `<button onclick="selectService('${s}')"
+                class="px-3 py-1 text-xs rounded-full transition-colors ${selectedService === s ? 'bg-brand text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}">
+                ${status} ${s} (${count})
+            </button>`;
+        }).join('')}
+    `;
+}
+
+function selectService(name) {
+    selectedService = name;
+    renderPills();
+    filterConfig();
+}
+
+let searchMode = 'fuzzy'; // 'fuzzy' or 'strict'
+
+function toggleSearchMode() {
+    searchMode = searchMode === 'fuzzy' ? 'strict' : 'fuzzy';
+    document.getElementById('searchModeBtn').textContent = searchMode === 'fuzzy' ? 'Fuzzy' : 'Strict';
+    filterConfig();
+}
+
+function matchSearch(text, query) {
+    if (!query) return true;
+    if (searchMode === 'strict') {
+        return text.toLowerCase().includes(query.toLowerCase());
+    }
+    // Fuzzy: all chars of query appear in order
+    const lower = text.toLowerCase();
+    const q = query.toLowerCase();
+    let qi = 0;
+    for (let i = 0; i < lower.length && qi < q.length; i++) {
+        if (lower[i] === q[qi]) qi++;
+    }
+    return qi === q.length;
+}
+
+function filterConfig() {
+    const query = document.getElementById('searchInput').value;
+    let filtered = schema;
+
+    // Service filter
+    if (selectedService !== 'all') {
+        filtered = filtered.filter(e => e.Service === selectedService);
+    }
+
+    // Fuzzy search across key, description, service, value, type
+    if (query) {
+        filtered = filtered.filter(e =>
+            matchSearch(e.Key + ' ' + e.Description + ' ' + e.Service + ' ' + e.current_value + ' ' + e.Type, query)
+        );
+    }
+
+    document.getElementById('statsBar').textContent =
+        `Showing ${filtered.length} of ${schema.length} keys` +
+        (query ? ` matching "${query}"` : '') +
+        (selectedService !== 'all' ? ` in ${selectedService}` : '');
+
+    renderTable(filtered);
+}
+
+function renderTable(entries) {
+    const el = document.getElementById('configTable');
+    if (entries.length === 0) {
+        el.innerHTML = '<div class="text-center py-8 text-gray-400">No matching config keys</div>';
+        return;
+    }
+
+    // Group by service
+    const grouped = {};
+    entries.forEach(e => {
+        if (!grouped[e.Service]) grouped[e.Service] = [];
+        grouped[e.Service].push(e);
+    });
+
+    el.innerHTML = Object.entries(grouped).map(([svc, keys]) => `
+        <div class="mb-6">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-2">${svc}</h3>
+            <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
+                ${keys.map(k => `
+                    <div class="px-4 py-3" id="row-${cssId(k.Key)}">
+                        <div class="flex items-center justify-between mb-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-mono text-sm">${k.Key}</span>
+                                <span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${k.Type}</span>
+                                <span class="text-[10px] text-gray-400">${k.Since}</span>
+                                ${k.status === 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">orphaned</span>' : ''}
+                                ${k.Deprecated && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">deprecated</span>' : ''}
+                                ${k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
+                            </div>
+                            <div class="flex gap-1">
+                                <button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover">Save</button>
+                                <button onclick="rollbackKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
+                                <button onclick="resetKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>
+                                <button onclick="toggleKeyHistory('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-brand" title="Change history">&darr; History</button>
+                            </div>
+                        </div>
+                        <div class="text-xs text-gray-500 mb-2">${k.Description}</div>
+                        <div class="flex gap-2 items-center">
+                            ${inputForType(k)}
+                            <span class="text-[10px] text-gray-400 whitespace-nowrap ${k.current_value !== k.Default ? 'text-amber-500' : ''}" title="Default value">
+                                default: ${escHtml(k.Default || '(empty)')}
+                            </span>
+                            <span id="dirty-${cssId(k.Key)}" class="hidden text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 whitespace-nowrap">unsaved</span>
+                        </div>
+                        <div id="history-${cssId(k.Key)}" class="hidden mt-2 text-xs border-t border-gray-100 dark:border-gray-800 pt-2"></div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function saveKey(key) {
+    const input = document.getElementById('input-' + cssId(key));
+    const value = input.value != null ? input.value : input.selectedOptions?.[0]?.value;
+    const original = originalValues[key] || '';
+
+    if (value === original) {
+        toast('No changes to save', 'info');
+        return;
+    }
+
+    const resp = await fetch(GW + '/v1/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, value })
+    });
+    const result = await resp.json();
+
+    if (resp.ok) {
+        clearDirty(key);
+        toast(`${key} updated to "${value}"`, 'success');
+        setTimeout(() => loadData(), 500);
+    } else {
+        toast(`Failed: ${result.error || 'unknown'}`, 'error');
+    }
+}
+
+async function rollbackKey(key) {
+    const resp = await fetch(GW + '/v1/config?rollback=' + encodeURIComponent(key));
+    if (resp.ok) {
+        toast(`${key} reverted to previous value`, 'info');
+        clearDirty(key);
+        loadData();
+    } else {
+        const r = await resp.json();
+        toast(r.error || 'No history for this key', 'error');
+    }
+}
+
+async function toggleKeyHistory(key) {
+    const el = document.getElementById('history-' + cssId(key));
+    if (!el) return;
+
+    if (!el.classList.contains('hidden')) {
+        el.classList.add('hidden');
+        openHistories.delete(key);
+        return;
+    }
+    openHistories.add(key);
+
+    el.innerHTML = '<span class="text-gray-400">Loading...</span>';
+    el.classList.remove('hidden');
+
+    const resp = await fetch(GW + '/v1/config?history=true&key=' + encodeURIComponent(key));
+    const history = await resp.json() || [];
+
+    if (history.length === 0) {
+        el.innerHTML = '<span class="text-gray-400">No changes recorded</span>';
+        return;
+    }
+
+    el.innerHTML = `
+        <table class="w-full text-xs">
+            <thead><tr class="text-gray-400">
+                <td class="pr-2 py-1">ID</td>
+                <td class="pr-2 py-1">Action</td>
+                <td class="pr-2 py-1">When</td>
+                <td class="pr-2 py-1">Old</td>
+                <td class="pr-2 py-1">New</td>
+                <td class="py-1">By</td>
+            </tr></thead>
+            <tbody>
+                ${history.map(h => `<tr class="border-t border-gray-100 dark:border-gray-800">
+                    <td class="pr-2 py-1 text-gray-400 font-mono" title="${h.id}">${(h.id || '').substring(0, 8)}</td>
+                    <td class="pr-2 py-1">${actionBadge(h.action)}</td>
+                    <td class="pr-2 py-1 text-gray-400 whitespace-nowrap">${new Date(h.timestamp).toLocaleString()}</td>
+                    <td class="pr-2 py-1 font-mono text-red-400">${escHtml(h.old_value || '(empty)')}</td>
+                    <td class="pr-2 py-1 font-mono text-green-400">${escHtml(h.new_value)}</td>
+                    <td class="py-1 text-gray-500">${h.actor}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function reopenHistories() {
+    openHistories.forEach(key => {
+        const el = document.getElementById('history-' + cssId(key));
+        if (el) {
+            el.classList.add('hidden'); // reset so toggleKeyHistory fetches fresh
+            toggleKeyHistory(key);
+        }
+    });
+}
+
+async function resetKey(key) {
+    const resp = await fetch(GW + '/v1/config?reset=' + encodeURIComponent(key));
+    if (resp.ok) {
+        toast(`${key} reset to default: ${defaultVal}`, 'info');
+        clearDirty(key);
+        loadData();
+    } else {
+        const r = await resp.json();
+        toast(r.error || 'Reset failed', 'error');
+    }
+}
+
+async function showHistory() {
+    const resp = await fetch(GW + '/v1/config?history=true');
+    const history = (await resp.json() || []).reverse();
+
+    document.getElementById('historyContent').innerHTML = history.length === 0
+        ? '<div class="py-4 text-center text-gray-400">No changes yet</div>'
+        : `<div class="divide-y divide-gray-100 dark:divide-gray-800 text-sm">
+            ${history.map(h => `
+                <div class="py-2">
+                    <div class="flex justify-between items-center">
+                        <span class="font-mono text-xs">${h.key}</span>
+                        <span class="text-[10px] text-gray-400">${h.source} &middot; ${new Date(h.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div class="text-xs mt-1 font-mono">
+                        <span class="text-red-400">${escHtml(h.old_value || '(empty)')}</span>
+                        <span class="text-gray-500 mx-1">&rarr;</span>
+                        <span class="text-green-400">${escHtml(h.new_value)}</span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>`;
+    document.getElementById('historyModal').classList.remove('hidden');
+}
+
+// Type-appropriate input controls
+function inputForType(k) {
+    const id = 'input-' + cssId(k.Key);
+    const onChange = `markDirty('${k.Key}')`;
+    const onEnter = `onkeydown="if(event.key==='Enter')saveKey('${k.Key}')"`;
+
+    switch (k.Type) {
+    case 'bool':
+        return `<select id="${id}" onchange="${onChange}"
+            class="px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">
+            <option value="true" ${k.current_value === 'true' ? 'selected' : ''}>true</option>
+            <option value="false" ${k.current_value === 'false' ? 'selected' : ''}>false</option>
+        </select>`;
+    case 'int':
+        return `<input id="${id}" type="number" step="1" value="${escHtml(k.current_value)}"
+            oninput="${onChange}" ${onEnter}
+            class="w-32 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+    case 'float':
+        return `<input id="${id}" type="number" step="0.01" value="${escHtml(k.current_value)}"
+            oninput="${onChange}" ${onEnter}
+            class="w-32 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+    case 'duration':
+        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}" placeholder="e.g. 100ms, 5s, 1m"
+            oninput="${onChange}" ${onEnter}
+            class="w-40 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+    default:
+        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}"
+            oninput="${onChange}" ${onEnter}
+            class="flex-1 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+    }
+}
+
+// Dirty tracking - only show unsaved if value differs from what's in the DB
+const originalValues = {};
+const dirtyKeys = new Set();
+const openHistories = new Set();
+
+function storeOriginalValues() {
+    schema.forEach(k => { originalValues[k.Key] = k.current_value; });
+}
+
+function markDirty(key) {
+    const input = document.getElementById('input-' + cssId(key));
+    if (!input) return;
+    const current = input.value || input.selectedOptions?.[0]?.value || '';
+    const original = originalValues[key] || '';
+    const el = document.getElementById('dirty-' + cssId(key));
+    const row = document.getElementById('row-' + cssId(key));
+
+    if (current !== original) {
+        if (el) el.classList.remove('hidden');
+        if (row) row.classList.add('border-l-2', 'border-l-amber-400');
+        dirtyKeys.add(key);
+    } else {
+        if (el) el.classList.add('hidden');
+        if (row) row.classList.remove('border-l-2', 'border-l-amber-400');
+        dirtyKeys.delete(key);
+    }
+}
+
+function clearDirty(key) {
+    const el = document.getElementById('dirty-' + cssId(key));
+    const row = document.getElementById('row-' + cssId(key));
+    if (el) el.classList.add('hidden');
+    if (row) row.classList.remove('border-l-2', 'border-l-amber-400');
+    dirtyKeys.delete(key);
+}
+
+// Toast notifications
+function toast(message, type) {
+    const container = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    const colors = {
+        success: 'bg-green-500',
+        error: 'bg-red-500',
+        info: 'bg-brand'
+    };
+    t.className = `${colors[type] || colors.info} text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-all transform translate-y-2 opacity-0`;
+    t.textContent = message;
+    container.appendChild(t);
+    requestAnimationFrame(() => {
+        t.classList.remove('translate-y-2', 'opacity-0');
+    });
+    setTimeout(() => {
+        t.classList.add('translate-y-2', 'opacity-0');
+        setTimeout(() => t.remove(), 300);
+    }, 3000);
+}
+
+function actionBadge(action) {
+    const map = {
+        'config_update':   '<span class="px-1.5 py-0.5 text-[10px] rounded bg-blue-100 dark:bg-blue-900/30 text-blue-500">update</span>',
+        'config_rollback': '<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 dark:bg-amber-900/30 text-amber-500">undo</span>',
+        'config_reset':    '<span class="px-1.5 py-0.5 text-[10px] rounded bg-purple-100 dark:bg-purple-900/30 text-purple-500">reset</span>',
+    };
+    return map[action] || `<span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${action || '?'}</span>`;
+}
+function cssId(key) { return key.replace(/[.\s]/g, '-'); }
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+loadData();
+</script>
+</body>
+</html>

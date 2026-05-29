@@ -61,6 +61,9 @@ func main() {
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/templates/trace/explorer.html")
 	})
+	mux.HandleFunc("/dev/config-manager", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "web/templates/config/manager.html")
+	})
 
 	// sellers.json (IAB standard - lists all publishers we represent)
 	mux.HandleFunc("/sellers.json", func(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +244,7 @@ function toggleTheme(){var h=document.documentElement,n=h.classList.contains('da
   <div class="flex gap-3 text-sm">
     <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
     <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
+    <a href="/dev/config-manager" class="text-gray-500 dark:text-gray-400 hover:text-brand">Config</a>
     <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
   </div>
   <button onclick="toggleTheme()" id="ti" class="ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">☀️</button>
@@ -262,6 +266,10 @@ function toggleTheme(){var h=document.documentElement,n=h.classList.contains('da
     <a href="/dev/trace-explorer" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
       <div class="font-medium text-brand">Trace Explorer</div>
       <div class="text-sm text-gray-500 dark:text-gray-400">Trace a single ad request through every service end-to-end</div>
+    </a>
+    <a href="/dev/config-manager" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
+      <div class="font-medium text-brand">Config Manager</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">View and edit live config for all services, per-pod overrides, change history</div>
     </a>
     <a href="/docs" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
       <div class="font-medium text-brand">API Docs (Swagger)</div>

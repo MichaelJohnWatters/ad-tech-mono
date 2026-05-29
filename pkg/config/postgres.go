@@ -45,11 +45,32 @@ func (s *PostgresSource) FetchAll(ctx context.Context) (map[string]string, error
 }
 
 func (s *PostgresSource) Update(ctx context.Context, key, value string) error {
+	return s.UpdateWithAction(ctx, key, value, "config_update")
+}
+
+// UpdateWithAction writes a config value and records the action type in the audit log.
+// Actions: config_update, config_rollback, config_reset
+func (s *PostgresSource) UpdateWithAction(ctx context.Context, key, value, action string) error {
 	valueJSON, _ := json.Marshal(value)
 
 	// Get old value for audit trail
 	var oldValueJSON []byte
 	s.db.QueryRowContext(ctx, "SELECT value FROM config WHERE key = $1", key).Scan(&oldValueJSON)
+	var oldVal string
+	if len(oldValueJSON) > 0 {
+		if err := json.Unmarshal(oldValueJSON, &oldVal); err != nil {
+			oldVal = string(oldValueJSON)
+		}
+	}
+	// If no existing value, use the schema default so audit log shows what it was
+	if oldVal == "" {
+		for _, entry := range Schema() {
+			if entry.Key == key {
+				oldVal = entry.Default
+				break
+			}
+		}
+	}
 
 	// Upsert
 	_, err := s.db.ExecContext(ctx, `
@@ -61,16 +82,15 @@ func (s *PostgresSource) Update(ctx context.Context, key, value string) error {
 		return err
 	}
 
-	// Write to audit log for persistent history
-	oldVal := string(oldValueJSON)
+	// Write to audit log with action type
 	changesJSON, _ := json.Marshal(map[string]string{
 		"old_value": oldVal,
-		"new_value": string(valueJSON),
+		"new_value": value,
 	})
 	s.db.ExecContext(ctx, `
 		INSERT INTO audit_log (account_id, actor_id, action, resource_type, resource_id, changes, timestamp)
-		VALUES (NULL, 'config_manager', 'config_update', 'config', $1, $2, now())
-	`, key, changesJSON)
+		VALUES (NULL, 'config_manager', $1, 'config', $2, $3, now())
+	`, action, key, changesJSON)
 
 	return nil
 }
@@ -82,7 +102,9 @@ func (s *PostgresSource) Delete(ctx context.Context, key string) error {
 
 // ConfigChangeLog is a persistent config change record from the audit_log table.
 type ConfigChangeLog struct {
+	ID        string    `json:"id"`
 	Key       string    `json:"key"`
+	Action    string    `json:"action"` // config_update, config_rollback, config_reset
 	OldValue  string    `json:"old_value"`
 	NewValue  string    `json:"new_value"`
 	Actor     string    `json:"actor"`
@@ -97,14 +119,14 @@ func (s *PostgresSource) History(ctx context.Context, key string, limit int) ([]
 
 	if key != "" {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT resource_id, changes, actor_id, timestamp
+			SELECT id, resource_id, action, changes, actor_id, timestamp
 			FROM audit_log
 			WHERE resource_type = 'config' AND resource_id = $1
 			ORDER BY timestamp DESC LIMIT $2
 		`, key, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-			SELECT resource_id, changes, actor_id, timestamp
+			SELECT id, resource_id, action, changes, actor_id, timestamp
 			FROM audit_log
 			WHERE resource_type = 'config'
 			ORDER BY timestamp DESC LIMIT $1
@@ -119,7 +141,7 @@ func (s *PostgresSource) History(ctx context.Context, key string, limit int) ([]
 	for rows.Next() {
 		var cl ConfigChangeLog
 		var changesJSON []byte
-		if err := rows.Scan(&cl.Key, &changesJSON, &cl.Actor, &cl.Timestamp); err != nil {
+		if err := rows.Scan(&cl.ID, &cl.Key, &cl.Action, &changesJSON, &cl.Actor, &cl.Timestamp); err != nil {
 			continue
 		}
 		var changes map[string]string
