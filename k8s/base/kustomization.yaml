@@ -10,4 +10,10 @@ resources:
   - nats/statefulset.yaml
   - redis/deployment.yaml
   - minio/deployment.yaml
-  # Services will be added as they are built in Phase 2+
+  # Observability
+  - grafana/deployment.yaml
+  - grafana/dashboards.yaml
+  - prometheus/deployment.yaml
+  - loki/deployment.yaml
+  - promtail/deployment.yaml
+  - jaeger/deployment.yaml

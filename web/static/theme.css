@@ -1,0 +1,485 @@
+/* Ad Tech Platform - Theme System
+   Usage: add class="dark" or class="light" to <html>
+   Default: follows system preference via prefers-color-scheme
+   Toggle: theme.js handles switching and localStorage persistence
+*/
+
+:root {
+  /* Shared brand colours */
+  --brand-primary: #4361ee;
+  --brand-primary-hover: #3a56d4;
+  --brand-success: #4ade80;
+  --brand-warn: #fbbf24;
+  --brand-error: #f87171;
+  --brand-purple: #a78bfa;
+  --brand-pink: #f472b6;
+  --brand-orange: #fb923c;
+  --brand-cyan: #22d3ee;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+
+  /* Sizing */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --max-width: 1200px;
+}
+
+/* ============================================================
+   Dark Theme (default)
+   ============================================================ */
+:root,
+html.dark {
+  --bg-page: #0f0f1a;
+  --bg-surface: #1a1a2e;
+  --bg-surface-2: #16162a;
+  --bg-surface-3: #1e1e3a;
+  --bg-input: #1e1e3a;
+  --bg-hover: #252545;
+  --bg-status: #0d2818;
+
+  --border: #2a2a4a;
+  --border-subtle: #222240;
+  --border-input: #3a3a5a;
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0b0;
+  --text-muted: #666680;
+  --text-inverse: #1a1a2e;
+
+  --status-border: #4ade80;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+
+  color-scheme: dark;
+}
+
+/* ============================================================
+   Light Theme
+   ============================================================ */
+html.light {
+  --bg-page: #f5f5f8;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f8f8fb;
+  --bg-surface-3: #eeeef2;
+  --bg-input: #ffffff;
+  --bg-hover: #f0f0f5;
+  --bg-status: #e8faf0;
+
+  --border: #e0e0e8;
+  --border-subtle: #eaeaf0;
+  --border-input: #d0d0d8;
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #555566;
+  --text-muted: #888899;
+  --text-inverse: #ffffff;
+
+  --status-border: #22c55e;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+
+  color-scheme: light;
+}
+
+/* System preference fallback */
+@media (prefers-color-scheme: light) {
+  html:not(.dark):not(.light) {
+    --bg-page: #f5f5f8;
+    --bg-surface: #ffffff;
+    --bg-surface-2: #f8f8fb;
+    --bg-surface-3: #eeeef2;
+    --bg-input: #ffffff;
+    --bg-hover: #f0f0f5;
+    --bg-status: #e8faf0;
+    --border: #e0e0e8;
+    --border-subtle: #eaeaf0;
+    --border-input: #d0d0d8;
+    --text-primary: #1a1a2e;
+    --text-secondary: #555566;
+    --text-muted: #888899;
+    --text-inverse: #ffffff;
+    --status-border: #22c55e;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+    color-scheme: light;
+  }
+}
+
+/* ============================================================
+   Base Reset & Typography
+   ============================================================ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+a { color: var(--brand-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+code {
+  background: var(--bg-surface-3);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+pre {
+  background: var(--bg-surface-2);
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+/* ============================================================
+   Layout Components
+   ============================================================ */
+.page-header {
+  background: var(--bg-surface);
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.page-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.page-header a {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+.page-header a:hover { color: var(--brand-primary); }
+
+.page-content {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.card h2, .card h3 {
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.card p {
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   Status Banner
+   ============================================================ */
+.status-banner {
+  background: var(--bg-status);
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  margin: 16px 0;
+  border-left: 4px solid var(--status-border);
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  padding: 8px 18px;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  transition: background 0.15s;
+}
+
+.btn-primary { background: var(--brand-primary); color: white; }
+.btn-primary:hover { background: var(--brand-primary-hover); }
+
+.btn-success { background: #2d6a4f; color: white; }
+.btn-success:hover { background: #1b4332; }
+
+.btn-secondary {
+  background: var(--bg-surface-3);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: var(--bg-hover); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--bg-hover); }
+
+/* ============================================================
+   Form Controls
+   ============================================================ */
+.input, select, input[type="text"] {
+  padding: 8px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+}
+
+select {
+  cursor: pointer;
+}
+
+/* ============================================================
+   Controls Bar (header toolbar)
+   ============================================================ */
+.controls-bar {
+  background: var(--bg-surface);
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.controls-bar input[type="text"] {
+  flex: 1;
+  min-width: 200px;
+  font-family: var(--font-mono);
+}
+
+/* ============================================================
+   Debug Panel (publisher simulator sidebar)
+   ============================================================ */
+.debug-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  box-shadow: var(--shadow-sm);
+}
+
+.debug-panel h3 {
+  color: var(--brand-primary);
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.debug-entry {
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 12px;
+}
+
+.debug-entry:last-child { border-bottom: none; }
+.debug-entry .label { color: var(--text-muted); font-size: 11px; }
+.debug-entry .value { color: var(--text-primary); }
+.debug-entry .success { color: var(--brand-success); }
+.debug-entry .fail { color: var(--brand-error); }
+.debug-entry .pending { color: var(--brand-warn); }
+
+/* ============================================================
+   Trace Flow Nodes
+   ============================================================ */
+.trace-flow { display: flex; flex-direction: column; gap: 0; }
+
+.trace-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 16px;
+  border-left: 3px solid var(--border);
+  margin-left: 60px;
+  transition: background 0.15s;
+}
+.trace-node:hover { background: var(--bg-hover); }
+.trace-node.active { border-left-color: var(--brand-success); }
+.trace-node.warn { border-left-color: var(--brand-warn); }
+.trace-node.error { border-left-color: var(--brand-error); }
+.trace-node.nobid { border-left-color: var(--text-muted); opacity: 0.6; }
+
+.trace-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 60px;
+  text-align: right;
+  position: relative;
+  left: -72px;
+  margin-right: -60px;
+}
+
+.trace-service {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 100px;
+}
+.trace-service.exchange { color: #818cf8; }
+.trace-service.dsp { color: #34d399; }
+.trace-service.tracker { color: var(--brand-warn); }
+.trace-service.adserver { color: var(--brand-pink); }
+.trace-service.reporting { color: var(--brand-cyan); }
+.trace-service.billing { color: var(--brand-purple); }
+.trace-service.nats { color: var(--brand-orange); }
+.trace-service.browser { color: var(--text-secondary); }
+
+.trace-msg { font-size: 13px; color: var(--text-primary); }
+.trace-msg .detail { color: var(--text-muted); font-size: 12px; }
+
+/* ============================================================
+   Metric Panels
+   ============================================================ */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.panel {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+
+.panel h3 {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.panel .metric {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.panel .metric.green { color: var(--brand-success); }
+.panel .metric.blue { color: var(--brand-primary); }
+.panel .metric.yellow { color: var(--brand-warn); }
+.panel .metric.purple { color: var(--brand-purple); }
+
+.panel .label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ============================================================
+   Ad Slot (publisher simulator)
+   ============================================================ */
+.ad-slot {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface-2);
+  position: relative;
+  margin: 20px 0;
+  color: var(--text-muted);
+}
+
+.ad-slot.loaded {
+  border-color: var(--brand-primary);
+  border-style: solid;
+  background: var(--bg-surface);
+}
+
+.ad-slot .ad-label {
+  position: absolute;
+  top: -10px;
+  left: 10px;
+  background: var(--brand-primary);
+  color: white;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   Info Note
+   ============================================================ */
+.info-note {
+  background: var(--bg-surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ============================================================
+   Lists
+   ============================================================ */
+.link-list { list-style: none; }
+.link-list li { line-height: 2.2; }
+.link-list li a { color: var(--brand-primary); }
+
+/* Section headers */
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 24px 0 8px;
+}
+
+/* ============================================================
+   Theme Toggle Button
+   ============================================================ */
+.theme-toggle {
+  background: var(--bg-surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-primary);
+  margin-left: auto;
+}
+.theme-toggle:hover { background: var(--bg-hover); }
+
+/* ============================================================
+   Footer
+   ============================================================ */
+.page-footer {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.page-footer a { color: var(--brand-primary); }

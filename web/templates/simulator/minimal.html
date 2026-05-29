@@ -1,53 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html class="dark" lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ad Tech - Publisher Simulator</title>
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }
-
-        .header { background: #1a1a2e; color: white; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
-        .header h1 { font-size: 16px; font-weight: 600; }
-        .header .controls { display: flex; gap: 8px; }
-        .header button { background: #4361ee; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-        .header button:hover { background: #3a56d4; }
-        .header select { padding: 4px 8px; border-radius: 4px; border: 1px solid #555; background: #2a2a4e; color: white; font-size: 13px; }
-
-        .container { max-width: 900px; margin: 20px auto; display: grid; grid-template-columns: 1fr 320px; gap: 20px; padding: 0 20px; }
-
-        .content { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .content h2 { margin-bottom: 12px; color: #1a1a2e; }
-        .content p { line-height: 1.6; color: #666; margin-bottom: 12px; }
-
-        .ad-slot { border: 2px dashed #ddd; border-radius: 4px; min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #fafafa; position: relative; margin: 20px 0; }
-        .ad-slot.loaded { border-color: #4361ee; border-style: solid; background: white; }
-        .ad-slot .ad-label { position: absolute; top: -10px; left: 10px; background: #4361ee; color: white; font-size: 10px; padding: 2px 8px; border-radius: 3px; }
+        .sim-container { max-width: var(--max-width); margin: 20px auto; display: grid; grid-template-columns: 1fr 320px; gap: 20px; padding: 0 20px; }
+        .sim-content { background: var(--bg-surface); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
+        .sim-content h2 { margin-bottom: 12px; }
+        .sim-content p { line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
         .ad-slot .ad-content { text-align: center; padding: 20px; }
-        .ad-slot .ad-content h3 { color: #1a1a2e; margin-bottom: 8px; }
-        .ad-slot .ad-content .cta { display: inline-block; background: #4361ee; color: white; padding: 8px 20px; border-radius: 4px; text-decoration: none; margin-top: 10px; }
-
-        .debug-panel { background: #1a1a2e; color: #e0e0e0; border-radius: 8px; padding: 16px; font-size: 12px; font-family: 'SF Mono', Monaco, monospace; box-shadow: 0 1px 3px rgba(0,0,0,0.2); position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
-        .debug-panel h3 { color: #4361ee; margin-bottom: 12px; font-size: 14px; }
-        .debug-entry { margin-bottom: 16px; border-bottom: 1px solid #2a2a4e; padding-bottom: 12px; }
-        .debug-entry:last-child { border-bottom: none; }
-        .debug-entry .label { color: #888; font-size: 11px; }
-        .debug-entry .value { color: #fff; }
-        .debug-entry .success { color: #4ade80; }
-        .debug-entry .fail { color: #f87171; }
-        .debug-entry .pending { color: #fbbf24; }
-        .debug-entry .trace-link { color: #4361ee; cursor: pointer; text-decoration: underline; }
+        .ad-slot .ad-content h3 { margin-bottom: 8px; }
+        .ad-slot .ad-content .cta { display: inline-block; background: var(--brand-primary); color: white; padding: 8px 20px; border-radius: var(--radius-sm); text-decoration: none; margin-top: 10px; }
+        .debug-panel { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
+        .debug-entry .trace-link { color: var(--brand-primary); cursor: pointer; text-decoration: underline; }
         .event-row { display: flex; justify-content: space-between; margin: 4px 0; }
         .event-row .status { min-width: 20px; text-align: center; }
-
-        .footer { text-align: center; padding: 20px; color: #999; font-size: 12px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Publisher Simulator - Minimal</h1>
-        <div class="controls">
+    <div class="page-header">
+        <h1>Publisher Simulator</h1>
+        <a href="/">Dashboard</a>
+        <a href="/dev/trace-explorer">Trace Explorer</a>
+        <button class="theme-toggle" onclick="toggleTheme()">☀️</button>
+    </div>
+    <div class="controls-bar">
             <select id="geoSelect">
                 <option value="GBR">UK</option>
                 <option value="USA">US</option>
@@ -60,19 +40,34 @@
                 <option value="2">Desktop</option>
                 <option value="5">Tablet</option>
             </select>
-            <button onclick="loadAd()">Load Ad</button>
-            <button onclick="clearAd()">Clear</button>
-        </div>
+            <select id="sizeSelect">
+                <option value="300x250">300x250 (MPU)</option>
+                <option value="728x90">728x90 (Leaderboard)</option>
+                <option value="160x600">160x600 (Skyscraper)</option>
+                <option value="320x50">320x50 (Mobile Banner)</option>
+                <option value="970x250">970x250 (Billboard)</option>
+                <option value="300x600">300x600 (Half Page)</option>
+                <option value="336x280">336x280 (Large Rectangle)</option>
+            </select>
+            <select id="floorSelect">
+                <option value="0.50">Floor: $0.50</option>
+                <option value="1.00" selected>Floor: $1.00</option>
+                <option value="2.00">Floor: $2.00</option>
+                <option value="5.00">Floor: $5.00</option>
+                <option value="10.00">Floor: $10.00</option>
+            </select>
+            <button class="btn btn-primary" onclick="loadAd()">Load Ad</button>
+            <button class="btn btn-secondary" onclick="clearAd()">Clear</button>
     </div>
 
-    <div class="container">
-        <div class="content">
+    <div class="sim-container">
+        <div class="sim-content">
             <h2>The Daily Simulator</h2>
             <p>This is a simulated publisher page. The ad slot below runs a real auction through the full ad tech stack: SSP → Exchange → DSP → Ad Server → Tracker.</p>
             <p>Click "Load Ad" to trigger a bid request. The debug panel on the right shows every event in real time.</p>
 
-            <div class="ad-slot" id="adSlot">
-                <span>300×250 Ad Slot</span>
+            <div class="ad-slot" id="adSlot" style="width: 300px; min-height: 250px;">
+                <span id="adSlotLabel">300x250 Ad Slot</span>
                 <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
             </div>
 
@@ -90,15 +85,31 @@
         </div>
     </div>
 
-    <div class="footer">
-        Ad Tech Platform - Publisher Simulator | <a href="/" style="color: #4361ee;">Dashboard</a>
+    <div class="page-footer">
+        Ad Tech Platform &middot; <a href="/">Dashboard</a> &middot; <a href="/dev/trace-explorer">Trace Explorer</a>
     </div>
 
     <script>
         const EXCHANGE_URL = window.location.protocol + '//' + window.location.hostname + ':8081';
+        const ADSERVER_URL = window.location.protocol + '//' + window.location.hostname + ':8085';
         const TRACKER_URL = window.location.protocol + '//' + window.location.hostname + ':8083';
 
         let currentTraceID = null;
+
+        // Resize ad slot when size dropdown changes
+        document.getElementById('sizeSelect').addEventListener('change', function() {
+            if (!currentTraceID) { // only resize if no ad is loaded
+                updateSlotSize();
+            }
+        });
+
+        function updateSlotSize() {
+            const [w, h] = document.getElementById('sizeSelect').value.split('x').map(Number);
+            const slot = document.getElementById('adSlot');
+            slot.style.width = w + 'px';
+            slot.style.minHeight = h + 'px';
+            document.getElementById('adSlotLabel').textContent = w + 'x' + h + ' Ad Slot';
+        }
 
         function debugLog(entries) {
             const panel = document.getElementById('debugContent');
@@ -129,9 +140,17 @@
             ]);
 
             // Step 1: Send bid request to Exchange
+            const [adW, adH] = document.getElementById('sizeSelect').value.split('x').map(Number);
+            const floor = parseFloat(document.getElementById('floorSelect').value);
+
+            // Resize slot to match
+            const slot = document.getElementById('adSlot');
+            slot.style.width = adW + 'px';
+            slot.style.minHeight = adH + 'px';
+
             const bidRequest = {
                 id: traceID,
-                imp: [{ id: 'imp-1', banner: { w: 300, h: 250 }, bidfloor: 1.0 }],
+                imp: [{ id: 'imp-1', banner: { w: adW, h: adH }, bidfloor: floor }],
                 site: { domain: 'sim-publisher.com', page: window.location.href, cat: ['IAB17'] },
                 device: { devicetype: device, geo: { country: geo } },
                 user: { id: 'sim-user-' + Math.floor(Math.random() * 1000) },
@@ -175,21 +194,49 @@
             ];
 
             // Render ad in slot
-            const slot = document.getElementById('adSlot');
             slot.classList.add('loaded');
             slot.innerHTML = `
-                <span class="ad-label">Sponsored</span>
+                <span class="ad-label">Sponsored - ${adW}x${adH}</span>
                 <div class="ad-content">
                     <h3>Demo Ad Creative</h3>
-                    <p style="color: #666; font-size: 14px;">Campaign: ${winner.cid}<br>Creative: ${winner.crid}<br>Clearing: $${winner.price.toFixed(2)} CPM</p>
+                    <p style="color: #666; font-size: 14px;">Campaign: ${winner.cid}<br>Creative: ${winner.crid}<br>Size: ${adW}x${adH} | Floor: $${floor.toFixed(2)} | Clearing: $${winner.price.toFixed(2)} CPM</p>
                     <a href="#" class="cta" onclick="fireClick('${traceID}'); return false;">Learn More</a>
                 </div>
             `;
 
-            // Step 2: Fire impression pixel
+            // Step 2: Call ad server to get pixel URLs with full context
             const events = entries[3].events;
+            let impPixelURL = `${TRACKER_URL}/v1/t/imp?tid=${traceID}&cid=${winner.cid}&pid=imp-1&sig=sim`;
+            let viewPixelURL = `${TRACKER_URL}/v1/t/view?tid=${traceID}&cid=${winner.cid}&pid=imp-1`;
             try {
-                const impResp = await fetch(`${TRACKER_URL}/v1/t/imp?tid=${traceID}&cid=${winner.cid}&pid=imp-1&sig=sim`);
+                const adResp = await fetch(`${ADSERVER_URL}/v1/ad/serve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        trace_id: traceID,
+                        campaign_id: winner.cid,
+                        creative_id: winner.crid,
+                        placement_id: 'imp-1',
+                        publisher_id: 'sim-publisher',
+                        advertiser_id: auctionResult.seatbid[0].seat,
+                        clearing_price: winner.price,
+                        currency: auctionResult.cur || 'USD',
+                        site_domain: 'sim-publisher.com',
+                        width: adW,
+                        height: adH
+                    })
+                });
+                const adData = await adResp.json();
+                impPixelURL = adData.impression_url;
+                viewPixelURL = adData.viewability_url;
+                events.push({ name: 'Ad Server', ok: true, detail: 'pixel URLs generated with full context' });
+            } catch (err) {
+                events.push({ name: 'Ad Server', ok: false, detail: 'fallback to basic pixels: ' + err.message });
+            }
+
+            // Step 3: Fire impression pixel (URL now has full context from ad server)
+            try {
+                const impResp = await fetch(impPixelURL);
                 events.push({ name: 'Impression pixel', ok: impResp.status === 200, detail: `${impResp.status} (${impResp.headers.get('content-type')})` });
             } catch (err) {
                 events.push({ name: 'Impression pixel', ok: false, detail: err.message });
@@ -197,15 +244,37 @@
 
             debugLog(entries);
 
-            // Step 3: Viewability check (after 1.5s simulated viewport time)
-            events.push({ name: 'Viewability', ok: null, detail: 'waiting 1.5s...' });
+            // Step 3: Viewability check - simulate real viewport measurement
+            // Smaller ads are more likely to be fully in view, larger ones may be partially clipped
+            const viewportH = window.innerHeight;
+            const slotRect = slot.getBoundingClientRect();
+            const visibleTop = Math.max(0, slotRect.top);
+            const visibleBottom = Math.min(viewportH, slotRect.bottom);
+            const visibleH = Math.max(0, visibleBottom - visibleTop);
+            const visiblePct = Math.min(100, Math.round((visibleH / adH) * 100));
+
+            // Simulate time-in-view: random 1-4 seconds
+            const viewDurMs = 1000 + Math.floor(Math.random() * 3000);
+            const viewDurSec = (viewDurMs / 1000).toFixed(1);
+
+            // IAB standard: display ad is viewable if >= 50% pixels visible for >= 1 continuous second
+            // Large ads (>242500px area): 30% threshold
+            const areaThreshold = (adW * adH > 242500) ? 30 : 50;
+            const isViewable = visiblePct >= areaThreshold && viewDurMs >= 1000;
+
+            events.push({ name: 'Viewability', ok: null, detail: `measuring (${areaThreshold}% threshold)...` });
             debugLog(entries);
 
-            await new Promise(r => setTimeout(r, 1500));
+            await new Promise(r => setTimeout(r, viewDurMs));
 
             try {
-                const viewResp = await fetch(`${TRACKER_URL}/v1/t/view?tid=${traceID}&cid=${winner.cid}&pid=imp-1&dur=1500&pct=85`);
-                events[events.length - 1] = { name: 'Viewability', ok: viewResp.status === 204, detail: '1.5s visible, 85% area' };
+                const viewResp = await fetch(viewPixelURL + `&dur=${viewDurMs}&pct=${visiblePct}`);
+                const iabLabel = isViewable ? 'IAB viewable' : 'not viewable';
+                events[events.length - 1] = {
+                    name: 'Viewability',
+                    ok: viewResp.status === 204,
+                    detail: `${viewDurSec}s visible, ${visiblePct}% area (${iabLabel})`
+                };
             } catch (err) {
                 events[events.length - 1] = { name: 'Viewability', ok: false, detail: err.message };
             }
@@ -235,7 +304,8 @@
         function clearAd() {
             const slot = document.getElementById('adSlot');
             slot.classList.remove('loaded');
-            slot.innerHTML = '<span>300×250 Ad Slot</span><span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>';
+            updateSlotSize();
+            slot.innerHTML = '<span id="adSlotLabel">' + document.getElementById('sizeSelect').value.replace('x', 'x') + ' Ad Slot</span><span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>';
             debugLog([{ label: 'Status', value: 'Waiting for ad request...', status: 'pending' }]);
             currentTraceID = null;
         }

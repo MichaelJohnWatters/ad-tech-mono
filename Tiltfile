@@ -9,7 +9,7 @@ dev_mode = os.getenv('DEV_MODE', 'fast')
 profile = os.getenv('PROFILE', 'full')
 
 # Kill orphaned processes from previous sessions by port
-local('for port in 8080 8081 8082 8083 8084 8085; do lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null; done; sleep 1; echo "ports cleared"')
+local('for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null; done; sleep 1; echo "ports cleared"')
 
 # ============================================================
 # Infrastructure (always runs in K8s)
@@ -24,6 +24,14 @@ k8s_resource('postgres', labels=['infra'], port_forwards=['5432:5432'])
 k8s_resource('nats', labels=['infra'], port_forwards=['4222:4222', '8222:8222'])
 k8s_resource('redis', labels=['infra'], port_forwards=['6379:6379'])
 k8s_resource('minio', labels=['infra'], port_forwards=['9000:9000', '9001:9001'])
+k8s_resource('grafana', labels=['observability'], port_forwards=['3000:3000'],
+    links=['http://localhost:3000'])
+k8s_resource('prometheus', labels=['observability'], port_forwards=['9090:9090'],
+    links=['http://localhost:9090'])
+k8s_resource('loki', labels=['observability'], port_forwards=['3100:3100'])
+k8s_resource('promtail', labels=['observability'])
+k8s_resource('jaeger', labels=['observability'], port_forwards=['16686:16686'],
+    links=['http://localhost:16686'])
 
 # ============================================================
 # Services
@@ -62,6 +70,22 @@ if dev_mode == 'fast':
         labels=['services'],
         resource_deps=['postgres', 'redis'])
 
+    local_resource('dsp-competitor1',
+        cmd='go build -o ./bin/dsp ./cmd/dsp',
+        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 ./bin/dsp',
+        serve_dir='.',
+        deps=['cmd/dsp', 'pkg/'],
+        labels=['services'],
+        resource_deps=['postgres', 'redis'])
+
+    local_resource('dsp-competitor2',
+        cmd='go build -o ./bin/dsp ./cmd/dsp',
+        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 ./bin/dsp',
+        serve_dir='.',
+        deps=['cmd/dsp', 'pkg/'],
+        labels=['services'],
+        resource_deps=['postgres', 'redis'])
+
     local_resource('tracker',
         cmd='go build -o ./bin/tracker ./cmd/tracker',
         serve_cmd='./bin/tracker',
@@ -85,6 +109,14 @@ if dev_mode == 'fast':
         deps=['cmd/adserver', 'pkg/'],
         labels=['services'],
         resource_deps=['minio', 'redis'])
+
+    local_resource('reporting',
+        cmd='go build -o ./bin/reporting ./cmd/reporting',
+        serve_cmd='./bin/reporting',
+        serve_dir='.',
+        deps=['cmd/reporting', 'pkg/'],
+        labels=['services'],
+        resource_deps=['nats'])
 
 else:
     # --------------------------------------------------------
@@ -132,6 +164,10 @@ local_resource('reset',
     cmd='go run ./cmd/migrate reset && go run ./cmd/migrate && go run ./cmd/seed --profile standard',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres'])
+
+local_resource('day-boundary',
+    cmd='go run ./cmd/dayboundary',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
 # ============================================================
 # Simulation
@@ -231,6 +267,11 @@ local_resource('endpoints',
   AD SERVER (:8085) - Creative serving
   ─────────────────────────────────────────────────────────
   GET  /healthz                          Liveness (gRPC services coming)
+
+  REPORTING (:8086) - Analytics & event ingestion
+  ─────────────────────────────────────────────────────────
+  POST /v1/reporting/query               Query analytics store
+  POST /v1/reporting/events              HTTP event ingestion (standalone)
 
   INFRA (K8s pods)
   ─────────────────────────────────────────────────────────

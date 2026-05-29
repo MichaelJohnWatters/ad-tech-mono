@@ -1,0 +1,73 @@
+# Competitor 1 - Large agency DSP (Omnicom-style).
+# Big brands, aggressive mobile bidding, high budgets.
+# Bids are randomised ±30% with 20% random no-bid rate.
+name: competitor1
+competitor: true
+noise_pct: 30       # ±30% random bid noise
+no_bid_rate: 0.20   # 20% chance of random no-bid
+
+campaigns:
+  - id: c1-001
+    account_id: agency-omnicom
+    advertiser_id: adv-megastore
+    io_id: c1-io-001
+    name: "MegaStore Summer Blowout"
+    creative_id: c1-cr-001
+    creative_domain: megastore.com
+    base_bid: 3.50
+    currency: USD
+    daily_budget: 5000
+    total_budget: 100000
+    bid_model: cpm
+    pacing_mode: asap
+    status: live
+    targeting:
+      include:
+        geo: [GBR, USA, DEU, FRA]
+    modifiers:
+      device:
+        mobile: 30
+      geo_country:
+        USA: 25
+        GBR: 15
+
+  - id: c1-002
+    account_id: agency-omnicom
+    advertiser_id: adv-luxauto
+    io_id: c1-io-002
+    name: "LuxAuto - Premium Desktop"
+    creative_id: c1-cr-002
+    creative_domain: luxauto.com
+    base_bid: 8.00
+    currency: USD
+    daily_budget: 2000
+    total_budget: 50000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        device: [desktop]
+        geo: [GBR, USA]
+
+  - id: c1-003
+    account_id: agency-omnicom
+    advertiser_id: adv-fastfood
+    io_id: c1-io-003
+    name: "QuickBite App Install"
+    creative_id: c1-cr-003
+    creative_domain: quickbite.app
+    base_bid: 1.50
+    currency: USD
+    daily_budget: 3000
+    total_budget: 60000
+    bid_model: cpm
+    pacing_mode: front_loaded
+    status: live
+    targeting:
+      include:
+        device: [mobile, tablet]
+    modifiers:
+      geo_country:
+        USA: 40
+        GBR: 20

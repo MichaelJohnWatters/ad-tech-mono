@@ -1,0 +1,97 @@
+# Competitor 2 - Performance-focused DSP.
+# Mix of cheap high-volume and expensive niche campaigns.
+# More volatile bidding: ±40% noise, 15% no-bid rate.
+name: competitor2
+competitor: true
+noise_pct: 40       # ±40% random bid noise (more volatile)
+no_bid_rate: 0.15   # 15% chance of random no-bid
+
+campaigns:
+  - id: c2-001
+    account_id: dsp-perf-media
+    advertiser_id: adv-vpn-plus
+    io_id: c2-io-001
+    name: "VPN Plus - Global RON"
+    creative_id: c2-cr-001
+    creative_domain: vpnplus.com
+    base_bid: 0.80
+    currency: USD
+    daily_budget: 10000
+    total_budget: 200000
+    bid_model: cpm
+    pacing_mode: asap
+    status: live
+    modifiers:
+      device:
+        mobile: 10
+        desktop: 5
+      geo_country:
+        USA: 50
+        GBR: 30
+        DEU: 20
+        FRA: 15
+        JPN: 10
+
+  - id: c2-002
+    account_id: dsp-perf-media
+    advertiser_id: adv-crypto-ex
+    io_id: c2-io-002
+    name: "CryptoEx - High Value Geo"
+    creative_id: c2-cr-002
+    creative_domain: cryptoex.io
+    base_bid: 5.00
+    currency: USD
+    daily_budget: 1000
+    total_budget: 20000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        geo: [USA, GBR]
+        device: [desktop]
+
+  - id: c2-003
+    account_id: dsp-perf-media
+    advertiser_id: adv-game-studio
+    io_id: c2-io-003
+    name: "Epic Quest - Mobile Gamers"
+    creative_id: c2-cr-003
+    creative_domain: epicquest.game
+    base_bid: 4.00
+    currency: USD
+    daily_budget: 4000
+    total_budget: 80000
+    bid_model: cpm
+    pacing_mode: asap
+    status: live
+    targeting:
+      include:
+        device: [mobile]
+    modifiers:
+      geo_country:
+        USA: 20
+        JPN: 35
+        GBR: 10
+
+  - id: c2-004
+    account_id: dsp-perf-media
+    advertiser_id: adv-saas-crm
+    io_id: c2-io-004
+    name: "CloudCRM - B2B Desktop"
+    creative_id: c2-cr-004
+    creative_domain: cloudcrm.io
+    base_bid: 6.50
+    currency: USD
+    daily_budget: 800
+    total_budget: 15000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        device: [desktop]
+    modifiers:
+      geo_country:
+        USA: 30
+        GBR: 20

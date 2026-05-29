@@ -18,6 +18,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
@@ -32,7 +33,7 @@ func main() {
 	port := cfg.Get("exchange.port", "8081")
 	channel := cfg.Get("exchange.channel", "all")
 	bidTimeout := cfg.GetDuration("exchange.bid_timeout", 100*time.Millisecond)
-	dspEndpoints := strings.Split(cfg.Get("exchange.dsp_endpoints", "http://localhost:8082"), ",")
+	dspEndpoints := strings.Split(cfg.Get("exchange.dsp_endpoints", "http://localhost:8082,http://localhost:8089,http://localhost:8090"), ",")
 
 	engine := auction.NewEngine(clk)
 	httpClient := &http.Client{Timeout: bidTimeout}
@@ -45,7 +46,9 @@ func main() {
 	mux.HandleFunc("/v1/openrtb/win", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("/v1/openrtb/loss", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
-	server := &http.Server{Addr: ":" + port, Handler: mux, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
+	handler := middleware.CORS(mux)
+
+	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
 	log.Info("exchange starting", "port", port, "channel", channel, "dsps", dspEndpoints)
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
@@ -72,7 +75,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		reqLog.Info("auction started", "channel", channel, "num_dsps", len(dspEndpoints))
 
 		// Fan out to DSPs in parallel
-		bids := fanOutToDSPs(ctx, client, dspEndpoints, bidReq, reqLog)
+		bids, bidRecords := fanOutToDSPs(ctx, client, dspEndpoints, bidReq, reqLog)
 
 		if len(bids) == 0 {
 			w.Header().Set("Content-Type", "application/json")
@@ -124,14 +127,60 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			"num_bids", len(bids),
 			"duration_ms", clk.Since(start).Milliseconds(),
 		)
+
+		// Send win/loss notifications asynchronously
+		go sendWinLossNotifications(client, bidRecords, winner.Bid.DSPID, winner.ClearingPrice, bidReq.Imp[0].BidFloor, reqLog)
 	}
 }
 
-func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, log *slog.Logger) []auction.Bid {
+// sendWinLossNotifications notifies each DSP whether they won or lost.
+// Winner gets price confirmation. Losers get the reason and clearing price
+// so they can adjust their bid shading models.
+func sendWinLossNotifications(client *http.Client, records []dspBidRecord, winnerDSP string, clearingPrice, floorPrice float64, log *slog.Logger) {
+	for _, rec := range records {
+		if rec.Bid.DSPID == winnerDSP {
+			// Win notification
+			winURL := fmt.Sprintf("%s/v1/openrtb/win?bid_id=%s&price=%.4f",
+				rec.Endpoint, rec.BidID, clearingPrice)
+			resp, err := client.Get(winURL)
+			if err != nil {
+				log.Debug("win notification failed", "dsp", rec.Bid.DSPID, "error", err)
+				continue
+			}
+			resp.Body.Close()
+			log.Debug("win notification sent", "dsp", rec.Bid.DSPID, "price", clearingPrice)
+		} else {
+			// Loss notification with reason
+			reason := 102 // outbid
+			if rec.Bid.Price < floorPrice {
+				reason = 100 // below floor
+			}
+			lossURL := fmt.Sprintf("%s/v1/openrtb/loss?bid_id=%s&reason=%d&clearing_price=%.4f&campaign_id=%s",
+				rec.Endpoint, rec.BidID, reason, clearingPrice, rec.Bid.CampaignID)
+			resp, err := client.Get(lossURL)
+			if err != nil {
+				log.Debug("loss notification failed", "dsp", rec.Bid.DSPID, "error", err)
+				continue
+			}
+			resp.Body.Close()
+			log.Debug("loss notification sent", "dsp", rec.Bid.DSPID, "reason", reason)
+		}
+	}
+}
+
+// dspBidRecord tracks which endpoint a bid came from so we can send win/loss notices.
+type dspBidRecord struct {
+	Bid      auction.Bid
+	BidID    string // OpenRTB bid ID
+	Endpoint string // DSP's base URL
+}
+
+func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, log *slog.Logger) ([]auction.Bid, []dspBidRecord) {
 	type dspResult struct {
-		dspID string
-		bids  []auction.Bid
-		err   error
+		dspID   string
+		bids    []auction.Bid
+		records []dspBidRecord
+		err     error
 	}
 
 	ch := make(chan dspResult, len(endpoints))
@@ -172,9 +221,10 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			}
 
 			var bids []auction.Bid
+			var records []dspBidRecord
 			for _, sb := range bidResp.SeatBid {
 				for _, b := range sb.Bid {
-					bids = append(bids, auction.Bid{
+					bid := auction.Bid{
 						DSPID:        dspID,
 						CampaignID:   b.CID,
 						CreativeID:   b.CrID,
@@ -183,14 +233,21 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						BidModel:     "cpm",
 						AdvertiserID: firstOrEmpty(b.ADomain),
 						ResponseTime: responseTime,
+					}
+					bids = append(bids, bid)
+					records = append(records, dspBidRecord{
+						Bid:      bid,
+						BidID:    b.ID,
+						Endpoint: endpoint,
 					})
 				}
 			}
-			ch <- dspResult{dspID: dspID, bids: bids}
+			ch <- dspResult{dspID: dspID, bids: bids, records: records}
 		}()
 	}
 
 	var allBids []auction.Bid
+	var allRecords []dspBidRecord
 	for range endpoints {
 		result := <-ch
 		if result.err != nil {
@@ -198,8 +255,9 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			continue
 		}
 		allBids = append(allBids, result.bids...)
+		allRecords = append(allRecords, result.records...)
 	}
-	return allBids
+	return allBids, allRecords
 }
 
 func firstOrEmpty(s []string) string {
@@ -208,3 +266,4 @@ func firstOrEmpty(s []string) string {
 	}
 	return ""
 }
+

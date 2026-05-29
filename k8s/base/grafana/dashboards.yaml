@@ -1,0 +1,360 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: adtech
+data:
+  pipeline-health.json: |
+    {
+      "dashboard": {
+        "title": "Ad Tech Pipeline Health",
+        "uid": "adtech-pipeline",
+        "tags": ["adtech", "pipeline"],
+        "timezone": "utc",
+        "refresh": "10s",
+        "time": {"from": "now-1h", "to": "now"},
+        "annotations": {
+          "list": [
+            {
+              "name": "Deployments",
+              "datasource": "Prometheus",
+              "enable": true,
+              "expr": "changes(process_start_time_seconds{job=~\"adtech-.*\"}[1m]) > 0",
+              "tagKeys": "job",
+              "titleFormat": "Deploy: {{job}}"
+            }
+          ]
+        },
+        "panels": [
+          {
+            "title": "Auction Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+            "targets": [
+              {
+                "expr": "rate(adtech_auctions_total[5m])",
+                "legendFormat": "{{channel}}"
+              }
+            ]
+          },
+          {
+            "title": "Auction Latency (p99)",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.99, rate(adtech_auction_duration_seconds_bucket[5m]))",
+                "legendFormat": "p99"
+              },
+              {
+                "expr": "histogram_quantile(0.50, rate(adtech_auction_duration_seconds_bucket[5m]))",
+                "legendFormat": "p50"
+              }
+            ]
+          },
+          {
+            "title": "Bid Rate by DSP",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+            "targets": [
+              {
+                "expr": "rate(adtech_bids_total[5m])",
+                "legendFormat": "{{dsp_id}}"
+              }
+            ]
+          },
+          {
+            "title": "Impression Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+            "targets": [
+              {
+                "expr": "rate(adtech_impressions_total[5m])",
+                "legendFormat": "impressions/s"
+              }
+            ]
+          },
+          {
+            "title": "Click Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+            "targets": [
+              {
+                "expr": "rate(adtech_clicks_total[5m])",
+                "legendFormat": "clicks/s"
+              }
+            ]
+          },
+          {
+            "title": "Fill Rate",
+            "type": "gauge",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+            "targets": [
+              {
+                "expr": "rate(adtech_auctions_filled_total[5m]) / rate(adtech_auctions_total[5m])",
+                "legendFormat": "fill rate"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "min": 0,
+                "max": 1,
+                "thresholds": {
+                  "steps": [
+                    {"value": 0, "color": "red"},
+                    {"value": 0.3, "color": "yellow"},
+                    {"value": 0.6, "color": "green"}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "title": "NATS Event Lag",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "targets": [
+              {
+                "expr": "adtech_nats_consumer_pending_messages",
+                "legendFormat": "{{stream}} / {{consumer}}"
+              }
+            ]
+          },
+          {
+            "title": "Service Error Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "targets": [
+              {
+                "expr": "rate(adtech_http_errors_total[5m])",
+                "legendFormat": "{{service}} {{status_code}}"
+              }
+            ]
+          },
+          {
+            "title": "Revenue (Clearing Price USD)",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
+            "targets": [
+              {
+                "expr": "sum(increase(adtech_revenue_usd_total[1h]))",
+                "legendFormat": "last hour"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {"unit": "currencyUSD"}
+            }
+          },
+          {
+            "title": "Active Campaigns",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
+            "targets": [
+              {
+                "expr": "adtech_active_campaigns",
+                "legendFormat": "campaigns"
+              }
+            ]
+          },
+          {
+            "title": "Budget Utilisation",
+            "type": "gauge",
+            "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
+            "targets": [
+              {
+                "expr": "sum(adtech_campaign_spend_usd) / sum(adtech_campaign_budget_usd)",
+                "legendFormat": "utilisation"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {"unit": "percentunit", "min": 0, "max": 1}
+            }
+          }
+        ],
+        "templating": {
+          "list": [
+            {
+              "name": "channel",
+              "type": "query",
+              "datasource": "Prometheus",
+              "query": "label_values(adtech_auctions_total, channel)",
+              "refresh": 2,
+              "includeAll": true,
+              "multi": true
+            }
+          ]
+        }
+      }
+    }
+  service-detail.json: |
+    {
+      "dashboard": {
+        "title": "Ad Tech Service Detail",
+        "uid": "adtech-service",
+        "tags": ["adtech", "service"],
+        "timezone": "utc",
+        "refresh": "10s",
+        "time": {"from": "now-1h", "to": "now"},
+        "panels": [
+          {
+            "title": "Request Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "targets": [
+              {
+                "expr": "rate(adtech_http_requests_total{service=\"$service\"}[5m])",
+                "legendFormat": "{{method}} {{path}}"
+              }
+            ]
+          },
+          {
+            "title": "Request Latency",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.99, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "legendFormat": "p99"
+              },
+              {
+                "expr": "histogram_quantile(0.95, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "legendFormat": "p95"
+              },
+              {
+                "expr": "histogram_quantile(0.50, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "legendFormat": "p50"
+              }
+            ]
+          },
+          {
+            "title": "Error Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "targets": [
+              {
+                "expr": "rate(adtech_http_errors_total{service=\"$service\"}[5m])",
+                "legendFormat": "{{status_code}}"
+              }
+            ]
+          },
+          {
+            "title": "Memory Usage",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "targets": [
+              {
+                "expr": "process_resident_memory_bytes{job=~\"adtech-$service\"}",
+                "legendFormat": "RSS"
+              },
+              {
+                "expr": "go_memstats_heap_inuse_bytes{job=~\"adtech-$service\"}",
+                "legendFormat": "Heap"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {"unit": "bytes"}
+            }
+          },
+          {
+            "title": "Goroutines",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "targets": [
+              {
+                "expr": "go_goroutines{job=~\"adtech-$service\"}",
+                "legendFormat": "goroutines"
+              }
+            ]
+          },
+          {
+            "title": "Logs",
+            "type": "logs",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "targets": [
+              {
+                "datasource": "Loki",
+                "expr": "{service=\"$service\"} |= ``"
+              }
+            ]
+          }
+        ],
+        "templating": {
+          "list": [
+            {
+              "name": "service",
+              "type": "custom",
+              "query": "exchange,dsp,tracker,gateway,ssp,adserver,reporting,pipeline",
+              "current": {"text": "exchange", "value": "exchange"}
+            }
+          ]
+        }
+      }
+    }
+  trace-explorer.json: |
+    {
+      "dashboard": {
+        "title": "Ad Tech Trace Explorer",
+        "uid": "adtech-trace",
+        "tags": ["adtech", "trace"],
+        "timezone": "utc",
+        "panels": [
+          {
+            "title": "Span Waterfall",
+            "type": "traces",
+            "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+            "targets": [
+              {
+                "datasource": "Jaeger",
+                "query": "$trace_id"
+              }
+            ]
+          },
+          {
+            "title": "Log Timeline",
+            "type": "logs",
+            "gridPos": {"h": 10, "w": 24, "x": 0, "y": 10},
+            "targets": [
+              {
+                "datasource": "Loki",
+                "expr": "{trace_id=\"$trace_id\"} |= ``"
+              }
+            ]
+          },
+          {
+            "title": "Event Records",
+            "type": "table",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+            "description": "Impression, click, conversion events for this trace",
+            "targets": [
+              {
+                "datasource": "Loki",
+                "expr": "{trace_id=\"$trace_id\"} | json | line_format \"{{.msg}}\" |= \"recorded\""
+              }
+            ]
+          },
+          {
+            "title": "Auction Detail",
+            "type": "table",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+            "description": "Bids received, winner, clearing price",
+            "targets": [
+              {
+                "datasource": "Loki",
+                "expr": "{service=\"exchange\", trace_id=\"$trace_id\"} | json | line_format \"{{.msg}}\" |= \"auction\""
+              }
+            ]
+          }
+        ],
+        "templating": {
+          "list": [
+            {
+              "name": "trace_id",
+              "type": "textbox",
+              "label": "Trace ID",
+              "current": {"text": "", "value": ""}
+            }
+          ]
+        }
+      }
+    }
