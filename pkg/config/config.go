@@ -21,29 +21,64 @@ import (
 )
 
 // Config holds configuration values loaded from all layers.
-// Lookup order: live config (Postgres) -> env var -> code default.
-// All pods of a service share the same config. Use env vars for pod-specific overrides.
+// Lookup order: pod-specific -> service-level -> env var -> code default.
 type Config struct {
 	values map[string]string
+	podID  string
 }
 
 // Load creates a new Config.
 func Load() *Config {
+	podID := os.Getenv("POD_NAME")
+	if podID == "" {
+		podID = os.Getenv("HOSTNAME")
+	}
 	return &Config{
 		values: make(map[string]string),
+		podID:  podID,
 	}
 }
 
-// Get returns a config value. Checks: live config -> env var -> default.
+// SetPodID sets the pod identifier for pod-level config lookups.
+func (c *Config) SetPodID(id string) {
+	c.podID = id
+}
+
+// PodID returns the current pod identifier.
+func (c *Config) PodID() string {
+	return c.podID
+}
+
+// Get returns a config value.
+// Checks: pod-specific -> service-level -> env var -> code default.
 func (c *Config) Get(key string, defaultValue string) string {
+	// Pod-specific override: "exchange.pod-abc123.bid_timeout"
+	if c.podID != "" {
+		podKey := podConfigKey(key, c.podID)
+		if v, ok := c.values[podKey]; ok {
+			return v
+		}
+	}
+	// Service-level config
 	if v, ok := c.values[key]; ok {
 		return v
 	}
+	// Environment variable
 	envKey := envKeyFromConfigKey(key)
 	if v := os.Getenv(envKey); v != "" {
 		return v
 	}
 	return defaultValue
+}
+
+// podConfigKey builds "exchange.bid_timeout" -> "exchange.pod-abc123.bid_timeout"
+func podConfigKey(key, podID string) string {
+	for i, c := range key {
+		if c == '.' {
+			return key[:i] + ".pod-" + podID + key[i:]
+		}
+	}
+	return "pod-" + podID + "." + key
 }
 
 // GetInt returns an integer config value.
