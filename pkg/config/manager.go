@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -179,7 +180,12 @@ func (m *Manager) applyChanges(newValues map[string]string, source string) {
 }
 
 // Set updates a config value via the API (bypasses polling).
+// Validates the value type if the key is in the schema.
 func (m *Manager) Set(ctx context.Context, key, value string) error {
+	if err := Validate(key, value); err != nil {
+		return err
+	}
+
 	m.mu.RLock()
 	source := m.source
 	m.mu.RUnlock()
@@ -191,6 +197,41 @@ func (m *Manager) Set(ctx context.Context, key, value string) error {
 	}
 
 	m.applyChanges(map[string]string{key: value}, "api")
+	return nil
+}
+
+// Rollback reverts a config key to its previous value using the change history.
+func (m *Manager) Rollback(ctx context.Context, key string) error {
+	m.mu.RLock()
+	var previousValue string
+	found := false
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i].Key == key {
+			previousValue = m.history[i].OldValue
+			found = true
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("no history for key %q", key)
+	}
+
+	if previousValue == "" {
+		return m.Remove(ctx, key)
+	}
+
+	// Bypass validation for rollback (restoring known-good value)
+	m.mu.RLock()
+	source := m.source
+	m.mu.RUnlock()
+	if source != nil {
+		if err := source.Update(ctx, key, previousValue); err != nil {
+			return err
+		}
+	}
+	m.applyChanges(map[string]string{key: previousValue}, "rollback")
 	return nil
 }
 
@@ -257,8 +298,45 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			if r.URL.Path == "/config/history" || r.URL.Query().Get("history") == "true" {
+			if r.URL.Query().Get("history") == "true" {
 				json.NewEncoder(w).Encode(m.History(50))
+				return
+			}
+			if r.URL.Query().Get("schema") == "true" {
+				// Show schema with current values
+				schema := Schema()
+				type entry struct {
+					SchemaEntry
+					CurrentValue string `json:"current_value"`
+				}
+				var result []entry
+				for _, s := range schema {
+					result = append(result, entry{
+						SchemaEntry:  s,
+						CurrentValue: m.cfg.Get(s.Key, s.Default),
+					})
+				}
+				// Filter by service if requested
+				svc := r.URL.Query().Get("service")
+				if svc != "" {
+					var filtered []entry
+					for _, e := range result {
+						if e.Service == svc {
+							filtered = append(filtered, e)
+						}
+					}
+					result = filtered
+				}
+				json.NewEncoder(w).Encode(result)
+				return
+			}
+			if r.URL.Query().Get("rollback") != "" {
+				key := r.URL.Query().Get("rollback")
+				if err := m.Rollback(r.Context(), key); err != nil {
+					http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]string{"key": key, "status": "rolled_back"})
 				return
 			}
 			key := r.URL.Query().Get("key")

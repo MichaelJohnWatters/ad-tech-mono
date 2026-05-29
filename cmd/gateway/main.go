@@ -92,6 +92,11 @@ func main() {
 	mux.HandleFunc(routes.Config, cfgMgr.HTTPHandler())
 	mux.HandleFunc(routes.ProxyConfig, cfgMgr.HTTPHandler())
 
+	// Service registry - shows all running services and their config
+	if sc.Registry != nil {
+		mux.HandleFunc("/v1/services", sc.Registry.HTTPHandler())
+	}
+
 	// Auth endpoint
 	mux.HandleFunc(routes.AuthToken, tokenHandler(signingKey))
 
