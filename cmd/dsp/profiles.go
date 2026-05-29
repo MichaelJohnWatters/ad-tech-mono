@@ -11,6 +11,8 @@ import (
 )
 
 // DSPProfile is the YAML structure for a DSP profile file.
+// Different from models.DSPProfile which is the API/storage model.
+// This version includes targeting YAML fields for profile loading.
 type DSPProfile struct {
 	Name       string            `yaml:"name"`
 	Competitor bool              `yaml:"competitor"`
@@ -19,7 +21,7 @@ type DSPProfile struct {
 	Campaigns  []CampaignConfig  `yaml:"campaigns"`
 }
 
-// CampaignConfig is a campaign definition in YAML.
+// CampaignConfig is a campaign definition in YAML with targeting.
 type CampaignConfig struct {
 	ID             string          `yaml:"id"`
 	AccountID      string          `yaml:"account_id"`

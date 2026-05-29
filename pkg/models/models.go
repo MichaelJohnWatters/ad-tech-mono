@@ -240,3 +240,65 @@ type BidResponse struct {
 	NoBid         bool
 	NoBidReason   string
 }
+
+// ServeRequest is what the exchange/SSP sends to the ad server after an auction win.
+type ServeRequest struct {
+	TraceID       string  `json:"trace_id"`
+	CampaignID    string  `json:"campaign_id"`
+	CreativeID    string  `json:"creative_id"`
+	PlacementID   string  `json:"placement_id"`
+	PublisherID   string  `json:"publisher_id"`
+	AdvertiserID  string  `json:"advertiser_id"`
+	IOId          string  `json:"io_id"`
+	DealID        string  `json:"deal_id"`
+	ClearingPrice float64 `json:"clearing_price"`
+	Currency      string  `json:"currency"`
+	SiteDomain    string  `json:"site_domain"`
+	Width         int     `json:"width"`
+	Height        int     `json:"height"`
+}
+
+// ServeResponse contains the rendered ad HTML with all macros substituted.
+type ServeResponse struct {
+	HTML           string  `json:"html"`
+	ImpressionURL  string  `json:"impression_url"`
+	ClickURL       string  `json:"click_url"`
+	ViewabilityURL string  `json:"viewability_url"`
+	TraceID        string  `json:"trace_id"`
+	CreativeID     string  `json:"creative_id"`
+	CampaignID     string  `json:"campaign_id"`
+	PlacementID    string  `json:"placement_id"`
+	PublisherID    string  `json:"publisher_id"`
+	AdvertiserID   string  `json:"advertiser_id"`
+	ClearingPrice  float64 `json:"clearing_price"`
+	Currency       string  `json:"currency"`
+	Width          int     `json:"width"`
+	Height         int     `json:"height"`
+}
+
+// DSPProfile is a YAML-based DSP configuration with campaign definitions.
+type DSPProfile struct {
+	Name       string             `yaml:"name" json:"name"`
+	Competitor bool               `yaml:"competitor" json:"competitor"`
+	NoisePct   float64            `yaml:"noise_pct" json:"noise_pct"`
+	NoBidRate  float64            `yaml:"no_bid_rate" json:"no_bid_rate"`
+	Campaigns  []CampaignConfig   `yaml:"campaigns" json:"campaigns"`
+}
+
+// CampaignConfig is a campaign definition in a DSP profile YAML.
+type CampaignConfig struct {
+	ID             string          `yaml:"id" json:"id"`
+	AccountID      string          `yaml:"account_id" json:"account_id"`
+	AdvertiserID   string          `yaml:"advertiser_id" json:"advertiser_id"`
+	IOId           string          `yaml:"io_id" json:"io_id"`
+	Name           string          `yaml:"name" json:"name"`
+	CreativeID     string          `yaml:"creative_id" json:"creative_id"`
+	CreativeDomain string          `yaml:"creative_domain" json:"creative_domain"`
+	BaseBid        float64         `yaml:"base_bid" json:"base_bid"`
+	Currency       string          `yaml:"currency" json:"currency"`
+	DailyBudget    float64         `yaml:"daily_budget" json:"daily_budget"`
+	TotalBudget    float64         `yaml:"total_budget" json:"total_budget"`
+	BidModel       string          `yaml:"bid_model" json:"bid_model"`
+	PacingMode     string          `yaml:"pacing_mode" json:"pacing_mode"`
+	Status         string          `yaml:"status" json:"status"`
+}

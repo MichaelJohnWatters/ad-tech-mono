@@ -31,11 +31,17 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 
 ## Conventions
 
-- Each service follows the same startup pattern: load config -> connect deps -> register health checks -> start server -> wait for shutdown signal
-- Use `pkg/lifecycle/` for graceful shutdown
-- Use `pkg/config/` for configuration loading (defaults -> env -> live config)
-- Use `pkg/logger/` for structured logging
-- Use `pkg/health/` for health check registration
+- Each service follows the same startup pattern: `config.Setup() -> connect deps -> register health checks -> start server -> wait for shutdown signal`
+- **MUST use shared packages** - never hardcode values that exist in a shared package:
+  - `pkg/config/` - `config.Setup(serviceName, log)` for live config with polling
+  - `pkg/constants/` - service names, status values, bid models, device types, channels
+  - `pkg/routes/` - all HTTP paths, ports, service URLs (versioned with `routes.APIVersion`)
+  - `pkg/events/` - NATS subject constants, event payload types, publisher helper
+  - `pkg/logger/` - `logger.New(constants.ServiceXxx)` for structured JSON logging
+  - `pkg/health/` - `/healthz` and `/readyz` endpoints
+  - `pkg/lifecycle/` - graceful shutdown with `lifecycle.ServeHTTP()`
+  - `pkg/middleware/` - CORS, auth (JWT/RBAC), metrics, reverse proxy
+- **Never hardcode** port numbers, service URLs, route paths, status strings, or NATS subjects
 - See each service's own CLAUDE.md for specific details
 
 ## Diagram Rule

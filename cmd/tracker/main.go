@@ -12,13 +12,17 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -32,18 +36,20 @@ var pixel = []byte{
 }
 
 func main() {
-	cfg := config.Load()
-	log := logger.New("tracker")
+	log := logger.New(constants.ServiceTracker)
+	sc := config.Setup(constants.ServiceTracker, log)
+	cfg := sc.Cfg
+	_ = sc // manager available for OnChange callbacks
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("tracker.port", "8083")
-	natsURL := cfg.Get("tracker.nats_url", "nats://localhost:4222")
-	reportingURL := cfg.Get("tracker.reporting_url", "http://localhost:8086")
+	port := cfg.Get("tracker.port", routes.PortTracker)
+	natsURL := cfg.Get("tracker.nats_url", routes.DefaultNATSURL)
+	reportingURL := cfg.Get("tracker.reporting_url", routes.DefaultReportingURL)
 
 	// Try NATS first, fall back to HTTP bridge
 	var bus events.EventBus
-	natsBus, err := natsbus.New(natsURL, "tracker", log)
+	natsBus, err := natsbus.New(natsURL, constants.ServiceTracker, log)
 	if err != nil {
 		log.Warn("nats unavailable, using HTTP bridge to reporting", "error", err)
 		bus = nil // will use HTTP fallback
@@ -62,17 +68,39 @@ func main() {
 	}
 
 	publisher := &eventPublisher{bus: bus, reportingURL: reportingURL, log: log}
+	fraudChecker := fraud.NewRealTimeChecker(fraud.DefaultConfig())
+	signingKey := cfg.Get("tracker.signing_key", adserving.DefaultSigningKey)
+	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.HandleFunc(routes.Metrics, metrics.Handler())
 
 	// Impression pixel
-	mux.HandleFunc("/v1/t/imp", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerImpression, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
+
+		// Validate HMAC signature
+		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+			reqLog.Warn("invalid signature", "path", r.URL.Path)
+			// Don't block in dev - just warn. In prod: return 403.
+		}
+
+		// Real-time fraud check
+		fraudResult := fraudChecker.Check(fraud.Request{
+			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+			TraceID: traceID, Referer: r.Referer(),
+		})
+		if fraudResult.Blocked {
+			reqLog.Warn("fraud blocked", "score", fraudResult.Score, "reasons", fraudResult.Reasons)
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+			w.Write(pixel) // still return pixel (don't reveal detection)
+			return         // but don't record or bill
+		}
 
 		price, _ := strconv.ParseFloat(q.Get("price"), 64)
 		reqLog.Info("impression",
@@ -92,23 +120,23 @@ func main() {
 			AccountID:        q.Get("advid"),
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
-			Channel:          "display",
+			Channel:          constants.ChannelDisplay,
 			ClearingPrice:    price,
 			ClearingCurrency: q.Get("cur"),
 			ClearingPriceUSD: price,
-			BidModel:         "cpm",
+			BidModel:         constants.BidModelCPM,
 			DealID:           q.Get("deal"),
 			SchemaVersion:    1,
 			Timestamp:        time.Now().UTC(),
 		}, reqLog)
 
-		w.Header().Set("Content-Type", "image/gif")
-		w.Header().Set("Cache-Control", "no-store, no-cache")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
 		w.Write(pixel)
 	})
 
 	// Click redirect
-	mux.HandleFunc("/v1/t/click", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerClick, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		redir := q.Get("redir")
@@ -135,7 +163,7 @@ func main() {
 	})
 
 	// Conversion pixel
-	mux.HandleFunc("/v1/t/conv", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerConversion, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		convType := q.Get("type")
@@ -157,13 +185,13 @@ func main() {
 			Timestamp:      time.Now().UTC(),
 		}, reqLog)
 
-		w.Header().Set("Content-Type", "image/gif")
-		w.Header().Set("Cache-Control", "no-store, no-cache")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
 		w.Write(pixel)
 	})
 
 	// Viewability beacon
-	mux.HandleFunc("/v1/t/view", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerView, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		ctx := logger.WithTraceID(r.Context(), traceID)
@@ -173,18 +201,18 @@ func main() {
 	})
 
 	// Video/Audio events
-	mux.HandleFunc("/v1/t/video", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerVideo, func(w http.ResponseWriter, r *http.Request) {
 		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
 		logger.WithContext(log, ctx).Info("video_event", "event_type", r.URL.Query().Get("event"))
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/v1/t/audio", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
 		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
 		logger.WithContext(log, ctx).Info("audio_event", "event_type", r.URL.Query().Get("event"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := middleware.CORS(mux)
+	handler := metrics.Wrap(middleware.CORS(mux))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
 	mode := "NATS JetStream"
@@ -246,7 +274,7 @@ func (p *eventPublisher) httpFallback(event analytics.Event, log *slog.Logger) {
 		log.Warn("marshal for http fallback failed", "error", err)
 		return
 	}
-	resp, err := http.Post(p.reportingURL+"/v1/reporting/events", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(p.reportingURL+routes.ReportingEvents, constants.ContentTypeJSON, bytes.NewReader(body))
 	if err != nil {
 		log.Warn("http fallback failed", "error", err)
 		return

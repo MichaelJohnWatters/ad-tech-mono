@@ -11,79 +11,67 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
-// ServeRequest is what the exchange/SSP sends after an auction win.
-type ServeRequest struct {
-	TraceID      string  `json:"trace_id"`
-	CampaignID   string  `json:"campaign_id"`
-	CreativeID   string  `json:"creative_id"`
-	PlacementID  string  `json:"placement_id"`
-	PublisherID  string  `json:"publisher_id"`
-	AdvertiserID string  `json:"advertiser_id"`
-	IOId         string  `json:"io_id"`
-	DealID       string  `json:"deal_id"`
-	ClearingPrice float64 `json:"clearing_price"`
-	Currency      string  `json:"currency"`
-	SiteDomain    string  `json:"site_domain"`
-	Width         int     `json:"width"`
-	Height        int     `json:"height"`
-}
-
-// ServeResponse contains the rendered ad HTML with all macros substituted.
-type ServeResponse struct {
-	HTML           string `json:"html"`
-	ImpressionURL  string `json:"impression_url"`
-	ClickURL       string `json:"click_url"`
-	ViewabilityURL string `json:"viewability_url"`
-	TraceID        string `json:"trace_id"`
-	CreativeID     string `json:"creative_id"`
-	CampaignID     string `json:"campaign_id"`
-	PlacementID    string `json:"placement_id"`
-	PublisherID    string `json:"publisher_id"`
-	AdvertiserID   string `json:"advertiser_id"`
-	ClearingPrice  float64 `json:"clearing_price"`
-	Currency       string `json:"currency"`
-	Width          int    `json:"width"`
-	Height         int    `json:"height"`
-}
-
-// Creative is a stored creative template.
-type Creative struct {
-	ID       string
-	Name     string
-	HTML     string // template with ${...} macros
-	Width    int
-	Height   int
-	Format   string // banner, native, video
+// AdCreative is the ad server's internal creative with HTML template.
+// Different from models.Creative which is the database model.
+type AdCreative struct {
+	ID         string
+	Name       string
+	HTML       string // template with ${...} macros
+	Width      int
+	Height     int
+	Format     string
 	LandingURL string
 }
 
 func main() {
-	cfg := config.Load()
-	log := logger.New("adserver")
+	log := logger.New(constants.ServiceAdServer)
+	sc := config.Setup(constants.ServiceAdServer, log)
+	cfg := sc.Cfg
+	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("adserver.port", "8085")
-	trackerURL := cfg.Get("adserver.tracker_url", "http://localhost:8083")
+	port := cfg.Get("adserver.port", routes.PortAdServer)
+	trackerURL := cfg.Get("adserver.tracker_url", routes.DefaultTrackerURL)
 
 	creatives := seedCreatives()
 
+	// Creative rotation bandit (Thompson Sampling)
+	creativeIDs := make([]string, 0, len(creatives))
+	for id := range creatives {
+		creativeIDs = append(creativeIDs, id)
+	}
+	bandit := optimise.NewBandit(creativeIDs)
+
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
 	// Serve an ad - called after auction win
-	mux.HandleFunc("/v1/ad/serve", serveHandler(log, creatives, trackerURL))
+	mux.HandleFunc(routes.AdServe, serveHandler(log, creatives, trackerURL))
+
+	// Bandit stats for debugging
+	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"stats":   bandit.Stats(),
+			"weights": bandit.Weights(),
+		})
+	})
 
 	// List creatives for debugging
-	mux.HandleFunc("/v1/ad/creatives", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc(routes.AdCreatives, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(creatives)
 	})
 
@@ -94,14 +82,14 @@ func main() {
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
-func serveHandler(log *slog.Logger, creatives map[string]Creative, trackerURL string) http.HandlerFunc {
+func serveHandler(log *slog.Logger, creatives map[string]AdCreative, trackerURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		var req ServeRequest
+		var req models.ServeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
@@ -113,7 +101,7 @@ func serveHandler(log *slog.Logger, creatives map[string]Creative, trackerURL st
 		creative, ok := creatives[req.CreativeID]
 		if !ok {
 			// Fallback to a generic creative
-			creative = Creative{
+			creative = AdCreative{
 				ID:   req.CreativeID,
 				Name: "Dynamic Creative",
 				HTML: defaultCreativeHTML,
@@ -145,7 +133,7 @@ func serveHandler(log *slog.Logger, creatives map[string]Creative, trackerURL st
 		clickURL := adserving.BuildClickURL(macroCtx)
 		viewabilityURL := adserving.BuildViewabilityURL(macroCtx)
 
-		resp := ServeResponse{
+		resp := models.ServeResponse{
 			HTML:           renderedHTML,
 			ImpressionURL:  impressionURL,
 			ClickURL:       clickURL,
@@ -162,7 +150,7 @@ func serveHandler(log *slog.Logger, creatives map[string]Creative, trackerURL st
 			Height:         req.Height,
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 
 		reqLog.Info("ad served",
@@ -174,8 +162,8 @@ func serveHandler(log *slog.Logger, creatives map[string]Creative, trackerURL st
 	}
 }
 
-func seedCreatives() map[string]Creative {
-	return map[string]Creative{
+func seedCreatives() map[string]AdCreative {
+	return map[string]AdCreative{
 		"cr-shoes-001": {
 			ID: "cr-shoes-001", Name: "Acme Shoes - Summer Sale", Format: "banner",
 			LandingURL: "https://acme-shoes.com/summer-sale",

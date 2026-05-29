@@ -13,22 +13,26 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
 func main() {
-	cfg := config.Load()
-	log := logger.New("reporting")
+	log := logger.New(constants.ServiceReporting)
+	sc := config.Setup(constants.ServiceReporting, log)
+	cfg := sc.Cfg
+	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("reporting.port", "8086")
+	port := cfg.Get("reporting.port", routes.PortReporting)
 
 	// Analytics store
 	store := analytics.NewMemory()
@@ -64,8 +68,8 @@ func main() {
 	consumer := NewEventConsumer(log, store, billingEngine)
 
 	// Connect to NATS for event consumption
-	natsURL := cfg.Get("reporting.nats_url", "nats://localhost:4222")
-	natsBus, err := natsbus.New(natsURL, "reporting", log)
+	natsURL := cfg.Get("reporting.nats_url", routes.DefaultNATSURL)
+	natsBus, err := natsbus.New(natsURL, constants.ServiceReporting, log)
 	if err != nil {
 		log.Warn("nats unavailable, events only via HTTP endpoint", "error", err)
 	} else {
@@ -83,21 +87,21 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", hlth.LivenessHandler())
-	mux.Handle("/readyz", hlth.ReadinessHandler())
+	mux.Handle(routes.Healthz, hlth.LivenessHandler())
+	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
 	// Query API
-	mux.HandleFunc("/v1/reporting/query", queryHandler(log, store))
+	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, store))
 
 	// HTTP event ingestion
-	mux.HandleFunc("/v1/reporting/events", consumer.HTTPHandler())
+	mux.HandleFunc(routes.ReportingEvents, consumer.HTTPHandler())
 
 	// Billing API
-	mux.HandleFunc("/v1/billing/summary", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	mux.HandleFunc(routes.BillingSummary, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(ledger.Summary())
 	})
-	mux.HandleFunc("/v1/billing/ledger", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(routes.BillingLedger, func(w http.ResponseWriter, r *http.Request) {
 		traceID := r.URL.Query().Get("trace_id")
 		var entries []billing.LedgerEntry
 		if traceID != "" {
@@ -105,7 +109,7 @@ func main() {
 		} else {
 			entries = ledger.Entries()
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(entries)
 	})
 
@@ -308,7 +312,7 @@ func queryHandler(log *slog.Logger, store analytics.Store) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(result)
 	}
 }
