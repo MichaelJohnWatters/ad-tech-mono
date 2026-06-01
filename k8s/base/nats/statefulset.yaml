@@ -48,6 +48,7 @@ spec:
       containers:
         - name: nats
           image: nats:2.10-alpine
+          imagePullPolicy: IfNotPresent
           command:
             - nats-server
             - --config

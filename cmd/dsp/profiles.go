@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/targeting"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,11 +13,12 @@ import (
 // Different from models.DSPProfile which is the API/storage model.
 // This version includes targeting YAML fields for profile loading.
 type DSPProfile struct {
-	Name       string            `yaml:"name"`
-	Competitor bool              `yaml:"competitor"`
-	NoisePct   float64           `yaml:"noise_pct"`
-	NoBidRate  float64           `yaml:"no_bid_rate"`
-	Campaigns  []CampaignConfig  `yaml:"campaigns"`
+	Name      string           `yaml:"name"`
+	NoisePct  float64          `yaml:"noise_pct"`
+	NoBidRate float64          `yaml:"no_bid_rate"`
+	Campaigns []CampaignConfig `yaml:"campaigns"`
+	// Competitor field was removed in the v1.2 dsps-table refactor — the
+	// behaviour is now derived from noise_pct > 0 || no_bid_rate > 0.
 }
 
 // CampaignConfig is a campaign definition in YAML with targeting.
@@ -92,54 +92,6 @@ func FindProfile(profileName string, log *slog.Logger) (*DSPProfile, error) {
 	return nil, fmt.Errorf("profile %q not found in profiles/dsps/", profileName)
 }
 
-// ProfileToCampaigns converts a YAML profile to the internal Campaign slice.
-func ProfileToCampaigns(profile *DSPProfile) []Campaign {
-	campaigns := make([]Campaign, 0, len(profile.Campaigns))
-	for _, cc := range profile.Campaigns {
-		c := Campaign{
-			ID:             cc.ID,
-			AccountID:      cc.AccountID,
-			AdvertiserID:   cc.AdvertiserID,
-			IOId:           cc.IOId,
-			Name:           cc.Name,
-			CreativeID:     cc.CreativeID,
-			CreativeDomain: cc.CreativeDomain,
-			BaseBid:        cc.BaseBid,
-			Currency:       cc.Currency,
-			DailyBudget:    cc.DailyBudget,
-			TotalBudget:    cc.TotalBudget,
-			BidModel:       cc.BidModel,
-			PacingMode:     cc.PacingMode,
-			Status:         cc.Status,
-		}
-
-		if cc.Targeting != nil {
-			c.Targeting = targeting.Rules{
-				Include: targeting.TargetingSet{
-					Geo:        cc.Targeting.Include.Geo,
-					Device:     cc.Targeting.Include.Device,
-					OS:         cc.Targeting.Include.OS,
-					Segments:   cc.Targeting.Include.Segments,
-					Domains:    cc.Targeting.Include.Domains,
-					Categories: cc.Targeting.Include.Categories,
-				},
-				Exclude: targeting.TargetingSet{
-					Geo:        cc.Targeting.Exclude.Geo,
-					Device:     cc.Targeting.Exclude.Device,
-					Domains:    cc.Targeting.Exclude.Domains,
-					Categories: cc.Targeting.Exclude.Categories,
-				},
-			}
-		}
-
-		if cc.Modifiers != nil {
-			c.Modifiers = targeting.Modifiers{
-				Device:     cc.Modifiers.Device,
-				GeoCountry: cc.Modifiers.GeoCountry,
-			}
-		}
-
-		campaigns = append(campaigns, c)
-	}
-	return campaigns
-}
+// (ProfileToCampaigns removed — runtime campaigns now come from the warm cache.
+// YAML→models.Campaign conversion lives on yamlCampaignLoader in main.go and is
+// only used when Postgres is unreachable.)

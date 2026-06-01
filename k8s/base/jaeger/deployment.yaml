@@ -18,6 +18,7 @@ spec:
       containers:
         - name: jaeger
           image: jaegertracing/all-in-one:1.58
+          imagePullPolicy: IfNotPresent
           env:
             - name: COLLECTOR_OTLP_ENABLED
               value: "true"

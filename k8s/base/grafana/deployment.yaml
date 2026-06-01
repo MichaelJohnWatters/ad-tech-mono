@@ -11,15 +11,41 @@ data:
         type: prometheus
         access: proxy
         url: http://prometheus.adtech.svc.cluster.local:9090
+        uid: prometheus
         isDefault: true
       - name: Loki
         type: loki
         access: proxy
         url: http://loki.adtech.svc.cluster.local:3100
+        uid: loki
+        jsonData:
+          # Logs-to-trace pivot: when a log line surfaces a trace_id (32 hex
+          # chars — the OTel W3C format pkg/tracing emits), render it as a
+          # clickable link that opens the Jaeger datasource with that trace.
+          derivedFields:
+            - name: TraceID
+              matcherRegex: '"trace_id":"([a-f0-9]{32})"'
+              url: '$${__value.raw}'
+              datasourceUid: jaeger
       - name: Jaeger
         type: jaeger
         access: proxy
         url: http://jaeger.adtech.svc.cluster.local:16686
+        uid: jaeger
+        jsonData:
+          # Trace-to-logs pivot: every span in a Jaeger trace gets a
+          # "View logs" button that opens Loki filtered to {service=...,
+          # trace_id=...}. Same trace_id flows through both stores after
+          # the OTel W3C unification in pkg/tracing.
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: -1m
+            spanEndTimeShift: 1m
+            tags:
+              - key: service.name
+                value: service
+            filterByTraceID: true
+            customQuery: false
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -60,6 +86,7 @@ spec:
       containers:
         - name: grafana
           image: grafana/grafana:11.6.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
               name: http

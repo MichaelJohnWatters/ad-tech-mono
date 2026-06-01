@@ -26,10 +26,17 @@ const (
 	SubjectPrivacyCompleted = "adtech.privacy.deletion_completed"
 
 	// Cache invalidation (Any → ALL services, Core NATS pub/sub not JetStream)
-	SubjectCacheInvalidateCampaigns  = "adtech.cache.invalidate.campaigns"
-	SubjectCacheInvalidatePlacements = "adtech.cache.invalidate.placements"
-	SubjectCacheInvalidateCreatives  = "adtech.cache.invalidate.creatives"
-	SubjectCacheInvalidateDSPs       = "adtech.cache.invalidate.dsp-endpoints"
+	SubjectCacheInvalidateCampaigns    = "adtech.cache.invalidate.campaigns"
+	SubjectCacheInvalidatePlacements   = "adtech.cache.invalidate.placements"
+	SubjectCacheInvalidateCreatives    = "adtech.cache.invalidate.creatives"
+	SubjectCacheInvalidateDSPs         = "adtech.cache.invalidate.dsp-endpoints"
+	SubjectCacheInvalidatePublishers   = "adtech.cache.invalidate.publishers"
+	SubjectCacheInvalidateDeals        = "adtech.cache.invalidate.deals"
+	SubjectCacheInvalidateFraudRules   = "adtech.cache.invalidate.fraud-rules"
+	SubjectCacheInvalidateOptOuts      = "adtech.cache.invalidate.opt-outs"
+	SubjectCacheInvalidateWebhookSubs  = "adtech.cache.invalidate.webhook-subs"
+	SubjectCacheInvalidateBillingRates = "adtech.cache.invalidate.billing-rates"
+	SubjectCacheInvalidateSigningKeys  = "adtech.cache.invalidate.signing-keys"
 
 	// Webhooks (Any → Webhooks dispatcher)
 	SubjectWebhook = "adtech.webhooks"

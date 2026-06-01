@@ -50,35 +50,23 @@ func (c *Config) PodID() string {
 }
 
 // Get returns a config value.
-// Checks: pod-specific -> service-level -> env var -> code default.
+//
+// Resolution: in-memory value (populated by the manager from a pod-scoped
+// Postgres fetch) → env var → code default.
+//
+// The pod scoping happens upstream: PostgresSource.FetchAllForPod returns
+// only this pod's rows (plus legacy globals) so c.values already contains
+// the right value for this pod. The old key-prefix trick
+// ("exchange.pod-X.bid_timeout") is gone — same key, scoped row.
 func (c *Config) Get(key string, defaultValue string) string {
-	// Pod-specific override: "exchange.pod-abc123.bid_timeout"
-	if c.podID != "" {
-		podKey := podConfigKey(key, c.podID)
-		if v, ok := c.values[podKey]; ok {
-			return v
-		}
-	}
-	// Service-level config
 	if v, ok := c.values[key]; ok {
 		return v
 	}
-	// Environment variable
 	envKey := envKeyFromConfigKey(key)
 	if v := os.Getenv(envKey); v != "" {
 		return v
 	}
 	return defaultValue
-}
-
-// podConfigKey builds "exchange.bid_timeout" -> "exchange.pod-abc123.bid_timeout"
-func podConfigKey(key, podID string) string {
-	for i, c := range key {
-		if c == '.' {
-			return key[:i] + ".pod-" + podID + key[i:]
-		}
-	}
-	return "pod-" + podID + "." + key
 }
 
 // GetInt returns an integer config value.

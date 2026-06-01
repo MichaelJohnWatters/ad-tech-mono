@@ -23,8 +23,45 @@ const traceIDKey contextKey = "trace_id"
 
 // New creates a structured JSON logger for a service.
 // All log lines include the service name automatically.
+//
+// If LOKI_URL is set in the environment, log lines are also asynchronously
+// pushed to Loki for centralised viewing in Grafana. Stdout output stays
+// the same, so `tilt logs <service>` still works as before.
+//
+// POD_NAME env var, if set, becomes the `pod` Loki label so the same
+// service running multiple pods (internal/competitor1/competitor2 DSPs)
+// can be filtered apart in Grafana.
 func New(service string) *slog.Logger {
-	return NewWithWriter(service, os.Stdout)
+	return NewWithWriter(service, writerForService(service))
+}
+
+// activeLokiSink holds the live sink so the shutdown path can flush it.
+// One per process — we only support a single Loki destination.
+var activeLokiSink *lokiSink
+
+// StopLoki drains and stops the background Loki pusher, if active. Call
+// from main's graceful-shutdown path so the final in-flight batch ships
+// before exit. No-op when LOKI_URL was not set.
+func StopLoki() {
+	if activeLokiSink != nil {
+		activeLokiSink.Stop()
+	}
+}
+
+// writerForService returns os.Stdout, or io.MultiWriter(stdout, lokiSink)
+// when LOKI_URL is set. Stdout is kept so `tilt logs` and any local file
+// tailing still work — Loki is additive, not a replacement.
+func writerForService(service string) io.Writer {
+	url := os.Getenv("LOKI_URL")
+	if url == "" {
+		return os.Stdout
+	}
+	labels := map[string]string{"service": service}
+	if pod := os.Getenv("POD_NAME"); pod != "" {
+		labels["pod"] = pod
+	}
+	activeLokiSink = newLokiSink(url, labels)
+	return io.MultiWriter(os.Stdout, activeLokiSink)
 }
 
 // NewWithWriter creates a logger that writes to the given writer.

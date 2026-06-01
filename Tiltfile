@@ -11,6 +11,13 @@ profile = os.getenv('PROFILE', 'full')
 # Kill orphaned processes from previous sessions by port
 local('for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null; done; sleep 1; echo "ports cleared"')
 
+# Tilt scrubs the literal value of every K8s Secret from log output by
+# default. Our postgres secret has username='adtech', which collides with
+# every NATS subject prefix, the Minio bucket name, the namespace, and
+# half our account types. Disable scrubbing for local dev so logs stay
+# readable. Staging/prod overlays should NOT do this.
+secret_settings(disable_scrub=True)
+
 # ============================================================
 # Infrastructure (always runs in K8s)
 # ============================================================
@@ -30,7 +37,10 @@ k8s_resource('prometheus', labels=['observability'], port_forwards=['9090:9090']
     links=['http://localhost:9090'])
 k8s_resource('loki', labels=['observability'], port_forwards=['3100:3100'])
 k8s_resource('promtail', labels=['observability'])
-k8s_resource('jaeger', labels=['observability'], port_forwards=['16686:16686'],
+k8s_resource('jaeger', labels=['observability'],
+    # 16686 = UI, 4317 = OTLP/gRPC, 4318 = OTLP/HTTP (what pkg/tracing uses).
+    # Without 4318 forwarded, every service spams "dial tcp :4318 connection refused".
+    port_forwards=['16686:16686', '4317:4317', '4318:4318'],
     links=['http://localhost:16686'])
 
 # ============================================================
@@ -45,78 +55,93 @@ if dev_mode == 'fast':
     # kill the process cleanly (no orphaned child processes).
     # --------------------------------------------------------
 
+    # readiness_probe makes Tilt's "ready" state reflect actual /readyz
+    # success (DB + cache + bus connected), not just "process started".
+    # Pods stay yellow until checks pass, so cascade-failures surface fast.
+    def ready(port):
+        return probe(period_secs=2, http_get=http_get_action(port=port, path='/readyz'))
+
     local_resource('gateway',
         cmd='go build -o ./bin/gateway ./cmd/gateway',
-        serve_cmd='POD_NAME=gateway-0 ./bin/gateway',
+        serve_cmd='POD_NAME=gateway-0 LOKI_URL=http://localhost:3100 ./bin/gateway',
         serve_dir='.',
         deps=['cmd/gateway', 'pkg/', 'web/'],
         labels=['services'],
         resource_deps=['postgres', 'redis'],
+        readiness_probe=ready(8080),
         links=['http://localhost:8080', 'http://localhost:8080/dev/publisher-simulator'])
 
     local_resource('exchange',
         cmd='go build -o ./bin/exchange ./cmd/exchange',
-        serve_cmd='POD_NAME=exchange-0 ./bin/exchange',
+        serve_cmd='POD_NAME=exchange-0 LOKI_URL=http://localhost:3100 ./bin/exchange',
         serve_dir='.',
         deps=['cmd/exchange', 'pkg/'],
         labels=['services'],
-        resource_deps=['nats'])
+        resource_deps=['nats', 'postgres'],
+        readiness_probe=ready(8081))
 
     local_resource('dsp',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='POD_NAME=dsp-internal-0 ./bin/dsp',
+        serve_cmd='POD_NAME=dsp-internal-0 LOKI_URL=http://localhost:3100 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
-        resource_deps=['postgres', 'redis'])
+        resource_deps=['postgres', 'redis'],
+        readiness_probe=ready(8082))
 
     local_resource('dsp-competitor1',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 POD_NAME=dsp-competitor1 ./bin/dsp',
+        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 POD_NAME=dsp-competitor1 LOKI_URL=http://localhost:3100 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
-        resource_deps=['postgres', 'redis'])
+        resource_deps=['postgres', 'redis'],
+        readiness_probe=ready(8089))
 
     local_resource('dsp-competitor2',
         cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 POD_NAME=dsp-competitor2 ./bin/dsp',
+        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 POD_NAME=dsp-competitor2 LOKI_URL=http://localhost:3100 ./bin/dsp',
         serve_dir='.',
         deps=['cmd/dsp', 'pkg/'],
         labels=['services'],
-        resource_deps=['postgres', 'redis'])
+        resource_deps=['postgres', 'redis'],
+        readiness_probe=ready(8090))
 
     local_resource('tracker',
         cmd='go build -o ./bin/tracker ./cmd/tracker',
-        serve_cmd='POD_NAME=tracker-0 ./bin/tracker',
+        serve_cmd='POD_NAME=tracker-0 LOKI_URL=http://localhost:3100 ./bin/tracker',
         serve_dir='.',
         deps=['cmd/tracker', 'pkg/'],
         labels=['services'],
-        resource_deps=['nats', 'redis'])
+        resource_deps=['nats', 'redis'],
+        readiness_probe=ready(8083))
 
     local_resource('ssp',
         cmd='go build -o ./bin/ssp ./cmd/ssp',
-        serve_cmd='POD_NAME=ssp-0 ./bin/ssp',
+        serve_cmd='POD_NAME=ssp-0 LOKI_URL=http://localhost:3100 ./bin/ssp',
         serve_dir='.',
         deps=['cmd/ssp', 'pkg/'],
         labels=['services'],
-        resource_deps=['postgres'])
+        resource_deps=['postgres'],
+        readiness_probe=ready(8084))
 
     local_resource('adserver',
         cmd='go build -o ./bin/adserver ./cmd/adserver',
-        serve_cmd='POD_NAME=adserver-0 ./bin/adserver',
+        serve_cmd='POD_NAME=adserver-0 LOKI_URL=http://localhost:3100 ./bin/adserver',
         serve_dir='.',
         deps=['cmd/adserver', 'pkg/'],
         labels=['services'],
-        resource_deps=['minio', 'redis'])
+        resource_deps=['minio', 'redis', 'postgres'],
+        readiness_probe=ready(8085))
 
     local_resource('reporting',
         cmd='go build -o ./bin/reporting ./cmd/reporting',
-        serve_cmd='POD_NAME=reporting-0 ./bin/reporting',
+        serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ./bin/reporting',
         serve_dir='.',
         deps=['cmd/reporting', 'pkg/'],
         labels=['services'],
-        resource_deps=['nats'])
+        resource_deps=['nats', 'postgres'],
+        readiness_probe=ready(8086))
 
 else:
     # --------------------------------------------------------
@@ -210,10 +235,45 @@ local_resource('chaos-kill-nats',
 # ============================================================
 
 local_resource('test-unit',
-    cmd='go test ./pkg/...',
+    cmd='go test ./pkg/... ./cmd/...',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False)
 
+# E2E tests run against the FULL deployment — every service + every infra
+# dep must be healthy first. A partial stack defeats the point of e2e.
+# Reflected in resource_deps below.
+e2e_full_deps = [
+    'postgres', 'nats', 'redis', 'minio',
+    'gateway', 'exchange', 'dsp', 'dsp-competitor1', 'dsp-competitor2',
+    'ssp', 'adserver', 'tracker', 'reporting',
+]
+
+# Full e2e suite: every Test* in tests/e2e/.
+# Resets DB and Redis at the start of each Test* (see harness.Reset), so
+# don't run while a simulator is actively pushing traffic.
 local_resource('test-e2e',
+    cmd='go test ./tests/... -tags=e2e -count=1 -timeout=10m -v',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False,
+    resource_deps=e2e_full_deps)
+
+# Individual test buttons for fast iteration on one scenario.
+# Same full-deployment requirement — partial stack = invalid test.
+local_resource('e2e-narrative',
+    cmd='go test ./tests/e2e/... -tags=e2e -run TestEndToEnd -count=1 -timeout=5m -v',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False,
+    resource_deps=e2e_full_deps)
+
+local_resource('e2e-rls',
+    cmd='go test ./tests/e2e/... -tags=e2e -run TestRLSIsolation -count=1 -timeout=2m -v',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False,
+    resource_deps=e2e_full_deps)
+
+local_resource('e2e-budget',
+    cmd='go test ./tests/e2e/... -tags=e2e -run TestBudgetCap -count=1 -timeout=3m -v',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False,
+    resource_deps=e2e_full_deps)
+
+# Legacy shell smoke test — kept for now in case anyone scripts against it.
+local_resource('test-e2e-shell-legacy',
     cmd='./tests/e2e_smoke_test.sh',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['tests'], auto_init=False)
 
@@ -287,6 +347,14 @@ local_resource('endpoints',
   Steady sim:       go run ./cmd/simulator run --profile steady --duration 1m
   List profiles:    go run ./cmd/simulator profiles
   Health check:     curl http://localhost:8080/healthz
+
+  E2E TESTS (Tilt buttons or CLI)
+  ─────────────────────────────────────────────────────────
+  All:              make test-e2e            (or click test-e2e in Tilt)
+  Narrative:        click e2e-narrative      (full TestEndToEnd compounding)
+  RLS only:         click e2e-rls            (multi-tenant isolation)
+  Budget cap:       click e2e-budget         (daily_budget enforcement)
+  Refresh caches:   curl -XPOST localhost:8082/debug/cache/refresh
 
 ============================================================
 '""",

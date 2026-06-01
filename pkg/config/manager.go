@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -53,8 +54,13 @@ type ChangeRecord struct {
 
 // ConfigSource provides live config values (Postgres, HTTP, file, etc.)
 type ConfigSource interface {
-	// FetchAll returns all live config key-value pairs.
+	// FetchAll returns every row in the source — used by admin tooling and
+	// the manager UI. Pod read paths use FetchAllForPod for scoped reads.
 	FetchAll(ctx context.Context) (map[string]string, error)
+	// FetchAllForPod returns the values visible to a specific pod: its
+	// own pod-scoped rows merged on top of legacy global rows. Sources
+	// without a pod concept (in-memory test source) just return FetchAll.
+	FetchAllForPod(ctx context.Context, podID string) (map[string]string, error)
 	// Update sets a config value in the backing store.
 	Update(ctx context.Context, key, value string) error
 	// Delete removes a config value from the backing store.
@@ -153,7 +159,14 @@ func (m *Manager) poll(ctx context.Context) {
 		return
 	}
 
-	values, err := source.FetchAll(ctx)
+	// Pod-scoped fetch: the manager polls only the values visible to this
+	// pod (own rows + legacy globals). Other pods' overrides stay out of
+	// our in-memory map, so reads can't pick up someone else's tuning.
+	podID := ""
+	if registry != nil {
+		podID = registry.PodID()
+	}
+	values, err := source.FetchAllForPod(ctx, podID)
 	if err != nil {
 		m.log.Warn("config poll failed", "error", err)
 		return
@@ -161,7 +174,6 @@ func (m *Manager) poll(ctx context.Context) {
 
 	m.applyChanges(values, "poll")
 
-	// Heartbeat ping so the registry shows when this pod last polled
 	if registry != nil && serviceName != "" {
 		registry.Ping(ctx, serviceName)
 	}
@@ -199,6 +211,14 @@ func (m *Manager) applyChanges(newValues map[string]string, source string) {
 // Set updates a config value via the API (bypasses polling).
 // Validates the value type if the key is in the schema.
 func (m *Manager) Set(ctx context.Context, key, value string) error {
+	return m.SetForPod(ctx, "", key, value)
+}
+
+// SetForPod writes a value scoped to a specific pod (empty podID = the
+// legacy global row). Same flow as Set: validate, persist, replay through
+// applyChanges so OnChange callbacks fire for any pod whose in-memory
+// view matches.
+func (m *Manager) SetForPod(ctx context.Context, podID, key, value string) error {
 	if err := Validate(key, value); err != nil {
 		return err
 	}
@@ -208,12 +228,25 @@ func (m *Manager) Set(ctx context.Context, key, value string) error {
 	m.mu.RUnlock()
 
 	if source != nil {
-		if err := source.Update(ctx, key, value); err != nil {
+		if pg, ok := source.(*PostgresSource); ok {
+			if err := pg.UpdateForPod(ctx, podID, key, value, "config_update"); err != nil {
+				return err
+			}
+		} else if err := source.Update(ctx, key, value); err != nil {
 			return err
 		}
 	}
 
-	m.applyChanges(map[string]string{key: value}, "api")
+	// Only echo the change into the in-memory map if it's our own pod or
+	// the global scope — other pods will pick it up on their next poll
+	// (or NATS invalidate).
+	ownPod := ""
+	if m.registry != nil {
+		ownPod = m.registry.PodID()
+	}
+	if podID == "" || podID == ownPod {
+		m.applyChanges(map[string]string{key: value}, "api")
+	}
 	return nil
 }
 
@@ -365,41 +398,76 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			if r.URL.Query().Get("history") == "true" {
-				// Per-key history from Postgres audit log
+			if r.URL.Query().Get("resolved") == "true" {
 				key := r.URL.Query().Get("key")
-				if key != "" {
-					if pgSource, ok := m.source.(*PostgresSource); ok {
-						history, err := pgSource.History(r.Context(), key, 20)
-						if err == nil {
-							json.NewEncoder(w).Encode(history)
-							return
-						}
+				pod := r.URL.Query().Get("pod") // optional, defaults to this pod
+				if pod == "" && m.registry != nil {
+					pod = m.registry.PodID()
+				}
+				resolved := m.resolveSource(r.Context(), key, pod)
+				json.NewEncoder(w).Encode(resolved)
+				return
+			}
+			if r.URL.Query().Get("history") == "true" {
+				// Audit log from Postgres. Per-key when ?key=X is set, or
+				// the platform-wide tail (last N changes across all keys)
+				// when only ?history=true is set. Limit defaults to 50/200
+				// to keep the page lightweight.
+				key := r.URL.Query().Get("key")
+				limit := 50
+				if key == "" {
+					limit = 200
+				}
+				if pgSource, ok := m.source.(*PostgresSource); ok {
+					history, err := pgSource.History(r.Context(), key, limit)
+					if err == nil {
+						json.NewEncoder(w).Encode(history)
+						return
 					}
 				}
-				// Fall back to in-memory history
-				json.NewEncoder(w).Encode(m.History(50))
+				// In-memory fallback for when the source isn't Postgres.
+				json.NewEncoder(w).Encode(m.History(limit))
 				return
 			}
 			if r.URL.Query().Get("schema") == "true" {
-				// Show schema with current values
+				// Show schema with current values + source provenance per key.
+				// The UI uses Source/SourcePod to render the per-row "where
+				// did this value come from" badge.
 				schema := Schema()
 				type entry struct {
 					SchemaEntry
 					CurrentValue string `json:"current_value"`
 					Status       string `json:"status"` // active, orphaned, new
+					Source       string `json:"source,omitempty"`
+					SourcePod    string `json:"source_pod,omitempty"`
 				}
 
-				// Build lookup of schema keys
+				// Source resolution is per-pod. Default to the requesting
+				// service's own pod; UI can override with ?pod=X to view a
+				// specific pod's provenance.
+				pod := r.URL.Query().Get("pod")
+				if pod == "" && m.registry != nil {
+					pod = m.registry.PodID()
+				}
+
 				schemaKeys := make(map[string]bool)
 				var result []entry
 				for _, s := range schema {
 					schemaKeys[s.Key] = true
-					result = append(result, entry{
+					e := entry{
 						SchemaEntry:  s,
 						CurrentValue: m.cfg.Get(s.Key, s.Default),
 						Status:       "active",
-					})
+					}
+					// Secret rows: redact value, mark source unconditionally
+					// as env (or default if the env var isn't set).
+					if s.Tier == TierSecret {
+						e.CurrentValue = "***"
+					}
+					rc := m.resolveSource(r.Context(), s.Key, pod)
+					e.Source = rc.Source
+					e.SourcePod = rc.PodID
+					result = append(result, e)
 				}
 
 				// Add orphaned keys from Postgres that aren't in current schema
@@ -465,12 +533,13 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 			var req struct {
 				Key   string `json:"key"`
 				Value string `json:"value"`
+				PodID string `json:"pod_id"` // empty = global, otherwise scoped to that pod
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 				return
 			}
-			if err := m.Set(r.Context(), req.Key, req.Value); err != nil {
+			if err := m.SetForPod(r.Context(), req.PodID, req.Key, req.Value); err != nil {
 				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 				return
 			}
@@ -492,6 +561,89 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}
 	}
+}
+
+// ResolvedConfig is the response shape of the /v1/config?resolved=true
+// endpoint. It tells the UI (and ops tooling) exactly where a value came
+// from — pod row, legacy global row, env var, or schema default. Powers
+// the Source column in the config manager UI so operators stop having to
+// read code to answer "why is this value X right now?".
+type ResolvedConfig struct {
+	Key       string `json:"key"`
+	Tier      string `json:"tier"`     // live / static / secret (from schema)
+	Value     string `json:"value"`    // effective resolved value
+	Source    string `json:"source"`   // postgres-pod / postgres-global / env / default / unknown
+	PodID     string `json:"pod_id"`   // populated when Source = postgres-pod
+	EnvKey    string `json:"env_key"`  // env var name checked (always reported)
+	Default   string `json:"default"`  // schema default, for comparison
+	Redacted  bool   `json:"redacted"` // true for secret tier (value masked)
+}
+
+// resolveSource computes the provenance for a key + pod. The order
+// mirrors Config.Get's read path + the upstream FetchAllForPod merge
+// rules, but reaches into the source for the pod_id of the winning row.
+func (m *Manager) resolveSource(ctx context.Context, key, podID string) ResolvedConfig {
+	out := ResolvedConfig{Key: key, PodID: podID, EnvKey: envKeyFromConfigKey(key)}
+
+	// Pull schema metadata (tier + default).
+	for _, e := range Schema() {
+		if e.Key == key {
+			out.Tier = e.Tier
+			out.Default = e.Default
+			break
+		}
+	}
+
+	// Secret tier: never look in Postgres; env-only. Mask the value.
+	if out.Tier == TierSecret {
+		v := os.Getenv(out.EnvKey)
+		if v == "" {
+			v = out.Default
+			out.Source = "default"
+		} else {
+			out.Source = "env"
+		}
+		out.Value = "***"
+		out.Redacted = true
+		_ = v
+		return out
+	}
+
+	// Live + Static: Postgres for pod, then global, then env, then default.
+	// Only Live should actually have Postgres rows; if Static has one it's
+	// stale data from before the tier model (flag via Source value).
+	if pg, ok := m.source.(*PostgresSource); ok && podID != "" {
+		var valueJSON []byte
+		err := pg.db.QueryRowContext(ctx,
+			"SELECT value FROM config WHERE pod_id = $1 AND key = $2",
+			podID, key,
+		).Scan(&valueJSON)
+		if err == nil && len(valueJSON) > 0 {
+			out.Value = decodeJSONStringOrRaw(valueJSON)
+			out.Source = "postgres-pod"
+			return out
+		}
+	}
+	if pg, ok := m.source.(*PostgresSource); ok {
+		var valueJSON []byte
+		err := pg.db.QueryRowContext(ctx,
+			"SELECT value FROM config WHERE pod_id = '' AND key = $1",
+			key,
+		).Scan(&valueJSON)
+		if err == nil && len(valueJSON) > 0 {
+			out.Value = decodeJSONStringOrRaw(valueJSON)
+			out.Source = "postgres-global"
+			return out
+		}
+	}
+	if v := os.Getenv(out.EnvKey); v != "" {
+		out.Value = v
+		out.Source = "env"
+		return out
+	}
+	out.Value = out.Default
+	out.Source = "default"
+	return out
 }
 
 // MemorySource is an in-memory config source for testing/local dev.
@@ -517,6 +669,12 @@ func (s *MemorySource) FetchAll(_ context.Context) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// FetchAllForPod returns the same set for in-memory tests — there's no
+// pod scoping for this source.
+func (s *MemorySource) FetchAllForPod(ctx context.Context, _ string) (map[string]string, error) {
+	return s.FetchAll(ctx)
 }
 
 func (s *MemorySource) Update(_ context.Context, key, value string) error {

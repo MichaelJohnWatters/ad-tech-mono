@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Config Manager - Ad Tech Platform</title>
+    <title>AdTech Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
     tailwind.config = {
@@ -23,7 +23,7 @@
     <div class="flex gap-3 text-sm">
         <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
         <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
-        <a href="/dev/config-manager" class="text-brand font-medium">Config</a>
+        <a href="/dev/console" class="text-brand font-medium">Console</a>
         <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
     </div>
     <button onclick="toggleTheme()" class="ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">&#9728;&#65039;</button>
@@ -31,38 +31,87 @@
 
 <main class="max-w-5xl mx-auto px-5 py-6">
     <div class="flex items-center justify-between mb-4">
-        <h1 class="text-xl font-semibold">Config Manager</h1>
+        <h1 class="text-xl font-semibold">AdTech Console</h1>
         <div class="flex gap-2">
             <button onclick="loadData()" class="px-3 py-1.5 text-sm bg-brand text-white rounded hover:bg-brand-hover">Refresh</button>
-            <button onclick="showHistory()" class="px-3 py-1.5 text-sm bg-gray-200 dark:bg-gray-700 rounded hover:bg-gray-300 dark:hover:bg-gray-600">History</button>
         </div>
     </div>
 
-    <!-- Search -->
-    <div class="mb-4 flex gap-2">
-        <input id="searchInput" type="text" placeholder="Search keys, services, descriptions..."
-            oninput="filterConfig()"
-            class="flex-1 px-3 py-2 text-sm font-mono bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:border-brand focus:outline-none">
-        <button id="searchModeBtn" onclick="toggleSearchMode()"
-            class="px-3 py-2 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 whitespace-nowrap">
-            Fuzzy
-        </button>
+    <!-- Top-level tabs. URL hash (#config / #services / etc.) controls which
+         pane is visible. Hash sync means deep links work. -->
+    <div class="border-b border-gray-200 dark:border-gray-800 mb-4">
+        <nav id="tabBar" class="flex gap-1 -mb-px">
+            <button data-tab="overview" onclick="selectTab('overview')" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Overview</button>
+            <button data-tab="services" onclick="selectTab('services')" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Services</button>
+            <button data-tab="pods" onclick="selectTab('pods')" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Pods</button>
+            <button data-tab="config" onclick="selectTab('config')" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Config</button>
+            <button data-tab="audit" onclick="selectTab('audit')" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Audit</button>
+        </nav>
     </div>
 
-    <!-- Service filter pills -->
-    <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
+    <!-- Overview tab — platform health summary + recent activity. Empty
+         placeholder for now; rendered by renderOverviewTab() once we wire
+         it to the metrics + audit endpoints. -->
+    <section data-tab-pane="overview" class="tab-pane hidden">
+        <div id="overviewContent" class="text-gray-400 text-sm py-12 text-center">
+            Overview coming soon — will show platform health, recent alerts,
+            recent config changes, and quick-link tiles.
+        </div>
+    </section>
 
-    <!-- Alerts -->
-    <div id="alerts" class="mb-4"></div>
+    <!-- Services tab — services grouped with their pods + action buttons
+         (logs/traces/metrics/config) that open Grafana, Jaeger, Prometheus
+         with the right filter applied. -->
+    <section data-tab-pane="services" class="tab-pane hidden">
+        <div id="servicesContent"></div>
+    </section>
 
-    <!-- Pod overview -->
-    <div id="podOverview" class="mb-4"></div>
+    <!-- Pods tab — flat per-pod listing. The alerts + pod overview that
+         currently live above the config table moves here. -->
+    <section data-tab-pane="pods" class="tab-pane hidden">
+        <div id="alerts" class="mb-4"></div>
+        <div id="podOverview" class="mb-4"></div>
+    </section>
 
-    <!-- Stats bar -->
-    <div id="statsBar" class="text-xs text-gray-400 mb-4"></div>
+    <!-- Config tab — the current key-table workflow. Contains search,
+         filter pills (tier + service), and the grouped config rows. -->
+    <section data-tab-pane="config" class="tab-pane hidden">
+        <!-- Search -->
+        <div class="mb-4 flex gap-2">
+            <input id="searchInput" type="text" placeholder="Search keys, services, descriptions..."
+                oninput="filterConfig()"
+                class="flex-1 px-3 py-2 text-sm font-mono bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:border-brand focus:outline-none">
+            <button id="searchModeBtn" onclick="toggleSearchMode()"
+                class="px-3 py-2 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 whitespace-nowrap">
+                Fuzzy
+            </button>
+        </div>
 
-    <!-- Config table -->
-    <div id="configTable"></div>
+        <!-- Tier filter pills (defaults to Live — operators rarely need to see
+             static infra or secrets, and we lock them anyway) -->
+        <div id="tierPills" class="flex flex-wrap gap-2 mb-2"></div>
+
+        <!-- Service filter pills -->
+        <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
+
+        <!-- Stats bar -->
+        <div id="statsBar" class="text-xs text-gray-400 mb-4"></div>
+
+        <!-- Config table -->
+        <div id="configTable"></div>
+    </section>
+
+    <!-- Audit tab — cross-key change log. Loads /v1/config?history=true
+         which returns the platform-wide tail of the audit_log. -->
+    <section data-tab-pane="audit" class="tab-pane hidden">
+        <div class="flex items-center justify-between mb-3 gap-2">
+            <input id="auditSearch" type="text" placeholder="Filter by key / actor / value..."
+                oninput="renderAuditTab()"
+                class="flex-1 max-w-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:border-brand focus:outline-none">
+            <button onclick="loadAudit()" class="px-3 py-1.5 text-sm bg-brand text-white rounded hover:bg-brand-hover">Refresh</button>
+        </div>
+        <div id="auditContent"></div>
+    </section>
 
     <!-- Toast container -->
     <div id="toastContainer" class="fixed bottom-4 right-4 flex flex-col gap-2 z-50"></div>
@@ -85,6 +134,152 @@ let services = [];
 let schema = [];
 let selectedService = 'all';
 let selectedPod = null;
+let selectedTier = 'live'; // default: hide static/secret which can't be edited anyway
+
+// Tab navigation. The hash in the URL is the source of truth so deep
+// links and refreshes land on the right tab. Default = 'config' since
+// that's the most-used view today.
+const VALID_TABS = ['overview', 'services', 'pods', 'config', 'audit'];
+
+function selectTab(name) {
+    if (!VALID_TABS.includes(name)) name = 'config';
+    document.querySelectorAll('.tab-pane').forEach(el => {
+        el.classList.toggle('hidden', el.dataset.tabPane !== name);
+    });
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        const active = btn.dataset.tab === name;
+        // Active tab gets a brand-coloured border + bold; others fall back
+        // to the muted hover style.
+        btn.classList.toggle('border-brand', active);
+        btn.classList.toggle('text-brand', active);
+        btn.classList.toggle('font-medium', active);
+        btn.classList.toggle('border-transparent', !active);
+        btn.classList.toggle('text-gray-500', !active);
+    });
+    if (location.hash !== '#' + name) {
+        history.replaceState(null, '', '#' + name);
+    }
+}
+
+function initTabsFromHash() {
+    const hash = location.hash.replace('#', '');
+    selectTab(VALID_TABS.includes(hash) ? hash : 'config');
+}
+
+window.addEventListener('hashchange', () => {
+    initTabsFromHash();
+    // Lazy-load Audit data on first visit so the console page-load stays
+    // cheap when no one's viewing audit.
+    if (location.hash === '#audit' && !auditLoaded) loadAudit();
+});
+window.addEventListener('DOMContentLoaded', initTabsFromHash);
+
+// Audit log state — fetched on demand.
+let auditEntries = [];
+let auditLoaded = false;
+
+async function loadAudit() {
+    const resp = await fetch(GW + '/v1/config?history=true');
+    auditEntries = await resp.json() || [];
+    auditLoaded = true;
+    renderAuditTab();
+}
+
+function renderAuditTab() {
+    const el = document.getElementById('auditContent');
+    if (!auditLoaded) {
+        el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">Click Refresh to load audit log.</div>';
+        return;
+    }
+    if (!auditEntries.length) {
+        el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">No config changes recorded yet.</div>';
+        return;
+    }
+    const q = (document.getElementById('auditSearch').value || '').toLowerCase();
+    const filtered = auditEntries.filter(e => {
+        if (!q) return true;
+        const hay = (e.key + ' ' + (e.actor || '') + ' ' + (e.action || '') + ' ' + (e.old_value || '') + ' ' + (e.new_value || '')).toLowerCase();
+        return hay.includes(q);
+    });
+    el.innerHTML = `
+    <div class="text-xs text-gray-400 mb-2">${filtered.length} of ${auditEntries.length} entries</div>
+    <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-900/50 text-xs uppercase tracking-wider text-gray-400">
+                <tr>
+                    <th class="px-3 py-2 text-left">When</th>
+                    <th class="px-3 py-2 text-left">Action</th>
+                    <th class="px-3 py-2 text-left">Key</th>
+                    <th class="px-3 py-2 text-left">Change</th>
+                    <th class="px-3 py-2 text-left">Actor</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                ${filtered.map(e => {
+                    const ago = timeAgo(e.timestamp);
+                    const action = (e.action || 'unknown').replace('config_', '');
+                    const actionCls = e.action === 'config_reset'
+                        ? 'text-red-500'
+                        : e.action === 'config_rollback'
+                            ? 'text-amber-500'
+                            : e.action === 'config_seed'
+                                ? 'text-gray-400'
+                                : 'text-emerald-500';
+                    return `
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">${ago}</td>
+                        <td class="px-3 py-2 text-xs ${actionCls}">${action}</td>
+                        <td class="px-3 py-2 font-mono text-xs">${escHtml(e.key)}</td>
+                        <td class="px-3 py-2 text-xs">
+                            <span class="text-gray-400 line-through">${escHtml(e.old_value || '∅')}</span>
+                            <span class="mx-1">→</span>
+                            <span>${escHtml(e.new_value || '∅')}</span>
+                        </td>
+                        <td class="px-3 py-2 text-xs text-gray-400">${escHtml(e.actor || '-')}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>
+    </div>`;
+}
+
+// Tier classification: drives badges, lock state, default filter.
+// Mirrors pkg/config/schema.go TierLive/TierStatic/TierSecret constants.
+const TIER_LIVE = 'live';
+const TIER_STATIC = 'static';
+const TIER_SECRET = 'secret';
+function tierClass(tier) {
+    switch (tier) {
+        case TIER_LIVE: return 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600';
+        case TIER_STATIC: return 'bg-gray-200 dark:bg-gray-700 text-gray-500';
+        case TIER_SECRET: return 'bg-amber-100 dark:bg-amber-900/40 text-amber-600';
+        default: return 'bg-gray-100 dark:bg-gray-800 text-gray-400';
+    }
+}
+// sourceBadge renders the provenance of a key's effective value as a
+// short coloured tag. Helps operators answer "why is this value X?"
+// without reading code. Hidden when source is empty (older API response).
+function sourceBadge(k) {
+    if (!k.source) return '';
+    const labels = {
+        'postgres-pod':    {text: 'pod row', cls: 'bg-brand/20 text-brand'},
+        'postgres-global': {text: 'global row', cls: 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-500'},
+        'env':             {text: 'env var', cls: 'bg-sky-100 dark:bg-sky-900/30 text-sky-500'},
+        'default':         {text: 'schema default', cls: 'bg-gray-100 dark:bg-gray-800 text-gray-400'},
+    };
+    const meta = labels[k.source] || {text: k.source, cls: 'bg-gray-100 dark:bg-gray-800 text-gray-400'};
+    const tip = k.source_pod ? `from pod ${k.source_pod}` : k.source;
+    return `<span class="px-1.5 py-0.5 text-[10px] rounded ${meta.cls}" title="${tip}">${meta.text}</span>`;
+}
+
+function tierTooltip(tier) {
+    switch (tier) {
+        case TIER_LIVE: return 'Live — runtime-tunable, persists in Postgres';
+        case TIER_STATIC: return 'Static — boot-time only, change in YAML/env and redeploy';
+        case TIER_SECRET: return 'Secret — sourced from K8s Secret env var; rotate via secret pipeline';
+        default: return 'Unknown tier';
+    }
+}
 
 async function loadData() {
     const [svcResp, schemaResp] = await Promise.all([
@@ -95,10 +290,178 @@ async function loadData() {
     schema = await schemaResp.json() || [];
     storeOriginalValues();
     renderAlerts();
+    renderTierPills();
+    renderPills();
+    renderPodOverview();
+    renderServicesTab();
+    renderOverviewTab();
+    filterConfig();
+    reopenHistories();
+}
+
+// Action-link URL builders. All three observability tools live on the
+// developer's host (port-forwarded out of K8s by Tilt), so these are
+// absolute http://localhost URLs the browser opens in a new tab.
+const GRAFANA_URL = 'http://localhost:3000';
+const JAEGER_URL = 'http://localhost:16686';
+const PROMETHEUS_URL = 'http://localhost:9090';
+
+function grafanaLogsURL(service, pod) {
+    const expr = pod ? `{service="${service}", pod="${pod}"}` : `{service="${service}"}`;
+    const left = encodeURIComponent(JSON.stringify({
+        datasource: 'Loki',
+        queries: [{refId: 'A', expr, queryType: 'range'}],
+        range: {from: 'now-15m', to: 'now'},
+    }));
+    return `${GRAFANA_URL}/explore?left=${left}`;
+}
+function jaegerTracesURL(service) {
+    return `${JAEGER_URL}/search?service=${encodeURIComponent(service)}&lookback=15m&limit=50`;
+}
+function prometheusURL(service) {
+    const expr = `rate(adtech_http_requests_total{service="${service}"}[1m])`;
+    return `${PROMETHEUS_URL}/graph?g0.expr=${encodeURIComponent(expr)}&g0.tab=0&g0.range_input=15m`;
+}
+
+function renderServicesTab() {
+    const el = document.getElementById('servicesContent');
+    if (!services.length) {
+        el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">No services registered yet.</div>';
+        return;
+    }
+    el.innerHTML = services.map(g => {
+        const runningPods = g.pods.filter(p => p.status === 'running').length;
+        const totalPods = g.pods.length;
+        const healthClass = runningPods === totalPods
+            ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600'
+            : runningPods === 0
+                ? 'bg-red-100 dark:bg-red-900/30 text-red-500'
+                : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600';
+        return `
+        <div class="mb-6 bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800">
+            <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="font-medium">${g.service}</span>
+                    <span class="px-1.5 py-0.5 text-[10px] rounded ${healthClass}">${runningPods}/${totalPods} up</span>
+                </div>
+                <div class="flex gap-1 text-xs">
+                    <a href="${grafanaLogsURL(g.service)}" target="_blank" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">logs</a>
+                    <a href="${jaegerTracesURL(g.service)}" target="_blank" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">traces</a>
+                    <a href="${prometheusURL(g.service)}" target="_blank" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">metrics</a>
+                    <button onclick="jumpToConfig('${g.service}')" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">config</button>
+                </div>
+            </div>
+            <div class="divide-y divide-gray-100 dark:divide-gray-800">
+                ${g.pods.map(p => {
+                    const ago = timeAgo(p.last_ping_at);
+                    const podClass = p.status === 'running' ? 'text-emerald-500' : 'text-red-500';
+                    return `
+                    <div class="px-4 py-2 flex items-center justify-between gap-2 text-sm">
+                        <div class="flex items-center gap-2 flex-1 min-w-0">
+                            <span class="${podClass} text-xs">●</span>
+                            <span class="font-mono truncate">${p.pod_id}</span>
+                            <span class="text-xs text-gray-400">v${p.version}</span>
+                            <span class="text-xs text-gray-400">ping ${ago}</span>
+                        </div>
+                        <div class="flex gap-1 text-xs flex-shrink-0">
+                            <a href="${grafanaLogsURL(g.service, p.pod_id)}" target="_blank" class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">logs</a>
+                            <button onclick="jumpToConfigForPod('${g.service}','${p.pod_id}')" class="px-2 py-0.5 rounded border border-gray-200 dark:border-gray-700 hover:border-brand hover:text-brand">config</button>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function jumpToConfig(service) {
+    selectedService = service;
+    selectedPod = null;
     renderPills();
     renderPodOverview();
     filterConfig();
-    reopenHistories();
+    selectTab('config');
+}
+function jumpToConfigForPod(service, podID) {
+    selectedService = service;
+    selectedPod = podID;
+    renderPills();
+    renderPodOverview();
+    filterConfig();
+    selectTab('config');
+}
+
+function renderOverviewTab() {
+    const el = document.getElementById('overviewContent');
+    if (!services.length) {
+        el.innerHTML = '<div class="text-sm py-12 text-center">No services registered.</div>';
+        return;
+    }
+    const totalPods = services.reduce((n, g) => n + g.pods.length, 0);
+    const runningPods = services.reduce((n, g) => n + g.pods.filter(p => p.status === 'running').length, 0);
+    const stalePods = services.flatMap(g => g.pods).filter(p =>
+        p.status === 'running' && (Date.now() - new Date(p.last_ping_at).getTime() > 2 * 60 * 1000));
+    const orphans = schema.filter(k => k.status === 'orphaned').length;
+    el.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-left">
+        <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 mb-1">Services</div>
+            <div class="text-2xl font-semibold">${services.length}</div>
+        </div>
+        <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 mb-1">Pods up</div>
+            <div class="text-2xl font-semibold ${runningPods === totalPods ? 'text-emerald-500' : 'text-amber-500'}">${runningPods}/${totalPods}</div>
+        </div>
+        <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 mb-1">Stale (&gt;2m)</div>
+            <div class="text-2xl font-semibold ${stalePods.length ? 'text-amber-500' : ''}">${stalePods.length}</div>
+        </div>
+        <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 mb-1">Orphan keys</div>
+            <div class="text-2xl font-semibold ${orphans ? 'text-red-500' : ''}">${orphans}</div>
+        </div>
+    </div>
+    <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <a href="${GRAFANA_URL}" target="_blank" class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4 hover:border-brand transition-colors">
+            <div class="font-medium">Grafana</div>
+            <div class="text-xs text-gray-400">logs, metrics, dashboards</div>
+        </a>
+        <a href="${JAEGER_URL}" target="_blank" class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4 hover:border-brand transition-colors">
+            <div class="font-medium">Jaeger</div>
+            <div class="text-xs text-gray-400">distributed traces</div>
+        </a>
+        <a href="${PROMETHEUS_URL}" target="_blank" class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 p-4 hover:border-brand transition-colors">
+            <div class="font-medium">Prometheus</div>
+            <div class="text-xs text-gray-400">raw metrics</div>
+        </a>
+    </div>`;
+}
+
+function renderTierPills() {
+    const el = document.getElementById('tierPills');
+    const tiers = [
+        {key: 'live', label: 'Live', desc: 'runtime-tunable'},
+        {key: 'static', label: 'Static', desc: 'redeploy to change'},
+        {key: 'secret', label: 'Secret', desc: 'env-only, redacted'},
+        {key: 'all', label: 'All', desc: 'show every key'},
+    ];
+    el.innerHTML = tiers.map(t => {
+        const active = selectedTier === t.key;
+        const count = t.key === 'all' ? schema.length : schema.filter(e => (e.Tier || 'live') === t.key).length;
+        const cls = active
+            ? 'bg-brand text-white border-brand'
+            : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-brand';
+        return `<button onclick="selectTier('${t.key}')" title="${t.desc}"
+            class="px-2.5 py-1 text-xs rounded-full border ${cls} transition-colors">
+            ${t.label} <span class="text-[10px] opacity-70">${count}</span>
+        </button>`;
+    }).join('');
+}
+
+function selectTier(t) {
+    selectedTier = t;
+    renderTierPills();
+    filterConfig();
 }
 
 function renderPills() {
@@ -242,6 +605,12 @@ function filterConfig() {
     const query = document.getElementById('searchInput').value;
     let filtered = schema;
 
+    // Tier filter — applied first because "all" still has a tier. Missing
+    // Tier field on a key (e.g. orphan from older schema) defaults to live.
+    if (selectedTier !== 'all') {
+        filtered = filtered.filter(e => (e.Tier || 'live') === selectedTier);
+    }
+
     // Service/pod filter: show keys this service uses (service-specific + platform)
     if (selectedService !== 'all') {
         const group = services.find(g => g.service === selectedService);
@@ -296,41 +665,58 @@ function renderTable(entries) {
                     const podKey = selectedPod ? podScopedKey(k.Key, selectedPod) : null;
                     const podOverride = podKey ? schema.find(s => s.Key === podKey) : null;
                     const hasPodOverride = !!podOverride;
+                    const tier = k.Tier || 'live';
+                    const locked = tier === 'static' || tier === 'secret';
+                    // Static/Secret rows can't be edited from the UI — Save/Undo/Reset
+                    // are hidden, input is disabled, and a hover tooltip explains
+                    // how to change the value instead.
+                    const lockReason = tier === 'static'
+                        ? 'Static infrastructure — change in YAML/env and redeploy'
+                        : tier === 'secret'
+                            ? 'Secret — sourced from K8s Secret; rotate via secret pipeline'
+                            : '';
                     return `
-                    <div class="px-4 py-3" id="row-${cssId(k.Key)}">
+                    <div class="px-4 py-3 ${locked ? 'opacity-60' : ''}" id="row-${cssId(k.Key)}">
                         <div class="flex items-center justify-between mb-1">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <span class="font-mono text-sm">${k.Key}</span>
+                                <span class="px-1.5 py-0.5 text-[10px] rounded ${tierClass(tier)}" title="${tierTooltip(tier)}">${tier}</span>
                                 <span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${k.Type}</span>
                                 <span class="text-[10px] text-gray-400">${k.Since}</span>
                                 ${selectedPod ? (hasPodOverride
                                     ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-brand/20 text-brand">pod override</span>'
                                     : '<span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-400">service value</span>')
                                 : ''}
+                                ${sourceBadge(k)}
                                 ${k.status === 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">orphaned</span>' : ''}
                                 ${k.Deprecated && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">deprecated</span>' : ''}
-                                ${k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
+                                ${!locked && k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
                             </div>
                             <div class="flex gap-1">
-                                <button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover"
-                                    title="${selectedPod ? 'Save for pod ' + selectedPod : 'Save for all pods'}">
-                                    ${selectedPod ? 'Save (pod)' : 'Save'}
-                                </button>
-                                ${selectedPod ? `<button onclick="saveKey('${k.Key}', true)" class="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500" title="Save for ALL pods of this service">Save All</button>` : ''}
-                                <button onclick="rollbackKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
-                                <button onclick="resetKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>
+                                ${locked
+                                    ? `<span class="px-2 py-1 text-[10px] text-gray-400 italic" title="${lockReason}">read-only</span>`
+                                    : `<button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover"
+                                            title="${selectedPod ? 'Save for pod ' + selectedPod : 'Save for all pods'}">
+                                            ${selectedPod ? 'Save (pod)' : 'Save'}
+                                        </button>
+                                        ${selectedPod ? `<button onclick="saveKey('${k.Key}', true)" class="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500" title="Save for ALL pods of this service">Save All</button>` : ''}
+                                        <button onclick="rollbackKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
+                                        <button onclick="resetKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>`
+                                }
                                 <button onclick="toggleKeyHistory('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-brand" title="Change history">&darr; History</button>
                             </div>
                         </div>
                         <div class="text-xs text-gray-500 mb-2">${k.Description}</div>
                         <div class="flex gap-2 items-center">
-                            ${inputForType(k)}
-                            <span class="text-[10px] text-gray-400 whitespace-nowrap ${k.current_value !== k.Default ? 'text-amber-500' : ''}" title="Default value">
+                            ${tier === 'secret'
+                                ? '<span class="font-mono text-xs text-gray-400 italic">(redacted — see K8s Secret)</span>'
+                                : inputForType(k, locked)}
+                            <span class="text-[10px] text-gray-400 whitespace-nowrap ${!locked && k.current_value !== k.Default ? 'text-amber-500' : ''}" title="Default value">
                                 default: ${escHtml(k.Default || '(empty)')}
                             </span>
                             <span id="dirty-${cssId(k.Key)}" class="hidden text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 whitespace-nowrap">unsaved</span>
                         </div>
-                        ${!selectedPod ? renderPodSubRows(k, svc) : ''}
+                        ${!selectedPod && !locked ? renderPodSubRows(k, svc) : ''}
                         <div id="history-${cssId(k.Key)}" class="hidden mt-2 text-xs border-t border-gray-100 dark:border-gray-800 pt-2"></div>
                     </div>`;
                 }).join('')}
@@ -343,25 +729,19 @@ async function saveKey(key, forceAllPods) {
     const input = document.getElementById('input-' + cssId(key));
     const value = input.value != null ? input.value : input.selectedOptions?.[0]?.value;
     const original = originalValues[key] || '';
-
-    // Check if any pods have checkboxes (multi-pod mode)
     const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
     const hasSubRows = checkboxes.length > 0;
 
-    // Only skip if value unchanged AND we're not targeting specific pods with overrides
     if (value === original && !hasSubRows && !selectedPod) {
         toast('No changes to save', 'info');
         return;
     }
 
+    // Single-pod scope: when the user has drilled into a pod, Save writes
+    // only that pod's row. Save All from the same view fans out to every
+    // running pod of the service.
     if (selectedPod && !forceAllPods) {
-        // Single pod save
-        const podKey = podScopedKey(key, selectedPod);
-        const resp = await fetch(GW + '/v1/config', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: podKey, value })
-        });
+        const resp = await putConfig(key, value, selectedPod);
         if (resp.ok) {
             clearDirty(key);
             toast(`${key} → "${value}" (pod ${selectedPod.substring(0, 15)})`, 'success');
@@ -370,52 +750,69 @@ async function saveKey(key, forceAllPods) {
             toast(`Failed: ${r.error || 'unknown'}`, 'error');
         }
     } else {
-        // Check which pods are ticked
-        const checkboxes = document.querySelectorAll(`.pod-checkbox[data-key="${key}"]`);
+        // Service-scope view: either fan out to checkbox-selected pods, or
+        // (when no checkboxes / Save All) target every running pod of the
+        // current service. "Running" = service_registry.status='running'
+        // with a fresh last_ping_at (the backend tracks this).
         const checked = [...checkboxes].filter(cb => cb.checked);
         const unchecked = [...checkboxes].filter(cb => !cb.checked);
 
+        let targets;
         if (unchecked.length > 0 && checkboxes.length > 0) {
-            // Some pods unticked: write pod-specific keys for checked pods ONLY
-            // Do NOT write service-level key (that would affect unchecked pods too)
-            let ok = true;
-            for (const cb of checked) {
-                const podKey = podScopedKey(key, cb.dataset.pod);
-                const resp = await fetch(GW + '/v1/config', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: podKey, value })
-                });
-                if (!resp.ok) ok = false;
-            }
-            if (ok) {
-                toast(`${key} → "${value}" (${checked.length} pod${checked.length !== 1 ? 's' : ''}, ${unchecked.length} skipped)`, 'success');
-            } else {
-                toast('Some pod updates failed', 'error');
-            }
+            targets = checked.map(cb => cb.dataset.pod);
         } else {
-            // All pods ticked (or no sub-rows): write service-level key
-            if (value === original && !hasSubRows) {
-                toast('No changes to save', 'info');
-                return;
-            }
-            const resp = await fetch(GW + '/v1/config', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value })
-            });
-            if (resp.ok) {
-                toast(`${key} → "${value}" (all pods)`, 'success');
-            } else {
-                const r = await resp.json();
-                toast(`Failed: ${r.error || 'unknown'}`, 'error');
-            }
+            targets = runningPodsForKey(key);
         }
 
+        if (targets.length === 0) {
+            toast('No running pods to update', 'error');
+            return;
+        }
+
+        const results = await Promise.all(targets.map(pod => putConfig(key, value, pod)));
+        const okCount = results.filter(r => r.ok).length;
+        const failCount = results.length - okCount;
+        if (failCount === 0) {
+            toast(`${key} → "${value}" (${okCount} pod${okCount !== 1 ? 's' : ''})`, 'success');
+        } else {
+            toast(`${okCount} ok, ${failCount} failed`, 'error');
+        }
         clearDirty(key);
     }
 
     setTimeout(() => loadData(), 500);
+}
+
+// putConfig posts to the gateway's /v1/config endpoint with the new
+// per-pod write shape. Empty podID is allowed (writes the legacy global
+// row); the UI never uses that path today but kept for backward compat.
+async function putConfig(key, value, podID) {
+    return fetch(GW + '/v1/config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({key, value, pod_id: podID || ''}),
+    });
+}
+
+// runningPodsForKey returns the pod_ids that are currently RUNNING for
+// the service that owns this key. "Save All" fans out to these only —
+// dead pods are skipped (their rows linger but we don't update them).
+function runningPodsForKey(key) {
+    const entry = schema.find(e => e.Key === key);
+    if (!entry) return [];
+    const svcName = entry.Service === 'platform' ? selectedService : entry.Service;
+    // Platform keys are owned by no single service — fall back to every
+    // running pod across the whole registry.
+    const groups = svcName && svcName !== 'all'
+        ? services.filter(g => g.service === svcName)
+        : services;
+    const pods = [];
+    for (const g of groups) {
+        for (const p of (g.pods || [])) {
+            if (p.status === 'running') pods.push(p.pod_id);
+        }
+    }
+    return pods;
 }
 
 async function rollbackKey(key) {
@@ -613,34 +1010,39 @@ async function showHistory() {
 }
 
 // Type-appropriate input controls
-function inputForType(k) {
+function inputForType(k, locked) {
     const id = 'input-' + cssId(k.Key);
-    const onChange = `markDirty('${k.Key}')`;
-    const onEnter = `onkeydown="if(event.key==='Enter')saveKey('${k.Key}')"`;
+    const onChange = locked ? '' : `markDirty('${k.Key}')`;
+    const onEnter = locked ? '' : `onkeydown="if(event.key==='Enter')saveKey('${k.Key}')"`;
+    // Static-tier rows still show the value (so operators can see what the
+    // pod is using) but the control is disabled — visually greyed and not
+    // tab-stoppable. Secret-tier rows skip this function entirely.
+    const disabled = locked ? 'disabled' : '';
+    const lockedClass = locked ? 'cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900';
 
     switch (k.Type) {
     case 'bool':
-        return `<select id="${id}" onchange="${onChange}"
-            class="px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">
+        return `<select id="${id}" onchange="${onChange}" ${disabled}
+            class="px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">
             <option value="true" ${k.current_value === 'true' ? 'selected' : ''}>true</option>
             <option value="false" ${k.current_value === 'false' ? 'selected' : ''}>false</option>
         </select>`;
     case 'int':
-        return `<input id="${id}" type="number" step="1" value="${escHtml(k.current_value)}"
+        return `<input id="${id}" type="number" step="1" value="${escHtml(k.current_value)}" ${disabled}
             oninput="${onChange}" ${onEnter}
-            class="w-32 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+            class="w-32 px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
     case 'float':
-        return `<input id="${id}" type="number" step="0.01" value="${escHtml(k.current_value)}"
+        return `<input id="${id}" type="number" step="0.01" value="${escHtml(k.current_value)}" ${disabled}
             oninput="${onChange}" ${onEnter}
-            class="w-32 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+            class="w-32 px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
     case 'duration':
-        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}" placeholder="e.g. 100ms, 5s, 1m"
+        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}" placeholder="e.g. 100ms, 5s, 1m" ${disabled}
             oninput="${onChange}" ${onEnter}
-            class="w-40 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+            class="w-40 px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
     default:
-        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}"
+        return `<input id="${id}" type="text" value="${escHtml(k.current_value)}" ${disabled}
             oninput="${onChange}" ${onEnter}
-            class="flex-1 px-2 py-1 text-sm font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
+            class="flex-1 px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">`;
     }
 }
 

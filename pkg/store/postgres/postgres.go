@@ -134,7 +134,7 @@ func SetTenantContext(ctx context.Context, tx *sql.Tx) error {
 	if accountID == "" {
 		return fmt.Errorf("account_id not set in context")
 	}
-	_, err := tx.ExecContext(ctx, "SET LOCAL app.current_account_id = $1", accountID)
+	_, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID)
 	return err
 }
 
@@ -174,7 +174,7 @@ func (s *Store) QueryRead(ctx context.Context, query string, args ...any) (*sql.
 		if err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, "SET LOCAL app.current_account_id = $1", accountID); err != nil {
+		if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
 			tx.Rollback()
 			return nil, err
 		}

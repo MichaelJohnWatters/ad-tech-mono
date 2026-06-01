@@ -1,0 +1,62 @@
+package main
+
+import "github.com/prometheus/client_golang/prometheus"
+
+// auctionMetrics groups the exchange's domain-specific Prometheus
+// collectors so the dashboards can show fill rate, revenue,
+// per-DSP bid behaviour — things the HTTP-level metrics middleware
+// can't infer.
+//
+// All registered on the service-local registry returned by
+// middleware.Metrics.Registry() so they're emitted alongside the
+// generic adtech_http_* metrics from the same /metrics endpoint.
+type auctionMetrics struct {
+	// Auctions broken down by outcome — the headline counter the
+	// Pipeline Health dashboard's fill-rate panel divides over.
+	// Labels:
+	//   result = "winner" | "no_bids" | "all_below_floor" | "no_winner"
+	//   channel = the auction channel (display, video, all, …)
+	auctionsTotal *prometheus.CounterVec
+
+	// Bids RECEIVED by the exchange, broken down per DSP endpoint and
+	// whether the DSP returned a bid or not. This is the exchange-side
+	// view of bid_rate, complementary to the smart-router JSON debug
+	// endpoint. Labels: dsp_endpoint, decision = "bid" | "no_bid".
+	bidsReceivedTotal *prometheus.CounterVec
+
+	// Clearing-price sum — revenue counter. Increments by the cleared
+	// price (in USD, not cents) on each winning auction. Use
+	// rate()/increase() over time windows for revenue per minute / hour.
+	clearingPriceUSDTotal prometheus.Counter
+
+	// Floors-below counter — how often a bid arrived but dropped because
+	// it was below the placement floor. Useful for tuning floor prices.
+	bidsBelowFloorTotal *prometheus.CounterVec
+}
+
+func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
+	m := &auctionMetrics{
+		auctionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "auctions_total",
+			Help:      "Exchange auctions by outcome. result=winner|no_bids|all_below_floor|no_winner.",
+		}, []string{"result", "channel"}),
+		bidsReceivedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "bids_received_total",
+			Help:      "Bid responses received by the exchange from each DSP. decision=bid|no_bid.",
+		}, []string{"dsp_endpoint", "decision"}),
+		clearingPriceUSDTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "auction_clearing_price_usd_total",
+			Help:      "Sum of clearing prices (USD) across winning auctions. Use rate() for revenue-per-second.",
+		}),
+		bidsBelowFloorTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "bids_below_floor_total",
+			Help:      "Bids dropped pre-auction because their price was below the placement floor.",
+		}, []string{"placement_id"}),
+	}
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal)
+	return m
+}

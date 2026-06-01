@@ -34,6 +34,40 @@ data:
               trace_id:
               level:
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: adtech
+---
+# Promtail uses kubernetes_sd_configs to attach pod metadata to log lines.
+# Without this Role, every reconcile logs a noisy
+# `pods is forbidden: User "system:serviceaccount:adtech:default" cannot
+# list resource "pods"` warning.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: promtail
+  namespace: adtech
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: promtail
+  namespace: adtech
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: adtech
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -50,9 +84,11 @@ spec:
       labels:
         app: promtail
     spec:
+      serviceAccountName: promtail
       containers:
         - name: promtail
           image: grafana/promtail:3.1.0
+          imagePullPolicy: IfNotPresent
           args:
             - -config.file=/etc/promtail/promtail.yaml
           volumeMounts:

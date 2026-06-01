@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
@@ -24,6 +25,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 // 1x1 transparent GIF pixel (43 bytes)
@@ -40,12 +42,22 @@ func main() {
 	sc := config.Setup(constants.ServiceTracker, log)
 	cfg := sc.Cfg
 	_ = sc // manager available for OnChange callbacks
+	config.PublishSchemaWithURL(cfg.Get("database.url", ""), constants.ServiceTracker, trackerSchema, log)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
 	port := cfg.Get("tracker.port", routes.PortTracker)
 	natsURL := cfg.Get("tracker.nats_url", routes.DefaultNATSURL)
 	reportingURL := cfg.Get("tracker.reporting_url", routes.DefaultReportingURL)
+
+	otelShutdown := tracing.Init(context.Background(), tracing.Config{
+		ServiceName:    constants.ServiceTracker,
+		ServiceVersion: cfg.Get("otel.service_version", "dev"),
+		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
+		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 0.1), // pixels are high volume — sample only 10% by default
+		Log:            log,
+	})
+	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	// Try NATS first, fall back to HTTP bridge
 	var bus events.EventBus
@@ -72,10 +84,18 @@ func main() {
 	signingKey := cfg.Get("tracker.signing_key", adserving.DefaultSigningKey)
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
+	l2 := connectRedis(cfg, log)
+	dedup := NewDedup(
+		l2,
+		cfg.GetDuration("tracker.dedup_ttl", 24*time.Hour),
+		cfg.GetBool("tracker.dedup_enabled", true),
+		log,
+	)
+
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
-	mux.HandleFunc(routes.Metrics, metrics.Handler())
+	mux.Handle(routes.Metrics, metrics.Handler())
 
 	// Impression pixel
 	mux.HandleFunc(routes.TrackerImpression, func(w http.ResponseWriter, r *http.Request) {
@@ -95,9 +115,24 @@ func main() {
 			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
 			TraceID: traceID, Referer: r.Referer(),
 		})
+		// Dev-mode override: publisher simulator can append ?dev_force_fraud=1
+		// to deliberately trip a block, so the UI can demonstrate the
+		// fraud-rejection flow. Gated by debug.endpoints_enabled — prod
+		// requests can't be forced into the blocked path by a forged param.
+		if q.Get("dev_force_fraud") == "1" && cfg.GetBool("debug.endpoints_enabled", true) {
+			fraudResult.Blocked = true
+			fraudResult.Reasons = append([]string{"dev_force_fraud"}, fraudResult.Reasons...)
+		}
 		if fraudResult.Blocked {
 			reqLog.Warn("fraud blocked", "score", fraudResult.Score, "reasons", fraudResult.Reasons)
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+			// Dev-mode signal so the pub sim UI can show fraud was tripped.
+			// Real bots get the silent pixel-return treatment in prod (this
+			// header simply isn't set when debug endpoints are off).
+			if cfg.GetBool("debug.endpoints_enabled", true) {
+				w.Header().Set("X-Dev-Fraud-Blocked", "1")
+				w.Header().Set("X-Dev-Fraud-Reasons", strings.Join(fraudResult.Reasons, ","))
+			}
 			w.Write(pixel) // still return pixel (don't reveal detection)
 			return         // but don't record or bill
 		}
@@ -111,7 +146,15 @@ func main() {
 			"price", price,
 		)
 
-		go publisher.publishImpression(ctx, analytics.ImpressionEvent{
+		if !dedup.FirstSeen(ctx, "impression", traceID) {
+			reqLog.Debug("duplicate impression, dropping", "trace_id", traceID)
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+			w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
+			w.Write(pixel)
+			return
+		}
+
+		go publisher.publishImpression(context.WithoutCancel(ctx), analytics.ImpressionEvent{
 			TraceID:          traceID,
 			CampaignID:       q.Get("cid"),
 			CreativeID:       q.Get("crid"),
@@ -144,7 +187,17 @@ func main() {
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("click", "campaign_id", q.Get("cid"), "redirect", redir)
 
-		go publisher.publishClick(ctx, analytics.ClickEvent{
+		if !dedup.FirstSeen(ctx, "click", traceID) {
+			reqLog.Debug("duplicate click, dropping", "trace_id", traceID)
+			if redir != "" {
+				http.Redirect(w, r, redir, http.StatusFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		go publisher.publishClick(context.WithoutCancel(ctx), analytics.ClickEvent{
 			TraceID:     traceID,
 			CampaignID:  q.Get("cid"),
 			CreativeID:  q.Get("crid"),
@@ -172,7 +225,15 @@ func main() {
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("conversion", "type", convType, "revenue", revenue)
 
-		go publisher.publishConversion(ctx, analytics.ConversionEvent{
+		if !dedup.FirstSeen(ctx, "conversion:"+convType, traceID) {
+			reqLog.Debug("duplicate conversion, dropping", "trace_id", traceID, "type", convType)
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+			w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
+			w.Write(pixel)
+			return
+		}
+
+		go publisher.publishConversion(context.WithoutCancel(ctx), analytics.ConversionEvent{
 			TraceID:        traceID,
 			CampaignID:     q.Get("cid"),
 			CreativeID:     q.Get("crid"),
@@ -212,7 +273,7 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := metrics.Wrap(middleware.CORS(mux))
+	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
 	mode := "NATS JetStream"

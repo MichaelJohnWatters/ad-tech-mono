@@ -5,20 +5,26 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	_ "github.com/lib/pq"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 func main() {
@@ -28,6 +34,34 @@ func main() {
 	cfgMgr := sc.Manager
 	hlth := health.New()
 	lc := lifecycle.New(log)
+
+	// Publish our own schema + load every other service's published schema
+	// from Postgres so the config-manager UI renders the full key set.
+	// LoadPublishedSchema is best-effort — UI just shows whatever the
+	// services have published (empty if none have booted yet).
+	dbURL := cfg.Get("database.url", "")
+	config.PublishSchemaWithURL(dbURL, constants.ServiceGateway, gatewaySchema, log)
+	if dbURL != "" {
+		if db, err := sql.Open("postgres", dbURL); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := config.LoadPublishedSchema(ctx, db); err != nil {
+				log.Warn("load published schema failed", "error", err)
+			}
+			cancel()
+			_ = db.Close()
+		}
+	}
+
+	// OpenTelemetry — empty endpoint disables tracing so dev/test envs
+	// without Jaeger still boot. Same pattern as the auction-path services.
+	otelShutdown := tracing.Init(context.Background(), tracing.Config{
+		ServiceName:    constants.ServiceGateway,
+		ServiceVersion: cfg.Get("otel.service_version", "dev"),
+		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
+		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		Log:            log,
+	})
+	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	port := cfg.Get("gateway.port", routes.PortGateway)
 	signingKey := cfg.Get("gateway.jwt_signing_key", "")
@@ -39,14 +73,18 @@ func main() {
 	reportingURL := cfg.Get("gateway.reporting_url", routes.DefaultReportingURL)
 	exchangeURL := cfg.Get("gateway.exchange_url", routes.DefaultExchangeURL)
 	trackerURL := cfg.Get("gateway.tracker_url", routes.DefaultTrackerURL)
+	jaegerURL := cfg.Get("gateway.jaeger_url", routes.DefaultJaegerURL)
 
 	authMiddleware := middleware.Auth(signingKey, log)
+
+	metrics := middleware.NewMetrics(constants.ServiceGateway)
 
 	mux := http.NewServeMux()
 
 	// Health (no auth)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.Handle(routes.Metrics, metrics.Handler())
 
 	// Static files (no auth)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
@@ -61,9 +99,23 @@ func main() {
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/templates/trace/explorer.html")
 	})
-	mux.HandleFunc("/dev/config-manager", func(w http.ResponseWriter, r *http.Request) {
+	if cfg.GetBool("debug.endpoints_enabled", true) {
+		// Reset+reseed for the pub sim. NATS publisher is opened lazily so
+		// the cache-invalidate fan-out works even though the gateway has
+		// no other reason to talk to NATS.
+		resetBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway, log)
+		redisAddr := cfg.Get("redis.url", "localhost:6379")
+		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(dbURL, redisAddr, resetBus, log))
+	}
+	// /dev/console is the canonical command-center URL. /dev/config-manager
+	// is an alias kept for backward compatibility — same template, just
+	// historic naming. Both land on the tabbed console; the URL hash
+	// (#config, #services, etc.) picks the active tab.
+	consoleHandler := func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "web/templates/config/manager.html")
-	})
+	}
+	mux.HandleFunc("/dev/console", consoleHandler)
+	mux.HandleFunc("/dev/config-manager", consoleHandler)
 
 	// sellers.json (IAB standard - lists all publishers we represent)
 	mux.HandleFunc("/sellers.json", func(w http.ResponseWriter, r *http.Request) {
@@ -128,13 +180,16 @@ func main() {
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
 	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
+	// Jaeger query API (browser → gateway → jaeger; Jaeger v1.58 has no CORS
+	// on the query endpoint, so the pub sim reads spans through here).
+	mux.Handle(routes.ProxyJaeger, middleware.CORS(middleware.StripPrefix(strings.TrimSuffix(routes.ProxyJaeger, "/"), middleware.ReverseProxy(jaegerURL, log))))
 
 	// Dashboard home (no auth in dev mode)
 	mux.HandleFunc("/", dashboardHandler())
 
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(mux)),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}

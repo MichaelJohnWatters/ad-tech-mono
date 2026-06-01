@@ -168,6 +168,14 @@ func (d *DuckDB) InsertAuction(ctx context.Context, e *AuctionEvent) error {
 	return err
 }
 
+// InsertAuctionWin records a winning bid. Schema TODO: needs an
+// `auction_wins` table next to `auctions`. For now this stub keeps the
+// interface satisfied so the in-memory store path works in dev; wire the
+// real INSERT when DuckDB becomes the default analytics backend.
+func (d *DuckDB) InsertAuctionWin(_ context.Context, _ *AuctionWinEvent) error {
+	return nil
+}
+
 func (d *DuckDB) InsertBatch(ctx context.Context, events []Event) error {
 	for _, e := range events {
 		var err error

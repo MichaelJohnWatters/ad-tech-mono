@@ -79,16 +79,23 @@ func (r *Registry) Register(ctx context.Context, serviceName, version, port stri
 		)
 	`)
 
-	// Get config keys for this service from schema
+	// Collect live-tier keys this service uses. Static and Secret keys are
+	// read from env/YAML/code default at runtime — they never get Postgres
+	// rows. This is what fixed the *.port bug: ports are now tagged static
+	// and stop seeding into the config table.
 	var keys []string
 	for _, entry := range Schema() {
-		if entry.Service == serviceName || entry.Service == "platform" {
-			keys = append(keys, entry.Key)
+		if entry.Service != serviceName && entry.Service != "platform" {
+			continue
 		}
+		if entry.Tier != TierLive {
+			continue
+		}
+		keys = append(keys, entry.Key)
 	}
 	keysJSON, _ := json.Marshal(keys)
 
-	// Upsert this pod
+	// Upsert this pod's registry row.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO service_registry (pod_id, service, version, host, port, config_keys, status, started_at, last_ping_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'running', now(), now())
@@ -100,17 +107,28 @@ func (r *Registry) Register(ctx context.Context, serviceName, version, port stri
 		return err
 	}
 
-	// Seed config keys for this service+version if they don't exist
+	// Seed live-tier keys for *this pod* if absent. ON CONFLICT (pod_id, key)
+	// DO NOTHING preserves operator tuning across restarts — the row only
+	// gets the default when no prior value exists for this pod.
 	source := NewPostgresSource(r.db)
 	for _, entry := range Schema() {
 		if entry.Service != serviceName && entry.Service != "platform" {
 			continue
 		}
+		if entry.Tier != TierLive {
+			continue
+		}
 		var exists bool
-		r.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM config WHERE key = $1)", entry.Key).Scan(&exists)
+		r.db.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM config WHERE pod_id = $1 AND key = $2)",
+			r.podID, entry.Key,
+		).Scan(&exists)
 		if !exists {
-			source.UpdateWithAction(ctx, entry.Key, entry.Default, "config_seed")
-			r.log.Debug("seeded config key", "key", entry.Key, "default", entry.Default, "version", version)
+			if err := source.UpdateForPod(ctx, r.podID, entry.Key, entry.Default, "config_seed"); err != nil {
+				r.log.Warn("seed failed", "key", entry.Key, "pod", r.podID, "error", err)
+				continue
+			}
+			r.log.Debug("seeded config key", "key", entry.Key, "pod", r.podID, "default", entry.Default, "version", version)
 		}
 	}
 
@@ -119,7 +137,7 @@ func (r *Registry) Register(ctx context.Context, serviceName, version, port stri
 		"service", serviceName,
 		"version", version,
 		"port", port,
-		"config_keys", len(keys),
+		"live_keys", len(keys),
 	)
 	return nil
 }

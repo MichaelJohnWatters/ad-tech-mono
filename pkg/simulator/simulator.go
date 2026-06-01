@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 // Config holds simulator configuration.
@@ -90,7 +92,11 @@ func New(cfg Config) *Simulator {
 
 // RunSingle fires a single auction request.
 func (s *Simulator) RunSingle(ctx context.Context, req Request) Result {
-	traceID := fmt.Sprintf("sim-%d-%d", time.Now().UnixMilli(), rand.Intn(10000))
+	// W3C-formatted trace ID + matching traceparent so the exchange's
+	// HTTPMiddleware adopts this exact trace ID (rather than generating a
+	// fresh one). The same ID ends up in Jaeger, Loki, NATS events, and the
+	// analytics store — one ID to paste into Grafana.
+	traceID, traceparent := tracing.NewClientTraceparent()
 	if req.Width == 0 {
 		req.Width = 300
 	}
@@ -127,6 +133,7 @@ func (s *Simulator) RunSingle(ctx context.Context, req Request) Result {
 		return Result{TraceID: traceID, Error: err.Error()}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("traceparent", traceparent)
 
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
@@ -162,12 +169,21 @@ func (s *Simulator) RunSingle(ctx context.Context, req Request) Result {
 	result.CampaignID = bidResp.SeatBid[0].Bid[0].CID
 	result.CreativeID = bidResp.SeatBid[0].Bid[0].CrID
 
-	// Fire impression pixel
+	// Fire impression pixel with the same traceparent so the tracker's
+	// span joins the auction trace in Jaeger.
 	pixelURL := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=imp-1&pubid=sim-pub&price=%.4f&cur=USD",
 		s.config.TrackerURL, traceID, result.CampaignID, result.CreativeID, result.WinPrice)
-	if pixResp, err := s.client.Get(pixelURL); err == nil {
-		pixResp.Body.Close()
-		result.PixelFired = true
+	if pixReq, err := http.NewRequestWithContext(ctx, "GET", pixelURL, nil); err == nil {
+		pixReq.Header.Set("traceparent", traceparent)
+		// Browser-shaped UA + Referer so the tracker's fraud check accepts
+		// the request (default Go UA = bot, drops the impression). Mirrors
+		// cmd/simulator/main.go:fireGet and tests/e2e/harness/tracker.go.
+		pixReq.Header.Set("User-Agent", "Mozilla/5.0 (adtech-simulator)")
+		pixReq.Header.Set("Referer", "https://simulator.dev/")
+		if pixResp, err := s.client.Do(pixReq); err == nil {
+			pixResp.Body.Close()
+			result.PixelFired = true
+		}
 	}
 
 	return result

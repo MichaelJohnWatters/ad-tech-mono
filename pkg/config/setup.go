@@ -49,6 +49,12 @@ func Setup(serviceName string, log *slog.Logger) *ServiceConfig {
 	if dbURL == "" {
 		dbURL = "postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable"
 	}
+	// Mirror the resolved URL into the live cfg so services that read
+	// cfg.Get("database.url", "") at runtime (warm-cache loaders, audience
+	// store, etc.) see the same value Setup used to establish the connection.
+	// Without this, every service logs "database.url not set" and falls back
+	// to empty in-memory caches even though Postgres is reachable.
+	cfg.SetLive("database.url", dbURL)
 
 	db, err := sql.Open("postgres", dbURL)
 	if err == nil {
@@ -82,52 +88,48 @@ func Setup(serviceName string, log *slog.Logger) *ServiceConfig {
 }
 
 // DefaultValues returns the platform-wide config defaults.
-// These are the same values each service uses as fallback defaults,
-// centralised here so the config manager knows about all of them.
+//
+// NOTE: Port keys are intentionally NOT seeded into Postgres. They are
+// infrastructure-fixed (the K8s manifest decides the port), not runtime-
+// tunable from the config manager UI. Seeding them would let a Postgres
+// value override the DSP_PORT/SSP_PORT env vars that the Tiltfile relies
+// on to give each pod (internal / competitor1 / competitor2) a distinct
+// port. Defaults for ports live in the code (routes.PortDSP etc.) and
+// the env var path in Config.Get is the override.
 func DefaultValues() map[string]string {
 	return map[string]string{
 		// Gateway
-		"gateway.port":                routes.PortGateway,
-		"gateway.jwt_signing_key":     "",
-		"gateway.dsp_url":             routes.DefaultDSPURL,
-		"gateway.ssp_url":             routes.DefaultSSPURL,
-		"gateway.adserver_url":        routes.DefaultAdServerURL,
-		"gateway.reporting_url":       routes.DefaultReportingURL,
-		"gateway.exchange_url":        routes.DefaultExchangeURL,
-		"gateway.tracker_url":         routes.DefaultTrackerURL,
+		"gateway.jwt_signing_key":      "",
+		"gateway.dsp_url":              routes.DefaultDSPURL,
+		"gateway.ssp_url":              routes.DefaultSSPURL,
+		"gateway.adserver_url":         routes.DefaultAdServerURL,
+		"gateway.reporting_url":        routes.DefaultReportingURL,
+		"gateway.exchange_url":         routes.DefaultExchangeURL,
+		"gateway.tracker_url":          routes.DefaultTrackerURL,
 		"gateway.config_poll_interval": "30s",
 
 		// Exchange
-		"exchange.port":          routes.PortExchange,
 		"exchange.channel":       constants.ChannelAll,
 		"exchange.bid_timeout":   "100ms",
 		"exchange.dsp_endpoints": routes.DefaultDSPURL + "," + routes.DefaultDSPComp1URL + "," + routes.DefaultDSPComp2URL,
 		"exchange.nats_url":      routes.DefaultNATSURL,
 
 		// DSP
-		"dsp.port":    routes.PortDSP,
 		"dsp.profile": "internal",
 
 		// Tracker
-		"tracker.port":          routes.PortTracker,
 		"tracker.nats_url":      routes.DefaultNATSURL,
 		"tracker.reporting_url": routes.DefaultReportingURL,
 		"tracker.signing_key":   "adtech-dev-signing-key-change-in-prod",
 
 		// SSP
-		"ssp.port":         routes.PortSSP,
 		"ssp.exchange_url": routes.DefaultExchangeURL,
 
 		// Ad Server
-		"adserver.port":        routes.PortAdServer,
 		"adserver.tracker_url": routes.DefaultTrackerURL,
 
 		// Reporting
-		"reporting.port":     routes.PortReporting,
 		"reporting.nats_url": routes.DefaultNATSURL,
-
-		// Pipeline
-		"pipeline.port": routes.PortPipeline,
 	}
 }
 

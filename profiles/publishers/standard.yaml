@@ -1,0 +1,182 @@
+# Standard publisher set used by the SSP and seeded into Postgres.
+# External IDs (pub-daily-news, pl-news-mpu, …) are friendly names; the seed
+# derives deterministic UUIDs from them so YAML stays human and DB rows are
+# globally unique. Re-running the seed UPSERTs in place.
+name: standard
+
+publishers:
+  - id: pub-daily-news
+    name: "Daily News"
+    domain: "daily-news.com"
+    currency: USD
+    revshare_pct: 20
+    placements:
+      - id: pl-news-mpu
+        name: "Article MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "https://daily-news.com/article/123"
+        categories: [IAB12]
+      - id: pl-news-leaderboard
+        name: "Homepage Leaderboard"
+        format: display
+        width: 728
+        height: 90
+        floor_price: 1.50
+        page_url: "https://daily-news.com/"
+        categories: [IAB12]
+      - id: pl-news-halfpage
+        name: "Article Half Page"
+        format: display
+        width: 300
+        height: 600
+        floor_price: 2.50
+        page_url: "https://daily-news.com/article/123"
+        categories: [IAB12]
+      - id: pl-news-mobile-banner
+        name: "Mobile Article Banner"
+        format: display
+        width: 320
+        height: 50
+        floor_price: 0.30
+        page_url: "https://m.daily-news.com/article/123"
+        categories: [IAB12]
+
+  - id: pub-tech-review
+    name: "Tech Review"
+    domain: "tech-review.io"
+    currency: USD
+    revshare_pct: 22
+    placements:
+      - id: pl-tech-sidebar
+        name: "Reviews Sidebar"
+        format: display
+        width: 160
+        height: 600
+        floor_price: 0.80
+        page_url: "https://tech-review.io/reviews"
+        categories: [IAB19]
+      - id: pl-tech-top-leader
+        name: "Article Top Leaderboard"
+        format: display
+        width: 728
+        height: 90
+        floor_price: 1.20
+        page_url: "https://tech-review.io/reviews"
+        categories: [IAB19]
+      - id: pl-tech-large-rect
+        name: "Review Large Rectangle"
+        format: display
+        width: 336
+        height: 280
+        floor_price: 1.40
+        page_url: "https://tech-review.io/reviews"
+        categories: [IAB19]
+
+  - id: pub-sports-daily
+    name: "Sports Daily"
+    domain: "sports-daily.com"
+    currency: USD
+    revshare_pct: 18
+    placements:
+      - id: pl-sport-mpu
+        name: "Live Page MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 2.00
+        page_url: "https://sports-daily.com/live"
+        categories: [IAB17]
+      - id: pl-sport-pregame-billboard
+        name: "Pre-Game Billboard"
+        format: display
+        width: 970
+        height: 250
+        floor_price: 4.00
+        page_url: "https://sports-daily.com/pregame"
+        categories: [IAB17]
+      - id: pl-sport-mobile-strip
+        name: "Mobile Score Strip"
+        format: display
+        width: 320
+        height: 50
+        floor_price: 0.40
+        page_url: "https://m.sports-daily.com/live"
+        categories: [IAB17]
+
+  - id: pub-shoppers-hub
+    name: "Shoppers Hub"
+    domain: "shoppers-hub.com"
+    currency: USD
+    revshare_pct: 25
+    placements:
+      - id: pl-shop-billboard
+        name: "Deals Billboard"
+        format: display
+        width: 970
+        height: 250
+        floor_price: 3.00
+        page_url: "https://shoppers-hub.com/deals"
+        categories: [IAB22]
+      - id: pl-shop-cart-sidebar
+        name: "Cart Sidebar"
+        format: display
+        width: 300
+        height: 600
+        floor_price: 2.20
+        page_url: "https://shoppers-hub.com/cart"
+        categories: [IAB22]
+      - id: pl-shop-product-mpu
+        name: "Product Page MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.80
+        page_url: "https://shoppers-hub.com/product"
+        categories: [IAB22]
+
+  # Premium niche publisher — high CPM floors reflect a finance audience.
+  # Useful for testing "all_bids_below_floor" auction outcomes.
+  - id: pub-finance-pro
+    name: "Finance Pro"
+    domain: "finance-pro.io"
+    currency: USD
+    revshare_pct: 30
+    placements:
+      - id: pl-finance-leaderboard
+        name: "Market News Leaderboard"
+        format: display
+        width: 728
+        height: 90
+        floor_price: 12.00
+        page_url: "https://finance-pro.io/markets"
+        categories: [IAB13]
+      - id: pl-finance-billboard
+        name: "Premium Billboard"
+        format: display
+        width: 970
+        height: 250
+        floor_price: 18.00
+        page_url: "https://finance-pro.io/"
+        categories: [IAB13]
+
+  # Synthetic publisher used by /dev/publisher-simulator. Not a real-world
+  # stand-in like the others — its existence is what lets the simulator's
+  # "fake page" act like a publisher that has actually signed up with the
+  # SSP and configured its own inventory.
+  - id: pub-simulator
+    name: "Publisher Simulator"
+    domain: "publisher-simulator.local"
+    currency: USD
+    revshare_pct: 20
+    placements:
+      - id: pl-sim-mpu
+        name: "Simulator MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "http://localhost:8080/dev/publisher-simulator"
+        categories: [IAB12]
