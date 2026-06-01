@@ -17,6 +17,7 @@ type MemoryStore struct {
 	clicks      []ClickEvent
 	conversions []ConversionEvent
 	auctions    []AuctionEvent
+	auctionWins []AuctionWinEvent
 }
 
 // NewMemory creates an in-memory analytics store.
@@ -50,6 +51,27 @@ func (s *MemoryStore) InsertAuction(_ context.Context, e *AuctionEvent) error {
 	defer s.mu.Unlock()
 	s.auctions = append(s.auctions, *e)
 	return nil
+}
+
+func (s *MemoryStore) InsertAuctionWin(_ context.Context, e *AuctionWinEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auctionWins = append(s.auctionWins, *e)
+	return nil
+}
+
+// AuctionWinCount returns how many auction-win records have been recorded
+// for the given trace_id. Used by tests to verify dedup / once-only delivery.
+func (s *MemoryStore) AuctionWinCount(traceID string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, w := range s.auctionWins {
+		if w.TraceID == traceID {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {

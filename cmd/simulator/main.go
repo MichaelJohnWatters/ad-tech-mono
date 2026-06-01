@@ -23,6 +23,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 var log = logger.New("simulator")
@@ -161,11 +162,11 @@ func runSimulation() {
 				return
 			}
 
-			traceID := fmt.Sprintf("sim-%d-%d", time.Now().UnixMilli(), sent)
+			traceID, traceparent := tracing.NewClientTraceparent()
 			bidReq := generateBidRequest(traceID, p)
 
 			// Send auction request
-			won, err := sendAuction(client, exchangeURL, bidReq)
+			won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 			sent++
 			if err != nil {
 				errors++
@@ -178,16 +179,16 @@ func runSimulation() {
 			if won {
 				wins++
 				// Fire impression pixel
-				firePixel(client, trackerURL, traceID, "imp")
+				firePixel(client, trackerURL, traceID, traceparent, "imp")
 
 				// Simulate viewability (after delay in real life, instant here)
 				if rand.Intn(100) < p.ViewabilityPct {
-					fireViewability(client, trackerURL, traceID)
+					fireViewability(client, trackerURL, traceID, traceparent)
 				}
 
 				// Simulate click
 				if rand.Float64() < p.ClickRate {
-					fireClick(client, trackerURL, traceID)
+					fireClick(client, trackerURL, traceID, traceparent)
 				}
 			}
 
@@ -210,7 +211,7 @@ func runSingle() {
 	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
 	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
 
-	traceID := fmt.Sprintf("single-%d", time.Now().UnixMilli())
+	traceID, traceparent := tracing.NewClientTraceparent()
 	bidReq := openrtb.BidRequest{
 		ID:  traceID,
 		Imp: []openrtb.Imp{{ID: "imp-1", Banner: &openrtb.Banner{W: 300, H: 250}, BidFloor: 1.0}},
@@ -225,7 +226,7 @@ func runSingle() {
 	fmt.Printf("Trace ID: %s\n", traceID)
 	fmt.Printf("Geo: %s | Device: %s | Floor: $1.00\n\n", geo, device)
 
-	won, err := sendAuction(client, exchangeURL, bidReq)
+	won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 	if err != nil {
 		fmt.Printf("Auction: FAILED (%v)\n", err)
 		return
@@ -233,9 +234,9 @@ func runSingle() {
 
 	if won {
 		fmt.Println("Auction: WON")
-		firePixel(client, trackerURL, traceID, "imp")
+		firePixel(client, trackerURL, traceID, traceparent, "imp")
 		fmt.Println("Impression: fired")
-		fireViewability(client, trackerURL, traceID)
+		fireViewability(client, trackerURL, traceID, traceparent)
 		fmt.Println("Viewability: fired")
 	} else {
 		fmt.Println("Auction: NO FILL")
@@ -311,9 +312,15 @@ func generateBidRequest(traceID string, p profile) openrtb.BidRequest {
 	}
 }
 
-func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest) (bool, error) {
+func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (bool, error) {
 	body, _ := json.Marshal(bidReq)
-	resp, err := client.Post(exchangeURL+routes.OpenRTBAuction, constants.ContentTypeJSON, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", constants.ContentTypeJSON)
+	req.Header.Set("traceparent", traceparent)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -324,21 +331,43 @@ func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequ
 	return !bidResp.NoBid && len(bidResp.SeatBid) > 0, nil
 }
 
-func firePixel(client *http.Client, trackerURL, traceID, eventType string) {
-	url := fmt.Sprintf("%s/v1/t/%s?tid=%s&cid=demo-campaign&pid=imp-1&sig=sim", trackerURL, eventType, traceID)
-	client.Get(url)
+// fireGet sends a tracker pixel GET with the same `traceparent` we used for
+// the auction, so HTTPMiddleware adopts that W3C trace ID instead of minting
+// a fresh one. The query-string `tid` stays in lockstep so the explicit
+// trace_id the tracker logs matches the OTel span's trace_id.
+//
+// Sets a browser-shaped User-Agent + Referer so the tracker's fraud check
+// doesn't flag us as a bot (default Go UA "Go-http-client/1.1" hits both
+// "bot_user_agent" and "no_referer" scores → request gets dropped silently
+// before reaching the NATS publish). Same fix as `tests/e2e/harness/tracker.go`.
+func fireGet(client *http.Client, url, traceparent string) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("traceparent", traceparent)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-simulator)")
+	req.Header.Set("Referer", "https://simulator.dev/")
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
-func fireViewability(client *http.Client, trackerURL, traceID string) {
+func firePixel(client *http.Client, trackerURL, traceID, traceparent, eventType string) {
+	url := fmt.Sprintf("%s/v1/t/%s?tid=%s&cid=demo-campaign&pid=imp-1&sig=sim", trackerURL, eventType, traceID)
+	fireGet(client, url, traceparent)
+}
+
+func fireViewability(client *http.Client, trackerURL, traceID, traceparent string) {
 	dur := 1000 + rand.Intn(3000)
 	pct := 50 + rand.Intn(50)
 	url := fmt.Sprintf("%s/v1/t/view?tid=%s&dur=%d&pct=%d", trackerURL, traceID, dur, pct)
-	client.Get(url)
+	fireGet(client, url, traceparent)
 }
 
-func fireClick(client *http.Client, trackerURL, traceID string) {
+func fireClick(client *http.Client, trackerURL, traceID, traceparent string) {
 	url := fmt.Sprintf("%s/v1/t/click?tid=%s&cid=demo-campaign&sig=sim&redir=https://example.com", trackerURL, traceID)
-	client.Get(url)
+	fireGet(client, url, traceparent)
 }
 
 func printResults(sent, wins, errors int, elapsed time.Duration) {

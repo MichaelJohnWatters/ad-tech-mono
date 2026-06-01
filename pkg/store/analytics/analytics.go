@@ -29,6 +29,7 @@ type Store interface {
 	InsertClick(ctx context.Context, e *ClickEvent) error
 	InsertConversion(ctx context.Context, e *ConversionEvent) error
 	InsertAuction(ctx context.Context, e *AuctionEvent) error
+	InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error
 	InsertBatch(ctx context.Context, events []Event) error
 
 	// Read path
@@ -125,6 +126,31 @@ type AuctionEvent struct {
 	DealID           string    `json:"deal_id,omitempty"`
 	SchemaVersion    int       `json:"schema_version"`
 	Timestamp        time.Time `json:"timestamp"`
+}
+
+// AuctionWinEvent records the winning bid of an auction — the moment a buyer
+// commits to a clearing price. Distinct from AuctionEvent (full auction
+// snapshot with all bids) because it's the financial trigger: every win is a
+// candidate spend that should bill once delivery is confirmed.
+//
+// Wire-format mirror of pkg/events.AuctionWinEvent. Kept here so the
+// analytics layer doesn't need to import pkg/events.
+type AuctionWinEvent struct {
+	TraceID       string    `json:"trace_id"`
+	AuctionID     string    `json:"auction_id,omitempty"`
+	WinnerDSP     string    `json:"winner_dsp"`
+	CampaignID    string    `json:"campaign_id"`
+	CreativeID    string    `json:"creative_id,omitempty"`
+	PlacementID   string    `json:"placement_id"`
+	PublisherID   string    `json:"publisher_id"`
+	AdvertiserID  string    `json:"advertiser_id"`
+	ClearingPrice float64   `json:"clearing_price"`
+	Currency      string    `json:"currency,omitempty"`
+	BidModel      string    `json:"bid_model,omitempty"`
+	DealID        string    `json:"deal_id,omitempty"`
+	Channel       string    `json:"channel,omitempty"`
+	SchemaVersion int       `json:"schema_version"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // QueryParams defines a query against the analytics store.

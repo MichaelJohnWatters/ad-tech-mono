@@ -53,3 +53,17 @@ venv/
 
 # k6 results
 k6-results/
+
+# Stale Go binaries that get created when `go build ./cmd/xxx` runs from
+# the repo root (Tiltfile uses `-o ./bin/xxx` so this only happens for
+# ad-hoc local builds). These should never be committed.
+/adserver
+/dsp
+/exchange
+/gateway
+/reporting
+/seed
+/simulator
+/ssp
+/tracker
+/pipeline

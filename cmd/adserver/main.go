@@ -3,15 +3,23 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
+	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -19,14 +27,21 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
+	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	_ "github.com/lib/pq"
 )
 
-// AdCreative is the ad server's internal creative with HTML template.
-// Different from models.Creative which is the database model.
+// AdCreative is the rendered creative the ad server returns. Its source is
+// the postgres-backed warm cache (metadata) plus html_content from the row
+// or a body fetched from Minio at asset_url.
 type AdCreative struct {
 	ID         string
 	Name       string
-	HTML       string // template with ${...} macros
+	HTML       string
 	Width      int
 	Height     int
 	Format     string
@@ -34,8 +49,10 @@ type AdCreative struct {
 }
 
 func main() {
+	clk := clock.Real{}
 	log := logger.New(constants.ServiceAdServer)
 	sc := config.Setup(constants.ServiceAdServer, log)
+	config.PublishSchemaWithURL(sc.Cfg.Get("database.url", ""), constants.ServiceAdServer, adserverSchema, log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
@@ -44,23 +61,67 @@ func main() {
 	port := cfg.Get("adserver.port", routes.PortAdServer)
 	trackerURL := cfg.Get("adserver.tracker_url", routes.DefaultTrackerURL)
 
-	creatives := seedCreatives()
+	otelShutdown := tracing.Init(context.Background(), tracing.Config{
+		ServiceName:    constants.ServiceAdServer,
+		ServiceVersion: cfg.Get("otel.service_version", "dev"),
+		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
+		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		Log:            log,
+	})
+	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	// Creative rotation bandit (Thompson Sampling)
-	creativeIDs := make([]string, 0, len(creatives))
-	for id := range creatives {
-		creativeIDs = append(creativeIDs, id)
+	// Redis freq cap
+	l2 := connectRedis(cfg, log)
+	freqCap := NewFreqCap(
+		l2,
+		cfg.GetInt("adserver.freq_cap_per_user_per_campaign", 5),
+		cfg.GetDuration("adserver.freq_cap_window", 24*time.Hour),
+		log,
+	)
+
+	// Object store for large creative bodies
+	objStore := connectObjects(cfg, log)
+	bucket := cfg.Get("s3.bucket", "adtech-creatives")
+
+	// Warm cache of creative metadata from Postgres
+	metaCache := startCreativeMetaCache(cfg, clk, log)
+	if metaCache != nil {
+		lc.OnShutdown("creative-meta", func(_ context.Context) error { metaCache.Stop(); return nil })
 	}
+
+	// Readiness: L2 connection alive + creative cache has loaded at least once.
+	hlth.AddReadinessCheck("l2", func(ctx context.Context) error {
+		return l2.Ping(ctx)
+	})
+	hlth.AddReadinessCheck("creative-cache", func(_ context.Context) error {
+		ts, err := metaCache.LastLoaded()
+		if err != nil {
+			return err
+		}
+		if ts.IsZero() {
+			return errors.New("creative cache not yet loaded")
+		}
+		return nil
+	})
+
+	resolver := NewCreativeResolver(
+		metaCache, objStore, bucket,
+		cfg.GetDuration("adserver.default_creative_ttl", 5*time.Minute),
+		clk, log,
+	)
+
+	// Bandit warm-start: use whatever creatives loaded into the metadata cache
+	creativeIDs := resolver.ListIDs()
 	bandit := optimise.NewBandit(creativeIDs)
+
+	metrics := middleware.NewMetrics(constants.ServiceAdServer)
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.Handle(routes.Metrics, metrics.Handler())
+	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL))
 
-	// Serve an ad - called after auction win
-	mux.HandleFunc(routes.AdServe, serveHandler(log, creatives, trackerURL))
-
-	// Bandit stats for debugging
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -69,20 +130,135 @@ func main() {
 		})
 	})
 
-	// List creatives for debugging
 	mux.HandleFunc(routes.AdCreatives, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(creatives)
+		json.NewEncoder(w).Encode(resolver.ListIDs())
 	})
 
-	handler := middleware.CORS(mux)
+	if cfg.GetBool("debug.endpoints_enabled", true) {
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(metaCache))
+	}
+
+	handler := tracing.HTTPMiddleware(constants.ServiceAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
-	log.Info("adserver starting", "port", port, "creatives", len(creatives), "tracker", trackerURL)
+	log.Info("adserver starting",
+		"port", port,
+		"creatives", len(creativeIDs),
+		"tracker", trackerURL,
+		"bucket", bucket,
+	)
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
-func serveHandler(log *slog.Logger, creatives map[string]AdCreative, trackerURL string) http.HandlerFunc {
+// startCreativeMetaCache wires the warm cache to Postgres, falling back to
+// an empty in-memory loader when Postgres is unavailable so the service
+// boots in offline dev environments (it serves a default creative in that case).
+func startCreativeMetaCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[models.Creative] {
+	pollInterval := firstNonZeroDuration(
+		cfg.GetDuration("cache.warm.creatives.poll_interval", 0),
+		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+	)
+	loader := pickCreativeLoader(cfg, log)
+	bus := connectNATS(cfg, log)
+	c := warm.New(warm.Config[models.Creative]{
+		Name:              "creatives",
+		Loader:            loader,
+		Clock:             clk,
+		Bus:               bus,
+		InvalidateSubject: events.SubjectCacheInvalidateCreatives,
+		PollInterval:      pollInterval,
+		Log:               log,
+	})
+	if err := c.Start(context.Background()); err != nil {
+		log.Error("creative meta cache initial load failed", "error", err)
+	}
+	return c
+}
+
+func pickCreativeLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Creative] {
+	dbURL := cfg.Get("database.url", "")
+	if dbURL == "" {
+		log.Warn("database.url not set, creatives cache will be empty")
+		return emptyCreativeLoader{}
+	}
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Warn("postgres open failed", "error", err)
+		return emptyCreativeLoader{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		log.Warn("postgres ping failed", "error", err)
+		_ = db.Close()
+		return emptyCreativeLoader{}
+	}
+	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+	log.Info("postgres connected for creative loader")
+	return &postgres.CreativeLoader{Store: store}
+}
+
+type emptyCreativeLoader struct{}
+
+func (emptyCreativeLoader) LoadAll(_ context.Context) ([]models.Creative, error) { return nil, nil }
+func (emptyCreativeLoader) KeyOf(c models.Creative) string                       { return c.ID }
+
+// connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
+func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
+	addr := cfg.Get("redis.url", "localhost:6379")
+	pwd := cfg.Get("redis.password", "")
+	db := cfg.GetInt("redis.db", 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+	if err != nil {
+		log.Warn("redis unreachable, falling back to in-memory L2", "addr", addr, "error", err)
+		return cache.NewMemoryL2()
+	}
+	log.Info("redis connected", "addr", addr)
+	return client
+}
+
+// connectObjects returns an S3/Minio store if configured, else a local FS store.
+func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
+	endpoint := cfg.Get("s3.endpoint", "")
+	if endpoint == "" {
+		root := "/tmp/adtech-creatives"
+		log.Warn("s3.endpoint not set, using local filesystem", "root", root)
+		store, err := fs.New(root)
+		if err != nil {
+			log.Error("fs store init failed", "error", err)
+		}
+		return store
+	}
+	store, err := objs3.New(objs3.Config{
+		Endpoint:  endpoint,
+		AccessKey: cfg.Get("s3.access_key", "adtech"),
+		SecretKey: cfg.Get("s3.secret_key", "adtech-local-dev"),
+		Region:    cfg.Get("s3.region", "us-east-1"),
+		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+	})
+	if err != nil {
+		log.Error("s3 init failed, falling back to filesystem", "error", err)
+		fsStore, _ := fs.New("/tmp/adtech-creatives")
+		return fsStore
+	}
+	log.Info("s3 connected", "endpoint", endpoint)
+	return store
+}
+
+func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
+	url := cfg.Get("adserver.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	bus, err := natsbus.New(url, constants.ServiceAdServer, log)
+	if err != nil {
+		log.Warn("nats unavailable, creative cache will poll only", "error", err)
+		return nil
+	}
+	return bus
+}
+
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -98,9 +274,14 @@ func serveHandler(log *slog.Logger, creatives map[string]AdCreative, trackerURL 
 		ctx := logger.WithTraceID(r.Context(), req.TraceID)
 		reqLog := logger.WithContext(log, ctx)
 
-		creative, ok := creatives[req.CreativeID]
+		if !freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID) {
+			reqLog.Info("ad blocked by freq cap", "user", req.UserID, "campaign", req.CampaignID)
+			http.Error(w, "frequency cap exceeded", http.StatusTooManyRequests)
+			return
+		}
+
+		creative, ok := resolver.Get(ctx, req.CreativeID)
 		if !ok {
-			// Fallback to a generic creative
 			creative = AdCreative{
 				ID:   req.CreativeID,
 				Name: "Dynamic Creative",
@@ -125,10 +306,7 @@ func serveHandler(log *slog.Logger, creatives map[string]AdCreative, trackerURL 
 			TrackerURL:   trackerURL,
 		}
 
-		// Substitute macros in creative HTML
 		renderedHTML := adserving.SubstituteMacros(creative.HTML, macroCtx)
-
-		// Build tracking URLs with full context
 		impressionURL := adserving.BuildImpressionURL(macroCtx)
 		clickURL := adserving.BuildClickURL(macroCtx)
 		viewabilityURL := adserving.BuildViewabilityURL(macroCtx)
@@ -162,46 +340,13 @@ func serveHandler(log *slog.Logger, creatives map[string]AdCreative, trackerURL 
 	}
 }
 
-func seedCreatives() map[string]AdCreative {
-	return map[string]AdCreative{
-		"cr-shoes-001": {
-			ID: "cr-shoes-001", Name: "Acme Shoes - Summer Sale", Format: "banner",
-			LandingURL: "https://acme-shoes.com/summer-sale",
-			HTML: fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#f8f4f0;border:1px solid #ddd;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">
-  <h3 style="margin:0 0 8px;color:#1a1a2e;">Summer Shoe Sale</h3>
-  <p style="margin:0 0 12px;color:#666;font-size:13px;">Up to 50%% off at Acme Shoes</p>
-  <a href="${CLICK_URL}%s" style="background:#4361ee;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Shop Now</a>
-  <img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;">
-</div>`, "https://acme-shoes.com/summer-sale"),
-		},
-		"cr-shoes-002": {
-			ID: "cr-shoes-002", Name: "Acme Shoes - New Collection", Format: "banner",
-			LandingURL: "https://acme-shoes.com/new",
-			HTML: fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#e8f0fe;border:1px solid #c5d5f0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">
-  <h3 style="margin:0 0 8px;color:#1a1a2e;">New Collection 2024</h3>
-  <p style="margin:0 0 12px;color:#666;font-size:13px;">Acme Shoes - Walk in Style</p>
-  <a href="${CLICK_URL}%s" style="background:#2d6a4f;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Explore</a>
-</div>`, "https://acme-shoes.com/new"),
-		},
-		"cr-tech-001": {
-			ID: "cr-tech-001", Name: "Globex Tech - Cloud Platform", Format: "banner",
-			LandingURL: "https://globex-tech.com/cloud",
-			HTML: fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#1a1a2e;border:1px solid #333;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;color:white;">
-  <h3 style="margin:0 0 8px;">Globex Cloud Platform</h3>
-  <p style="margin:0 0 12px;color:#aaa;font-size:13px;">Scale without limits. Start free.</p>
-  <a href="${CLICK_URL}%s" style="background:#818cf8;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Try Free</a>
-</div>`, "https://globex-tech.com/cloud"),
-		},
-		"cr-saas-001": {
-			ID: "cr-saas-001", Name: "Initech SaaS - Productivity", Format: "banner",
-			LandingURL: "https://initech.io/signup",
-			HTML: fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#fef3c7;border:1px solid #f59e0b;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">
-  <h3 style="margin:0 0 8px;color:#92400e;">Initech Productivity Suite</h3>
-  <p style="margin:0 0 12px;color:#78350f;font-size:13px;">Get more done. 14-day free trial.</p>
-  <a href="${CLICK_URL}%s" style="background:#f59e0b;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Start Trial</a>
-</div>`, "https://initech.io/signup"),
-		},
+func firstNonZeroDuration(ds ...time.Duration) time.Duration {
+	for _, d := range ds {
+		if d > 0 {
+			return d
+		}
 	}
+	return 30 * time.Second
 }
 
 const defaultCreativeHTML = `<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#f5f5f5;border:1px solid #ddd;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">

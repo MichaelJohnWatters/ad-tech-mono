@@ -5,6 +5,8 @@ namespace: adtech
 
 resources:
   - namespace.yaml
+  # Image cache (Docker Hub pull-through mirror at NodePort 30500)
+  - registry-mirror/deployment.yaml
   # Infrastructure
   - postgres/statefulset.yaml
   - nats/statefulset.yaml

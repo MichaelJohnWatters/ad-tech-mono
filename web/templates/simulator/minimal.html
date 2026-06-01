@@ -11,6 +11,51 @@
         .sim-content { background: var(--bg-surface); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
         .sim-content h2 { margin-bottom: 12px; }
         .sim-content p { line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
+        /* Mgmt tabs: highlight the active one so it's clear which DSP pod
+           the table below is showing. Without this they all look identical. */
+        .mgmt-tab.active { background: var(--brand-primary, #6366f1); color: white; border-color: var(--brand-primary, #6366f1); }
+        /* Modal — used for the "New Campaign" form. Centered overlay with
+           backdrop, escape to close, click-outside-to-close. */
+        .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-backdrop.open { display: flex; }
+        .modal { background: var(--bg-surface, #1a1a1a); border: 1px solid var(--border, #333); border-radius: 8px; padding: 20px; width: 460px; max-width: 90vw; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+        .modal h3 { margin: 0 0 14px; }
+        .modal .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+        .modal label { font-size: 12px; color: var(--text-secondary, #aaa); font-weight: 600; }
+        .modal label .hint { font-weight: normal; color: var(--text-muted, #888); margin-left: 4px; }
+        .modal input[type="text"], .modal input[type="number"] { width: 100%; padding: 6px 8px; background: var(--bg-surface-2, #222); color: var(--text-primary, #eee); border: 1px solid var(--border, #333); border-radius: 4px; box-sizing: border-box; }
+        .modal .checkbox-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .modal .checkbox-grid label { font-weight: normal; color: var(--text-primary, #eee); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        /* Trace timeline (mirrors trace-explorer styles so the two pages render the same flow) */
+        .trace-section { margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px; }
+        .trace-section h3 { margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+        .trace-header { background: var(--bg-surface-3, #1f1f1f); border: 1px solid var(--border, #333); border-radius: var(--radius-lg, 6px); padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: var(--text-secondary); font-family: var(--font-mono, monospace); }
+        .trace-header a { color: var(--brand-primary); }
+        .flow { display: flex; flex-direction: column; }
+        .node { display: flex; align-items: flex-start; gap: 12px; padding: 8px 14px; border-left: 3px solid var(--border, #333); margin-left: 60px; transition: background 0.15s; }
+        .node:hover { background: var(--bg-hover, rgba(255,255,255,0.04)); }
+        .node.active { border-left-color: #2ecc71; }
+        .node.warn { border-left-color: #f39c12; }
+        .node.error { border-left-color: #e74c3c; }
+        .node.nobid { border-left-color: var(--text-muted, #666); opacity: 0.6; }
+        .node .time { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-muted, #888); min-width: 72px; text-align: right; position: relative; left: -96px; margin-right: -72px; padding-right: 4px; }
+        .node .service { font-weight: 600; font-size: 13px; min-width: 100px; }
+        .node .service.exchange { color: #818cf8; }
+        .node .service.dsp { color: #34d399; }
+        .node .service.tracker { color: #f39c12; }
+        .node .service.adserver { color: #ec4899; }
+        .node .service.reporting { color: #06b6d4; }
+        .node .service.browser { color: var(--text-secondary, #aaa); }
+        .node .msg { font-size: 13px; color: var(--text-primary, #ddd); }
+        .node .msg .detail { color: var(--text-muted, #888); font-size: 12px; }
+        /* Source badge: shows whether the row came from a synchronous
+           browser fetch (live) or from polling Jaeger after the fact (jaeger).
+           Browser hops show up immediately; jaeger hops trickle in over the
+           ~30s poll window. Same trace_id either way — just two views of it. */
+        .node .src { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .node .src.live { background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3); }
+        .node .src.jaeger { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
         .ad-slot .ad-content { text-align: center; padding: 20px; }
         .ad-slot .ad-content h3 { margin-bottom: 8px; }
         .ad-slot .ad-content .cta { display: inline-block; background: var(--brand-primary); color: white; padding: 8px 20px; border-radius: var(--radius-sm); text-decoration: none; margin-top: 10px; }
@@ -27,6 +72,137 @@
         <a href="/dev/trace-explorer">Trace Explorer</a>
         <button class="theme-toggle" onclick="toggleTheme()">☀️</button>
     </div>
+    <!-- Observability quick-links. Each opens in a new tab so the pub sim
+         workflow isn't interrupted. PromQL links pre-fill useful queries
+         tied to the metrics middleware (request_duration_seconds histograms
+         by service+handler) so the click lands you on a usable graph, not
+         an empty query bar. Grafana explore links use the standard /explore
+         path with a JSON-encoded query for the loki / prometheus datasource.
+         Organised by the question they answer rather than the tool they hit
+         — e.g. "is the system slow?" is one row, "where are the errors?"
+         is another. -->
+    <details open style="max-width: var(--max-width); margin: 4px auto 12px; padding: 0; border-top: 1px solid var(--border-subtle, #2a2a3a); border-bottom: 1px solid var(--border-subtle, #2a2a3a); background: rgba(255,255,255,0.02); font-size: 12px;">
+        <summary style="padding: 8px 20px; cursor: pointer; user-select: none; color: var(--text-secondary);"><strong>Observability</strong> <span style="color: var(--text-muted); font-weight: normal;">— quick-links to metrics, logs, traces, debug surfaces. Click to collapse.</span></summary>
+        <div style="padding: 4px 20px 12px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: start;">
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Hot path latency</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%5B5m%5D))by(service%2Chandler%2Cle))" target="_blank" title="p95 latency per handler over last 5 min">p95 by handler</a>
+                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.99%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fopenrtb%2Fbid%22%7D%5B5m%5D))by(pod%2Cle))" target="_blank" title="p99 bid latency per DSP pod">p99 bid by DSP pod</a>
+                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fopenrtb%2Fauction%22%7D%5B5m%5D))by(le))" target="_blank" title="p95 exchange auction over 5m">Auction p95</a>
+                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fssp%2Fserve%22%7D%5B5m%5D))by(le))" target="_blank" title="p95 SSP /serve over 5m">SSP serve p95</a>
+                <a href="http://localhost:9090/api/v1/query?query=topk(5%2Chistogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%5B5m%5D))by(service%2Chandler%2Cle)))" target="_blank" title="5 slowest handlers right now">Top 5 slowest</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Throughput</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%5B1m%5D))by(service%2Chandler)" target="_blank" title="Requests per second by service+handler">RPS</a>
+                <a href="http://localhost:9090/api/v1/query?query=adtech_http_in_flight_requests" target="_blank" title="In-flight requests gauge per service">In-flight</a>
+                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bservice%3D%22dsp%22%2Chandler%3D%22%2Fv1%2Fopenrtb%2Fbid%22%7D%5B1m%5D))by(pod)" target="_blank" title="Bid requests per second per DSP pod">DSP bid RPS</a>
+                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bservice%3D%22tracker%22%7D%5B1m%5D))by(handler)" target="_blank" title="Tracker pixel RPS by endpoint">Tracker RPS</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Errors</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bstatus%3D~%225..%22%7D%5B1m%5D))by(service)" target="_blank" title="5xx rate by service">5xx rate</a>
+                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bstatus%3D~%224..%22%7D%5B1m%5D))by(service%2Chandler)" target="_blank" title="4xx rate by service+handler">4xx rate</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22.%2B%5C%22%7D%20%7C%3D%20%5C%22ERROR%5C%22%22%7D%5D%7D" target="_blank" title="All ERROR-level log lines across services">All ERROR logs</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22.%2B%5C%22%7D%20%7C%3D%20%5C%22WARN%5C%22%22%7D%5D%7D" target="_blank" title="All WARN-level log lines">All WARN logs</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Process health</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:9090/api/v1/query?query=adtech_up" target="_blank" title="Per-service up=1 gauge">Up</a>
+                <a href="http://localhost:9090/api/v1/query?query=go_goroutines" target="_blank" title="Goroutine count per service — watch for leaks">Goroutines</a>
+                <a href="http://localhost:9090/api/v1/query?query=adtech_process_resident_memory_bytes%2F1024%2F1024" target="_blank" title="RSS in MiB per service">Memory (MiB)</a>
+                <a href="http://localhost:9090/api/v1/query?query=rate(go_gc_duration_seconds_sum%5B5m%5D)" target="_blank" title="GC time per second — high = GC pressure">GC pressure</a>
+                <a href="http://localhost:9090/api/v1/query?query=go_threads" target="_blank" title="OS threads per Go process">OS threads</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Traces</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:16686" target="_blank">Jaeger home</a>
+                <a href="http://localhost:16686/search?service=exchange&operation=exchange.auction&limit=20" target="_blank" title="Last 20 auctions — sortable by duration to find slow ones">Recent auctions</a>
+                <a href="http://localhost:16686/search?service=dsp&operation=dsp%20POST%20%2Fv1%2Fopenrtb%2Fbid&limit=20" target="_blank" title="Last 20 DSP bid handler spans">Bid handlers</a>
+                <a href="http://localhost:16686/search?service=ssp&operation=ssp%20GET%20%2Fv1%2Fssp%2Fserve&limit=20" target="_blank" title="Last 20 SSP serve entry-point traces">SSP serves</a>
+                <a href="http://localhost:16686/search?service=adserver&operation=adserver%20POST%20%2Fv1%2Fad%2Fserve&limit=20" target="_blank" title="Last 20 ad-server renders">Ad serves</a>
+                <a href="http://localhost:16686/search?service=tracker&limit=20" target="_blank" title="Last 20 tracker spans">Tracker spans</a>
+                <a href="http://localhost:16686/search?service=reporting&operation=nats%20consume%20adtech.auction.win&limit=20" target="_blank" title="NATS auction.win consumer spans">Auction.win consume</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Dashboards</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:3000/d/adtech-logs" target="_blank" title="Unified logs with service/level/trace_id filters">All Logs</a>
+                <a href="http://localhost:3000/d/adtech-pipeline" target="_blank" title="Auction RPS, bid latency, errors, in-flight, memory">Pipeline Health</a>
+                <a href="http://localhost:3000/d/adtech-service" target="_blank" title="Per-service request/latency/errors/goroutines/logs">Service Detail</a>
+                <a href="http://localhost:3000/d/adtech-trace" target="_blank" title="Span waterfall + correlated logs for a single trace">Trace Explorer</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Service logs</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22ssp%5C%22%7D%22%7D%5D%7D" target="_blank">SSP</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22dsp%5C%22%7D%22%7D%5D%7D" target="_blank">DSP</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22exchange%5C%22%7D%22%7D%5D%7D" target="_blank">Exchange</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22adserver%5C%22%7D%22%7D%5D%7D" target="_blank">Ad server</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22tracker%5C%22%7D%22%7D%5D%7D" target="_blank">Tracker</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22reporting%5C%22%7D%22%7D%5D%7D" target="_blank">Reporting</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22gateway%5C%22%7D%22%7D%5D%7D" target="_blank">Gateway</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Loki filters</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22exchange%5C%22%7D%20%7C%3D%20%5C%22auction%20complete%5C%22%22%7D%5D%7D" target="_blank" title="All exchange auction-complete lines (winner_dsp, clearing_price, etc.)">Auction outcomes</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22exchange%5C%22%7D%20%7C%3D%20%5C%22no_bids%5C%22%22%7D%5D%7D" target="_blank" title="Exchange no_bids events">No-bid auctions</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D%5C%22dsp%5C%22%7D%20%7C%3D%20%5C%22bid%20submitted%5C%22%22%7D%5D%7D" target="_blank" title="Every DSP bid submission with campaign + price">Bid submissions</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22.%2B%5C%22%7D%20%7C%3D%20%5C%22audience%20preload%5C%22%22%7D%5D%7D" target="_blank" title="Audience preloader heartbeats — proves the warm cache is running">Audience preload</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Debug endpoints</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:8081/v1/openrtb/routing" target="_blank" title="Smart router learned stats per DSP">Router stats</a>
+                <a href="http://localhost:8086/debug/auction_wins" target="_blank" title="Recent AuctionWinEvents (count)">Auction wins</a>
+                <a href="http://localhost:8086/v1/billing/ledger" target="_blank" title="In-memory billing ledger entries">Ledger</a>
+                <a href="http://localhost:8084/v1/ssp/placements" target="_blank" title="SSP warm-cache contents (all placements)">SSP placements</a>
+                <a href="http://localhost:8082/v1/dsp/campaigns" target="_blank" title="DSP internal warm-cache contents">DSP-internal</a>
+                <a href="http://localhost:8089/v1/dsp/campaigns" target="_blank" title="DSP competitor1 warm-cache">DSP-comp1</a>
+                <a href="http://localhost:8090/v1/dsp/campaigns" target="_blank" title="DSP competitor2 warm-cache">DSP-comp2</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Raw /metrics</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="http://localhost:8080/metrics" target="_blank" title="Raw Prometheus metrics — gateway">gateway</a>
+                <a href="http://localhost:8081/metrics" target="_blank">exchange</a>
+                <a href="http://localhost:8082/metrics" target="_blank">dsp-internal</a>
+                <a href="http://localhost:8089/metrics" target="_blank">dsp-comp1</a>
+                <a href="http://localhost:8090/metrics" target="_blank">dsp-comp2</a>
+                <a href="http://localhost:8083/metrics" target="_blank">tracker</a>
+                <a href="http://localhost:8084/metrics" target="_blank">ssp</a>
+                <a href="http://localhost:8085/metrics" target="_blank">adserver</a>
+                <a href="http://localhost:8086/metrics" target="_blank">reporting</a>
+            </div>
+
+            <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Cache controls</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
+                <a href="#" onclick="event.preventDefault(); refreshAllCaches()" title="POST /debug/cache/refresh on every service — force warm-cache reload">Refresh all caches</a>
+                <a href="http://localhost:9090" target="_blank" title="Prometheus home (build your own queries)">Prometheus home</a>
+                <a href="http://localhost:3000" target="_blank" title="Grafana home (build dashboards)">Grafana home</a>
+            </div>
+        </div>
+    </details>
+    <!-- Sticky drain status banner. Hidden by default; shown when a drain
+         starts so the user can close the configuration modal and keep
+         working while requests fire in the background. Persists after the
+         drain completes (or is stopped) so the user sees the final reason
+         + stats; click Dismiss to clear. -->
+    <div id="drainBanner" style="display: none; position: sticky; top: 0; z-index: 500; padding: 10px 20px; background: var(--bg-primary, #1a1a2e); border-bottom: 3px solid #4361ee; box-shadow: 0 2px 8px rgba(0,0,0,0.3); font-size: 13px;">
+        <div style="max-width: var(--max-width); margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+            <div id="drainBannerStatus" style="flex: 1;"></div>
+            <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                <button class="btn btn-secondary" id="drainBannerStopBtn" onclick="stopDrain()" style="padding: 4px 12px;">Stop</button>
+                <button class="btn btn-secondary" id="drainBannerDismissBtn" onclick="dismissDrainBanner()" style="padding: 4px 12px; display: none;">Dismiss</button>
+            </div>
+        </div>
+    </div>
     <div class="controls-bar">
             <select id="geoSelect">
                 <option value="GBR">UK</option>
@@ -40,31 +216,36 @@
                 <option value="2">Desktop</option>
                 <option value="5">Tablet</option>
             </select>
-            <select id="sizeSelect">
-                <option value="300x250">300x250 (MPU)</option>
-                <option value="728x90">728x90 (Leaderboard)</option>
-                <option value="160x600">160x600 (Skyscraper)</option>
-                <option value="320x50">320x50 (Mobile Banner)</option>
-                <option value="970x250">970x250 (Billboard)</option>
-                <option value="300x600">300x600 (Half Page)</option>
-                <option value="336x280">336x280 (Large Rectangle)</option>
-            </select>
-            <select id="floorSelect">
-                <option value="0.50">Floor: $0.50</option>
-                <option value="1.00" selected>Floor: $1.00</option>
-                <option value="2.00">Floor: $2.00</option>
-                <option value="5.00">Floor: $5.00</option>
-                <option value="10.00">Floor: $10.00</option>
+            <!-- Placement picker. Replaces the static size dropdown: every
+                 option is a real seeded placement from the SSP. Selecting one
+                 changes (a) which placement_id we POST in the ad request,
+                 (b) the rendered ad slot dimensions, (c) the "ACTIVE PAGE"
+                 badge in the SSP Inventory panel. Populated from
+                 /v1/ssp/placements on page load + after every SSP refresh. -->
+            <select id="placementSelect" style="min-width: 280px;">
+                <option value="">Loading placements…</option>
             </select>
             <button class="btn btn-primary" onclick="loadAd()">Load Ad</button>
             <button class="btn btn-secondary" onclick="clearAd()">Clear</button>
+            <!-- Spam load-test: fires N concurrent /v1/ssp/serve requests
+                 across every active placement with rotating geo + device.
+                 Budgets drain via the OpenRTB nurl HTTP path the same way
+                 a single Load Ad does — just at scale. Watch the DSP State
+                 panel for the spent counter ticking up. -->
+            <button class="btn btn-secondary" id="drainBtn" onclick="drainBudgets()" style="margin-left: 12px;">Drain budgets</button>
+            <!-- Reset+reseed: wipes tenant tables, FLUSHDBs Redis, re-runs
+                 cmd/seed --profile standard, publishes cache invalidates.
+                 Useful between drain experiments so you don't have to
+                 `tilt trigger migrate-reset` in a terminal. -->
+            <button class="btn btn-secondary" id="resetBtn" onclick="resetAndReseed()" style="margin-left: 12px;">Reset &amp; reseed</button>
     </div>
+
 
     <div class="sim-container">
         <div class="sim-content">
             <h2>The Daily Simulator</h2>
             <p>This is a simulated publisher page. The ad slot below runs a real auction through the full ad tech stack: SSP → Exchange → DSP → Ad Server → Tracker.</p>
-            <p>Click "Load Ad" to trigger a bid request. The debug panel on the right shows every event in real time.</p>
+            <p>Click "Load Ad" to send an ad request to the SSP. The SSP then constructs an OpenRTB bid request, fans it out to DSPs, picks a winner, and returns the served ad. The debug panel on the right shows every event in real time.</p>
 
             <div class="ad-slot" id="adSlot" style="width: 300px; min-height: 250px;">
                 <span id="adSlotLabel">300x250 Ad Slot</span>
@@ -72,6 +253,87 @@
             </div>
 
             <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation.</p>
+
+            <!-- Trace timeline: mirrors the Trace Explorer's step-by-step
+                 flow view so you can see the same hops (SSP → exchange → DSP →
+                 ad server → tracker) right next to the ad slot. Populated by
+                 traceLog() calls in the loadAd flow. -->
+            <div id="traceSection" class="trace-section" style="display: none;">
+                <h3>
+                    <span>Trace Timeline</span>
+                    <span style="font-size: 12px; font-weight: normal; color: var(--text-secondary, #aaa);" id="tracePollStatus"></span>
+                    <a id="traceExplorerLink" href="#" style="font-size: 12px;">Open in Trace Explorer →</a>
+                </h3>
+                <div id="traceHeader" class="trace-header"></div>
+                <!-- Auction outcome panel: filled in from the exchange.auction
+                     span tags. Empty until Jaeger has the span. Dev-only info
+                     (winner, clearing price) — never exposed to the browser
+                     fetch response, which mirrors what a real SSP returns. -->
+                <div id="auctionOutcome" style="display: none; padding: 8px 12px; margin: 8px 0; background: rgba(67, 97, 238, 0.08); border-left: 3px solid #4361ee; border-radius: 4px; font-size: 13px;"></div>
+                <div id="traceFlow" class="flow"></div>
+
+                <h3 style="margin-top: 18px;">Trace Destinations</h3>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    The same trace_id should reach every system that observes the request. Live queries below show what's actually there; stubs mark systems that are spec'd but not yet wired.
+                </div>
+                <div id="traceDestinations" style="display: grid; grid-template-columns: 24px 130px 1fr auto; gap: 6px 12px; font-size: 13px; align-items: center;">
+                    <!-- populated by renderDestinations() -->
+                </div>
+            </div>
+
+            <!-- DSP management panel: live view of each DSP's warm cache
+                 (campaigns it would bid with). Tabs let you switch between
+                 the three DSP pods. Auto-refreshes after each auction so you
+                 can see budget/status changes propagate. Edit + create live
+                 in this panel via PATCH/POST/DELETE on /v1/dsp/campaigns. -->
+            <!-- SSP Inventory panel: the supply side mirror to the DSP State
+                 panel below. Lists the publishers that have signed up with
+                 this SSP and the placements (ad slots) they expose. Read-only
+                 view of the warm cache fed by /v1/ssp/placements. Highlights
+                 the placement the pub sim is currently calling so it's
+                 obvious which slot the "fake page" maps to in the seed. -->
+            <div id="sspPanel" style="margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">SSP Inventory</h3>
+                    <button class="btn btn-secondary" onclick="refreshSSP()">Refresh</button>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px;">
+                    The publishers that have signed up with this SSP and the placements (ad slots) they expose. When this page loads an ad it sends <code>placement_id=pl-sim-mpu</code> — see <strong>Publisher Simulator</strong> below, that's the slot the auction runs against. Other publishers in the list are seeded fixtures simulating real signups.
+                </div>
+                <div id="sspContent" style="font-size: 13px;">
+                    <div style="color: var(--text-secondary);">Loading…</div>
+                </div>
+            </div>
+
+            <div id="mgmtPanel" style="margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">DSP State</h3>
+                    <div>
+                        <button class="btn btn-secondary" onclick="refreshMgmt()">Refresh</button>
+                    </div>
+                </div>
+
+                <!-- Scenario toggles: apply to the next "Load Ad" auction.
+                     Slow checkboxes inject 150ms latency at the matching DSP
+                     so you can watch the bid_timeout / early-finish behavior
+                     fire. Trip fraud forces the tracker to fraud-block the
+                     impression pixel so you can see the rejection path. All
+                     gated server-side by debug.endpoints_enabled so prod
+                     ignores forged headers. -->
+                <div style="background: var(--bg-surface-2, rgba(255,255,255,0.03)); border: 1px solid var(--border-subtle, #333); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; font-size: 13px;">
+                    <strong style="color: var(--text-secondary);">Scenarios for next auction:</strong>
+                    <label><input type="checkbox" id="slowDsp0"> Slow DSP 1 (internal)</label>
+                    <label><input type="checkbox" id="slowDsp1"> Slow DSP 2 (competitor1)</label>
+                    <label><input type="checkbox" id="slowDsp2"> Slow DSP 3 (competitor2)</label>
+                    <label><input type="checkbox" id="tripFraud"> Trip fraud on impression pixel</label>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    Three DSP pods run in this stack, each with its own warm cache filtered by the advertiser allowlist in its YAML profile (<code>profiles/dsps/{internal,competitor1,competitor2}.yaml</code>). When you fire an auction the exchange fans out to all three; each one only bids with the campaigns shown in its section. Click a header to collapse / expand. Useful for "Drain budgets" runs — watch all three drain in parallel.
+                </div>
+                <div id="mgmtContent" style="font-size: 13px;">
+                    <div style="color: var(--text-secondary);">Loading…</div>
+                </div>
+            </div>
         </div>
 
         <div class="debug-panel" id="debugPanel">
@@ -85,30 +347,578 @@
         </div>
     </div>
 
+    <!-- Drain budgets modal. Configurable fixed-count vs drain-until-exhausted,
+         per-request random delays, and a live stop button. State during a
+         drain run is rendered into #drainStatus so the user can watch
+         counters update while the modal stays open. -->
+    <div id="drainModal" class="modal-backdrop" onclick="if (event.target === this) closeDrainModal()">
+        <div class="modal" role="dialog" aria-labelledby="drainTitle">
+            <h3 id="drainTitle">Drain budgets</h3>
+            <p style="color: var(--text-secondary); font-size: 12px; margin: 4px 0 8px;">
+                Fires <code>/v1/ssp/serve</code> calls across every fillable placement with rotating geo + device. Winners' Redis budget counters tick up via the OpenRTB nurl path. Watch the DSP State sections collapse to <strong>$0 left</strong> as their daily caps deplete.
+            </p>
+            <div id="drainPoolSummary" style="font-size: 11px; color: var(--text-secondary); padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 4px; margin-bottom: 14px;">Computing pool…</div>
+            <form id="drainForm" onsubmit="event.preventDefault(); startDrain()">
+                <div class="form-row">
+                    <label>Run mode</label>
+                    <div style="display: flex; gap: 16px; font-size: 13px;">
+                        <label><input type="radio" name="drainMode" value="count" checked onchange="updateDrainModeVisibility()"> Fixed count</label>
+                        <label><input type="radio" name="drainMode" value="exhausted" onchange="updateDrainModeVisibility()"> Until exhausted</label>
+                    </div>
+                </div>
+                <div class="form-row" id="drainCountRow">
+                    <label for="drainCount">Number of auctions</label>
+                    <input id="drainCount" type="number" min="1" value="300" />
+                </div>
+                <div class="form-row" id="drainExhaustedRow" style="display: none;">
+                    <label for="drainNobidThreshold">Stop after consecutive no-bids</label>
+                    <input id="drainNobidThreshold" type="number" min="1" value="30" />
+                    <span class="hint">When this many requests in a row come back as no-bid, the drain is done.</span>
+                </div>
+                <div class="form-row" style="flex-direction: row; gap: 12px;">
+                    <div style="flex: 1;">
+                        <label for="drainConcurrency">Concurrency</label>
+                        <input id="drainConcurrency" type="number" min="1" max="100" value="10" />
+                        <span class="hint">Parallel requests per batch. With the Redis audience preloader + 500ms <code>bid_timeout</code>, the bid path is Postgres-free so 10-25 is comfortable on the local stack. Above ~50 you start hitting Go HTTP server defaults.</span>
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="drainMinDelay">Min delay (ms)</label>
+                        <input id="drainMinDelay" type="number" min="0" value="0" />
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="drainMaxDelay">Max delay (ms)</label>
+                        <input id="drainMaxDelay" type="number" min="0" value="0" />
+                        <span class="hint">Random sleep between batches. 0/0 = max throughput. Set 50-200 for realistic pacing.</span>
+                    </div>
+                </div>
+                <div class="form-row" style="flex-direction: row; gap: 8px; margin-top: 12px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeDrainModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Start drain</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- New campaign modal. Hidden by default; opened by newCampaignForm(),
+         closed via the Cancel button, Escape, or click on the backdrop. -->
+    <div id="newCampaignModal" class="modal-backdrop" onclick="if (event.target === this) closeCampaignModal()">
+        <div class="modal" role="dialog" aria-labelledby="newCampaignTitle">
+            <h3 id="newCampaignTitle">New Campaign — <span id="newCampaignDsp"></span></h3>
+            <form id="newCampaignForm" onsubmit="submitCampaignForm(event)">
+                <div class="form-row">
+                    <label for="ncName">Name</label>
+                    <input id="ncName" type="text" required placeholder="Acme Q4 Promo" />
+                </div>
+                <div class="form-row" style="flex-direction: row; gap: 12px;">
+                    <div style="flex: 1;">
+                        <label for="ncBaseBid">Base bid <span class="hint">($ CPM)</span></label>
+                        <input id="ncBaseBid" type="number" step="0.01" value="2.50" required />
+                    </div>
+                    <div style="flex: 1;">
+                        <label for="ncDailyBudget">Daily budget <span class="hint">($)</span></label>
+                        <input id="ncDailyBudget" type="number" step="1" value="500" required />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Geo targeting <span class="hint">(none = any)</span></label>
+                    <div class="checkbox-grid">
+                        <label><input type="checkbox" value="GBR" checked> GBR</label>
+                        <label><input type="checkbox" value="USA"> USA</label>
+                        <label><input type="checkbox" value="DEU"> DEU</label>
+                        <label><input type="checkbox" value="FRA"> FRA</label>
+                        <label><input type="checkbox" value="JPN"> JPN</label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Device targeting <span class="hint">(none = any)</span></label>
+                    <div class="checkbox-grid">
+                        <label><input type="checkbox" value="mobile" checked> mobile</label>
+                        <label><input type="checkbox" value="desktop"> desktop</label>
+                        <label><input type="checkbox" value="tablet"> tablet</label>
+                    </div>
+                </div>
+                <div id="ncError" style="color: #e74c3c; font-size: 12px; min-height: 16px;"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeCampaignModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div class="page-footer">
         Ad Tech Platform &middot; <a href="/">Dashboard</a> &middot; <a href="/dev/trace-explorer">Trace Explorer</a>
     </div>
 
     <script>
-        const EXCHANGE_URL = window.location.protocol + '//' + window.location.hostname + ':8081';
-        const ADSERVER_URL = window.location.protocol + '//' + window.location.hostname + ':8085';
+        // SSP_URL is the only ad-network URL the browser hits directly —
+        // mirrors how a real publisher page works: one call to the SSP,
+        // get HTML back, render. Exchange/ad-server/tracker URLs are
+        // invisible to the visitor in production; we keep TRACKER_URL
+        // only for the click handler (the SSP-rendered HTML embeds a
+        // tracker URL that we follow on click).
+        const SSP_URL = window.location.protocol + '//' + window.location.hostname + ':8084';
         const TRACKER_URL = window.location.protocol + '//' + window.location.hostname + ':8083';
 
         let currentTraceID = null;
+        // Trace timeline state — reset at the top of each loadAd call and
+        // appended to as the request flows through services. Renders into
+        // #traceFlow so the user can read the same step-by-step view the
+        // standalone Trace Explorer shows.
+        let traceSteps = [];
+        let traceStart = 0;
 
-        // Resize ad slot when size dropdown changes
-        document.getElementById('sizeSelect').addEventListener('change', function() {
-            if (!currentTraceID) { // only resize if no ad is loaded
-                updateSlotSize();
+        function traceReset() {
+            traceSteps = [];
+            traceStart = performance.now();
+            knownSpans.clear();
+            expandedNodes.clear();
+            stopJaegerPoll();
+            document.getElementById('traceSection').style.display = 'block';
+            document.getElementById('traceFlow').innerHTML = '';
+            document.getElementById('traceHeader').innerHTML = 'Trace ID: <em>pending exchange response</em>';
+            const outcome = document.getElementById('auctionOutcome');
+            outcome.style.display = 'none';
+            outcome.innerHTML = '';
+        }
+
+        // formatElapsed renders a millisecond delta as either "Xms" (sub-second)
+        // or "X.Ys" (>= 1s). Keeps the timeline column readable when later
+        // spans land in the multi-second range without losing precision on
+        // the early ones.
+        function formatElapsed(ms) {
+            if (ms < 1000) return ms + 'ms';
+            return (ms / 1000).toFixed(2) + 's';
+        }
+
+        function traceLog(service, msg, opts = {}) {
+            const elapsed = Math.round(performance.now() - traceStart);
+            traceSteps.push({
+                time: formatElapsed(elapsed),
+                service,
+                msg,
+                detail: opts.detail || '',
+                cls: opts.cls || 'active',
+                // Source: 'live' = browser observed the HTTP response itself;
+                // 'jaeger' = poller discovered the span post-hoc. Default is
+                // 'live' since the loadAd flow calls traceLog directly from
+                // its fetch handlers. The Jaeger poller passes 'jaeger'.
+                src: opts.src || 'live',
+                // meta is an optional dict of key→value strings shown in the
+                // expanded detail panel. For JAEGER rows the poller fills it
+                // with span tags + duration; LIVE rows can pass HTTP status,
+                // timing, response shape, etc.
+                meta: opts.meta || null,
+                // Stable index used as the toggle target id.
+                idx: traceSteps.length,
+            });
+            renderTrace();
+        }
+
+        // toggleTraceNode flips a row's expanded detail panel open/closed.
+        // Toggled state survives re-renders because renderTrace re-applies
+        // the expanded class from the expandedNodes set.
+        const expandedNodes = new Set();
+        function toggleTraceNode(idx) {
+            if (expandedNodes.has(idx)) expandedNodes.delete(idx);
+            else expandedNodes.add(idx);
+            renderTrace();
+        }
+
+        // renderTraceMeta turns an opts.meta dict (or null) into the expanded
+        // detail HTML. Keys printed in insertion order so the upstream caller
+        // controls the layout.
+        function renderTraceMeta(meta) {
+            if (!meta || Object.keys(meta).length === 0) {
+                return '<div style="color: var(--text-muted, #888); font-style: italic;">no metadata</div>';
             }
+            const rows = Object.entries(meta).map(([k, v]) => {
+                const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+                return `<div style="display: flex; gap: 12px; padding: 2px 0;">
+                    <span style="color: var(--text-muted, #888); min-width: 180px; font-family: var(--font-mono, monospace);">${k}</span>
+                    <span style="font-family: var(--font-mono, monospace); word-break: break-all;">${val}</span>
+                </div>`;
+            }).join('');
+            return rows;
+        }
+
+        function renderTrace() {
+            const flow = document.getElementById('traceFlow');
+            flow.innerHTML = traceSteps.map(s => {
+                const isOpen = expandedNodes.has(s.idx);
+                const caret = isOpen ? '▾' : '▸';
+                const detailPanel = isOpen ? `
+                    <div class="node-detail" style="margin-left: 60px; margin-top: -6px; margin-bottom: 6px; padding: 8px 14px 10px; background: rgba(255,255,255,0.02); border-left: 3px solid var(--border-subtle, #333); font-size: 12px;">
+                        ${renderTraceMeta(s.meta)}
+                    </div>
+                ` : '';
+                return `
+                <div class="node ${s.cls}" onclick="toggleTraceNode(${s.idx})" style="cursor: pointer;">
+                    <span class="time">${s.time}</span>
+                    <span class="src ${s.src}">${s.src}</span>
+                    <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
+                    <span class="msg"><span style="color: var(--text-muted, #888); margin-right: 6px;">${caret}</span>${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
+                </div>
+                ${detailPanel}
+                `;
+            }).join('');
+        }
+
+        function traceHeader(traceID) {
+            const jaegerLink = (traceID && traceID.length === 32)
+                ? ` <a href="http://localhost:16686/trace/${traceID}" target="_blank">[Jaeger →]</a>`
+                : '';
+            document.getElementById('traceHeader').innerHTML =
+                `Trace ID: <code>${traceID}</code>${jaegerLink}`;
+            document.getElementById('traceExplorerLink').href =
+                `/dev/trace-explorer#${traceID}`;
+        }
+
+        // Jaeger poller — picks up downstream spans that the browser doesn't
+        // directly observe (NATS consumers, exchange.notify.{win,loss}, etc.)
+        // and appends them to the timeline. Runs for ~30s after the browser
+        // finishes its synchronous flow, with a countdown indicator so the
+        // user knows when the next refresh fires.
+        // Same-origin proxy via the gateway (see routes.ProxyJaeger).
+        // Jaeger v1.58 doesn't support CORS on the query API, so the browser
+        // can't hit :16686 directly from a page served on a different port.
+        const JAEGER_API = window.location.protocol + '//' + window.location.host + '/v1/jaeger/api';
+        let jaegerPollTimer = null;
+        let jaegerPollIteration = 0;
+        const JAEGER_POLL_INTERVAL = 3000;
+        const JAEGER_POLL_MAX = 100;  // 100 × 3s = 5 min
+
+        function startJaegerPoll(traceID) {
+            stopJaegerPoll();
+            jaegerPollIteration = 0;
+            // Fire one immediate fetch so the JAEGER rows that have already
+            // landed (the ad-server / tracker spans typically ingest within
+            // 1-2s) appear right away. Then schedule the periodic poll for
+            // late-arriving spans.
+            jaegerPollIteration = 1;
+            fetchJaegerTrace(traceID).finally(() => scheduleNextPoll(traceID));
+        }
+
+        function stopJaegerPoll() {
+            if (jaegerPollTimer) { clearInterval(jaegerPollTimer); jaegerPollTimer = null; }
+            document.getElementById('tracePollStatus').textContent = '';
+        }
+
+        function scheduleNextPoll(traceID) {
+            let countdown = JAEGER_POLL_INTERVAL / 1000;
+            const status = document.getElementById('tracePollStatus');
+            const renderStatus = () => {
+                const suffix = lastJaegerError ? ` · last error: ${lastJaegerError}` : '';
+                status.textContent = `· polling Jaeger for downstream spans (next in ${countdown}s)${suffix}`;
+            };
+            renderStatus();
+            jaegerPollTimer = setInterval(() => {
+                countdown -= 1;
+                if (countdown > 0) {
+                    renderStatus();
+                    return;
+                }
+                clearInterval(jaegerPollTimer);
+                jaegerPollTimer = null;
+                jaegerPollIteration += 1;
+                fetchJaegerTrace(traceID).finally(() => {
+                    if (jaegerPollIteration < JAEGER_POLL_MAX) {
+                        scheduleNextPoll(traceID);
+                    } else {
+                        status.textContent = `· poll complete (${jaegerPollIteration} fetches)`;
+                    }
+                });
+            }, 1000);
+        }
+
+        // Set of (service|operation|startTime) we've already added to the
+        // timeline so re-polls don't duplicate.
+        const knownSpans = new Set();
+        // Sticky error from the last fetch attempt; surfaces in the status line
+        // so silent failures (CORS, Jaeger down) don't get overwritten by the
+        // next "polling..." countdown.
+        let lastJaegerError = '';
+
+        async function fetchJaegerTrace(traceID) {
+            const status = document.getElementById('tracePollStatus');
+            status.textContent = `· fetching Jaeger trace…`;
+            try {
+                const resp = await fetch(`${JAEGER_API}/traces/${traceID}`);
+                if (!resp.ok) {
+                    lastJaegerError = `Jaeger returned HTTP ${resp.status}`;
+                    return;
+                }
+                lastJaegerError = '';
+                const data = await resp.json();
+                const traces = data.data || [];
+                if (traces.length === 0) return;
+                const trace = traces[0];
+                const procs = trace.processes || {};
+                const spans = trace.spans || [];
+                // Sort by startTime (microseconds since epoch in Jaeger)
+                spans.sort((a, b) => a.startTime - b.startTime);
+                let newCount = 0;
+                for (const s of spans) {
+                    const service = (procs[s.processID] || {}).serviceName || '?';
+                    const op = s.operationName || '?';
+                    const key = `${service}|${op}|${s.startTime}`;
+                    // Always check the auction span for outcome tags, even if we've
+                    // seen it before — it gets tagged after the span starts so the
+                    // first poll may have caught it pre-tag.
+                    if (op === 'exchange.auction') {
+                        renderAuctionOutcome(s.tags || []);
+                    }
+                    if (knownSpans.has(key)) continue;
+                    knownSpans.add(key);
+                    // Skip the browser-instrumented hops we already showed
+                    // (auction POST/handler, fanout, DSP bid, ad serve, pixel).
+                    // What's new are: NATS consumers (always "nats consume ..."),
+                    // exchange.notify.*, exchange.winloss_notify, etc.
+                    if (!isInterestingDownstreamSpan(service, op)) continue;
+                    const durMs = (s.duration / 1000).toFixed(1);
+                    const dspLabel = dspLabelFromSpan(service, op, s.tags || []);
+                    const label = dspLabel ? `${op} → ${dspLabel}` : op;
+                    // Flatten the span into a key→value dict for the
+                    // expandable detail panel. Skip noisy OTel-internal tags
+                    // (otel.scope.*, telemetry.sdk.*) that don't help a
+                    // human reader.
+                    const meta = { 'span.duration_ms': durMs, 'span.id': s.spanID || '' };
+                    if (s.references && s.references.length > 0) meta['span.parent_id'] = s.references[0].spanID;
+                    for (const t of (s.tags || [])) {
+                        if (/^(otel\.|telemetry\.sdk\.|internal\.)/.test(t.key)) continue;
+                        meta[t.key] = t.value;
+                    }
+                    traceLog(serviceTag(service), label, { detail: `${durMs}ms`, src: 'jaeger', meta });
+                    newCount += 1;
+                }
+                if (newCount > 0) {
+                    status.textContent = `· +${newCount} new span${newCount === 1 ? '' : 's'} this poll`;
+                    setTimeout(() => {
+                        if (jaegerPollIteration < JAEGER_POLL_MAX) {
+                            status.textContent = `· polling Jaeger for downstream spans`;
+                        }
+                    }, 1500);
+                }
+            } catch (err) {
+                lastJaegerError = `Jaeger fetch failed: ${err.message} (CORS? see k8s/base/jaeger/deployment.yaml QUERY_HTTP_CORS_ALLOWED_ORIGINS)`;
+                status.textContent = `· ${lastJaegerError}`;
+            }
+        }
+
+        // Map a port to the friendly DSP name. Mirrors the Tiltfile's
+        // DSP_PORT assignments — keep in sync if those change.
+        const DSP_PORT_NAMES = { '8082': 'dsp-internal', '8089': 'dsp-competitor1', '8090': 'dsp-competitor2' };
+
+        // renderAuctionOutcome pulls winner + clearing price from the
+        // exchange.auction span tags and shows them in the outcome panel.
+        // Idempotent: re-rendering with the same data just no-ops visually.
+        function renderAuctionOutcome(tags) {
+            const tag = (k) => {
+                const t = tags.find(t => t.key === k);
+                return t ? t.value : null;
+            };
+            const winnerDSP = tag('auction.winner_dsp');
+            const winnerEp  = tag('auction.winner_endpoint');
+            const price     = tag('auction.clearing_price');
+            const numBids   = tag('auction.num_bids');
+            const dealID    = tag('auction.deal_id');
+            if (winnerDSP == null && price == null) return;
+            let dspName = winnerDSP || '(unknown)';
+            if (winnerEp) {
+                const m = String(winnerEp).match(/:(\d+)/);
+                if (m && DSP_PORT_NAMES[m[1]]) dspName = `${DSP_PORT_NAMES[m[1]]} (${winnerDSP})`;
+            }
+            const dealNote = dealID ? ` · deal=${dealID}` : '';
+            const el = document.getElementById('auctionOutcome');
+            el.style.display = 'block';
+            el.innerHTML = `<strong>Auction outcome</strong> · Winner: <code>${dspName}</code> · Clearing price: <strong>$${Number(price).toFixed(4)}</strong> · ${numBids} bidder${numBids === 1 ? '' : 's'}${dealNote}`;
+        }
+
+        // dspLabelFromSpan extracts the DSP identity from a span's tags so the
+        // timeline can show which pod was notified instead of a generic "dsp".
+        // Exchange-side notify spans carry `notify.endpoint`
+        // (e.g. http://localhost:8082); DSP-side server spans carry
+        // `net.host.port` from the OTel HTTP instrumentation.
+        function dspLabelFromSpan(service, op, tags) {
+            const tag = (k) => {
+                const t = tags.find(t => t.key === k);
+                return t ? String(t.value) : '';
+            };
+            const op_lower = (op || '').toLowerCase();
+            if (op_lower.startsWith('exchange.notify')) {
+                const ep = tag('notify.endpoint');
+                const m = ep.match(/:(\d+)/);
+                if (m && DSP_PORT_NAMES[m[1]]) return DSP_PORT_NAMES[m[1]];
+                return ep || '';
+            }
+            if (service === 'dsp' && /openrtb\/(win|loss)/.test(op_lower)) {
+                const port = tag('net.host.port') || tag('server.port');
+                if (port && DSP_PORT_NAMES[port]) return DSP_PORT_NAMES[port];
+                return port ? `:${port}` : '';
+            }
+            return '';
+        }
+
+        function isInterestingDownstreamSpan(service, op) {
+            // Filter out the spans the browser-side traceLog already added.
+            const op_lower = (op || '').toLowerCase();
+            // NATS consumers (reporting + future webhooks/etc.)
+            if (op_lower.startsWith('nats consume')) return true;
+            // Exchange-side notify spans (win/loss notifications + fan-out wrapper)
+            if (op_lower.startsWith('exchange.notify') || op_lower === 'exchange.winloss_notify') return true;
+            // DSP-side server spans for win/loss
+            if (service === 'dsp' && /openrtb\/(win|loss)/.test(op_lower)) return true;
+            return false;
+        }
+
+        function serviceTag(service) {
+            // Map to known CSS-styled service classes; default to a generic one.
+            const known = ['exchange', 'dsp', 'tracker', 'adserver', 'reporting', 'ssp', 'browser'];
+            if (known.includes(service)) return service;
+            return 'reporting'; // fallback color
+        }
+
+        // Trace destinations panel — shows every system the request should
+        // have flowed to. Live-queries the ones with debug APIs (reporting),
+        // links to UIs for the ones that can't be JS-queried easily (Jaeger,
+        // Loki/Grafana), and stubs the ones that aren't built yet (Postgres
+        // analytics persistence, webhooks dispatcher, rollups). Mirrors the
+        // wishlist in PLAN.md → "Persistence Strategy" so this view doubles
+        // as a live status board for the build-out.
+        const REPORTING_URL = window.location.protocol + '//' + window.location.hostname + ':8086';
+        const JAEGER_URL = window.location.protocol + '//' + window.location.hostname + ':16686';
+        const GRAFANA_URL = window.location.protocol + '//' + window.location.hostname + ':3000';
+
+        async function renderDestinations(traceID) {
+            const dests = [
+                // [icon, label, detail-renderer, link]
+                makeDest('jaeger',     'Jaeger',          'Distributed trace spans — every service publishes here via OTel.', `${JAEGER_URL}/trace/${traceID}`, 'Open →'),
+                makeDest('loki',       'Loki / Grafana',  'Log lines from every service — slog includes trace_id field.',     grafanaLokiLink(traceID), 'Open →'),
+                makeDest('nats',       'NATS JetStream',  'Events flow through (impression, auction.win) — ephemeral, no after-the-fact lookup. trace_id propagated via msg headers.', null, null, 'info'),
+                makeDest('analytics',  'Analytics store', '…', null, null, 'pending'),
+                makeDest('billing',    'Billing ledger',  '…', null, null, 'pending'),
+                makeDest('pg-events',  'Postgres events', 'Raw event rows in Postgres — not yet wired (DuckDB/in-memory only today). See PLAN.md "Persistence Strategy" → analytics store step.', null, null, 'stub'),
+                makeDest('rollups',    'Rollup aggregates','Minute/hour/day aggregates — cmd/rollup stub, not running. See PLAN.md "Persistence Strategy" step 7.', null, null, 'stub'),
+                makeDest('webhooks',   'Webhook dispatch','HTTP POST to registered advertiser/publisher URLs — cmd/webhooks not built. See PLAN.md NATS subjects → webhook subjects.', null, null, 'stub'),
+            ];
+
+            const container = document.getElementById('traceDestinations');
+            container.innerHTML = dests.map(renderDestRow).join('');
+
+            // Live queries (parallel) for the built systems.
+            queryAnalytics(traceID, container);
+            queryBilling(traceID, container);
+        }
+
+        function makeDest(id, label, detail, link, linkLabel, status) {
+            return { id, label, detail, link, linkLabel: linkLabel || 'Open →', status: status || 'ok' };
+        }
+
+        function renderDestRow(d) {
+            const icon = {
+                ok: '✓', pending: '⏳', stub: '⚠', info: 'ℹ', error: '✗',
+            }[d.status] || '·';
+            const color = {
+                ok: '#2ecc71', pending: '#888', stub: '#f39c12', info: '#888', error: '#e74c3c',
+            }[d.status] || '#888';
+            const linkHtml = d.link
+                ? `<a href="${d.link}" target="_blank" style="font-size: 12px;">${d.linkLabel}</a>`
+                : '<span></span>';
+            return `
+                <div style="color: ${color}; font-weight: 600; text-align: center;" data-cell="icon" data-id="${d.id}">${icon}</div>
+                <div style="font-weight: 600;">${d.label}</div>
+                <div style="color: var(--text-secondary, #aaa); font-size: 12px;" data-cell="detail" data-id="${d.id}">${d.detail}</div>
+                <div>${linkHtml}</div>
+            `;
+        }
+
+        function updateDest(container, id, opts) {
+            const iconCell = container.querySelector(`[data-cell="icon"][data-id="${id}"]`);
+            const detailCell = container.querySelector(`[data-cell="detail"][data-id="${id}"]`);
+            if (!iconCell || !detailCell) return;
+            if (opts.status) {
+                const map = {
+                    ok: ['✓', '#2ecc71'], pending: ['⏳', '#888'], error: ['✗', '#e74c3c'], stub: ['⚠', '#f39c12'],
+                };
+                const [icon, color] = map[opts.status] || ['·', '#888'];
+                iconCell.textContent = icon;
+                iconCell.style.color = color;
+            }
+            if (opts.detail !== undefined) detailCell.textContent = opts.detail;
+        }
+
+        async function queryAnalytics(traceID, container) {
+            try {
+                const resp = await fetch(REPORTING_URL + '/debug/auction_wins?trace_id=' + traceID);
+                const data = await resp.json();
+                const n = data.count || 0;
+                updateDest(container, 'analytics', {
+                    status: n > 0 ? 'ok' : 'pending',
+                    detail: `auction.win records: ${n} (in-memory analytics store; DuckDB is the prod backend per PLAN.md)`,
+                });
+            } catch (e) {
+                updateDest(container, 'analytics', { status: 'error', detail: 'query failed: ' + e.message });
+            }
+        }
+
+        async function queryBilling(traceID, container) {
+            try {
+                const resp = await fetch(REPORTING_URL + '/v1/billing/ledger?trace_id=' + traceID);
+                const entries = await resp.json();
+                const n = Array.isArray(entries) ? entries.length : 0;
+                const spend = n > 0 ? entries.reduce((s, e) => s + (e.Amount || 0), 0) : 0;
+                updateDest(container, 'billing', {
+                    status: n > 0 ? 'ok' : 'pending',
+                    detail: n > 0
+                        ? `${n} ledger entry${n === 1 ? '' : 'ies'} · $${spend.toFixed(4)} spend (in-memory ledger; Postgres persistence pending per PLAN.md)`
+                        : 'no ledger entry yet — billing flows from impression pixel; check that the pixel fired',
+                });
+            } catch (e) {
+                updateDest(container, 'billing', { status: 'error', detail: 'query failed: ' + e.message });
+            }
+        }
+
+        function grafanaLokiLink(traceID) {
+            // Grafana Explore deep-link with the Loki query prefilled. Datasource
+            // uid "loki" matches the provisioned data source name in
+            // k8s/base/grafana/datasources.
+            const query = `{service=~".+"} |= \`${traceID}\``;
+            const range = encodeURIComponent(JSON.stringify({ from: 'now-1h', to: 'now' }));
+            return `${GRAFANA_URL}/explore?left=${encodeURIComponent(JSON.stringify({
+                datasource: 'loki',
+                queries: [{ refId: 'A', expr: query }],
+                range: { from: 'now-1h', to: 'now' },
+            }))}`;
+        }
+
+        // Cached placement list — kept in sync with the SSP panel so the
+        // dropdown options and the panel's highlighted row stay coherent.
+        // Each entry is the raw row from /v1/ssp/placements.
+        let placementOptions = [];
+
+        // currentPlacement returns the placement row corresponding to the
+        // selected dropdown option, or null if the list hasn't loaded yet.
+        function currentPlacement() {
+            const id = document.getElementById('placementSelect').value;
+            return placementOptions.find(p => p.ID === id) || null;
+        }
+
+        document.getElementById('placementSelect').addEventListener('change', function() {
+            // Selection changed → resize the empty slot to match (if no ad
+            // is currently displayed) and re-render the SSP panel so the
+            // ACTIVE PAGE badge moves to the new placement's row.
+            if (!currentTraceID) updateSlotSize();
+            renderSSP();
         });
 
         function updateSlotSize() {
-            const [w, h] = document.getElementById('sizeSelect').value.split('x').map(Number);
+            const p = currentPlacement();
+            if (!p) return;
             const slot = document.getElementById('adSlot');
-            slot.style.width = w + 'px';
-            slot.style.minHeight = h + 'px';
-            document.getElementById('adSlotLabel').textContent = w + 'x' + h + ' Ad Slot';
+            slot.style.width = p.Width + 'px';
+            slot.style.minHeight = p.Height + 'px';
+            const label = document.getElementById('adSlotLabel');
+            if (label) label.textContent = p.Width + 'x' + p.Height + ' Ad Slot';
         }
 
         function debugLog(entries) {
@@ -128,118 +938,183 @@
             `).join('');
         }
 
+        // Generate a W3C-format trace context for this ad flow so the
+        // exchange's HTTPMiddleware adopts THIS trace_id (instead of minting
+        // its own). Same value lands in Jaeger spans, slog `trace_id`
+        // fields, NATS events, and the analytics store — pasting it into
+        // Trace Explorer / Jaeger then resolves to a real trace.
+        function newW3CTraceparent() {
+            const tid = crypto.getRandomValues(new Uint8Array(16));
+            const sid = crypto.getRandomValues(new Uint8Array(8));
+            const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+            const traceID = hex(tid);
+            return { traceID, traceparent: `00-${traceID}-${hex(sid)}-01` };
+        }
+
         async function loadAd() {
             const geo = document.getElementById('geoSelect').value;
             const device = parseInt(document.getElementById('deviceSelect').value);
-            const traceID = 'sim-' + Date.now();
+            const { traceID, traceparent } = newW3CTraceparent();
             currentTraceID = traceID;
+            const userID = 'sim-user-' + Math.floor(Math.random() * 1000);
+
+            // Reset the trace timeline for this new request and seed the
+            // header with the trace_id (which will also flow into log lines,
+            // Jaeger spans, and the analytics store).
+            traceReset();
+            traceHeader(traceID);
+            const _pubSel = currentPlacement();
+            traceLog('browser', 'Ad request sent to SSP', {
+                detail: `${geo} / device=${device}`,
+                meta: {
+                    'placement.id': _pubSel ? _pubSel.ID : '(none)',
+                    'placement.name': _pubSel ? _pubSel.Name : '(none)',
+                    'placement.publisher': _pubSel ? _pubSel.PublisherName : '(none)',
+                    'placement.size': _pubSel ? `${_pubSel.Width}x${_pubSel.Height}` : '?',
+                    'placement.floor': _pubSel ? `$${Number(_pubSel.FloorPrice).toFixed(2)}` : '?',
+                    'visitor.geo': geo,
+                    'visitor.device_type': device,
+                    'visitor.user_id': userID,
+                    'trace.id': traceID,
+                    'trace.traceparent': traceparent,
+                },
+            });
 
             debugLog([
                 { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
-                { label: 'Status', value: 'Sending bid request...', status: 'pending' }
+                { label: 'Status', value: 'Sending ad request to SSP...', status: 'pending' }
             ]);
 
-            // Step 1: Send bid request to Exchange
-            const [adW, adH] = document.getElementById('sizeSelect').value.split('x').map(Number);
-            const floor = parseFloat(document.getElementById('floorSelect').value);
+            // Dev: pass the slow-DSP CSV through as a header. SSP forwards
+            // it to the exchange which propagates to specific DSPs. Real
+            // publisher pages don't set this; behavior is dev-gated server-side.
+            const slowDsps = [];
+            if (document.getElementById('slowDsp0').checked) slowDsps.push('0');
+            if (document.getElementById('slowDsp1').checked) slowDsps.push('1');
+            if (document.getElementById('slowDsp2').checked) slowDsps.push('2');
 
-            // Resize slot to match
+            // The realistic publisher-visitor flow: one fetch to SSP, get
+            // back rendered HTML + pixel URLs. The browser never learns
+            // which DSP won, the clearing price, or any auction internals
+            // — those land in Jaeger after the fact (poller below).
+            //
+            // External_id "e2e-pl-tracker-view" is the placement seeded
+            // by the e2e suite; in a real publisher tag this would be the
+            // publisher's slot ID.
+            const sel = currentPlacement();
+            if (!sel) {
+                debugLog([{ label: 'Status', value: 'No placement selected. Wait for SSP to load, or pick one in the dropdown.', status: 'fail' }]);
+                return;
+            }
+            // SSP accepts placement_id as either a UUID (UI-created) or an
+            // external key (seed-derived). The picker holds UUIDs, so we
+            // send those directly.
+            const sspURL = `${SSP_URL}/v1/ssp/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            // Resize ad slot to match the selected placement's dimensions.
             const slot = document.getElementById('adSlot');
-            slot.style.width = adW + 'px';
-            slot.style.minHeight = adH + 'px';
+            slot.style.width = sel.Width + 'px';
+            slot.style.minHeight = sel.Height + 'px';
 
-            const bidRequest = {
-                id: traceID,
-                imp: [{ id: 'imp-1', banner: { w: adW, h: adH }, bidfloor: floor }],
-                site: { domain: 'sim-publisher.com', page: window.location.href, cat: ['IAB17'] },
-                device: { devicetype: device, geo: { country: geo } },
-                user: { id: 'sim-user-' + Math.floor(Math.random() * 1000) },
-                tmax: 100
-            };
-
-            let auctionResult;
+            let serveResp;
             const auctionStart = performance.now();
             try {
-                const resp = await fetch(EXCHANGE_URL + '/v1/openrtb/auction', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(bidRequest)
-                });
-                auctionResult = await resp.json();
+                const headers = { 'traceparent': traceparent };
+                if (slowDsps.length > 0) headers['X-Dev-Slow-DSPs'] = slowDsps.join(',');
+                const resp = await fetch(sspURL, { headers });
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+                serveResp = await resp.json();
             } catch (err) {
                 debugLog([
                     { label: 'Trace ID', value: traceID },
-                    { label: 'Status', value: 'Exchange unreachable: ' + err.message, status: 'fail' }
+                    { label: 'Status', value: 'SSP unreachable: ' + err.message, status: 'fail' }
                 ]);
                 return;
             }
-            const auctionMs = Math.round(performance.now() - auctionStart);
+            const sspMs = Math.round(performance.now() - auctionStart);
 
-            // Check for winner
-            if (auctionResult.nobid || !auctionResult.seatbid || auctionResult.seatbid.length === 0) {
+            // No-bid path — SSP returned nobid:true, no HTML, no pixels.
+            // Real publisher pages would fall back to a house ad / try
+            // another SSP. We just log and stop.
+            if (serveResp.nobid) {
+                traceLog('ssp', 'SSP response: no fill', { cls: 'nobid', detail: `${sspMs}ms` });
                 debugLog([
                     { label: 'Trace ID', value: traceID },
-                    { label: 'Auction', value: `No fill (${auctionMs}ms)`, status: 'fail' },
-                    { label: 'Status', value: 'No bids above floor price', status: 'fail' }
+                    { label: 'Status', value: `No fill (${sspMs}ms)`, status: 'fail' }
                 ]);
                 return;
             }
 
-            const winner = auctionResult.seatbid[0].bid[0];
+            // SSP returned HTML + pixel URLs. The browser sees:
+            //   - that a winning ad came back (got HTML, not nobid)
+            //   - the rendered HTML to insert into the slot
+            //   - the impression/click/viewability URLs to fire
+            // It does NOT see: winner DSP, clearing price, campaign id,
+            // creative id, bid landscape. Those are Jaeger-only.
+            traceLog('ssp', 'SSP response: ad ready', {
+                detail: `${sspMs}ms · HTML + pixel URLs returned`,
+                meta: {
+                    'http.duration_ms': sspMs,
+                    'http.url': sspURL,
+                    'response.html_length': (serveResp.html || '').length,
+                    'response.width': serveResp.width,
+                    'response.height': serveResp.height,
+                    'response.impression_url': serveResp.impression_url,
+                    'response.click_url': serveResp.click_url,
+                    'response.viewability_url': serveResp.viewability_url,
+                    'response.trace_id': serveResp.trace_id,
+                },
+            });
+
             const entries = [
                 { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
-                { label: 'Auction', value: `Winner: ${auctionResult.seatbid[0].seat} at $${winner.price.toFixed(2)} CPM (${auctionMs}ms)`, status: 'success' },
-                { label: 'Creative', value: `${winner.crid || 'unknown'} (${winner.cid || 'unknown'})` },
+                { label: 'SSP', value: `Ad returned (${sspMs}ms)`, status: 'success' },
                 { label: 'Events', value: '', events: [] }
             ];
 
-            // Render ad in slot
+            // Render the SSP-provided HTML directly. This is the real flow:
+            // publisher slot becomes the rendered creative.
             slot.classList.add('loaded');
             slot.innerHTML = `
-                <span class="ad-label">Sponsored - ${adW}x${adH}</span>
-                <div class="ad-content">
-                    <h3>Demo Ad Creative</h3>
-                    <p style="color: #666; font-size: 14px;">Campaign: ${winner.cid}<br>Creative: ${winner.crid}<br>Size: ${adW}x${adH} | Floor: $${floor.toFixed(2)} | Clearing: $${winner.price.toFixed(2)} CPM</p>
-                    <a href="#" class="cta" onclick="fireClick('${traceID}'); return false;">Learn More</a>
-                </div>
+                ${serveResp.html || ''}
+                <a href="#" class="cta" style="display:block;margin-top:8px;text-align:center;" onclick="fireClickURL('${serveResp.click_url}', '${traceparent}'); return false;">Click ad (simulate)</a>
             `;
 
-            // Step 2: Call ad server to get pixel URLs with full context
-            const events = entries[3].events;
-            let impPixelURL = `${TRACKER_URL}/v1/t/imp?tid=${traceID}&cid=${winner.cid}&pid=imp-1&sig=sim`;
-            let viewPixelURL = `${TRACKER_URL}/v1/t/view?tid=${traceID}&cid=${winner.cid}&pid=imp-1`;
-            try {
-                const adResp = await fetch(`${ADSERVER_URL}/v1/ad/serve`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        trace_id: traceID,
-                        campaign_id: winner.cid,
-                        creative_id: winner.crid,
-                        placement_id: 'imp-1',
-                        publisher_id: 'sim-publisher',
-                        advertiser_id: auctionResult.seatbid[0].seat,
-                        clearing_price: winner.price,
-                        currency: auctionResult.cur || 'USD',
-                        site_domain: 'sim-publisher.com',
-                        width: adW,
-                        height: adH
-                    })
-                });
-                const adData = await adResp.json();
-                impPixelURL = adData.impression_url;
-                viewPixelURL = adData.viewability_url;
-                events.push({ name: 'Ad Server', ok: true, detail: 'pixel URLs generated with full context' });
-            } catch (err) {
-                events.push({ name: 'Ad Server', ok: false, detail: 'fallback to basic pixels: ' + err.message });
-            }
+            const events = entries[2].events;
+            let impPixelURL = serveResp.impression_url;
+            let viewPixelURL = serveResp.viewability_url;
 
             // Step 3: Fire impression pixel (URL now has full context from ad server)
+            // Dev: when "Trip fraud" is checked, append ?dev_force_fraud=1
+            // so the tracker treats this as fraud-blocked. Tracker still
+            // returns 200 + pixel (don't reveal detection to real bots) but
+            // sets X-Dev-Fraud-Blocked: 1 in debug mode so we can show it.
+            if (document.getElementById('tripFraud').checked) {
+                impPixelURL += (impPixelURL.includes('?') ? '&' : '?') + 'dev_force_fraud=1';
+            }
             try {
-                const impResp = await fetch(impPixelURL);
-                events.push({ name: 'Impression pixel', ok: impResp.status === 200, detail: `${impResp.status} (${impResp.headers.get('content-type')})` });
+                const impResp = await fetch(impPixelURL, { headers: { 'traceparent': traceparent } });
+                const fraudBlocked = impResp.headers.get('X-Dev-Fraud-Blocked') === '1';
+                if (fraudBlocked) {
+                    const reasons = impResp.headers.get('X-Dev-Fraud-Reasons') || '';
+                    events.push({ name: 'Impression pixel', ok: false, detail: `🚨 fraud blocked: ${reasons}` });
+                    traceLog('tracker', 'Impression dropped (fraud)', { cls: 'error', detail: reasons });
+                } else {
+                    events.push({ name: 'Impression pixel', ok: impResp.status === 200, detail: `${impResp.status} (${impResp.headers.get('content-type')})` });
+                    traceLog('tracker', 'Impression recorded', {
+                        detail: 'pixel 200 · published to NATS',
+                        meta: {
+                            'http.status': impResp.status,
+                            'http.content_type': impResp.headers.get('content-type') || '',
+                            'http.url': impPixelURL,
+                            'response.x_trace_id': impResp.headers.get('x-trace-id') || '(none)',
+                        },
+                    });
+                }
             } catch (err) {
                 events.push({ name: 'Impression pixel', ok: false, detail: err.message });
+                traceLog('tracker', 'Impression call failed', { cls: 'error', detail: err.message });
             }
 
             debugLog(entries);
@@ -251,6 +1126,12 @@
             const visibleTop = Math.max(0, slotRect.top);
             const visibleBottom = Math.min(viewportH, slotRect.bottom);
             const visibleH = Math.max(0, visibleBottom - visibleTop);
+            // Pull current placement dimensions for the viewability calc.
+            // Falls back to the slot's actual rendered height/width if the
+            // dropdown is somehow empty (defensive — shouldn't happen).
+            const _sel = currentPlacement();
+            const adH = _sel ? _sel.Height : slotRect.height;
+            const adW = _sel ? _sel.Width : slotRect.width;
             const visiblePct = Math.min(100, Math.round((visibleH / adH) * 100));
 
             // Simulate time-in-view: random 1-4 seconds
@@ -268,7 +1149,7 @@
             await new Promise(r => setTimeout(r, viewDurMs));
 
             try {
-                const viewResp = await fetch(viewPixelURL + `&dur=${viewDurMs}&pct=${visiblePct}`);
+                const viewResp = await fetch(viewPixelURL + `&dur=${viewDurMs}&pct=${visiblePct}`, { headers: { 'traceparent': traceparent } });
                 const iabLabel = isViewable ? 'IAB viewable' : 'not viewable';
                 events[events.length - 1] = {
                     name: 'Viewability',
@@ -281,34 +1162,860 @@
 
             entries.push({ label: 'Status', value: 'Ad served successfully', status: 'success' });
             debugLog(entries);
+            // Refresh DSP state — daily_budget will have decremented for the
+            // winner; if budget went to 0 you'll see them drop out next auction.
+            refreshMgmt();
+            // Wait a beat for NATS auction.win / impression events to land in
+            // reporting, then render the trace destinations panel with live
+            // counts (built systems) + stubs (pending systems).
+            setTimeout(() => renderDestinations(traceID), 400);
+            // Kick off Jaeger polling so downstream spans (NATS consumers,
+            // exchange.notify.{win,loss}, etc.) appear in the timeline as
+            // they get ingested by the collector.
+            startJaegerPoll(traceID);
         }
 
-        async function fireClick(traceID) {
+        // fireClickURL fires the click pixel using the SSP-supplied,
+        // HMAC-signed click URL. The visitor flow embeds this URL in the
+        // rendered creative; the browser just follows it when the user
+        // clicks. Renamed from the old fireClick which hand-built the URL
+        // from auction internals the browser no longer has access to.
+        async function fireClickURL(clickURL, traceparent) {
             const panel = document.getElementById('debugContent');
             try {
-                // Don't follow redirect, just fire the tracker
-                await fetch(`${TRACKER_URL}/v1/t/click?tid=${traceID}&cid=demo-campaign&pid=imp-1&sig=sim&redir=https://example.com`, { redirect: 'manual' });
-                const clickEntry = document.createElement('div');
-                clickEntry.className = 'debug-entry';
-                clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
-                panel.appendChild(clickEntry);
+                await fetch(clickURL, { redirect: 'manual', headers: { 'traceparent': traceparent } });
             } catch (err) {
                 // fetch with redirect:manual throws on 302, but the click was still tracked
-                const clickEntry = document.createElement('div');
-                clickEntry.className = 'debug-entry';
-                clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
-                panel.appendChild(clickEntry);
             }
+            const clickEntry = document.createElement('div');
+            clickEntry.className = 'debug-entry';
+            clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
+            panel.appendChild(clickEntry);
+            traceLog('tracker', 'Click tracked', {
+                detail: 'pixel 302 → landing page · published to NATS',
+                meta: {
+                    'http.url': clickURL,
+                    'http.expected_status': 302,
+                    'http.redirect_mode': 'manual',
+                    'note': 'browser fetch with redirect:manual throws on 302 — that is the success path',
+                },
+            });
         }
 
         function clearAd() {
             const slot = document.getElementById('adSlot');
             slot.classList.remove('loaded');
             updateSlotSize();
-            slot.innerHTML = '<span id="adSlotLabel">' + document.getElementById('sizeSelect').value.replace('x', 'x') + ' Ad Slot</span><span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>';
+            const p = currentPlacement();
+            const label = p ? `${p.Width}x${p.Height} Ad Slot` : 'Ad Slot';
+            slot.innerHTML = `<span id="adSlotLabel">${label}</span><span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>`;
             debugLog([{ label: 'Status', value: 'Waiting for ad request...', status: 'pending' }]);
             currentTraceID = null;
         }
+
+        // Drain budgets — fires /v1/ssp/serve calls across every fillable
+        // placement with rotating geo + device. Winners' Redis budget
+        // counters tick up via the OpenRTB nurl path. Configuration lives
+        // in #drainModal: fixed count vs "stop after N consecutive no-bids",
+        // concurrency, optional random per-batch delay. A drain in flight
+        // can be interrupted via the Stop button.
+        //
+        // ALL_GEOS / ALL_DEVS are the universe; the actual sampling pool is
+        // narrowed by buildDrainPool() to only combos that match at least one
+        // live campaign's targeting, and placements whose floor a live DSP
+        // can clear. Without this filter ~85% of random inputs return no-bid
+        // because their geo/device doesn't match any campaign's include list,
+        // or the placement floor is above every DSP's max bid.
+        const ALL_GEOS = ['GBR', 'USA', 'FRA', 'JPN', 'DEU', 'AUS', 'CAN'];
+        const ALL_DEVS = ['mobile', 'desktop', 'tablet'];
+        let drainInflight = false;
+        let drainStopRequested = false;
+
+        // buildDrainPool inspects the live DSP campaign cache + SSP placement
+        // list to construct an eligibility pool. A drain that samples from
+        // this pool will fill at a much higher rate than uniform random
+        // because impossible combos (high floors / unmatched targeting) are
+        // excluded up front.
+        function buildDrainPool() {
+            const allCampaigns = [];
+            for (const idx of [0, 1, 2]) {
+                const s = dspState[idx];
+                if (s && !s.error) allCampaigns.push(...s.campaigns);
+            }
+            const liveCampaigns = allCampaigns.filter(c => c.Status === 'live' && (c.SpentToday || 0) < (c.DailyBudget || 1));
+            const maxBid = liveCampaigns.reduce((m, c) => Math.max(m, c.BaseBid || 0), 0);
+
+            // Pool geos/devices = union of values explicitly listed in any
+            // campaign's Include.Geo / Include.Device.
+            //
+            // Empty include array on a campaign means "accepts any" — but we
+            // deliberately don't let that EXPAND the test pool to geos no
+            // campaign explicitly targets. Reason: those any-geo campaigns
+            // tend to be the low-bid "RON" (run-of-network) campaigns
+            // (VPN Plus $0.80, Initech $1.20). When we sample a geo like
+            // JPN that no high-bid campaign targets, only those weak ones
+            // can bid → most lose to the floor → drain hits all-no-bid.
+            //
+            // Restricting the pool to explicitly-targeted geos means every
+            // sample lands in a geo where at least one *targeted* campaign
+            // (with a real budget intent) will bid, plus the any-geo
+            // campaigns still match. Same logic for devices.
+            const geos = new Set();
+            const devices = new Set();
+            for (const c of liveCampaigns) {
+                const t = (c.Targeting && c.Targeting.Include) || {};
+                (t.Geo || []).forEach(g => geos.add(g));
+                (t.Device || []).forEach(d => devices.add(d));
+            }
+            const finalGeos = geos.size > 0 ? [...geos] : ALL_GEOS;
+            const finalDevs = devices.size > 0 ? [...devices] : ALL_DEVS;
+
+            // Drop placements whose floor is above every live campaign's max
+            // base_bid — those auctions are guaranteed no-bid.
+            const elPlacements = placementOptions.filter(p => Number(p.FloorPrice) <= maxBid);
+            const skippedFloor = placementOptions.length - elPlacements.length;
+            return { placements: elPlacements, geos: finalGeos, devices: finalDevs, maxBid, skippedFloor, liveCampaigns: liveCampaigns.length };
+        }
+
+        function drainBudgets() {
+            if (placementOptions.length === 0) {
+                alert('No placements loaded yet. Wait for the SSP panel to populate.');
+                return;
+            }
+            if (drainInflight) {
+                // Already running — surface the banner rather than re-opening
+                // the config modal. User can Stop or wait for it to finish.
+                document.getElementById('drainBanner').style.display = 'block';
+                return;
+            }
+            // Refresh DSP state so the pool computation uses the latest
+            // campaigns (status, spent, base_bid) — and show pool summary
+            // in the modal so the user understands the eligibility filter.
+            refreshMgmt().then(() => {
+                const pool = buildDrainPool();
+                const summary = document.getElementById('drainPoolSummary');
+                if (summary) {
+                    // Diagnostic line + raw numbers so we can spot when the
+                    // pool degenerates (zero live campaigns / falling back
+                    // to ALL_GEOS). If maxBid is 0 here, the DSP fetch
+                    // failed and the pool isn't useful.
+                    const debug = `dspState=[${[0,1,2].map(i => dspState[i] ? (dspState[i].error ? 'ERR' : dspState[i].campaigns.length) : 'null').join(',')}] live=${pool.liveCampaigns} maxBid=$${pool.maxBid.toFixed(2)}`;
+                    summary.innerHTML = `<strong>Eligibility pool:</strong> ${pool.placements.length} placements (${pool.skippedFloor} skipped) · geos: ${pool.geos.join(', ')} · devices: ${pool.devices.join(', ')}<br><span style="color: var(--text-muted, #888); font-family: var(--font-mono, monospace);">${debug}</span>`;
+                }
+            });
+            updateDrainModeVisibility();
+            document.getElementById('drainModal').classList.add('open');
+        }
+
+        function closeDrainModal() {
+            // Drain only starts on form submit (Start button). Closing the
+            // modal pre-start is a plain cancel — no confirmation needed.
+            document.getElementById('drainModal').classList.remove('open');
+        }
+
+        function updateDrainModeVisibility() {
+            const mode = document.querySelector('input[name="drainMode"]:checked').value;
+            document.getElementById('drainCountRow').style.display = mode === 'count' ? '' : 'none';
+            document.getElementById('drainExhaustedRow').style.display = mode === 'exhausted' ? '' : 'none';
+        }
+
+        function stopDrain() {
+            drainStopRequested = true;
+        }
+
+        function dismissDrainBanner() {
+            document.getElementById('drainBanner').style.display = 'none';
+        }
+
+        // refreshAllCaches POSTs /debug/cache/refresh on every service that
+        // owns a warm cache. Used after a manual seed run or schema edit
+        // when you don't want to wait for the 30s poll interval. Reports
+        // success/failure per service in the drain banner.
+        async function refreshAllCaches() {
+            const targets = [
+                ['ssp', 8084], ['exchange', 8081], ['adserver', 8085],
+                ['dsp-internal', 8082], ['dsp-competitor1', 8089], ['dsp-competitor2', 8090],
+            ];
+            const banner = document.getElementById('drainBanner');
+            const status = document.getElementById('drainBannerStatus');
+            banner.style.display = 'block';
+            document.getElementById('drainBannerStopBtn').style.display = 'none';
+            document.getElementById('drainBannerDismissBtn').style.display = 'none';
+            status.innerHTML = '<strong>Refreshing warm caches…</strong>';
+            const results = await Promise.all(targets.map(async ([name, port]) => {
+                try {
+                    const r = await fetch(`http://${window.location.hostname}:${port}/debug/cache/refresh`, { method: 'POST' });
+                    return { name, ok: r.ok, code: r.status };
+                } catch (err) { return { name, ok: false, code: err.message }; }
+            }));
+            const ok = results.filter(r => r.ok).length;
+            const summary = results.map(r => `${r.ok ? '✓' : '✗'} ${r.name}`).join(' · ');
+            status.innerHTML = `<strong>Caches refreshed:</strong> ${ok}/${results.length} ok · ${summary}`;
+            document.getElementById('drainBannerDismissBtn').style.display = '';
+            await refreshSSP();
+            await refreshMgmt();
+        }
+
+        // resetAndReseed POSTs to /dev/reset-and-reseed (gateway endpoint).
+        // Confirms first — this is destructive. After the backend returns,
+        // refreshes the SSP + DSP panels so the user sees the freshly
+        // seeded state. Uses the drain banner for live status because it's
+        // already wired for "long-running ops show progress at the top".
+        async function resetAndReseed() {
+            if (!confirm('Wipe all campaigns, placements, deals, and reseed from profiles/? Cannot be undone.')) return;
+            const btn = document.getElementById('resetBtn');
+            const banner = document.getElementById('drainBanner');
+            const status = document.getElementById('drainBannerStatus');
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = 'Resetting…';
+            banner.style.display = 'block';
+            document.getElementById('drainBannerStopBtn').style.display = 'none';
+            document.getElementById('drainBannerDismissBtn').style.display = 'none';
+            status.innerHTML = '<strong>Resetting + reseeding…</strong> truncating tables, flushing Redis, running seed, invalidating caches.';
+
+            const startTime = performance.now();
+            let body;
+            try {
+                const resp = await fetch('/dev/reset-and-reseed', { method: 'POST' });
+                body = await resp.json();
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            } catch (err) {
+                status.innerHTML = `<strong style="color: #e74c3c;">Reset failed:</strong> ${err.message}`;
+                document.getElementById('drainBannerDismissBtn').style.display = '';
+                btn.disabled = false;
+                btn.textContent = originalText;
+                return;
+            }
+            const totalMs = (performance.now() - startTime).toFixed(0);
+            const stepSummary = body.map(s => `${s.ok ? '✓' : '✗'} ${s.step} (${s.duration_ms}ms)`).join(' · ');
+            status.innerHTML = `<strong>Reset complete</strong> in ${totalMs}ms · ${stepSummary}`;
+            document.getElementById('drainBannerDismissBtn').style.display = '';
+            btn.disabled = false;
+            btn.textContent = originalText;
+            // Refresh both panels — seed has populated new data, services
+            // should already have started reloading caches via the NATS
+            // invalidate, but we explicitly refetch to be sure.
+            await refreshSSP();
+            await refreshMgmt({ force: true });
+        }
+
+        async function startDrain() {
+            if (drainInflight) return;
+            const mode = document.querySelector('input[name="drainMode"]:checked').value;
+            const concurrency = Math.max(1, parseInt(document.getElementById('drainConcurrency').value, 10) || 25);
+            const minDelay = Math.max(0, parseInt(document.getElementById('drainMinDelay').value, 10) || 0);
+            const maxDelay = Math.max(minDelay, parseInt(document.getElementById('drainMaxDelay').value, 10) || 0);
+            const totalTarget = mode === 'count'
+                ? Math.max(1, parseInt(document.getElementById('drainCount').value, 10) || 300)
+                : Infinity;
+            const nobidThreshold = mode === 'exhausted'
+                ? Math.max(1, parseInt(document.getElementById('drainNobidThreshold').value, 10) || 30)
+                : Infinity;
+
+            // Close the modal so the user can keep using the page. Drain runs
+            // in the background; the sticky banner at top shows live progress.
+            document.getElementById('drainModal').classList.remove('open');
+            const banner = document.getElementById('drainBanner');
+            const bannerStatus = document.getElementById('drainBannerStatus');
+            banner.style.display = 'block';
+            document.getElementById('drainBannerStopBtn').style.display = '';
+            document.getElementById('drainBannerDismissBtn').style.display = 'none';
+
+            const modeLabel = mode === 'count' ? `Drain (count=${totalTarget})` : `Drain (until ${nobidThreshold} consecutive no-bids)`;
+            const renderStatus = (fired, served, nobid, errored, consecutiveNobids, elapsedSec) => {
+                const targetLabel = mode === 'count' ? `${fired}/${totalTarget}` : `${fired} fired`;
+                const exhaustedLabel = mode === 'exhausted' ? ` · consec no-bids: <strong>${consecutiveNobids}</strong>/${nobidThreshold}` : '';
+                const poolNote = `<span style="color: var(--text-muted, #888);"> · pool: ${poolPlacements.length}p × ${poolGeos.length}g × ${poolDevs.length}d</span>`;
+                bannerStatus.innerHTML = `<strong>${modeLabel}</strong> · ${targetLabel} in ${elapsedSec.toFixed(1)}s · ${served} served · ${nobid} no-bid · ${errored} err${exhaustedLabel}${poolNote}`;
+            };
+
+            // Force a fresh DSP state fetch *before* building the pool. The
+            // drainBudgets handler kicks off a refreshMgmt but doesn't await
+            // it before opening the modal — so a fast Drain → Start click
+            // can hit startDrain while dspState is still { null, null, null }.
+            // Without this await, buildDrainPool sees zero live campaigns,
+            // falls back to uniform random, and the drain repeats the same
+            // 14% fill rate that prompted this whole smart-pool feature.
+            await refreshMgmt();
+            const pool = buildDrainPool();
+            // Recomputing per-batch would let campaigns that exhaust mid-drain
+            // be filtered out — but it would also mask "the drain killed
+            // them all" with "they were never in the pool to begin with".
+            // One-shot at start keeps the signal clean: shrinking served-count
+            // = depletion happening, not pool churn.
+            const poolPlacements = pool.placements.length > 0 ? pool.placements : placementOptions;
+            const poolGeos = pool.geos;
+            const poolDevs = pool.devices;
+
+            drainInflight = true;
+            drainStopRequested = false;
+            const startTime = performance.now();
+            // Background poll: refresh the DSP/SSP panels every 1s while the
+            // drain is running, decoupled from the per-batch cadence. Lets the
+            // user watch budgets tick down in real time. Throttled via the
+            // in-flight flag so a slow refresh doesn't queue up calls.
+            let panelRefreshInFlight = false;
+            const panelTimer = setInterval(async () => {
+                if (panelRefreshInFlight) return;
+                panelRefreshInFlight = true;
+                try { await refreshMgmt(); } finally { panelRefreshInFlight = false; }
+            }, 1000);
+
+            let fired = 0, served = 0, nobid = 0, errored = 0, consecutiveNobids = 0;
+            renderStatus(0, 0, 0, 0, 0, 0);
+
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const randomDelay = () => minDelay + Math.random() * (maxDelay - minDelay);
+
+            while (true) {
+                if (drainStopRequested) break;
+                if (fired >= totalTarget) break;
+                if (consecutiveNobids >= nobidThreshold) break;
+
+                const remaining = mode === 'count' ? Math.min(concurrency, totalTarget - fired) : concurrency;
+                // Build a batch, then await all in parallel. Each result
+                // updates the per-batch counters; consecutive no-bid count
+                // tracks "did *any* request in this batch succeed?" which
+                // gives a stable signal for the exhausted-mode stop condition.
+                let batchSucceeded = false;
+                let batchNobids = 0;
+                const promises = [];
+                for (let j = 0; j < remaining; j++) {
+                    const p = poolPlacements[Math.floor(Math.random() * poolPlacements.length)];
+                    const geo = poolGeos[Math.floor(Math.random() * poolGeos.length)];
+                    const dev = poolDevs[Math.floor(Math.random() * poolDevs.length)];
+                    const uid = 'drain-' + Math.floor(Math.random() * 1e8);
+                    const url = `${SSP_URL}/v1/ssp/serve?placement_id=${p.ID}&geo=${geo}&device=${dev}&user_id=${uid}`;
+                    promises.push(
+                        fetch(url).then(async r => {
+                            if (!r.ok) { errored++; return; }
+                            try {
+                                const body = await r.json();
+                                if (body.nobid) { nobid++; batchNobids++; }
+                                else { served++; batchSucceeded = true; }
+                            } catch (_) { errored++; }
+                        }).catch(() => { errored++; })
+                    );
+                }
+                await Promise.all(promises);
+                fired += remaining;
+                // Consecutive no-bid run: if the whole batch was no-bid, add
+                // its count to the running tally; if any request served,
+                // reset the tally (something still has budget).
+                if (batchSucceeded) consecutiveNobids = 0;
+                else consecutiveNobids += batchNobids;
+
+                renderStatus(fired, served, nobid, errored, consecutiveNobids, (performance.now() - startTime) / 1000);
+
+                // Random sleep between batches if configured.
+                if (maxDelay > 0) await sleep(randomDelay());
+            }
+
+            // Stop the background panel poller; do one final refresh so the
+            // final state (post-last-batch) is on-screen for the summary.
+            clearInterval(panelTimer);
+            await refreshMgmt();
+            await refreshSSP();
+            const reason = drainStopRequested ? 'stopped by user'
+                : fired >= totalTarget ? `reached target (${totalTarget})`
+                : `exhausted (${consecutiveNobids} consecutive no-bids)`;
+            bannerStatus.innerHTML = `<strong>Done — ${reason}</strong> · ${fired} fired · ${served} served · ${nobid} no-bid · ${errored} err · ${((performance.now() - startTime) / 1000).toFixed(1)}s`;
+            document.getElementById('drainBannerStopBtn').style.display = 'none';
+            document.getElementById('drainBannerDismissBtn').style.display = '';
+            drainInflight = false;
+        }
+
+        // ============================================================
+        // Mgmt panel — talks to each DSP pod over its own port.
+        // ============================================================
+        const DSP_URLS = [
+            window.location.protocol + '//' + window.location.hostname + ':8082',
+            window.location.protocol + '//' + window.location.hostname + ':8089',
+            window.location.protocol + '//' + window.location.hostname + ':8090',
+        ];
+        const DSP_NAMES = ['internal :8082', 'competitor1 :8089', 'competitor2 :8090'];
+        // Open/closed state per DSP section. Default all open so drain runs
+        // are visible across all three. Selecting a header toggles its body.
+        const dspExpanded = { 0: true, 1: true, 2: true };
+
+        function toggleDspSection(idx) {
+            dspExpanded[idx] = !dspExpanded[idx];
+            renderMgmt();
+        }
+
+        // Cached DSP fetch results keyed by index. refreshMgmt overwrites;
+        // renderMgmt reads. Splitting them lets the toggle action re-render
+        // without re-fetching (snappy collapse/expand even during a drain).
+        const dspState = { 0: null, 1: null, 2: null };
+
+        // refreshSSP fetches the SSP's warm cache via /v1/ssp/placements,
+        // stores it as placementOptions (the picker dropdown source), and
+        // triggers a re-render of both the dropdown and the panel. Splitting
+        // fetch from render lets us re-render the panel on selection change
+        // (so the ACTIVE PAGE badge follows the picker) without re-fetching.
+        async function refreshSSP() {
+            const content = document.getElementById('sspContent');
+            content.innerHTML = '<div style="color: var(--text-secondary);">Loading…</div>';
+            let placements;
+            try {
+                const resp = await fetch('http://' + window.location.hostname + ':8084/v1/ssp/placements');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                placements = await resp.json();
+            } catch (err) {
+                content.innerHTML = `<div style="color: #e74c3c;">SSP unreachable: ${err.message}</div>`;
+                return;
+            }
+            placementOptions = (placements || []).filter(p => p.Status !== 'archived');
+            renderPlacementDropdown();
+            renderSSP();
+        }
+
+        // renderPlacementDropdown replaces the picker's options with one entry
+        // per active placement, grouped by publisher. The Publisher Simulator
+        // entry is selected by default on first load so the page boots
+        // pointing at its own publisher's slot.
+        function renderPlacementDropdown() {
+            const sel = document.getElementById('placementSelect');
+            const previouslySelected = sel.value;
+            if (placementOptions.length === 0) {
+                sel.innerHTML = '<option value="">No placements available</option>';
+                return;
+            }
+            const byPub = {};
+            for (const p of placementOptions) {
+                if (!byPub[p.PublisherID]) byPub[p.PublisherID] = { name: p.PublisherName, items: [] };
+                byPub[p.PublisherID].items.push(p);
+            }
+            const pubs = Object.values(byPub).sort((a, b) => a.name.localeCompare(b.name));
+            sel.innerHTML = pubs.map(pub => {
+                const opts = pub.items.map(p => `<option value="${p.ID}">${p.Name} (${p.Width}x${p.Height}, $${Number(p.FloorPrice).toFixed(2)})</option>`).join('');
+                return `<optgroup label="${pub.name}">${opts}</optgroup>`;
+            }).join('');
+            // Restore prior selection if still valid; otherwise default to the
+            // Publisher Simulator's slot.
+            if (placementOptions.some(p => p.ID === previouslySelected)) {
+                sel.value = previouslySelected;
+            } else {
+                const sim = placementOptions.find(p => p.PublisherName === 'Publisher Simulator');
+                if (sim) sel.value = sim.ID;
+            }
+            updateSlotSize();
+        }
+
+        // Set of publisher IDs the user has collapsed. Empty = all expanded
+        // (the default). Persists across re-renders so toggling one publisher
+        // doesn't reset the others (analogous to dspExpanded for the DSP panel).
+        const pubCollapsed = new Set();
+
+        function togglePubSection(pubID) {
+            if (pubCollapsed.has(pubID)) pubCollapsed.delete(pubID);
+            else pubCollapsed.add(pubID);
+            renderSSP();
+        }
+
+        // renderSSP groups the cached placements by publisher and renders the
+        // inventory table. The currently-selected placement (from the picker)
+        // gets the ACTIVE PAGE badge — selection moves the badge in real time
+        // via the placementSelect change handler. Each publisher section
+        // is collapsible; the header summary stays visible when collapsed so
+        // a glance still shows publisher domain + placement count + whether
+        // it owns the active page.
+        function renderSSP() {
+            const content = document.getElementById('sspContent');
+            if (placementOptions.length === 0) {
+                content.innerHTML = '<div style="color: var(--text-secondary);">No placements available. Run <code>tilt trigger seed-standard</code>.</div>';
+                return;
+            }
+            const activeID = document.getElementById('placementSelect').value;
+            const byPub = {};
+            for (const p of placementOptions) {
+                if (!byPub[p.PublisherID]) byPub[p.PublisherID] = { id: p.PublisherID, name: p.PublisherName, domain: p.PublisherDomain, placements: [] };
+                byPub[p.PublisherID].placements.push(p);
+            }
+            const pubs = Object.values(byPub).sort((a, b) => a.name.localeCompare(b.name));
+            content.innerHTML = pubs.map(pub => {
+                const open = !pubCollapsed.has(pub.id);
+                const caret = open ? '▾' : '▸';
+                const ownsActive = pub.placements.some(p => p.ID === activeID);
+                const activeTagHeader = ownsActive
+                    ? ' <span style="background: rgba(46, 204, 113, 0.2); color: #2ecc71; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; margin-left: 6px;">active page</span>'
+                    : '';
+                const pausedCount = pub.placements.filter(p => p.Status === 'paused').length;
+                const pausedSummary = pausedCount > 0 ? ` · ${pausedCount} paused` : '';
+                const rows = pub.placements.map(p => {
+                    const isActive = p.ID === activeID;
+                    const tag = isActive ? ' <span style="background: rgba(46, 204, 113, 0.2); color: #2ecc71; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; margin-left: 6px;">active page</span>' : '';
+                    const path = (p.PageURLPattern || '').replace(/^https?:\/\/[^/]+/, '') || '/';
+                    const actions = `
+                        <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="editPlacementFloor('${p.ID}', ${Number(p.FloorPrice)})">Floor</button>
+                        <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="togglePlacementStatus('${p.ID}', '${p.Status}')">${p.Status === 'paused' ? 'Resume' : 'Pause'}</button>
+                        <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="deletePlacement('${p.ID}', '${p.Name.replace(/'/g, '')}')">Delete</button>
+                    `;
+                    const statusBadge = p.Status === 'paused'
+                        ? ' <span style="background: rgba(243, 156, 18, 0.2); color: #f39c12; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; margin-left: 6px;">paused</span>'
+                        : '';
+                    return `<tr${isActive ? ' style="background: rgba(46, 204, 113, 0.06);"' : ''}>
+                        <td style="padding: 6px 10px;">${p.Name}${statusBadge}${tag}</td>
+                        <td style="padding: 6px 10px; color: var(--text-secondary);">${p.Format}</td>
+                        <td style="padding: 6px 10px; font-family: var(--font-mono, monospace);">${p.Width}×${p.Height}</td>
+                        <td style="padding: 6px 10px; font-family: var(--font-mono, monospace);">$${Number(p.FloorPrice).toFixed(2)}</td>
+                        <td style="padding: 6px 10px; color: var(--text-secondary); font-family: var(--font-mono, monospace); font-size: 12px;">${path}</td>
+                        <td style="padding: 6px 10px; text-align: right; white-space: nowrap;">${actions}</td>
+                    </tr>`;
+                }).join('');
+                const tableHTML = open ? `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead style="background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">
+                            <tr>
+                                <th style="padding: 6px 10px; text-align: left;">Placement</th>
+                                <th style="padding: 6px 10px; text-align: left;">Format</th>
+                                <th style="padding: 6px 10px; text-align: left;">Size</th>
+                                <th style="padding: 6px 10px; text-align: left;">Floor</th>
+                                <th style="padding: 6px 10px; text-align: left;">Page</th>
+                                <th style="padding: 6px 10px; text-align: right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                ` : '';
+                return `
+                    <div style="margin-bottom: 14px; border: 1px solid var(--border-subtle, #333); border-radius: 6px; overflow: hidden;">
+                        <div onclick="togglePubSection('${pub.id}')" style="padding: 8px 12px; background: rgba(255,255,255,0.03); ${open ? 'border-bottom: 1px solid var(--border-subtle, #333);' : ''} display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
+                            <div>
+                                <span style="color: var(--text-muted, #888); margin-right: 8px;">${caret}</span>
+                                <strong>${pub.name}</strong>${activeTagHeader}
+                                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">${pub.domain}</span>
+                                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">· ${pub.placements.length} placement${pub.placements.length === 1 ? '' : 's'}${pausedSummary}</span>
+                            </div>
+                            <button class="btn btn-secondary" style="padding: 2px 10px; font-size: 11px;" onclick="event.stopPropagation(); newPlacement('${pub.id}', '${pub.name.replace(/'/g, '')}')">+ Placement</button>
+                        </div>
+                        ${tableHTML}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Placement CRUD — these call POST/PATCH/DELETE on /v1/ssp/placements
+        // and then trigger a synchronous SSP cache refresh + UI re-render so
+        // the change is immediately visible (without waiting for NATS
+        // invalidate to propagate).
+        async function ssperMutate(method, url, body) {
+            const opts = { method };
+            if (body) {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = JSON.stringify(body);
+            }
+            const resp = await fetch(url, opts);
+            if (!resp.ok) {
+                const text = await resp.text().catch(() => '');
+                throw new Error(`${method} ${url} → HTTP ${resp.status}: ${text}`);
+            }
+            // Force the SSP warm cache to reload now rather than waiting for
+            // the 30s poll or the NATS invalidate to land.
+            try { await fetch('http://' + window.location.hostname + ':8084/debug/cache/refresh', { method: 'POST' }); } catch (_) {}
+            await refreshSSP();
+        }
+
+        async function editPlacementFloor(id, current) {
+            const v = prompt('New floor price (USD CPM):', current.toFixed(2));
+            if (v === null) return;
+            const floor = parseFloat(v);
+            if (!isFinite(floor) || floor < 0) { alert('Floor must be a non-negative number.'); return; }
+            try {
+                await ssperMutate('PATCH', `${SSP_URL}/v1/ssp/placements/${id}`, { floor_price: floor });
+            } catch (err) { alert(err.message); }
+        }
+
+        async function togglePlacementStatus(id, currentStatus) {
+            const next = currentStatus === 'paused' ? 'active' : 'paused';
+            try {
+                await ssperMutate('PATCH', `${SSP_URL}/v1/ssp/placements/${id}`, { status: next });
+            } catch (err) { alert(err.message); }
+        }
+
+        async function deletePlacement(id, name) {
+            if (!confirm(`Archive placement "${name}"? It will stop receiving traffic.`)) return;
+            try {
+                await ssperMutate('DELETE', `${SSP_URL}/v1/ssp/placements/${id}`);
+            } catch (err) { alert(err.message); }
+        }
+
+        // newPlacement prompts for the basic fields and POSTs to create.
+        // Publisher is fixed (the row's parent publisher); other fields
+        // come from prompts. Lighter than a full modal but enough to demo
+        // the CRUD plumbing end-to-end.
+        async function newPlacement(publisherID, publisherName) {
+            const name = prompt(`New placement under "${publisherName}". Name:`);
+            if (!name) return;
+            const sizeStr = prompt('Size (WxH, e.g. 300x250):', '300x250');
+            if (!sizeStr) return;
+            const m = sizeStr.match(/^(\d+)x(\d+)$/i);
+            if (!m) { alert('Invalid size format. Use WxH.'); return; }
+            const width = parseInt(m[1], 10), height = parseInt(m[2], 10);
+            const floorStr = prompt('Floor price (USD CPM):', '1.00');
+            if (floorStr === null) return;
+            const floor = parseFloat(floorStr);
+            if (!isFinite(floor) || floor < 0) { alert('Floor must be a non-negative number.'); return; }
+            try {
+                await ssperMutate('POST', `${SSP_URL}/v1/ssp/placements`, {
+                    publisher_id: publisherID,
+                    name, format: 'display', width, height, floor_price: floor,
+                });
+            } catch (err) { alert(err.message); }
+        }
+
+        async function refreshMgmt(opts = {}) {
+            // Fetch all three DSPs in parallel. Errors are recorded per-pod
+            // so a single broken DSP doesn't blank the whole panel.
+            const fetches = DSP_URLS.map(async (url, idx) => {
+                if (opts.force) {
+                    try { await fetch(url + '/debug/cache/refresh', { method: 'POST' }); } catch (_) {}
+                }
+                try {
+                    const resp = await fetch(url + '/v1/dsp/campaigns');
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    const campaigns = await resp.json();
+                    dspState[idx] = { campaigns: Array.isArray(campaigns) ? campaigns : [], error: null };
+                } catch (err) {
+                    dspState[idx] = { campaigns: [], error: err.message };
+                }
+            });
+            await Promise.all(fetches);
+            renderMgmt();
+        }
+
+        // renderMgmt paints all three DSP sections from dspState. Called by
+        // refreshMgmt after a fetch and by toggleDspSection on expand/collapse
+        // (which doesn't need a fetch).
+        function renderMgmt() {
+            const content = document.getElementById('mgmtContent');
+            content.innerHTML = [0, 1, 2].map(idx => {
+                const data = dspState[idx];
+                const open = dspExpanded[idx];
+                const caret = open ? '▾' : '▸';
+                // Header summary: aggregate spent + remaining across this
+                // pod's campaigns so the user can see drain progress even
+                // when the section is collapsed.
+                let headerSummary = '<span style="color: var(--text-secondary); font-size: 12px;">loading…</span>';
+                let body = '<div style="color: var(--text-secondary); padding: 8px 0;">loading…</div>';
+                if (data) {
+                    if (data.error) {
+                        headerSummary = `<span style="color: #e74c3c; font-size: 12px;">${data.error}</span>`;
+                        body = `<div style="color: #e74c3c; padding: 8px 0;">Failed to reach ${DSP_URLS[idx]}: ${data.error}</div>`;
+                    } else if (data.campaigns.length === 0) {
+                        headerSummary = '<span style="color: var(--text-secondary); font-size: 12px;">no campaigns</span>';
+                        body = '<div style="color: var(--text-secondary); padding: 8px 0;">No campaigns in this DSP\'s warm cache.</div>';
+                    } else {
+                        const totalSpent = data.campaigns.reduce((s, c) => s + (c.SpentToday || 0), 0);
+                        const totalCap = data.campaigns.reduce((s, c) => s + (c.DailyBudget || 0), 0);
+                        const remaining = Math.max(0, totalCap - totalSpent);
+                        const pct = totalCap > 0 ? Math.min(100, (totalSpent / totalCap) * 100) : 0;
+                        const liveCount = data.campaigns.filter(c => c.Status === 'live').length;
+                        const drainedCount = data.campaigns.filter(c => (c.SpentToday || 0) >= (c.DailyBudget || 1) - 0.01).length;
+                        headerSummary = `
+                            <span style="color: var(--text-secondary); font-size: 12px;">
+                                ${data.campaigns.length} campaign${data.campaigns.length === 1 ? '' : 's'} · ${liveCount} live · <strong>$${totalSpent.toFixed(2)}</strong> / $${totalCap.toFixed(2)} spent (<strong style="color: ${pct >= 100 ? '#e74c3c' : pct >= 80 ? '#f39c12' : '#2ecc71'}">$${remaining.toFixed(2)} left</strong>)${drainedCount > 0 ? ` · ${drainedCount} drained` : ''}
+                            </span>`;
+                        body = renderCampaigns(data.campaigns, idx);
+                    }
+                }
+                return `
+                    <div style="margin-bottom: 14px; border: 1px solid var(--border-subtle, #333); border-radius: 6px; overflow: hidden;">
+                        <div onclick="toggleDspSection(${idx})" style="padding: 10px 14px; background: rgba(255,255,255,0.03); cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; gap: 12px;">
+                            <div style="flex-shrink: 0;">
+                                <span style="color: var(--text-muted, #888); margin-right: 8px;">${caret}</span>
+                                <strong>DSP ${idx + 1}</strong>
+                                <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">${DSP_NAMES[idx]}</span>
+                            </div>
+                            <div style="flex: 1; text-align: right;">${headerSummary}</div>
+                            <button class="btn btn-secondary" style="padding: 2px 10px; font-size: 11px; flex-shrink: 0;" onclick="event.stopPropagation(); newCampaignForm(${idx})">+ Campaign</button>
+                        </div>
+                        ${open ? `<div style="padding: 0 14px 12px;">${body}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderCampaigns(campaigns, dspIdx) {
+            const rows = campaigns.map(c => {
+                const targeting = c.Targeting && c.Targeting.Include
+                    ? `geo=${(c.Targeting.Include.Geo || []).join('|') || 'any'} / dev=${(c.Targeting.Include.Device || []).join('|') || 'any'}`
+                    : '';
+                const statusBadge = c.Status === 'live'
+                    ? '<span style="color: #2ecc71;">● live</span>'
+                    : c.Status === 'paused'
+                        ? '<span style="color: #f39c12;">⏸ paused</span>'
+                        : `<span style="color: var(--text-secondary);">${c.Status}</span>`;
+                // Spend progress: shows today's spend vs the daily cap.
+                // Bar fills as the campaign wins auctions; turns amber over 80%,
+                // red at 100% so depletion is obvious at a glance.
+                const spent = c.SpentToday || 0;
+                const cap = c.DailyBudget || 1;
+                const pct = Math.min(100, (spent / cap) * 100);
+                const barColor = pct >= 100 ? '#e74c3c' : pct >= 80 ? '#f39c12' : '#2ecc71';
+                const remaining = Math.max(0, cap - spent);
+                const spendCell = `
+                    <div style="display: flex; flex-direction: column; gap: 2px; min-width: 130px;">
+                        <div style="font-size: 11px; color: var(--text-secondary);">
+                            $${spent.toFixed(2)} / $${cap.toFixed(2)} · <strong>$${remaining.toFixed(2)} left</strong>
+                        </div>
+                        <div style="background: var(--border-subtle, #333); height: 4px; border-radius: 2px; overflow: hidden;">
+                            <div style="background: ${barColor}; height: 100%; width: ${pct.toFixed(1)}%; transition: width 0.3s;"></div>
+                        </div>
+                    </div>
+                `;
+                const advertiser = c.AdvertiserName
+                    ? `<strong>${c.AdvertiserName}</strong>`
+                    : `<span title="${c.AdvertiserID || ''}">${(c.AdvertiserID || '').slice(0, 8)}…</span>`;
+                return `
+                    <tr data-id="${c.ID}">
+                        <td style="padding: 6px 8px;"><strong>${c.Name}</strong><div style="color: var(--text-secondary); font-size: 11px;">${c.ID.slice(0, 8)}…</div></td>
+                        <td style="padding: 6px 8px;">${advertiser}</td>
+                        <td style="padding: 6px 8px;">${statusBadge}</td>
+                        <td style="padding: 6px 8px;"><input type="number" step="0.01" value="${c.BaseBid}" style="width: 80px;" data-field="base_bid" /></td>
+                        <td style="padding: 6px 8px;"><input type="number" step="1" value="${c.DailyBudget}" style="width: 100px;" data-field="daily_budget" /></td>
+                        <td style="padding: 6px 8px;">${spendCell}</td>
+                        <td style="padding: 6px 8px; color: var(--text-secondary); font-size: 11px;">${targeting}</td>
+                        <td style="padding: 6px 8px;">
+                            <button class="btn btn-secondary" style="padding: 2px 8px;" onclick="saveCampaign(${dspIdx}, '${c.ID}', this)">Save</button>
+                            <button class="btn btn-secondary" style="padding: 2px 8px;" onclick="toggleStatus(${dspIdx}, '${c.ID}', '${c.Status}')">${c.Status === 'live' ? 'Pause' : 'Resume'}</button>
+                            <button class="btn btn-secondary" style="padding: 2px 8px; color: #e74c3c;" onclick="deleteCampaign(${dspIdx}, '${c.ID}', '${c.Name.replace(/'/g, "\\'")}')">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            return `
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="text-align: left; border-bottom: 1px solid var(--border-subtle, #333); color: var(--text-secondary); font-size: 11px;">
+                            <th style="padding: 6px 8px;">Campaign</th>
+                            <th style="padding: 6px 8px;">Advertiser</th>
+                            <th style="padding: 6px 8px;">Status</th>
+                            <th style="padding: 6px 8px;">Base Bid</th>
+                            <th style="padding: 6px 8px;">Daily Budget</th>
+                            <th style="padding: 6px 8px;">Spent / Remaining</th>
+                            <th style="padding: 6px 8px;">Targeting</th>
+                            <th style="padding: 6px 8px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        }
+
+        // Edit (Phase B) — PATCH base_bid + daily_budget from inline inputs.
+        async function saveCampaign(dspIdx, id, btn) {
+            const row = btn.closest('tr');
+            const base_bid = parseFloat(row.querySelector('[data-field="base_bid"]').value);
+            const daily_budget = parseFloat(row.querySelector('[data-field="daily_budget"]').value);
+            btn.disabled = true; btn.textContent = '…';
+            try {
+                const resp = await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base_bid, daily_budget })
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                btn.textContent = '✓';
+                await refreshMgmt({ force: true });
+            } catch (err) {
+                btn.textContent = '✗ ' + err.message;
+                btn.disabled = false;
+            }
+        }
+
+        // Pause/resume (Phase C) — PATCH status field.
+        async function toggleStatus(dspIdx, id, currentStatus) {
+            const newStatus = currentStatus === 'live' ? 'paused' : 'live';
+            await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
+            await refreshMgmt({ force: true });
+        }
+
+        // Delete (Phase C) — soft-delete by archiving (DSP filters status=live
+        // anyway, so archived campaigns just stop appearing).
+        async function deleteCampaign(dspIdx, id, name) {
+            if (!confirm(`Delete campaign "${name}"?`)) return;
+            await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, { method: 'DELETE' });
+            await refreshMgmt({ force: true });
+        }
+
+        // Create (Phase C) — opens a modal form. Real labels, real inputs,
+        // submit handler validates + POSTs + refreshes the panel.
+        // dspIdx is the index into DSP_URLS for the target pod; stored on
+        // the modal so the submit handler knows where to POST.
+        let newCampaignDspIdx = 0;
+        function newCampaignForm(dspIdx) {
+            newCampaignDspIdx = dspIdx;
+            const tabLabel = `DSP ${dspIdx + 1} (${DSP_NAMES[dspIdx]})`;
+            document.getElementById('newCampaignDsp').textContent = tabLabel;
+            document.getElementById('ncError').textContent = '';
+            document.getElementById('newCampaignForm').reset();
+            // The reset above unchecks all checkboxes; reapply the defaults
+            // we marked checked in the markup (GBR + mobile).
+            document.querySelectorAll('#newCampaignModal input[type="checkbox"][value="GBR"]').forEach(cb => cb.checked = true);
+            document.querySelectorAll('#newCampaignModal input[type="checkbox"][value="mobile"]').forEach(cb => cb.checked = true);
+            document.getElementById('ncBaseBid').value = '2.50';
+            document.getElementById('ncDailyBudget').value = '500';
+            document.getElementById('newCampaignModal').classList.add('open');
+            setTimeout(() => document.getElementById('ncName').focus(), 0);
+        }
+
+        function closeCampaignModal() {
+            document.getElementById('newCampaignModal').classList.remove('open');
+        }
+
+        // Escape closes whichever modal is open — small QoL.
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                closeCampaignModal();
+                if (!drainInflight) document.getElementById('drainModal').classList.remove('open');
+            }
+        });
+
+        async function submitCampaignForm(e) {
+            e.preventDefault();
+            const errBox = document.getElementById('ncError');
+            errBox.textContent = '';
+            const name = document.getElementById('ncName').value.trim();
+            const base_bid = parseFloat(document.getElementById('ncBaseBid').value);
+            const daily_budget = parseFloat(document.getElementById('ncDailyBudget').value);
+            const geoBoxes = document.querySelectorAll('#newCampaignModal .checkbox-grid input[type="checkbox"]');
+            const include_geo = [];
+            const include_device = [];
+            // Geo checkboxes are in the first grid; device in the second. We
+            // identify by value being a known 3-letter ISO code vs lowercase name.
+            geoBoxes.forEach(cb => {
+                if (!cb.checked) return;
+                if (/^[A-Z]{3}$/.test(cb.value)) include_geo.push(cb.value);
+                else include_device.push(cb.value);
+            });
+            const body = { name, base_bid, daily_budget, include_geo, include_device };
+            try {
+                const resp = await fetch(DSP_URLS[newCampaignDspIdx] + '/v1/dsp/campaigns', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!resp.ok) {
+                    errBox.textContent = 'Create failed: ' + (await resp.text());
+                    return;
+                }
+            } catch (err) {
+                errBox.textContent = 'Create failed: ' + err.message;
+                return;
+            }
+            closeCampaignModal();
+            await refreshMgmt({ force: true });
+        }
+
+        // Initial load + refresh after each auction so changes are visible.
+        refreshMgmt();
+        refreshSSP();
     </script>
 </body>
 </html>

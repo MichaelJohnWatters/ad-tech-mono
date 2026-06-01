@@ -168,6 +168,32 @@ A full-stack programmatic advertising platform in a single Go monorepo that a de
 - Publisher revenue reports
 - Data exports and API access
 
+**Current state of event dispatch** (cmd/reporting):
+
+Per-subject handlers attached via `EventConsumer.RegisterNATSSubscriptions`. After each NATS message arrives, two destinations are written:
+
+| Event subject | Analytics store | Billing ledger |
+|---|---|---|
+| `adtech.events.impression` | `InsertImpression` (always) | `ProcessEvent` — CPM bills immediately, CPC/CPA/vCPM/CPCV reserve budget |
+| `adtech.events.click` | `InsertClick` (always) | **NOT WIRED** — should call `ProcessEvent` to settle CPC reservations |
+| `adtech.events.conversion` | `InsertConversion` (always) | **NOT WIRED** — should settle CPA reservations |
+| `adtech.events.view` (viewability) | (no handler yet) | **NOT WIRED** — should settle vCPM reservations |
+| `adtech.auction.complete` | `InsertAuction` (always) | not billed (the corresponding `adtech.auction.win` event is what triggers billing) |
+
+The reserve/settle dispatch logic exists in `pkg/billing.Engine.ProcessEvent` — switches on `BidModel`. What's missing is the call to it from the click/conversion/view handlers. This is why all 8 `tests/e2e/billing_models_test.go` cases skip with "CPC/CPA reserve-settle dispatch in cmd/reporting consumer pending."
+
+**Current backing stores** (both pluggable, both in-memory in dev):
+
+- **Analytics**: `analytics.NewMemory()` in dev. `pkg/store/analytics/duckdb.go` exists and works (CGO build via `build/Dockerfile.reporting`), used in staging. ClickHouse impl planned for prod (multi-writer).
+- **Billing ledger**: `billing.NewLedger()` is an in-process `[]LedgerEntry` slice. Volatile — restart wipes it. Accumulates across the e2e suite's lifetime (test `Reset` truncates Postgres + flushes Redis but doesn't reset the reporting process). Postgres-backed ledger is the planned upgrade — schema columns are in `migrations/` (`ledger_entries`, `invoices`, `reservations`) but nothing writes to them yet. Until then, every spend-tracking test that runs against a live stack should snapshot `TotalSpend` before its action and assert on the delta, not the absolute. Existing examples: `TestEndToEnd/08_tracker_and_billing`, `TestFraudDedupSameImpressionDropped`.
+
+**Downstream consumers of the analytics store** (scaffolded, not wired):
+
+- `cmd/rollup` — minute/hour/day/month aggregates for fast dashboard queries. Job stub.
+- `cmd/webhooks` — subscribes to event subjects, POSTs to advertiser/publisher-registered URLs. Empty directory.
+- `cmd/pipeline` enrichment — derived fields (fraud score, IAB classification) before events land in analytics. Stub.
+- Billing persistence — `Ledger.Record` should `INSERT INTO ledger_entries` in addition to the in-memory append. Not done.
+
 ### 7. User and Account Management
 
 **What it is:** Authentication, authorisation, and multi-tenant account management.
@@ -177,6 +203,19 @@ A full-stack programmatic advertising platform in a single Go monorepo that a de
 - Role-based access control (admin, manager, viewer)
 - API key management
 - Organisation/team structures
+
+**Current state (2026-05-31):** the user/account *tables* exist (`accounts`, `api_keys`, `team_members`) and RLS uses `account_id` for tenant isolation, but the *runtime auth surface* is not built. No middleware checks bearer tokens / API keys; no service distinguishes "anonymous" from "authenticated" callers; no per-role permissions are enforced. Today's effective security model is "trusted network" — fine for local dev where only the developer's machine talks to the services, but a hard blocker for any external surface.
+
+**What this blocks (today):** the campaign-management endpoints landed on `cmd/dsp/main.go` (`POST/PATCH/DELETE /v1/dsp/campaigns`) are real platform endpoints but ship unauthenticated. They're safe in local dev (closed network, dev tooling only), and the e2e suite exercises them, but they MUST NOT be exposed to any public surface (or even an internal staging network) until auth lands. The handler files contain explicit TODO comments pointing to this section.
+
+**What needs to land:**
+
+1. `pkg/middleware/auth.go` — bearer token / mTLS verification middleware. Reads expected token from config (secret tier), wraps any handler requiring auth. Returns 401 on missing/invalid token.
+2. Identity-bearing context: middleware decodes the token to `(user_id, account_id, roles)` and attaches to `r.Context()`. Handlers read identity via a helper (`auth.IdentityFromContext`) and pin tenant context to the caller's account.
+3. Per-role permissions: handler-level checks like `if !auth.HasRole(ctx, "admin")` for mutating operations. Roles loaded from `team_members` table.
+4. Audit log wiring: every mutation goes into `audit_log` with caller identity and before/after diff. Table already exists in `migrations/`.
+5. Apply to the campaign management endpoints + every future POST/PATCH/DELETE that lands on a service-direct route.
+6. **Same auth primitives serve the External DSP Partners outbound case** (see "External DSP Partners → Auth-aware HTTP client") — same `pkg/middleware/auth.go` design covers both inbound (we receive a token) and outbound (we send a token to a partner). Build both directions in the same module to keep one consistent auth story.
 
 ### 8. Data and Audience Management
 
@@ -1158,6 +1197,238 @@ All workflows available via REST API:
 
 ---
 
+## External DSP Partners (Multi-Tenant Integration Platform)
+
+### What this section is
+
+The exchange today speaks **OpenRTB on the wire** — the protocol primitives (bid request fan-out, win/loss notify, OpenRTB JSON shapes) are implemented and work against internal DSPs (`cmd/dsp` + the two competitor pods). The gap is everything *around* the wire: partner onboarding, auth, observability, financial reconciliation, compliance. That's the operational layer needed to run as a multi-tenant exchange — accepting bids from real external DSP partners (Xandr, DV360, TTD, smaller players) instead of only our own internal bidders.
+
+This is part of the project scope (intentional learning exercise — building the operational layer is how you actually learn how an exchange works). Spec'd here so the work has a documented home.
+
+### Current state
+
+| Capability | Built | Notes |
+|---|---|---|
+| OpenRTB BidRequest serialization | ✅ | `pkg/openrtb/openrtb.go` — 20 types matching IAB 2.5/2.6 |
+| HTTP fan-out to DSP endpoints (parallel goroutines) | ✅ | `cmd/exchange/main.go` `fanOutToDSPs` |
+| BidResponse parsing | ✅ | Same path |
+| HTTP nurl (win notify) | ✅ | `sendWinLossNotifications` |
+| HTTP lurl (loss notify) with reason code | ✅ | Same |
+| Per-call timeout via request context | ✅ | Auction deadline propagated via fanCtx |
+| Smart router (adaptive skip of slow/no-bid DSPs across auctions) | ✅ | `pkg/optimise.SmartRouter` |
+| Bid shading model | ✅ | `pkg/bidshading` |
+
+### Production gaps (the work to schedule)
+
+Eight categories, build order based on what each unlocks.
+
+#### 1. DSP registry (foundation — build first)
+
+Today: `exchange.dsp_endpoints` config = comma-separated URLs. Static, set at deploy time, no metadata.
+
+Need: a Postgres table `partners` with one row per integrated DSP, the exchange reads from it instead of env config. Schema sketch:
+
+```sql
+CREATE TABLE partners (
+    id              UUID PRIMARY KEY,
+    name            TEXT NOT NULL,
+    type            TEXT NOT NULL,  -- 'dsp', 'agency', etc.
+    status          TEXT NOT NULL,  -- 'sandbox', 'active', 'paused', 'terminated'
+    endpoint_bid    TEXT NOT NULL,  -- their /openrtb/bid URL
+    endpoint_nurl   TEXT,           -- if different from bid base
+    auth_method     TEXT NOT NULL,  -- 'api_key', 'mtls', 'oauth2'
+    auth_secret_ref TEXT NOT NULL,  -- ref to secret store, never the secret itself
+    channels        TEXT[],         -- 'display', 'video', 'native'
+    formats         TEXT[],         -- 'banner', 'vast', 'mraid'
+    sizes           TEXT[],         -- '300x250', '728x90', etc.
+    geos            TEXT[],         -- ISO country codes they bid on
+    timeout_ms      INT DEFAULT 100,
+    max_qps         INT,            -- rate limit
+    contact_tech    TEXT,           -- engineering contact email
+    contact_billing TEXT,
+    sla_terms       JSONB,          -- response time SLA, fill rate floor, etc.
+    onboarded_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Implementation: new `cmd/partner-portal` (admin UI for managing DSPs) + warm cache in exchange reading from this table (same pattern as `pkg/store/postgres.CampaignLoader`). DSP onboarding flow: register → sandbox (test traffic, no billing) → certify (pass acceptance tests) → active. Unlocks everything else — auth, observability, SLAs are all per-row in this table.
+
+#### 2. Auth-aware HTTP client
+
+Today: bare `http.Client`, no headers added on outbound. Inbound win/loss endpoints don't verify caller identity.
+
+Need: `pkg/dsp-client/` (new) — wraps `http.Client`, takes a partner record, picks the auth method, signs requests:
+
+- **API key**: `Authorization: Bearer {secret}` header (read from secret store via `auth_secret_ref`)
+- **mTLS**: load client cert + key, configure TLS dialer per partner (common for tier-1 partners)
+- **OAuth2 client credentials**: fetch token, cache until expiry, re-fetch on 401
+- **Request signing** (for partners that require HMAC-signed request bodies)
+
+Inbound side: tracker/exchange win endpoints verify signed callbacks before crediting budget.
+
+Secret store: should not be Postgres columns — use K8s secrets, Vault, or AWS Secrets Manager via a `pkg/secrets/` abstraction. The partner row holds a *reference* (`auth_secret_ref = "vault:partners/xandr/api_key"`), not the value.
+
+#### 3. Per-partner observability
+
+Today: smart-router metrics are aggregate (all DSPs combined). Logs include `dsp_id` but it's a generated index, not a stable partner identifier.
+
+Need:
+- Prometheus metrics with `partner_id` label (instead of `dsp-{idx}`): bid rate, response latency p50/p95/p99, error rate by class (timeout, 5xx, malformed), win rate, average clearing price.
+- Per-partner Grafana dashboard auto-provisioned from the partner registry.
+- A partner-facing dashboard (subset of metrics, scoped to their own data) so partners can see their own performance without an account manager email loop.
+- Per-partner traffic shaping: respect the `max_qps` from the registry; circuit-break a partner that returns 5xx > N% for M minutes.
+
+#### 4. Bid request payload completeness + OpenRTB compliance
+
+Today: BidRequest covers core fields but a real partner expects strict adherence to a specific OpenRTB version. Some examples we may not yet send:
+
+- `source.fd` (final fan-out destination)
+- `source.tid` (transaction id, distinct from our trace_id)
+- `app` object for in-app inventory (we send `site` only)
+- `regs.gpp` (newer privacy signal beyond GDPR/CCPA)
+- `imp[].secure` (whether the page is HTTPS — required for safe iframe rendering)
+- `imp[].metric[]` (publisher-supplied viewability prediction)
+
+Need: per-partner OpenRTB version + extension support recorded in the registry. Validation harness that submits a known-good bid request to each partner's sandbox and verifies the response shape. CI test that runs against a recorded "golden" bid request to catch regressions in our payload generation.
+
+#### 5. Bidder-specific quirks
+
+Real DSPs have idiosyncrasies — non-standard header requirements, malformed JSON we have to tolerate, custom macro syntax in their bid responses, region-specific endpoint URLs.
+
+Need: per-partner *adapter* in `pkg/dsp-client/adapters/`. Each adapter implements a small interface:
+
+```go
+type Adapter interface {
+    PrepareRequest(*openrtb.BidRequest) (*openrtb.BidRequest, error)  // partner-specific tweaks
+    ParseResponse([]byte) (*openrtb.BidResponse, error)               // tolerate quirks
+    SignRequest(*http.Request) error                                  // partner-specific auth
+}
+```
+
+Default adapter handles spec-compliant partners. Override per-partner only when needed. Pattern stolen from Prebid Server's adapter model — well-understood in ad tech.
+
+#### 6. Financial integration
+
+Today: in-memory ledger, single tenant model.
+
+Need (most of this is already in the persistence-strategy roadmap, but per-partner adds requirements):
+- Ledger entries scoped by partner_id (which DSP did this spend come from)
+- Per-partner invoice generation on configurable cadence (net-30, net-60, prepay)
+- Reconciliation workflow: monthly export of our spend data per partner, partner sends theirs, automated diff with tolerance (e.g. ±0.5%), surfaced discrepancies for resolution
+- Dispute resolution queue in the partner portal
+- Multi-currency support if partner bills in non-USD (`exchange_rates` table, daily ECB rate import)
+
+#### 7. Privacy and compliance per partner
+
+Today: privacy signals are stubs (the consent strings are passed but not enforced; opt-out is wired but not gated).
+
+Need:
+- Per-partner IAB TCF vendor ID stored in registry. When a user's consent string excludes that vendor, the exchange must not include their bid request in that partner's fan-out.
+- GPP signal propagation (newer than TCF, region-aware)
+- Audit log of "what data we sent to which partner per bid request" — required for GDPR access requests (a user can ask "tell me everywhere my data went," we must answer per partner per bid)
+- Per-region data sovereignty: if partner isn't certified for EU, don't send EU traffic
+- Right-to-deletion propagation: when a user requests deletion, hit each partner's deletion endpoint and verify success (some partners support this via OpenRTB `regs.deletion_request`, others need direct API calls)
+
+#### 8. Operational lifecycle
+
+The non-code surface that makes partnerships work:
+
+- Partner onboarding doc + sandbox environment (separate K8s namespace, fake traffic, no real billing)
+- Partner offboarding: pause status → 30-day grace period for in-flight invoices → terminate (purge auth secrets, archive ledger, retain audit logs)
+- Status page / incident comms (when our exchange has an outage, partners need to know)
+- Change management: schema changes to OpenRTB payload have a notice period so partners can adapt their parsers
+
+### Build order
+
+1. **DSP registry table + warm cache** — unblocks everything else, small change to exchange (read from cache instead of env config)
+2. **Auth-aware HTTP client + secret store integration** — required before any real partner can be added
+3. **Per-partner Prometheus metrics + Grafana** — partners require SLA visibility
+4. **Partner portal admin UI** — until this exists, onboarding is a manual SQL insert
+5. **Adapter framework** — needed first time we onboard a partner with quirks
+6. **Privacy enforcement (TCF vendor gating)** — required for any EU traffic
+7. **Financial reconciliation workflow** — needed by first month-end of real spend
+8. **Compliance audit log** — needed first time a GDPR access request lands
+
+Until #1-3 are done, the exchange remains internal-only. Each subsequent step expands the partner-classes we can serve (sandbox-only → low-trust partners → regulated regions → enterprise tier-1 DSPs).
+
+### What we *don't* build (out of scope)
+
+- **Proprietary internal RPC protocols for internal DSPs.** Stay on OpenRTB HTTP for everyone — see "Three transports, three roles" in NATS Subjects section.
+- **Bidder-side SDK.** We're the exchange, not a DSP — partners build their own bid handlers in whatever language they want, the only contract is the OpenRTB wire format.
+- **Real-time settlement on every bid.** Reconciliation is monthly. Real-time spend tracking is for budget caps (Redis counter), not for invoicing.
+
+---
+
+## Exchange Fan-Out: Latency, Timeouts, and Adaptive Routing
+
+How the exchange decides who to ask, how long to wait, and when to stop waiting. Tightly coupled to the External DSP Partners work above — once we onboard partners with varying latency profiles, the fan-out has to adapt.
+
+### How it works today
+
+`cmd/exchange/main.go:fanOutToDSPs` issues all DSP HTTP calls in parallel (one goroutine per endpoint), gathers responses through a buffered channel, and **early-finishes** when either all DSPs have reported OR the fan-out context's deadline elapses.
+
+```
+auction handler:
+    fanCtx, cancel = context.WithTimeout(ctx, bid_timeout)   ← explicit deadline
+    spawn N goroutines (one per selected DSP)
+        each: POST /v1/openrtb/bid via http.NewRequestWithContext(fanCtx)
+        each: write dspResult{...} to channel
+    main loop:
+        select {
+            case result := <-ch:   record + accumulate bids
+            case <-fanCtx.Done():  early-finish — stop waiting, drop late goroutines
+        }
+    run auction with whatever bids arrived
+```
+
+Three layers of "drop slow DSPs":
+
+1. **Per-call HTTP timeout (belt-and-braces).** `httpClient.Timeout = bid_timeout` at boot. Each `client.Do` call gives up at `bid_timeout` regardless of context propagation working. Live-config aware via `sc.Manager.OnChange("exchange.bid_timeout", ...)`.
+
+2. **Per-auction context deadline (primary).** Every outbound request uses `fanCtx` which has `WithTimeout(ctx, bid_timeout)`. When the deadline elapses, in-flight `client.Do` calls return a context-cancelled error AND the main loop exits via `<-fanCtx.Done()`. Auction worst-case latency = `bid_timeout` exactly — late goroutines write to the buffered channel and are simply not read.
+
+3. **Across-auction adaptive skip (learned).** `router.RecordCall(channel, endpoint, bidReceived, topBid, latency, timedOut)` feeds `pkg/optimise.SmartRouter` after every fan-out. Stats are keyed per `(channel, dspID)` so a DSP that's great at display isn't penalised by poor video performance. DSPs with bid rate <5% or timeout rate >50% (after 20+ calls) get filtered out by `router.SelectDSPs(channel, all)` in future auctions. Periodic re-test prevents permanent blackballing.
+
+### Build status
+
+| Gap (originally documented) | Status |
+|---|---|
+| Explicit `bid_timeout` deadline on the fan-out context (not just inherited request timeout) | ✅ Done. `bidTimeoutFn` closure reads live config per request; `context.WithTimeout` derives `fanCtx`. |
+| Explicit `http.Client.Timeout` as belt-and-braces | ✅ Already in place before this work — `httpClient := &http.Client{Timeout: bidTimeout}` at boot. |
+| Main loop waits for every goroutine even after the auction would have completed | ✅ Done. Gather loop now `select`s on `<-ch` or `<-ctx.Done()`. Auctions complete at exactly `bid_timeout` instead of "slowest DSP's actual response time." |
+| SmartRouter EV scoring (`bid_rate × avg_bid × win_rate`) | ✅ Already in place — preserved during the per-channel refactor. |
+| SmartRouter per-channel routing | ✅ Done. Stats keyed by `(channel, dspID)`; `SelectDSPs(channel, ...)` and `RecordCall(channel, ...)` carry channel through. New unit test `TestSmartRouter_PerChannelStats` proves channel isolation. |
+| All DSPs share one `bid_timeout` value | ⏳ Pending. Requires External DSP Partners step 1 (registry table) — per-partner `timeout_ms` lives in `partners` row, fanCtx becomes per-DSP. |
+| SmartRouter evaluation-status quota | ⏳ Pending. Requires partner registry (need "status: evaluation" metadata on each partner). |
+
+### Implementation references (for future readers)
+
+- Fan-out function: `cmd/exchange/main.go:fanOutToDSPs` — parallel goroutines + early-finish select
+- Timeout wiring: `cmd/exchange/main.go` — `bidTimeoutFn` closure passed to `auctionHandler`; `fanCtx, fanCancel := context.WithTimeout(ctx, bidTimeout)`
+- SmartRouter: `pkg/optimise/routing.go` — `(channel, dspID)` keyed stats, EV scoring with latency penalty
+- Tests: `pkg/optimise/optimise_test.go` (`TestSmartRouter_Selection`, `TestSmartRouter_PerChannelStats`); e2e `TestSmartRoutingTracksDSPStats` and `TestBidShadingTrackerRecords` continue to pass
+
+### Deferred / opt-in: extended-timeout fallback
+
+A "two-tier timeout" — wait short by default, extend the deadline if zero bids arrived — was discussed and **explicitly not built**. Reasons:
+
+- Not standard OpenRTB practice. The protocol defines TMax as a hard deadline; publishers set it based on their page-render budget, not based on "we'd like a bid eventually."
+- Predictable latency matters more than incremental bid recovery. Publishers prefer "auctions complete in ≤100ms always" over "≤100ms usually, ≤200ms sometimes" — easier to size their render pipeline.
+- The right fix for "too many no-bids" is supply-side (more bidders, better routing), not "wait longer."
+- Standard fallback for empty auctions is a **house ad** at the ad-server level, not extending the auction. That keeps the auction itself fast and decouples the empty-case handling.
+
+If this becomes useful for experimentation later, the design is: add `exchange.bid_timeout_extended` config (default 0 = disabled). When set and the primary deadline elapsed with zero bids, switch the `<-ctx.Done()` branch to "wait until extended deadline OR ≥1 bid." Off by default, on for measurement runs. Not on the active build list.
+
+### Why this matters more once we have external partners
+
+With only internal DSPs, all latencies are tight (~1-5ms in-cluster) and uniform — the original "wait for all" loop cost almost nothing. With external partners on the wire, response times span 20-150ms and vary by partner/region/load. The early-finish + per-channel routing + explicit deadline combination prevents one slow partner from gating the auction or muting a channel-specialist's selection.
+
+Remaining work to do **before** onboarding the first external DSP: the per-partner-timeout (build status row above) — landed via the partner registry from External DSP Partners section.
+
+---
+
 ## Identity and First-Party Data
 
 ### Identity Layers
@@ -1301,6 +1572,82 @@ A secure matching environment where publisher and advertiser data overlap can be
 
 Deferred - but the identity graph architecture supports it. The `pkg/audience/` package would host clean room logic when ready.
 
+### Audience Segment Delivery (Read Path)
+
+When a bid request flows through the platform, two distinct enrichment paths attach audience signals to it. Both are wired today (see "Current State" below); both share the same storage but read with different filters.
+
+**Why two paths?**
+
+In the real industry SSPs and DSPs are different companies with different data assets. The protocol assumes both can contribute signals about a user, and the architecture has to keep them cleanly separated so neither leaks to the other (or, in path B's case, to rival DSPs receiving the same fan-out).
+
+| | Path A: SSP-public | Path B: DSP-private |
+|---|---|---|
+| **Who collected the membership** | Publisher / SSP DMP — site-level behaviour, publisher CRM, third-party data provider | DSP — its own pixels on advertiser sites, CRM uploads, lookalikes, suppression lists |
+| **How it reaches the DSP** | SSP looks up segments on inbound request, stamps `user.ext.segments` on the outbound OpenRTB bid request | DSP looks up its own segments after receiving the bid request, before targeting evaluation |
+| **Who can see it** | Every DSP that gets the bid request fan-out | Only the DSP that owns the segment |
+| **Use cases** | Generic context like "sports_fan", "subscriber" — value to all bidders | Competitive edge: "browsed_rolex_yesterday", "lifetime_value_$4k+" — never leaves the DSP |
+| **Encoded as** | `audience_segments.visibility = 'public'` | `audience_segments.visibility = 'dsp_private'` |
+
+**Flow:**
+
+```
+                Postgres: audience_segments + audience_segment_members
+                                       │
+        ┌──────────────────────────────┼──────────────────────────────┐
+        │ visibility='public'          │ visibility='dsp_private'     │
+        ▼                              ▼                              ▼
+   SSP lookup                     (filtered out                  DSP lookup
+   SegmentsForUser                 from SSP query)              DSPSegmentsForUser
+        │                                                              │
+        ▼                                                              │
+   user.ext.segments = [public segs]                                  │
+        │                                                              │
+        ▼                                                              ▼
+   Exchange fan-out  ──────────────────────►  DSP bid handler        │
+                                                  │                    │
+                                                  ├────────────────────┘
+                                                  ▼
+                                  tReq.Segments = public ∪ dsp_private
+                                                  │
+                                                  ▼
+                                  targeting.Evaluate(campaign, tReq)
+```
+
+The DSP performs a **union** rather than a replace — a campaign can match on either source, and bid modifiers stack from both.
+
+**Current State (what's wired):**
+
+- ✅ `audience_segments` table (migration 011) — segment definitions with `account_id`, `type`, `source`
+- ✅ `audience_segment_members` table (migration 019) — user_id → segment_id edges, indexed on user_id for hot-path lookup
+- ✅ `audience_segments.visibility` column (migration 020) — `public` | `dsp_private`
+- ✅ `pkg/audience/store/postgres.Store` — `SegmentsForUser` (path A) and `DSPSegmentsForUser` (path B), both filter by visibility via JOIN
+- ✅ SSP wiring (`cmd/ssp/main.go`) — opens store at boot; on each `/v1/ssp/request` with `user_id`, looks up public segments and stamps `user.ext.segments`. Nil-tolerant: SSP keeps serving without enrichment if Postgres is unreachable.
+- ✅ DSP wiring (`cmd/dsp/main.go`) — opens store at boot; in `bidHandler`, after reading SSP-stamped segments, unions in DSP-private segments before `targeting.Evaluate`.
+- ✅ Targeting evaluator (`pkg/targeting`) — already supports `include_segments` / `exclude_segments` and segment bid modifiers. Both paths exercise the same evaluator code.
+- ✅ E2E tests — `TestTargetingSegmentInclude` (path A), `TestTargetingDSPPrivateSegment` (path B).
+
+**What's NOT wired (production wishlist):**
+
+| Gap | What to build | Why it matters |
+|---|---|---|
+| **Hot-path caching** | Redis HSET keyed by `user:{id}:segments`, populated from Postgres on cache miss + invalidated on membership change. Add a Bloom filter in-process to skip the Redis call entirely for users with no segments (the common case). | Today every bid request is a Postgres roundtrip per service (SSP + DSP) — fine for dev/test, melts under prod load. Warm-cache pattern (`pkg/cache/warm`) doesn't fit: the dataset is O(100M users × N segments), can't hold in process memory. |
+| **Membership write pipeline** | Tracker NATS consumer applies behavioural rules (visited X pages → enroll in segment Y); CRM upload endpoint writes batches; lookalike batch job writes modelled members. All write to `audience_segment_members`. | Today the only writers are the seed and the e2e harness — direct SQL. No real-world ingestion path exists. `cmd/pipeline/` and `pkg/pipeline/` are scaffolded but not wired for this. |
+| **Segment lifecycle** | TTL on memberships (e.g. behavioural segments decay after 30d), refresh on re-trigger, audit log of who added/removed users. | Without TTL, "viewed_product" segments grow forever and lose targeting value. Without audit, GDPR access-request requests can't be answered. |
+| **Cross-account access controls** | SSP currently returns every public segment for a user regardless of which advertisers are bidding. Real platforms gate visibility via deals (advertiser X has a deal that includes audience Y → only their bid sees Y in `user.data`). | Today's behaviour leaks targeting opportunities across advertisers. Tightening requires linking deal IDs to segment access policies. |
+| **Composite segments** | `audience.Store.EvaluateComposite` exists in-memory but Postgres path doesn't evaluate composite rules at lookup time. | Advertisers express segments as "(visited_product_page AND NOT existing_customer) OR (lookalike_to_top_buyers)". Without composite evaluation, this collapses to creating many flat segments. |
+| **Identity graph integration** | Lookup keys are raw `user_id` strings today. In prod the SSP would resolve `(publisher_user_id, hashed_email, cookie_id)` to the canonical platform user ID via `pkg/identity` before the segment lookup. | A user known to advertiser X via hashed email might also be known to the SSP via publisher cookie. Without the graph, the two stay separate and segment hit-rate is artificially low. |
+| **Consent gating** | SSP looks up and stamps unconditionally today. Should check `regs.gdpr` / `user.ext.consent` and skip segment stamping if consent is missing or revoked. | Privacy law compliance. Path B has the same gap on the DSP side. |
+| **Suppression list optimisation** | A "do_not_target" segment with 10M user IDs queried on every bid request via the same JOIN — expensive. Should be a Bloom filter loaded into memory at the DSP, checked before the campaign loop. | Suppression lists are common (existing customers excluded from acquisition campaigns) and have very different lookup characteristics than positive targeting. |
+| **Membership scale validation** | Currently no benchmarks for "1M users × 50 segments × N bid requests/sec." Need load tests before swapping any of the above into the hot path. | Cache strategy choice depends on real-world numbers (avg segments per user, % of users with any segments, segment-add rate). |
+
+The recommended build order when this work is picked up:
+
+1. **Membership write pipeline first** — without realistic data, none of the perf work can be benchmarked properly. Wire `cmd/pipeline/` to consume tracker events and write behavioural memberships.
+2. **Redis cache with Bloom filter prefilter** — the single biggest latency win. SSP and DSP each get their own Redis client pointing at the same key namespace (or sharded by source if isolation matters).
+3. **Identity graph resolution** — once the cache is in place, swap raw `user_id` lookups for canonical-ID lookups via `pkg/identity`.
+4. **Consent gating** — small change, high compliance value. Goes in last because it requires consent signals to actually flow through the pipeline (`pkg/privacy` integration).
+5. **Composite + suppression + lifecycle + cross-account ACLs** — incremental on top.
+
 ### Implementation
 
 | Component | Location |
@@ -1308,7 +1655,10 @@ Deferred - but the identity graph architecture supports it. The `pkg/audience/` 
 | Platform ID generation | SSP ad tag (JavaScript) + `cmd/ssp/` |
 | Identity graph store | Postgres (graph edges) + Redis (fast lookups during bidding) |
 | Identity graph builder | `pkg/identity/` - matching logic, graph operations, merging |
-| Audience management | `pkg/audience/` - segment creation, CRM upload, matching |
+| Audience management (definitions) | `pkg/audience/` - segment types, in-memory store for tests, composite rule eval |
+| Audience read path (Postgres) | `pkg/audience/store/postgres/` - `SegmentsForUser` (public, SSP) + `DSPSegmentsForUser` (private, DSP) |
+| Audience write path | **NOT BUILT** - target: `cmd/pipeline/` consumes tracker events, writes to `audience_segment_members`. See "Audience Segment Delivery (Read Path)" → wishlist |
+| Audience hot-path cache | **NOT BUILT** - target: Redis HSET + in-process Bloom filter. See wishlist for the staging order |
 | Privacy controls | `pkg/privacy/` - consent checking, opt-out, deletion propagation |
 | Ad tag SDK | `web/static/adtech.js` - publisher-facing JavaScript tag |
 | First-party data API | Gateway: `/v1/api/audiences/*` |
@@ -9567,6 +9917,22 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.pipeline.file.quarantined` | Pipeline | Gateway (dashboard alerts) | FileQuarantinedEvent (validation failed) |
 | `adtech.pipeline.drift.detected` | Pipeline | Gateway (dashboard alerts) | SchemaDriftEvent |
 
+#### Consumer Naming Convention (load-bearing)
+
+JetStream consumers are identified by name. Two `CreateOrUpdateConsumer` calls with the same name **overwrite** each other's `FilterSubject` rather than coexisting. A service that subscribes to multiple subjects with a single "group" identifier silently collapses into one consumer whose filter is whichever subject won the race.
+
+The natsbus wrapper (`pkg/events/natsbus.Subscribe`) therefore derives the consumer name from `service + group + subject-leaf`:
+
+```
+service="reporting", group="reporting", subject="adtech.events.impression"
+  → consumer name "reporting-reporting-impression"
+
+service="reporting", group="reporting", subject="adtech.events.click"
+  → consumer name "reporting-reporting-click"
+```
+
+Each subject gets its own consumer, its own `FilterSubject`, and its own fetch goroutine. Callers cannot collide regardless of how they pick group names. **Do not bypass this** — past incident: an early `cmd/reporting` version subscribed all four event subjects under group="reporting" without subject in the name. Only the last subject won; the other three were silently dropped by JetStream's `InterestPolicy` retention (no interested consumer = no retention), and the dispatching goroutines mis-decoded the surviving subject's payloads as the wrong event types. Symptom was ledger entries with valid `TraceID` but empty `CampaignID` and zero `Amount`. Hard to spot because Go map iteration order randomised which subject "won" each boot.
+
 #### Webhook Subjects (JetStream - reliable delivery)
 
 | Subject | Publisher | Subscriber(s) | Payload |
@@ -9650,6 +10016,172 @@ Services (DSP, Exchange, Ad Server)
 ```
 
 Events always flow through NATS. The reporting service consumes from NATS and writes to whichever analytics store is configured. This means adding a new sink later (Snowflake, BigQuery, a data lake) is just another NATS subscriber - nothing upstream changes.
+
+### Persistence Strategy
+
+This section is the build guide for closing the gap between "in-memory today" and "durable in prod." Every service holds state that survives across requests; this catalogues what each piece is, where it lives now, where it needs to live, and how it gets there safely.
+
+#### State inventory (what services hold)
+
+| State | Holder | Today | Target | Loss tolerance |
+|---|---|---|---|---|
+| **Ledger entries** (every spend, reservation, settlement) | reporting | `[]LedgerEntry` slice (volatile) | Postgres `ledger_entries` table (already in migrations) | **Zero.** Loss = unbilled spend, fails financial reconciliation. |
+| **Analytics events** (impression, click, conversion, auction) | reporting | `analytics.NewMemory` slices (volatile) | DuckDB file on PVC (dev/staging) or ClickHouse (prod) | Low. Loss = missing rows in reports for the window between last persist and crash. |
+| **Aggregated rollups** (hourly/daily campaign+placement metrics) | rollup job (not built) | — | Postgres `rollups_*` tables + Parquet on S3 | Low. Can be regenerated from raw events. |
+| **Budget counters** (campaign spend-to-date) | DSP | Redis (`dsp:budget:{id}:spent`) | Same, with periodic Postgres snapshot for daily-close reconciliation | Low. Counter resets daily; worst case = one day of over-spend if Redis dies mid-window. |
+| **Frequency caps** (user × campaign serve counts) | adserver | Redis (`adserver:freqcap:{user}:{campaign}`) | Same | Acceptable. Loss = users see ads 1-2x more than cap until reload. |
+| **Tracker dedup** (seen trace IDs) | tracker | Redis (`tracker:seen:{type}:{trace}` SetNX) | Same | Acceptable. Loss = a small window where repeat impressions could double-count. |
+| **Warm caches** (campaigns, placements, deals, creatives) | DSP/SSP/exchange/adserver | In-process `atomic.Pointer[snapshot]` (volatile) | Stays in-process — backed by Postgres reload + NATS invalidate. No persistence needed. | Built-in: every cache cold-starts from its Postgres loader. |
+| **Audience segment memberships** | SSP/DSP | Postgres `audience_segment_members` (already persistent) | Add Redis hot-path cache in front | None — durable today, just slow. |
+| **Bid shading stats** (per-placement clearing-price model) | DSP | `bidshading.Tracker` in-process map | Postgres `bid_shading_stats` (new table) + periodic snapshot | Medium. Loss = model resets to "no learning," need ~hours of bids to converge again. |
+| **Smart router stats** (per-DSP bid rate, latency) | exchange | `optimise.SmartRouter` in-process map | Same as bid shading — new Postgres table, periodic snapshot | Medium. Same convergence concern. |
+| **Audit log** | gateway/config-manager | Postgres `audit_log` (already persistent) | No change | None — durable today. |
+| **Creative HTML + assets** | adserver | Postgres `creatives.html_content` for small + Minio/S3 for large | No change | None — durable today. |
+| **Trace + log data** | every service | Loki (logs) + Jaeger (traces), PVC-backed | No change | Operational only; not financially or legally load-bearing. |
+
+#### Write patterns by criticality
+
+Three distinct patterns, picked by how badly a crash-between-write-and-flush hurts:
+
+**Pattern A: synchronous-write-through (financial state).** Used for the ledger. The handler call returns only after Postgres has acked the INSERT. The in-memory slice stays as a read-through cache for `GET /v1/billing/summary` so the dashboard is fast, but the source of truth is the row in `ledger_entries`. If Postgres is unreachable, the handler **fails closed** — Nak the NATS message, let it redeliver. Better to slow down ingestion than to lose money silently.
+
+```
+handleImpression:
+   1. ProcessEvent(...) → computes LedgerEntry
+   2. INSERT INTO ledger_entries (...)        ← synchronous, blocks until acked
+   3. ledger.entries = append(ledger.entries, entry)   ← cache only after DB ack
+   4. msg.Ack()
+```
+
+**Pattern B: batched-async-write (high-volume event data).** Used for analytics events. Handler appends to an in-process buffer; a periodic flush worker writes batches to the analytics store (DuckDB or ClickHouse). NATS ack only happens once the batch is durable. Buffer flush is triggered by either size (N events) or time (T ms) — whichever first. Crash before flush = NATS redelivers from the last acked offset, so events are at-least-once delivered (idempotent via trace_id).
+
+```
+handleImpression:
+   1. buffer.append(event)
+   2. (no immediate ack — message stays unacked in JetStream)
+
+flushWorker (every 200ms or 500 events):
+   1. batch = buffer.drain()
+   2. store.InsertBatch(batch)          ← single network roundtrip
+   3. for each msg in batch: msg.Ack()  ← only ack after durable
+```
+
+**Pattern C: fire-and-forget (operational state).** Used for warm caches, dedup counters, shading/routing stats. State is rebuildable — if it's lost, the system recovers organically (caches reload from Postgres, stats relearn from incoming traffic, dedup just allows one duplicate). No write coordination needed; failures get a `log.Warn` and move on.
+
+#### Recovery patterns
+
+When a service starts (cold boot, restart, rolling deploy), it has to reconstruct its in-memory state. Three approaches in use:
+
+| State | Recovery on startup |
+|---|---|
+| Warm caches | `Loader.LoadAll(ctx)` runs synchronously in `warm.Cache.Start` before the service accepts traffic. /readyz fails until the first load completes. |
+| Ledger cache | `SELECT * FROM ledger_entries WHERE timestamp >= now() - interval '90 days' INTO MEMORY`. Bounded by retention window so memory doesn't grow unboundedly. Older rows accessed via direct SQL on demand. |
+| Analytics events | Not loaded — the store IS the source of truth. Query API hits DuckDB/ClickHouse directly. |
+| Shading + router stats | Load latest snapshot from Postgres on startup, continue learning forward. Snapshot every 5 minutes via a background goroutine. |
+| Budget counters | Redis is the source of truth. If Redis is empty on cold start (cluster reboot), DSP reads "spent so far today" from `SELECT SUM(amount) FROM ledger_entries WHERE timestamp >= today` to rebuild. |
+| Dedup keys | Acceptable to lose. Redis cold start = one window of possible duplicates. |
+
+#### Failure modes — what happens when a backing store is unreachable
+
+The whole system is built around "degrade, don't die." Each store has an explicit fallback policy. Encode this once in service boot, surface via /readyz so K8s can route around bad instances.
+
+| Store | Service behavior when down | Why |
+|---|---|---|
+| Postgres (campaigns, deals, etc.) | Services keep serving from warm cache snapshot. /readyz still 200. Log WARN every retry. | Bid path must not stop because of DB blip. Stale data is better than no bids. |
+| Postgres (ledger) | Reporting handler Nak's NATS message. /readyz reports degraded but not down. | Financial integrity > throughput. NATS holds messages for redelivery. |
+| Redis (budget, freq cap, dedup) | Fail-open. Bid path continues, freq caps don't enforce, dedup allows duplicates. Log WARN. | Same logic as cached campaigns — better to serve than not. Reconciliation catches over-spend. |
+| Analytics store (DuckDB/ClickHouse) | Buffer fills up to a bound (e.g. 10k events), then drops oldest with WARN. /readyz reports degraded. | Reports go stale but ad serving continues. Operational alert fires. |
+| NATS | Tracker uses HTTP fallback (`/v1/reporting/events` direct POST). Cache invalidate is fire-and-forget so lost messages = one extra poll cycle of stale cache. | Tracker is the only thing on the critical path that MUST get its event somewhere. |
+| Minio/S3 | Ad server falls back to `html_content` from Postgres for small banners. Large-asset creatives 503 cleanly. | Most creatives are inline today; large assets are rare. |
+
+#### Implementation order (closing the gaps)
+
+These map to the rows in the inventory table marked "today: volatile." Build order by financial / correctness impact:
+
+1. **Billing ledger → Postgres (pattern A).** Schema (`ledger_entries`, `reservations`, `invoices`, `payouts`) is already in `migrations/`. Implement `pkg/billing.PostgresLedger` satisfying the same interface as `NewLedger`; wire `cmd/reporting/main.go` to use it. Load last 90 days on startup. Highest urgency — losing financial state on a pod restart is the worst class of bug we still have.
+2. **CPC/CPA/vCPM dispatch from click/conversion/view handlers.** Reuses `billing.Engine.ProcessEvent` which already supports reserve/settle for non-CPM models. Unblocks 8 skipped `billing_models_test.go` cases.
+3. **Analytics store → DuckDB by default in dev.** Add config key `analytics.backend = memory|duckdb|clickhouse`; existing `pkg/store/analytics/duckdb.go` is ready. Use a PVC so the file survives pod restarts. Switch `cmd/reporting/main.go:54` to read the config.
+4. **Batched-async write worker for analytics (pattern B).** Today each event is one Postgres/DuckDB roundtrip; under load this dominates latency. Drain buffer into `InsertBatch` (already implemented on DuckDB).
+5. **ClickHouse implementation** for multi-replica prod reporting (currently DuckDB blocks scaling reporting past 1 replica).
+6. **Bid shading + smart router stat snapshots.** New tables (`bid_shading_stats`, `smart_router_stats`), background snapshot goroutine in each holder service, load-on-startup. Lower priority — current behavior is "warm up on every restart," which is fine while traffic volumes are low.
+7. **Rollup job** reading from analytics store, writing aggregates back into Postgres `rollups_*` + Parquet onto S3 via Delta Log (see "Data Rollups" section).
+8. **Win-notify reconciliation job** (new `cmd/reconcile` or as a sub-loop in `cmd/billing` once it exists). Periodically scans:
+   - reporting analytics: all `auction_wins` in the last N minutes
+   - DSP budget counters: cumulative spend per campaign
+   Surfaces any (campaign, win) where the auction recorded a clearing price but the DSP budget didn't tick up by the matching amount. Catches transient HTTP nurl failures uniformly for all DSP classes (internal *and* external). This is the right replacement for the dual-transport DSP redundancy we deliberately did not build — symmetric, observable, doesn't fork the wire protocol.
+
+Steps 1-2 are high urgency (financial correctness). 3-4 are needed before any meaningful load test (memory growth). 5-8 are scaling/optimisation work.
+
+#### Published events with no consumer (events going to /dev/null)
+
+A wider audit of NATS subjects on 2026-05-31 found one published-but-unconsumed subject and a long list of subjects spec'd in PLAN.md but never published yet. Listing the actively-broken cases:
+
+| Subject | Published by | Spec'd consumer | Reality |
+|---|---|---|---|
+| `adtech.auction.win` | exchange (`cmd/exchange/main.go`) | Reporting (analytics today, billing ledger when migration lands) | **Reporting subscriber wired (2026-05-31).** DSPs do **not** subscribe — budget is updated via the OpenRTB HTTP nurl path. Billing flow still on impression-pixel path; flip is deferred (see migration plan below). |
+
+#### Three transports, three roles (current state after 2026-05-31)
+
+The exchange–DSP and exchange–reporting interactions are deliberately split so each transport carries a single responsibility. No redundant paths, no dedup machinery, identical behavior for internal and external DSPs.
+
+| Transport | Direction | Role | Consumer |
+|---|---|---|---|
+| HTTP OpenRTB bid request/response | exchange ↔ DSP | Auction primitive: ask for a bid, get a bid back inside the timeout window | Every DSP (internal + external) |
+| HTTP OpenRTB nurl (`/v1/openrtb/win`) | exchange → DSP | Tell the winning DSP "you won at price X" so it credits its budget counter | Winning DSP only (point-to-point) |
+| NATS `adtech.auction.win` | exchange → internal bus | Internal event stream of auction outcomes for analytics, future billing ledger, future learning models | Reporting (and future webhooks, fraud scoring, etc.). **NOT DSPs.** |
+
+Why DSPs don't subscribe to the NATS path:
+
+- **Uniformity.** External DSPs (Xandr, DV360, TTD) can't reach our internal NATS bus — there's a security boundary. If internal DSPs subscribed to NATS for budget while external relied on HTTP, the two DSP classes would have different reliability profiles for the same financial signal. Operational confusion + asymmetric over-spend risk.
+- **OpenRTB compliance.** The HTTP nurl is the IAB standard. As long as some DSPs must use it, all DSPs should use it.
+- **No protocol fork.** Keeping all DSP-facing wire protocols on HTTP means the exchange has one bid-fan-out implementation, one win-notify implementation, one timeout strategy, one set of tests. Adding NATS as an alternative DSP transport would double that surface for marginal latency benefit at our scale.
+
+What we lose by not having NATS as a DSP-side redundancy: a small reliability tail (HTTP win-notify can fail on transient errors / pod restarts, leaving a single win uncounted in the DSP's budget). The right fix is a **reconciliation job** (see "Persistence Strategy" → Implementation order), not parallel transport machinery. The job periodically diffs reporting's NATS-recorded auction-wins against DSP budget counters and surfaces discrepancies — that catches under-counts uniformly for every DSP class.
+
+What `adtech.auction.win` does today:
+
+- Reporting subscriber writes to `analytics.Store.InsertAuctionWin`. Every auction outcome (winner DSP, advertiser, campaign, clearing price, deal_id) lives in the analytics store with full lineage. Queryable via the standard analytics path and the `/debug/auction_wins?trace_id=` debug endpoint.
+
+What it does **not** do (deferred — see migration plan below):
+
+- Billing ledger entry. The impression-pixel handler still writes the spend entry for CPM. Flipping the billing source from impression to auction.win is a breaking change: it changes the semantic of "spend" from "delivered impression" to "won auction (regardless of delivery)" and requires the click/conversion/view handlers to switch to a settlement model. Migrating cleanly is the right move; doing it as a side effect of fixing the /dev/null issue would have been not.
+
+#### Billing source-of-truth migration (deferred — recommended next)
+
+The right end state per the architecture spec is:
+
+```
+auction.win → reservation entry in ledger (immediately, regardless of delivery)
+    ├─ CPM model     → settled to "spend" by the impression event (impression pixel = delivery confirmation)
+    ├─ CPC model     → settled to "spend" by the click event
+    ├─ CPA model     → settled to "spend" by the conversion event
+    └─ vCPM model    → settled to "spend" by the viewability event
+
+Reservation that never settles (user navigated away, viewability never hit)
+    → released after a timeout (configurable, default 24h)
+    → makes "won-but-not-served" visible as a billable discrepancy for ops review
+```
+
+The migration steps:
+
+1. **Add `auction_wins` ledger entry type** (`EntryAuctionWin` next to `EntrySpend`/`EntryReservation`) so the historical "spend on impression" entries remain valid while new "reservation on win → settlement on delivery" entries flow alongside. Don't co-mingle the schemas.
+2. **`handleAuctionWin`** in reporting calls `billing.Engine.ProcessWin(event)` — the new method writes a reservation (not spend) sized at the clearing price, keyed by trace_id.
+3. **`handleImpression`** in reporting switches its `ProcessEvent(EventType="impression")` call to a settlement lookup (`SettleReservation(traceID, "delivered")`). For CPM, settlement converts the reservation amount into a spend entry. For CPC/CPA/vCPM, settlement happens on click/conversion/view instead — the impression just records "delivered" without converting the reservation.
+4. **Reservation expiry job** (`cmd/billing-expiry` — new) scans for reservations older than the configured TTL with no matching settlement, releases them, and emits `adtech.billing.reservation_released`.
+5. **Update tests** — every spend test now operates on settled-spend, not raw spend. Delta assertions stay correct; the magnitudes change for CPC/CPA/vCPM cases (which currently skip).
+6. **Remove the in-memory ledger fallback** and require Postgres ledger persistence to be in place first (per the "Persistence Strategy" build order above).
+
+This migration is what closes the 8 skipped `tests/e2e/billing_models_test.go` cases (CPC/CPA/vCPM/CPCV reserve-settle, reservation expiry, tiered RS, etc.) and turns "auction.win as single source of truth for cost" from aspirational language into actual behavior.
+
+Subjects from the table in "NATS Subjects (Async Events)" that have **no publisher yet** (placeholder for future work, harmless until something publishes them): `adtech.budget.depleted`, `adtech.campaign.state_changed`, `adtech.creative.review_completed`, `adtech.billing.reservation_*`, `adtech.privacy.opt_out`, `adtech.privacy.deletion_*`, all video/audio/dooh/retail/ingame/install subjects, `adtech.video.transcode_*`, `adtech.video.session_*`, `adtech.billing.tier_changed`, `adtech.audience.membership_updated`, `adtech.cleanroom.*`, `adtech.marketplace.*`, `adtech.pipeline.*`. These should be reviewed when their owning services come online.
+
+#### What stays in-memory on purpose
+
+Not everything needs to persist. Three categories are intentionally volatile:
+
+- **Warm caches.** They reload from Postgres on demand. Persisting them would add complexity without buying anything — restart latency is already <100ms.
+- **Dedup state.** A short post-restart window where one duplicate could slip through is acceptable; the alternative is making every tracker pixel hit a slower store.
+- **Routing/shading learned state during early system bring-up.** Once stable traffic exists, snapshot (step 6 above). Until then, treat reset-on-restart as a feature — it's how A/B testing of new algorithms naturally clears prior bias.
 
 ### Database Schema (Core Entities - PostgreSQL)
 
@@ -14968,3 +15500,252 @@ One click from "something went wrong" to "these are the exact code changes that 
 | CI/CD integration | `.github/workflows/` - POST to /v1/api/ops/deployments/record on deploy |
 | Tilt integration | Tiltfile - records deployment events on rebuild |
 | Diff service | `pkg/ops/diff.go` - fetches commit list from GitHub API between two SHAs |
+
+---
+
+## Recent Architecture Evolution (2026-05-31)
+
+This section captures structural changes landed in a single working session. Each is a real shift in how the platform is shaped; older sections above were updated in place where directly affected, and this section gives the cross-cutting narrative for future readers picking up the thread.
+
+### DSPs as first-class DB entities (migration 022)
+
+Before: a DSP's identity was a stack of (YAML profile + pod name + per-pod `dsp.profile` config row). Three places had to stay in sync. Adding a new DSP meant adding a YAML, a Tilt-launched pod, and config rows — and even then `dsp.is_competitor` was a fourth source of truth that could disagree with `noise_pct`.
+
+After: one `dsps` table. Columns: `id (uuid), name, display_name, profile_type ('internal'|'competitor'|'external'), noise_pct, no_bid_rate, endpoint (nullable for in-cluster), status`. Plus `accounts.dsp_id UUID REFERENCES dsps(id)` so every advertiser account points at the DSP that manages it.
+
+- Seed (`cmd/seed`) reads YAML files → INSERTs dsps rows → stamps `account.dsp_id` per campaign block
+- DSP service at boot looks up its own row by name (config key `dsp.profile` becomes a name lookup, not a behavior knob): `postgres.DSPByName(ctx, db, profileName)` → uses returned `noise_pct`/`no_bid_rate` + passes `dsp.id` to the warm cache
+- `CampaignLoader` filters by `accounts.dsp_id = $1` (joins accounts) — replaces the old YAML-derived `accountIDs` allowlist
+- `dsp.is_competitor` config key **dropped entirely** — derived from `noise_pct > 0 || no_bid_rate > 0`. One source of truth, no more "is_competitor=true but noise=0" inconsistent state.
+- Management `POST /v1/dsp/campaigns` (the create endpoint) gets-or-creates a per-DSP "default mgmt advertiser" account with `dsp_id` set to the calling DSP, so UI-created campaigns appear only in that DSP's tab.
+
+YAML profiles stay as seed input (human-readable source of behavior+seeded campaigns); the runtime never reads them — DB is authoritative.
+
+### Schema decentralization (migration 023 + `pkg/config.PublishSchema`)
+
+Before: `pkg/config/Schema()` returned a hardcoded slice of 72 entries spanning every service. Adding a `dsp.foo` key meant editing a shared package. `pkg/CLAUDE.md` already said "All reusable libraries live here. Nothing is duplicated across services" — the centralized schema was inconsistent with that rule.
+
+After: each service owns a `cmd/<svc>/config.go` declaring its own `var <svc>Schema = []config.SchemaEntry{...}`. At boot the service calls `config.PublishSchemaWithURL(dbURL, serviceName, entries, log)` which:
+1. UPSERTs the rows into a new `config_schema` table (migration 023) — atomic per-service (DELETE old rows for this service + INSERT fresh)
+2. Merges into the in-process registry so this service's `Validate()` and `GetDefault()` still work without a DB roundtrip
+
+The gateway additionally calls `config.LoadPublishedSchema(ctx, db)` at boot to merge every service's rows from the table — that's how the config-manager UI sees DSP keys without importing `cmd/dsp`. `pkg/config/defaultSchema()` shrunk from 72 entries to just the platform-shared ones (server, nats, config, database, redis, s3, debug, otel, generic cache.warm).
+
+Net: adding a new DSP knob = edit `cmd/dsp/config.go` only. The shared package never knows about service-specific keys.
+
+### SSP `/v1/ssp/serve` — the realistic visitor path
+
+The publisher simulator originally called the exchange and ad server directly from the browser ("X-ray mode") — useful for dev visibility but unlike any real publisher page. Real publisher pages call one SSP endpoint, get rendered HTML back, and never learn the auction winner or clearing price.
+
+New endpoint: `/v1/ssp/serve` runs the auction (via the existing exchange call), picks the winner, calls the ad server internally, returns `{trace_id, html, impression_url, click_url, viewability_url, width, height}`. Deliberately omits winner DSP, clearing price, campaign id — competitive info that real OpenRTB never leaks to the browser.
+
+The old `/v1/ssp/request` (returns the raw BidResponse) is preserved unchanged for tests and any dev tool that needs the X-ray view. Same `runSSPAuction` helper backs both endpoints.
+
+Pub sim was refactored to use the new endpoint. The browser now makes one fetch + fires the SSP-supplied pixel URLs; everything else (winner identity, fan-out behavior, NATS consumer activity, win/loss notifications) lands in the trace timeline as `JAEGER` rows discovered by the Jaeger poller.
+
+### Win/loss notification trace propagation
+
+Before: `sendWinLossNotifications` (the goroutine that POSTs nurl/lurl to DSPs after the auction returns) used bare `client.Get(winURL)` with no context propagation. DSP-side server spans for those handlers were detached from the auction trace in Jaeger — they appeared as fresh trace_ids.
+
+After: function takes `ctx context.Context` from `context.WithoutCancel(ctx)` (preserves trace context past handler return), opens a parent span `exchange.winloss_notify`, opens a child span per notification (`exchange.notify.win` / `exchange.notify.loss`), and uses `http.NewRequestWithContext` + `tracing.InjectHTTP` so the DSP-side `dsp GET /v1/openrtb/win` server span becomes a child of the auction trace.
+
+Result: the full notify fan-out is visible under the auction trace in Jaeger. Exchange-side spans + DSP-side spans link cleanly.
+
+### Per-pod warm-cache consumer collision fix
+
+Before: all DSP pods passed `service="dsp"` to `natsbus.New`. The warm-cache invalidate consumer for `adtech.cache.invalidate.campaigns` ended up with consumer name `dsp-campaigns-cache` for every pod — JetStream load-balanced invalidates across pods (only one pod refreshed per message), leaving the others' caches stale.
+
+After: `pkg/cache/warm.Start` appends `POD_NAME` (or `pid-{pid}` fallback) to the group: `cache.Name + "-cache-" + podID`. Each pod now gets its own consumer (`dsp-campaigns-cache-dsp-internal-0`, `...-dsp-competitor1`, `...-dsp-competitor2`) → every pod refreshes on every invalidate (broadcast semantics as intended).
+
+This is the third instance of the "JetStream durable consumer name → semantics" pattern that's bitten us. The rule, documented in `pkg/events/natsbus.Subscribe`: include the subject in consumer name for "load-balance" semantics; include POD_NAME for "broadcast" semantics. Reporting uses the former (one pod consumes each event); warm caches use the latter (every pod refreshes).
+
+### Pub sim becomes a publisher visitor (not a dev tool)
+
+The publisher simulator (`/dev/publisher-simulator`) had grown into an X-ray dashboard — it showed auction winners, clearing prices, and DSP fan-out shapes because the browser was directly calling the exchange. Two cleanup passes brought it back to being a publisher visitor with all the X-ray info still available via Jaeger:
+
+1. **Visitor mode**: refactored to call only `/v1/ssp/serve`. The browser sees HTML + pixel URLs, nothing else. Click URL is the SSP-supplied HMAC-signed one (not hand-built from internal IDs the browser no longer has).
+2. **LIVE vs JAEGER badges**: each timeline row carries a source pill — `LIVE` (green) for browser-observed via fetch response, `JAEGER` (purple) for spans discovered post-hoc by the Jaeger poller. Mixing the two would have been dishonest.
+3. **Jaeger poller**: after each Load Ad, the pub sim polls `GET /api/traces/{id}` every 2s for ~30s. Countdown indicator in the timeline header. New spans (NATS consumers, `exchange.notify.*`, server-side win-handler invocations) get appended as the OTel collector ingests them.
+4. **Trace destinations panel**: a separate panel below the timeline shows where the trace_id should appear across the platform (Jaeger, Loki, analytics store, billing ledger, NATS, plus stubs for Postgres events / rollups / webhooks). Live counts come from `/debug/auction_wins` and `/v1/billing/ledger`. Stub rows point at PLAN.md sections describing what those systems will be when built.
+
+The simulator also gained dev-mode scenario toggles (slow specific DSPs, trip fraud detection on impression pixel) and a full DSP/campaign management panel (per-DSP tabs, inline edit, pause/resume, delete-soft, new-campaign modal) — all driven by new CRUD endpoints on the DSP service: `POST/PATCH/DELETE /v1/dsp/campaigns` and `/v1/dsp/campaigns/{id}`. Those endpoints are real platform endpoints (not debug-only), and have explicit TODO markers for the auth middleware that needs to land before any public exposure.
+
+### Audit log of structural changes during this session
+
+| Change | Files touched | Notes |
+|---|---|---|
+| NATS consumer name = service + group + subject leaf | `pkg/events/natsbus/natsbus.go` | Fixed silent event drop in `cmd/reporting` (one consumer was overwriting another's FilterSubject) |
+| Warm-cache consumer name includes POD_NAME | `pkg/cache/warm/warm.go` | Fixed broadcast semantics for cache invalidate across multiple DSP pods |
+| Audience segments path A (SSP-public) + path B (DSP-private) | `migrations/019, 020`, `pkg/audience/store/postgres`, `cmd/ssp`, `cmd/dsp` | See "Audience Segment Delivery (Read Path)" above |
+| `adtech.auction.win` consumed by reporting | `cmd/reporting`, `pkg/store/analytics` | Was published-and-dropped before |
+| Billing accrual bug discovered + fixed | `pkg/events/natsbus`, harness UA fix | Tests now correctly verify TotalSpend (was silently passing via loose fallback) |
+| `bid_timeout` enforced as fan-out context deadline + early-finish | `cmd/exchange/main.go` | Auctions complete in exactly `bid_timeout`, not "slowest DSP timeout" |
+| SmartRouter EV scoring + per-channel routing | `pkg/optimise/routing.go` | Stats keyed by `(channel, dspID)`; existing EV scoring preserved |
+| `dsps` table + accounts.dsp_id | `migrations/022`, `pkg/store/postgres/dsps.go`, `cmd/seed`, `cmd/dsp` | DSPs are first-class entities; `is_competitor` dropped |
+| Per-service `cmd/<svc>/config.go` + `config.PublishSchema` | `migrations/023`, `pkg/config/schema.go`, every `cmd/*/main.go` | Schema decentralized; gateway loads union from DB |
+| `/v1/ssp/serve` — visitor-flow endpoint | `cmd/ssp/main.go`, `pkg/routes/routes.go` | Browser-safe response shape; `runSSPAuction` helper shared with `/v1/ssp/request` |
+| Win/loss notify spans + trace propagation | `cmd/exchange/main.go` | DSP-side notify handlers now linked into auction trace in Jaeger |
+| Campaign CRUD on DSP | `cmd/dsp/management.go` | Real platform endpoints, NOT debug-gated, TODO for auth |
+| Pub sim full overhaul | `web/templates/simulator/minimal.html` | Visitor mode, LIVE/JAEGER badges, Jaeger poller, mgmt panel, trace destinations |
+
+### What's queued but not built (carried into next session)
+
+- **Production auth middleware** for the DSP management endpoints (per the TODOs in `cmd/dsp/main.go` and `cmd/dsp/management.go`). Until this lands the endpoints must not be exposed to a public surface.
+- **Postgres-backed billing ledger.** Schema (`ledger_entries`, `invoices`, `payouts`) exists in `migrations/`. Today's ledger is `billing.NewLedger()` — in-process, lost on restart. See "Persistence Strategy" section for the build plan.
+- **DuckDB analytics store as dev default.** `pkg/store/analytics/duckdb.go` exists but `cmd/reporting/main.go:54` still uses `NewMemory()`. Selection logic via a config key. Required before any meaningful perf/load measurement.
+- **CPC/CPA/vCPM settle dispatch.** `pkg/billing.Engine.ProcessEvent` supports the reserve/settle pattern but the `cmd/reporting` click/conversion/view handlers don't call it. 8 skipped `billing_models_test.go` cases gated on this.
+- **External DSP Partners onboarding** — full plan in the "External DSP Partners (Multi-Tenant Integration Platform)" section earlier. Now that DSPs are first-class DB entities, external partners just need rows with `endpoint` set + auth + the partner-portal admin UI.
+- **Reconciliation job** to compare analytics auction-wins against DSP budget counters (catches the small reliability gap where HTTP nurl fails and budget under-counts). Documented in "Persistence Strategy" → Implementation order step 8.
+
+### Where to look for context in future sessions
+
+| Topic | Section |
+|---|---|
+| What each DSP service owns | `cmd/dsp/CLAUDE.md`, plus the `dsps` table |
+| Per-service config | `cmd/<svc>/config.go` files; gateway loads union from `config_schema` table |
+| Audience segment flow | "Audience Segment Delivery (Read Path)" + memory `project_audience_segments_state.md` |
+| Event dispatch + NATS consumer naming | "Consumer Naming Convention (load-bearing)" + memory `project_event_dispatch_state.md` |
+| Fan-out timeouts + SmartRouter | "Exchange Fan-Out: Latency, Timeouts, and Adaptive Routing" |
+| External DSP partner onboarding plan | "External DSP Partners (Multi-Tenant Integration Platform)" |
+| Persistence roadmap | "Persistence Strategy" subsection in "Data Storage" |
+| What's in-memory and volatile today | Same "Persistence Strategy" — state inventory table |
+| Pub sim architecture | `web/templates/simulator/minimal.html` — single file, LIVE/JAEGER badges explain row provenance |
+
+## Recent Architecture Evolution (2026-06-01)
+
+Second working session in two days. Focus: turning the pub sim into a self-contained dev workbench (drain, reset, observability) and closing the bid-hot-path Postgres dependency that made high concurrency fail. Each structural change below is summarised; deeper details live in the referenced files.
+
+### Audience segments moved off the bid hot path
+
+Before: every DSP bid handler did `audienceStore.DSPSegmentsForUser(ctx, userID)` — a synchronous Postgres query per bid. Under concurrent load (drain runs, real traffic spikes) the shared connection pool queued queries past the inherited 100ms `bid_timeout`. The bid context cancelled the query, the bid path returned no-bid, and every auction in the burst came back empty. 14% fill rate at concurrency 5.
+
+After: three-layer architecture, swappable behind one interface (`pkg/audience/store.Lookup`):
+
+- `pkg/audience/store/postgres` — direct query, used as the fallback only.
+- `pkg/audience/store/cached` — lazy Redis L2 cache. Bid path hits Redis; on miss falls back to Postgres + populates Redis with 5-min TTL. Negative results (no segments) cached too.
+- `pkg/audience/store/preload` — eager warm cache. Background goroutine queries the full `audience_segment_members` table every 30s and dumps each `(user, visibility)` → segment list into Redis. Bid path is Redis-only; no Postgres on the hot path. Same pattern as the campaign/placement/creative warm caches but the backing store is shared Redis (not per-pod RAM), because audience memberships are unbounded by user count.
+
+DSP and SSP `openAudienceStore` build the cached store when Redis is available and fall through to postgres-direct otherwise. Also added a 25ms `context.WithTimeout` around the lookup so a slow downstream never eats the bid budget — bid proceeds without segments rather than failing.
+
+Result: 100% fill at concurrency 10 in the smoke test; previously 0%.
+
+### Database URL bootstrap pumped into the live config
+
+Bug discovered: every service logged `"database.url not set, ... cache will be empty"` on boot despite the schema having a default of `postgres://adtech:adtech-local-dev@localhost:5432/adtech`. Root cause: `pkg/config/Setup` resolved the DB URL into a local variable for the Postgres source connection but never wrote it back to the in-process cfg layer, so subsequent `cfg.Get("database.url", "")` calls in service handlers returned empty.
+
+Fix: one line in `pkg/config/setup.go` — after resolving the URL, call `cfg.SetLive("database.url", dbURL)` so all subsequent reads see the same value. Restored warm-cache loading across every service.
+
+### Prometheus metrics middleware (real histograms)
+
+Before: hand-rolled `pkg/middleware/metrics.go` exposing a single `adtech_http_request_duration_ms` *gauge* (just an average). Useless for tail-latency analysis.
+
+After: `prometheus/client_golang`-backed implementation with:
+- `adtech_http_requests_total{service, handler, method, status}` Counter.
+- `adtech_http_request_duration_seconds_bucket{...}` Histogram with bucket layout favouring sub-100ms resolution for the bid hot path (`{1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000}` ms).
+- `adtech_http_in_flight_requests{service}` Gauge.
+- Go runtime + process collectors auto-registered.
+- Same `NewMetrics(serviceName)`/`Wrap`/`Handler` API as before — no service-side changes.
+- `Registry()` accessor lets services register domain-specific collectors that share the `/metrics` endpoint.
+- `normalizePath()` collapses UUIDs / long IDs in URL paths to `:id` to bound label cardinality.
+
+DSP was previously missing `/metrics` entirely — added.
+
+### Exchange domain counters
+
+`cmd/exchange/metrics.go` defines four collectors that populate the Pipeline Health dashboard:
+
+- `adtech_auctions_total{result, channel}` — winner / no_bids / all_below_floor / no_winner.
+- `adtech_auction_clearing_price_usd_total` — revenue counter (use `rate()` for $/sec).
+- `adtech_bids_below_floor_total{placement_id}` — per-placement floor rejection.
+- `adtech_bids_received_total{dsp_endpoint, decision}` — registered, increment site queued for follow-up.
+
+All registered on the service-local registry so they emit from the same `/metrics` endpoint as the HTTP metrics.
+
+### Grafana dashboards rebuilt against real metric names
+
+The previously-provisioned dashboards referenced metrics that no Go code ever emitted (`adtech_auctions_total`, `adtech_revenue_usd_total`, `adtech_active_campaigns`, …). They've been rewritten:
+
+- **Pipeline Health** — uses the new exchange domain counters (fill rate %, revenue/min, bids-below-floor) and HTTP-derived metrics (RPS, latency by DSP pod, in-flight). 13 panels.
+- **Service Detail** — per-service breakdown via a `$service` template variable. Per-handler p95, error rate, goroutines + Go memory, embedded log panel.
+- **All Logs** — new dashboard, single unified log stream with service / level / trace_id / search template filters.
+- **Trace Explorer** — kept, simplified (dropped one Loki query using line_format syntax that doesn't fit our slog format).
+
+On macOS the Linux-specific `process_resident_memory_bytes` isn't emitted — dashboards use `go_memory_classes_total_bytes` as the memory metric instead.
+
+### Gateway → Jaeger CORS proxy
+
+The pub sim polls Jaeger for spans (`GET /api/traces/{id}`) but Jaeger v1.58 doesn't support CORS on the query API. Browser fetches from the gateway-served page to `:16686` failed silently.
+
+Fix: gateway-side reverse proxy at `routes.ProxyJaeger` (`/v1/jaeger/`) wrapping `middleware.CORS(StripPrefix(...))`. Browser hits same-origin via the gateway, the proxy adds CORS headers, traces appear in the pub sim timeline.
+
+### `exchange.bid_timeout` default 100ms → 500ms
+
+100ms is the IAB industry default for prod but the local Tilt stack is single-Go-process per DSP. The audience-lookup Postgres queries (before the cache fix) regularly exceeded 100ms under burst load. 500ms is more forgiving for the local-dev concurrency profile while still expressive of the real OpenRTB constraint. Live-tunable via the config manager.
+
+### Pub sim grew into a full dev workbench
+
+The publisher simulator (`web/templates/simulator/minimal.html`) absorbed major UX features:
+
+- **Placement picker** dropdown replacing the old static size selector. Populated from `/v1/ssp/placements`; selecting changes (a) which placement_id is sent in the ad request, (b) the rendered ad slot dimensions, (c) which placement row shows `ACTIVE PAGE` in the SSP Inventory panel.
+- **SSP Inventory panel** — collapsible publisher sections listing all placements with floor/format/size/page columns. Each placement has Floor / Pause / Delete buttons; each publisher header has a `+ Placement` button. CRUD endpoints in `cmd/ssp/management.go`.
+- **DSP State refactor** — three collapsible sections (one per pod) replacing the old tabs. Header summary shows aggregate spent/remaining + drained count even when collapsed, so a `Drain budgets` run is visible across all pods at once.
+- **Drain budgets modal** — configurable fixed-count vs "until exhausted" mode, concurrency, random per-batch delay. Sticky banner across the top of the page shows live progress + Stop button while the modal closes. Smart pool (built from live DSP+SSP data) filters out placements with floors no DSP can clear + geos/devices no campaign targets. Fill rate went from 14% (uniform random) to ~90% (smart pool).
+- **Reset & reseed button** — POSTs `/dev/reset-and-reseed` on the gateway. Truncates 19 tenant tables → FLUSHDB Redis → re-runs `cmd/seed --profile standard` via exec → publishes NATS cache invalidates. Per-step timing surfaced in the banner.
+- **Trace timeline expandable rows** — every row gets a caret; click reveals the full metadata. Browser rows show placement/visitor/trace info; SSP/tracker rows show HTTP status + URL; JAEGER rows show every OpenTelemetry tag (notify.dsp, notify.endpoint, http.status_code, auction.winner_dsp, auction.clearing_price, etc.).
+- **Auction outcome banner** — pulls `auction.winner_dsp`, `auction.clearing_price`, `auction.num_bids` from the `exchange.auction` span tags (newly added in `cmd/exchange/main.go`). Shows winner + cleared price + #bidders.
+- **Observability quick-link panel** — collapsible toolbar with 58 pre-built links to Prometheus queries (p95 by handler, RPS, in-flight, errors), Grafana dashboards (All Logs, Pipeline Health, Service Detail, Trace Explorer), Jaeger searches (recent auctions, bid handlers, SSP serves), Loki filters (auction outcomes, no-bids, bid submissions), debug endpoints (router stats, ledger, per-DSP campaigns), raw /metrics endpoints, and a `refreshAllCaches()` one-click action.
+- **Macro substitution** — SSP now substitutes `${IMP_PIXEL}`, `${CLICK_URL}`, `${VIEWABILITY_URL}`, `${TRACE_ID}` in creative HTML before returning to the browser. Was emitting literal `${IMP_PIXEL}` which the browser tried to fetch as a URL.
+- **Per-request timing** in milliseconds for sub-second events and seconds (X.YYs) for longer ones, with widened/repositioned time column so it doesn't overlap the green status line.
+
+### `pub-simulator` is a first-class seeded publisher
+
+The pub sim's "fake publisher page" used to use one of the other seeded publishers' placements (`pl-news-mpu`). Now there's a dedicated entry in `profiles/publishers/standard.yaml`:
+
+```yaml
+- id: pub-simulator
+  name: "Publisher Simulator"
+  domain: "publisher-simulator.local"
+  ...
+  placements:
+    - id: pl-sim-mpu
+      name: "Simulator MPU"
+      ...
+```
+
+The pub sim defaults its placement picker to `pl-sim-mpu`. Makes the data-model link between the page and the SSP explicit: the simulator IS a publisher who's signed up with the SSP.
+
+### Audit log of structural changes during this session
+
+| Change | Files touched | Notes |
+|---|---|---|
+| Audience read path: postgres-direct → cached → preload | `pkg/audience/store/{store.go,cached/,preload/,postgres/}`, `cmd/dsp/main.go`, `cmd/ssp/main.go` | Three swappable backends behind one Lookup interface; Redis is the L2 |
+| `cfg.SetLive("database.url", ...)` in Setup | `pkg/config/setup.go` | Bug fix — caches had been silently empty since the config manager landed |
+| Real Prometheus histograms | `pkg/middleware/metrics.go`, `go.mod` (prometheus/client_golang dep) | Same NewMetrics API; underlying impl now emits proper buckets |
+| Exchange domain counters | `cmd/exchange/{metrics.go,main.go}` | auctions_total, clearing_price, bids_below_floor |
+| Gateway → Jaeger CORS proxy | `cmd/gateway/main.go`, `pkg/routes/routes.go` | Same-origin path via the gateway |
+| `exchange.bid_timeout` 100ms → 500ms default | `cmd/exchange/{main.go,config.go}` | Hardcoded fallback + schema default both updated |
+| Pub sim drain modal + sticky banner + smart pool | `web/templates/simulator/minimal.html` | Big chunk of JS; sample pool built from live DSP+SSP data |
+| Pub sim collapsible DSP/SSP sections | same | Headers stay visible during drain so spend is watchable |
+| Trace timeline expandable rows | same | Per-row metadata; ms vs Xs time formatting |
+| Reset & reseed button | `cmd/gateway/{main.go,reset.go}`, `pkg/routes/routes.go` | POST /dev/reset-and-reseed: TRUNCATE + Redis FLUSHDB + cmd/seed exec + NATS invalidate |
+| SSP Inventory panel + placement CRUD | `cmd/ssp/{main.go,management.go}`, `pkg/routes/routes.go` | Mirrors the DSP campaign CRUD pattern |
+| Macro substitution in served HTML | `cmd/ssp/main.go` | Before serving, ${IMP_PIXEL} etc. replaced with real signed URLs |
+| `pub-simulator` first-class publisher | `profiles/publishers/standard.yaml`, template default | Dedicated seed entry, default placement is its own slot |
+| Auction outcome span tags | `cmd/exchange/main.go` | winner_dsp / clearing_price / num_bids exposed for the pub sim banner |
+| Grafana dashboards rewrite | `k8s/base/grafana/dashboards.yaml` | All Logs (new), Pipeline Health (uses real metric names), Service Detail (per-handler p95) |
+| Observability quick-link toolbar (58 links) | `web/templates/simulator/minimal.html` | Pre-built PromQL queries, Loki filters, Jaeger searches |
+
+### What's queued but not built (carried into next session)
+
+- **Custom domain counters in DSP** — `adtech_bids_total{dsp_id, decision="bid|no_bid"}` and `adtech_campaign_spend_usd`/`_budget_usd` gauges so Pipeline Health can show per-DSP behaviour without scraping the smart-router JSON.
+- **Smart-router stats as Prometheus gauges** — currently only available via `/v1/openrtb/routing` JSON. Would give Grafana per-DSP `bid_rate` / `win_rate` over time.
+- **NATS consumer lag metric** — `adtech_nats_consumer_pending_messages` referenced by the dashboard but not emitted yet.
+- **CPC/CPA/vCPM settle dispatch** — `pkg/billing.Engine.ProcessEvent` supports reserve/settle but the `cmd/reporting` click/conversion/view handlers don't call it. 8 skipped `billing_models_test.go` cases gated on this.
+- **Postgres-backed billing ledger** — still in-memory; loses state on restart.
+- **DuckDB analytics as dev default** — code exists, just not wired.
+- **Production auth middleware for DSP campaign CRUD + SSP placement CRUD** — both noted as TODO in source; must not be exposed publicly until that lands.
+- **External DSP Partners onboarding plan** — full plan in PLAN.md, now blocked only on auth + per-partner metadata table.
+
+### Local dev infra friction worth flagging
+
+The vmType `vz` Colima setup is unstable on macOS 14 (Sonoma) — the cluster API + port-forwards drop periodically, requiring `colima start` to recover. Lima warnings flag this as a kernel/hypervisor mismatch fixed by macOS 15.5. Working around it cost real session time; macOS update is the long-term answer. `colima delete -f && colima start --vm-type qemu` is the alternative but qemu hits a separate k3s networking issue (kubelet proxy at `192.168.5.1:10250` unreachable from the API server).

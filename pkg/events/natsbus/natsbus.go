@@ -19,6 +19,9 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Bus implements events.EventBus using NATS JetStream.
@@ -77,15 +80,30 @@ func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) 
 }
 
 func (b *Bus) Publish(ctx context.Context, subject string, data []byte) error {
-	_, err := b.js.Publish(ctx, subject, data)
-	if err != nil {
+	// Inject the active OTel span context as NATS message headers so the
+	// consumer span links back to this publisher span. Without this, the
+	// Jaeger trace breaks at every NATS hop — tracker emits a span, but
+	// reporting's consumer work shows as a separate disconnected trace.
+	msg := &nats.Msg{Subject: subject, Data: data, Header: nats.Header{}}
+	otel.GetTextMapPropagator().Inject(ctx, natsHeaderCarrier(msg.Header))
+
+	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
 	return nil
 }
 
 func (b *Bus) Subscribe(ctx context.Context, subject, group string, handler events.Handler) error {
-	consumerName := fmt.Sprintf("%s-%s", b.service, group)
+	// Consumer name must include the subject — without this, a caller that
+	// subscribes to multiple subjects under the same group (e.g. reporting
+	// subscribes to impression + click + conversion + auction.complete all
+	// as group="reporting") collides: each CreateOrUpdateConsumer call
+	// overwrites the previous FilterSubject, and only the last subject's
+	// messages get delivered. The other handlers silently misdecode whatever
+	// the "winning" subject's payloads happen to be.
+	//
+	// We sanitise the subject for use in a NATS consumer name (no dots).
+	consumerName := fmt.Sprintf("%s-%s-%s", b.service, group, subjectToConsumerSuffix(subject))
 
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, streamForSubject(subject), jetstream.ConsumerConfig{
 		Name:          consumerName,
@@ -113,19 +131,41 @@ func (b *Bus) Subscribe(ctx context.Context, subject, group string, handler even
 			}
 
 			for msg := range msgs.Messages() {
+				// Extract the publisher's span context from NATS headers
+				// (set by Publish). Then open a CONSUMER span as its child,
+				// so Jaeger renders the full publisher → consumer flow as
+				// one trace. ctx propagates the span context into the
+				// handler — downstream code can call tracing.TraceIDFromContext
+				// to get the same W3C trace ID the publisher saw.
+				msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
+				msgCtx, span := otel.Tracer("adtech").Start(msgCtx,
+					"nats consume "+msg.Subject(),
+					trace.WithSpanKind(trace.SpanKindConsumer),
+					trace.WithAttributes(
+						attribute.String("messaging.system", "nats"),
+						attribute.String("messaging.destination", msg.Subject()),
+					),
+				)
+
+				traceID := ""
+				if sc := span.SpanContext(); sc.HasTraceID() {
+					traceID = sc.TraceID().String()
+				}
+
 				evtMsg := events.NewMessage(
 					msg.Subject(),
 					msg.Data(),
-					"", // trace ID extracted by handler
+					traceID,
 					msg.Headers().Get("Nats-Msg-Id"),
 					func() error { return msg.Ack() },
 					func() error { return msg.Nak() },
 				)
 
-				if err := handler(ctx, evtMsg); err != nil {
+				if err := handler(msgCtx, evtMsg); err != nil {
 					b.log.Error("handler failed", "subject", subject, "error", err)
 					msg.Nak()
 				}
+				span.End()
 			}
 		}
 	}()
@@ -139,8 +179,44 @@ func (b *Bus) Close() error {
 	return nil
 }
 
+// subjectToConsumerSuffix turns a dotted subject like "adtech.events.impression"
+// into "impression" — just the leaf segment. NATS consumer names can't contain
+// dots, and the full subject is redundant in the name since FilterSubject
+// already carries it.
+func subjectToConsumerSuffix(subject string) string {
+	for i := len(subject) - 1; i >= 0; i-- {
+		if subject[i] == '.' {
+			return subject[i+1:]
+		}
+	}
+	return subject
+}
+
 // streamForSubject maps a subject to its JetStream stream name.
 func streamForSubject(subject string) string {
 	// All adtech events go to the "adtech" stream
 	return "adtech"
+}
+
+// natsHeaderCarrier adapts nats.Header to OTel's TextMapCarrier so the
+// propagator can inject/extract W3C traceparent into NATS message headers.
+// nats.Header is map[string][]string under the hood — same shape as
+// http.Header but a distinct named type, hence the adapter.
+type natsHeaderCarrier nats.Header
+
+func (c natsHeaderCarrier) Get(key string) string {
+	v := nats.Header(c).Get(key)
+	return v
+}
+
+func (c natsHeaderCarrier) Set(key, value string) {
+	nats.Header(c).Set(key, value)
+}
+
+func (c natsHeaderCarrier) Keys() []string {
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	return keys
 }

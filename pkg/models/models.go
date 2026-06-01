@@ -8,7 +8,35 @@ package models
 
 import (
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/targeting"
 )
+
+// Campaign is the denormalized read model used by the DSP at bid time.
+//
+// It joins a line item with its insertion order (for advertiser_id), its
+// targeting rules, and its primary creative. The warm cache holds a list
+// of these; the bid handler iterates them in process. IDs are UUIDs stored
+// as their string text form — keeps Postgres, NATS, logs, and the in-memory
+// cache uniform without adding 16-byte parsing on the hot path.
+type Campaign struct {
+	ID             string // line_items.id (UUID text)
+	AccountID      string // owning advertiser account UUID
+	AdvertiserID   string // = AccountID for advertiser-owned IOs, distinct for agency
+	IOId           string // insertion_orders.id
+	Name           string
+	CreativeID     string // primary creative for now; rotation upgrade later
+	CreativeDomain string
+	BaseBid        float64
+	Currency       string
+	DailyBudget    float64
+	TotalBudget    float64
+	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
+	PacingMode     string // even, asap, front_loaded
+	Status         string // live, paused, ended, ...
+	Targeting      targeting.Rules
+	Modifiers      targeting.Modifiers
+}
 
 // Account represents an advertiser, publisher, agency, staff, or admin account.
 type Account struct {
@@ -256,6 +284,7 @@ type ServeRequest struct {
 	SiteDomain    string  `json:"site_domain"`
 	Width         int     `json:"width"`
 	Height        int     `json:"height"`
+	UserID        string  `json:"user_id,omitempty"` // hashed user id; empty = no consent, skip freq cap
 }
 
 // ServeResponse contains the rendered ad HTML with all macros substituted.

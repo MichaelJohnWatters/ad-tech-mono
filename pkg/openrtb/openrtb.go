@@ -21,15 +21,20 @@ type BidRequest struct {
 
 // Imp represents an impression opportunity.
 type Imp struct {
-	ID          string   `json:"id"`
-	Banner      *Banner  `json:"banner,omitempty"`
-	Video       *Video   `json:"video,omitempty"`
-	Audio       *Audio   `json:"audio,omitempty"`
-	Native      *Native  `json:"native,omitempty"`
-	BidFloor    float64  `json:"bidfloor,omitempty"`
-	BidFloorCur string   `json:"bidfloorcur,omitempty"`
-	DealID      string   `json:"dealid,omitempty"`
-	Ext         *ImpExt  `json:"ext,omitempty"`
+	ID          string  `json:"id"`
+	// TagID is the OpenRTB "identifier for specific ad placement or ad tag"
+	// — we use it to carry the placement UUID through to the exchange so
+	// deal eligibility can match on placement_id. (ID stays the
+	// auction-side imp identifier; TagID is the platform identifier.)
+	TagID       string  `json:"tagid,omitempty"`
+	Banner      *Banner `json:"banner,omitempty"`
+	Video       *Video  `json:"video,omitempty"`
+	Audio       *Audio  `json:"audio,omitempty"`
+	Native      *Native `json:"native,omitempty"`
+	BidFloor    float64 `json:"bidfloor,omitempty"`
+	BidFloorCur string  `json:"bidfloorcur,omitempty"`
+	DealID      string  `json:"dealid,omitempty"`
+	Ext         *ImpExt `json:"ext,omitempty"`
 }
 
 // Banner represents a display ad opportunity.

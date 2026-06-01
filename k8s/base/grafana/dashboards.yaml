@@ -6,93 +6,182 @@ metadata:
 data:
   pipeline-health.json: |
     {
-      "dashboard": {
         "title": "Ad Tech Pipeline Health",
         "uid": "adtech-pipeline",
         "tags": ["adtech", "pipeline"],
         "timezone": "utc",
         "refresh": "10s",
-        "time": {"from": "now-1h", "to": "now"},
-        "annotations": {
-          "list": [
-            {
-              "name": "Deployments",
-              "datasource": "Prometheus",
-              "enable": true,
-              "expr": "changes(process_start_time_seconds{job=~\"adtech-.*\"}[1m]) > 0",
-              "tagKeys": "job",
-              "titleFormat": "Deploy: {{job}}"
-            }
-          ]
-        },
+        "time": {"from": "now-15m", "to": "now"},
         "panels": [
           {
-            "title": "Auction Rate",
+            "title": "Auction RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+            "description": "Auctions per second hitting the exchange.",
             "targets": [
               {
-                "expr": "rate(adtech_auctions_total[5m])",
-                "legendFormat": "{{channel}}"
+                "expr": "sum(rate(adtech_http_requests_total{service=\"exchange\",handler=\"/v1/openrtb/auction\"}[1m]))",
+                "legendFormat": "auctions/s"
               }
             ]
           },
           {
-            "title": "Auction Latency (p99)",
+            "title": "Auction Latency",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+            "description": "Exchange auction handler p50/p95/p99 from the request_duration_seconds histogram.",
             "targets": [
               {
-                "expr": "histogram_quantile(0.99, rate(adtech_auction_duration_seconds_bucket[5m]))",
+                "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
                 "legendFormat": "p99"
               },
               {
-                "expr": "histogram_quantile(0.50, rate(adtech_auction_duration_seconds_bucket[5m]))",
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
+                "legendFormat": "p95"
+              },
+              {
+                "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
                 "legendFormat": "p50"
               }
-            ]
+            ],
+            "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
-            "title": "Bid Rate by DSP",
+            "title": "Bid RPS by DSP pod",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+            "description": "OpenRTB bid requests per second per DSP pod. Each pod is a separate scrape target with a 'pod' label set in the Prometheus scrape config.",
             "targets": [
               {
-                "expr": "rate(adtech_bids_total[5m])",
-                "legendFormat": "{{dsp_id}}"
+                "expr": "sum(rate(adtech_http_requests_total{service=\"dsp\",handler=\"/v1/openrtb/bid\"}[1m])) by (pod)",
+                "legendFormat": "{{pod}}"
               }
             ]
           },
           {
-            "title": "Impression Rate",
+            "title": "Impression RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+            "description": "Tracker impression pixel hits per second.",
             "targets": [
               {
-                "expr": "rate(adtech_impressions_total[5m])",
+                "expr": "sum(rate(adtech_http_requests_total{service=\"tracker\",handler=\"/v1/t/imp\"}[1m]))",
                 "legendFormat": "impressions/s"
               }
             ]
           },
           {
-            "title": "Click Rate",
+            "title": "Click RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+            "description": "Tracker click redirects per second.",
             "targets": [
               {
-                "expr": "rate(adtech_clicks_total[5m])",
+                "expr": "sum(rate(adtech_http_requests_total{service=\"tracker\",handler=\"/v1/t/click\"}[1m]))",
                 "legendFormat": "clicks/s"
               }
             ]
           },
           {
-            "title": "Fill Rate",
-            "type": "gauge",
+            "title": "Bid latency p95 by DSP",
+            "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+            "description": "p95 OpenRTB bid handler latency per DSP pod. Spikes here are the leading indicator of fan-out timeouts on the exchange side.",
             "targets": [
               {
-                "expr": "rate(adtech_auctions_filled_total[5m]) / rate(adtech_auctions_total[5m])",
-                "legendFormat": "fill rate"
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"dsp\",handler=\"/v1/openrtb/bid\"}[1m])) by (pod, le))",
+                "legendFormat": "{{pod}}"
+              }
+            ],
+            "fieldConfig": {"defaults": {"unit": "s"}}
+          },
+          {
+            "title": "Service Error Rate (5xx + 4xx)",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" — there's no separate errors counter.",
+            "targets": [
+              {
+                "expr": "sum(rate(adtech_http_requests_total{status=~\"[45]..\"}[5m])) by (service, status)",
+                "legendFormat": "{{service}} {{status}}"
+              }
+            ]
+          },
+          {
+            "title": "In-flight requests by service",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "description": "Number of concurrent HTTP requests being handled. A sustained climb usually means a downstream is slow + requests are pooling.",
+            "targets": [
+              {
+                "expr": "sum(adtech_http_in_flight_requests) by (service)",
+                "legendFormat": "{{service}}"
+              }
+            ]
+          },
+          {
+            "title": "Service up",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
+            "description": "1 = service is up (Prometheus successfully scraped its /metrics).",
+            "targets": [
+              {
+                "expr": "sum(adtech_up) by (service)",
+                "legendFormat": "{{service}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {"steps": [{"value": 0, "color": "red"}, {"value": 1, "color": "green"}]}
+              }
+            }
+          },
+          {
+            "title": "Goroutines",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
+            "description": "Live goroutine count per service. A monotonic climb is a leak signal.",
+            "targets": [
+              {
+                "expr": "go_goroutines",
+                "legendFormat": "{{service}}"
+              }
+            ]
+          },
+          {
+            "title": "Go heap (MiB)",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
+            "description": "Go runtime total memory classes (heap + stacks + metadata + …). On macOS the Linux process_resident_memory_bytes isn't emitted, so this is the closest proxy.",
+            "targets": [
+              {
+                "expr": "go_memory_classes_total_bytes / 1024 / 1024",
+                "legendFormat": "{{service}}"
+              }
+            ],
+            "fieldConfig": {"defaults": {"unit": "MiB", "decimals": 1}}
+          },
+          {
+            "title": "Auction outcomes (fill rate)",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+            "description": "adtech_auctions_total broken down by result. The winner share over total = fill rate.",
+            "targets": [
+              {
+                "expr": "sum(rate(adtech_auctions_total[1m])) by (result)",
+                "legendFormat": "{{result}}"
+              }
+            ]
+          },
+          {
+            "title": "Fill rate %",
+            "type": "stat",
+            "gridPos": {"h": 4, "w": 6, "x": 12, "y": 28},
+            "description": "winner share of all auctions over the last minute. 100% = every request filled.",
+            "targets": [
+              {
+                "expr": "sum(rate(adtech_auctions_total{result=\"winner\"}[1m])) / sum(rate(adtech_auctions_total[1m]))",
+                "legendFormat": "fill"
               }
             ],
             "fieldConfig": {
@@ -100,177 +189,155 @@ data:
                 "unit": "percentunit",
                 "min": 0,
                 "max": 1,
-                "thresholds": {
-                  "steps": [
-                    {"value": 0, "color": "red"},
-                    {"value": 0.3, "color": "yellow"},
-                    {"value": 0.6, "color": "green"}
-                  ]
-                }
+                "thresholds": {"steps": [{"value": 0, "color": "red"}, {"value": 0.3, "color": "yellow"}, {"value": 0.7, "color": "green"}]}
               }
             }
           },
           {
-            "title": "NATS Event Lag",
-            "type": "timeseries",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
-            "targets": [
-              {
-                "expr": "adtech_nats_consumer_pending_messages",
-                "legendFormat": "{{stream}} / {{consumer}}"
-              }
-            ]
-          },
-          {
-            "title": "Service Error Rate",
-            "type": "timeseries",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
-            "targets": [
-              {
-                "expr": "rate(adtech_http_errors_total[5m])",
-                "legendFormat": "{{service}} {{status_code}}"
-              }
-            ]
-          },
-          {
-            "title": "Revenue (Clearing Price USD)",
+            "title": "Revenue/min (USD)",
             "type": "stat",
-            "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
+            "gridPos": {"h": 4, "w": 6, "x": 18, "y": 28},
+            "description": "Sum of clearing prices over the last minute. rate() x 60 turns the per-second counter rate into per-minute.",
             "targets": [
               {
-                "expr": "sum(increase(adtech_revenue_usd_total[1h]))",
-                "legendFormat": "last hour"
+                "expr": "rate(adtech_auction_clearing_price_usd_total[1m]) * 60",
+                "legendFormat": "$/min"
               }
             ],
-            "fieldConfig": {
-              "defaults": {"unit": "currencyUSD"}
-            }
+            "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2}}
           },
           {
-            "title": "Active Campaigns",
+            "title": "Total revenue (last hour)",
             "type": "stat",
-            "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
+            "gridPos": {"h": 4, "w": 6, "x": 12, "y": 32},
             "targets": [
               {
-                "expr": "adtech_active_campaigns",
-                "legendFormat": "campaigns"
+                "expr": "increase(adtech_auction_clearing_price_usd_total[1h])",
+                "legendFormat": "$ 1h"
+              }
+            ],
+            "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2}}
+          },
+          {
+            "title": "Bids dropped below floor",
+            "type": "timeseries",
+            "gridPos": {"h": 4, "w": 6, "x": 18, "y": 32},
+            "description": "Bids that arrived but were below the placement's effective floor. High here = floors set too high for available demand.",
+            "targets": [
+              {
+                "expr": "sum(rate(adtech_bids_below_floor_total[1m])) by (placement_id)",
+                "legendFormat": "{{placement_id}}"
               }
             ]
           },
           {
-            "title": "Budget Utilisation",
-            "type": "gauge",
-            "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
-            "targets": [
-              {
-                "expr": "sum(adtech_campaign_spend_usd) / sum(adtech_campaign_budget_usd)",
-                "legendFormat": "utilisation"
-              }
-            ],
-            "fieldConfig": {
-              "defaults": {"unit": "percentunit", "min": 0, "max": 1}
+            "title": "Still-aspirational (need code)",
+            "type": "text",
+            "gridPos": {"h": 3, "w": 24, "x": 0, "y": 36},
+            "options": {
+              "mode": "markdown",
+              "content": "These would round out the dashboard but need code emitting them: `adtech_campaign_spend_usd / _budget_usd` (DSP budget utilisation), `adtech_active_campaigns` (DSP gauge), `adtech_nats_consumer_pending_messages` (reporting consumer lag). The smart router's per-DSP bid_rate / win_rate are emitted by the JSON debug endpoint at `:8081/v1/openrtb/routing` — could be exported as Prometheus gauges as a small follow-up."
             }
           }
-        ],
-        "templating": {
-          "list": [
-            {
-              "name": "channel",
-              "type": "query",
-              "datasource": "Prometheus",
-              "query": "label_values(adtech_auctions_total, channel)",
-              "refresh": 2,
-              "includeAll": true,
-              "multi": true
-            }
-          ]
-        }
-      }
+        ]
     }
   service-detail.json: |
     {
-      "dashboard": {
         "title": "Ad Tech Service Detail",
         "uid": "adtech-service",
         "tags": ["adtech", "service"],
         "timezone": "utc",
         "refresh": "10s",
-        "time": {"from": "now-1h", "to": "now"},
+        "time": {"from": "now-15m", "to": "now"},
         "panels": [
           {
-            "title": "Request Rate",
+            "title": "Request Rate by handler",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
             "targets": [
               {
-                "expr": "rate(adtech_http_requests_total{service=\"$service\"}[5m])",
-                "legendFormat": "{{method}} {{path}}"
+                "expr": "sum(rate(adtech_http_requests_total{service=\"$service\"}[1m])) by (handler, method)",
+                "legendFormat": "{{method}} {{handler}}"
               }
             ]
           },
           {
-            "title": "Request Latency",
+            "title": "Request Latency (p50/p95/p99)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "description": "Latency histogram quantiles across all handlers for the selected service.",
             "targets": [
               {
-                "expr": "histogram_quantile(0.99, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
                 "legendFormat": "p99"
               },
               {
-                "expr": "histogram_quantile(0.95, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
                 "legendFormat": "p95"
               },
               {
-                "expr": "histogram_quantile(0.50, rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[5m]))",
+                "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
                 "legendFormat": "p50"
               }
-            ]
+            ],
+            "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
-            "title": "Error Rate",
+            "title": "Error Rate (4xx + 5xx)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "description": "Errors per second derived from adtech_http_requests_total with status=~\"[45]..\" (we don't keep a separate counter).",
             "targets": [
               {
-                "expr": "rate(adtech_http_errors_total{service=\"$service\"}[5m])",
-                "legendFormat": "{{status_code}}"
+                "expr": "sum(rate(adtech_http_requests_total{service=\"$service\",status=~\"[45]..\"}[1m])) by (status, handler)",
+                "legendFormat": "{{status}} {{handler}}"
               }
             ]
           },
           {
-            "title": "Memory Usage",
+            "title": "p95 Latency by handler",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "description": "Breaks down latency per handler so you can spot which endpoint is causing the service-wide tail.",
             "targets": [
               {
-                "expr": "process_resident_memory_bytes{job=~\"adtech-$service\"}",
-                "legendFormat": "RSS"
-              },
-              {
-                "expr": "go_memstats_heap_inuse_bytes{job=~\"adtech-$service\"}",
-                "legendFormat": "Heap"
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (handler, le))",
+                "legendFormat": "{{handler}}"
               }
             ],
-            "fieldConfig": {
-              "defaults": {"unit": "bytes"}
-            }
+            "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
-            "title": "Goroutines",
+            "title": "In-flight requests",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
             "targets": [
               {
-                "expr": "go_goroutines{job=~\"adtech-$service\"}",
+                "expr": "adtech_http_in_flight_requests{service=\"$service\"}",
+                "legendFormat": "in-flight"
+              }
+            ]
+          },
+          {
+            "title": "Goroutines + memory",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "description": "Goroutine count and Go runtime total memory (in MiB). Goroutines climbing without coming down = leak. Memory climbing alongside RPS is fine; alongside no RPS is leak.",
+            "targets": [
+              {
+                "expr": "go_goroutines{service=\"$service\"}",
                 "legendFormat": "goroutines"
+              },
+              {
+                "expr": "go_memory_classes_total_bytes{service=\"$service\"} / 1024 / 1024",
+                "legendFormat": "memory (MiB)"
               }
             ]
           },
           {
             "title": "Logs",
             "type": "logs",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
             "targets": [
               {
                 "datasource": "Loki",
@@ -284,16 +351,92 @@ data:
             {
               "name": "service",
               "type": "custom",
-              "query": "exchange,dsp,tracker,gateway,ssp,adserver,reporting,pipeline",
-              "current": {"text": "exchange", "value": "exchange"}
+              "query": "exchange,dsp,tracker,gateway,ssp,adserver,reporting",
+              "current": {"text": "dsp", "value": "dsp"}
             }
           ]
         }
-      }
+    }
+  all-logs.json: |
+    {
+        "title": "Ad Tech All Logs",
+        "uid": "adtech-logs",
+        "tags": ["adtech", "logs"],
+        "timezone": "utc",
+        "refresh": "5s",
+        "time": {"from": "now-15m", "to": "now"},
+        "panels": [
+          {
+            "title": "Filtered logs",
+            "type": "logs",
+            "gridPos": {"h": 24, "w": 24, "x": 0, "y": 0},
+            "description": "All service logs in one stream. Filter via the template vars at the top. Service+level are multi-select (default = all). trace_id + search are textboxes (default empty = no filter). Examples: trace_id=ea14... + search empty → all log lines for that trace across services. service=dsp + level=WARN + search=\"audience\" → DSP warnings about the audience store. To extend in-panel without editing this dashboard: click the panel title → Edit, then append more LogQL clauses (e.g. | campaign=\"abc-123\").",
+            "options": {
+              "showTime": true,
+              "showLabels": false,
+              "showCommonLabels": false,
+              "wrapLogMessage": true,
+              "sortOrder": "Descending",
+              "dedupStrategy": "none",
+              "enableLogDetails": true
+            },
+            "targets": [
+              {
+                "datasource": "Loki",
+                "expr": "{service=~\"${service:regex}\"} | json | level=~\"${level:regex}\" | trace_id=~\".*${trace_id}.*\" |~ \"${search}\"",
+                "refId": "A"
+              }
+            ]
+          },
+          {
+            "title": "Quick filters (copy a query into the panel above)",
+            "type": "text",
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+            "options": {
+              "mode": "markdown",
+              "content": "**Common LogQL shortcuts** — append these clauses to the panel query (Panel → Edit) when the top-bar filters aren't enough:\n\n- All **ERRORs** across services: set level=ERROR in the dropdown above.\n- **One trace end-to-end**: paste the trace_id into the textbox; the query auto-wraps with `trace_id=~\".*<id>.*\"`.\n- **Exchange auctions only**: set service=exchange, then search `auction complete` or `no_bids`.\n- **DSP bid submissions** with campaign + price: `service=dsp, search=\"bid submitted\"`.\n- **Slow paths**: in the panel query add `| duration_ms > 100` (works if the service slog'd a duration_ms field on that line).\n- **Audience preload heartbeats**: `service=~\".+\", search=\"audience preload\"` — confirms warm cache is pumping every 30s.\n- **Win/loss notify trace**: `service=dsp, search=\"win notification\"|\"loss notification\"`.\n\n**Why some fields show 'no extracted labels'**: a log line without a JSON field for that key (e.g. an INFO without a trace_id) won't match `| trace_id=~\".+\"`. With the default `.*` we use here, empty / missing fields still pass through."
+            }
+          }
+        ],
+        "templating": {
+          "list": [
+            {
+              "name": "service",
+              "type": "query",
+              "datasource": {"type": "loki", "uid": "loki"},
+              "query": "label_values({service=~\".+\"}, service)",
+              "refresh": 2,
+              "includeAll": true,
+              "allValue": ".+",
+              "multi": true,
+              "current": {"text": "All", "value": "$__all"}
+            },
+            {
+              "name": "level",
+              "type": "custom",
+              "query": "INFO,WARN,ERROR,DEBUG",
+              "includeAll": true,
+              "allValue": ".+",
+              "multi": true,
+              "current": {"text": "All", "value": "$__all"}
+            },
+            {
+              "name": "trace_id",
+              "type": "textbox",
+              "label": "Trace ID (substring)",
+              "current": {"text": "", "value": ""}
+            },
+            {
+              "name": "search",
+              "type": "textbox",
+              "label": "Free-text search (regex)",
+              "current": {"text": "", "value": ""}
+            }
+          ]
+        }
     }
   trace-explorer.json: |
     {
-      "dashboard": {
         "title": "Ad Tech Trace Explorer",
         "uid": "adtech-trace",
         "tags": ["adtech", "trace"],
@@ -322,26 +465,14 @@ data:
             ]
           },
           {
-            "title": "Event Records",
-            "type": "table",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
-            "description": "Impression, click, conversion events for this trace",
-            "targets": [
-              {
-                "datasource": "Loki",
-                "expr": "{trace_id=\"$trace_id\"} | json | line_format \"{{.msg}}\" |= \"recorded\""
-              }
-            ]
-          },
-          {
             "title": "Auction Detail",
-            "type": "table",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
-            "description": "Bids received, winner, clearing price",
+            "type": "logs",
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+            "description": "Exchange auction-complete log lines for this trace — winner_dsp, clearing_price, num_bids.",
             "targets": [
               {
                 "datasource": "Loki",
-                "expr": "{service=\"exchange\", trace_id=\"$trace_id\"} | json | line_format \"{{.msg}}\" |= \"auction\""
+                "expr": "{service=\"exchange\", trace_id=\"$trace_id\"} |= \"auction complete\""
               }
             ]
           }
@@ -356,5 +487,4 @@ data:
             }
           ]
         }
-      }
     }

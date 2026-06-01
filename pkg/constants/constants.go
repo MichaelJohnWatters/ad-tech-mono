@@ -290,6 +290,11 @@ const (
 	ServiceAdServer  = "adserver"
 	ServiceReporting = "reporting"
 	ServicePipeline  = "pipeline"
+	ServiceSeed      = "seed"
+	ServiceBilling   = "billing"
+	ServiceWebhooks  = "webhooks"
+	ServiceFraud     = "fraud"
+	ServicePrivacy   = "privacy"
 )
 
 // ============================================================
@@ -302,6 +307,24 @@ const (
 	GeoDEU = "DEU"
 	GeoFRA = "FRA"
 	GeoJPN = "JPN"
+)
+
+// ============================================================
+// IAB Content Categories (common ones)
+// ============================================================
+
+// ============================================================
+// NATS consumer group names
+// ============================================================
+//
+// Passed as the `group` argument to bus.Subscribe. The natsbus wrapper
+// composes the actual JetStream consumer name as {service}-{group}-{subject-leaf}
+// so different subjects under the same group don't collide.
+
+const (
+	// NATSGroupReporting — reporting service's event-ingestion consumers
+	// (impression, click, conversion, auction.complete, auction.win).
+	NATSGroupReporting = "reporting"
 )
 
 // ============================================================

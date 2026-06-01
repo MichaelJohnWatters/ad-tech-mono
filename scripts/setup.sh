@@ -93,6 +93,43 @@ else
     colima start --kubernetes --cpu 4 --memory 8 --disk 60
 fi
 
+# --- Configure Docker Hub pull-through cache ---
+# Routes all docker.io/* pulls through the in-cluster registry-mirror Pod
+# (deployed by Tilt via k8s/base/registry-mirror/). First pull populates
+# the PVC; subsequent pulls (including across `colima stop`/`start`) hit
+# the cache and survive Docker Hub outages.
+#
+# Lives here rather than in registries.yaml because Colima runs k3s with
+# --docker, which delegates pulls to the Docker daemon (registries.yaml
+# would be ignored). `colima delete` wipes /etc/docker/daemon.json, so
+# this re-applies on every fresh VM.
+echo ""
+echo "--- Configuring image cache (Docker Hub pull-through mirror) ---"
+MIRROR_URL="http://localhost:30500"
+CURRENT_DAEMON=$(colima ssh -- sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+if echo "$CURRENT_DAEMON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if d.get('registry-mirrors') == ['$MIRROR_URL'] else 1)
+" 2>/dev/null; then
+    echo "Mirror already configured in /etc/docker/daemon.json."
+else
+    echo "Patching /etc/docker/daemon.json to use mirror at $MIRROR_URL..."
+    UPDATED_DAEMON=$(echo "$CURRENT_DAEMON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d['registry-mirrors'] = ['$MIRROR_URL']
+d['insecure-registries'] = ['localhost:30500']
+print(json.dumps(d, indent=2))
+")
+    echo "$CURRENT_DAEMON" | colima ssh -- sudo tee /etc/docker/daemon.json.bak > /dev/null
+    echo "$UPDATED_DAEMON"  | colima ssh -- sudo tee /etc/docker/daemon.json     > /dev/null
+    echo "Restarting Docker (~30s; also bounces k3s)..."
+    colima ssh -- sudo systemctl restart docker
+    echo "Waiting for k3s to come back..."
+    until kubectl get nodes 2>/dev/null | grep -q Ready; do sleep 3; done
+fi
+
 # --- Verify K8s is ready ---
 echo ""
 echo "--- Verifying Kubernetes ---"

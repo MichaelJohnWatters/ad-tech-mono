@@ -179,21 +179,22 @@ func TestGenerateRecommendations(t *testing.T) {
 
 func TestSmartRouter_Selection(t *testing.T) {
 	router := NewSmartRouter()
+	const ch = "display"
 
 	// DSP A: high bid rate, fast
 	for i := 0; i < 100; i++ {
-		router.RecordCall("dsp-a", true, 3.00, 10*time.Millisecond, false)
+		router.RecordCall(ch, "dsp-a", true, 3.00, 10*time.Millisecond, false)
 	}
 	// DSP B: low bid rate
 	for i := 0; i < 100; i++ {
-		router.RecordCall("dsp-b", i < 3, 1.00, 20*time.Millisecond, false)
+		router.RecordCall(ch, "dsp-b", i < 3, 1.00, 20*time.Millisecond, false)
 	}
 	// DSP C: high timeout rate
 	for i := 0; i < 100; i++ {
-		router.RecordCall("dsp-c", false, 0, 200*time.Millisecond, i > 40)
+		router.RecordCall(ch, "dsp-c", false, 0, 200*time.Millisecond, i > 40)
 	}
 
-	selected := router.SelectDSPs([]string{"dsp-a", "dsp-b", "dsp-c"})
+	selected := router.SelectDSPs(ch, []string{"dsp-a", "dsp-b", "dsp-c"})
 
 	// dsp-a should be first (best performer)
 	if len(selected) == 0 || selected[0] != "dsp-a" {
@@ -212,5 +213,38 @@ func TestSmartRouter_Selection(t *testing.T) {
 		if id == "dsp-c" {
 			t.Error("dsp-c should be excluded (high timeout rate)")
 		}
+	}
+}
+
+// TestSmartRouter_PerChannelStats — a DSP that bids prolifically on display
+// but never on video should still be selected for display auctions. Without
+// per-channel segmentation, mixing the two would let the video no-bid rate
+// drag the display selection.
+func TestSmartRouter_PerChannelStats(t *testing.T) {
+	router := NewSmartRouter()
+
+	// display: 100% bid rate
+	for i := 0; i < 100; i++ {
+		router.RecordCall("display", "dsp-a", true, 2.50, 5*time.Millisecond, false)
+	}
+	// video: 0% bid rate (over the 5% skip threshold after 20 calls)
+	for i := 0; i < 50; i++ {
+		router.RecordCall("video", "dsp-a", false, 0, 5*time.Millisecond, false)
+	}
+
+	displaySelection := router.SelectDSPs("display", []string{"dsp-a"})
+	if len(displaySelection) != 1 || displaySelection[0] != "dsp-a" {
+		t.Errorf("display: expected dsp-a, got %v — channel stats mixed?", displaySelection)
+	}
+
+	videoSelection := router.SelectDSPs("video", []string{"dsp-a"})
+	if len(videoSelection) != 0 {
+		t.Errorf("video: expected dsp-a excluded (0%% bid rate on video), got %v", videoSelection)
+	}
+
+	// Sanity: both stat rows exist independently
+	stats := router.Stats()
+	if len(stats) != 2 {
+		t.Errorf("Stats() returned %d rows, want 2 (one per channel)", len(stats))
 	}
 }

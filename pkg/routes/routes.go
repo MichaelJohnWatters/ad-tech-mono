@@ -35,6 +35,10 @@ const (
 	ProxyDSP       = apiPrefix + "/dsp/"
 	ProxyBilling   = apiPrefix + "/billing/"
 	ProxyConfig    = apiPrefix + "/config/"
+	// ProxyJaeger forwards browser fetches to the Jaeger query API. Used by
+	// the pub sim to read trace spans post-hoc. Goes through the gateway
+	// because Jaeger v1.58 doesn't support CORS on the query endpoint.
+	ProxyJaeger = apiPrefix + "/jaeger/"
 
 	// Docs
 	DocsSwagger = "/docs"
@@ -44,6 +48,10 @@ const (
 	// Dev tools
 	DevPublisherSim = "/dev/publisher-simulator"
 	DevTraceExplorer = "/dev/trace-explorer"
+	// DevResetReseed wipes all tenant data and re-runs the seed profile.
+	// Gated by debug.endpoints_enabled. Used by the pub sim's "Reset &
+	// reseed" button so you don't need to drop to a terminal between runs.
+	DevResetReseed = "/dev/reset-and-reseed"
 
 	// Health
 	Healthz = "/healthz"
@@ -90,7 +98,21 @@ const (
 
 const (
 	SSPPlacements = "/v1/ssp/placements"
-	SSPRequest    = "/v1/ssp/request"
+	// SSPPublishers returns the publishers a placement can be attached to.
+	// Used by the publisher simulator's "+ New Placement" modal as the
+	// dropdown source.
+	SSPPublishers = "/v1/ssp/publishers"
+	// SSPRequest returns the raw OpenRTB BidResponse — used by e2e tests
+	// and the (deprecated) X-ray dev path. Real publisher pages don't hit
+	// this; auction details (winner, clearing price, fan-out) should never
+	// leak to the browser.
+	SSPRequest = "/v1/ssp/request"
+	// SSPServe is the realistic publisher-visitor path: SSP runs the
+	// auction internally, calls the ad server, and returns just the
+	// rendered HTML + pixel URLs. The browser never sees winner/pricing.
+	// Used by the publisher simulator and what a real adtech.js SDK would
+	// call on a publisher page.
+	SSPServe = "/v1/ssp/serve"
 )
 
 // ============================================================
@@ -115,6 +137,21 @@ const (
 )
 
 // ============================================================
+// Debug endpoints (all services)
+// ============================================================
+//
+// Behind debug.endpoints_enabled config (default true in dev). Exposed by
+// any service that holds warm caches so tests and ops tooling can force a
+// synchronous reload from Postgres without waiting for the poll interval.
+const (
+	DebugCacheRefresh = "/debug/cache/refresh"
+	// DebugAuctionWins returns the count of auction-win records the reporting
+	// in-memory analytics store has for a given trace_id. Used by e2e tests
+	// to verify adtech.auction.win NATS events reached reporting exactly once.
+	DebugAuctionWins = "/debug/auction_wins"
+)
+
+// ============================================================
 // Service base URLs (default local dev)
 // ============================================================
 
@@ -133,6 +170,7 @@ const (
 	DefaultNATSURL      = "nats://" + DefaultHost + ":" + PortNATSClient
 	DefaultDSPComp1URL  = "http://" + DefaultHost + ":" + PortDSPComp1
 	DefaultDSPComp2URL  = "http://" + DefaultHost + ":" + PortDSPComp2
+	DefaultJaegerURL    = "http://" + DefaultHost + ":" + PortJaeger
 )
 
 // ServiceURL builds a URL from host and port.

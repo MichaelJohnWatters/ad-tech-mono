@@ -17,7 +17,12 @@ spec:
     spec:
       containers:
         - name: minio
-          image: minio/minio:latest
+          # Pinned to digest of the previous `:latest` resolution to (a) stop
+          # re-pulling on every pod restart (`:latest` defaults to
+          # imagePullPolicy: Always) and (b) survive Docker Hub flakes.
+          # Bump when a Minio CVE or needed feature lands.
+          image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          imagePullPolicy: IfNotPresent
           args: ["server", "/data", "--console-address", ":9001"]
           env:
             - name: MINIO_ROOT_USER

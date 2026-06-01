@@ -1,0 +1,34 @@
+# Sample deals exercising each deal type. Seed converts the friendly external
+# IDs into UUIDv5s via idgen.Derive(kind, key), matching the publishers /
+# placements / advertisers that other profiles seed.
+#
+# Deal types (priority order): pg > preferred > pmp > open
+#  - pg: programmatic guaranteed — preempts the auction, deal price = floor
+#  - preferred: first-look at a negotiated price for one or more advertisers
+#  - pmp: private marketplace, advertiser allowlist + price floor
+#  - open: implicit when no deal applies (not seeded)
+name: standard
+
+deals:
+  - id: deal-pg-shoppers-acme
+    publisher: pub-shoppers-hub
+    name: "Shoppers Hub × Acme PG"
+    type: pg
+    price: 5.00
+    advertisers: [adv-acme]
+    placements: [pl-shop-billboard]
+
+  - id: deal-pref-news-acme-globex
+    publisher: pub-daily-news
+    name: "Daily News Premium First-Look"
+    type: preferred
+    price: 2.50
+    advertisers: [adv-acme, adv-globex]
+    # no placement allowlist = applies to every Daily News placement
+
+  - id: deal-pmp-tech
+    publisher: pub-tech-review
+    name: "Tech Review PMP"
+    type: pmp
+    price: 1.20
+    advertisers: [adv-globex, adv-initech]
