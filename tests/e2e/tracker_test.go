@@ -8,11 +8,15 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
+
+func itoa(i int) string { return strconv.Itoa(i) }
 
 // TestTrackerClickRedirects — the click endpoint must 302 to the redir URL.
 // We disable follow-redirect on the client so we can inspect the 302 itself.
@@ -52,26 +56,83 @@ func TestTrackerConversionPixel(t *testing.T) {
 	}
 }
 
-// TestTrackerViewabilityBeacon — viewability endpoint returns 204 with no body.
+// TestTrackerViewabilityBeacon — viewability endpoint returns 204 with no
+// body and stamps X-IAB-Viewable when the inputs cross the IAB threshold
+// (>=50% pixels for >=1s on standard ads). Server-side computation is the
+// authority; client's bool is not consulted.
 func TestTrackerViewabilityBeacon(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "tracker-view")
 
-	url := h.URLs.Tracker + "/v1/t/view?tid=trk-view-1&cid=" + w.Campaign.ID + "&dur=2000&pct=75"
-	resp := get(t, h, url)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("viewability status = %d, want 204", resp.StatusCode)
+	cases := []struct {
+		name         string
+		dur          int
+		pct          int
+		wantViewable bool
+	}{
+		{"clearly viewable", 2000, 75, true},
+		{"below time threshold", 500, 100, false},
+		{"below pct threshold", 2000, 40, false},
+		{"right at threshold", 1000, 50, true},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Spaces in c.name would land unescaped in the URL and trip
+			// Go's http.NewRequest before it reaches the server.
+			tid := "trk-view-" + strings.ReplaceAll(c.name, " ", "-")
+			url := h.URLs.Tracker + "/v1/t/view?tid=" + tid + "&cid=" + w.Campaign.ID +
+				"&dur=" + itoa(c.dur) + "&pct=" + itoa(c.pct)
+			resp := get(t, h, url)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("viewability status = %d, want 204", resp.StatusCode)
+			}
+			got := resp.Header.Get("X-IAB-Viewable") == "1"
+			if got != c.wantViewable {
+				t.Errorf("case %d %s: X-IAB-Viewable=%v, want %v", i, c.name, got, c.wantViewable)
+			}
+		})
 	}
 }
 
-// TestTrackerHMACStrictMode — when tracker.signature_validation is true,
-// requests without a valid sig must be rejected. Currently the tracker
-// runs in dev mode (signature_validation=false), so this is skipped until
-// we either flip via config-manager mid-test or add a "strict" flag to the
-// test harness. Sketches the assertion shape.
+// TestTrackerHMACStrictMode — flip tracker.signature_validation to true,
+// hit /v1/t/imp without a sig param and assert 403. Then flip back and
+// confirm the same request succeeds. Proves the live-config knob gates
+// the HMAC enforcement path (warn-only by default in dev, hard-reject
+// when ops ratchet to strict).
 func TestTrackerHMACStrictMode(t *testing.T) {
-	t.Skip("HMAC strict mode requires flipping tracker.signature_validation via config-manager mid-test; build a config-write helper before enabling")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "trk-hmac")
+
+	const pod = "tracker-0"
+	const key = "tracker.signature_validation"
+
+	// Force baseline to "false" so the next assertion is unambiguous —
+	// don't rely on whatever a prior test happened to leave behind.
+	// Cleanup also resets to "false" (the schema default), not to whatever
+	// the row held before — leftover "true" from a previous failed run
+	// would otherwise poison every later test that hits a tracker
+	// endpoint without a sig param.
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, key, "false", pod)
+	})
+	h.SetConfigForPod(t, key, "false", pod)
+
+	url := h.URLs.Tracker + "/v1/t/imp?tid=trk-hmac-baseline&cid=" + w.Campaign.ID
+	resp := get(t, h, url)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("baseline (strict=false) status = %d, want 200", resp.StatusCode)
+	}
+
+	h.SetConfigForPod(t, key, "true", pod)
+
+	url = h.URLs.Tracker + "/v1/t/imp?tid=trk-hmac-strict&cid=" + w.Campaign.ID
+	resp = get(t, h, url)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("strict-mode unsigned status = %d, want 403", resp.StatusCode)
+	}
 }
 
 func get(t *testing.T, h *harness.Harness, url string) *http.Response {
@@ -79,6 +140,12 @@ func get(t *testing.T, h *harness.Harness, url string) *http.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// The tracker's fraud checker treats the default Go UA as a bot —
+	// it would silently 204 the request without firing the view event
+	// path. Set a browser-shaped UA + Referer so the harness exercises
+	// the real flow. Same pattern as harness.fireAndConsume.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (e2e-harness)")
+	req.Header.Set("Referer", "https://e2e.test/")
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)

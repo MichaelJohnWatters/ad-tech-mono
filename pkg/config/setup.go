@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -176,6 +177,21 @@ func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...S
 		// the deployment YAMLs don't have to enumerate every alias.
 		{"NATS_URL", serviceName + ".nats_url"},
 		{"REDIS_URL", serviceName + ".redis_addr"},
+	}
+	// Service-prefixed env vars take precedence so a Deployment that
+	// only sets TRACKER_NATS_URL (and not NATS_URL) still populates
+	// nats.url and tracker.nats_url. Apply the prefix-fallback first so
+	// the literal-env-var pass below can override it if both are set.
+	upperService := strings.ToUpper(strings.ReplaceAll(serviceName, "-", "_"))
+	for _, infra := range []struct{ envSuffix, key string }{
+		{"NATS_URL", "nats.url"},
+		{"NATS_URL", serviceName + ".nats_url"},
+		{"REDIS_URL", "redis.url"},
+		{"REDIS_URL", serviceName + ".redis_addr"},
+	} {
+		if v := os.Getenv(upperService + "_" + infra.envSuffix); v != "" {
+			cfg.SetLive(infra.key, v)
+		}
 	}
 	for _, m := range envKeyMap {
 		if v := os.Getenv(m.env); v != "" {

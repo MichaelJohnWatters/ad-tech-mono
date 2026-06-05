@@ -39,10 +39,9 @@ var pixel = []byte{
 
 func main() {
 	log := logger.New(constants.ServiceTracker)
-	sc := config.Setup(constants.ServiceTracker, log)
+	sc := config.Setup(constants.ServiceTracker, trackerSchema, log)
 	cfg := sc.Cfg
-	_ = sc // manager available for OnChange callbacks
-	config.PublishSchemaWithURL(cfg.Get("database.url", ""), constants.ServiceTracker, trackerSchema, log)
+	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
@@ -85,12 +84,7 @@ func main() {
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
 	l2 := connectRedis(cfg, log)
-	dedup := NewDedup(
-		l2,
-		cfg.GetDuration("tracker.dedup_ttl", 24*time.Hour),
-		cfg.GetBool("tracker.dedup_enabled", true),
-		log,
-	)
+	dedup := NewDedup(l2, knobs.DedupTTL.Value, knobs.DedupEnabled.Value, log)
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
@@ -104,10 +98,17 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 
-		// Validate HMAC signature
+		// Validate HMAC signature. When tracker.signature_validation is
+		// true (prod-shape) we 403 the request; otherwise we warn and let
+		// the event through so dev pipelines that don't yet sign keep
+		// flowing. The config knob is live-tunable so ops can ratchet
+		// strictness without a redeploy.
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
-			// Don't block in dev - just warn. In prod: return 403.
+			if cfg.GetBool("tracker.signature_validation", false) {
+				http.Error(w, "invalid signature", http.StatusForbidden)
+				return
+			}
 		}
 
 		// Real-time fraud check
@@ -154,6 +155,14 @@ func main() {
 			return
 		}
 
+		// BidModel carried on the URL via ?bm= so the billing engine can
+		// route reserve-vs-bill-immediately correctly. Default CPM when
+		// missing (legacy URLs from before this param landed).
+		bidModel := q.Get("bm")
+		if bidModel == "" {
+			bidModel = constants.BidModelCPM
+		}
+
 		go publisher.publishImpression(context.WithoutCancel(ctx), analytics.ImpressionEvent{
 			TraceID:          traceID,
 			CampaignID:       q.Get("cid"),
@@ -167,7 +176,7 @@ func main() {
 			ClearingPrice:    price,
 			ClearingCurrency: q.Get("cur"),
 			ClearingPriceUSD: price,
-			BidModel:         constants.BidModelCPM,
+			BidModel:         bidModel,
 			DealID:           q.Get("deal"),
 			SchemaVersion:    1,
 			Timestamp:        time.Now().UTC(),
@@ -251,25 +260,117 @@ func main() {
 		w.Write(pixel)
 	})
 
-	// Viewability beacon
+	// Viewability beacon. Client (adtech.js / publisher simulator) calls
+	// this after observing the rendered ad in the viewport. URL params:
+	//   tid  - trace id (links back to the impression)
+	//   cid, crid, pid, pubid, advid - campaign / creative / placement /
+	//                                  publisher / advertiser
+	//   dur  - milliseconds the ad was visible at >= the IAB threshold
+	//   pct  - peak percent of the ad's pixels in viewport (0-100)
+	//   area - optional, ad's pixel area (w*h). When provided, the >=242,500
+	//          IAB Large Format rule kicks in (30% threshold instead of 50%).
+	//
+	// Server is the authority on IsIABViewable — the client's bool isn't
+	// trusted. The analytics row stores both the measured inputs and the
+	// server's verdict so downstream consumers (billing, dashboards) can
+	// filter on iab_viewable directly.
 	mux.HandleFunc(routes.TrackerView, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
-		reqLog.Info("viewability", "duration_ms", q.Get("dur"), "percent_visible", q.Get("pct"), "campaign_id", q.Get("cid"))
+
+		// Same HMAC + fraud + dedup gates as the impression handler.
+		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+			reqLog.Warn("invalid signature", "path", r.URL.Path)
+			if cfg.GetBool("tracker.signature_validation", false) {
+				http.Error(w, "invalid signature", http.StatusForbidden)
+				return
+			}
+		}
+
+		fraudResult := fraudChecker.Check(fraud.Request{
+			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+			TraceID: traceID, Referer: r.Referer(),
+		})
+		if fraudResult.Blocked {
+			reqLog.Warn("view fraud blocked", "score", fraudResult.Score, "reasons", fraudResult.Reasons)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		durMs, _ := strconv.ParseInt(q.Get("dur"), 10, 64)
+		pct, _ := strconv.Atoi(q.Get("pct"))
+		areaPx, _ := strconv.ParseInt(q.Get("area"), 10, 64)
+		iabViewable := analytics.IsIABViewable(durMs, pct, areaPx)
+
+		reqLog.Info("viewability",
+			"duration_ms", durMs,
+			"percent_visible", pct,
+			"area_px", areaPx,
+			"iab_viewable", iabViewable,
+			"campaign_id", q.Get("cid"),
+		)
+
+		// One view per (trace, view) — multiple beacons on the same render
+		// (browser back-button replay, double-firing IntersectionObserver) get
+		// deduped here, same as impressions.
+		if !dedup.FirstSeen(ctx, "view", traceID) {
+			reqLog.Debug("duplicate view, dropping", "trace_id", traceID)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		go publisher.publishView(context.WithoutCancel(ctx), analytics.ViewEvent{
+			TraceID:        traceID,
+			CampaignID:     q.Get("cid"),
+			CreativeID:     q.Get("crid"),
+			PlacementID:    q.Get("pid"),
+			PublisherID:    q.Get("pubid"),
+			AccountID:      q.Get("advid"),
+			DurationMs:     durMs,
+			PercentVisible: pct,
+			AreaPx:         areaPx,
+			IABViewable:    iabViewable,
+			SchemaVersion:  1,
+			Timestamp:      time.Now().UTC(),
+		}, reqLog)
+
+		// Echo the server's verdict back to the client (the simulator reads
+		// this so it can show "IAB viewable (server-verified)" vs the JS-only
+		// guess). Header-only — body stays 204.
+		if iabViewable {
+			w.Header().Set("X-IAB-Viewable", "1")
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Video/Audio events
+	// Video/Audio events. Publish through the same eventPublisher used by
+	// impression/click — bus may be nil in dev-no-NATS mode, in which case
+	// the publish is a no-op and we still return 204 so the player keeps
+	// firing pings.
 	mux.HandleFunc(routes.TrackerVideo, func(w http.ResponseWriter, r *http.Request) {
-		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
-		logger.WithContext(log, ctx).Info("video_event", "event_type", r.URL.Query().Get("event"))
+		traceID := r.URL.Query().Get("tid")
+		eventType := r.URL.Query().Get("event")
+		ctx := logger.WithTraceID(r.Context(), traceID)
+		logger.WithContext(log, ctx).Info("video_event", "event_type", eventType)
+		go publisher.publishVideo(context.WithoutCancel(ctx), events.VideoEvent{
+			TraceID:   traceID,
+			EventType: eventType,
+			Timestamp: time.Now(),
+		}, log)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
-		ctx := logger.WithTraceID(r.Context(), r.URL.Query().Get("tid"))
-		logger.WithContext(log, ctx).Info("audio_event", "event_type", r.URL.Query().Get("event"))
+		traceID := r.URL.Query().Get("tid")
+		eventType := r.URL.Query().Get("event")
+		ctx := logger.WithTraceID(r.Context(), traceID)
+		logger.WithContext(log, ctx).Info("audio_event", "event_type", eventType)
+		go publisher.publishAudio(context.WithoutCancel(ctx), events.AudioEvent{
+			TraceID:   traceID,
+			EventType: eventType,
+			Timestamp: time.Now(),
+		}, log)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -305,11 +406,28 @@ func (p *eventPublisher) publishClick(ctx context.Context, e analytics.ClickEven
 	p.httpFallback(analytics.Event{Type: analytics.EventClick, Click: &e}, log)
 }
 
+func (p *eventPublisher) publishView(ctx context.Context, e analytics.ViewEvent, log *slog.Logger) {
+	if p.publish(ctx, events.SubjectView, e, log) {
+		return
+	}
+}
+
 func (p *eventPublisher) publishConversion(ctx context.Context, e analytics.ConversionEvent, log *slog.Logger) {
 	if p.publish(ctx, events.SubjectConversion, e, log) {
 		return
 	}
 	p.httpFallback(analytics.Event{Type: analytics.EventConversion, Conversion: &e}, log)
+}
+
+// publishVideo / publishAudio fire from the /v1/t/video and /v1/t/audio
+// pixel handlers respectively. No HTTP fallback — engagement pings are
+// observability, not billing source-of-truth, so a NATS outage just
+// means the event is lost rather than triggering the standalone path.
+func (p *eventPublisher) publishVideo(ctx context.Context, e events.VideoEvent, log *slog.Logger) {
+	p.publish(ctx, events.SubjectVideo, e, log)
+}
+func (p *eventPublisher) publishAudio(ctx context.Context, e events.AudioEvent, log *slog.Logger) {
+	p.publish(ctx, events.SubjectAudio, e, log)
 }
 
 // publish marshals and publishes to NATS. Returns true if successful.
