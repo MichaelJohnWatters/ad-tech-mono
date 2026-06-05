@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: publisher-adserver, namespace: adtech, labels: { app: publisher-adserver } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: publisher-adserver } }
+  template:
+    metadata: { labels: { app: publisher-adserver } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: publisher-adserver
+          image: adtech-publisher-adserver
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8088, name: http }]
+          env:
+            # Stable pod_id so e2e tests target the pod's config row without
+            # discovery (matches local-process POD_NAME=<service>-0 convention).
+            - { name: POD_NAME, value: "publisher-adserver-0" }
+            - { name: PUBLISHER_ADSERVER_SSP_URL, value: "http://ssp:8084" }
+            - { name: PUBLISHER_ADSERVER_ADSERVER_URL, value: "http://adserver:8085" }
+            - { name: DATABASE_URL, value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: LOKI_URL, value: "http://loki:3100" }
+            - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8088 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8088 }, periodSeconds: 2, failureThreshold: 5 }

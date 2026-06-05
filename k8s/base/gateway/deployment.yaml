@@ -1,0 +1,41 @@
+# Gateway — uses build/Dockerfile.gateway (not Dockerfile.dev) because
+# it embeds web/templates + web/static and runs the dashboard.
+# live_update won't apply; iteration requires a full image rebuild.
+# Acceptable since gateway is mostly stable + the UI lives in web/
+# which we can serve via a separate Tilt sync if/when needed.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gateway, namespace: adtech, labels: { app: gateway } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata: { labels: { app: gateway } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: gateway
+          image: adtech-gateway
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            # Stable pod_id so e2e tests target the pod's config row without
+            # discovery (matches local-process POD_NAME=<service>-0 convention).
+            - { name: POD_NAME, value: "gateway-0" }
+            - { name: PLATFORM_ROOT_PASSWORD, value: "dev-root-password" }
+            - { name: GATEWAY_DSP_URL, value: "http://dsp-internal:8082" }
+            - { name: GATEWAY_SSP_URL, value: "http://ssp:8084" }
+            - { name: GATEWAY_EXCHANGE_URL, value: "http://exchange:8081" }
+            - { name: GATEWAY_TRACKER_URL, value: "http://tracker:8083" }
+            - { name: GATEWAY_REPORTING_URL, value: "http://reporting:8086" }
+            - { name: GATEWAY_ADSERVER_URL, value: "http://adserver:8085" }
+            - { name: GATEWAY_PUBLISHER_ADSERVER_URL, value: "http://publisher-adserver:8088" }
+            - { name: GATEWAY_JAEGER_URL, value: "http://jaeger:16686" }
+            - { name: DATABASE_URL, value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: REDIS_URL, value: "redis:6379" }
+            - { name: LOKI_URL, value: "http://loki:3100" }
+            - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, periodSeconds: 2, failureThreshold: 5 }

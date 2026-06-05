@@ -1,0 +1,86 @@
+# Tracker — first podified service in the DEV_MODE=container migration.
+# See docs/PODS_MIGRATION.md for the migration plan + rollback steps.
+#
+# Tracker is internet-facing in real deployments (pixel URLs hit it from
+# browsers worldwide), so the pod shape here mirrors what we'd ship to
+# prod — resource limits, readiness probe, NATS + Redis dependencies.
+# Image is built via Tilt's docker_build('adtech-tracker', build/Dockerfile.dev)
+# which packages the host-built ./bin/tracker binary for live_update.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tracker
+  namespace: adtech
+  labels:
+    app: tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tracker
+  template:
+    metadata:
+      labels:
+        app: tracker
+    spec:
+      # Disable Kubernetes service-link env injection. K8s normally
+      # injects {SVC}_PORT=tcp://<ip>:<port> for every Service in the
+      # namespace, which collides with pkg/config's env-var fallback:
+      # cfg.Get("tracker.port", ...) would resolve to "tcp://10.43.x:8083"
+      # instead of the port number, and the HTTP server fails to bind.
+      # Affects every podified service in this namespace; turn it off
+      # platform-wide for all our services to keep the platform's own
+      # env-var-driven config in control.
+      enableServiceLinks: false
+      containers:
+        - name: tracker
+          image: adtech-tracker
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+              name: http
+          env:
+            # Pod-aware config — POD_NAME flows into the per-pod registry
+            # in pkg/config so config-manager rows key correctly. Hardcoded
+            # to "<service>-0" so e2e tests target the pod's config row
+            # without runtime discovery. Safe for single-replica dev; prod
+            # would use a StatefulSet for stable identities across replicas.
+            - name: POD_NAME
+              value: "tracker-0"
+            # Service-prefixed env keys: cfg.Get's automatic env fallback
+            # (envKeyFromConfigKey: dot → underscore, uppercase) means
+            # TRACKER_NATS_URL resolves cfg.Get("tracker.nats_url", ...)
+            # without needing the bridge in pkg/config/setup.go.
+            - name: TRACKER_NATS_URL
+              value: "nats://nats:4222"
+            - name: TRACKER_REPORTING_URL
+              value: "http://reporting:8086"
+            # Global infra URLs that connectRedis et al. read.
+            - name: REDIS_URL
+              value: "redis:6379"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            # OTel — points at the in-cluster Jaeger collector.
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8083
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8083
+            periodSeconds: 2
+            failureThreshold: 3

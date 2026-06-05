@@ -1,0 +1,127 @@
+# DSP — three pods share the same image, distinguished only by env:
+#   dsp-internal   → DSP_PROFILE=internal,   port 8082
+#   dsp-competitor1 → DSP_PROFILE=competitor1, port 8089
+#   dsp-competitor2 → DSP_PROFILE=competitor2, port 8090
+# Defined as 3 Deployments so each gets its own Service + Ingress
+# hostname (dsp-int / dsp-comp1 / dsp-comp2). Per-port_forward in the
+# Tiltfile preserves localhost:{8082,8089,8090} for e2e tests.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsp-internal
+  namespace: adtech
+  labels: { app: dsp-internal }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dsp-internal } }
+  template:
+    metadata: { labels: { app: dsp-internal } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: dsp
+          image: adtech-dsp
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8082, name: http }]
+          env:
+            # Stable pod_id so e2e tests target the pod's config row
+            # without discovery (matches local-process POD_NAME=<service>-0
+            # convention). Safe for single-replica dev.
+            - name: POD_NAME
+              value: "dsp-internal-0"
+            - name: DSP_PROFILE
+              value: "internal"
+            - name: DSP_PORT
+              value: "8082"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: REDIS_URL
+              value: "redis:6379"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8082 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz,  port: 8082 }, periodSeconds: 2, failureThreshold: 5 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsp-competitor1
+  namespace: adtech
+  labels: { app: dsp-competitor1 }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dsp-competitor1 } }
+  template:
+    metadata: { labels: { app: dsp-competitor1 } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: dsp
+          image: adtech-dsp
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8089, name: http }]
+          env:
+            - name: POD_NAME
+              value: "dsp-competitor1-0"
+            - name: DSP_PROFILE
+              value: "competitor1"
+            - name: DSP_PORT
+              value: "8089"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: REDIS_URL
+              value: "redis:6379"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8089 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz,  port: 8089 }, periodSeconds: 2, failureThreshold: 5 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dsp-competitor2
+  namespace: adtech
+  labels: { app: dsp-competitor2 }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dsp-competitor2 } }
+  template:
+    metadata: { labels: { app: dsp-competitor2 } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: dsp
+          image: adtech-dsp
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8090, name: http }]
+          env:
+            - name: POD_NAME
+              value: "dsp-competitor2-0"
+            - name: DSP_PROFILE
+              value: "competitor2"
+            - name: DSP_PORT
+              value: "8090"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: REDIS_URL
+              value: "redis:6379"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8090 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz,  port: 8090 }, periodSeconds: 2, failureThreshold: 5 }
