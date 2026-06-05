@@ -167,6 +167,19 @@ all surfaced and got fixed).
   the knob is true and the sig is missing/invalid. Warn-only is still
   the dev default.
 
+**Reporting / ledger flow caught up (un-skipping the CPC/CPA/vCPM
+billing tests):**
+
+`cmd/reporting/main.go` now dispatches NATS events into the billing
+engine by bid model. `handleClick` calls `Engine.SettleByTrace(…,
+"click")` so CPC reservations close on the click event;
+`handleConversion` does the same for CPA on conversion;
+`handleViewabilityFromTracker` settles vCPM only when the tracker's
+server-authoritative `IABViewable=true` lands. CPM stays as
+settle-at-impression. See the TigerBeetle "Carry-over follow-ups"
+section for which billing-models tests are now active vs which
+remain gated on harness helpers.
+
 **Carry-over follow-ups:**
 
 - The 22 still-skipped e2e tests split into: 10 real product gaps
@@ -220,10 +233,18 @@ default `memory`). 5 phases shipped:
 
 **Carry-over follow-ups:**
 
-- The 8 skipped CPC/CPA/vCPM tests in `tests/e2e/billing_models_test.go`
-  remain skipped — their dependency is the reporting NATS click/conversion
-  handlers calling `Engine.SettleByTrace`, not the ledger backend.
-  Un-skipping them is the next billing batch.
+- ~~The 8 skipped CPC/CPA/vCPM tests in
+  `tests/e2e/billing_models_test.go` remain skipped~~ → **3 of 8 shipped
+  (2026-06-04 → 06):** the reporting NATS handlers now call
+  `Engine.SettleByTrace` from `handleClick` / `handleConversion` /
+  `handleViewabilityFromTracker`. `TestBillingCPCReserveAndSettle`,
+  `TestBillingCPAReserveAndSettle`, `TestBillingViewabilityVCPMSettle`
+  are active and passing in the e2e suite. The 5 still-skipped tests
+  (`TestBillingReservationExpiry`, `TieredRevenueShareTierFlip`,
+  `GuaranteedMinimumSubsidy`, `DealTypeFeeModifier`,
+  `CurrencyConversion`) are gated on harness helpers (contract-write,
+  bulk-auctions, low-TTL cron, exchange_rates seed), not on the
+  reporting/ledger path.
 - Multi-currency, replicated 3-node TB cluster, and migration of
   in-memory ledger data into TB remain out of scope (see original
   "explicitly out of scope" list below).
@@ -359,25 +380,68 @@ Items the user surfaced as "we'll handle them next" while we focused on Prebid.
    - *Competitive exclusion:* Add IAB-category exclusion list to `publisher_line_items` + a Redis page-view-scoped lock. When a sponsorship for IAB-22 (Personal Finance) is served on `page_view_id=X`, set `pubad:exclusion:{X}:IAB-22` for 5 minutes. Subsequent serves on the same page_view fetch the lock and exclude matching categories from arbitration. ~full day including the page-view-id propagation work.
 - *Open question for preferred:* how do we surface the negotiated rate to the SSP so the auction enforces it? Either pubad adds a `bidfloor` override on the OpenRTB request before sending to SSP, or pubad evaluates the response and overrides the price. Mirrors what `pkg/deals` already does at the exchange layer for advertiser-side preferred deals.
 
+### New (2026-06-06): Full event-pathway sweep
+
+**9. End-to-end event-pathway audit** (L) — `zero data slippage` audit
+- *Gap:* We've been closing event-pathway holes piecemeal — opt-out
+  events defined but not published; tracker rejection events defined
+  but not published; ad server render-fail events not modelled; some
+  Prebid outcomes not beaconed; etc. (See items #1, #2, #3, #5 above
+  for individual holes already catalogued.) What we don't have is a
+  single audit pass that walks every event source → bus subject →
+  consumer(s) → analytics + ledger landings and confirms each step
+  is wired, logged, and observable.
+- *Why it matters:* The platform's stated goal is "zero data
+  slippage" but the only way we currently verify that is the e2e
+  suite + memory. With ~30 NATS subjects across 9 services + 3
+  storage sinks (Postgres, analytics store, billing ledger), a
+  spot-check approach will keep missing things. CI catches missing
+  publishes only when a test exists for that specific signal.
+- *Sketch:*
+   - *(a) Inventory.* Generate a table of (publishing site, subject,
+     payload type, consumer service(s), analytics bucket, billing
+     landing, slog message). Source from `pkg/events/subjects.go` +
+     `pkg/events/payloads.go` + `grep -rn 'bus.Publish\|publisher.Publish'`
+     across `cmd/`. Note publishers that don't have consumers and
+     consumers that subscribe to undefined subjects.
+   - *(b) Wiring check.* For every NATS subject we publish, assert
+     downstream landings: (i) at least one e2e test fires the event
+     and asserts on a queryable downstream signal (analytics row,
+     billing ledger entry, debug counter, log line), (ii) the consumer
+     ACKs on success and NAKs on transient error (idempotent retry),
+     (iii) the payload is versioned (`schema_version` field present).
+   - *(c) Logging check.* Every event source has a structured slog
+     line at the publish site, with `trace_id`, `subject`, and a
+     business-relevant identifier (campaign_id, placement_id,
+     account_id). Every consumer logs receipt with the same `trace_id`
+     so a Loki query can stitch the flow end-to-end.
+   - *(d) Observability dashboard.* Grafana panel per subject with
+     publish-rate + consume-rate + lag percentile. One scrape config
+     covers all `/metrics` endpoints. Trace explorer already pivots
+     by `trace_id` (per memory) — this dashboard pivots by subject.
+   - *(e) Plug the gaps.* For every missing publish, missing consumer,
+     missing test, missing log, or missing dashboard panel: fix in a
+     small commit with the specific gap referenced.
+- *Decision needed:* whether to add subject inventory to the build
+  (a `go:generate` that walks the codebase) or maintain it manually
+  alongside `pkg/events/subjects.go`. Auto-generation catches drift
+  but is brittle; manual stays in sync with intent but rots.
+- *Subsumes:* items #1, #2, #3, #5 from this backlog become bullets
+  inside #9's "plug the gaps" step. Track them there once the sweep
+  starts.
+
 ### Order
 
 Suggested order if no other priority intervenes (updated 2026-06-06,
 post pod-migration + e2e green; #6 already shipped):
-1. **#7 Auth on CRUD** — blocks any non-dev deployment. Must land before
+1. **#9 Event-pathway sweep** — frame items #1, #2, #3, #5 under one
+   audit so we close all the "zero data slippage" gaps in one consistent
+   pass instead of piecemeal. Inventory first, then fix per-gap.
+2. **#7 Auth on CRUD** — blocks any non-dev deployment. Must land before
    we can usefully test external DSP Partners.
-2. **#2 Tracker fraud-rejection events** — purely additive analytics,
-   no architecture question, lands in a couple hours. Will also unstick
-   `TestFraudIPBlocklistRejected` etc. once warm-cache wiring lands
-   alongside.
-3. **#5 External Prebid viewability beacon** — closes the last "zero
-   data slippage" gap.
-4. **#1 Opt-out propagation** — needs a decision on scope first; queue
-   conversation before implementing. Unsticks four `TestPrivacy*` e2e
-   skips.
-5. **#8 Pubad preferred + exclusion** — biggest in this list. Schedule
+3. **#8 Pubad preferred + exclusion** — biggest in this list. Schedule
    its own session.
-6. **#3 Adserver render-fail events** — small, opportunistic.
-7. **#4 Direct CPC/CPA** — deferred until a real publisher asks; no
+4. **#4 Direct CPC/CPA** — deferred until a real publisher asks; no
    work item, just a documented limitation.
 
 ### Smaller-than-backlog items also worth picking up
