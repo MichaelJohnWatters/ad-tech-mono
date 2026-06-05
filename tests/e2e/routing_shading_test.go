@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -44,12 +45,43 @@ func TestSmartRoutingTracksDSPStats(t *testing.T) {
 	}
 }
 
-// TestSmartRoutingSkipsAlwaysNoBidDSP — requires a way to set a DSP to
-// always return no_bid (e.g. via config-manager flip of its noise_pct
-// to >100 with no_bid_rate 1.0). Skipped until the config-write helper
-// lands.
+// TestSmartRoutingSkipsAlwaysNoBidDSP — proves the
+// exchange.routing_min_calls threshold gates the skip: under the
+// configured minimum the always-no-bid DSP is still included in
+// fan-out (the router won't act on too-thin stats), and only after
+// the threshold crosses does it get excluded.
+//
+// Complementary to TestCompetitiveB7 which asserts the steady-state
+// behavior. This test checks the *transition* through the threshold.
 func TestSmartRoutingSkipsAlwaysNoBidDSP(t *testing.T) {
-	t.Skip("needs harness.SetConfig to force a DSP to no-bid; pending config-write helper")
+	h := harness.WaitReady(t, 60*time.Second)
+	h.SeedStandard(t)
+	h.ResetSmartRouter(t)
+	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
+	h.RefreshAllCaches(t)
+
+	// 10 auctions — well under default routing_min_calls=20.
+	h.FireNAuctions(t, 10, "pl-news-mpu", "GBR", "mobile")
+	preview := h.SmartRouterPreview(t)
+	includedEarly := false
+	for _, ep := range preview.Selected {
+		if ep == h.URLs.ClusterDSPComp1 {
+			includedEarly = true
+			break
+		}
+	}
+	if !includedEarly {
+		t.Errorf("router skipped comp1 after only 10 calls; expected it to wait for routing_min_calls (default 20)")
+	}
+
+	// Train past the threshold and re-check — comp1 must drop now.
+	h.FireNAuctions(t, 20, "pl-news-mpu", "GBR", "mobile")
+	preview = h.SmartRouterPreview(t)
+	for _, ep := range preview.Selected {
+		if ep == h.URLs.ClusterDSPComp1 {
+			t.Fatalf("router still selecting comp1 after 30 no-bids; selected=%v", preview.Selected)
+		}
+	}
 }
 
 // TestBidShadingTrackerRecords — DSPs maintain a per-placement shading
@@ -87,7 +119,7 @@ type dspStat struct {
 
 func getRoutingStats(t *testing.T, h *harness.Harness) []dspStat {
 	t.Helper()
-	body := getExchangeDebugBody(t, h, "/v1/openrtb/routing")
+	body := getExchangeDebugBody(t, h, routes.DebugExchangeRouting)
 	var stats []dspStat
 	if err := json.Unmarshal(body, &stats); err != nil {
 		t.Fatalf("routing stats decode: %v\nraw: %s", err, string(body))

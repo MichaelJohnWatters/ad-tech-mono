@@ -3,12 +3,15 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
 
 // Manager provides live configuration with polling, change detection,
@@ -38,6 +41,12 @@ type Manager struct {
 	registry     *Registry
 	serviceName  string
 	stopCh       chan struct{}
+	// bus, when set, broadcasts adtech.cache.invalidate.config on every Set
+	// and triggers a re-poll on receipt. Lets a PUT /v1/config on one pod
+	// propagate to every other pod within NATS round-trip time, instead of
+	// waiting for the next 30s poll tick. nil = poll-only mode.
+	bus        events.EventBus
+	subscribed bool // true after Subscribe to invalidate subject succeeds
 }
 
 // ChangeCallback is called when a config value changes.
@@ -101,6 +110,15 @@ func (m *Manager) SetSource(source ConfigSource) {
 	m.source = source
 }
 
+// SetBus wires a NATS-style event bus so Set() can broadcast invalidates
+// and Start() can subscribe to re-poll on receipt. Call before Start().
+// nil = poll-only mode (unchanged from before this method existed).
+func (m *Manager) SetBus(bus events.EventBus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bus = bus
+}
+
 // OnChange registers a callback for when a specific key changes.
 func (m *Manager) OnChange(key string, cb ChangeCallback) {
 	m.mu.Lock()
@@ -123,8 +141,11 @@ func (m *Manager) Start(ctx context.Context) {
 
 	m.log.Info("config manager started", "poll_interval", interval)
 
-	// Initial fetch
+	// Initial fetch + first subscribe attempt. Subscribe may fail if no
+	// service has called EnsureStream yet — that's fine, the poll loop
+	// retries it each tick.
 	m.poll(ctx)
+	m.trySubscribeInvalidate(ctx)
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -138,9 +159,49 @@ func (m *Manager) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				m.poll(ctx)
+				m.trySubscribeInvalidate(ctx)
 			}
 		}
 	}()
+}
+
+// trySubscribeInvalidate establishes the NATS subscription for
+// adtech.cache.invalidate.config. No-op when (a) no bus is wired, or (b)
+// already subscribed. Retries every poll tick until success so the order
+// of "stream creation by some service" vs "manager Start" doesn't matter.
+func (m *Manager) trySubscribeInvalidate(ctx context.Context) {
+	m.mu.Lock()
+	if m.bus == nil || m.subscribed {
+		m.mu.Unlock()
+		return
+	}
+	bus := m.bus
+	m.mu.Unlock()
+
+	podID := ""
+	if m.registry != nil {
+		podID = m.registry.PodID()
+	}
+	if podID == "" {
+		podID = fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	group := "config-invalidate-" + podID
+	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateConfig, group, func(c context.Context, msg *events.Message) error {
+		m.log.Info("config invalidate received, re-polling", "key", string(msg.Data))
+		m.poll(c)
+		_ = msg.Ack()
+		return nil
+	})
+	if err != nil {
+		// Expected on first attempts before any service has ensured the
+		// stream. Logged at Debug to avoid spamming Warn every poll tick.
+		m.log.Debug("config invalidate subscribe failed (will retry)", "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.subscribed = true
+	m.mu.Unlock()
+	m.log.Info("config invalidate subscribed")
 }
 
 // Stop halts polling.
@@ -184,9 +245,9 @@ func (m *Manager) applyChanges(newValues map[string]string, source string) {
 	defer m.mu.Unlock()
 
 	for key, newVal := range newValues {
-		oldVal, existed := m.cfg.values[key]
+		oldVal, existed := m.cfg.rawGet(key)
 		if !existed || oldVal != newVal {
-			m.cfg.values[key] = newVal
+			m.cfg.SetLive(key, newVal)
 
 			record := ChangeRecord{
 				Key: key, OldValue: oldVal, NewValue: newVal,
@@ -219,7 +280,7 @@ func (m *Manager) Set(ctx context.Context, key, value string) error {
 // applyChanges so OnChange callbacks fire for any pod whose in-memory
 // view matches.
 func (m *Manager) SetForPod(ctx context.Context, podID, key, value string) error {
-	if err := Validate(key, value); err != nil {
+	if err := m.validateForPod(ctx, podID, key, value); err != nil {
 		return err
 	}
 
@@ -246,6 +307,53 @@ func (m *Manager) SetForPod(ctx context.Context, podID, key, value string) error
 	}
 	if podID == "" || podID == ownPod {
 		m.applyChanges(map[string]string{key: value}, "api")
+	}
+
+	// Broadcast so sibling pods re-poll immediately. Best-effort — if NATS
+	// is unreachable the change still lands eventually via the 30s poll,
+	// so we log but don't fail the write.
+	m.mu.RLock()
+	bus := m.bus
+	m.mu.RUnlock()
+	if bus != nil {
+		if err := bus.Publish(ctx, events.SubjectCacheInvalidateConfig, []byte(key)); err != nil {
+			m.log.Warn("config invalidate publish failed", "key", key, "error", err)
+		} else {
+			m.log.Info("config invalidate published", "key", key)
+		}
+	}
+	return nil
+}
+
+// validateForPod runs schema type validation. Falls through to the
+// pod-owned schema (service_registry.schema_entries) for keys that
+// aren't in the platform Schema() — DSP/exchange/tracker etc. each
+// own their config keys, so dsp.daily_budget_default has its `int`
+// type only in dsp-internal-0's schema row. Without this, the
+// platform Validate() returned nil ("unknown key, allowed") and an
+// int-typed key would accept arbitrary strings.
+func (m *Manager) validateForPod(ctx context.Context, podID, key, value string) error {
+	for _, entry := range Schema() {
+		if entry.Key == key {
+			return validateType(entry, value)
+		}
+	}
+	if m.registry == nil || podID == "" {
+		return nil
+	}
+	pods, err := m.registry.ListPods(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, p := range pods {
+		if p.PodID != podID {
+			continue
+		}
+		for _, entry := range p.SchemaEntries {
+			if entry.Key == key {
+				return validateType(entry, value)
+			}
+		}
 	}
 	return nil
 }
@@ -348,8 +456,8 @@ func (m *Manager) Remove(ctx context.Context, key string) error {
 	}
 
 	m.mu.Lock()
-	oldVal := m.cfg.values[key]
-	delete(m.cfg.values, key)
+	oldVal, _ := m.cfg.rawGet(key)
+	m.cfg.ClearLive(key)
 	m.history = append(m.history, ChangeRecord{
 		Key: key, OldValue: oldVal, NewValue: "",
 		Source: "api", Timestamp: time.Now(),
@@ -376,13 +484,7 @@ func (m *Manager) History(limit int) []ChangeRecord {
 
 // All returns all current live config values.
 func (m *Manager) All() map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make(map[string]string, len(m.cfg.values))
-	for k, v := range m.cfg.values {
-		out[k] = v
-	}
-	return out
+	return m.cfg.snapshot()
 }
 
 // HTTPHandler returns an HTTP handler for the config management API.
@@ -433,7 +535,20 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 				// Show schema with current values + source provenance per key.
 				// The UI uses Source/SourcePod to render the per-row "where
 				// did this value come from" badge.
-				schema := Schema()
+				//
+				// Schema source: union of every running pod's published
+				// schema_entries (read from service_registry). Fallback to
+				// the in-process registry when no Registry is wired (tests,
+				// or when Postgres is unreachable at boot).
+				var schema []SchemaEntry
+				if m.registry != nil {
+					if entries, err := m.registry.AllSchemas(r.Context()); err == nil && len(entries) > 0 {
+						schema = entries
+					}
+				}
+				if schema == nil {
+					schema = Schema()
+				}
 				type entry struct {
 					SchemaEntry
 					CurrentValue string `json:"current_value"`
@@ -540,7 +655,14 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 				return
 			}
 			if err := m.SetForPod(r.Context(), req.PodID, req.Key, req.Value); err != nil {
-				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+				status := http.StatusInternalServerError
+				// Schema validation errors are client-input problems,
+				// not server failures. Return 400 so callers can
+				// distinguish them from a real persistence outage.
+				if errors.Is(err, ErrValidation) {
+					status = http.StatusBadRequest
+				}
+				http.Error(w, `{"error":"`+err.Error()+`"}`, status)
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]string{"key": req.Key, "value": req.Value, "status": "updated"})

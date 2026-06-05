@@ -95,15 +95,48 @@ func TestFreqCapPerCampaignIsolation(t *testing.T) {
 	}
 }
 
-// TestFreqCapWindowExpiry — TTL on the freq cap counter expires; after
-// the window, the same (user, campaign) pair allows new serves again.
-// Default window is 24h which is too long for a real test; the test
-// flushes Redis (already part of harness.Reset implicitly via BuildBasicWorld)
-// to simulate the expiry, since we don't yet have a per-test override
-// of adserver.freq_cap_window.
-//
-// The "real" assertion would change the config key to e.g. 1s and sleep —
-// pending a harness helper to write live config.
+// TestFreqCapWindowExpiry — flip adserver.freq_cap_window to a short
+// value via the live-config API, saturate the cap, sleep past the
+// window, then assert the next serve succeeds. Proves the TTL on the
+// Redis counter is wired to the config knob (not hardcoded) and that
+// the counter genuinely resets when it expires.
 func TestFreqCapWindowExpiry(t *testing.T) {
-	t.Skip("needs harness.SetConfig to flip adserver.freq_cap_window low for the test; pending config-write helper")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "fc-expiry")
+
+	const pod = "adserver-0"
+	const key = "adserver.freq_cap_window"
+
+	before := resolveConfig(t, h, key, pod)
+	h.SetConfigForPod(t, key, "2s", pod)
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, key, before.Value, pod)
+	})
+
+	user := "fc-expiry-user"
+	req := models.ServeRequest{
+		TraceID: "fc-expiry", UserID: user,
+		CampaignID: w.Campaign.ID, CreativeID: w.Campaign.CreativeID,
+		PlacementID: w.Placement.ID, PublisherID: w.Publisher.ID,
+		AdvertiserID: w.AdvAcc.ID,
+		SiteDomain:   w.Publisher.Domain, Width: 300, Height: 250, Currency: "USD",
+	}
+
+	// Saturate: default cap is 5/window.
+	for i := 0; i < 5; i++ {
+		if s := h.ServeAd(t, req); s != 200 {
+			t.Fatalf("warm-up serve #%d status=%d, want 200", i+1, s)
+		}
+	}
+	if s := h.ServeAd(t, req); s != 429 {
+		t.Fatalf("over-cap serve status=%d, want 429 (cap should be saturated)", s)
+	}
+
+	// Sleep past the 2s window. The Redis TTL was set at the first serve
+	// (Incr + Expire-on-first), so add a small margin for clock skew.
+	time.Sleep(3 * time.Second)
+
+	if s := h.ServeAd(t, req); s != 200 {
+		t.Fatalf("post-expiry serve status=%d, want 200 (window should have reset the counter)", s)
+	}
 }
