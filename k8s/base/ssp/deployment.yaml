@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ssp, namespace: adtech, labels: { app: ssp } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ssp } }
+  template:
+    metadata: { labels: { app: ssp } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: ssp
+          image: adtech-ssp
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8084, name: http }]
+          env:
+            # Stable pod_id so e2e tests target the pod's config row without
+            # discovery (matches local-process POD_NAME=<service>-0 convention).
+            # Safe for single-replica dev; prod would use a StatefulSet.
+            - { name: POD_NAME, value: "ssp-0" }
+            - { name: SSP_EXCHANGE_URL, value: "http://exchange:8081" }
+            - { name: SSP_ADSERVER_URL, value: "http://adserver:8085" }
+            - { name: DATABASE_URL, value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: LOKI_URL, value: "http://loki:3100" }
+            - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8084 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8084 }, periodSeconds: 2, failureThreshold: 5 }

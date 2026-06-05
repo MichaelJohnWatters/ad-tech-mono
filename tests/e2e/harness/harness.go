@@ -28,39 +28,70 @@ import (
 )
 
 // URLs of every locally-deployed service. Sourced from pkg/routes so port
-// changes flow through automatically.
+// changes flow through automatically. Each service has two URLs:
+//
+//   - The bare name (DSP, Exchange, etc.) is reachable from the test process
+//     on the host (via Tilt port-forward). Use for direct probes from tests.
+//   - The Cluster* variant is reachable from inside the cluster (via k8s
+//     Service DNS). Use when writing a value into a service's config that
+//     another pod will dial — e.g. exchange.dsp_endpoints. The host's
+//     localhost:8082 doesn't work from inside a pod (it's the pod's own
+//     loopback), so cluster-internal DNS is required.
 type URLs struct {
-	Gateway     string
-	Exchange    string
-	DSP         string
-	DSPComp1    string
-	DSPComp2    string
-	Tracker     string
-	SSP         string
-	AdServer    string
-	Reporting   string
-	NATSURL     string
-	RedisAddr   string
-	MinioEndpt  string
-	PostgresURL string
+	Gateway           string
+	Exchange          string
+	DSP               string
+	DSPComp1          string
+	DSPComp2          string
+	Tracker           string
+	SSP               string
+	AdServer          string
+	Reporting         string
+	PublisherAdServer string
+	NATSURL           string
+	RedisAddr         string
+	MinioEndpt        string
+	PostgresURL       string
+
+	// Cluster-internal DNS variants, for config values that pods will
+	// dial. Always populated; the test never has to choose between them.
+	ClusterExchange string
+	ClusterDSP      string
+	ClusterDSPComp1 string
+	ClusterDSPComp2 string
+	ClusterTracker  string
+	ClusterSSP      string
+	ClusterAdServer string
 }
 
 // DefaultURLs returns the addresses exposed by the local Tilt stack.
 func DefaultURLs() URLs {
 	return URLs{
-		Gateway:     routes.DefaultGatewayURL,
-		Exchange:    routes.DefaultExchangeURL,
-		DSP:         routes.DefaultDSPURL,
-		DSPComp1:    routes.DefaultDSPComp1URL,
-		DSPComp2:    routes.DefaultDSPComp2URL,
-		Tracker:     routes.DefaultTrackerURL,
-		SSP:         routes.DefaultSSPURL,
-		AdServer:    routes.DefaultAdServerURL,
-		Reporting:   routes.DefaultReportingURL,
-		NATSURL:     "nats://localhost:4222",
-		RedisAddr:   "localhost:6379",
-		MinioEndpt:  "localhost:9000",
-		PostgresURL: "postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable",
+		Gateway:           routes.DefaultGatewayURL,
+		Exchange:          routes.DefaultExchangeURL,
+		DSP:               routes.DefaultDSPURL,
+		DSPComp1:          routes.DefaultDSPComp1URL,
+		DSPComp2:          routes.DefaultDSPComp2URL,
+		Tracker:           routes.DefaultTrackerURL,
+		SSP:               routes.DefaultSSPURL,
+		AdServer:          routes.DefaultAdServerURL,
+		Reporting:         routes.DefaultReportingURL,
+		PublisherAdServer: routes.DefaultPublisherAdServerURL,
+		NATSURL:           routes.DefaultNATSURL,
+		RedisAddr:         routes.DefaultRedisAddr,
+		MinioEndpt:        routes.DefaultMinioEndpoint,
+		PostgresURL:       routes.DefaultPostgresURL,
+
+		// In-cluster DNS — matches the Service names in k8s/base/*/service.yaml.
+		// Used when a test writes a config value that a pod will dial
+		// (e.g. exchange.dsp_endpoints, publisher_adserver.prebid_servers).
+		ClusterExchange: "http://exchange:" + routes.PortExchange,
+		ClusterDSP:      "http://dsp-internal:" + routes.PortDSP,
+		ClusterDSPComp1: "http://dsp-competitor1:" + routes.PortDSPComp1,
+		ClusterDSPComp2: "http://dsp-competitor2:" + routes.PortDSPComp2,
+		ClusterTracker:  "http://tracker:" + routes.PortTracker,
+		ClusterSSP:      "http://ssp:" + routes.PortSSP,
+		ClusterAdServer: "http://adserver:" + routes.PortAdServer,
 	}
 }
 

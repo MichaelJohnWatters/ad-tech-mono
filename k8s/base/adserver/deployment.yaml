@@ -1,0 +1,58 @@
+# Adserver — second podified service. Same shape as tracker.
+# See docs/PODS_MIGRATION.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adserver
+  namespace: adtech
+  labels:
+    app: adserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adserver
+  template:
+    metadata:
+      labels:
+        app: adserver
+    spec:
+      enableServiceLinks: false  # see tracker deployment for rationale
+      containers:
+        - name: adserver
+          image: adtech-adserver
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+              name: http
+          env:
+            # Stable pod_id — see tracker deployment for rationale.
+            - name: POD_NAME
+              value: "adserver-0"
+            - name: ADSERVER_TRACKER_URL
+              value: "http://tracker:8083"
+            - name: REDIS_URL
+              value: "redis:6379"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+            - name: S3_ENDPOINT
+              value: "http://minio:9000"
+            - name: S3_BUCKET
+              value: "adtech-creatives"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8085 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8085 }
+            periodSeconds: 2
+            failureThreshold: 5
