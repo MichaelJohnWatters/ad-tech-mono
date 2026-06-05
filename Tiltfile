@@ -8,8 +8,22 @@
 dev_mode = os.getenv('DEV_MODE', 'fast')
 profile = os.getenv('PROFILE', 'full')
 
-# Kill orphaned processes from previous sessions by port
-local('for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null; done; sleep 1; echo "ports cleared"')
+# Kill orphaned processes from previous sessions by port. Skips Tilt's
+# own port-forwards and their kubectl subprocesses — once services moved
+# to pods, those ports are owned by Tilt itself, and a blind `kill -9`
+# would terminate the running Tilt instance during a Tiltfile reload.
+local('''for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do
+    for pid in $(lsof -ti :$port 2>/dev/null); do
+        pname=$(ps -p $pid -o comm= 2>/dev/null | tr -d ' ')
+        case "$pname" in
+            tilt|kubectl|*tilt*) ;;
+            *) kill -9 $pid 2>/dev/null ;;
+        esac
+    done
+done
+sleep 1
+echo "ports cleared"
+''')
 
 # Tilt scrubs the literal value of every K8s Secret from log output by
 # default. Our postgres secret has username='adtech', which collides with
@@ -17,6 +31,12 @@ local('for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do lsof -t
 # half our account types. Disable scrubbing for local dev so logs stay
 # readable. Staging/prod overlays should NOT do this.
 secret_settings(disable_scrub=True)
+
+# restart_process extension — modern replacement for the deprecated
+# restart_container() live_update step (which is not permitted for k8s
+# resources). docker_build_with_restart wraps docker_build and injects
+# a supervisor that re-execs the entrypoint on live_update.
+load('ext://restart_process', 'docker_build_with_restart')
 
 # ============================================================
 # Infrastructure (always runs in K8s)
@@ -26,6 +46,15 @@ if profile == 'lite':
     k8s_yaml(kustomize('k8s/overlays/local-lite'))
 else:
     k8s_yaml(kustomize('k8s/overlays/local'))
+
+# Traefik ingress controller — Colima starts k3s with --disable=traefik,
+# so we apply our own copy. Lives in its own namespace; kept out of the
+# kustomize bundle above which pins everything to namespace: adtech.
+# See k8s/base/traefik/README.md. Required for the DEV_MODE=container
+# migration to route {service}.adtech.local hostnames — see
+# docs/PODS_MIGRATION.md.
+k8s_yaml('k8s/base/traefik/install.yaml')
+k8s_resource('traefik', labels=['infra'], port_forwards=[])
 
 k8s_resource('postgres', labels=['infra'], port_forwards=['5432:5432'])
 k8s_resource('nats', labels=['infra'], port_forwards=['4222:4222', '8222:8222'])
@@ -49,91 +78,122 @@ k8s_resource('jaeger', labels=['observability'],
 
 if dev_mode == 'fast':
     # --------------------------------------------------------
-    # Fast mode: build binary + run it. Tilt watches for file
-    # changes, rebuilds the binary (~1-2s), and restarts cleanly.
-    # Unlike `go run`, running a binary directly means Tilt can
-    # kill the process cleanly (no orphaned child processes).
+    # Fast mode: services run as K8s pods (DEV_MODE=container path).
+    # Edit cmd/*/main.go → Tilt rebuilds the host binary (~1-2s) →
+    # docker_build_with_restart rsyncs into the pod and re-execs
+    # (sub-second). Same production-shape as staging/prod; no
+    # local_resource / host-process gap. See docs/PODS_MIGRATION.md
+    # for the full plan + rollback steps.
+    #
+    # Reporting stays as local_resource for now — CGO + DuckDB needs
+    # a cross-compile workaround that's been flaky. Will be migrated
+    # once the cross-compile path is stable.
     # --------------------------------------------------------
 
-    # readiness_probe makes Tilt's "ready" state reflect actual /readyz
-    # success (DB + cache + bus connected), not just "process started".
-    # Pods stay yellow until checks pass, so cascade-failures surface fast.
+    # ---- Tracker (no DB deps, simplest to validate) ----
+    local_resource('tracker-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/tracker ./cmd/tracker',
+        deps=['cmd/tracker', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-tracker', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'tracker'},
+        only=['bin/tracker', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/tracker', '/app')])
+    k8s_yaml(['k8s/base/tracker/deployment.yaml', 'k8s/base/tracker/service.yaml', 'k8s/base/tracker/ingress.yaml'])
+    k8s_resource('tracker', resource_deps=['tracker-build', 'nats', 'redis'],
+        port_forwards=['8083:8083'], labels=['services'])
+
+    # ---- Adserver ----
+    local_resource('adserver-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/adserver ./cmd/adserver',
+        deps=['cmd/adserver', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-adserver', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'adserver'},
+        only=['bin/adserver', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/adserver', '/app')])
+    k8s_yaml(['k8s/base/adserver/deployment.yaml', 'k8s/base/adserver/service.yaml', 'k8s/base/adserver/ingress.yaml'])
+    k8s_resource('adserver', resource_deps=['adserver-build', 'minio', 'redis', 'postgres'],
+        port_forwards=['8085:8085'], labels=['services'])
+
+    # ---- DSP × 3 (one image, three deployments via env-driven config) ----
+    local_resource('dsp-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/dsp ./cmd/dsp',
+        deps=['cmd/dsp', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-dsp', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'dsp'},
+        only=['bin/dsp', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/dsp', '/app')])
+    k8s_yaml(['k8s/base/dsp/deployment.yaml', 'k8s/base/dsp/service.yaml', 'k8s/base/dsp/ingress.yaml'])
+    k8s_resource('dsp-internal',    resource_deps=['dsp-build', 'postgres', 'redis'], port_forwards=['8082:8082'], labels=['services'])
+    k8s_resource('dsp-competitor1', resource_deps=['dsp-build', 'postgres', 'redis'], port_forwards=['8089:8089'], labels=['services'])
+    k8s_resource('dsp-competitor2', resource_deps=['dsp-build', 'postgres', 'redis'], port_forwards=['8090:8090'], labels=['services'])
+
+    # ---- SSP ----
+    local_resource('ssp-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/ssp ./cmd/ssp',
+        deps=['cmd/ssp', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-ssp', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'ssp'},
+        only=['bin/ssp', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/ssp', '/app')])
+    k8s_yaml(['k8s/base/ssp/deployment.yaml', 'k8s/base/ssp/service.yaml', 'k8s/base/ssp/ingress.yaml'])
+    k8s_resource('ssp', resource_deps=['ssp-build', 'postgres'],
+        port_forwards=['8084:8084'], labels=['services'])
+
+    # ---- Exchange ----
+    local_resource('exchange-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/exchange ./cmd/exchange',
+        deps=['cmd/exchange', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-exchange', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'exchange'},
+        only=['bin/exchange', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/exchange', '/app')])
+    k8s_yaml(['k8s/base/exchange/deployment.yaml', 'k8s/base/exchange/service.yaml', 'k8s/base/exchange/ingress.yaml'])
+    k8s_resource('exchange', resource_deps=['exchange-build', 'nats', 'postgres'],
+        port_forwards=['8081:8081'], labels=['services'])
+
+    # ---- Publisher-Adserver ----
+    local_resource('publisher-adserver-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/publisher-adserver ./cmd/publisher-adserver',
+        deps=['cmd/publisher-adserver', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-publisher-adserver', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'publisher-adserver'},
+        only=['bin/publisher-adserver', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/publisher-adserver', '/app')])
+    k8s_yaml(['k8s/base/publisher-adserver/deployment.yaml', 'k8s/base/publisher-adserver/service.yaml', 'k8s/base/publisher-adserver/ingress.yaml'])
+    k8s_resource('publisher-adserver', resource_deps=['publisher-adserver-build', 'postgres', 'ssp', 'adserver'],
+        port_forwards=['8088:8088'], labels=['services'])
+
+    # ---- Gateway (host-built binary + embedded web/ + seed binary) ----
+    # The seed binary is baked into the gateway image so /dev/reset-and-reseed
+    # can exec it without needing a Go toolchain inside the pod.
+    local_resource('gateway-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/gateway ./cmd/gateway && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/seed ./cmd/seed',
+        deps=['cmd/gateway', 'cmd/seed', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-gateway', '.',
+        dockerfile='build/Dockerfile.dev.gateway',
+        only=['bin/gateway', 'bin/seed', 'web', 'profiles'],
+        entrypoint='/app',
+        live_update=[sync('bin/gateway', '/app'), sync('bin/seed', '/seed'), sync('web', '/web'), sync('profiles', '/profiles')])
+    k8s_yaml(['k8s/base/gateway/deployment.yaml', 'k8s/base/gateway/service.yaml', 'k8s/base/gateway/ingress.yaml'])
+    k8s_resource('gateway', resource_deps=['gateway-build', 'postgres', 'redis'],
+        port_forwards=['8080:8080'], labels=['services'],
+        links=['http://localhost:8080', 'http://localhost:8080/dev/publisher-simulator', 'http://gateway.adtech.local'])
+
+    # ---- Reporting (STAYS LOCAL — CGO cross-compile blocker) ----
     def ready(port):
         return probe(period_secs=2, http_get=http_get_action(port=port, path='/readyz'))
-
-    local_resource('gateway',
-        cmd='go build -o ./bin/gateway ./cmd/gateway',
-        serve_cmd='POD_NAME=gateway-0 LOKI_URL=http://localhost:3100 ./bin/gateway',
-        serve_dir='.',
-        deps=['cmd/gateway', 'pkg/', 'web/'],
-        labels=['services'],
-        resource_deps=['postgres', 'redis'],
-        readiness_probe=ready(8080),
-        links=['http://localhost:8080', 'http://localhost:8080/dev/publisher-simulator'])
-
-    local_resource('exchange',
-        cmd='go build -o ./bin/exchange ./cmd/exchange',
-        serve_cmd='POD_NAME=exchange-0 LOKI_URL=http://localhost:3100 ./bin/exchange',
-        serve_dir='.',
-        deps=['cmd/exchange', 'pkg/'],
-        labels=['services'],
-        resource_deps=['nats', 'postgres'],
-        readiness_probe=ready(8081))
-
-    local_resource('dsp',
-        cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='POD_NAME=dsp-internal-0 LOKI_URL=http://localhost:3100 ./bin/dsp',
-        serve_dir='.',
-        deps=['cmd/dsp', 'pkg/'],
-        labels=['services'],
-        resource_deps=['postgres', 'redis'],
-        readiness_probe=ready(8082))
-
-    local_resource('dsp-competitor1',
-        cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8089 DSP_PROFILE=competitor1 POD_NAME=dsp-competitor1 LOKI_URL=http://localhost:3100 ./bin/dsp',
-        serve_dir='.',
-        deps=['cmd/dsp', 'pkg/'],
-        labels=['services'],
-        resource_deps=['postgres', 'redis'],
-        readiness_probe=ready(8089))
-
-    local_resource('dsp-competitor2',
-        cmd='go build -o ./bin/dsp ./cmd/dsp',
-        serve_cmd='DSP_PORT=8090 DSP_PROFILE=competitor2 POD_NAME=dsp-competitor2 LOKI_URL=http://localhost:3100 ./bin/dsp',
-        serve_dir='.',
-        deps=['cmd/dsp', 'pkg/'],
-        labels=['services'],
-        resource_deps=['postgres', 'redis'],
-        readiness_probe=ready(8090))
-
-    local_resource('tracker',
-        cmd='go build -o ./bin/tracker ./cmd/tracker',
-        serve_cmd='POD_NAME=tracker-0 LOKI_URL=http://localhost:3100 ./bin/tracker',
-        serve_dir='.',
-        deps=['cmd/tracker', 'pkg/'],
-        labels=['services'],
-        resource_deps=['nats', 'redis'],
-        readiness_probe=ready(8083))
-
-    local_resource('ssp',
-        cmd='go build -o ./bin/ssp ./cmd/ssp',
-        serve_cmd='POD_NAME=ssp-0 LOKI_URL=http://localhost:3100 ./bin/ssp',
-        serve_dir='.',
-        deps=['cmd/ssp', 'pkg/'],
-        labels=['services'],
-        resource_deps=['postgres'],
-        readiness_probe=ready(8084))
-
-    local_resource('adserver',
-        cmd='go build -o ./bin/adserver ./cmd/adserver',
-        serve_cmd='POD_NAME=adserver-0 LOKI_URL=http://localhost:3100 ./bin/adserver',
-        serve_dir='.',
-        deps=['cmd/adserver', 'pkg/'],
-        labels=['services'],
-        resource_deps=['minio', 'redis', 'postgres'],
-        readiness_probe=ready(8085))
-
     local_resource('reporting',
         cmd='go build -o ./bin/reporting ./cmd/reporting',
         serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ./bin/reporting',

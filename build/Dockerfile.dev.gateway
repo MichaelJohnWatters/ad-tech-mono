@@ -1,0 +1,21 @@
+# Dockerfile.dev.gateway — gateway variant of Dockerfile.dev.
+#
+# Same pre-built-binary pattern as Dockerfile.dev, but also bakes in:
+#   /seed       — the cmd/seed binary, exec'd by the gateway's
+#                 /dev/reset-and-reseed handler (so the pod doesn't
+#                 need a Go toolchain).
+#   /profiles/  — the YAML profiles that /seed loads from
+#                 (profiles/dsps, profiles/publishers, etc.).
+#
+# Kept separate from Dockerfile.dev because adding these COPYs to the
+# shared image would force every per-service docker_build to whitelist
+# bin/seed + profiles in its `only=[...]` even though only gateway uses
+# them.
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY bin/gateway /app
+COPY web /web
+COPY bin/seed /seed
+COPY profiles /profiles
+WORKDIR /
+ENTRYPOINT ["/app"]
