@@ -15,6 +15,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	_ "github.com/lib/pq"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -24,31 +25,42 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 func main() {
 	log := logger.New(constants.ServiceGateway)
-	sc := config.Setup(constants.ServiceGateway, log)
+	sc := config.Setup(constants.ServiceGateway, gatewaySchema, log)
 	cfg := sc.Cfg
 	cfgMgr := sc.Manager
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	// Publish our own schema + load every other service's published schema
-	// from Postgres so the config-manager UI renders the full key set.
-	// LoadPublishedSchema is best-effort — UI just shows whatever the
-	// services have published (empty if none have booted yet).
+	// The config-manager UI reads the union of every running pod's schema
+	// from service_registry.schema_entries — no separate "load published
+	// schema" step is needed here.
 	dbURL := cfg.Get("database.url", "")
-	config.PublishSchemaWithURL(dbURL, constants.ServiceGateway, gatewaySchema, log)
+
+	// Open a Postgres handle for handlers that need direct DB access
+	// (bootstrap mints a secrets row, reset-and-reseed truncates).
+	// sql.Open is lazy — it parses the URL but doesn't dial — so we
+	// store the handle even if the first Ping fails. Postgres DNS may
+	// not be ready when gateway boots (initial cluster spin-up); the
+	// handle will succeed on subsequent requests once postgres is up.
+	// Handlers still defend against a nil handle and 503 if DB never
+	// becomes reachable.
+	var gwDB *sql.DB
 	if dbURL != "" {
-		if db, err := sql.Open("postgres", dbURL); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := config.LoadPublishedSchema(ctx, db); err != nil {
-				log.Warn("load published schema failed", "error", err)
+		if d, err := sql.Open("postgres", dbURL); err == nil {
+			gwDB = d
+			lc.OnShutdown("gw-db", func(_ context.Context) error { return d.Close() })
+			if err := d.Ping(); err != nil {
+				log.Warn("gateway db ping failed at boot; handlers will retry on demand", "error", err)
 			}
-			cancel()
-			_ = db.Close()
+		} else {
+			log.Warn("gateway db open failed; bootstrap endpoint will return 503", "error", err)
 		}
 	}
 
@@ -70,6 +82,7 @@ func main() {
 	dspURL := cfg.Get("gateway.dsp_url", routes.DefaultDSPURL)
 	sspURL := cfg.Get("gateway.ssp_url", routes.DefaultSSPURL)
 	adserverURL := cfg.Get("gateway.adserver_url", routes.DefaultAdServerURL)
+	pubadURL := cfg.Get("gateway.publisher_adserver_url", routes.DefaultPublisherAdServerURL)
 	reportingURL := cfg.Get("gateway.reporting_url", routes.DefaultReportingURL)
 	exchangeURL := cfg.Get("gateway.exchange_url", routes.DefaultExchangeURL)
 	trackerURL := cfg.Get("gateway.tracker_url", routes.DefaultTrackerURL)
@@ -89,22 +102,36 @@ func main() {
 	// Static files (no auth)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
 
-	// Dev tools (no auth - dev only)
+	// Templates — loaded once, re-parsed on every render in dev mode so
+	// editing a .html file in the editor shows up on the next browser
+	// reload without a Go rebuild. Dev mode is detected from whether a
+	// JWT signing key is configured (same heuristic the existing
+	// "dev_mode" log line at the bottom of this function uses).
+	templates, err := newTemplateManager(signingKey == "")
+	if err != nil {
+		log.Error("template load failed", "error", err)
+		os.Exit(1)
+	}
+
+	// Dev tools (no auth - dev only). Routes go through the template
+	// manager so the new `dict` FuncMap is available and later phases
+	// can introduce shared layout/component partials without touching
+	// this wiring.
 	mux.HandleFunc("/dev/publisher-simulator", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/templates/simulator/minimal.html")
+		templates.Render(w, "minimal.html", nil)
 	})
 	mux.HandleFunc("/dev/publisher-simulator/minimal", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/templates/simulator/minimal.html")
+		templates.Render(w, "minimal.html", nil)
 	})
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/templates/trace/explorer.html")
+		templates.Render(w, "explorer.html", nil)
 	})
 	if cfg.GetBool("debug.endpoints_enabled", true) {
 		// Reset+reseed for the pub sim. NATS publisher is opened lazily so
 		// the cache-invalidate fan-out works even though the gateway has
 		// no other reason to talk to NATS.
 		resetBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway, log)
-		redisAddr := cfg.Get("redis.url", "localhost:6379")
+		redisAddr := cfg.Get("redis.url", routes.DefaultRedisAddr)
 		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(dbURL, redisAddr, resetBus, log))
 	}
 	// /dev/console is the canonical command-center URL. /dev/config-manager
@@ -112,7 +139,7 @@ func main() {
 	// historic naming. Both land on the tabbed console; the URL hash
 	// (#config, #services, etc.) picks the active tab.
 	consoleHandler := func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "web/templates/config/manager.html")
+		templates.Render(w, "manager.html", nil)
 	}
 	mux.HandleFunc("/dev/console", consoleHandler)
 	mux.HandleFunc("/dev/config-manager", consoleHandler)
@@ -154,6 +181,31 @@ func main() {
 
 	// Auth endpoint
 	mux.HandleFunc(routes.AuthToken, tokenHandler(signingKey))
+	// Bootstrap is the one-shot operator-key minting endpoint.
+	// PLATFORM_ROOT_PASSWORD env var gates it; once a row with
+	// name='bootstrap-admin-key' exists in secrets, subsequent calls
+	// return 410. See cmd/gateway/bootstrap.go for the full design notes.
+	mux.HandleFunc(routes.AuthBootstrap, bootstrapHandler(gwDB, log))
+
+	// Secrets management API. Backed by the secrets warm cache for auth
+	// (same gate as DSP/SSP CRUD); writes fan out via NATS so every
+	// service's secrets cache refreshes sub-second. UI lives in the
+	// Secrets sub-tab of /dev/console.
+	secretsCache := secrets.Start(context.Background(), cfg, clock.Real{}, log, constants.ServiceGateway)
+	lc.OnShutdown("gateway-secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
+	secretsBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway+"-secrets-mgmt", log)
+	secretsAuth := middleware.AuthAPIKey(secretsCache, log)
+	mux.Handle(routes.APISecrets, secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
+	mux.Handle(routes.APISecrets+"/", secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
+
+	// Cache refresh — exposes the secrets warm cache so e2e tests and
+	// ops can force a reload after rotation without waiting for the
+	// 30s natural poll. Same shape as every other service's debug
+	// endpoint (routes.DebugCacheRefresh).
+	if cfg.GetBool("debug.endpoints_enabled", true) {
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(secretsCache.Cache))
+	}
 
 	// API routes (auth required) - proxy to internal services
 	mux.Handle(routes.APICampaigns, authMiddleware(
@@ -179,13 +231,23 @@ func main() {
 	mux.Handle(routes.ProxyAdServer, middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
+	mux.Handle(routes.ProxyPubAd, middleware.CORS(middleware.ReverseProxy(pubadURL, log)))
 	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	// Jaeger query API (browser → gateway → jaeger; Jaeger v1.58 has no CORS
 	// on the query endpoint, so the pub sim reads spans through here).
 	mux.Handle(routes.ProxyJaeger, middleware.CORS(middleware.StripPrefix(strings.TrimSuffix(routes.ProxyJaeger, "/"), middleware.ReverseProxy(jaegerURL, log))))
 
-	// Dashboard home (no auth in dev mode)
-	mux.HandleFunc("/", dashboardHandler())
+	// Dashboard home (no auth in dev mode). HTML lives in
+	// web/templates/dashboard.html — see Phase 0 of the design audit
+	// (docs/UI_DESIGN_AUDIT.md). dashboardHandler() is kept as a no-op
+	// placeholder for callers/tests that may still reference it.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		templates.Render(w, "dashboard.html", nil)
+	})
 
 	server := &http.Server{
 		Addr:         ":" + port,
@@ -268,135 +330,6 @@ func tokenHandler(signingKey string) http.HandlerFunc {
 	}
 }
 
-func dashboardHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeHTML)
-		w.Write([]byte(`<!DOCTYPE html>
-<html class="dark" lang="en">
-<head>
-<title>Ad Tech Platform</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-tailwind.config = {
-  darkMode: 'class',
-  theme: { extend: { colors: { brand: { DEFAULT: '#4361ee', hover: '#3a56d4' }, surface: { dark: '#1a1a2e', page: '#0f0f1a' } } } }
-}
-</script>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
-<script>
-(function(){var s=localStorage.getItem('theme');if(s)document.documentElement.className=s;else if(window.matchMedia('(prefers-color-scheme:light)').matches)document.documentElement.className='light'})();
-function toggleTheme(){var h=document.documentElement,n=h.classList.contains('dark')?'light':'dark';h.className=n;localStorage.setItem('theme',n);document.getElementById('ti').textContent=n==='dark'?'\u2600\uFE0F':'\uD83C\uDF19'}
-</script>
-</head>
-<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-200 min-h-screen">
-
-<nav class="bg-white dark:bg-surface-dark border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center gap-4">
-  <a href="/" class="font-semibold text-lg text-gray-900 dark:text-white">Ad Tech</a>
-  <div class="flex gap-3 text-sm">
-    <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
-    <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
-    <a href="/dev/config-manager" class="text-gray-500 dark:text-gray-400 hover:text-brand">Config</a>
-    <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
-  </div>
-  <button onclick="toggleTheme()" id="ti" class="ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">☀️</button>
-</nav>
-
-<main class="max-w-2xl mx-auto px-5 py-8">
-
-<div class="bg-emerald-50 dark:bg-emerald-950/30 border-l-4 border-emerald-400 dark:border-emerald-500 p-4 rounded-r-lg mb-6 text-sm">
-  3 DSPs competing in real-time auctions. Full pipeline: SSP &rarr; Exchange &rarr; DSP &rarr; Ad Server &rarr; Tracker &rarr; Reporting.
-</div>
-
-<section class="mb-8">
-  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Developer Tools</h2>
-  <div class="grid gap-3">
-    <a href="/dev/publisher-simulator" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
-      <div class="font-medium text-brand">Publisher Simulator</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">Simulated publisher page with real auctions, ad sizes, and debug overlay</div>
-    </a>
-    <a href="/dev/trace-explorer" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
-      <div class="font-medium text-brand">Trace Explorer</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">Trace a single ad request through every service end-to-end</div>
-    </a>
-    <a href="/dev/config-manager" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
-      <div class="font-medium text-brand">Config Manager</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">View and edit live config for all services, per-pod overrides, change history</div>
-    </a>
-    <a href="/docs" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
-      <div class="font-medium text-brand">API Docs (Swagger)</div>
-      <div class="text-sm text-gray-500 dark:text-gray-400">Full OpenAPI spec - Customer, Partner, and Internal endpoints with try-it-out</div>
-    </a>
-  </div>
-</section>
-
-<section class="mb-8">
-  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Observability</h2>
-  <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-    <a href="http://localhost:3000" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">Grafana</div><div class="text-xs text-gray-400">:3000</div>
-    </a>
-    <a href="http://localhost:9090" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">Prometheus</div><div class="text-xs text-gray-400">:9090</div>
-    </a>
-    <a href="http://localhost:16686" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">Jaeger</div><div class="text-xs text-gray-400">:16686</div>
-    </a>
-    <a href="http://localhost:10350" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">Tilt</div><div class="text-xs text-gray-400">:10350</div>
-    </a>
-    <a href="http://localhost:8222" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">NATS</div><div class="text-xs text-gray-400">:8222</div>
-    </a>
-    <a href="http://localhost:9001" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
-      <div class="font-medium">Minio</div><div class="text-xs text-gray-400">:9001</div>
-    </a>
-  </div>
-</section>
-
-<section class="mb-8">
-  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Services</h2>
-  <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800 text-sm">
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Gateway</span><span class="text-gray-400 font-mono">:8080</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Exchange</span><span class="text-gray-400 font-mono">:8081</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">DSP</span><span class="text-gray-400 font-mono">:8082 :8089 :8090</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Tracker</span><span class="text-gray-400 font-mono">:8083</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">SSP</span><span class="text-gray-400 font-mono">:8084</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Ad Server</span><span class="text-gray-400 font-mono">:8085</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Reporting</span><span class="text-gray-400 font-mono">:8086</span></div>
-    <div class="px-4 py-2 flex justify-between"><span class="font-medium">Pipeline</span><span class="text-gray-400 font-mono">:8087</span></div>
-  </div>
-</section>
-
-<section class="mb-8">
-  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Debug</h2>
-  <div class="flex flex-wrap gap-2 text-sm">
-    <a href="/v1/dsp/campaigns" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">DSP Campaigns</a>
-    <a href="/v1/dsp/shading" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">Win-Rate Data</a>
-    <a href="/v1/ssp/placements" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">SSP Placements</a>
-    <a href="/v1/ad/creatives" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">Creatives</a>
-    <a href="/healthz" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">/healthz</a>
-    <a href="/readyz" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">/readyz</a>
-  </div>
-</section>
-
-<section>
-  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Quick Test</h2>
-  <pre class="bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 rounded-lg p-4 text-sm font-mono overflow-x-auto">go run ./cmd/simulator single --geo GBR --device mobile</pre>
-</section>
-
-</main>
-
-<footer class="text-center py-6 text-xs text-gray-400 dark:text-gray-600">
-  Ad Tech Platform &middot; <a href="/docs" class="text-brand">API Docs</a> &middot; <a href="http://localhost:10350" target="_blank" class="text-brand">Tilt</a>
-</footer>
-</body>
-</html>`))
-	}
-}
 
 func swaggerUIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

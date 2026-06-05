@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -122,10 +123,24 @@ func resetAndReseedHandler(dbURL string, redisAddr string, bus events.EventBus, 
 
 		// Step 3: Re-run cmd/seed. Spawning the binary avoids dragging
 		// every insert helper into the gateway binary's import graph.
+		//
+		// In pod mode the seed binary is at /seed (baked into the gateway
+		// image alongside /profiles by build/Dockerfile.dev). Falls back to
+		// `go run ./cmd/seed` for host-mode dev where the Go toolchain
+		// is available and there's no pre-built binary.
 		t3 := time.Now()
 		seedCtx, seedCancel := context.WithTimeout(ctx, 45*time.Second)
 		defer seedCancel()
-		cmd := exec.CommandContext(seedCtx, "go", "run", "./cmd/seed", "--profile", "standard")
+		var cmd *exec.Cmd
+		if _, err := os.Stat("/seed"); err == nil {
+			cmd = exec.CommandContext(seedCtx, "/seed", "--profile", "standard",
+				"--dsps-dir", "/profiles/dsps",
+				"--publishers-dir", "/profiles/publishers",
+				"--deals-dir", "/profiles/deals",
+				"--direct-sold-dir", "/profiles/direct-sold")
+		} else {
+			cmd = exec.CommandContext(seedCtx, "go", "run", "./cmd/seed", "--profile", "standard")
+		}
 		out, err := cmd.CombinedOutput()
 		detail := strings.TrimSpace(string(out))
 		// Trim very long output; the JSON response shouldn't bloat with
