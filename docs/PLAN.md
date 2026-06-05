@@ -85,6 +85,634 @@ This document is 13,000+ lines. Use this legend to find what you need.
 
 ---
 
+## Completed Build: Pod Migration + E2E Green (2026-06-04 → 2026-06-06)
+
+**Status: LIVE. All 9 services run as k8s pods + reporting (local_resource).
+E2E suite: 100 PASS / 22 SKIP / 0 FAIL against the podified stack.**
+
+Two sessions of work that moved the dev environment from "host
+processes orchestrated by Tilt" to "production-shape pod deployments
+under `tilt up`," then drove the e2e suite green against the new
+shape. Forms the foundation for any CI work (the failure modes pods
+expose — DNS timing, per-pod config rows, in-cluster reachability —
+all surfaced and got fixed).
+
+**What shipped:**
+
+- **Pods migration LIVE** — `k8s/base/{tracker,adserver,ssp,exchange,
+  publisher-adserver,gateway,dsp}/deployment.yaml` (plus matching
+  Services + Ingresses). Reporting stays as `local_resource` because
+  DuckDB needs CGO and cross-compile from macOS to Linux/musl was too
+  fragile. Iteration loop: edit Go → host cross-compile to
+  `./bin/<svc>` (~1-2s) → `docker_build_with_restart` syncs the binary
+  into the pod and restarts the process (~1s).
+- **Colima must use qemu** — vz vmType crashes the cluster under
+  sustained docker-build load on macOS 14. Documented in
+  `docs/PODS_MIGRATION.md` + saved memory. Switch requires
+  `colima delete --force` + recreate with `--vm-type qemu`.
+- **Stable pod IDs** — every Deployment hardcodes
+  `POD_NAME=<service>-0` instead of the downward-API random k8s name.
+  Tests that target a specific pod's config row
+  (`SetConfigForPod(t, key, value, "exchange-0")`) now actually land
+  on the running pod. Safe for single-replica dev; prod would use a
+  StatefulSet for stable identities across replicas.
+- **In-cluster DNS for pod-bound URLs** —
+  `tests/e2e/harness/harness.go` gained `URLs.Cluster*` alongside the
+  host-side URLs. Bare URL (localhost:8082) is for the test process
+  probing services directly; Cluster* (`http://dsp-internal:8082`) is
+  for values that pods will dial. localhost from inside a pod is its
+  own loopback, not the host.
+- **Env-var → DB override at boot** — `pkg/config/setup.go`
+  `applyEnvOverridesToDB` overwrites Postgres rows whose value still
+  equals the schema default with the env-var value. Without this,
+  `registry.Register` seeded e.g. `exchange.dsp_endpoints=localhost`
+  (the schema default for local-process mode) and the Postgres value
+  beat the in-memory `cfg.SetLive` override on the next poll. Also
+  added service-prefixed env-var fallback: deployments set
+  `TRACKER_NATS_URL` (not bare `NATS_URL`), so the bridge now reads
+  `<UPPER_SERVICE>_NATS_URL` first and propagates to both `nats.url`
+  and `tracker.nats_url`.
+- **Gateway lazy DB** — `cmd/gateway/main.go` opens the Postgres
+  handle once and lets handlers retry on demand. Previously the
+  handle was nil-ed if the first Ping failed at boot (postgres DNS
+  not ready), and every bootstrap/secrets endpoint 503'd forever.
+- **Seed binary baked into gateway image** —
+  `build/Dockerfile.dev.gateway` + `cmd/gateway/reset.go` exec `/seed`
+  directly instead of shelling out to `go run ./cmd/seed`. The
+  gateway pod has no Go toolchain, so the previous reset endpoint
+  returned 500 with `exec: "go": executable file not found`.
+- **Migration 024 self-bootstraps `service_registry`** — the table is
+  normally created lazily by `pkg/config/registry.go` at first pod
+  boot, but the migrate job runs before any service starts on a
+  fresh cluster. Added `CREATE TABLE IF NOT EXISTS` preamble to 024.
+- **Host-bridge for fake DSPs** —
+  `tests/e2e/harness/hostproxy.go` `HostReachableServer` binds 0.0.0.0
+  and returns a URL with the host IP (Colima's `192.168.5.2`). Pods
+  can call back to test-process-hosted fake DSPs/Prebid Servers via
+  this. macOS dual-stack listeners report `[::]:port` not
+  `0.0.0.0:port` — needed to substitute either form.
+
+**Two new product features fell out of unsticking skipped tests:**
+
+- **Config schema validation** — `pkg/config/manager.SetForPod` now
+  consults the registry-published per-pod schema
+  (`service_registry.schema_entries`), not just the platform
+  `Schema()`. DSP/exchange/tracker etc. each own their config keys;
+  without this, `dsp.daily_budget_default` fell through as "unknown
+  key, allowed" and the int/float check was bypassed. Gateway PUT
+  handler maps `ErrValidation` to 400 instead of 500.
+- **Tracker HMAC strict mode actually enforced** —
+  `tracker.signature_validation` was declared in the schema but never
+  read. Now both impression and viewability handlers return 403 when
+  the knob is true and the sig is missing/invalid. Warn-only is still
+  the dev default.
+
+**Carry-over follow-ups:**
+
+- The 22 still-skipped e2e tests split into: 10 real product gaps
+  (privacy not enforced, fraud blocklists not warm-cached, prebid
+  multi-imp loop, billing contract-write helpers), 4 chaos tests
+  needing `harness.ChaosKill*` helpers (`kubectl delete pod -l app=X`),
+  3 observability harness gaps (Jaeger client, log capture, migration
+  step helper), 4 billing contract tests needing both contract-write
+  helper AND seed data, and 1 Postgres setup (TestRLSIsolation — dev
+  role is BYPASSRLS superuser).
+- The fundamentally untouched items in the 2026-06-03 backlog
+  (opt-out propagation, tracker fraud-rejection events, ad server
+  render-fail events, Prebid viewability beacon, auth on CRUD, pubad
+  preferred/exclusion) are still queued. See "Next-Up Backlog
+  (2026-06-03)" below — order is unchanged.
+
+---
+
+## Completed Build: TigerBeetle-backed Ledger (2026-06-02)
+
+**Status: code-complete; live verification deferred to first `tilt up` with TB pod ready.**
+
+Outcome: TB ledger lives behind a config gate (`billing.ledger_backend`,
+default `memory`). 5 phases shipped:
+
+- Phase 1 — `k8s/base/tigerbeetle/` StatefulSet (image
+  `ghcr.io/tigerbeetle/tigerbeetle:0.16.43`, init container runs
+  `tigerbeetle format`, main runs `tigerbeetle start --addresses=0.0.0.0:3000`,
+  1Gi PVC, TCP probes). Tiltfile port-forwards 3033 → 3000.
+- Phase 2 — `pkg/tb/` (client wrapper + ID/money/code helpers, all pure
+  except `client.go`). 16 unit tests cover ID determinism, round-trips,
+  bid-model packing.
+- Phase 3 — `pkg/billing.Ledger` promoted to an interface; struct renamed
+  `MemoryLedger`; `NewLedger` → `NewMemoryLedger`. All call sites updated;
+  every existing billing test continues to pass.
+- Phase 4 — `pkg/billing/tigerbeetle/` implements the interface. 10 unit
+  tests against a fake TB client. Integration test (`go:build
+  tigerbeetle_integration`) hits a real TB instance via Tilt port-forward.
+- Phase 5 — `cmd/reporting/ledger.go` selects backend at boot. Unreachable
+  TB is fatal (no silent fail-open — ledger is source of truth for cost).
+
+**Decisions that diverged from the original sketch:**
+
+- Settle is **3 linked transfers** (post-pending + escrow→publisher +
+  escrow→house), not 2. The literal sketch left publisher revenue
+  stranded in escrow. Atomic via the TB Linked flag.
+- `BalanceFor` on an advertiser account now returns the TB-native
+  `debits_posted` (= clearing price). `MemoryLedger.BalanceFor`
+  historically double-counted the credit side; callers that relied on
+  that quirk will see corrected, lower TotalCredit numbers.
+
+**Carry-over follow-ups:**
+
+- The 8 skipped CPC/CPA/vCPM tests in `tests/e2e/billing_models_test.go`
+  remain skipped — their dependency is the reporting NATS click/conversion
+  handlers calling `Engine.SettleByTrace`, not the ledger backend.
+  Un-skipping them is the next billing batch.
+- Multi-currency, replicated 3-node TB cluster, and migration of
+  in-memory ledger data into TB remain out of scope (see original
+  "explicitly out of scope" list below).
+
+**Original plan kept below for the record (decisions resolved):**
+
+## Original Build Plan (kept for reference)
+
+Decided to back the billing ledger with [TigerBeetle](https://tigerbeetle.com/) rather than Postgres. Conceptual fit is exact — TB's pending/posted two-phase transfers map 1:1 onto our reserve/settle pattern, and TB's per-transfer `timeout` field obsoletes the reservation-expiry cron we were planning to build. Trade-off accepted: an extra K8s pod and a slightly less debuggable backing store (no `psql`-style ad-hoc queries), in exchange for the right data model and as a learning exercise.
+
+### Open decisions (resolve before Phase 1 starts)
+
+1. **TB version pin.** Latest 0.16.x, pre-1.0. Pin a specific 0.16 release unless changed.
+2. **PVC size.** Default 1Gi for local Tilt; revisit for prod.
+3. **House account naming.** `platform:house` (TB account derived from this string). Margin transfers credit it.
+
+### Phases (smaller commits within each)
+
+**Phase 1 — Infrastructure (~30 min).** `k8s/base/tigerbeetle/` StatefulSet single replica + PVC + `tigerbeetle format` init container + `tigerbeetle start` main container on port 3000. Tiltfile entry with port-forward. Verify pod ready + port-forward responds. Commit boundary.
+
+**Phase 2 — Domain bridge `pkg/tb` (~45 min).** Pure functions, no behaviour changes:
+- `pkg/tb/client.go` — `NewClient(addresses)` wrapper hiding SDK quirks.
+- `pkg/tb/ids.go` — UUID-string → `[16]byte` TB account ID (raw UUID bytes). Per-trace reservation IDs via `idgen.Derive`. Static IDs for house account + USD ledger.
+- `pkg/tb/money.go` — `float64 USD ↔ int64 cents`. Same scheme as Redis budget tracker.
+- `pkg/tb/codes.go` — enums for the `code` field (1=spend, 2=reservation, 3=settlement, 4=release) + `bid_model → user_data_32` packing.
+- Unit tests for ID derivation + money conversion (no TB connection needed).
+
+**Phase 3 — Ledger interface (~45 min).** Pure refactor:
+- Promote `pkg/billing.Ledger` (currently a struct) to an interface with the existing public methods (`Record`, `Entries`, `EntriesForTrace`, `EntriesForAccount`, `BalanceFor`, `Summary`, `ReservationByTrace`, `HasSettlement`).
+- Existing struct → `MemoryLedger`, still satisfies the interface.
+- Update `Engine` constructor + all call sites to take the interface. Existing tests continue to use `MemoryLedger`.
+- All existing tests green.
+
+**Phase 4 — TigerBeetle impl `pkg/billing/tigerbeetle` (~1.5-2 hr).** Implements the `Ledger` interface:
+- `Record(EntryReservation)` → `CreateTransfers{Flags: Pending, Code: 2, Timeout: 24h, UserData128: traceID, UserData32: bidModelCode}`, debit `advertiser:UUID`, credit `escrow` (shared account).
+- `Record(EntrySettlement)` → `CreateTransfers{Flags: PostPendingTransfer, PendingID: …}`. Plus a second non-pending transfer for the margin slice escrow→house.
+- `Record(EntrySpend)` (CPM) → advertiser→publisher + advertiser→house, two non-pending transfers.
+- `Record(EntryRelease)` → `void_pending_transfer` (or rely on TB timeout — possibly both).
+- Account auto-provisioning: `LookupAccounts` → `CreateAccounts` on first sight, with in-process cache.
+- Query methods:
+  - `BalanceFor(accountID)` → `LookupAccounts`, `debits_posted - credits_posted`.
+  - `Summary()` → in-process counter (TB has no GROUP BY).
+  - `EntriesForTrace` / `ReservationByTrace` / `HasSettlement` → `GetAccountTransfers` filtered by `user_data_128 = traceID`.
+- Integration test against a real TB instance (build-tag-guarded, requires Tilt up).
+
+**Phase 5 — Cutover (~30 min).** New config keys:
+- `billing.ledger_backend` = `memory | tigerbeetle` (TierStatic, default `memory` so dev without TB still works).
+- `billing.tigerbeetle_addresses` (TierStatic).
+- `cmd/reporting/main.go` picks the impl at boot. Re-run CPC + CPA + vCPM e2e tests against TB — should pass identically. Update memory + PLAN.md ledger section.
+
+### Explicitly out of scope this round
+
+- Multi-currency (single USD ledger for now; multi-ledger is small later).
+- 3-node replicated TB cluster (prod shape — single replica fine for now).
+- Migration of in-memory ledger data into TB (dev ledger is volatile; start fresh).
+- Invoice generation. `pkg/billing/invoice.go` already queries the `Ledger` interface; will "just work" once cutover is done but won't be wired in this batch.
+
+### Won't solve
+
+- Invoice generation still requires joining TB transfers with Postgres campaign/publisher metadata in application code. TB doesn't know domain entities.
+- Reconciliation between TB ledger and analytics store. Still application code.
+
+### Time estimate
+
+~4 hours of focused work end-to-end. Commit at each phase boundary so we can stop / inspect / roll back if Phase 4's TB API learning curve eats more time than expected.
+
+---
+
+## Next-Up Backlog (2026-06-03)
+
+Concrete, sized work items queued for upcoming sessions. Each entry lists the gap, why it matters, the implementation sketch, and a complexity estimate (S = under 2 hrs, M = half-day, L = 1–2 days, XL = multi-day). Picked up in roughly the order listed unless something jumps the queue.
+
+### Deferred billing / analytics gaps
+
+Carry-over from the analytics-gap audit (2026-06-03). Eight gaps were identified; three (`BudgetDepletedEvent`, video+audio engagement, `ServeNoFillEvent`) shipped that day. These five remain.
+
+**1. Privacy opt-out → `OptOutEvent` propagation** (M)
+- *Gap:* `events.OptOutEvent` + `Publisher.OptOut` are defined but no service ever calls them. Gateway has no opt-out endpoint to receive a user's consent withdrawal.
+- *Why it matters:* GDPR / CCPA compliance — when a user opts out, downstream consumers (DSP audience cache, ad server frequency cap, tracker fraud cache) must drop the user's records within minutes, not "eventually."
+- *Sketch:* Gateway adds `POST /v1/privacy/opt-out` (consent storage in Postgres `consent_records` table that already exists per memory) + publishes `adtech.privacy.opt_out`. DSP, ad server, tracker subscribe and clear any per-user state on receipt. Existing handlers in `pkg/events/publisher.go` are the right shape.
+- *Blocking decision:* opt-out scope per the 3-level model (`docs/PLAN.md` → "User Opt-Out and Data Deletion System"). Just need to commit to which levels the endpoint surfaces.
+
+**2. Tracker fraud-rejection events** (M)
+- *Gap:* When tracker drops a fraudulent pixel (HMAC fail, IP/UA blocklist, dedup hit) it logs but doesn't publish. Reporting can count served impressions but has no signal of "we caught fraud spike."
+- *Why it matters:* Ops can't alert on fraud volume changes; can't show advertisers "we blocked X% of your fraudulent traffic this period"; can't compute true-cost-per-acquisition (need fraud-adjusted denominator).
+- *Sketch:* New subject `adtech.tracker.rejected` + `RejectedEvent{TraceID, EventType, RejectionReason, Timestamp}`. Tracker grows an `events.Publisher` (same pattern pubad uses) and publishes from each rejection site (HMAC validation, fraud realtime middleware, dedup gate). Reporting subscribes + analytics bucket + debug counter + e2e test. Same shape as the analytics-gap closures we just shipped.
+- *Implementation note:* Tracker is the highest-RPS service. Fire-and-forget publish is critical; don't block the pixel response on NATS.
+
+**3. Ad server creative-render failures** (S)
+- *Gap:* When adserver returns 5xx or falls back to default HTML for an unknown creative, no event fires. Silent quality issue.
+- *Why it matters:* Operators can't see "creative X is broken in adserver" without log scraping. Real product impact: a broken creative still bills (impression pixel fires) but renders empty.
+- *Sketch:* New subject `adtech.adserver.render_failed` + payload with creative_id, reason, trace_id. Ad server's existing `eventPublisher` pattern (we have one — see how tracker is structured). Add publishes at the resolver-miss + render-error sites. Reporting subscribes + counter.
+
+**4. Direct-sold CPC/CPA settle** (XL — product question first)
+- *Gap:* `DirectWinEvent` records direct-sold serves with `bid_model="direct:<tier>"`. Billing engine's `SettleByTrace` only knows about `cpm`, `cpc`, `cpa`, `vcpm`, `cpcv`. No "direct" model means direct-sold can only be priced CPM (settle at impression). Real-world direct deals are almost always CPM, so this is probably fine — but explicitly so.
+- *Why it matters:* Limits how publishers can sell direct inventory. Some advertisers want direct-CPA for performance commitments.
+- *Sketch:* Real question: do we want this feature? If yes, design how billing.Engine recognizes "direct:cpc" / "direct:cpa" reservation patterns and settles on tracker click/conversion. Probably a model-flag on `publisher_line_items` (`bid_model TEXT NOT NULL DEFAULT 'cpm'`). Settle path mirrors what `cmd/reporting/handleClick` already does for programmatic CPC.
+- *Decision needed:* Add to the Publisher-Side Ad Server design entry in PLAN.md, mark as deferred until a real publisher asks. For now document the CPM-only limitation in the publisher-adserver docs.
+
+**5. External Prebid bid viewability beacon injection** (M)
+- *Gap:* When external Prebid bid wins (pubad outbound), we render `bid.adm` verbatim. The external bidder's pixels report to their infrastructure — we have no signal that the impression actually rendered, was viewable, or got clicked.
+- *Why it matters:* "Zero data slippage" is the platform's stated goal but this path slips. Without our own beacon, fill-rate analytics overcounts (we'd record the Prebid win regardless of whether the creative actually rendered).
+- *Sketch:* Pubad's `writePrebidWinner` injects our `<img src="${VIEWABILITY_URL}">` and impression pixel into the bid's `adm` HTML before serving. Tracker beacons fire alongside the external bidder's. Reporting attributes views to the Prebid endpoint via a new `prebid_endpoint` column on `view_events`.
+- *Subtle:* If the external bid's `adm` is a script or iframe (common), simple HTML injection may not work. May need an outer wrapper div with our pixel + the bid contents inside.
+
+### Other tracks queued behind Prebid
+
+Items the user surfaced as "we'll handle them next" while we focused on Prebid.
+
+**6. ~~Seed-vs-schema-default bug~~** ✅ DONE
+- *Resolution:* `config.WithSeedDefaults(overrides)` Setup option ships
+  the per-pod override map at boot. `cmd/dsp/main.go` calls
+  `dspSeedOverrides(profileName)` which reads the YAML profile and
+  hands the `noise_pct`/`no_bid_rate` per-profile values to
+  `config.Setup`. Registry's seed step uses the override when present;
+  `migrateSeedDefaults` (in `pkg/config/setup.go`) updates rows that
+  still hold the original schema default so existing deployments pick
+  up the fix without manual SQL. Verified by
+  `TestSeedDefaults_*` e2e tests (competitor1 noise=30, competitor2
+  noise=40, internal stays 0).
+
+**7. Real auth on management endpoints** (M)
+- *Gap:* `cmd/dsp/management.go` (campaign CRUD) and `cmd/ssp/management.go` (placement CRUD) have no auth. Anyone on the network can create / mutate / delete campaigns and placements. Acceptable in dev; unacceptable in any deployment past `tilt up`.
+- *Why it matters:* Memory flags it as TODO in source: "Production auth middleware for DSP campaign CRUD + SSP placement CRUD — both noted as TODO in source; must not be exposed publicly until that lands." We have `pkg/middleware/Auth` and `pkg/middleware/RequirePermission` for the API proxy paths — these CRUD endpoints aren't wired.
+- *Sketch:* Wrap the relevant handlers with `middleware.Auth(signingKey)` + `middleware.RequirePermission("campaigns:write" / "placements:write")`. Add the permissions to the role definitions. The gateway already issues JWTs — internal services just need to validate them. JWT signing key flows via config (`gateway.jwt_signing_key`). E2E test: assert unauth'd PATCH returns 401, authed advertiser-token can PATCH own campaign, can't PATCH other tenant's.
+- *Side cleanup:* the `External DSP Partners onboarding plan` (per memory) is gated on this work — partners need to authenticate before being trusted to land bids.
+
+**8. Publisher-adserver: preferred-tier + competitive exclusion** (L)
+- *Gap:* Original publisher-adserver design (in PLAN.md) listed four tiers — sponsorship, guaranteed, **preferred**, house — but the starting scope shipped only the first, second, and fourth. Preferred deals (publisher-side: rate floor without volume commitment) aren't implemented. Competitive exclusion (Coke creative blocked while Pepsi line item is serving on the same page view) also deferred.
+- *Why it matters:* Preferred is a real publisher product (publishers often have 5-10 preferred buyers before opening up open-market). Competitive exclusion is table-stakes for premium publishers — luxury brand advertisers won't book if competitors can run adjacent.
+- *Sketch:*
+   - *Preferred:* Add `preferred` to the priority_tier enum + arbitration ladder. Behaviour: "rate floor without preempt" — sets `effective_floor = max(placement_floor, preferred_cpm)` for the programmatic auction, doesn't preempt. Same shape as deals.Preferred at the exchange layer; pubad has its own equivalent. ~half-day.
+   - *Competitive exclusion:* Add IAB-category exclusion list to `publisher_line_items` + a Redis page-view-scoped lock. When a sponsorship for IAB-22 (Personal Finance) is served on `page_view_id=X`, set `pubad:exclusion:{X}:IAB-22` for 5 minutes. Subsequent serves on the same page_view fetch the lock and exclude matching categories from arbitration. ~full day including the page-view-id propagation work.
+- *Open question for preferred:* how do we surface the negotiated rate to the SSP so the auction enforces it? Either pubad adds a `bidfloor` override on the OpenRTB request before sending to SSP, or pubad evaluates the response and overrides the price. Mirrors what `pkg/deals` already does at the exchange layer for advertiser-side preferred deals.
+
+### Order
+
+Suggested order if no other priority intervenes (updated 2026-06-06,
+post pod-migration + e2e green; #6 already shipped):
+1. **#7 Auth on CRUD** — blocks any non-dev deployment. Must land before
+   we can usefully test external DSP Partners.
+2. **#2 Tracker fraud-rejection events** — purely additive analytics,
+   no architecture question, lands in a couple hours. Will also unstick
+   `TestFraudIPBlocklistRejected` etc. once warm-cache wiring lands
+   alongside.
+3. **#5 External Prebid viewability beacon** — closes the last "zero
+   data slippage" gap.
+4. **#1 Opt-out propagation** — needs a decision on scope first; queue
+   conversation before implementing. Unsticks four `TestPrivacy*` e2e
+   skips.
+5. **#8 Pubad preferred + exclusion** — biggest in this list. Schedule
+   its own session.
+6. **#3 Adserver render-fail events** — small, opportunistic.
+7. **#4 Direct CPC/CPA** — deferred until a real publisher asks; no
+   work item, just a documented limitation.
+
+### Smaller-than-backlog items also worth picking up
+
+These came out of the pod-migration session and don't merit a full
+backlog entry, but each is a couple-hour fix:
+
+- **Chaos test helpers** — 4 skipped tests
+  (`TestChaos{Redis,NATS,Postgres,Minio}Down`) want a
+  `harness.ChaosKill{Service}` that runs `kubectl delete pod -l app=X`.
+  Together with a `WaitForReady` retry, this unsticks all 4.
+- **Migration step harness helper** — `cmd/migrate` only does
+  up-to-latest. A `goose up-by-one` / `goose down-by-one` mode would
+  unstick `TestMigrationForwardPreservesData` /
+  `TestMigrationRollbackSafety`.
+- **Jaeger client wrapper** — would unstick
+  `TestTracePropagatesSSPToExchangeToDSP`. Just a `GET
+  /api/traces?traceID=…` against the in-cluster Jaeger.
+- **Bulk-auctions harness helper** — needed for tiered revshare /
+  guaranteed minimum tests. Just a loop of `RunAuction + FireImpression`
+  with progress logging.
+- **RLS test postgres role** — `TestRLSIsolation` skips because the
+  dev `adtech` role is BYPASSRLS superuser. Add an app-tier
+  non-superuser role for tests that need to exercise the policies.
+
+---
+
+## Open Architecture Decisions
+
+Capture for choices that don't have a single right answer and shouldn't be silently picked in code. Each item lists the question, the live options, and the work that's blocked.
+
+### vCPM Settlement Model
+
+**Status: DECIDED 2026-06-01 for sub-decisions 1, 3, 4. Sub-decision 2 (reservation timeout) still open — waiting on the expiry cron.**
+
+**Question:** When a `vcpm` bid wins an auction and the impression renders, how and when does spend hit the ledger?
+
+**Context:** Viewability data already flows end-to-end as of 2026-06-01 — the tracker computes the server-authoritative IAB verdict and persists `ViewEvent{IABViewable, …}` to analytics. What's pending is the *billing* settlement: for `bid_model = vcpm` line items, the impression event must not bill immediately the way CPM does. It has to hold and only commit on a verified view.
+
+**Sub-decisions:**
+
+1. **Spend-accrual pattern** — pick one:
+   - *Reserve at impression, settle at view.* Auction win → reserve budget. View event arrives → reservation becomes spend. Timeout with no view → release. (Most common in real platforms; matches the existing CPC/CPA reserve-settle plumbing in `pkg/billing.Engine.ProcessEvent`.)
+   - *Bill only on view.* No reservation, no holding pattern. Impression is logged but doesn't touch the budget. Cleaner ledger math; messier pacing because a campaign can over-deliver before any spend is recorded.
+   - *Bill at impression, claw back on no-view.* Treat as CPM, refund if view never lands. Clean from a pacing view; nightmare from a reconciliation view. Not recommended.
+
+2. **Reservation timeout** — how long do we hold a reservation before releasing? Industry convention is 24–48h; would become `billing.vcpm_view_window` config key.
+
+3. **Default for `IABViewable = false`** — view event arrived but below threshold:
+   - Release reservation (advertiser only pays for genuinely viewable inventory).
+   - Bill at impression rate (publisher gets paid for delivery).
+   Contract-dependent in real platforms; pick a platform default with per-IO override later.
+
+4. **Rate source** — use the auction's `clearing_price` (what the DSP bid `vcpm` at), or a separate `vcpm_rate` field on the line item.
+
+**Chosen defaults (2026-06-01):**
+1. **DONE.** Reserve at impression, settle at view. `cmd/reporting/main.go:handleView` calls `Engine.SettleByTrace(ctx, traceID, "viewable")` when `IABViewable=true`. Same reserve/settle plumbing as CPC/CPA.
+2. **OPEN.** 24h reservation timeout. Pending the expiry cron — until that lands, reservations from non-viewable or never-viewed impressions accumulate in the in-memory ledger until reporting restarts. Tracked by the skipped `TestBillingReservationExpiry`.
+3. **DONE.** `IABViewable=false` → no settlement. Platform default contract semantic is "viewable or nothing"; we do not downgrade to CPM rate.
+4. **DONE.** Rate = `clearing_price` from the reservation row (no separate `vcpm_rate` field on the line item).
+
+**Status:** Layer 1 (contract data) landed earlier — `line_items.viewability_target_pct` + `deals.viewability_target_pct` in migration 025, plumbed through `models.Campaign` + `models.Deal` + the warm-cache loaders. Layer 2 (settlement) is wired for the chosen defaults; only sub-decision 2 remains open. `TestBillingViewabilityVCPMSettle` un-skipped and asserts both the viewable-settles and non-viewable-doesn't-settle paths.
+
+---
+
+### Prebid Server Integration
+
+**Status: DESIGN — committed in principle 2026-06-02, scope and integration shape still open.**
+
+**Question:** Prebid is the open-source de-facto standard for header bidding — the in-page (or server-side) auction that runs across many SSPs/exchanges in parallel before the publisher's ad server is called. We want our platform to participate. What shape does that integration take?
+
+**Background:**
+- `Prebid.js` runs in the browser; the publisher drops it on their page and configures bidder adapters (~300+ adapters exist for major SSPs/exchanges).
+- `Prebid Server` (Go and Java reference impls) is the server-side version — reduces browser load, hides bidder list from competitors, mandatory for AMP and most CTV.
+- Prebid is governed by IAB Tech Lab. Adapter spec is well-defined; bidders implement an HTTP endpoint that takes a Prebid `BidRequest` (OpenRTB-shaped with some extensions) and returns a `BidResponse`.
+
+**Sub-decisions:**
+
+1. **What role do we play?** Three plausible positions, not mutually exclusive:
+   - *(a) Bidder.* Other publishers' Prebid setups call us as one demand source among many. We expose a Prebid-compatible HTTP endpoint (OpenRTB 2.5/2.6 with Prebid extensions). Our exchange becomes the receiver of Prebid traffic. **Lowest cost, highest reach.**
+   - *(b) Host a Prebid Server.* Run our own Prebid Server instance for publishers who use us as their primary SSP. Acts as a single server-side header-bidding endpoint that fans out to many bidders (us + competitors). Closer to what a prior ad-tech employer/PubMatic do as "managed Prebid."
+   - *(c) Ship a Prebid.js adapter.* Write and contribute the canonical `ourPlatformBidAdapter.js` to the Prebid.js repo so publishers using stock Prebid.js can add us via config. Required if anyone is going to discover us via Prebid's prebid.org/dev-docs bidder list.
+   
+   (a) is table stakes; (b) is a product expansion; (c) is a distribution play. Most likely all three eventually, but pick a start.
+
+2. **Where does the bidder endpoint live?** Either:
+   - A new path on the existing `cmd/exchange` (e.g. `/v1/prebid/openrtb2/auction`) — Prebid Server speaks OpenRTB 2.x, which is close to what the exchange already handles. Translation layer maps Prebid extensions → internal bid request shape.
+   - A new `cmd/prebid-adapter` service that translates Prebid requests → internal SSP-style requests and forwards. Keeps the exchange clean of Prebid-specific extension handling.
+   
+   The exchange already accepts OpenRTB-shaped bid requests; the cheaper path is a new handler on it.
+
+3. **Server-side vs client-side bidder identity.** When we're a bidder, do we want to be called from Prebid.js (browser) or Prebid Server (publisher backend)? Server-side is faster (no browser RTT), better for CTV/AMP, and gives publishers a unified bidder list — but it requires our `seller.json` and `ads.txt` records to be set up properly. Probably support both; the wire format is nearly identical.
+
+4. **User sync / cookie matching.** Prebid bidders typically expose a `/setuid` endpoint that lets the Prebid Server set a cookie mapping the publisher-side user ID to our internal ID. Without it, we can't recognise repeat users across Prebid auctions. Cookieless future complicates this — likely we lean on the identity-graph work already underway (`pkg/identity/`) rather than building a separate cookie sync.
+
+5. **Prebid.js adapter (option c) shape.** If we contribute an adapter, what's the minimum viable spec?
+   - Bidder code (the unique short identifier in Prebid's registry — e.g. `appnexus`, `rubicon`).
+   - Parameters publishers configure on each ad unit (placement ID, optional floor, optional deal IDs).
+   - Request builder + response parser (JS code in the Prebid.js repo).
+   - Adapter docs + sample config (PRs to prebid.org documentation).
+
+**Recommended starting scope:**
+- Build (1a) + (2 = new handler on exchange) + (4 = setuid endpoint using existing identity store). Defer (1b) host-your-own Prebid Server and (1c) Prebid.js adapter until we have any external user.
+- Wire path: external Prebid Server → `POST exchange/v1/prebid/openrtb2/auction` → translation to internal `openrtb.BidRequest` → fan-out to DSPs (reusing the smart router) → bid response in Prebid format.
+
+**Decisions locked 2026-06-02:**
+- **Bidder code:** `adtechmono`. Used as the unique short identifier in any future Prebid registry submission and in our public Prebid-compatible endpoint docs.
+- **Bidfloor handling:** Effective floor = `max(prebid_bidfloor, our_placement_floor)`. Honours both publisher-side dynamic-floor logic (which Prebid Server has already applied upstream) and our own constraints (deal floors, fraud minimums). Matches AppNexus / PubMatic / Prebid Server reference behaviour.
+- **Deal IDs:** Pass through opaquely. The Prebid handler accepts `deals[]`, logs each ID, but does not attempt to match against internal `pkg/deals`. Registry table is an additive future change if we onboard a real partner whose deals should trigger our PG/Preferred/PMP priority logic.
+
+**Blocked work:** Nothing — additive feature. Touches `cmd/exchange`, adds Prebid translation layer, possibly new `cmd/prebid-adapter` if we pick option (b) later.
+
+**Known gap — multi-imp requests (G1 in the competitive auction suite, currently SKIPPED):**
+
+Prebid commonly sends multi-impression requests — a single OpenRTB body can carry 3+ imps representing several ad slots loaded together on one page (header bidding's "auction the whole page at once" model). Today `cmd/exchange/main.go` `auctionHandler` reads `bidReq.Imp[0]` and runs one auction for that imp; any additional imps in the same request are ignored. The Prebid bidder endpoint inherits this limitation because it dispatches through `auctionHandler` unchanged.
+
+What landing this needs:
+1. **Auction loop per imp.** `auctionHandler` rewritten to iterate `bidReq.Imp`, running the deal-eval + auction + winner-pick path per imp. Today's single-imp shortcuts in floor lookup (`bidReq.Imp[0].BidFloor`) and placement extraction need a per-imp version.
+2. **Response aggregation.** `openrtb.BidResponse.SeatBid` should carry one `Bid` per winning imp (currently emits one). Per-imp winners may come from different DSPs — the response groups by seat.
+3. **Per-imp NATS events.** `AuctionWinEvent` is currently one event per request; with multi-imp it becomes N events (one per winning imp). Reporting consumer + billing ledger key on `imp_id` to distinguish.
+4. **Per-imp win/loss notifications.** Fan-out today notifies each DSP once with the auction's clearing price; multi-imp means each DSP gets notified per imp it bid on (won/lost). DSP-side handlers don't need changes — they already accept per-bid GETs.
+5. **Per-imp deal evaluation.** Deal matcher already keys on (publisher, placement, advertiser); each imp's matches are evaluated independently. PG preempt for imp A doesn't affect imp B.
+6. **Span/log model.** The current `exchange.auction` span carries one set of `winner_dsp` / `clearing_price` attributes. Multi-imp needs either child spans per imp (cleaner, more traffic) or array-valued attributes (compact, harder to query in Jaeger). Recommend child spans.
+
+Scope estimate: ~1 day of focused work in `cmd/exchange/main.go` + minor downstream adjustments in `cmd/reporting` (per-imp billing accrual) and the e2e harness (a multi-imp request constructor + assertion helper). The Prebid handler itself needs no changes once the auction handles multi-imp natively.
+
+Why not done now: every existing test sends single-imp requests, so the gap doesn't break anything today. Real external Prebid integrations would surface it immediately. Build before any first external Prebid publisher onboards. Tracked by skipped `TestCompetitiveG1_PrebidMultiImpRequestPerImpAuction`.
+
+---
+
+### Publisher-Side Ad Server ("GAM-shaped" features)
+
+**Status: DESIGN — confirmed direction 2026-06-02, scope and arbitration semantics open.**
+
+**Question:** Our current stack is end-to-end *programmatic* — SSP → exchange → DSPs → ad server. Real publishers also have **direct-sold campaigns** (sales team signs Nike for 1M impressions at $50 CPM), **house ads** (promote own products in unsold inventory), and **passback chains** (fall back to another network when nothing fills). Today, programmatic is the *only* demand source the slot ever sees. A publisher ad server arbitrates across all of these — direct-sold, house, programmatic, passback — and picks per impression.
+
+**Background:** Industry term is "ad serving / inventory management" — DoubleClick for Publishers / Google Ad Manager (GAM) is the dominant player; alternatives include Kevel, AdButler, Smart AdServer, Equativ, Xandr Monetize. GAM's "Dynamic Allocation" is the canonical arbitration model that header bidding was specifically designed to escape from.
+
+**The arbitration ladder (per impression):**
+1. **Sponsorships / roadblocks** — "Nike owns 100% of homepage on June 5th." If active and eligible, short-circuits everything.
+2. **Guaranteed line items** behind pace — contractually obligated delivery; serve even if programmatic would pay more.
+3. **Non-guaranteed (preferred) line items** whose negotiated rate beats best programmatic bid.
+4. **Programmatic** — call into our SSP → exchange → DSP chain. (This is where our existing stack lives today.)
+5. **House ads** — promote own products, free fill for inventory that didn't clear floor.
+6. **Passback** — emit another ad network's tag if nothing above filled.
+
+The product *is* the arbitration. Direct-sold line items are obvious; the harder parts are pacing, competitive exclusion, and forecasting.
+
+**Sub-decisions:**
+
+1. **Service shape.** Two options:
+   - *(a) New `cmd/publisher-adserver`* that sits in front of the SSP. Browser → publisher-adserver → arbitration → (direct win OR call SSP). Cleanest separation; SSP stays purely a programmatic-demand-source surface.
+   - *(b) Fold arbitration into SSP.* SSP grows a "direct-sold check" pass before triggering the auction. Simpler to ship but conflates two distinct products (selling inventory vs. arbitrating inventory).
+   
+   Option (a) matches real-world architecture (GAM and SSPs are separate products at every publisher I've seen). Recommended.
+
+2. **Direct line item data model.** Need a new entity, distinct from `line_items` (which today holds advertiser-side line items). Proposed `publisher_line_items` table:
+   - Owner: publisher (`publisher_id`), not advertiser.
+   - Demand source: the brand/agency they sold to (text field; not necessarily an account in our system since direct deals can involve brands that never log into our DSP).
+   - Targeting: publisher-side targeting (which placements, which page categories, which geos).
+   - Delivery commitment: `impressions_committed`, `delivery_start`, `delivery_end`.
+   - Pricing: fixed CPM (most direct deals are CPM), with optional CPC/CPA variants.
+   - Priority tier: `sponsorship | guaranteed | preferred | house`.
+   - Creatives: linked to existing `creatives` table (publishers upload direct-sold creatives just like advertisers do).
+   - Pacing target: usually "even" (deliver linearly across the flight) or "asap" (front-load).
+
+3. **Pacing controller.** Per-impression decision: "should I serve this direct line item right now?"
+   - Compute `expected_impressions_so_far = total_committed * (now - start) / (end - start)`.
+   - Compute `actual_impressions_so_far` from the ledger.
+   - If actual < expected → behind pace, serve.
+   - If actual > expected by significant margin → ahead of pace, defer to programmatic this impression.
+   - More sophisticated: probabilistic pacing (serve with probability `p` calibrated to hit target by end-of-flight). Similar in shape to `pkg/dsp/budget` pacing on the DSP side — likely a new `pkg/pubad/pacing` package.
+
+4. **Arbitration vs programmatic.** Critical correctness question: when does direct-sold win over programmatic?
+   - *Sponsorships* always win when active.
+   - *Guaranteed behind pace* always wins (contract trumps revenue).
+   - *Guaranteed on-pace* — option: still wins (publisher prefers locked revenue over auction uncertainty), or go to auction with effective floor = guaranteed CPM (publisher takes whichever pays more, but risks under-delivering the guarantee).
+   - *Preferred / non-guaranteed* — go to auction with effective floor = preferred CPM. If programmatic clears, take programmatic; else serve preferred.
+   
+   GAM's default is "guaranteed always wins"; "guaranteed on-pace goes to auction" is a more recent product called "first look" / "open bidding." Pick a default; expose per-line-item config.
+
+5. **Competitive exclusion.** If a Coca-Cola direct campaign is running on this page view, exclude all Pepsi creatives from any source (direct OR programmatic) for that page view. Requires:
+   - Industry-category taxonomy on creatives (we already have IAB categories per `pkg/constants`).
+   - Per-line-item "competitive exclusion list" config.
+   - Page-view-scoped state (which categories are already locked on this page view). Lives in a short-lived Redis key keyed by page-view ID.
+
+6. **Forecasting.** Sales team asks: "can I commit to selling 5M impressions on sports content in July?" Need an inventory forecast. Stats job over historical SSP request volume + segmentation by targeting attributes. Plausibly built later — Phase 11+ — but worth flagging now because it shapes the data we want to retain.
+
+7. **Passback / fallback chains.** When nothing fills, emit another ad network's tag. Typically a sequence of tags tried in order (third-party JS / iframes / VAST URLs). Adds passback support to the ad server's response path.
+
+8. **UI surface.** Direct-sold inventory needs a new admin UI:
+   - Publisher trafficking view (create/manage `publisher_line_items`, upload creatives, set targeting, view pacing).
+   - Pacing dashboards (per-line-item delivery progress, projected end-of-flight delivery, behind-pace alerts).
+   - Forecasting UI (later).
+   
+   Plausibly a new section under the existing publisher console (whatever surface ends up holding `cmd/ssp/management.go`'s placement CRUD).
+
+**Where this slots into the request flow:**
+
+Full ASCII flow diagram covering all three entry points (publisher visitor, external Prebid Server, browser-fired pixels) plus the post-serve event chain lives at `docs/diagrams/request-flow.txt`. Quick summary:
+
+```
+Browser → Publisher Ad Server (arbitration)
+              ├─ sponsorship/guaranteed wins → Ad Server (render direct creative)
+              ├─ house ad → Ad Server (render house creative)
+              ├─ programmatic → SSP → Exchange → DSPs → winner → Ad Server (render)
+              └─ passback → emit fallback tag
+```
+
+`cmd/ssp` is unchanged structurally; it just becomes one demand source the publisher ad server calls. `cmd/exchange` and downstream are untouched.
+
+**Recommended starting scope (sub-phase 1):**
+- New `cmd/publisher-adserver` service.
+- `publisher_line_items` table + RLS policy + warm cache.
+- Priority tiers: sponsorship + guaranteed + house (skip preferred initially).
+- Basic even-pacing controller.
+- Arbitration: sponsorship-always-wins, guaranteed-always-wins, fall through to programmatic, house-on-no-fill.
+- Defer: competitive exclusion, forecasting, passback, "first look" guaranteed-goes-to-auction.
+
+**Decisions locked 2026-06-02:**
+- **Service name:** `cmd/publisher-adserver`. Verbose but unambiguous; clear contrast with `cmd/adserver` (creative renderer) for newcomers reading the cmd/ directory.
+- **Ingress:** Behind the existing gateway. Browser → `cmd/gateway` → `cmd/publisher-adserver`. Consistent with how every other browser-facing surface is fronted (CORS, rate limiting, observability all in one place). Adds ~1ms hop; acceptable.
+- **Pacing controller:** New `pkg/publisheradserver/pacing` package. DSP budget = stay under a ceiling; publisher pacing = hit a delivery commitment. Different problem semantics; sharing code would obscure the asymmetry. If Redis counter helpers end up duplicated, lift them into a shared `pkg/cache` util later.
+- **Pub sim wiring:** Once `cmd/publisher-adserver` exists, the pub sim switches to calling it instead of the SSP directly. Most accurate model of a real publisher (which never calls an SSP directly — always its own ad server). The trace timeline becomes a full publisher-adserver → SSP → exchange → DSP chain.
+- **PubAd ↔ Prebid order:** `cmd/publisher-adserver` is in front; Prebid is one demand source it can call. Browser → publisher-adserver → arbitrate direct-sold first → if no direct win, call Prebid → winning Prebid bid is the programmatic candidate (which may then lose to a guaranteed-but-not-yet-evaluated tier, depending on arbitration order). Matches the real GAM+Prebid flow. The publisher is the inventory owner; Prebid is a sourcing mechanism it opts into.
+
+**Integration note (PubAd + Prebid + existing stack):**
+
+Once both land, the publisher-adserver fans out demand sources in a defined order per impression:
+1. Direct-sold tiers (sponsorship → guaranteed behind pace → guaranteed on pace if "always wins" set).
+2. Programmatic auction — our own SSP/exchange chain.
+3. Prebid Server — fan out to external Prebid bidders for additional demand on the same impression.
+4. House ads.
+5. Passback.
+
+Programmatic and Prebid both produce a winning bid that competes against any "preferred" tier direct-sold line items (which have a floor but no commitment). House and passback only fire if nothing above filled.
+
+This puts Prebid in the same "external programmatic demand" bucket as our own exchange chain — which is correct, because from the publisher's perspective our exchange and a third-party Prebid bidder are both just sources of programmatic dollars competing for inventory the publisher owns.
+
+**Blocked work:** This is purely additive. Touches new package `pkg/publisheradserver`, new service `cmd/publisher-adserver`, new migration for `publisher_line_items` + related tables. Probably 2–3 weeks of build once design is locked.
+
+---
+
+### Auth Infrastructure (secrets-as-data, warm-cached)
+
+**Status: DESIGN — direction agreed 2026-06-03, implementation queued.**
+
+**Question:** Where do auth credentials live and how do they propagate? Today `gateway.jwt_signing_key` is a config-as-static value baked in at boot; `cmd/dsp/management.go` and `cmd/ssp/management.go` skip auth entirely; external Prebid traffic to `cmd/exchange` has no per-partner authentication; service-to-service calls are pure network trust. Multiple auth gaps with no unified mechanism.
+
+**The shape we're committing to:** **auth-as-data**, not auth-as-config. Secret material lives in Postgres tables, loaded by services through the same warm-cache primitive (`pkg/cache/warm`) that already serves campaigns / placements / creatives / deals. A high-level operator manages all secrets through the existing config-manager UI (new "Secrets" tab); rotations propagate to every service via NATS within milliseconds; brief outages during rotation are acceptable.
+
+**Why this shape (vs config-as-static):**
+- Rotation without redeploy. Operator clicks "Rotate" → broadcast → every pod picks up new value within NATS round-trip time.
+- Audit trail in the same audit_log table all other config changes use.
+- No new infrastructure: same warm-cache + NATS-invalidate mechanism we already trust for hot-path data.
+- High-level operator can manage every auth surface (JWT signing keys, HMAC secrets, partner shared secrets, API keys) from one UI without touching env vars / K8s Secrets / pod restarts.
+
+**Decisions locked 2026-06-03:**
+
+- **Two tables, not one:** generic `secrets` for opaque platform-managed material (JWT signing, HMAC, partner shared, service-to-service shared) — managed via the operator UI. Existing `api_keys` table stays separate for per-user-issued keys (advertiser / publisher self-service via the dashboard; different lifecycle, different UI surface).
+- **Warm-cache pattern matches existing platform code:** `pkg/cache/warm.Cache[Secret]` snapshot-backed, atomic.Pointer reads, 30s poll, NATS invalidate on `adtech.cache.invalidate.secrets`. Per-request reads are microsecond map lookups — zero Postgres round-trips on the hot path.
+- **Per-service filtering:** each service loads only the secrets it needs (`WHERE purpose IN (...) AND (owner = 'platform' OR owner = $service)`). Exchange doesn't load SSP's JWT signing key; gateway doesn't load tracker's HMAC keys. Smaller blast radius if any one service leaks its cache.
+- **Continue-with-empty-cache on boot:** if Postgres is unreachable at boot, the cache logs a warn and proceeds empty. `/readyz` returns 503 until first successful load. The poll loop retries every 30s, so a Postgres blip during deploy doesn't restart-loop the platform. Matches existing pattern in every other warm-cache caller (campaigns, deals, placements all use this).
+- **Rotation grace window:** when a secret is rotated, the old row goes `status=rotating` for a configurable window (default 5 minutes); during that window, validators accept BOTH old and new. After grace expires, old goes `status=revoked` and only new validates. JWT-style secrets validate against the current snapshot's active + rotating values; HMAC-style secrets check against both. Brief outages during the transition are acceptable per the agreed semantics — operator just re-rotates if propagation was slower than expected.
+
+**Schema sketch (subject to refinement at implementation time):**
+
+```sql
+CREATE TABLE secrets (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        TEXT NOT NULL,                 -- "jwt-gateway-signing", "prebid-partner-acme"
+  value       TEXT NOT NULL,                 -- the secret (encryption-at-rest TBD)
+  purpose     TEXT NOT NULL CHECK (purpose IN (
+                'jwt_signing', 'hmac_tracker',
+                'partner_shared', 'service_s2s'
+              )),
+  owner       TEXT NOT NULL DEFAULT 'platform', -- "platform" or service name
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+                'active', 'rotating', 'revoked'
+              )),
+  rotated_at  TIMESTAMPTZ,                   -- when status went rotating
+  revokes_at  TIMESTAMPTZ,                   -- when rotating→revoked
+  expires_at  TIMESTAMPTZ,                   -- optional natural expiry
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_secrets_purpose_owner ON secrets (purpose, owner) WHERE status != 'revoked';
+CREATE INDEX idx_secrets_name ON secrets (name) WHERE status != 'revoked';
+```
+
+**Open questions to resolve before Phase 1:**
+
+1. **Encryption at rest.** Three options:
+   - *(a)* Plain `TEXT` column, rely on Postgres access controls + transport encryption. Simplest for local dev; acceptable for platforms where the DB itself is the security boundary.
+   - *(b)* `pgcrypto` column-level encryption with a per-platform master key in a K8s Secret. Adds DB CPU cost on every read; warm cache reduces this to once-per-poll-cycle.
+   - *(c)* External secret manager (HashiCorp Vault sidecar, AWS Secrets Manager). Highest security; requires infrastructure we don't currently run.
+   - **Recommend:** defer to per-overlay decision. Local dev uses (a); staging/prod overlay flips to (b) via a config flag on PostgresSource. (c) is a future migration once we have a real customer with the requirement.
+
+2. **Bootstrap root credential.** Where does the very first auth come from?
+   - Env var `PLATFORM_ROOT_PASSWORD` set at deploy time, used only to create the first operator account via a one-shot `/v1/auth/bootstrap` endpoint that disables itself after first use.
+   - Operator creates other operators via the UI thereafter.
+   - "Break glass" rotation: env var change + pod restart re-enables the bootstrap endpoint.
+
+3. **Rotation grace window default.** 5 minutes proposed; operator-tunable per secret via `secrets.rotation_grace`. Real-world auth rotations typically run 24h to 7d for partner-shared keys (gives partners time to update their side); shorter for JWT/HMAC where we control both sides.
+
+**What this unblocks (a single piece of infrastructure closes multiple gaps):**
+
+- **#7 from backlog: DSP + SSP CRUD auth** — middleware looks up the caller's `api_keys` row (or JWT signing key from `secrets`) in the warm cache, validates, sets `account_id` in context. Half-day of work once secrets infra exists.
+- **External Prebid partner auth** — partner sends API key in `X-API-Key` header; exchange's secrets cache validates against `purpose=partner_shared` rows. Required before external Prebid Server onboarding.
+- **Rotatable JWT signing keys** — gateway currently has one static signing key. New flow: rotate via UI, gateway re-loads, in-flight tokens validated against active+rotating until grace expires.
+- **Tracker HMAC rotation** — currently the HMAC secret is config-as-static. With this infra, operator rotates in seconds without redeploys.
+
+**What this does NOT solve:**
+
+- **Service-to-service mTLS** — that's a K8s service mesh decision (Linkerd / Istio). Separate axis, defer until prod requires it. The secrets table could store shared secrets for an HMAC-based S2S auth interim solution if needed before mesh adoption.
+
+**Implementation phases (in order, sized for separate commits / sessions):**
+
+| # | What | Touches | Size |
+|---|---|---|---|
+| 1 | Migration 027: `secrets` table + RLS + indexes. `pkg/secrets/` package with `SecretLoader` for warm cache + per-service filter helpers. | `migrations/027_*.sql`, `pkg/secrets/`, `pkg/store/postgres/secrets.go` | S–M |
+| 2 | Each service wires its own warm cache (gateway: jwt_signing; tracker: hmac_tracker; exchange: partner_shared; pubad: service_s2s as needed). Readiness gate on first load. | every `cmd/<svc>/main.go` | M |
+| 3 | Generic auth middleware: `middleware.AuthAPIKey(cache)`, `middleware.AuthJWTRotatable(cache)`. Uses warm cache, accepts active+rotating values. | `pkg/middleware/auth.go` | M |
+| 4 | DSP + SSP CRUD endpoints wrap with the new middleware. E2E tests: unauth'd → 401, authed → 200, wrong-tenant → 403. | `cmd/dsp/management.go`, `cmd/ssp/management.go`, e2e | S |
+| 5 | Bootstrap root flow: env-driven `PLATFORM_ROOT_PASSWORD` → one-shot `/v1/auth/bootstrap` → creates first admin. | `cmd/gateway/`, schema for operator accounts | S |
+| 6 | Config manager UI "Secrets" tab: list / create / rotate / revoke. Audit trail rows in `audit_log` for every secret change. | `web/templates/config/manager.html`, `pkg/config/manager.go` (new `/v1/secrets` API) | M |
+| 7 | Rotation workflow + e2e tests: rotate a secret, prove old + new both validate during grace, prove old stops validating after grace, prove cache propagation < 1s via NATS. | e2e harness helpers + tests | M |
+
+Total: 1–2 sessions of focused work. Worth doing as one cohesive piece rather than incrementally because Phase 4 (DSP+SSP auth) is the actual blocker for staging deployment and earlier phases are scaffolding.
+
+**Blocked work:** Until this lands: no staging deployment (CRUD endpoints exposed unauth'd); no external Prebid partner onboarding; rotation of any secret requires a redeploy.
+
+---
+
 ## Vision
 
 A full-stack programmatic advertising platform in a single Go monorepo that a developer can clone and run locally end-to-end. Every component - from bid request to impression tracking - runs on one machine, giving complete visibility into the data flow with zero data slippage.
@@ -175,9 +803,9 @@ Per-subject handlers attached via `EventConsumer.RegisterNATSSubscriptions`. Aft
 | Event subject | Analytics store | Billing ledger |
 |---|---|---|
 | `adtech.events.impression` | `InsertImpression` (always) | `ProcessEvent` — CPM bills immediately, CPC/CPA/vCPM/CPCV reserve budget |
-| `adtech.events.click` | `InsertClick` (always) | **NOT WIRED** — should call `ProcessEvent` to settle CPC reservations |
-| `adtech.events.conversion` | `InsertConversion` (always) | **NOT WIRED** — should settle CPA reservations |
-| `adtech.events.view` (viewability) | (no handler yet) | **NOT WIRED** — should settle vCPM reservations |
+| `adtech.events.click` | `InsertClick` (always) | `SettleByTrace(traceID, "click")` (wired 2026-06-01) — no-op when reservation absent (CPM) or wrong model |
+| `adtech.events.conversion` | `InsertConversion` (always) | `SettleByTrace(traceID, "conversion")` (wired 2026-06-01) — same no-op semantics |
+| `adtech.events.view` (viewability) | `InsertView` (wired 2026-06-01) — server-authoritative IAB calc, persisted with `iab_viewable` verdict | `SettleByTrace(traceID, "viewable")` when `IABViewable=true` (wired 2026-06-01). Non-viewable views leave reservation open until the expiry cron lands. |
 | `adtech.auction.complete` | `InsertAuction` (always) | not billed (the corresponding `adtech.auction.win` event is what triggers billing) |
 
 The reserve/settle dispatch logic exists in `pkg/billing.Engine.ProcessEvent` — switches on `BidModel`. What's missing is the call to it from the click/conversion/view handlers. This is why all 8 `tests/e2e/billing_models_test.go` cases skip with "CPC/CPA reserve-settle dispatch in cmd/reporting consumer pending."
