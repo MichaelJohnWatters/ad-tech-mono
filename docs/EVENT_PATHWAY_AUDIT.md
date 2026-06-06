@@ -135,36 +135,111 @@ budget.depleted) and POSTs to registered URLs, then publish
   (e2e): ServeAd with an unresolvable creative_id → placeholder
   HTML returned + render_failed event lands with reason=unknown_creative.
 
-## What we haven't audited yet (next passes)
+## Sub-task status
 
-The inventory above answers "who publishes/consumes what." It does
-**not** yet answer the other three checks from PLAN.md §9:
+| Sub-task | Status |
+|---|---|
+| Inventory pass (who publishes / consumes what) | ✅ shipped — table at top |
+| `schema_version` policy | ✅ shipped 2026-06-06 — `CurrentSchemaVersion = 1` in `pkg/events`, reflection test in `payloads_test.go` |
+| Logging coverage + event-emission completeness audit | ✅ shipped 2026-06-06 — see below |
+| ACK/NAK + idempotency review | Pending |
+| Dashboards + observability (per-subject publish/consume/lag) | Pending |
 
-- **Logging coverage** — does every publish site emit a structured
-  slog line with `trace_id` + business identifier? Does every
-  consumer log receipt? (Spot-check shows yes for tracker + exchange
-  + reporting, but no systematic verification.)
-- **ACK/NAK + idempotency** — does every consumer handle the retry
-  case correctly? `pkg/events/natsbus` handles transport-level
-  ack/nak but the business logic in `handleClick` etc. needs to be
-  idempotent. We have dedup in tracker but not in reporting's settle
-  path.
-- **Dashboards + observability** — no Grafana panel inventory exists
-  per-subject yet. Prometheus scrape config covers `/metrics` but no
-  per-subject publish-rate / consume-rate / lag dashboards.
-- ~~**`schema_version`** — every payload type in `pkg/events/payloads.go`
-  should have `schema_version` field 1.~~ ✅ shipped 2026-06-06.
-  All 13 wire payloads (`pkg/events/payloads.go`) + all 6 analytics
-  mirrors (`pkg/store/analytics/analytics.go`) now carry
-  `SchemaVersion int \`json:"schema_version"\`` as their first field.
-  `pkg/events.CurrentSchemaVersion = 1` is the single bump-point.
-  Each typed `Publisher.X` method auto-sets the default when the
-  caller leaves it zero, and `cmd/dsp/management.go:publishCampaignStateChange`
-  + `cmd/tracker/main.go` route their `events.*` publishes through the
-  typed publisher so they pick up the same default.
-  `pkg/events/payloads_test.go:TestAllEventPayloadsHaveSchemaVersion`
-  is the regression net — adding a new payload without the field
-  fails the test.
+## Logging coverage + event-emission completeness audit (2026-06-06)
+
+Goal: confirm every NATS publish carries a structured slog line with
+`trace_id` + a business identifier, every consumer logs receipt with
+the same, and surface business-meaningful actions that should be
+emitted as events but aren't.
+
+### Reference patterns to preserve
+
+- `cmd/tracker/main.go` impression handler: `reqLog.Info("impression",
+  "campaign_id", …, "placement_id", …)` fires **before** the async
+  publish goroutine.
+- `cmd/dsp/management.go:publishCampaignStateChange`: explicit
+  state-change event with pre-publish `log.Info("published campaign
+  state change", "campaign_id", …, "old", …, "new", …)`.
+- `cmd/exchange/main.go`: `reqLog` context carries `trace_id` through
+  fan-out and into the async publish via `context.WithoutCancel(ctx)`.
+
+### Logging-coverage gaps (publish sites)
+
+Small but real — three handlers publish without an accompanying
+slog line that carries both `trace_id` and a business identifier:
+
+- **A1 — `cmd/tracker/main.go` view pixel handler** (around the
+  `publisher.publishView` call): no pre-publish log line. Fix: add
+  `reqLog.Info("view", "campaign_id", …, "duration_ms", …,
+  "iab_viewable", …)` before the publish goroutine.
+- **A2 — `cmd/tracker/main.go` video / audio handlers**: log the
+  `event_type` but no business identifiers (campaign_id /
+  placement_id / publisher_id). Fix: include whichever URL params
+  the handler already has access to.
+- **A3 — `cmd/publisher-adserver/main.go` direct.win / serve.nofill /
+  prebid.outbound.win publishes** (lines 306, 469, 488): goroutine
+  publishes with no pre-publish slog line in the handler scope. Fix:
+  add a `reqLog.Info` per branch before the `go d.pub.X(...)` call.
+
+Consumers in `cmd/reporting/main.go` all log receipt correctly —
+no structural gaps on the consume side.
+
+### Event-emission completeness gaps
+
+11 business-meaningful actions either log without an event or have
+no observable signal at all. Severity ranks roughly:
+
+- **B1 — Account creation (gateway signup)** — no handler found.
+  No log, no event. Audit gap.
+- **B2 — Account auto-create on DSP CRUD** —
+  `cmd/dsp/management.go:ensureMgmtAdvertiser` silently upserts an
+  accounts row. No log, no event. Audit gap.
+- **B3 — Login success / failure** — no audit trail. Security gap.
+- **B4 — Bootstrap key mint** — `cmd/gateway/bootstrap.go` logs
+  the mint but emits no event. Could ride an `adtech.audit.*`
+  subject if/when we build one.
+- **B5 — Role / permission changes** — no handler found.
+- **B6 — Publisher CRUD** — no dedicated CRUD handlers found
+  (publishers come through seed only).
+- **B7 — Creative create** — silent (part of `writeNewCampaign`,
+  no success log).
+- **B8 — Creative approve / reject** — no handler found.
+- **B9 — Deal CRUD** — no handlers found (deals are seed-only
+  today).
+- **B10 — Frequency-cap block at adserver** —
+  `cmd/adserver/main.go` line ~292 logs "ad blocked by freq cap"
+  but doesn't emit. Worth an event: ops can dashboard +
+  advertisers can see "we suppressed N over-cap serves." Could be
+  a small `adtech.adserver.freq_cap_blocked` subject following
+  the same shape as `adtech.tracker.rejected`.
+- **B11 — Pod register / heartbeat** — `pkg/config/registry`
+  writes to `service_registry` but no audit event. Ops can see
+  "pod X joined" only via log scraping. Probably fine for now.
+
+A coherent next pass would frame B1-B6 + B8 + B9 + B11 as an
+"audit-log subject" — one new `adtech.audit.*` family that captures
+account / auth / role / CRUD lifecycle events. That work pairs
+naturally with backlog #7 (real auth on management endpoints) since
+auth + audit logging are conventionally built together.
+
+B10 (freq cap event) is the only one that's a no-decision quick fix —
+follows the existing `tracker.rejected` template.
+
+### Trace-ID propagation
+
+HTTP-inbound handlers all extract `trace_id` from the request and
+propagate via `logger.WithTraceID(ctx, traceID)` → `reqLog :=
+logger.WithContext(log, ctx)`. Reference flow verified in tracker
+impression, exchange auction, ssp request, pubad serve, adserver
+serve. All publish sites use the reqLog context, so the trace_id
+chain holds end-to-end on the publish side.
+
+`cmd/reporting/main.go` consumers extract `trace_id` from the
+decoded payload and include it as a slog field but don't push it
+back into context via `logger.WithTraceID()`. Acceptable for
+fire-and-forget handlers (no downstream calls would inherit it
+anyway) but worth standardizing if reporting ever grows
+synchronous downstream calls.
 
 ## How to regenerate
 
