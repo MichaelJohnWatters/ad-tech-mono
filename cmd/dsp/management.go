@@ -165,6 +165,11 @@ type createCampaignRequest struct {
 	DailyBudget   float64  `json:"daily_budget"`
 	IncludeGeo    []string `json:"include_geo,omitempty"`
 	IncludeDevice []string `json:"include_device,omitempty"`
+	// ViewabilityTargetPct is the contractual viewability guarantee
+	// (0-100). Optional — nil = no guarantee, no makegood reconciliation.
+	// Settlement mechanics for vCPM are a separate platform-level decision
+	// (see docs/PLAN.md → "vCPM Settlement Model").
+	ViewabilityTargetPct *int `json:"viewability_target_pct,omitempty"`
 }
 
 func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, dspID, dspName string, log *slog.Logger) {
@@ -182,6 +187,13 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if req.DailyBudget <= 0 {
 		req.DailyBudget = 500
+	}
+	if req.ViewabilityTargetPct != nil {
+		v := *req.ViewabilityTargetPct
+		if v < 0 || v > 100 {
+			http.Error(w, "viewability_target_pct must be 0-100", http.StatusBadRequest)
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -264,11 +276,17 @@ VALUES ($1, $2, $3, $4, $4, 'USD', current_date, current_date + interval '90 day
 ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, req.DailyBudget*30); err != nil {
 		return fmt.Errorf("io insert: %w", err)
 	}
-	// Line item (the "campaign" in our parlance)
+	// Line item (the "campaign" in our parlance). viewability_target_pct
+	// is NULL when the request omits it — the row is otherwise unchanged
+	// from the pre-makegood era.
+	var viewTarget any
+	if req.ViewabilityTargetPct != nil {
+		viewTarget = *req.ViewabilityTargetPct
+	}
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.BaseBid, req.DailyBudget); err != nil {
+INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'live', 'display', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', $7, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.BaseBid, req.DailyBudget, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting (geo + device)
@@ -321,7 +339,7 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	accountID, err := lookupLineItemAccount(ctx, db, id)
+	accountID, oldStatus, err := lookupLineItemAccountAndStatus(ctx, db, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -333,6 +351,9 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 	publishInvalidate(ctx, bus, log, "patch", id)
+	if req.Status != nil {
+		publishCampaignStateChange(ctx, bus, log, id, accountID, oldStatus, *req.Status, "patch")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -383,7 +404,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	archived := "archived"
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	accountID, err := lookupLineItemAccount(ctx, db, id)
+	accountID, oldStatus, err := lookupLineItemAccountAndStatus(ctx, db, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -394,6 +415,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 		return
 	}
 	publishInvalidate(ctx, bus, log, "delete", id)
+	publishCampaignStateChange(ctx, bus, log, id, accountID, oldStatus, archived, "delete")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -455,6 +477,20 @@ func lookupLineItemAccount(ctx context.Context, db *sql.DB, lineItemID string) (
 	return accountID, nil
 }
 
+// lookupLineItemAccountAndStatus is the patch/delete-handler variant
+// that also returns the current status, so the handler can detect a
+// state transition and publish CampaignStateEvent only when the value
+// actually changed (no-op patches don't generate noise on the bus).
+func lookupLineItemAccountAndStatus(ctx context.Context, db *sql.DB, lineItemID string) (accountID, status string, err error) {
+	err = db.QueryRowContext(ctx,
+		"SELECT account_id::text, status FROM line_items WHERE id = $1",
+		lineItemID).Scan(&accountID, &status)
+	if err == sql.ErrNoRows {
+		return "", "", errors.New("campaign not found")
+	}
+	return accountID, status, err
+}
+
 func publishInvalidate(ctx context.Context, bus events.EventBus, log *slog.Logger, op, id string) {
 	if bus == nil {
 		return
@@ -463,4 +499,28 @@ func publishInvalidate(ctx context.Context, bus events.EventBus, log *slog.Logge
 	if err := bus.Publish(ctx, events.SubjectCacheInvalidateCampaigns, payload); err != nil {
 		log.Warn("publish invalidate failed (other pods will pick up on next poll)", "error", err)
 	}
+}
+
+// publishCampaignStateChange emits adtech.campaign.state_changed when a
+// pause/resume/archive actually flips the status. Skipped when oldState
+// == newState (a no-op patch shouldn't generate bus noise) and when bus
+// is nil (single-process tests). Reporting subscribes for ops dashboards
+// + e2e tests assert on the recorded transition.
+func publishCampaignStateChange(ctx context.Context, bus events.EventBus, log *slog.Logger, campaignID, accountID, oldState, newState, reason string) {
+	if bus == nil || oldState == newState {
+		return
+	}
+	payload, _ := json.Marshal(events.CampaignStateEvent{
+		CampaignID: campaignID,
+		AccountID:  accountID,
+		OldState:   oldState,
+		NewState:   newState,
+		Reason:     reason,
+		Timestamp:  time.Now(),
+	})
+	if err := bus.Publish(ctx, events.SubjectCampaignStateChanged, payload); err != nil {
+		log.Warn("publish campaign state change failed", "campaign_id", campaignID, "old", oldState, "new", newState, "error", err)
+		return
+	}
+	log.Info("published campaign state change", "campaign_id", campaignID, "old", oldState, "new", newState)
 }

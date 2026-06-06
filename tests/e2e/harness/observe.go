@@ -60,7 +60,7 @@ func (h *Harness) dspCampaignRows(t *testing.T, dspURL string) []dspCampaignRow 
 // ExchangeDealIDs returns the deal IDs currently in the exchange warm cache.
 func (h *Harness) ExchangeDealIDs(t *testing.T) []string {
 	t.Helper()
-	body := h.getJSON(t, h.URLs.Exchange+"/v1/openrtb/deals")
+	body := h.getJSON(t, h.URLs.Exchange+routes.DebugExchangeDeals)
 	var rows []struct {
 		ID string `json:"id"`
 	}
@@ -107,6 +107,98 @@ func (h *Harness) AuctionWinCount(t *testing.T, traceID string) int {
 	return out.Count
 }
 
+// AuctionWinByBidModel filters AuctionWinCount by bid_model. Used by the
+// new-event-types e2e tests to assert that DirectWin and PrebidOutboundWin
+// events landed in the analytics store with the right BidModel tag (e.g.
+// "direct:sponsorship" or "prebid_outbound").
+func (h *Harness) AuctionWinByBidModel(t *testing.T, traceID, bidModel string) int {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugAuctionWins+"?trace_id="+traceID+"&bid_model="+bidModel)
+	var out struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode auction win count: %v\nbody: %s", err, string(body))
+	}
+	return out.Count
+}
+
+// CampaignStateChange mirrors analytics.CampaignStateChange — the
+// per-event record reporting captured for a pause / resume / archive.
+// Fields decoded from JSON over the debug endpoint, so they're
+// untyped strings (the analytics layer keeps everything as text for
+// dashboard simplicity).
+type CampaignStateChange struct {
+	CampaignID string    `json:"CampaignID"`
+	AccountID  string    `json:"AccountID"`
+	OldState   string    `json:"OldState"`
+	NewState   string    `json:"NewState"`
+	Reason     string    `json:"Reason"`
+	Timestamp  time.Time `json:"Timestamp"`
+}
+
+// CampaignStateChangesByCampaign returns the recorded state transitions
+// reporting has seen for a campaign, in event-arrival order. Used to
+// verify adtech.campaign.state_changed actually propagates through the
+// DSP-mgmt → NATS → reporting pathway.
+func (h *Harness) CampaignStateChangesByCampaign(t *testing.T, campaignID string) []CampaignStateChange {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugCampaignStateChanges+"?campaign_id="+campaignID)
+	var out []CampaignStateChange
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode campaign state changes: %v\nbody: %s", err, string(body))
+	}
+	return out
+}
+
+// BudgetDepletionsByCampaign counts BudgetDepletedEvents reporting has
+// seen for a campaign. Used to verify the DSP → NATS → reporting flow.
+func (h *Harness) BudgetDepletionsByCampaign(t *testing.T, campaignID string) int {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugBudgetDepletions+"?campaign_id="+campaignID)
+	var out struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode budget depletion count: %v\nbody: %s", err, string(body))
+	}
+	return out.Count
+}
+
+// ServeNoFillsByTrace counts ServeNoFill records for a trace_id.
+func (h *Harness) ServeNoFillsByTrace(t *testing.T, traceID string) int {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugServeNoFills+"?trace_id="+traceID)
+	var out struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode serve nofill count: %v\nbody: %s", err, string(body))
+	}
+	return out.Count
+}
+
+// MediaEventsByTrace counts video/audio engagement records, optionally
+// filtered by channel ("video"/"audio") and event_type.
+func (h *Harness) MediaEventsByTrace(t *testing.T, traceID, channel, eventType string) int {
+	t.Helper()
+	q := "?trace_id=" + traceID
+	if channel != "" {
+		q += "&channel=" + channel
+	}
+	if eventType != "" {
+		q += "&event_type=" + eventType
+	}
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugMediaEvents+q)
+	var out struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode media event count: %v\nbody: %s", err, string(body))
+	}
+	return out.Count
+}
+
 // BillingSummary returns the reporting-side billing snapshot. Used to
 // assert AuctionWinEvent → spend ledger.
 func (h *Harness) BillingSummary(t *testing.T) map[string]any {
@@ -127,6 +219,11 @@ func (h *Harness) getJSON(t *testing.T, url string) []byte {
 	if err != nil {
 		t.Fatalf("get %s: %v", url, err)
 	}
+	// Always attach the dev API key — debug endpoints ignore it, management
+	// endpoints (DSP /v1/dsp/campaigns, SSP /v1/ssp/placements) now require
+	// it after the Phase 4 auth wiring. Saves every observe helper from
+	// having to know which endpoints are auth-wrapped.
+	req.Header.Set("X-API-Key", DevAPIKey)
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
 		t.Fatalf("get %s: %v", url, err)

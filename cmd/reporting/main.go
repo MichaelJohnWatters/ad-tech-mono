@@ -5,7 +5,7 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -31,8 +31,7 @@ import (
 
 func main() {
 	log := logger.New(constants.ServiceReporting)
-	sc := config.Setup(constants.ServiceReporting, log)
-	config.PublishSchemaWithURL(sc.Cfg.Get("database.url", ""), constants.ServiceReporting, reportingSchema, log)
+	sc := config.Setup(constants.ServiceReporting, reportingSchema, log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
@@ -59,7 +58,7 @@ func main() {
 
 	// Billing engine (unified with reporting - single consumer)
 	clk := clock.Real{}
-	ledger := billing.NewLedger()
+	ledger := selectLedger(cfg, log, lc)
 	contracts := billing.NewContractStore()
 	billingEngine := billing.NewEngine(ledger, contracts, clk, log)
 
@@ -109,6 +108,30 @@ func main() {
 
 	if cfg.GetBool("debug.endpoints_enabled", true) && contractCache != nil {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(contractCache))
+		// Billing rates dump — read by the pub sim's Billing Rates
+		// panel so operators can see which publisher contract a
+		// settle resolved to. Returns the warm-cache snapshot
+		// rather than re-querying Postgres so what's shown matches
+		// what billing.Engine sees.
+		mux.HandleFunc(routes.DebugBillingRates, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			rows := contractCache.All()
+			out := make([]map[string]any, 0, len(rows))
+			for _, c := range rows {
+				row := map[string]any{
+					"publisher_id": c.PublisherID,
+				}
+				if c.Contract != nil {
+					row["currency"] = c.Contract.Currency
+					row["model"] = string(c.Contract.Model)
+					row["fee_pct"] = c.Contract.FeePct
+					row["guaranteed_min_cpm"] = c.Contract.GuaranteedMinCPM
+					row["tiers"] = c.Contract.Tiers
+				}
+				out = append(out, row)
+			}
+			_ = json.NewEncoder(w).Encode(out)
+		})
 	}
 
 	// Debug: count auction-win records for a trace_id. Used by e2e tests to
@@ -121,8 +144,54 @@ func main() {
 		// query via the Store.Query interface.
 		mux.HandleFunc(routes.DebugAuctionWins, func(w http.ResponseWriter, r *http.Request) {
 			traceID := r.URL.Query().Get("trace_id")
+			bidModel := r.URL.Query().Get("bid_model")
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(map[string]int{"count": store.AuctionWinCount(traceID)})
+			var count int
+			if bidModel != "" {
+				count = store.AuctionWinByBidModel(traceID, bidModel)
+			} else {
+				count = store.AuctionWinCount(traceID)
+			}
+			json.NewEncoder(w).Encode(map[string]int{"count": count})
+		})
+
+		mux.HandleFunc(routes.DebugBudgetDepletions, func(w http.ResponseWriter, r *http.Request) {
+			campaignID := r.URL.Query().Get("campaign_id")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(map[string]int{"count": store.BudgetDepletionsByCampaign(campaignID)})
+		})
+
+		mux.HandleFunc(routes.DebugCampaignStateChanges, func(w http.ResponseWriter, r *http.Request) {
+			campaignID := r.URL.Query().Get("campaign_id")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(store.CampaignStateChangesByCampaign(campaignID))
+		})
+
+		mux.HandleFunc(routes.DebugServeNoFills, func(w http.ResponseWriter, r *http.Request) {
+			traceID := r.URL.Query().Get("trace_id")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(map[string]int{"count": store.ServeNoFillsByTrace(traceID)})
+		})
+
+		mux.HandleFunc(routes.DebugMediaEvents, func(w http.ResponseWriter, r *http.Request) {
+			traceID := r.URL.Query().Get("trace_id")
+			channel := r.URL.Query().Get("channel")
+			eventType := r.URL.Query().Get("event_type")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(map[string]int{"count": store.MediaEventsByTrace(traceID, channel, eventType)})
+		})
+
+		// Billing ledger reset — wipes in-memory ledger entries so e2e
+		// billing tests can run in isolation. No-op on TigerBeetle backend
+		// (the type assertion fails and we return reset=false).
+		mux.HandleFunc(routes.DebugBillingReset, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			if mem, ok := ledger.(*billing.MemoryLedger); ok {
+				mem.Reset()
+				json.NewEncoder(w).Encode(map[string]any{"reset": true, "backend": "memory"})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"reset": false, "backend": "tigerbeetle"})
 		})
 	}
 
@@ -165,11 +234,19 @@ func NewEventConsumer(log *slog.Logger, store analytics.Store, billingEngine *bi
 // Called when NATS is available.
 func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 	subjects := map[string]events.Handler{
-		events.SubjectImpression:     c.handleImpression,
-		events.SubjectClick:          c.handleClick,
-		events.SubjectConversion:     c.handleConversion,
-		events.SubjectAuctionComplete: c.handleAuction,
-		events.SubjectAuctionWin:     c.handleAuctionWin,
+		events.SubjectImpression:         c.handleImpression,
+		events.SubjectClick:              c.handleClick,
+		events.SubjectConversion:         c.handleConversion,
+		events.SubjectView:               c.handleView,
+		events.SubjectAuctionComplete:    c.handleAuction,
+		events.SubjectAuctionWin:         c.handleAuctionWin,
+		events.SubjectDirectWin:          c.handleDirectWin,
+		events.SubjectPrebidOutboundWin:  c.handlePrebidOutboundWin,
+		events.SubjectBudgetDepleted:        c.handleBudgetDepleted,
+		events.SubjectCampaignStateChanged:  c.handleCampaignState,
+		events.SubjectVideo:                 c.handleVideo,
+		events.SubjectAudio:                 c.handleAudio,
+		events.SubjectServeNoFill:           c.handleServeNoFill,
 	}
 
 	ctx := context.Background()
@@ -233,7 +310,65 @@ func (c *EventConsumer) handleClick(ctx context.Context, msg *events.Message) er
 		return msg.Nak()
 	}
 
+	// Settle the CPC reservation (if one exists). No-op for CPM (no
+	// reservation), CPA (settles on conversion), vCPM (settles on view),
+	// and CPCV (settles on complete). Original auction context is
+	// recovered from the reservation row — click pixel doesn't carry
+	// ClearingPrice/BidModel/DealType.
+	if c.billing != nil {
+		if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "click"); err != nil {
+			c.log.Warn("click settle failed", "trace_id", e.TraceID, "error", err)
+		}
+	}
+
 	c.log.Debug("click recorded", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
+	return msg.Ack()
+}
+
+// handleView persists a viewability event. Mirrors handleImpression but
+// without the billing call — vCPM settlement is a separate workstream (see
+// tests/e2e/billing_models_test.go for placeholders).
+func (c *EventConsumer) handleView(ctx context.Context, msg *events.Message) error {
+	var e analytics.ViewEvent
+	if err := json.Unmarshal(msg.Data, &e); err != nil {
+		c.log.Error("failed to decode view event", "error", err)
+		return msg.Ack()
+	}
+	if e.Timestamp.IsZero() {
+		e.Timestamp = time.Now()
+	}
+	if e.SchemaVersion == 0 {
+		e.SchemaVersion = 1
+	}
+
+	if err := c.store.InsertView(ctx, &e); err != nil {
+		c.log.Error("failed to write view", "error", err, "trace_id", e.TraceID)
+		return msg.Nak()
+	}
+
+	// vCPM settlement. Picked defaults (see docs/PLAN.md → "vCPM Settlement Model"):
+	//   1. Reserve at impression, settle at view — same reserve/settle
+	//      shape used for CPC and CPA. Mechanism: SettleByTrace looks up
+	//      the open reservation and routes through ProcessEvent.
+	//   3. IABViewable=false → no settlement. Reservation stays open until
+	//      the expiry cron releases it (pending, see TestBillingReservationExpiry).
+	//      We deliberately do NOT downgrade to CPM rate here — "viewable
+	//      or nothing" is the platform's default contract semantic.
+	//   4. Rate source = the auction's clearing_price (already on the
+	//      reservation row, recovered by SettleByTrace).
+	//
+	// Sub-decision 2 (the 24h reservation timeout) is honest but unbuilt;
+	// reservations from unviewable / never-viewed impressions accumulate
+	// in the in-memory ledger until restart. Pending the expiry cron.
+	if c.billing != nil && e.IABViewable {
+		if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "viewable"); err != nil {
+			c.log.Warn("view settle failed", "trace_id", e.TraceID, "error", err)
+		}
+	}
+
+	c.log.Debug("view recorded",
+		"trace_id", e.TraceID, "campaign_id", e.CampaignID,
+		"iab_viewable", e.IABViewable, "duration_ms", e.DurationMs)
 	return msg.Ack()
 }
 
@@ -253,6 +388,13 @@ func (c *EventConsumer) handleConversion(ctx context.Context, msg *events.Messag
 	if err := c.store.InsertConversion(ctx, &e); err != nil {
 		c.log.Error("failed to write conversion", "error", err, "trace_id", e.TraceID)
 		return msg.Nak()
+	}
+
+	// Settle the CPA reservation (if one exists). No-op for other models.
+	if c.billing != nil {
+		if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "conversion"); err != nil {
+			c.log.Warn("conversion settle failed", "trace_id", e.TraceID, "error", err)
+		}
 	}
 
 	c.log.Debug("conversion recorded", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
@@ -297,6 +439,210 @@ func (c *EventConsumer) handleAuctionWin(ctx context.Context, msg *events.Messag
 		return msg.Nak()
 	}
 	c.log.Debug("auction win recorded", "trace_id", e.TraceID, "campaign_id", e.CampaignID, "price", e.ClearingPrice)
+	return msg.Ack()
+}
+
+// handleDirectWin lands a publisher-adserver direct-sold serve in the
+// analytics store. Reused AuctionWinEvent shape with BidModel="direct"
+// so the existing analytics queries keep working — operators can filter
+// `WHERE bid_model = 'direct'` to isolate direct serves. The publisher
+// line item ID lives in CampaignID for symmetry with the programmatic
+// path; demand_source string in AdvertiserID. WinnerDSP is the constant
+// "publisher-adserver" so the source is always clear.
+func (c *EventConsumer) handleDirectWin(ctx context.Context, msg *events.Message) error {
+	var src events.DirectWinEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode direct win event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	e := analytics.AuctionWinEvent{
+		TraceID:       src.TraceID,
+		AuctionID:     src.TraceID, // no separate auction id for direct serves
+		WinnerDSP:     "publisher-adserver",
+		CampaignID:    src.PublisherLineItemID,
+		CreativeID:    src.CreativeID,
+		PlacementID:   src.PlacementID,
+		PublisherID:   src.PublisherID,
+		AdvertiserID:  src.DemandSource,
+		ClearingPrice: src.CPM,
+		Currency:      src.Currency,
+		BidModel:      "direct:" + src.PriorityTier, // direct:sponsorship / direct:guaranteed / direct:house
+		Channel:       "display",
+		SchemaVersion: 1,
+		Timestamp:     src.Timestamp,
+	}
+	if err := c.store.InsertAuctionWin(ctx, &e); err != nil {
+		c.log.Error("failed to write direct win", "error", err, "trace_id", e.TraceID)
+		return msg.Nak()
+	}
+	c.log.Debug("direct win recorded", "trace_id", e.TraceID, "line_item", src.PublisherLineItemID, "tier", src.PriorityTier, "cpm", src.CPM)
+	return msg.Ack()
+}
+
+// handlePrebidOutboundWin lands an external-Prebid-wins-against-SSP serve
+// in the analytics store. BidModel="prebid_outbound" so operators can
+// filter for these specifically. WinnerDSP carries the external Prebid
+// endpoint URL — most natural place since that endpoint IS the "demand
+// source" for this path. We don't bill these (money moves outside our
+// system); analytics is the only consumer.
+func (c *EventConsumer) handlePrebidOutboundWin(ctx context.Context, msg *events.Message) error {
+	var src events.PrebidOutboundWinEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode prebid outbound win event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	e := analytics.AuctionWinEvent{
+		TraceID:       src.TraceID,
+		AuctionID:     src.TraceID,
+		WinnerDSP:     src.PrebidEndpoint,
+		PlacementID:   src.PlacementID,
+		PublisherID:   src.PublisherID,
+		AdvertiserID:  src.Seat,
+		ClearingPrice: src.ClearingPrice,
+		Currency:      src.Currency,
+		BidModel:      "prebid_outbound",
+		DealID:        src.DealID,
+		Channel:       "display",
+		SchemaVersion: 1,
+		Timestamp:     src.Timestamp,
+	}
+	if err := c.store.InsertAuctionWin(ctx, &e); err != nil {
+		c.log.Error("failed to write prebid outbound win", "error", err, "trace_id", e.TraceID)
+		return msg.Nak()
+	}
+	c.log.Debug("prebid outbound win recorded", "trace_id", e.TraceID, "endpoint", src.PrebidEndpoint, "price", src.ClearingPrice)
+	return msg.Ack()
+}
+
+// handleVideo / handleAudio land video/audio engagement pings in the
+// shared MediaEvent bucket. One handler per subject so the consumer-name
+// suffix is distinct (events-video vs events-audio), but the storage
+// shape is shared (Channel column distinguishes).
+func (c *EventConsumer) handleVideo(ctx context.Context, msg *events.Message) error {
+	var src events.VideoEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode video event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertMediaEvent(analytics.MediaEvent{
+			TraceID: src.TraceID, Channel: "video",
+			EventType: src.EventType, PositionMs: src.PositionMs,
+			Timestamp: src.Timestamp,
+		})
+	}
+	return msg.Ack()
+}
+func (c *EventConsumer) handleAudio(ctx context.Context, msg *events.Message) error {
+	var src events.AudioEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode audio event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertMediaEvent(analytics.MediaEvent{
+			TraceID: src.TraceID, Channel: "audio",
+			EventType: src.EventType, PositionMs: src.PositionMs,
+			Timestamp: src.Timestamp,
+		})
+	}
+	return msg.Ack()
+}
+
+// handleServeNoFill records the moment a publisher-adserver request fell
+// through every demand source. Required for fill-rate analytics — the
+// AuctionWin records served impressions; this records the misses.
+func (c *EventConsumer) handleServeNoFill(ctx context.Context, msg *events.Message) error {
+	var src events.ServeNoFillEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode serve nofill event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertServeNoFill(analytics.ServeNoFill{
+			TraceID:     src.TraceID,
+			PublisherID: src.PublisherID,
+			PlacementID: src.PlacementID,
+			Reason:      src.Reason,
+			Timestamp:   src.Timestamp,
+		})
+	}
+	c.log.Info("serve nofill recorded", "trace_id", src.TraceID, "publisher", src.PublisherID, "reason", src.Reason)
+	return msg.Ack()
+}
+
+// handleCampaignState records a DSP-published state transition
+// (live → paused, paused → live, → archived, → ended). Lets
+// reporting dashboards show pause/resume timelines without waiting
+// for the next 30s warm-cache poll, and e2e tests can assert the
+// event propagated. No billing impact — pacing already stops bids on
+// state != "live" via the warm cache filter.
+func (c *EventConsumer) handleCampaignState(ctx context.Context, msg *events.Message) error {
+	var src events.CampaignStateEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode campaign state event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertCampaignStateChange(analytics.CampaignStateChange{
+			CampaignID: src.CampaignID,
+			AccountID:  src.AccountID,
+			OldState:   src.OldState,
+			NewState:   src.NewState,
+			Reason:     src.Reason,
+			Timestamp:  src.Timestamp,
+		})
+	}
+	c.log.Info("campaign state changed",
+		"campaign_id", src.CampaignID,
+		"old", src.OldState,
+		"new", src.NewState,
+		"reason", src.Reason)
+	return msg.Ack()
+}
+
+// handleBudgetDepleted records a DSP's "this campaign just ran out of
+// budget" event. Lets reporting dashboards show "X campaigns went dark
+// today" without scraping logs. No billing impact — depletion just stops
+// further bids; the spend that got us there was already recorded via
+// AuctionWin.
+func (c *EventConsumer) handleBudgetDepleted(ctx context.Context, msg *events.Message) error {
+	var src events.BudgetDepletedEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode budget depleted event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertBudgetDepletion(analytics.BudgetDepletion{
+			CampaignID: src.CampaignID,
+			AccountID:  src.AccountID,
+			Budget:     src.Budget,
+			Spent:      src.Spent,
+			Timestamp:  src.Timestamp,
+		})
+	}
+	c.log.Info("campaign budget depleted", "campaign_id", src.CampaignID, "budget", src.Budget, "spent", src.Spent)
 	return msg.Ack()
 }
 
@@ -422,35 +768,28 @@ func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, c
 	return c
 }
 
+// pickContractLoader returns a self-healing warm.Loader. Lazy-opens
+// Postgres on first LoadAll and reconnects after any error, so a
+// reporting pod that boots before Postgres is reachable picks up
+// contracts automatically on the next 30s poll. Mirrors the pattern
+// from pkg/secrets and pickDealLoader in cmd/exchange.
 func pickContractLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgres.ContractRow] {
 	dbURL := cfg.Get("database.url", "")
-	if dbURL == "" {
-		log.Warn("database.url not set, contract cache will be empty")
-		return emptyContractLoader{}
+	return &warm.RetryingLoader[postgres.ContractRow]{
+		Log:   log,
+		KeyFn: func(r postgres.ContractRow) string { return r.PublisherID },
+		Construct: func() (warm.Loader[postgres.ContractRow], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.ContractLoader{Store: store}, nil
+		},
 	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Warn("postgres open failed", "error", err)
-		return emptyContractLoader{}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("postgres ping failed", "error", err)
-		_ = db.Close()
-		return emptyContractLoader{}
-	}
-	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute})
-	log.Info("postgres connected for contract loader")
-	return &postgres.ContractLoader{Store: store}
 }
-
-type emptyContractLoader struct{}
-
-func (emptyContractLoader) LoadAll(_ context.Context) ([]postgres.ContractRow, error) {
-	return nil, nil
-}
-func (emptyContractLoader) KeyOf(r postgres.ContractRow) string { return r.PublisherID }
 
 func connectInvalidateBus(cfg *config.Config, log *slog.Logger) events.EventBus {
 	url := cfg.Get("reporting.nats_url", routes.DefaultNATSURL)

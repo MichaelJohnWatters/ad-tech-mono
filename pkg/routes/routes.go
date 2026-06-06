@@ -15,6 +15,13 @@ const apiPrefix = "/" + APIVersion
 const (
 	// Auth
 	AuthToken = "/v1/auth/token"
+	// AuthBootstrap is the one-shot endpoint for minting the first operator
+	// API key after a fresh deploy. Gated by PLATFORM_ROOT_PASSWORD env var
+	// (must match exactly); on success creates a row in the secrets table
+	// and returns the new key value once. Self-disables: subsequent calls
+	// return 410 Gone because the bootstrap row now exists. Operators
+	// rotate this initial key via the secrets UI thereafter.
+	AuthBootstrap = "/v1/auth/bootstrap"
 
 	// Config management
 	Config        = "/v1/config"
@@ -26,6 +33,13 @@ const (
 	APICreatives  = apiPrefix + "/api/creatives/"
 	APIReports    = apiPrefix + "/api/reports/"
 
+	// Gateway-local CRUD: secrets management (operator-only). Reads the
+	// secrets table directly and publishes adtech.cache.invalidate.secrets
+	// on every mutation so service warm caches re-sync sub-second. Gated
+	// by middleware.AuthAPIKey, not the JWT proxy chain — the Secrets
+	// tab in /dev/console drives this.
+	APISecrets = apiPrefix + "/api/secrets"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
@@ -33,6 +47,7 @@ const (
 	ProxyAdServer  = apiPrefix + "/ad/"
 	ProxySSP       = apiPrefix + "/ssp/"
 	ProxyDSP       = apiPrefix + "/dsp/"
+	ProxyPubAd     = apiPrefix + "/pubad/"
 	ProxyBilling   = apiPrefix + "/billing/"
 	ProxyConfig    = apiPrefix + "/config/"
 	// ProxyJaeger forwards browser fetches to the Jaeger query API. Used by
@@ -67,6 +82,14 @@ const (
 	OpenRTBAuction = "/v1/openrtb/auction"
 	OpenRTBWin     = "/v1/openrtb/win"
 	OpenRTBLoss    = "/v1/openrtb/loss"
+	// PrebidAuction is the Prebid Server-compatible bidder endpoint.
+	// External Prebid Server instances POST OpenRTB 2.x bid requests here;
+	// we apply our floor policy then dispatch through the normal auction.
+	// See pkg/prebid + docs/PLAN.md → "Prebid Server Integration".
+	PrebidAuction = "/v1/prebid/openrtb2/auction"
+	// PrebidSetUID is the cookie-sync endpoint Prebid bidders expose so
+	// Prebid Server can map publisher-side user IDs to our internal IDs.
+	PrebidSetUID = "/v1/prebid/setuid"
 )
 
 // ============================================================
@@ -116,6 +139,21 @@ const (
 )
 
 // ============================================================
+// Publisher Ad Server (:8088) - direct-sold arbitration in front of SSP
+// ============================================================
+//
+// New entry point for ad requests. Runs the arbitration ladder (sponsorship
+// → guaranteed → programmatic fallthrough → house) before any programmatic
+// auction happens. See docs/PLAN.md → "Publisher-Side Ad Server" and
+// pkg/publisheradserver.
+const (
+	// PublisherAdServe is the visitor-facing endpoint. Same shape as
+	// routes.SSPServe but arbitrates direct-sold first. Pub sim and other
+	// publisher clients should target this once it's wired.
+	PublisherAdServe = "/v1/pubad/serve"
+)
+
+// ============================================================
 // Ad Server (:8085) - creative serving
 // ============================================================
 
@@ -145,10 +183,43 @@ const (
 // synchronous reload from Postgres without waiting for the poll interval.
 const (
 	DebugCacheRefresh = "/debug/cache/refresh"
+	// DebugAudienceRefresh forces a synchronous audience preloader run on
+	// services that hold the warm-preload variant (DSP, SSP). Used by e2e
+	// tests after inserting audience_segment_members so the bid path sees
+	// the new row immediately instead of waiting up to 30s for the next
+	// natural preload tick.
+	DebugAudienceRefresh = "/debug/audience/refresh"
 	// DebugAuctionWins returns the count of auction-win records the reporting
 	// in-memory analytics store has for a given trace_id. Used by e2e tests
 	// to verify adtech.auction.win NATS events reached reporting exactly once.
 	DebugAuctionWins = "/debug/auction_wins"
+	// DebugBudgetDepletions counts BudgetDepletedEvent records for a campaign.
+	DebugBudgetDepletions = "/debug/budget_depletions"
+	// DebugCampaignStateChanges returns the recorded state transitions
+	// (live → paused / archived / etc.) for a campaign_id, in arrival
+	// order. Used by e2e tests to verify adtech.campaign.state_changed
+	// events reached reporting.
+	DebugCampaignStateChanges = "/debug/campaign_state_changes"
+	// DebugServeNoFills counts ServeNoFill records for a trace_id.
+	DebugServeNoFills = "/debug/serve_nofills"
+	// DebugMediaEvents counts MediaEvent records for a trace, optionally
+	// filtered by ?channel=video|audio and ?event_type=start|complete|...
+	DebugMediaEvents = "/debug/media_events"
+	// DebugBillingReset wipes the in-memory billing ledger so e2e billing
+	// tests can run in isolation without inheriting state from prior tests
+	// in the same reporting pod lifetime. No-op on TigerBeetle backend.
+	DebugBillingReset = "/debug/billing/reset"
+	// DebugBillingRates dumps the in-memory ContractStore (per-publisher
+	// revenue-share contracts loaded from publishers.revshare_config).
+	// Read by the pub sim's Billing Rates panel so operators can see why
+	// a settle produced a particular publisher payout.
+	DebugBillingRates = "/debug/billing/rates"
+	// Exchange debug surface — internal-state dumps + router preview/reset.
+	// All gated by debug.endpoints_enabled; do NOT expose externally.
+	DebugExchangeDeals   = "/debug/exchange/deals"
+	DebugExchangeRouting = "/debug/exchange/routing"
+	// Publisher-adserver debug surface — direct-sold line item cache dump.
+	DebugPubAdLineItems = "/debug/pubad/line-items"
 )
 
 // ============================================================
@@ -167,10 +238,18 @@ const (
 	DefaultAdServerURL  = "http://" + DefaultHost + ":" + PortAdServer
 	DefaultReportingURL = "http://" + DefaultHost + ":" + PortReporting
 	DefaultPipelineURL  = "http://" + DefaultHost + ":" + PortPipeline
+	DefaultPublisherAdServerURL = "http://" + DefaultHost + ":" + PortPublisherAdServer
 	DefaultNATSURL      = "nats://" + DefaultHost + ":" + PortNATSClient
 	DefaultDSPComp1URL  = "http://" + DefaultHost + ":" + PortDSPComp1
 	DefaultDSPComp2URL  = "http://" + DefaultHost + ":" + PortDSPComp2
 	DefaultJaegerURL    = "http://" + DefaultHost + ":" + PortJaeger
+	// Infrastructure addresses. These point at the local Tilt-managed
+	// services. Staging/prod overlays override via env vars or the config
+	// manager — the constants exist so dev tools and the test harness don't
+	// hardcode the same strings independently.
+	DefaultRedisAddr      = DefaultHost + ":" + PortRedis
+	DefaultMinioEndpoint  = DefaultHost + ":" + PortMinioAPI
+	DefaultPostgresURL    = "postgres://adtech:adtech-local-dev@" + DefaultHost + ":" + PortPostgres + "/adtech?sslmode=disable"
 )
 
 // ServiceURL builds a URL from host and port.
@@ -198,6 +277,7 @@ const (
 	PortAdServer    = "8085"
 	PortReporting   = "8086"
 	PortPipeline    = "8087"
+	PortPublisherAdServer = "8088"
 	PortGrafana     = "3000"
 	PortPrometheus  = "9090"
 	PortJaeger      = "16686"
