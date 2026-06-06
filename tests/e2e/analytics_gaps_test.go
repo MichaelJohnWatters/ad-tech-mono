@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
@@ -138,6 +139,49 @@ func TestCampaignStateChangeReachesReporting(t *testing.T) {
 	delta := len(h.CampaignStateChangesByCampaign(t, w.Campaign.ID)) - startCount
 	if delta != 2 {
 		t.Errorf("no-op patch generated extra event: delta = %d transitions, want 2", delta)
+	}
+}
+
+// TestAdserverRenderFailedEventForUnknownCreative — request an ad with
+// a creative_id the resolver can't find. The pixel still serves
+// (browser sees a 200 with placeholder HTML, identical to a real
+// creative) but reporting should record a render_failed event tagged
+// reason=unknown_creative so ops can see "creative X is broken
+// without log scraping."
+func TestAdserverRenderFailedEventForUnknownCreative(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "evt-render")
+
+	const fakeCreativeID = "00000000-0000-0000-0000-deadbeefcafe"
+	startCount := len(h.RenderFailuresByCreative(t, fakeCreativeID))
+
+	// ServeAd takes a campaign_id + creative_id directly. Use a
+	// real campaign but an unresolvable creative — the resolver will
+	// miss, fall back to placeholder HTML, and publish render_failed.
+	if status := h.ServeAd(t, models.ServeRequest{
+		TraceID:      "evt-render-trace-001",
+		CampaignID:   w.Campaign.ID,
+		CreativeID:   fakeCreativeID,
+		PlacementID:  w.Placement.ID,
+		PublisherID:  w.Publisher.ID,
+		AdvertiserID: w.AdvAcc.ID,
+		SiteDomain:   w.Publisher.Domain,
+		Width:        300, Height: 250, Currency: "USD",
+		UserID: "render-fail-user",
+	}); status != http.StatusOK {
+		t.Fatalf("ServeAd status = %d, want 200 (placeholder still rendered)", status)
+	}
+
+	harness.WaitFor(t, 5*time.Second, "render_failed event recorded", func() bool {
+		return len(h.RenderFailuresByCreative(t, fakeCreativeID)) > startCount
+	})
+	records := h.RenderFailuresByCreative(t, fakeCreativeID)
+	last := records[len(records)-1]
+	if last.Reason != "unknown_creative" {
+		t.Errorf("Reason = %q, want unknown_creative", last.Reason)
+	}
+	if last.CampaignID != w.Campaign.ID {
+		t.Errorf("CampaignID = %q, want %q", last.CampaignID, w.Campaign.ID)
 	}
 }
 

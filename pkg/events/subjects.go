@@ -17,6 +17,14 @@ const (
 	// rejected traffic from the denominator. Distinct from the
 	// per-event-type subjects above (those carry successful events).
 	SubjectTrackerRejected = "adtech.tracker.rejected"
+	// SubjectAdserverRenderFailed — fires when the ad server can't
+	// resolve the requested creative (unknown_creative) or hits an
+	// internal error and falls back to the default placeholder HTML.
+	// The impression pixel still fires (we don't reveal the failure to
+	// the browser) so reporting needs this side-channel to surface
+	// "creative X is broken" without log scraping. Consumed by
+	// reporting for ops dashboards.
+	SubjectAdserverRenderFailed = "adtech.adserver.render_failed"
 
 	// Auction subjects (Exchange → DSP, Reporting)
 	SubjectAuctionWin      = "adtech.auction.win"

@@ -36,6 +36,7 @@ flow. Cache invalidate subjects are in their own section.
 | 16 | `adtech.privacy.deletion_completed` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
 | 17 | `adtech.webhooks` | **declared, never published** | **no consumer** | — | — | ❌ Gap C (the `cmd/webhooks` service is an empty shell) |
 | 18 | `adtech.tracker.rejected` | `cmd/tracker/main.go:publishRejected` (HMAC strict / fraud / dedup sites) | `cmd/reporting:handleTrackerRejected` | `analytics.InsertTrackerRejection` | — | ✅ shipped 2026-06-06 (Gap E) |
+| 19 | `adtech.adserver.render_failed` | `cmd/adserver/main.go:serveHandler` (creative resolver miss) | `cmd/reporting:handleRenderFailed` | `analytics.InsertRenderFailure` | — | ✅ shipped 2026-06-06 (Gap F) |
 
 ## Cache invalidate subjects (14 declared)
 
@@ -117,10 +118,22 @@ budget.depleted) and POSTs to registered URLs, then publish
   rejections + 1 first-seen) and `TestTrackerRejectedEventHMACStrict`
   (strict-mode unsigned → rejected with reason=invalid_signature).
 
-**Gap F — Ad server render failures not published.**
-Adserver 5xx and default-HTML-fallback for unknown creative are
-silent. No `adtech.adserver.render_failed` subject. Same as backlog
-#3. Lands as part of backlog #3.
+**Gap F — Ad server render failures not published.** ✅ shipped 2026-06-06
+- New subject `adtech.adserver.render_failed` + `AdserverRenderFailedEvent`
+  (TraceID, CampaignID, CreativeID, PlacementID, PublisherID, Reason,
+  Detail, Timestamp).
+- `cmd/adserver/main.go` serveHandler now publishes the event when
+  the creative resolver misses (`reason=unknown_creative`,
+  `detail=<requested creative_id>`). Falls back to placeholder HTML
+  as before — the browser still sees a 200, but reporting now has
+  the side-channel signal.
+- `cmd/reporting.handleRenderFailed` records via
+  `analytics.InsertRenderFailure` +
+  `analytics.RenderFailuresByCreative` reader.
+- Debug endpoint `/debug/render_failures?creative_id=`.
+- Verified by `TestAdserverRenderFailedEventForUnknownCreative`
+  (e2e): ServeAd with an unresolvable creative_id → placeholder
+  HTML returned + render_failed event lands with reason=unknown_creative.
 
 ## What we haven't audited yet (next passes)
 

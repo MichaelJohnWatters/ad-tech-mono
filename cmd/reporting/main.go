@@ -167,6 +167,12 @@ func main() {
 			json.NewEncoder(w).Encode(store.CampaignStateChangesByCampaign(campaignID))
 		})
 
+		mux.HandleFunc(routes.DebugRenderFailures, func(w http.ResponseWriter, r *http.Request) {
+			creativeID := r.URL.Query().Get("creative_id")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(store.RenderFailuresByCreative(creativeID))
+		})
+
 		mux.HandleFunc(routes.DebugTrackerRejections, func(w http.ResponseWriter, r *http.Request) {
 			traceID := r.URL.Query().Get("trace_id")
 			reason := r.URL.Query().Get("reason")
@@ -260,6 +266,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectBudgetDepleted:        c.handleBudgetDepleted,
 		events.SubjectCampaignStateChanged:  c.handleCampaignState,
 		events.SubjectTrackerRejected:       c.handleTrackerRejected,
+		events.SubjectAdserverRenderFailed:  c.handleRenderFailed,
 		events.SubjectVideo:                 c.handleVideo,
 		events.SubjectAudio:                 c.handleAudio,
 		events.SubjectServeNoFill:           c.handleServeNoFill,
@@ -599,6 +606,40 @@ func (c *EventConsumer) handleServeNoFill(ctx context.Context, msg *events.Messa
 		})
 	}
 	c.log.Info("serve nofill recorded", "trace_id", src.TraceID, "publisher", src.PublisherID, "reason", src.Reason)
+	return msg.Ack()
+}
+
+// handleRenderFailed records an ad-server fallback (creative miss or
+// render error). No billing impact — the fallback HTML still produced
+// an impression-pixel-eligible response. Ops dashboards alert on
+// rate-of-change; advertisers see "creative X is broken in adserver"
+// without scraping logs.
+func (c *EventConsumer) handleRenderFailed(ctx context.Context, msg *events.Message) error {
+	var src events.AdserverRenderFailedEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode render failed event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertRenderFailure(analytics.RenderFailure{
+			TraceID:     src.TraceID,
+			CampaignID:  src.CampaignID,
+			CreativeID:  src.CreativeID,
+			PlacementID: src.PlacementID,
+			PublisherID: src.PublisherID,
+			Reason:      src.Reason,
+			Detail:      src.Detail,
+			Timestamp:   src.Timestamp,
+		})
+	}
+	c.log.Info("adserver render failure recorded",
+		"trace_id", src.TraceID,
+		"creative_id", src.CreativeID,
+		"reason", src.Reason,
+		"detail", src.Detail)
 	return msg.Ack()
 }
 

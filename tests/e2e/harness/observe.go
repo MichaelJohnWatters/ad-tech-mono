@@ -123,6 +123,33 @@ func (h *Harness) AuctionWinByBidModel(t *testing.T, traceID, bidModel string) i
 	return out.Count
 }
 
+// RenderFailure mirrors analytics.RenderFailure — one record per
+// ad-server fallback (unknown creative, render error). Decoded from
+// JSON over the debug endpoint.
+type RenderFailure struct {
+	TraceID     string    `json:"TraceID"`
+	CampaignID  string    `json:"CampaignID"`
+	CreativeID  string    `json:"CreativeID"`
+	PlacementID string    `json:"PlacementID"`
+	PublisherID string    `json:"PublisherID"`
+	Reason      string    `json:"Reason"`
+	Detail      string    `json:"Detail"`
+	Timestamp   time.Time `json:"Timestamp"`
+}
+
+// RenderFailuresByCreative returns the recorded ad-server fallback
+// records for a creative_id. Used by e2e to verify
+// adtech.adserver.render_failed events flowed end-to-end.
+func (h *Harness) RenderFailuresByCreative(t *testing.T, creativeID string) []RenderFailure {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugRenderFailures+"?creative_id="+creativeID)
+	var out []RenderFailure
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode render failures: %v\nbody: %s", err, string(body))
+	}
+	return out
+}
+
 // TrackerRejection mirrors analytics.TrackerRejection — one record per
 // pixel dropped at the tracker gate (invalid sig in strict mode, fraud
 // blocked, dedup hit). Decoded from JSON over the debug endpoint.

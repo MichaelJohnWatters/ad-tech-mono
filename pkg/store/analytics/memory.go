@@ -26,6 +26,23 @@ type MemoryStore struct {
 	mediaEvents          []MediaEvent
 	campaignStateChanges []CampaignStateChange
 	trackerRejections    []TrackerRejection
+	renderFailures       []RenderFailure
+}
+
+// RenderFailure records an ad server fallback — the requested creative
+// couldn't be resolved (unknown_creative) or rendered (render_error),
+// so the server fell back to placeholder HTML. The impression still
+// fires, so without this record the failure is invisible to billing
+// and to advertiser dashboards.
+type RenderFailure struct {
+	TraceID     string
+	CampaignID  string
+	CreativeID  string
+	PlacementID string
+	PublisherID string
+	Reason      string // unknown_creative / render_error / asset_missing
+	Detail      string
+	Timestamp   time.Time
 }
 
 // TrackerRejection records a pixel dropped at the gate (invalid HMAC,
@@ -155,6 +172,29 @@ func (s *MemoryStore) InsertBudgetDepletion(d BudgetDepletion) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.budgetDepletions = append(s.budgetDepletions, d)
+}
+
+// InsertRenderFailure appends an ad-server render-failure record.
+// Called by reporting's adtech.adserver.render_failed consumer.
+func (s *MemoryStore) InsertRenderFailure(r RenderFailure) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renderFailures = append(s.renderFailures, r)
+}
+
+// RenderFailuresByCreative returns the recorded failures for a
+// creative_id. Used by ops dashboards to surface "creative X broke
+// 47 times in the last hour" + by e2e tests.
+func (s *MemoryStore) RenderFailuresByCreative(creativeID string) []RenderFailure {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []RenderFailure
+	for _, r := range s.renderFailures {
+		if r.CreativeID == creativeID {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // InsertTrackerRejection appends a rejection record. Called by

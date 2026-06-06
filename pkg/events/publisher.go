@@ -82,3 +82,7 @@ func (p *Publisher) ServeNoFill(ctx context.Context, event ServeNoFillEvent) err
 func (p *Publisher) TrackerRejected(ctx context.Context, event TrackerRejectedEvent) error {
 	return p.PublishJSON(ctx, SubjectTrackerRejected, event)
 }
+
+func (p *Publisher) AdserverRenderFailed(ctx context.Context, event AdserverRenderFailedEvent) error {
+	return p.PublishJSON(ctx, SubjectAdserverRenderFailed, event)
+}

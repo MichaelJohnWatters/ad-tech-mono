@@ -205,6 +205,10 @@ const (
 	// invalid_signature / fraud / dedup). Used by e2e to verify the
 	// adtech.tracker.rejected pathway + by ops dashboards.
 	DebugTrackerRejections = "/debug/tracker_rejections"
+	// DebugRenderFailures returns ad-server render-failure records for
+	// a ?creative_id=. Used by e2e to verify adtech.adserver.render_failed
+	// + by ops dashboards to surface broken creatives.
+	DebugRenderFailures = "/debug/render_failures"
 	// DebugServeNoFills counts ServeNoFill records for a trace_id.
 	DebugServeNoFills = "/debug/serve_nofills"
 	// DebugMediaEvents counts MediaEvent records for a trace, optionally
