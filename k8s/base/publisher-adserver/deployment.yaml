@@ -19,6 +19,13 @@ spec:
             - { name: POD_NAME, value: "publisher-adserver-0" }
             - { name: PUBLISHER_ADSERVER_SSP_URL, value: "http://ssp:8084" }
             - { name: PUBLISHER_ADSERVER_ADSERVER_URL, value: "http://adserver:8085" }
+            # Browser-reachable URL for impression / view / click beacons
+            # injected into external Prebid bid HTML. Same fix as
+            # adserver.tracker_url (commit d756df3): cluster DNS like
+            # `tracker:8083` is unreachable from end-user browsers, so
+            # point at the gateway's /v1/t/* reverse proxy. Staging /
+            # prod overlays override with the public gateway URL.
+            - { name: PUBLISHER_ADSERVER_TRACKER_URL, value: "http://localhost:8080" }
             - { name: DATABASE_URL, value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" }
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: LOKI_URL, value: "http://loki:3100" }

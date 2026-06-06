@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
@@ -54,6 +55,7 @@ func main() {
 	port := cfg.Get("publisher_adserver.port", routes.PortPublisherAdServer)
 	sspURL := cfg.Get("publisher_adserver.ssp_url", routes.DefaultSSPURL)
 	adserverURL := cfg.Get("publisher_adserver.adserver_url", routes.DefaultAdServerURL)
+	trackerURL := cfg.Get("publisher_adserver.tracker_url", routes.DefaultTrackerURL)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServicePublisherAdServer,
@@ -148,6 +150,7 @@ func main() {
 		pacer:           pacer,
 		sspURL:          sspURL,
 		adserverURL:     adserverURL,
+		trackerURL:      trackerURL,
 		prebidClient:    prebidCli,
 		prebidServersFn: prebidServersFn,
 		pub:             pub,
@@ -178,6 +181,7 @@ type serveDeps struct {
 	pacer            *pacing.Tracker
 	sspURL           string
 	adserverURL      string
+	trackerURL       string
 	prebidClient     *prebidclient.Client
 	prebidServersFn  func() string  // CSV; re-read per request for live-tunable demand-source list
 	pub              *events.Publisher // nil-tolerant; emits DirectWin + PrebidOutboundWin events
@@ -490,14 +494,26 @@ func (d *serveDeps) publishNoFill(ctx context.Context, traceID string, p postgre
 	})
 }
 
-// writePrebidWinner renders an external Prebid bid's adm directly. We don't
-// run it through the ad server's macro substitution path because we don't
-// own the creative — the external bidder is responsible for its own pixel
-// URLs and click tracking. The visitor receives bid.adm verbatim.
+// writePrebidWinner renders an external Prebid bid's adm. We don't own
+// the creative content (the external bidder is responsible for its
+// own click + view tracking), but we DO need our own beacons fire so:
+// (a) reporting can attribute the impression/view/click to the
+// publisher line item, (b) fill-rate analytics don't overcount
+// Prebid wins where the creative never actually rendered, (c)
+// advertisers paying on the external buyer's vendor can still see
+// their own attribution in our reports.
 //
-// Closes analytics gap #2: emit PrebidOutboundWinEvent so reporting can
-// show "publisher X earned $Y from external Prebid endpoint Z" instead
-// of the served impression appearing as nobid in our analytics.
+// Beacon strategy: outer wrapper div with the bid's adm verbatim
+// inside, plus our 1×1 impression pixel + a hidden viewability
+// beacon element at the end. The external bidder's pixels still fire
+// from their original positions in the adm; ours fire from the
+// wrapper. Both records get written, no party loses signal.
+//
+// Click tracking on Prebid is opt-in for the sim — we return a
+// click_url alongside but don't override the bid's anchor hrefs
+// (that would break the external buyer's click chain).
+//
+// Closes EVENT_PATHWAY_AUDIT Gap (Prebid viewability beacon).
 func (d *serveDeps) writePrebidWinner(ctx context.Context, w http.ResponseWriter, placement postgres.PlacementRow, traceID string, best prebidclient.Result) {
 	if d.pub != nil {
 		logger.WithContext(d.log, ctx).Info("prebid outbound win",
@@ -519,23 +535,59 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, w http.ResponseWriter
 				Timestamp:      d.clk.Now(),
 			})
 	}
+
+	// Build our impression / view / click URLs using the same macros
+	// as the regular ad-server flow. CampaignID is empty (external
+	// creative, no internal campaign); advertiser is the external
+	// seat string so reporting can group wins by buyer.
+	macroCtx := adserving.MacroContext{
+		AuctionID:    traceID,
+		AuctionPrice: best.Price,
+		Currency:     best.Currency,
+		PlacementID:  placement.ID,
+		PublisherID:  placement.PublisherID,
+		AdvertiserID: best.Seat,
+		DealID:       best.DealID,
+		Width:        placement.Width,
+		Height:       placement.Height,
+		TrackerURL:   d.trackerURL,
+	}
+	impressionURL := adserving.BuildImpressionURL(macroCtx)
+	clickURL := adserving.BuildClickURL(macroCtx)
+	viewabilityURL := adserving.BuildViewabilityURL(macroCtx)
+
+	// Wrap the bid adm with our beacons. Outer div so script-shaped
+	// or iframe-shaped admm still render normally; our beacons sit
+	// outside the bid's own DOM scope so they aren't disturbed by
+	// whatever the bidder does inside.
+	wrappedHTML := `<div data-prebid-wrapper="1" style="display:block;width:100%;height:100%;">` +
+		best.HTML +
+		`<img src="` + impressionURL + `" width="1" height="1" style="display:none;" alt="" />` +
+		`</div>`
+
 	out := struct {
-		TraceID       string  `json:"trace_id"`
-		Source        string  `json:"source"`
-		PrebidEndpoint string `json:"prebid_endpoint"`
-		Seat          string  `json:"seat"`
-		HTML          string  `json:"html"`
-		Width         int     `json:"width"`
-		Height        int     `json:"height"`
-		ClearingPrice float64 `json:"clearing_price"`
-		Currency      string  `json:"currency"`
-		DealID        string  `json:"deal_id,omitempty"`
+		TraceID        string  `json:"trace_id"`
+		Source         string  `json:"source"`
+		PrebidEndpoint string  `json:"prebid_endpoint"`
+		Seat           string  `json:"seat"`
+		HTML           string  `json:"html"`
+		ImpressionURL  string  `json:"impression_url"`
+		ClickURL       string  `json:"click_url"`
+		ViewabilityURL string  `json:"viewability_url"`
+		Width          int     `json:"width"`
+		Height         int     `json:"height"`
+		ClearingPrice  float64 `json:"clearing_price"`
+		Currency       string  `json:"currency"`
+		DealID         string  `json:"deal_id,omitempty"`
 	}{
 		TraceID:        traceID,
 		Source:         "prebid",
 		PrebidEndpoint: best.Endpoint,
 		Seat:           best.Seat,
-		HTML:           best.HTML,
+		HTML:           wrappedHTML,
+		ImpressionURL:  impressionURL,
+		ClickURL:       clickURL,
+		ViewabilityURL: viewabilityURL,
 		Width:          placement.Width,
 		Height:         placement.Height,
 		ClearingPrice:  best.Price,
