@@ -1,0 +1,251 @@
+{{define "video.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Video Simulator (VAST 4.2 + IMA)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0f1419; color: #e6edf3; }
+  header { padding: 16px 24px; border-bottom: 1px solid #1f2933; background: #161b22; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 24px; padding: 24px; max-width: 1280px; margin: 0 auto; }
+  @media (max-width: 920px) { main { grid-template-columns: 1fr; } }
+  #player-wrap { background: #000; aspect-ratio: 16/9; position: relative; border-radius: 8px; overflow: hidden; }
+  #content-video { width: 100%; height: 100%; display: block; }
+  #ad-container { position: absolute; inset: 0; }
+  button.cta { padding: 10px 18px; background: #2d8cf0; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; margin: 16px 0 0 8px; }
+  button.cta:disabled { opacity: 0.5; cursor: not-allowed; }
+  .panel { background: #161b22; border: 1px solid #1f2933; border-radius: 8px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.08em; }
+  .events { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.6; }
+  .event-row { padding: 6px 8px; border-radius: 4px; margin-bottom: 2px; background: #1c2532; display: flex; gap: 8px; }
+  .event-row .ts { color: #6e7681; min-width: 56px; }
+  .event-row .name { color: #79c0ff; flex: 1; }
+  .event-row .meta { color: #8b949e; font-size: 11px; }
+  .event-row.ad-start { background: #1a3a4a; }
+  .event-row.ad-complete { background: #1a4a2a; }
+  .event-row.ad-click { background: #4a3a1a; }
+  .meta-card { display: grid; grid-template-columns: 80px 1fr; gap: 4px 12px; font-size: 12px; margin-bottom: 16px; }
+  .meta-card dt { color: #8b949e; }
+  .meta-card dd { margin: 0; color: #e6edf3; font-family: ui-monospace, "SF Mono", Menlo, monospace; word-break: break-all; }
+  details { background: #1c2532; padding: 8px 12px; border-radius: 4px; margin-top: 12px; }
+  details summary { cursor: pointer; color: #79c0ff; font-size: 12px; }
+  details pre { font-size: 11px; color: #c9d1d9; white-space: pre-wrap; word-break: break-all; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Video Simulator — VAST 4.2 pre-roll demo</h1>
+    <p>Loads a sample content video, requests VAST from <code>/v1/pubad/video/vast</code>, plays the pre-roll via Google IMA SDK. Tracker beacons fire through our normal <code>/v1/t/*</code> endpoints.</p>
+  </header>
+
+  <main>
+    <section>
+      <div id="player-wrap">
+        <video id="content-video" controls playsinline preload="metadata"
+          src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">
+        </video>
+        <div id="ad-container"></div>
+      </div>
+      <button id="play-btn" class="cta">Play content + pre-roll</button>
+      <button id="skip-content-btn" class="cta" style="background: #6e7681;">Reset</button>
+    </section>
+
+    <aside>
+      <div class="panel">
+        <h2>Auction context</h2>
+        <dl class="meta-card">
+          <dt>Trace ID</dt><dd id="trace-id">—</dd>
+          <dt>VAST URL</dt><dd><a href="" id="vast-url" style="color: #79c0ff;" target="_blank">(loaded on play)</a></dd>
+          <dt>Player</dt><dd>IMA SDK HTML5 (Google)</dd>
+        </dl>
+        <details>
+          <summary>VAST XML (last response)</summary>
+          <pre id="vast-xml">(none yet)</pre>
+        </details>
+      </div>
+
+      <div class="panel" style="margin-top: 16px;">
+        <h2>Player events</h2>
+        <div id="events" class="events">
+          <div class="event-row"><span class="ts">—</span><span class="name">Click "Play" to start the demo.</span></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Google IMA SDK: the dominant client-side VAST player. Handles
+       VAST parsing, ad pod sequencing, quartile beacons, click events,
+       and player UI without us re-implementing the VAST 4.x state
+       machine. The CDN URL is the IAB-standard public sample. -->
+  <script src="//imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+  <script>
+    var contentVideo = document.getElementById('content-video');
+    var adContainer = document.getElementById('ad-container');
+    var playBtn = document.getElementById('play-btn');
+    var resetBtn = document.getElementById('skip-content-btn');
+    var eventsEl = document.getElementById('events');
+    var traceIdEl = document.getElementById('trace-id');
+    var vastURLEl = document.getElementById('vast-url');
+    var vastXMLEl = document.getElementById('vast-xml');
+
+    var startTime = null;
+    var adsLoader, adsManager;
+    var lastVASTUrl = '';
+
+    function fmtTime() {
+      if (!startTime) startTime = Date.now();
+      var ms = Date.now() - startTime;
+      return (ms / 1000).toFixed(2) + 's';
+    }
+
+    function log(name, meta, klass) {
+      var row = document.createElement('div');
+      row.className = 'event-row' + (klass ? ' ' + klass : '');
+      row.innerHTML = '<span class="ts">' + fmtTime() + '</span>' +
+        '<span class="name">' + name + '</span>' +
+        (meta ? '<span class="meta">' + meta + '</span>' : '');
+      eventsEl.appendChild(row);
+      eventsEl.scrollTop = eventsEl.scrollHeight;
+    }
+
+    function resetEvents() {
+      eventsEl.innerHTML = '';
+      startTime = Date.now();
+    }
+
+    // Build the VAST URL the IMA SDK will fetch. The placement_id query
+    // param threads through to the tracker URLs the pubad handler
+    // generates, so the trace tree links the player request back to a
+    // notional placement. trace_id stamp is browser-side just so the
+    // sim has a stable handle to show; the pubad handler generates the
+    // authoritative trace ID inside the VAST.
+    function buildVASTRequestURL() {
+      var origin = window.location.origin;
+      return origin + '/v1/pubad/video/vast?placement_id=demo-video-mpu&t=' + Date.now();
+    }
+
+    function setupIMA() {
+      // IMA wires itself to the ad container; the publisher only has to
+      // tell it which DOM nodes to use and which video to associate
+      // with the ad.
+      var adDisplayContainer = new google.ima.AdDisplayContainer(adContainer, contentVideo);
+      adDisplayContainer.initialize();
+
+      adsLoader = new google.ima.AdsLoader(adDisplayContainer);
+      adsLoader.addEventListener(google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED, onAdsManagerLoaded, false);
+      adsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(e) {
+        log('AD_ERROR', String(e.getError()), 'ad-click');
+        resumeContent();
+      }, false);
+
+      // When the content video finishes, tell IMA so it can fire any
+      // post-rolls. We don't have a post-roll in this demo but it's the
+      // shape the next phase will need.
+      contentVideo.addEventListener('ended', function() { adsLoader.contentComplete(); });
+    }
+
+    function onAdsManagerLoaded(adsManagerLoadedEvent) {
+      var adsRenderingSettings = new google.ima.AdsRenderingSettings();
+      adsRenderingSettings.restoreCustomPlaybackStateOnAdBreakComplete = true;
+      adsManager = adsManagerLoadedEvent.getAdsManager(contentVideo, adsRenderingSettings);
+
+      // Wire every event the IMA SDK fires through our log panel —
+      // these are the same beacons the player sends to our tracker.
+      var E = google.ima.AdEvent.Type;
+      [
+        ['LOADED', E.LOADED],
+        ['STARTED', E.STARTED, 'ad-start'],
+        ['IMPRESSION', E.IMPRESSION, 'ad-start'],
+        ['FIRST_QUARTILE', E.FIRST_QUARTILE],
+        ['MIDPOINT', E.MIDPOINT],
+        ['THIRD_QUARTILE', E.THIRD_QUARTILE],
+        ['COMPLETE', E.COMPLETE, 'ad-complete'],
+        ['CLICK', E.CLICK, 'ad-click'],
+        ['PAUSED', E.PAUSED],
+        ['RESUMED', E.RESUMED],
+        ['SKIPPED', E.SKIPPED],
+        ['VOLUME_MUTED', E.VOLUME_MUTED],
+        ['VOLUME_CHANGED', E.VOLUME_CHANGED],
+        ['FULLSCREEN_CHANGED', E.FULLSCREEN_CHANGED],
+        ['ALL_ADS_COMPLETED', E.ALL_ADS_COMPLETED],
+      ].forEach(function(spec) {
+        var name = spec[0], type = spec[1], klass = spec[2];
+        adsManager.addEventListener(type, function(e) {
+          var ad = e.getAd && e.getAd();
+          var meta = ad ? '#' + ad.getAdId() + ' · ' + ad.getDuration() + 's' : '';
+          log(name, meta, klass);
+        });
+      });
+
+      // CONTENT_PAUSE / CONTENT_RESUME tell us when to start/stop the
+      // underlying content video so the ad gets exclusive playback.
+      adsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_PAUSE_REQUESTED, function() {
+        contentVideo.pause();
+        log('CONTENT_PAUSED', 'IMA owns playback', 'ad-start');
+      });
+      adsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_RESUME_REQUESTED, function() {
+        log('CONTENT_RESUMED', 'IMA released playback', 'ad-complete');
+        resumeContent();
+      });
+      adsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(e) {
+        log('AD_ERROR', String(e.getError()), 'ad-click');
+        resumeContent();
+      });
+
+      try {
+        // Initial dimensions are picked up off the player element.
+        adsManager.init(contentVideo.clientWidth, contentVideo.clientHeight, google.ima.ViewMode.NORMAL);
+        adsManager.start();
+      } catch (e) {
+        log('ADS_MANAGER_INIT_FAILED', String(e), 'ad-click');
+        resumeContent();
+      }
+    }
+
+    function resumeContent() {
+      // Once the pre-roll is done the player resumes the content.
+      try { contentVideo.play(); } catch (e) {}
+    }
+
+    function startDemo() {
+      resetEvents();
+      log('Demo started', 'requesting VAST', 'ad-start');
+
+      // Show the actual URL we'll hand to IMA for transparency, and
+      // preview the raw VAST XML for the dev panel.
+      lastVASTUrl = buildVASTRequestURL();
+      vastURLEl.textContent = lastVASTUrl;
+      vastURLEl.setAttribute('href', lastVASTUrl);
+
+      fetch(lastVASTUrl)
+        .then(function(r) { return r.text(); })
+        .then(function(text) {
+          vastXMLEl.textContent = text;
+          // Pull a trace ID out of the VAST so the panel can show it.
+          var m = text.match(/<Ad id="([^"]+)"/);
+          if (m) traceIdEl.textContent = m[1];
+        })
+        .catch(function() { vastXMLEl.textContent = '(VAST fetch failed)'; });
+
+      setupIMA();
+
+      var adsRequest = new google.ima.AdsRequest();
+      adsRequest.adTagUrl = lastVASTUrl;
+      adsRequest.linearAdSlotWidth = contentVideo.clientWidth;
+      adsRequest.linearAdSlotHeight = contentVideo.clientHeight;
+      adsLoader.requestAds(adsRequest);
+    }
+
+    playBtn.addEventListener('click', startDemo);
+    resetBtn.addEventListener('click', function() {
+      try { contentVideo.pause(); } catch (e) {}
+      contentVideo.currentTime = 0;
+      if (adsManager) { try { adsManager.destroy(); } catch (e) {} adsManager = null; }
+      resetEvents();
+      log('Reset', 'ready to play again');
+    });
+  </script>
+</body>
+</html>
+{{end}}

@@ -128,6 +128,9 @@ func main() {
 	mux.HandleFunc("/dev/publisher-simulator/minimal", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "minimal.html", nil)
 	})
+	mux.HandleFunc("/dev/publisher-simulator/video", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "video.html", nil)
+	})
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})

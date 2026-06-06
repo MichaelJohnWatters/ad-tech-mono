@@ -158,6 +158,12 @@ const (
 	// routes.SSPServe but arbitrates direct-sold first. Pub sim and other
 	// publisher clients should target this once it's wired.
 	PublisherAdServe = "/v1/pubad/serve"
+	// PublisherAdServeVAST returns a VAST 4.2 XML document for the video
+	// flow. Players (IMA SDK, video.js, hls.js) fetch from this endpoint
+	// and parse the response to discover the ad media file + tracker
+	// URLs. Same auction shape under the hood as PublisherAdServe — the
+	// only difference is the response is XML, not JSON.
+	PublisherAdServeVAST = "/v1/pubad/video/vast"
 )
 
 // ============================================================
