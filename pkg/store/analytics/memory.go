@@ -27,6 +27,20 @@ type MemoryStore struct {
 	campaignStateChanges []CampaignStateChange
 	trackerRejections    []TrackerRejection
 	renderFailures       []RenderFailure
+	freqCapBlocks        []FreqCapBlock
+}
+
+// FreqCapBlock records a serve suppression — adserver's
+// (user, campaign) freq-cap counter was saturated, the impression
+// pixel never fired. Lets ops alert on suppression-rate change and
+// gives advertisers visibility into over-cap volume.
+type FreqCapBlock struct {
+	TraceID     string
+	UserID      string
+	CampaignID  string
+	PlacementID string
+	PublisherID string
+	Timestamp   time.Time
 }
 
 // RenderFailure records an ad server fallback — the requested creative
@@ -172,6 +186,28 @@ func (s *MemoryStore) InsertBudgetDepletion(d BudgetDepletion) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.budgetDepletions = append(s.budgetDepletions, d)
+}
+
+// InsertFreqCapBlock appends a suppression record. Called by
+// reporting's adtech.adserver.freq_cap_blocked consumer.
+func (s *MemoryStore) InsertFreqCapBlock(b FreqCapBlock) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.freqCapBlocks = append(s.freqCapBlocks, b)
+}
+
+// FreqCapBlocksByCampaign returns the recorded suppression records
+// for a campaign. Used by ops dashboards and e2e tests.
+func (s *MemoryStore) FreqCapBlocksByCampaign(campaignID string) []FreqCapBlock {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []FreqCapBlock
+	for _, b := range s.freqCapBlocks {
+		if b.CampaignID == campaignID {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // InsertRenderFailure appends an ad-server render-failure record.

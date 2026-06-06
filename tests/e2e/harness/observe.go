@@ -123,6 +123,30 @@ func (h *Harness) AuctionWinByBidModel(t *testing.T, traceID, bidModel string) i
 	return out.Count
 }
 
+// FreqCapBlock mirrors analytics.FreqCapBlock — one record per
+// (user, campaign) suppression at the ad server.
+type FreqCapBlock struct {
+	TraceID     string    `json:"TraceID"`
+	UserID      string    `json:"UserID"`
+	CampaignID  string    `json:"CampaignID"`
+	PlacementID string    `json:"PlacementID"`
+	PublisherID string    `json:"PublisherID"`
+	Timestamp   time.Time `json:"Timestamp"`
+}
+
+// FreqCapBlocksByCampaign returns the recorded suppression records
+// for a campaign. Used by e2e to verify
+// adtech.adserver.freq_cap_blocked propagated end-to-end.
+func (h *Harness) FreqCapBlocksByCampaign(t *testing.T, campaignID string) []FreqCapBlock {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugFreqCapBlocks+"?campaign_id="+campaignID)
+	var out []FreqCapBlock
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode freq cap blocks: %v\nbody: %s", err, string(body))
+	}
+	return out
+}
+
 // RenderFailure mirrors analytics.RenderFailure — one record per
 // ad-server fallback (unknown creative, render error). Decoded from
 // JSON over the debug endpoint.

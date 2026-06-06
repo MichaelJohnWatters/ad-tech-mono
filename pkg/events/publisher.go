@@ -131,3 +131,10 @@ func (p *Publisher) AdserverRenderFailed(ctx context.Context, event AdserverRend
 	}
 	return p.PublishJSON(ctx, SubjectAdserverRenderFailed, event)
 }
+
+func (p *Publisher) AdserverFreqCapBlocked(ctx context.Context, event AdserverFreqCapBlockedEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.PublishJSON(ctx, SubjectAdserverFreqCapBlocked, event)
+}
