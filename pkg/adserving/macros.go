@@ -23,6 +23,7 @@ type MacroContext struct {
 	AdvertiserID string
 	IOId         string // insertion order
 	DealID       string
+	BidModel     string // cpm, cpc, cpa, vcpm, cpcv — propagated on tracker URLs so billing engine can route reserve vs bill-immediately
 	SiteDomain   string
 	AppBundle    string
 	Width        int
@@ -30,6 +31,7 @@ type MacroContext struct {
 	UserAgent    string
 	IP           string
 	TrackerURL   string // base URL for tracker service
+	LandingURL   string // baked into the signed click URL as redir= so the tracker can 302 to the advertiser page after recording the click
 }
 
 // SubstituteMacros replaces all ${...} macros in the input string.
@@ -87,11 +89,18 @@ func BuildImpressionURL(ctx MacroContext) string {
 	if ctx.DealID != "" {
 		params.Set("deal", ctx.DealID)
 	}
+	if ctx.BidModel != "" {
+		params.Set("bm", ctx.BidModel)
+	}
 	rawURL := ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
 }
 
-// BuildClickURL builds the click tracking URL.
+// BuildClickURL builds the click tracking URL. LandingURL (when set) is
+// baked in as the redir= param BEFORE signing so the tracker can 302 to
+// the advertiser page after recording the click without invalidating the
+// HMAC. Creative HTML therefore uses bare ${CLICK_URL} (no concatenation)
+// and the tracker handles the redirect.
 func BuildClickURL(ctx MacroContext) string {
 	params := url.Values{}
 	params.Set("tid", ctx.AuctionID)
@@ -99,6 +108,9 @@ func BuildClickURL(ctx MacroContext) string {
 	params.Set("crid", ctx.CreativeID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	if ctx.LandingURL != "" {
+		params.Set("redir", ctx.LandingURL)
+	}
 	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
 }

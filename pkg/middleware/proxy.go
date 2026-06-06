@@ -13,7 +13,16 @@ import (
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
 // to a backend service. Used by the gateway to proxy API calls to internal services.
 func ReverseProxy(target string, log *slog.Logger) http.Handler {
-	client := &http.Client{Timeout: 30 * time.Second}
+	// CheckRedirect returns ErrUseLastResponse so the gateway forwards
+	// upstream 3xx responses verbatim instead of following them. Critical
+	// for the tracker click flow where the 302 location points at an
+	// external advertiser domain the gateway can't (and shouldn't) reach.
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Build upstream URL

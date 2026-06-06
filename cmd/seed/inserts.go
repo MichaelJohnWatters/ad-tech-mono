@@ -236,7 +236,7 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 			if useAssetURL(c.CreativeID) && in.creativeAssetBase != "" {
 				key, _ := creativeAssetByTheme(c.CreativeDomain)
 				assetURL := in.creativeAssetBase + "/" + key
-				html = creativeAssetHTML(assetURL, landing)
+				html = creativeAssetHTML(assetURL)
 			}
 			const crQ = `
 INSERT INTO creatives (
@@ -273,7 +273,7 @@ func defaultCreativeHTML(externalID, domain string) string {
 	return `<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#f5f5f5;border:1px solid #ddd;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">` +
 		`<h3 style="margin:0 0 8px;color:#1a1a2e;">` + externalID + `</h3>` +
 		`<p style="margin:0 0 12px;color:#666;font-size:13px;">` + domain + `</p>` +
-		`<a href="${CLICK_URL}https://` + domain + `" style="background:#4361ee;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Visit</a>` +
+		`<a href="${CLICK_URL}" style="background:#4361ee;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Visit</a>` +
 		`<img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;"></div>`
 }
 
