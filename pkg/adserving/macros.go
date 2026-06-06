@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,7 @@ type MacroContext struct {
 	IP           string
 	TrackerURL   string // base URL for tracker service
 	LandingURL   string // baked into the signed click URL as redir= so the tracker can 302 to the advertiser page after recording the click
+	URLTTL       time.Duration // signed-URL freshness window; baked in as exp=<unix-ts> param and covered by the HMAC. 0 = no exp (URL never expires, replay-able forever once HMAC is stolen).
 }
 
 // SubstituteMacros replaces all ${...} macros in the input string.
@@ -92,6 +94,7 @@ func BuildImpressionURL(ctx MacroContext) string {
 	if ctx.BidModel != "" {
 		params.Set("bm", ctx.BidModel)
 	}
+	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
 }
@@ -111,6 +114,7 @@ func BuildClickURL(ctx MacroContext) string {
 	if ctx.LandingURL != "" {
 		params.Set("redir", ctx.LandingURL)
 	}
+	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
 }
@@ -122,6 +126,18 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	params.Set("cid", ctx.CampaignID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/view?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
+}
+
+// setExp adds an exp=<unix-seconds> param to a tracker-URL param set
+// when ttl > 0. Covered by the HMAC because it's added before SignURL,
+// so any rewrite invalidates the sig. The tracker rejects requests with
+// now > exp when tracker.exp_validation is enabled.
+func setExp(params url.Values, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	params.Set("exp", strconv.FormatInt(time.Now().Add(ttl).Unix(), 10))
 }

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSubstituteMacros(t *testing.T) {
@@ -81,6 +82,41 @@ func TestBuildClickURL(t *testing.T) {
 	}
 	if strings.Contains(url, "redir=") {
 		t.Errorf("redir should be absent when LandingURL is empty: %s", url)
+	}
+}
+
+func TestSignedURLsCarryExpWhenTTLSet(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID:   "trace-1",
+		CampaignID:  "c",
+		CreativeID:  "cr",
+		PlacementID: "p",
+		PublisherID: "pub",
+		TrackerURL:  "http://tracker:8083",
+		URLTTL:      time.Hour,
+	}
+	for name, urlFn := range map[string]func(MacroContext) string{
+		"imp":   BuildImpressionURL,
+		"click": BuildClickURL,
+		"view":  BuildViewabilityURL,
+	} {
+		signed := urlFn(ctx)
+		if !strings.Contains(signed, "exp=") {
+			t.Errorf("%s: expected exp= in signed URL: %s", name, signed)
+		}
+		u, err := url.Parse(signed)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", name, err)
+		}
+		if !ValidateSignature(u.Path, u.Query(), DefaultSigningKey) {
+			t.Errorf("%s: signature must cover exp: %s", name, signed)
+		}
+	}
+
+	noTTL := ctx
+	noTTL.URLTTL = 0
+	if strings.Contains(BuildImpressionURL(noTTL), "exp=") {
+		t.Errorf("expected no exp when URLTTL=0")
 	}
 }
 

@@ -15,8 +15,9 @@ var adserverSchema = []config.SchemaEntry{
 	{Key: "adserver.bandit_enabled", Type: "bool", Tier: config.TierLive, Default: "true", Description: "Enable Thompson-sampling creative rotation. Off = creatives picked by simple weighted rotation; on = explores under-served variants and converges on winners.", Service: constants.ServiceAdServer, Since: "v1.0"},
 	{Key: "adserver.default_creative_ttl", Type: "duration", Tier: config.TierLive, Default: "5m", Description: "How long the creative-metadata cache trusts a row before reloading from Postgres. Lower = quicker creative approval propagation, higher = less DB load.", Service: constants.ServiceAdServer, Since: "v1.0"},
 	{Key: "adserver.freq_cap_per_user_per_campaign", Type: "int", Tier: config.TierLive, Default: "5", Description: "Maximum impressions of any single campaign shown to one user inside the cap window. Hard ceiling; per-campaign overrides can only go lower.", Service: constants.ServiceAdServer, Since: "v1.1"},
-	{Key: "adserver.freq_cap_window", Type: "duration", Tier: config.TierLive, Default: "24h", Description: "Sliding window for the per-user-per-campaign frequency cap counter. Counter resets when the window expires; longer window = stricter cap.", Service: constants.ServiceAdServer, Since: "v1.1"},
+	{Key: "adserver.freq_cap_window", Type: "duration", Tier: config.TierLive, Default: "5m", Description: "Sliding window for the per-user-per-campaign frequency cap counter. Counter resets when the window expires; longer window = stricter cap. Default 5m is demo-friendly; production deployments raise this via live config (typical real-world values 1h–24h).", Service: constants.ServiceAdServer, Since: "v1.1"},
 	{Key: "cache.warm.creatives.poll_interval", Type: "duration", Tier: config.TierStatic, Default: "30s", Description: "How often the in-memory creative-metadata cache refreshes from Postgres. Affects how quickly approved/rejected creatives start/stop serving.", Service: constants.ServiceAdServer, Since: "v1.1"},
+	{Key: "adserver.url_ttl", Type: "duration", Tier: config.TierLive, Default: "1h", Description: "Freshness window baked into signed tracker pixel URLs as exp=<unix-ts>. Tracker rejects requests where now > exp. Bounds replay: an attacker who captures a click URL can't fire it after this window expires. Default 1h covers typical session length; 0 disables expiry (forever-valid URLs).", Service: constants.ServiceAdServer, Since: "v1.2"},
 }
 
 // Knobs is the ad server's typed config accessor. See cmd/dsp/config.go
@@ -28,14 +29,16 @@ type Knobs struct {
 	FreqCapLimit  *config.LiveInt
 	FreqCapWindow *config.LiveDuration
 	CreativeTTL   *config.LiveDuration
+	URLTTL        *config.LiveDuration
 }
 
 func NewKnobs(sc *config.ServiceConfig) *Knobs {
 	return &Knobs{
 		cfg:           sc.Cfg,
 		FreqCapLimit:  config.NewLiveInt(sc.Manager, sc.Cfg, "adserver.freq_cap_per_user_per_campaign", 5),
-		FreqCapWindow: config.NewLiveDuration(sc.Manager, sc.Cfg, "adserver.freq_cap_window", 24*time.Hour),
+		FreqCapWindow: config.NewLiveDuration(sc.Manager, sc.Cfg, "adserver.freq_cap_window", 5*time.Minute),
 		CreativeTTL:   config.NewLiveDuration(sc.Manager, sc.Cfg, "adserver.default_creative_ttl", 5*time.Minute),
+		URLTTL:        config.NewLiveDuration(sc.Manager, sc.Cfg, "adserver.url_ttl", time.Hour),
 	}
 }
 
