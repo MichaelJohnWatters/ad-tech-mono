@@ -7,7 +7,12 @@
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
     <style>
-        .sim-container { max-width: var(--max-width); margin: 20px auto; display: grid; grid-template-columns: 1fr 320px; gap: 20px; padding: 0 20px; }
+        /* Single-column layout — debug panel rolled inline below the
+           trace so the main content gets the full page width. No
+           max-width cap (other pages keep theme.css's 1200px cap for
+           readable line lengths; the simulator's flow diagram benefits
+           from every available horizontal pixel). */
+        .sim-container { margin: 20px 0; display: block; padding: 0 20px; }
         .sim-content { background: var(--bg-surface); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
         .sim-content h2 { margin-bottom: 12px; }
         .sim-content p { line-height: 1.6; color: var(--text-secondary); margin-bottom: 12px; }
@@ -33,20 +38,51 @@
         .trace-header { background: var(--bg-surface-3, #1f1f1f); border: 1px solid var(--border, #333); border-radius: var(--radius-lg, 6px); padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: var(--text-secondary); font-family: var(--font-mono, monospace); }
         .trace-header a { color: var(--brand-primary); }
         .flow { display: flex; flex-direction: column; }
-        .node { display: flex; align-items: flex-start; gap: 12px; padding: 8px 14px; border-left: 3px solid var(--border, #333); margin-left: 60px; transition: background 0.15s; }
+        /* Dropped the per-row left border (was 3px coloured by status:
+           green/amber/red). Status is already conveyed by the src badge
+           (live/jaeger) and the message text; the coloured strip added
+           noise without information. border:0 explicit because
+           theme.css's `.trace-node, .node` rule declares border-left
+           and we need to override it here. margin-left also reset
+           since the 60px gutter was for "hanging time"-style layouts. */
+        .node { display: flex; align-items: flex-start; gap: 12px; padding: 8px 14px; border-left: 0; margin-left: 0; transition: background 0.15s; }
         .node:hover { background: var(--bg-hover, rgba(255,255,255,0.04)); }
-        .node.active { border-left-color: #2ecc71; }
-        .node.warn { border-left-color: #f39c12; }
-        .node.error { border-left-color: #e74c3c; }
-        .node.nobid { border-left-color: var(--text-muted, #666); opacity: 0.6; }
-        .node .time { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-muted, #888); min-width: 72px; text-align: right; position: relative; left: -96px; margin-right: -72px; padding-right: 4px; }
+        .node.error { color: #e74c3c; }
+        .node.nobid { opacity: 0.6; }
+        /* Time column holds "#chrono · time" as a single tabular slot.
+           Plain inline layout reads left-to-right naturally. The left/
+           margin-right resets undo theme.css's hanging-left positioning
+           (position:relative;left:-72px;margin-right:-60px) which was
+           designed for a wide-column layout and made everything overlap
+           in the 280px sidebar. */
+        .node .time { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text-muted, #888); min-width: 90px; text-align: left; padding-right: 4px; white-space: nowrap; position: static; left: auto; margin-right: 0; }
+
+        /* Timeline-as-sidebar: single-line rows. Now that the sidebar
+           is 500px wide we can fit chrono + time + src + service + msg
+           on one line. msg gets the remaining space and truncates with
+           ellipsis if the message overflows; hover reveals the full
+           text via title attribute. */
+        #traceFlow .node { padding: 4px 8px; gap: 8px; align-items: center; flex-wrap: nowrap; }
+        #traceFlow .node .time { min-width: 0; font-size: 11px; padding-right: 0; flex: 0 0 auto; }
+        #traceFlow .node .service { min-width: 0; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
+        #traceFlow .node .src { font-size: 9px; padding: 0 4px; flex: 0 0 auto; }
+        #traceFlow .node .msg { font-size: 12px; flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* Service palette: green and purple are RESERVED for the source
+           badges (live = green, jaeger = purple) so a row's source signal
+           is always unambiguous against any service tag. Service colours
+           avoid those hues — exchange uses amber where it used to use
+           indigo, dsp uses teal where it used to use green. */
         .node .service { font-weight: 600; font-size: 13px; min-width: 100px; }
-        .node .service.exchange { color: #818cf8; }
-        .node .service.dsp { color: #34d399; }
-        .node .service.tracker { color: #f39c12; }
+        .node .service.exchange { color: #eab308; }
+        .node .service.dsp { color: #14b8a6; }
+        .node .service.tracker { color: #f97316; }
         .node .service.adserver { color: #ec4899; }
         .node .service.reporting { color: #06b6d4; }
         .node .service.browser { color: var(--text-secondary, #aaa); }
+        .node .service.ssp { color: #60a5fa; }
+        .node .service.pubad { color: #f43f5e; }
+        .node .service[class*="publisher-adserver"] { color: #f43f5e; }
+        .node .service.gateway { color: #0ea5e9; }
         .node .msg { font-size: 13px; color: var(--text-primary, #ddd); }
         .node .msg .detail { color: var(--text-muted, #888); font-size: 12px; }
         /* Source badge: shows whether the row came from a synchronous
@@ -54,12 +90,18 @@
            Browser hops show up immediately; jaeger hops trickle in over the
            ~30s poll window. Same trace_id either way — just two views of it. */
         .node .src { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        /* live = green, jaeger = purple — these two are the only places
+           green/purple appear in the timeline so the source signal stays
+           visually distinct from any service-coloured text. */
         .node .src.live { background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3); }
-        .node .src.jaeger { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+        .node .src.jaeger { background: rgba(168, 85, 247, 0.15); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.3); }
         .ad-slot .ad-content { text-align: center; padding: 20px; }
         .ad-slot .ad-content h3 { margin-bottom: 8px; }
         .ad-slot .ad-content .cta { display: inline-block; background: var(--brand-primary); color: white; padding: 8px 20px; border-radius: var(--radius-sm); text-decoration: none; margin-top: 10px; }
-        .debug-panel { position: sticky; top: 20px; max-height: calc(100vh - 40px); overflow-y: auto; }
+        /* Debug panel was the right sidebar; now rolled into the main
+           content column below the trace. Drop the sticky positioning
+           since it's inline. Keep some breathing room via margin. */
+        .debug-panel { margin-top: 20px; background: var(--bg-surface); border-radius: var(--radius-lg); padding: 16px 20px; box-shadow: var(--shadow-sm); }
         .debug-entry .trace-link { color: var(--brand-primary); cursor: pointer; text-decoration: underline; }
         .event-row { display: flex; justify-content: space-between; margin: 4px 0; }
         .event-row .status { min-width: 20px; text-align: center; }
@@ -81,42 +123,43 @@
          Organised by the question they answer rather than the tool they hit
          — e.g. "is the system slow?" is one row, "where are the errors?"
          is another. -->
-    <details open style="max-width: var(--max-width); margin: 4px auto 12px; padding: 0; border-top: 1px solid var(--border-subtle, #2a2a3a); border-bottom: 1px solid var(--border-subtle, #2a2a3a); background: rgba(255,255,255,0.02); font-size: 12px;">
+    <details open style="margin: 4px 0 12px; padding: 0; border-top: 1px solid var(--border-subtle, #2a2a3a); border-bottom: 1px solid var(--border-subtle, #2a2a3a); background: rgba(255,255,255,0.02); font-size: 12px;">
         <summary style="padding: 8px 20px; cursor: pointer; user-select: none; color: var(--text-secondary);"><strong>Observability</strong> <span style="color: var(--text-muted); font-weight: normal;">— quick-links to metrics, logs, traces, debug surfaces. Click to collapse.</span></summary>
         <div style="padding: 4px 20px 12px; display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; align-items: start;">
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Hot path latency</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
-                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%5B5m%5D))by(service%2Chandler%2Cle))" target="_blank" title="p95 latency per handler over last 5 min">p95 by handler</a>
-                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.99%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fopenrtb%2Fbid%22%7D%5B5m%5D))by(pod%2Cle))" target="_blank" title="p99 bid latency per DSP pod">p99 bid by DSP pod</a>
-                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fopenrtb%2Fauction%22%7D%5B5m%5D))by(le))" target="_blank" title="p95 exchange auction over 5m">Auction p95</a>
-                <a href="http://localhost:9090/api/v1/query?query=histogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%7Bhandler%3D%22%2Fv1%2Fssp%2Fserve%22%7D%5B5m%5D))by(le))" target="_blank" title="p95 SSP /serve over 5m">SSP serve p95</a>
-                <a href="http://localhost:9090/api/v1/query?query=topk(5%2Chistogram_quantile(0.95%2Csum(rate(adtech_http_request_duration_seconds_bucket%5B5m%5D))by(service%2Chandler%2Cle)))" target="_blank" title="5 slowest handlers right now">Top 5 slowest</a>
+                <a href="http://localhost:3000/d/adtech-service?viewPanel=4" target="_blank" title="adtech-service · panel 4 — p95 by handler for the selected service. Change the service variable at the top.">p95 by handler</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22prometheus%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22histogram_quantile%280.99%2Csum%28rate%28adtech_http_request_duration_seconds_bucket%7Bhandler%3D%5C%22/v1/openrtb/bid%5C%22%7D%5B5m%5D%29%29by%28pod%2Cle%29%29%22%7D%5D%7D" target="_blank" title="Grafana Explore — p99 bid latency per DSP pod. No dedicated panel; closest is Pipeline → panel 6 (p95).">p99 bid by DSP pod</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=2" target="_blank" title="adtech-pipeline · panel 2 — Auction Latency p50/p95/p99.">Auction p95</a>
+                <a href="http://localhost:3000/d/adtech-service?viewPanel=4&var-service=ssp" target="_blank" title="adtech-service · panel 4 with service=ssp — p95 by handler for SSP.">SSP serve p95</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22prometheus%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22topk%285%2Chistogram_quantile%280.95%2Csum%28rate%28adtech_http_request_duration_seconds_bucket%5B5m%5D%29%29by%28service%2Chandler%2Cle%29%29%29%22%7D%5D%7D" target="_blank" title="Grafana Explore — 5 slowest handlers right now (no dedicated panel).">Top 5 slowest</a>
             </div>
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Throughput</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
-                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%5B1m%5D))by(service%2Chandler)" target="_blank" title="Requests per second by service+handler">RPS</a>
-                <a href="http://localhost:9090/api/v1/query?query=adtech_http_in_flight_requests" target="_blank" title="In-flight requests gauge per service">In-flight</a>
-                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bservice%3D%22dsp%22%2Chandler%3D%22%2Fv1%2Fopenrtb%2Fbid%22%7D%5B1m%5D))by(pod)" target="_blank" title="Bid requests per second per DSP pod">DSP bid RPS</a>
-                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bservice%3D%22tracker%22%7D%5B1m%5D))by(handler)" target="_blank" title="Tracker pixel RPS by endpoint">Tracker RPS</a>
+                <a href="http://localhost:3000/d/adtech-service?viewPanel=1" target="_blank" title="adtech-service · panel 1 — request rate by handler for the selected service.">RPS</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=8" target="_blank" title="adtech-pipeline · panel 8 — in-flight requests by service.">In-flight</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=3" target="_blank" title="adtech-pipeline · panel 3 — bid RPS per DSP pod.">DSP bid RPS</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=4" target="_blank" title="adtech-pipeline · panel 4 — tracker impression RPS (click RPS is panel 5).">Tracker RPS</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=17" target="_blank" title="adtech-pipeline · panel 17 — bids submitted vs no-bids vs wins, by DSP endpoint.">Bids/Wins/No-bids by DSP</a>
             </div>
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Errors</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
-                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bstatus%3D~%225..%22%7D%5B1m%5D))by(service)" target="_blank" title="5xx rate by service">5xx rate</a>
-                <a href="http://localhost:9090/api/v1/query?query=sum(rate(adtech_http_requests_total%7Bstatus%3D~%224..%22%7D%5B1m%5D))by(service%2Chandler)" target="_blank" title="4xx rate by service+handler">4xx rate</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=7" target="_blank" title="adtech-pipeline · panel 7 — 5xx + 4xx by service+status.">5xx rate</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=7" target="_blank" title="Same panel as 5xx rate — 4xx and 5xx are charted together.">4xx rate</a>
                 <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22.%2B%5C%22%7D%20%7C%3D%20%5C%22ERROR%5C%22%22%7D%5D%7D" target="_blank" title="All ERROR-level log lines across services">All ERROR logs</a>
                 <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22loki%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22%7Bservice%3D~%5C%22.%2B%5C%22%7D%20%7C%3D%20%5C%22WARN%5C%22%22%7D%5D%7D" target="_blank" title="All WARN-level log lines">All WARN logs</a>
             </div>
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Process health</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
-                <a href="http://localhost:9090/api/v1/query?query=adtech_up" target="_blank" title="Per-service up=1 gauge">Up</a>
-                <a href="http://localhost:9090/api/v1/query?query=go_goroutines" target="_blank" title="Goroutine count per service — watch for leaks">Goroutines</a>
-                <a href="http://localhost:9090/api/v1/query?query=adtech_process_resident_memory_bytes%2F1024%2F1024" target="_blank" title="RSS in MiB per service">Memory (MiB)</a>
-                <a href="http://localhost:9090/api/v1/query?query=rate(go_gc_duration_seconds_sum%5B5m%5D)" target="_blank" title="GC time per second — high = GC pressure">GC pressure</a>
-                <a href="http://localhost:9090/api/v1/query?query=go_threads" target="_blank" title="OS threads per Go process">OS threads</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=9" target="_blank" title="adtech-pipeline · panel 9 — per-service up=1 stat.">Up</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=10" target="_blank" title="adtech-pipeline · panel 10 — goroutine count per service.">Goroutines</a>
+                <a href="http://localhost:3000/d/adtech-pipeline?viewPanel=11" target="_blank" title="adtech-pipeline · panel 11 — Go heap (MiB) per service.">Memory (MiB)</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22prometheus%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22rate%28go_gc_duration_seconds_sum%5B5m%5D%29%22%7D%5D%7D" target="_blank" title="Grafana Explore — GC time per second (no dedicated panel).">GC pressure</a>
+                <a href="http://localhost:3000/explore?orgId=1&left=%7B%22datasource%22%3A%22prometheus%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22go_threads%22%7D%5D%7D" target="_blank" title="Grafana Explore — OS threads per process (no dedicated panel).">OS threads</a>
             </div>
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Traces</span>
@@ -159,13 +202,13 @@
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Debug endpoints</span>
             <div style="display: flex; flex-wrap: wrap; gap: 4px 10px;">
-                <a href="http://localhost:8081/v1/openrtb/routing" target="_blank" title="Smart router learned stats per DSP">Router stats</a>
+                <a href="http://localhost:8081/debug/exchange/routing" target="_blank" title="Smart router learned stats per DSP">Router stats</a>
                 <a href="http://localhost:8086/debug/auction_wins" target="_blank" title="Recent AuctionWinEvents (count)">Auction wins</a>
                 <a href="http://localhost:8086/v1/billing/ledger" target="_blank" title="In-memory billing ledger entries">Ledger</a>
-                <a href="http://localhost:8084/v1/ssp/placements" target="_blank" title="SSP warm-cache contents (all placements)">SSP placements</a>
-                <a href="http://localhost:8082/v1/dsp/campaigns" target="_blank" title="DSP internal warm-cache contents">DSP-internal</a>
-                <a href="http://localhost:8089/v1/dsp/campaigns" target="_blank" title="DSP competitor1 warm-cache">DSP-comp1</a>
-                <a href="http://localhost:8090/v1/dsp/campaigns" target="_blank" title="DSP competitor2 warm-cache">DSP-comp2</a>
+                <a href="http://localhost:8084/v1/ssp/placements?api_key=dev-api-key-do-not-use-in-prod" target="_blank" title="SSP warm-cache contents (all placements). ?api_key=… is required because middleware.AuthAPIKey gates this endpoint; browser navigation can't add the X-API-Key header so we fall back to the query param.">SSP placements</a>
+                <a href="http://localhost:8082/v1/dsp/campaigns?api_key=dev-api-key-do-not-use-in-prod" target="_blank" title="DSP internal warm-cache contents">DSP-internal</a>
+                <a href="http://localhost:8089/v1/dsp/campaigns?api_key=dev-api-key-do-not-use-in-prod" target="_blank" title="DSP competitor1 warm-cache">DSP-comp1</a>
+                <a href="http://localhost:8090/v1/dsp/campaigns?api_key=dev-api-key-do-not-use-in-prod" target="_blank" title="DSP competitor2 warm-cache">DSP-comp2</a>
             </div>
 
             <span style="color: var(--text-muted); font-weight: 600; padding-top: 2px;">Raw /metrics</span>
@@ -195,7 +238,7 @@
          drain completes (or is stopped) so the user sees the final reason
          + stats; click Dismiss to clear. -->
     <div id="drainBanner" style="display: none; position: sticky; top: 0; z-index: 500; padding: 10px 20px; background: var(--bg-primary, #1a1a2e); border-bottom: 3px solid #4361ee; box-shadow: 0 2px 8px rgba(0,0,0,0.3); font-size: 13px;">
-        <div style="max-width: var(--max-width); margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
             <div id="drainBannerStatus" style="flex: 1;"></div>
             <div style="display: flex; gap: 8px; flex-shrink: 0;">
                 <button class="btn btn-secondary" id="drainBannerStopBtn" onclick="stopDrain()" style="padding: 4px 12px;">Stop</button>
@@ -227,6 +270,28 @@
             </select>
             <button class="btn btn-primary" onclick="loadAd()">Load Ad</button>
             <button class="btn btn-secondary" onclick="clearAd()">Clear</button>
+            <!-- Prebid mode: switches Load Ad from the realistic
+                 SSP-rendered flow to a Prebid-Server-style call that POSTs
+                 OpenRTB directly to the exchange's /v1/prebid/openrtb2/auction
+                 bidder endpoint. The request is built using the same shape
+                 our Prebid.js adapter (web/static/prebid-adtechmono-adapter.js)
+                 produces, so flipping this toggle is the closest local
+                 simulation of "real Prebid publisher calling us". The
+                 winning bid is rendered as a plain HTML block — no SSP
+                 ad-server render path, no macro substitution. -->
+            <label style="margin-left: 12px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
+                <input type="checkbox" id="prebidMode" onchange="if(this.checked){document.getElementById('pubAdMode').checked=false;}" /> Prebid mode
+            </label>
+            <!-- Publisher-led mode: routes through the publisher ad server
+                 (cmd/publisher-adserver, port 8088) instead of straight to
+                 the SSP. The publisher-adserver arbitrates direct-sold
+                 line items against programmatic (calling the SSP under
+                 the hood), then renders the winner. Mirrors what a real
+                 publisher running GAM / Kevel does. Mutually exclusive
+                 with Prebid mode — picking one auto-unchecks the other. -->
+            <label style="margin-left: 12px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
+                <input type="checkbox" id="pubAdMode" onchange="if(this.checked){document.getElementById('prebidMode').checked=false;}" /> Publisher ad server
+            </label>
             <!-- Spam load-test: fires N concurrent /v1/ssp/serve requests
                  across every active placement with rotating geo + device.
                  Budgets drain via the OpenRTB nurl HTTP path the same way
@@ -252,8 +317,26 @@
                 <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
             </div>
 
-            <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation.</p>
 
+        </div><!-- /.sim-content (publisher-page mock: just the heading + ad slot) -->
+
+        <!-- Debug panel: sits ABOVE the trace section as the first operator
+             surface after the publisher mock. Updated by debugLog() after
+             each ad serve with the per-step status entries. -->
+        <div class="debug-panel" id="debugPanel">
+            <h3>Ad Debug Panel</h3>
+            <div id="debugContent">
+                <div class="debug-entry">
+                    <div class="label">Status</div>
+                    <div class="value pending">Waiting for ad request...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Operator surfaces: trace section + cache state panels.
+             Outside sim-content so they read as their own thing,
+             not part of the publisher page mock above. -->
+        <div class="sim-content">
             <!-- Trace timeline: mirrors the Trace Explorer's step-by-step
                  flow view so you can see the same hops (SSP → exchange → DSP →
                  ad server → tracker) right next to the ad slot. Populated by
@@ -270,7 +353,63 @@
                      (winner, clearing price) — never exposed to the browser
                      fetch response, which mirrors what a real SSP returns. -->
                 <div id="auctionOutcome" style="display: none; padding: 8px 12px; margin: 8px 0; background: rgba(67, 97, 238, 0.08); border-left: 3px solid #4361ee; border-radius: 4px; font-size: 13px;"></div>
-                <div id="traceFlow" class="flow"></div>
+
+                <!-- Side-by-side: chronological timeline on the left
+                     (narrow, fixed-width), visual flow diagram on the
+                     right (wide, fills remaining space — the more
+                     visual surface gets the larger area). Two views
+                     share the same traceSteps source and cross-highlight
+                     on hover, so they read naturally as one surface.
+                     No flex-wrap — the map's SVG has max-width:100%
+                     and scales to fit whatever space is left. -->
+                <div id="traceLayout" style="display: flex; gap: 14px; margin: 10px 0; align-items: stretch;">
+
+                <!-- Timeline sidebar (left). Fixed-width column so it
+                     always sits beside the map; scrolls internally so a
+                     long trace doesn't push the debug panel below it
+                     off-screen. Each row uses the same #N chrono index
+                     as the map's edge badges; hovering pulses the
+                     matching map node and vice versa. -->
+                <div style="flex: 0 0 500px; border: 1px solid var(--border-subtle, #333); border-radius: 6px; padding: 8px 12px; display: flex; flex-direction: column; max-height: 760px;">
+                    <h4 style="margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-secondary, #aaa);">Chronological timeline</h4>
+                    <div id="traceFlow" class="flow" style="overflow-y: auto; flex: 1;"></div>
+                </div>
+
+                <!-- Visual map of the auction flow (right, the larger
+                     panel since it's the primary read surface). Two
+                     views:
+                       arch (default) — service boxes + animated hops
+                       seq            — swimlane / waterfall by time -->
+                <div id="traceMapWrapper" style="flex: 1 1 0; min-width: 0; border: 1px solid var(--border-subtle, #333); border-radius: 6px; padding: 8px 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <strong style="font-size: 13px;">Visual flow</strong>
+                        <div style="display: inline-flex; gap: 0; font-size: 11px;">
+                            <button id="traceMapArchBtn" onclick="selectTraceMapView('arch')"
+                                style="padding: 3px 10px; border: 1px solid var(--border-subtle, #444); border-radius: 4px 0 0 4px; background: var(--brand, #4361ee); color: white; cursor: pointer;">
+                                Architecture
+                            </button>
+                            <button id="traceMapSeqBtn" onclick="selectTraceMapView('seq')"
+                                style="padding: 3px 10px; border: 1px solid var(--border-subtle, #444); border-left: none; border-radius: 0 4px 4px 0; background: transparent; color: var(--text-secondary); cursor: pointer;">
+                                Sequence
+                            </button>
+                        </div>
+                    </div>
+                    <div id="traceMapArch" style="overflow-x: auto;">
+                        <svg id="traceMapArchSvg" width="880" height="380" viewBox="0 -60 880 380" style="display: block; max-width: 100%;"></svg>
+                    </div>
+                    <div id="traceMapSeq" style="display: none; overflow-x: auto;">
+                        <svg id="traceMapSeqSvg" width="880" height="360" viewBox="0 0 880 360" style="display: block; max-width: 100%;"></svg>
+                    </div>
+                    <!-- Persistent info bar — hover a node or hop edge to populate.
+                         Replaces the floating tooltip (which was broken by inline
+                         onmouseover JSON-string-in-double-quote-attribute parsing).
+                         Always present so the operator never wonders "what did I
+                         just hover" — the answer is right there. -->
+                    <div id="traceMapInfo" style="margin-top: 8px; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 4px; font-size: 11px; color: var(--text-secondary, #aaa); min-height: 32px; display: flex; flex-direction: column; gap: 2px;">
+                        <span style="color: var(--text-muted, #666); font-style: italic;">Hover a service or hop edge for details.</span>
+                    </div>
+                </div><!-- /#traceMapWrapper -->
+                </div><!-- /#traceLayout -->
 
                 <h3 style="margin-top: 18px;">Trace Destinations</h3>
                 <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
@@ -334,17 +473,66 @@
                     <div style="color: var(--text-secondary);">Loading…</div>
                 </div>
             </div>
-        </div>
 
-        <div class="debug-panel" id="debugPanel">
-            <h3>Ad Debug Panel</h3>
-            <div id="debugContent">
-                <div class="debug-entry">
-                    <div class="label">Status</div>
-                    <div class="value pending">Waiting for ad request...</div>
+            <!-- Exchange Deals: warm-cache snapshot of active PG / Preferred /
+                 PMP deals matched into the auction. PG always wins (preempt);
+                 Preferred / PMP raise the per-bid effective floor. Empty
+                 here = no deals seeded (run a deals profile via seed). -->
+            <div id="dealsPanel" style="margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">Exchange Deals</h3>
+                    <button class="btn btn-secondary" onclick="refreshDeals()">Refresh</button>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    Active deals in the exchange's warm cache. Priority order:
+                    PG (0) &gt; Preferred (1) &gt; PMP (2) &gt; Open (3). The
+                    matcher filters by publisher + placement + advertiser
+                    allowlist + time window per bid request.
+                </div>
+                <div id="dealsContent" style="font-size: 13px;">
+                    <div style="color: var(--text-secondary);">Loading…</div>
                 </div>
             </div>
-        </div>
+
+            <!-- Adserver Creatives: warm-cache snapshot of approved creatives
+                 the ad server can render. has_html = inline HTML (small banner
+                 fast path); else asset_url + Minio fetch. Mismatch with DSP
+                 campaign-referenced creatives = bug. -->
+            <div id="creativesPanel" style="margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">Ad Server Creatives</h3>
+                    <button class="btn btn-secondary" onclick="refreshCreatives()">Refresh</button>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    Approved creatives loaded into the ad server's warm cache.
+                    The "rendered" path picks based on creative_id from the
+                    winning bid.
+                </div>
+                <div id="creativesContent" style="font-size: 13px;">
+                    <div style="color: var(--text-secondary);">Loading…</div>
+                </div>
+            </div>
+
+            <!-- Reporting Billing Rates: per-publisher revenue-share contracts
+                 (loaded from publishers.revshare_config JSONB → ContractStore).
+                 Drives how each AuctionWinEvent settle splits between
+                 publisher payout and platform margin. -->
+            <div id="ratesPanel" style="margin-top: 24px; border-top: 1px solid var(--border-subtle, #333); padding-top: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">Reporting Billing Rates</h3>
+                    <button class="btn btn-secondary" onclick="refreshRates()">Refresh</button>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    Per-publisher revenue-share contracts in the reporting
+                    service's warm cache. Read from
+                    <code>publishers.revshare_config</code> JSONB.
+                </div>
+                <div id="ratesContent" style="font-size: 13px;">
+                    <div style="color: var(--text-secondary);">Loading…</div>
+                </div>
+            </div>
+
+        </div><!-- /.sim-content (operator surfaces: trace + cache panels) -->
     </div>
 
     <!-- Drain budgets modal. Configurable fixed-count vs drain-until-exhausted,
@@ -459,6 +647,20 @@
         // tracker URL that we follow on click).
         const SSP_URL = window.location.protocol + '//' + window.location.hostname + ':8084';
         const TRACKER_URL = window.location.protocol + '//' + window.location.hostname + ':8083';
+        // DEV_API_KEY is seeded by cmd/seed (SeedDevSecrets) as the well-
+        // known dev-mode operator credential. The pub sim attaches it to
+        // every call into management endpoints (SSP placements CRUD, DSP
+        // campaigns CRUD) so the dashboard works out of the box without
+        // manual key issuance. Production deployments revoke this row
+        // immediately after first boot.
+        const DEV_API_KEY = 'dev-api-key-do-not-use-in-prod';
+        // EXCHANGE_URL is used only by the optional "Prebid mode" toggle
+        // below — the standard publisher flow above NEVER calls the
+        // exchange from the browser (auction internals stay server-side).
+        // Prebid mode simulates what an external Prebid Server / Prebid.js
+        // adapter would do: POST OpenRTB directly to the exchange's
+        // bidder endpoint and render the winning bid.
+        const EXCHANGE_URL = window.location.protocol + '//' + window.location.hostname + ':8081';
 
         let currentTraceID = null;
         // Trace timeline state — reset at the top of each loadAd call and
@@ -467,10 +669,17 @@
         // standalone Trace Explorer shows.
         let traceSteps = [];
         let traceStart = 0;
+        // Wall-clock anchor for the timeline. Jaeger reports span startTime
+        // in microseconds since Unix epoch; we subtract this to convert into
+        // "ms since the trace began" so jaeger-discovered spans land at
+        // their real causal position, not where the 3s poller happened to
+        // fetch them.
+        let traceStartWall = 0;
 
         function traceReset() {
             traceSteps = [];
             traceStart = performance.now();
+            traceStartWall = Date.now();
             knownSpans.clear();
             expandedNodes.clear();
             stopJaegerPoll();
@@ -492,8 +701,17 @@
         }
 
         function traceLog(service, msg, opts = {}) {
-            const elapsed = Math.round(performance.now() - traceStart);
+            // Caller can pass an explicit elapsedMs (jaeger poller does:
+            // span.startTime - traceStartWall). Otherwise we measure
+            // ourselves — the live path.
+            let elapsed;
+            if (typeof opts.elapsedMs === 'number') {
+                elapsed = Math.max(0, Math.round(opts.elapsedMs));
+            } else {
+                elapsed = Math.round(performance.now() - traceStart);
+            }
             traceSteps.push({
+                elapsedMs: elapsed,
                 time: formatElapsed(elapsed),
                 service,
                 msg,
@@ -544,7 +762,17 @@
 
         function renderTrace() {
             const flow = document.getElementById('traceFlow');
-            flow.innerHTML = traceSteps.map(s => {
+            // Sort by the underlying elapsedMs so jaeger-late-arriving spans
+            // slot into causal order. Stable sort preserves insertion order
+            // for ties (matters when two spans share the same ms).
+            const ordered = traceSteps.slice().sort((a, b) => a.elapsedMs - b.elapsedMs || a.idx - b.idx);
+            // Assign chronological index (#1, #2, …) AFTER sorting so the
+            // numbers match the order rows appear — and match the badges
+            // on the visual flow above. Mutates the step in place because
+            // computeTraceMapModel re-derives the same ordering, so both
+            // views show the same chrono numbers.
+            ordered.forEach((s, i) => { s.chrono = i + 1; });
+            flow.innerHTML = ordered.map(s => {
                 const isOpen = expandedNodes.has(s.idx);
                 const caret = isOpen ? '▾' : '▸';
                 const detailPanel = isOpen ? `
@@ -553,8 +781,11 @@
                     </div>
                 ` : '';
                 return `
-                <div class="node ${s.cls}" onclick="toggleTraceNode(${s.idx})" style="cursor: pointer;">
-                    <span class="time">${s.time}</span>
+                <div class="node ${s.cls}" data-step-idx="${s.idx}" data-trace-node-id="${traceServiceToNodeID(s.service)}"
+                     onclick="toggleTraceNode(${s.idx})"
+                     onmouseenter="highlightFromTimeline(${s.idx})" onmouseleave="clearCrossHighlights()"
+                     style="cursor: pointer;">
+                    <span class="time" style="font-variant-numeric: tabular-nums;"><span style="color: var(--text-secondary, #aaa); font-weight: 600;">#${s.chrono}</span> <span style="color: var(--text-muted, #555);">·</span> ${s.time}</span>
                     <span class="src ${s.src}">${s.src}</span>
                     <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
                     <span class="msg"><span style="color: var(--text-muted, #888); margin-right: 6px;">${caret}</span>${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
@@ -562,7 +793,605 @@
                 ${detailPanel}
                 `;
             }).join('');
+            // Re-paint the visual map alongside the textual timeline.
+            renderTraceMap();
         }
+
+        // ============================================================
+        // Trace visualization — Architecture + Sequence views.
+        // Both views consume the same `traceSteps` array that drives
+        // #traceFlow. Pure SVG, no external libs.
+        //
+        // Design notes after v1 feedback ("arrows overlap, no tooltips,
+        // boxes all blue"):
+        //   - Tooltips moved to a persistent info bar (#traceMapInfo)
+        //     populated via event delegation on the SVG. The original
+        //     inline onmouseover="...JSON.stringify..." pattern was
+        //     broken because the stringified text contains double quotes
+        //     that terminated the HTML attribute early — handlers never
+        //     fired, hence "no popup". Delegation also lets the user
+        //     just glance at the bar instead of chasing a floating tip.
+        //   - Each service box is now coloured with the SAME palette
+        //     used by the textual trace timeline (.node .service.* in
+        //     the inline CSS above) so the visual map and the timeline
+        //     speak the same colour language.
+        //   - Edges grouped per (from,to) pair, with a numbered badge
+        //     showing the first hop index. Multi-hit edges add "×N".
+        //   - Back-edges (right-to-left arrows, e.g. DSP→Exchange
+        //     response) route as a HIGH ARC above the forward line so
+        //     forward + back are visually distinct rather than overlap.
+        //   - Layout uses a downstream band for AdServer/Tracker/
+        //     Reporting so the SSP→Exchange→Adserver leg reads top-down
+        //     and doesn't fight the fan-out lanes.
+        // ============================================================
+
+        // Service palette — matches the .node .service.* colours in the
+        // inline CSS at the top of the page so the diagram + timeline
+        // share a single visual language. If you tweak one, tweak both.
+        //
+        // Green and purple are reserved for the live / jaeger source
+        // badges — no service uses those hues so a source badge always
+        // reads cleanly against the row's service colour.
+        const TRACE_SVC_COLOR = {
+            browser:    '#94a3b8',
+            gateway:    '#0ea5e9',
+            pubad:      '#f43f5e',
+            ssp:        '#60a5fa',
+            exchange:   '#eab308',
+            dsp:        '#14b8a6',
+            'dsp-comp1':'#14b8a6',
+            'dsp-comp2':'#14b8a6',
+            adserver:   '#ec4899',
+            tracker:    '#f97316',
+            reporting:  '#06b6d4',
+        };
+
+        // Static service map. (x,y) is the box top-left in the
+        // architecture view; col is the swimlane index for sequence view.
+        // Layout: top band = request path (Browser → SSP → Exchange);
+        // right column = three DSPs fanned out; bottom band = downstream
+        // (AdServer → Tracker → Reporting) so back-edges and downstream
+        // edges don't fight for the same space.
+        const TRACE_NODES = [
+            // Left edge: client + front-door (gateway proxies management
+            // and observability calls; browser is the request originator
+            // for both ad-load flows and management UI).
+            { id: 'gateway',   label: 'Gateway',     x:  20, y:  10, col: 0 },
+            { id: 'browser',   label: 'Browser',     x:  20, y:  80, col: 1 },
+            // Top row: request path. Pub-AdSrv sits between Browser and
+            // SSP only on the publisher-led mode flow; stays inactive
+            // (grey) when Browser → SSP directly.
+            { id: 'pubad',     label: 'Pub-AdSrv',   x: 150, y:  80, col: 2 },
+            { id: 'ssp',       label: 'SSP',         x: 280, y:  80, col: 3 },
+            { id: 'exchange',  label: 'Exchange',    x: 410, y:  80, col: 4 },
+            // Right column: DSP fan-out
+            { id: 'dsp',       label: 'DSP-int',     x: 600, y:  10, col: 5 },
+            { id: 'dsp-comp1', label: 'DSP-comp1',   x: 600, y:  80, col: 6 },
+            { id: 'dsp-comp2', label: 'DSP-comp2',   x: 600, y: 150, col: 7 },
+            // Bottom row: downstream (render → track → report)
+            { id: 'adserver',  label: 'AdServer',    x: 280, y: 240, col: 8 },
+            { id: 'tracker',   label: 'Tracker',     x: 410, y: 240, col: 9 },
+            { id: 'reporting', label: 'Reporting',   x: 560, y: 240, col: 10 },
+        ];
+        const TRACE_NODE_BY_ID = Object.fromEntries(TRACE_NODES.map(n => [n.id, n]));
+        const NODE_W = 110, NODE_H = 40;
+
+        function traceServiceToNodeID(service) {
+            const s = (service || '').toLowerCase();
+            if (s.includes('comp1') || s.includes('competitor1')) return 'dsp-comp1';
+            if (s.includes('comp2') || s.includes('competitor2')) return 'dsp-comp2';
+            if (s.startsWith('dsp')) return 'dsp';
+            // Publisher-adserver MUST come before the generic adserver
+            // check below — "publisher-adserver" contains "adserver" as
+            // a substring, so the order matters.
+            if (s.includes('publisher-adserver') || s.includes('publisher_adserver') || s === 'pubad') return 'pubad';
+            if (s.includes('adserver') || s.includes('ad server')) return 'adserver';
+            if (s.includes('tracker')) return 'tracker';
+            if (s.includes('reporting')) return 'reporting';
+            if (s.includes('exchange')) return 'exchange';
+            if (s.includes('ssp')) return 'ssp';
+            if (s.includes('gateway')) return 'gateway';
+            return 'browser';
+        }
+
+        let currentTraceMapView = 'arch';
+
+        function selectTraceMapView(view) {
+            currentTraceMapView = view;
+            document.getElementById('traceMapArch').style.display = (view === 'arch') ? '' : 'none';
+            document.getElementById('traceMapSeq').style.display  = (view === 'seq')  ? '' : 'none';
+            const archBtn = document.getElementById('traceMapArchBtn');
+            const seqBtn  = document.getElementById('traceMapSeqBtn');
+            archBtn.style.background = (view === 'arch') ? 'var(--brand, #4361ee)' : 'transparent';
+            archBtn.style.color      = (view === 'arch') ? 'white' : 'var(--text-secondary)';
+            seqBtn.style.background  = (view === 'seq')  ? 'var(--brand, #4361ee)' : 'transparent';
+            seqBtn.style.color       = (view === 'seq')  ? 'white' : 'var(--text-secondary)';
+            renderTraceMap();
+        }
+
+        // computeTraceMapModel — builds two parallel views from traceSteps:
+        //   `ordered`/`perNode` are chronological (drive the timeline)
+        //   `hops` are CAUSAL — edges derived from OTel parent/child span
+        //   references, not from time-adjacency. Edge A→B means "span B
+        //   was a child of span A". Drawing edges from causality rather
+        //   than chronology fixes the false-signal problem where two
+        //   unrelated services that happened to fire close together
+        //   looked chained in the diagram.
+        //
+        // Browser-sourced rows (src='live') don't have OTel span IDs so
+        // they can't anchor causal edges. They still appear in the
+        // timeline and contribute to per-node counts, just not to the
+        // edge set. In practice the same hops they observe will also
+        // surface as Jaeger spans (with parent links), so the diagram
+        // doesn't lose information.
+        function computeTraceMapModel() {
+            const ordered = traceSteps.slice().sort((a, b) => a.elapsedMs - b.elapsedMs || a.idx - b.idx);
+            ordered.forEach((s, i) => { s.chrono = i + 1; });
+
+            // Map span_id → step so we can resolve parent references.
+            // Only jaeger-sourced rows carry span.id in meta.
+            const bySpanID = {};
+            for (const s of ordered) {
+                const sid = s.meta && s.meta['span.id'];
+                if (sid) bySpanID[sid] = s;
+            }
+
+            const perNode = {};
+            const hops = [];
+            for (const step of ordered) {
+                const nodeID = traceServiceToNodeID(step.service);
+                if (!perNode[nodeID]) perNode[nodeID] = { count: 0, errors: 0, steps: [] };
+                perNode[nodeID].count++;
+                if (step.cls === 'error') perNode[nodeID].errors++;
+                perNode[nodeID].steps.push(step);
+
+                // Causal edge: this span's parent span → this span.
+                // Only emit when both ends are known AND map to different
+                // service nodes (within-service spans don't need a hop).
+                const parentID = step.meta && step.meta['span.parent_id'];
+                if (parentID) {
+                    const parent = bySpanID[parentID];
+                    if (parent) {
+                        const fromNode = traceServiceToNodeID(parent.service);
+                        const toNode   = nodeID;
+                        if (fromNode !== toNode) {
+                            hops.push({ from: fromNode, to: toNode, step, parent });
+                        }
+                    }
+                }
+            }
+            return { ordered, perNode, hops };
+        }
+
+        // Cache of last-rendered hover targets — keyed by data-trace-key.
+        // Populated by both renderers; consumed by the SVG mouseover/out
+        // delegated handlers below.
+        const traceMapHoverData = {};
+
+        function renderTraceMap() {
+            if (!traceSteps.length) return;
+            if (currentTraceMapView === 'arch') renderTraceMapArch();
+            else renderTraceMapSeq();
+        }
+
+        // ============================================================
+        // Architecture view.
+        // ============================================================
+        function renderTraceMapArch() {
+            const svg = document.getElementById('traceMapArchSvg');
+            const model = computeTraceMapModel();
+            for (const k of Object.keys(traceMapHoverData)) delete traceMapHoverData[k];
+
+            const parts = [];
+            // Per-service arrow marker so each edge tip matches its source
+            // colour. SVG markers don't inherit stroke, hence one per
+            // service. Cheap (<10 markers) so just declare them all.
+            parts.push('<defs>');
+            for (const [svc, color] of Object.entries(TRACE_SVC_COLOR)) {
+                const safe = svc.replace(/[^a-z0-9]/g, '-');
+                parts.push(`<marker id="arr-${safe}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`);
+            }
+            parts.push('<marker id="arr-error" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ef4444"/></marker>');
+            parts.push('</defs>');
+
+            // Group hops by (from,to). chronos is the list of timeline
+            // step numbers that traversed this edge — so the badge can
+            // show "4" or "4,9" matching the #N labels in the list
+            // below. _steps holds the raw idxs for cross-highlight.
+            const edgeMap = {};
+            for (const h of model.hops) {
+                const k = `${h.from}->${h.to}`;
+                if (!edgeMap[k]) edgeMap[k] = { ...h, count: 0, chronos: [], _steps: [] };
+                edgeMap[k].count++;
+                edgeMap[k].chronos.push(h.step.chrono);
+                edgeMap[k]._steps.push(h.step.idx);
+            }
+
+            // ============================================================
+            // Per-box edge slot routing. Every box has 4 sides (top,
+            // right, bottom, left). Each edge picks an exit side on the
+            // source and an entry side on the target based on relative
+            // position, then claims a "slot" on that side. A side with
+            // N edges spreads them evenly across the available edge
+            // length with a small margin from the corners.
+            //
+            // The visual effect: when 3 edges leave Exchange's right
+            // side toward 3 DSPs, they exit at 3 distinct y positions
+            // (~25% / 50% / 75% down Exchange's right edge) instead of
+            // all from the midpoint, so they fan out cleanly from the
+            // very first pixel. Same on the entry side.
+            // ============================================================
+
+            // pickSide → which side of `box` faces `other`. Bias toward
+            // the dominant axis (horizontal vs vertical separation).
+            function pickSide(box, other) {
+                const cx = box.x + NODE_W / 2, cy = box.y + NODE_H / 2;
+                const ox = other.x + NODE_W / 2, oy = other.y + NODE_H / 2;
+                const dx = ox - cx, dy = oy - cy;
+                if (Math.abs(dx) >= Math.abs(dy)) {
+                    return dx >= 0 ? 'right' : 'left';
+                }
+                return dy >= 0 ? 'bottom' : 'top';
+            }
+
+            // anchor(box, side, slotIdx, total) → (x, y) point on `box`
+            // for slot `slotIdx` of `total` slots on the given side.
+            //
+            // Single-edge case (total == 1) ALWAYS uses the side's
+            // midpoint so a lone arrow reads as cleanly centred. Only
+            // when there are 2+ edges leaving/entering the same side do
+            // we spread them — and even then only across the inner 60%
+            // of the side so the spread stays subtle. Earlier versions
+            // pushed all the way to the corners which made the routing
+            // look noisier than necessary.
+            function anchor(box, side, slotIdx, total) {
+                if (side === 'right' || side === 'left') {
+                    const x = side === 'right' ? box.x + NODE_W : box.x;
+                    if (total <= 1) {
+                        return { x, y: box.y + NODE_H / 2, dirX: side === 'right' ? 1 : -1, dirY: 0 };
+                    }
+                    const usable = NODE_H * 0.6;
+                    const y0 = box.y + (NODE_H - usable) / 2;
+                    const y = y0 + (slotIdx + 0.5) * usable / total;
+                    return { x, y, dirX: side === 'right' ? 1 : -1, dirY: 0 };
+                }
+                const y = side === 'bottom' ? box.y + NODE_H : box.y;
+                if (total <= 1) {
+                    return { x: box.x + NODE_W / 2, y, dirX: 0, dirY: side === 'bottom' ? 1 : -1 };
+                }
+                const usable = NODE_W * 0.6;
+                const x0 = box.x + (NODE_W - usable) / 2;
+                const x = x0 + (slotIdx + 0.5) * usable / total;
+                return { x, y, dirX: 0, dirY: side === 'bottom' ? 1 : -1 };
+            }
+
+            // First pass — pick sides and reserve slots per (box, side).
+            // outCount[box.id][side] = total edges leaving that side.
+            // inCount[box.id][side]  = total edges entering that side.
+            // slotOut/slotIn = this edge's index within those totals.
+            const outCount = {}, inCount = {};
+            const edgePlans = [];
+            for (const e of Object.values(edgeMap)) {
+                const from = TRACE_NODE_BY_ID[e.from];
+                const to   = TRACE_NODE_BY_ID[e.to];
+                if (!from || !to) continue;
+                const exitSide  = pickSide(from, to);
+                const entrySide = pickSide(to, from);
+                outCount[from.id] = outCount[from.id] || {};
+                inCount[to.id]   = inCount[to.id]   || {};
+                outCount[from.id][exitSide] = (outCount[from.id][exitSide] || 0) + 1;
+                inCount[to.id][entrySide]   = (inCount[to.id][entrySide]   || 0) + 1;
+                edgePlans.push({
+                    e, from, to, exitSide, entrySide,
+                    slotOut: outCount[from.id][exitSide] - 1,
+                    slotIn:  inCount[to.id][entrySide]   - 1,
+                });
+            }
+
+            // Second pass — anchor each edge to its slotted points and
+            // draw a bezier whose control points pull outward in the
+            // direction the slot face is pointing. That keeps the curve
+            // smooth and prevents it folding back across the box.
+            for (const plan of edgePlans) {
+                const { e, from, to, exitSide, entrySide, slotOut, slotIn } = plan;
+                const totalOut = outCount[from.id][exitSide];
+                const totalIn  = inCount[to.id][entrySide];
+
+                const start = anchor(from, exitSide,  slotOut, totalOut);
+                const end   = anchor(to,   entrySide, slotIn,  totalIn);
+
+                // Pull control points away from the boxes along each side's
+                // normal direction. The pull length scales with the gap so
+                // a long cross-diagram edge gets a gentler curve.
+                const gap = Math.hypot(end.x - start.x, end.y - start.y);
+                const pull = Math.max(40, Math.min(120, gap * 0.45));
+                const c1x = start.x + start.dirX * pull;
+                const c1y = start.y + start.dirY * pull;
+                const c2x = end.x   + end.dirX   * pull;
+                const c2y = end.y   + end.dirY   * pull;
+
+                let pathD = `M${start.x},${start.y} C${c1x},${c1y} ${c2x},${c2y} ${end.x},${end.y}`;
+                let midX = (start.x + end.x) / 2;
+                let midY = (start.y + end.y) / 2;
+
+                // Back-edges (right-to-left between top-row services like
+                // DSP → Exchange) — only kick in if BOTH exitSide and
+                // entrySide are on the top of their boxes. Lift the
+                // control points above the row so the arc clears the
+                // boxes between them. Unique lift per slot so multiple
+                // back-edges sweep through distinct arcs.
+                const isBackArc = exitSide === 'top' && entrySide === 'top';
+                if (isBackArc) {
+                    const baseLift = -28;
+                    const laneY = baseLift - slotOut * 14;
+                    pathD = `M${start.x},${start.y} C${start.x},${laneY} ${end.x},${laneY} ${end.x},${end.y}`;
+                    midX = (start.x + end.x) / 2; midY = laneY + 10;
+                }
+
+                const isError = e.step.cls === 'error';
+                const stroke = isError ? '#ef4444' : (TRACE_SVC_COLOR[from.id] || '#4ade80');
+                const safe = from.id.replace(/[^a-z0-9]/g, '-');
+                const marker = isError ? 'arr-error' : `arr-${safe}`;
+
+                const dataKey = `edge:${e.from}->${e.to}`;
+                const chronoLabel = e.chronos.length > 1
+                    ? `#${e.chronos[0]}–#${e.chronos[e.chronos.length - 1]}`
+                    : `#${e.chronos[0]}`;
+                traceMapHoverData[dataKey] = {
+                    title: `${chronoLabel}  ·  ${from.label} → ${to.label}`,
+                    body: `${e.step.time} · ${e.step.msg}${e.step.detail ? ' · ' + e.step.detail : ''}${e.count > 1 ? `\nTimeline rows: ${e.chronos.map(c => '#' + c).join(', ')}` : ''}`,
+                    stepIdxs: e._steps,
+                };
+
+                parts.push(`<path d="${pathD}" stroke="${stroke}" stroke-width="2" fill="none" stroke-linejoin="round" marker-end="url(#${marker})" opacity="0.85" data-trace-key="${dataKey}" style="cursor: pointer;"/>`);
+                // Chronological badge — shows the timeline step #N that
+                // traversed this edge first. Multi-hop edges show #first
+                // (the count of additional hops surfaces in the tooltip).
+                const badgeLabel = e.count > 1 ? `#${e.chronos[0]}+` : `#${e.chronos[0]}`;
+                // Widen the badge for "#NN+" so the text isn't cropped.
+                const badgeWidth = Math.max(20, 8 + badgeLabel.length * 5);
+                parts.push(`<g data-trace-key="${dataKey}" style="cursor: pointer;">
+                    <rect x="${midX - badgeWidth/2}" y="${midY - 9}" width="${badgeWidth}" height="18" rx="9" ry="9" fill="#1a1a2e" stroke="${stroke}" stroke-width="1.5"/>
+                    <text x="${midX}" y="${midY + 3}" fill="${stroke}" font-size="10" font-weight="700" text-anchor="middle">${badgeLabel}</text>
+                </g>`);
+            }
+
+            // Render nodes — coloured by service palette.
+            for (const n of TRACE_NODES) {
+                const stats = model.perNode[n.id];
+                const active = !!stats;
+                const baseColor = TRACE_SVC_COLOR[n.id] || '#94a3b8';
+                const fill = active
+                    ? (stats.errors ? 'rgba(239,68,68,0.20)' : hexToRgba(baseColor, 0.18))
+                    : 'rgba(255,255,255,0.03)';
+                const stroke = active ? (stats.errors ? '#ef4444' : baseColor) : '#3a3a4a';
+                const labelColor = active ? '#fff' : '#777';
+                const dataKey = `node:${n.id}`;
+                traceMapHoverData[dataKey] = active
+                    ? {
+                        title: `${n.label}  ·  ${stats.count} span${stats.count === 1 ? '' : 's'}${stats.errors ? `  ·  ${stats.errors} error` : ''}`,
+                        body: stats.steps.slice(0, 6).map(s => `${s.time}  ${s.msg}`).join('\n') + (stats.steps.length > 6 ? `\n…and ${stats.steps.length - 6} more` : ''),
+                        stepIdxs: stats.steps.map(s => s.idx),
+                        nodeID: n.id,
+                      }
+                    : { title: `${n.label}`, body: 'no spans yet in this trace', stepIdxs: [], nodeID: n.id };
+
+                const badge = active
+                    ? `<circle cx="${n.x + NODE_W - 12}" cy="${n.y + 12}" r="8" fill="${stats.errors ? '#ef4444' : baseColor}"/>
+                       <text x="${n.x + NODE_W - 12}" y="${n.y + 15}" fill="#0f0f1a" font-size="10" font-weight="700" text-anchor="middle">${stats.count}</text>`
+                    : '';
+
+                parts.push(`<g data-trace-key="${dataKey}" style="cursor: pointer;">
+                    <rect x="${n.x}" y="${n.y}" width="${NODE_W}" height="${NODE_H}" rx="6" ry="6" fill="${fill}" stroke="${stroke}" stroke-width="${active ? 1.8 : 1}"/>
+                    <text x="${n.x + NODE_W / 2}" y="${n.y + NODE_H / 2 + 4}" fill="${labelColor}" font-size="13" font-weight="${active ? '600' : '400'}" text-anchor="middle">${n.label}</text>
+                    ${badge}
+                </g>`);
+            }
+
+            svg.innerHTML = parts.join('');
+        }
+
+        // ============================================================
+        // Sequence view.
+        // ============================================================
+        function renderTraceMapSeq() {
+            const svg = document.getElementById('traceMapSeqSvg');
+            const model = computeTraceMapModel();
+            for (const k of Object.keys(traceMapHoverData)) delete traceMapHoverData[k];
+
+            const COL_W = 95;
+            const HEADER_Y = 28;
+            const ROW_H = 28;
+            const cols = TRACE_NODES;
+            const maxRows = Math.max(1, model.ordered.length);
+            const totalH = HEADER_Y + ROW_H * (maxRows + 1) + 20;
+            svg.setAttribute('height', totalH);
+            svg.setAttribute('viewBox', `0 0 ${COL_W * cols.length + 40} ${totalH}`);
+
+            const parts = ['<defs>'];
+            for (const [svc, color] of Object.entries(TRACE_SVC_COLOR)) {
+                const safe = svc.replace(/[^a-z0-9]/g, '-');
+                parts.push(`<marker id="sarr-${safe}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`);
+            }
+            parts.push('<marker id="sarr-error" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ef4444"/></marker>');
+            parts.push('</defs>');
+
+            // Column headers + vertical service lanes. Header text now
+            // coloured with the same service palette so the eye picks up
+            // the matching dot below at a glance.
+            cols.forEach((c, i) => {
+                const cx = 20 + i * COL_W + COL_W / 2;
+                const active = !!model.perNode[c.id];
+                const color = active ? (TRACE_SVC_COLOR[c.id] || '#fff') : '#666';
+                parts.push(`<text x="${cx}" y="16" fill="${color}" font-size="11" font-weight="${active ? '600' : '400'}" text-anchor="middle">${c.label}</text>`);
+                parts.push(`<line x1="${cx}" y1="${HEADER_Y}" x2="${cx}" y2="${totalH - 10}" stroke="#2a2a3a" stroke-dasharray="2 4"/>`);
+            });
+
+            // Step rows. Arrow from prev column to this column at row y.
+            let prevCol = null, prevColor = null;
+            model.ordered.forEach((step, idx) => {
+                const node = TRACE_NODE_BY_ID[traceServiceToNodeID(step.service)];
+                if (!node) return;
+                const colIdx = cols.findIndex(c => c.id === node.id);
+                const cx = 20 + colIdx * COL_W + COL_W / 2;
+                const y = HEADER_Y + (idx + 1) * ROW_H;
+                const dotColor = step.cls === 'error' ? '#ef4444' : (TRACE_SVC_COLOR[node.id] || '#4361ee');
+
+                if (prevCol !== null && prevCol !== colIdx) {
+                    const px = 20 + prevCol * COL_W + COL_W / 2;
+                    const safe = (prevCol >= 0 && cols[prevCol] ? cols[prevCol].id : 'browser').replace(/[^a-z0-9]/g, '-');
+                    const arrowMarker = step.cls === 'error' ? 'sarr-error' : `sarr-${safe}`;
+                    const lineColor = step.cls === 'error' ? '#ef4444' : (prevColor || '#4ade80');
+                    parts.push(`<line x1="${px}" y1="${y - ROW_H / 2}" x2="${cx - 5}" y2="${y - ROW_H / 2}" stroke="${lineColor}" stroke-width="1.6" marker-end="url(#${arrowMarker})"/>`);
+                }
+
+                const dataKey = `seq:${idx}`;
+                traceMapHoverData[dataKey] = {
+                    title: `${step.time}  ·  ${node.label}`,
+                    body: step.msg + (step.detail ? '\n' + step.detail : ''),
+                    stepIdxs: [step.idx],
+                    nodeID: node.id,
+                };
+
+                parts.push(`<g data-trace-key="${dataKey}" style="cursor: pointer;">
+                    <circle cx="${cx}" cy="${y - ROW_H / 2}" r="6" fill="${dotColor}"/>
+                    <text x="${cx + 10}" y="${y - ROW_H / 2 + 4}" fill="#aaa" font-size="10">${step.time}</text>
+                </g>`);
+                prevCol = colIdx;
+                prevColor = dotColor;
+            });
+
+            svg.innerHTML = parts.join('');
+        }
+
+        // hexToRgba turns a #rrggbb literal into a rgba() string at the
+        // given alpha. SVG fills accept rgba directly; we use this for
+        // the translucent box backgrounds so the service colour bleeds
+        // through without being overwhelming.
+        function hexToRgba(hex, alpha) {
+            const h = hex.replace('#', '');
+            const r = parseInt(h.substring(0, 2), 16);
+            const g = parseInt(h.substring(2, 4), 16);
+            const b = parseInt(h.substring(4, 6), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        }
+
+        // Delegated mouseover/out handlers. The previous version used
+        // inline onmouseover="...JSON.stringify..." which was broken by
+        // double-quotes inside the stringified payload terminating the
+        // attribute. Delegation is bulletproof: one listener per SVG,
+        // pull the data-trace-key off the closest ancestor. Each handler
+        // also flashes the matching timeline rows so the operator sees
+        // the same event highlighted in both views — same data drives
+        // both, so the cross-link is essentially free.
+        function wireTraceMapHover(svgID) {
+            const svg = document.getElementById(svgID);
+            if (!svg || svg.__traceHoverWired) return;
+            svg.__traceHoverWired = true;
+            svg.addEventListener('mouseover', e => {
+                const el = e.target.closest('[data-trace-key]');
+                if (!el) return;
+                const data = traceMapHoverData[el.getAttribute('data-trace-key')];
+                if (!data) return;
+                showTraceMapInfo(data.title, data.body);
+                highlightTimelineSteps(data.stepIdxs || []);
+            });
+            svg.addEventListener('mouseout', e => {
+                const el = e.target.closest('[data-trace-key]');
+                if (!el) return;
+                clearTraceMapInfo();
+                clearCrossHighlights();
+            });
+        }
+
+        function showTraceMapInfo(title, body) {
+            const el = document.getElementById('traceMapInfo');
+            el.innerHTML =
+                `<div style="color: var(--text-primary, #eee); font-weight: 600;">${escSimHtml(title)}</div>` +
+                `<div style="white-space: pre-wrap;">${escSimHtml(body)}</div>`;
+        }
+        function clearTraceMapInfo() {
+            const el = document.getElementById('traceMapInfo');
+            el.innerHTML = '<span style="color: var(--text-muted, #666); font-style: italic;">Hover a service or hop edge for details.</span>';
+        }
+
+        // ============================================================
+        // Cross-highlight: map ↔ timeline.
+        // The timeline rows already carry data-step-idx + data-trace-node-id
+        // (added in renderTrace). The map elements carry stepIdxs +
+        // nodeID in traceMapHoverData. So:
+        //   - hover map → flash matching timeline rows
+        //   - hover timeline row → flash matching map node
+        // Both share the .trace-hilight CSS class injected once below.
+        // ============================================================
+        function highlightTimelineSteps(stepIdxs) {
+            if (!stepIdxs || !stepIdxs.length) return;
+            const set = new Set(stepIdxs);
+            document.querySelectorAll('#traceFlow .node[data-step-idx]').forEach(el => {
+                if (set.has(parseInt(el.dataset.stepIdx, 10))) {
+                    el.classList.add('trace-hilight');
+                } else {
+                    el.classList.remove('trace-hilight');
+                }
+            });
+        }
+
+        // highlightFromTimeline is the reverse direction — called from a
+        // timeline row's onmouseenter (see renderTrace above). Finds the
+        // matching map node by service id and outlines it. Also writes
+        // the info-bar so the user gets the same context as if they'd
+        // hovered the map directly.
+        function highlightFromTimeline(stepIdx) {
+            const step = traceSteps.find(s => s.idx === stepIdx);
+            if (!step) return;
+            const nodeID = traceServiceToNodeID(step.service);
+            const dataKey = `node:${nodeID}`;
+            const data = traceMapHoverData[dataKey];
+            if (data) {
+                showTraceMapInfo(data.title, data.body);
+            }
+            // Pulse the map node + its incoming edge if any. SVG groups
+            // match on data-trace-key — apply a wrapper class via opacity.
+            document.querySelectorAll('#traceMapArchSvg [data-trace-key], #traceMapSeqSvg [data-trace-key]').forEach(el => {
+                const k = el.getAttribute('data-trace-key');
+                el.classList.toggle('trace-hilight', k === dataKey || (k && k.startsWith('edge:') && k.endsWith('->' + nodeID)));
+            });
+        }
+
+        function clearCrossHighlights() {
+            document.querySelectorAll('.trace-hilight').forEach(el => el.classList.remove('trace-hilight'));
+            clearTraceMapInfo();
+        }
+
+        // Inject the highlight CSS once at startup (idempotent guard).
+        if (!document.getElementById('trace-hilight-style')) {
+            const style = document.createElement('style');
+            style.id = 'trace-hilight-style';
+            style.textContent = `
+                #traceFlow .node.trace-hilight {
+                    background: rgba(67, 97, 238, 0.18) !important;
+                    outline: 1px solid var(--brand, #4361ee);
+                    outline-offset: -1px;
+                    transition: background 0.12s ease;
+                }
+                #traceMapArchSvg [data-trace-key].trace-hilight rect,
+                #traceMapArchSvg [data-trace-key].trace-hilight path,
+                #traceMapSeqSvg [data-trace-key].trace-hilight circle {
+                    filter: drop-shadow(0 0 6px var(--brand, #4361ee));
+                    stroke-width: 3 !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // Wire the delegation on both SVGs the first time renderTraceMap
+        // runs. They never get re-created, so wiring is one-shot.
+        const _origRenderTraceMap = renderTraceMap;
+        renderTraceMap = function() {
+            _origRenderTraceMap();
+            wireTraceMapHover('traceMapArchSvg');
+            wireTraceMapHover('traceMapSeqSvg');
+        };
 
         function traceHeader(traceID) {
             const jaegerLink = (traceID && traceID.length === 32)
@@ -670,11 +1499,21 @@
                     }
                     if (knownSpans.has(key)) continue;
                     knownSpans.add(key);
-                    // Skip the browser-instrumented hops we already showed
-                    // (auction POST/handler, fanout, DSP bid, ad serve, pixel).
-                    // What's new are: NATS consumers (always "nats consume ..."),
-                    // exchange.notify.*, exchange.winloss_notify, etc.
-                    if (!isInterestingDownstreamSpan(service, op)) continue;
+                    // We trust the trace_id: every span Jaeger has for this
+                    // trace is something that happened, and the operator
+                    // benefits from seeing all of it. Don't filter — the
+                    // src badge ("live" vs "jaeger") + service colour
+                    // already disambiguate browser-observed vs server-side
+                    // rows. Showing both kinds is complementary: the
+                    // browser sees a request firing, the server-side span
+                    // shows the handler's duration and tags.
+                    //
+                    // (The old isInterestingDownstreamSpan allowlist
+                    // accidentally dropped any service it didn't know
+                    // about — adserver was invisible for months because
+                    // of this, until the visual flow diagram made the
+                    // gap obvious. Reject-by-default is the wrong polarity
+                    // for a debug tool.)
                     const durMs = (s.duration / 1000).toFixed(1);
                     const dspLabel = dspLabelFromSpan(service, op, s.tags || []);
                     const label = dspLabel ? `${op} → ${dspLabel}` : op;
@@ -688,7 +1527,11 @@
                         if (/^(otel\.|telemetry\.sdk\.|internal\.)/.test(t.key)) continue;
                         meta[t.key] = t.value;
                     }
-                    traceLog(serviceTag(service), label, { detail: `${durMs}ms`, src: 'jaeger', meta });
+                    // Convert Jaeger's microsecond Unix-epoch startTime
+                    // into "ms since this trace began". Negative deltas
+                    // (clock skew) get clamped to 0 inside traceLog.
+                    const elapsedMs = (s.startTime / 1000) - traceStartWall;
+                    traceLog(serviceTag(service), label, { detail: `${durMs}ms`, src: 'jaeger', meta, elapsedMs });
                     newCount += 1;
                 }
                 if (newCount > 0) {
@@ -757,18 +1600,6 @@
                 return port ? `:${port}` : '';
             }
             return '';
-        }
-
-        function isInterestingDownstreamSpan(service, op) {
-            // Filter out the spans the browser-side traceLog already added.
-            const op_lower = (op || '').toLowerCase();
-            // NATS consumers (reporting + future webhooks/etc.)
-            if (op_lower.startsWith('nats consume')) return true;
-            // Exchange-side notify spans (win/loss notifications + fan-out wrapper)
-            if (op_lower.startsWith('exchange.notify') || op_lower === 'exchange.winloss_notify') return true;
-            // DSP-side server spans for win/loss
-            if (service === 'dsp' && /openrtb\/(win|loss)/.test(op_lower)) return true;
-            return false;
         }
 
         function serviceTag(service) {
@@ -964,7 +1795,15 @@
             traceReset();
             traceHeader(traceID);
             const _pubSel = currentPlacement();
-            traceLog('browser', 'Ad request sent to SSP', {
+            // Only log the "request sent to SSP" entry when we're on the
+            // SSP-rendered path. Prebid mode bypasses the SSP entirely
+            // and POSTs directly to the exchange (see loadAdViaPrebid).
+            // Publisher-led mode goes through the pub-ad server first
+            // (see loadAdViaPubAd). In either case the SSP hop would be
+            // misleading at the top of the timeline.
+            const _isPrebid = document.getElementById('prebidMode').checked;
+            const _isPubAd  = document.getElementById('pubAdMode').checked;
+            if (!_isPrebid && !_isPubAd) traceLog('browser', 'Ad request sent to SSP', {
                 detail: `${geo} / device=${device}`,
                 meta: {
                     'placement.id': _pubSel ? _pubSel.ID : '(none)',
@@ -1014,6 +1853,25 @@
             const slot = document.getElementById('adSlot');
             slot.style.width = sel.Width + 'px';
             slot.style.minHeight = sel.Height + 'px';
+
+            // Prebid mode short-circuit: skip the SSP path entirely and POST
+            // an OpenRTB request to /v1/prebid/openrtb2/auction. This is
+            // what a publisher running our Prebid.js adapter (or a Prebid
+            // Server configured with our endpoint) would do.
+            if (document.getElementById('prebidMode').checked) {
+                await loadAdViaPrebid(sel, geo, device, userID, traceID, traceparent);
+                return;
+            }
+
+            // Publisher-led mode: hit the publisher ad server first. It
+            // arbitrates direct-sold line items against programmatic
+            // (calling the SSP behind the scenes) and returns the
+            // chosen render. This is the realistic flow for any
+            // publisher running a primary ad server like GAM / Kevel.
+            if (document.getElementById('pubAdMode').checked) {
+                await loadAdViaPubAd(sel, geo, device, userID, traceID, traceparent);
+                return;
+            }
 
             let serveResp;
             const auctionStart = performance.now();
@@ -1080,6 +1938,7 @@
                 ${serveResp.html || ''}
                 <a href="#" class="cta" style="display:block;margin-top:8px;text-align:center;" onclick="fireClickURL('${serveResp.click_url}', '${traceparent}'); return false;">Click ad (simulate)</a>
             `;
+            observeAdClicks(slot, traceparent);
 
             const events = entries[2].events;
             let impPixelURL = serveResp.impression_url;
@@ -1149,15 +2008,40 @@
             await new Promise(r => setTimeout(r, viewDurMs));
 
             try {
-                const viewResp = await fetch(viewPixelURL + `&dur=${viewDurMs}&pct=${visiblePct}`, { headers: { 'traceparent': traceparent } });
-                const iabLabel = isViewable ? 'IAB viewable' : 'not viewable';
+                // Pass the ad's pixel area too so the tracker's server-side
+                // IAB calc can apply the Large Format Standard (30%
+                // threshold) for ads >= 242,500 px².
+                const areaPx = adW * adH;
+                const viewResp = await fetch(viewPixelURL + `&dur=${viewDurMs}&pct=${visiblePct}&area=${areaPx}`, { headers: { 'traceparent': traceparent } });
+                // The tracker stamps X-IAB-Viewable on the response when
+                // its server-authoritative IAB calc passes. That's the
+                // verdict we display — the JS-side `isViewable` is just
+                // an UX hint while the beacon is in flight.
+                const serverViewable = viewResp.headers.get('X-IAB-Viewable') === '1';
+                const iabLabel = serverViewable ? 'IAB viewable (server-verified)' : 'not viewable';
                 events[events.length - 1] = {
                     name: 'Viewability',
                     ok: viewResp.status === 204,
                     detail: `${viewDurSec}s visible, ${visiblePct}% area (${iabLabel})`
                 };
+                // Add a trace row for parity with the Impression entry
+                // above. Server-side, tracker publishes adtech.events.view
+                // on NATS and reporting consumes it — those spans surface
+                // via the Jaeger poll alongside this live row.
+                traceLog('tracker', serverViewable ? 'View recorded (IAB viewable)' : 'View recorded (not viewable)', {
+                    detail: `${viewDurSec}s · ${visiblePct}% · area=${areaPx}px²`,
+                    meta: {
+                        'http.status': viewResp.status,
+                        'http.url': viewPixelURL,
+                        'iab.viewable': serverViewable,
+                        'view.duration_ms': viewDurMs,
+                        'view.visible_pct': visiblePct,
+                        'view.area_px': areaPx,
+                    },
+                });
             } catch (err) {
                 events[events.length - 1] = { name: 'Viewability', ok: false, detail: err.message };
+                traceLog('tracker', 'View call failed', { cls: 'error', detail: err.message });
             }
 
             entries.push({ label: 'Status', value: 'Ad served successfully', status: 'success' });
@@ -1165,6 +2049,10 @@
             // Refresh DSP state — daily_budget will have decremented for the
             // winner; if budget went to 0 you'll see them drop out next auction.
             refreshMgmt();
+            // The downstream warm-cache panels don't change per auction
+            // (deals/creatives/rates are config-driven, not per-bid), so
+            // skip refreshing them here to keep the hot path light. The
+            // Refresh button on each panel covers manual reloads.
             // Wait a beat for NATS auction.win / impression events to land in
             // reporting, then render the trace destinations panel with live
             // counts (built systems) + stubs (pending systems).
@@ -1173,6 +2061,35 @@
             // exchange.notify.{win,loss}, etc.) appear in the timeline as
             // they get ingested by the collector.
             startJaegerPoll(traceID);
+        }
+
+        // observeAdClicks attaches a delegated click listener on the slot so
+        // when the user clicks the rendered creative's tracker anchor (which
+        // is target="_blank" and opens in a new tab), the debug panel still
+        // shows the click event. The new tab handles the actual tracker
+        // call + 302; the simulator can't see that flow because it's in a
+        // different tab, so we only log here — no fetch (which would double-
+        // fire the pixel even with tracker dedup) and no preventDefault
+        // (the browser navigation is what fires the pixel for real).
+        function observeAdClicks(slot, traceparent) {
+            slot.addEventListener('click', (evt) => {
+                const anchor = evt.target.closest('a[href*="/v1/t/click"]');
+                if (!anchor) return;
+                // Skip the synthetic "Click ad (simulate)" CTA — it routes
+                // through fireClickURL which already logs.
+                if (anchor.classList.contains('cta')) return;
+                const clickEntry = document.createElement('div');
+                clickEntry.className = 'debug-entry';
+                clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Ad clicked ✓ → tracker fires + 302 in new tab</div>';
+                document.getElementById('debugContent').appendChild(clickEntry);
+                traceLog('tracker', 'Ad clicked (new tab)', {
+                    detail: 'tracker fires in opened tab, simulator cannot observe response',
+                    meta: {
+                        'http.url': anchor.href,
+                        'note': 'new-tab navigation — backend click event was recorded; check Jaeger for the tracker span',
+                    },
+                });
+            });
         }
 
         // fireClickURL fires the click pixel using the SSP-supplied,
@@ -1200,6 +2117,265 @@
                     'note': 'browser fetch with redirect:manual throws on 302 — that is the success path',
                 },
             });
+        }
+
+        // loadAdViaPrebid mirrors what web/static/prebid-adtechmono-adapter.js
+        // does in a real Prebid.js page: build an OpenRTB BidRequest and POST
+        // it to /v1/prebid/openrtb2/auction. Renders the winning bid's adm
+        // (HTML) into the ad slot. No SSP, no ad-server render path — the
+        // browser drives the auction directly, the way a Prebid Server or
+        // pbjs-with-our-adapter would.
+        //
+        // Keep this in sync with prebid-adtechmono-adapter.js — the inline
+        // OpenRTB request here is the same shape buildRequests() produces.
+        // loadAdViaPubAd hits the publisher-adserver's /v1/pubad/serve
+        // endpoint, which is the publisher orchestrator. Internally it
+        // (1) arbitrates direct-sold line items against programmatic,
+        // (2) calls the SSP behind the scenes to run a real auction
+        // when programmatic wins arbitration, and (3) returns either a
+        // direct creative or the programmatic winner. Mirrors what a
+        // publisher running GAM/Kevel does in production.
+        //
+        // After the serve response we run the SAME post-serve flow as
+        // the SSP path: render HTML, fire impression pixel, fire view
+        // beacon after a delay, wire the click handler, kick off the
+        // Jaeger poll so downstream server-side spans (SSP, exchange,
+        // DSP, adserver, tracker, NATS consumers) populate the timeline.
+        const PUBAD_URL = window.location.protocol + '//' + window.location.hostname + ':8088';
+        async function loadAdViaPubAd(sel, geo, device, userID, traceID, traceparent) {
+            const slot = document.getElementById('adSlot');
+            slot.style.width = sel.Width + 'px';
+            slot.style.minHeight = sel.Height + 'px';
+
+            traceLog('browser', 'Ad request sent to Pub-AdServer', {
+                detail: `${geo} / device=${device}`,
+                meta: {
+                    'placement.id': sel.ID,
+                    'placement.publisher': sel.PublisherName,
+                    'placement.size': `${sel.Width}x${sel.Height}`,
+                    'visitor.geo': geo,
+                    'visitor.device_type': device,
+                    'trace.id': traceID,
+                    'flow.mode': 'publisher-led (direct + programmatic arbitration)',
+                },
+            });
+
+            const url = `${PUBAD_URL}/v1/pubad/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            const auctionStart = performance.now();
+            let serveResp;
+            try {
+                const headers = { 'traceparent': traceparent };
+                const resp = await fetch(url, { headers });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                serveResp = await resp.json();
+            } catch (err) {
+                debugLog([{ label: 'Status', value: `Pub-AdServer call failed: ${err.message}`, status: 'fail' }]);
+                slot.innerHTML = `<div style="padding: 20px; color: #e74c3c; text-align: center;">Pub-AdServer error: ${err.message}</div>`;
+                traceLog('pubad', 'Pub-AdServer error', { cls: 'error', detail: err.message });
+                return;
+            }
+            const pubAdMs = Math.round(performance.now() - auctionStart);
+
+            if (serveResp.no_bid || !serveResp.html) {
+                slot.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No fill from publisher ad server</div>';
+                traceLog('pubad', 'Pub-AdServer response: no fill', { cls: 'nobid', detail: `${pubAdMs}ms` });
+                // Still kick off Jaeger polling — the upstream spans (SSP,
+                // exchange, DSPs) still happened even on no-bid and are
+                // worth surfacing for debugging.
+                setTimeout(() => renderDestinations(traceID), 400);
+                startJaegerPoll(traceID);
+                return;
+            }
+
+            traceLog('pubad', 'Pub-AdServer response: ad ready', {
+                detail: `${pubAdMs}ms · HTML returned`,
+                meta: {
+                    'creative.id': serveResp.creative_id || '(unknown)',
+                    'campaign.id': serveResp.campaign_id || '(unknown)',
+                    'decision.type': serveResp.decision_type || '(unknown)',
+                    'response.impression_url': serveResp.impression_url,
+                    'response.click_url': serveResp.click_url,
+                    'response.viewability_url': serveResp.viewability_url,
+                },
+            });
+
+            const entries = [
+                { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
+                { label: 'Pub-AdSrv', value: `Ad returned (${pubAdMs}ms)`, status: 'success' },
+                { label: 'Events', value: '', events: [] },
+            ];
+
+            // Render the creative HTML into the slot + a synthetic click CTA.
+            slot.classList.add('loaded');
+            slot.innerHTML = `
+                ${serveResp.html || ''}
+                <a href="#" class="cta" style="display:block;margin-top:8px;text-align:center;" onclick="fireClickURL('${serveResp.click_url}', '${traceparent}'); return false;">Click ad (simulate)</a>
+            `;
+            observeAdClicks(slot, traceparent);
+
+            // Fire impression pixel — tracker writes an impression span,
+            // then asynchronously publishes adtech.events.impression on
+            // NATS for reporting to consume. Both surface via Jaeger poll.
+            const events = entries[2].events;
+            try {
+                const impResp = await fetch(serveResp.impression_url, { headers: { 'traceparent': traceparent } });
+                events.push({ name: 'Impression pixel', ok: impResp.status === 200, detail: `${impResp.status}` });
+                traceLog('tracker', 'Impression recorded', {
+                    detail: 'pixel 200 · published to NATS',
+                    meta: { 'http.status': impResp.status, 'http.url': serveResp.impression_url },
+                });
+            } catch (err) {
+                events.push({ name: 'Impression pixel', ok: false, detail: err.message });
+                traceLog('tracker', 'Impression call failed', { cls: 'error', detail: err.message });
+            }
+            debugLog(entries);
+
+            // Viewability beacon — wait a synthetic dwell time then post.
+            const viewDurMs = 1000 + Math.floor(Math.random() * 3000);
+            await new Promise(r => setTimeout(r, viewDurMs));
+            try {
+                const adW = sel.Width, adH = sel.Height;
+                const viewURL = serveResp.viewability_url + `&dur=${viewDurMs}&pct=100&area=${adW * adH}`;
+                const viewResp = await fetch(viewURL, { headers: { 'traceparent': traceparent } });
+                const iabViewable = viewResp.headers.get('X-IAB-Viewable') === '1';
+                events.push({ name: 'Viewability', ok: viewResp.status === 204, detail: `${(viewDurMs / 1000).toFixed(1)}s (${iabViewable ? 'IAB viewable' : 'not viewable'})` });
+            } catch (err) {
+                events.push({ name: 'Viewability', ok: false, detail: err.message });
+            }
+
+            entries.push({ label: 'Status', value: 'Ad served successfully', status: 'success' });
+            debugLog(entries);
+
+            // Same downstream wiring as the SSP path — render the trace
+            // destinations panel after a short delay so NATS consumers
+            // have landed, then start the Jaeger poll to surface every
+            // server-side span (SSP, exchange, DSP fan-out, exchange
+            // notify, tracker, NATS consume spans, etc.).
+            refreshMgmt();
+            setTimeout(() => renderDestinations(traceID), 400);
+            startJaegerPoll(traceID);
+        }
+
+        async function loadAdViaPrebid(sel, geo, device, userID, traceID, traceparent) {
+            const slot = document.getElementById('adSlot');
+            slot.style.width = sel.Width + 'px';
+            slot.style.minHeight = sel.Height + 'px';
+
+            const bidReq = {
+                id: traceID,
+                imp: [{
+                    id: 'imp-1',
+                    tagid: sel.ID, // placement UUID
+                    bidfloor: Number(sel.FloorPrice) || 0,
+                    bidfloorcur: 'USD',
+                    banner: {
+                        w: sel.Width,
+                        h: sel.Height,
+                        format: [{ w: sel.Width, h: sel.Height }],
+                    },
+                }],
+                site: {
+                    domain: window.location.hostname,
+                    page: window.location.href,
+                    publisher: { id: sel.PublisherID },
+                },
+                device: {
+                    geo: { country: geo },
+                    devicetype: device,
+                },
+                user: { id: userID },
+                tmax: 1000,
+            };
+
+            traceLog('browser', 'Prebid OpenRTB request sent to exchange', {
+                detail: `/v1/prebid/openrtb2/auction (bidder=adtechmono)`,
+                meta: {
+                    'placement.id': sel.ID,
+                    'placement.size': `${sel.Width}x${sel.Height}`,
+                    'placement.floor': `$${Number(sel.FloorPrice).toFixed(2)}`,
+                    'visitor.geo': geo,
+                    'visitor.device_type': device,
+                    'trace.id': traceID,
+                    'prebid.bidder_code': 'adtechmono',
+                },
+            });
+
+            const auctionStart = performance.now();
+            let body;
+            try {
+                const resp = await fetch(`${EXCHANGE_URL}/v1/prebid/openrtb2/auction`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'traceparent': traceparent,
+                    },
+                    body: JSON.stringify(bidReq),
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                body = await resp.json();
+            } catch (err) {
+                debugLog([
+                    { label: 'Trace ID', value: traceID },
+                    { label: 'Status', value: 'Prebid endpoint unreachable: ' + err.message, status: 'fail' }
+                ]);
+                return;
+            }
+            const elapsed = performance.now() - auctionStart;
+
+            if (body.nobid || !body.seatbid || body.seatbid.length === 0) {
+                traceLog('exchange', 'Prebid response: nobid', {
+                    detail: `${elapsed.toFixed(0)}ms`,
+                    meta: { 'prebid.nobid': 'true' },
+                });
+                debugLog([
+                    { label: 'Trace ID', value: traceID },
+                    { label: 'Mode', value: 'Prebid' },
+                    { label: 'Status', value: 'No bid (Prebid)', status: 'fail' }
+                ]);
+                slot.classList.remove('loaded');
+                slot.innerHTML = '<div style="padding:8px;color:#888;">Prebid: no bid</div>';
+                return;
+            }
+
+            const bid = body.seatbid[0].bid[0];
+            traceLog('exchange', 'Prebid response: winning bid', {
+                detail: `seat=${body.seatbid[0].seat} price=${bid.price.toFixed(2)} ${body.cur || 'USD'}`,
+                meta: {
+                    'prebid.cpm': bid.price.toFixed(4),
+                    'prebid.creative_id': bid.crid,
+                    'prebid.campaign_id': bid.cid,
+                    'prebid.deal_id': bid.dealid || '(none)',
+                    'prebid.duration_ms': elapsed.toFixed(0),
+                },
+            });
+
+            // The adapter's interpretResponse uses b.adm for the rendered HTML.
+            // The exchange today doesn't populate adm (the real ad server does
+            // macro substitution downstream). For the demo, render a synthetic
+            // "Prebid winning bid" tile so the user sees the result.
+            slot.classList.add('loaded');
+            slot.innerHTML = `<div style="width:${sel.Width}px;height:${sel.Height}px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#1a1a2e;color:#fff;font-family:sans-serif;border:2px dashed #4cc9f0;">
+                <div style="font-size:11px;opacity:0.7;">PREBID WINNING BID</div>
+                <div style="font-size:18px;font-weight:600;margin-top:4px;">$${bid.price.toFixed(2)} ${body.cur || 'USD'}</div>
+                <div style="font-size:10px;opacity:0.6;margin-top:6px;">seat ${body.seatbid[0].seat}</div>
+                <div style="font-size:10px;opacity:0.6;">${bid.dealid ? 'deal ' + bid.dealid : 'open auction'}</div>
+            </div>`;
+
+            // Surface downstream server-side spans (DSP fan-out,
+            // exchange.notify.{win,loss}, NATS consume spans in
+            // reporting) — Prebid mode used to be missing these because
+            // the poller was only triggered on the SSP path.
+            setTimeout(() => renderDestinations(traceID), 400);
+            startJaegerPoll(traceID);
+
+            debugLog([
+                { label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` },
+                { label: 'Mode', value: 'Prebid (server-to-server)' },
+                { label: 'Bidder code', value: 'adtechmono' },
+                { label: 'Clearing price', value: `$${bid.price.toFixed(2)} ${body.cur || 'USD'}` },
+                { label: 'Auction duration', value: `${elapsed.toFixed(0)}ms` },
+                { label: 'Status', value: 'OK', status: 'ok' },
+            ]);
         }
 
         function clearAd() {
@@ -1279,7 +2455,7 @@
 
         function drainBudgets() {
             if (placementOptions.length === 0) {
-                alert('No placements loaded yet. Wait for the SSP panel to populate.');
+                toast('No placements loaded yet. Wait for the SSP panel to populate.', 'error');
                 return;
             }
             if (drainInflight) {
@@ -1362,7 +2538,7 @@
         // seeded state. Uses the drain banner for live status because it's
         // already wired for "long-running ops show progress at the top".
         async function resetAndReseed() {
-            if (!confirm('Wipe all campaigns, placements, deals, and reseed from profiles/? Cannot be undone.')) return;
+            if (!await confirmAction('Wipe all campaigns, placements, deals, and reseed from profiles/? Cannot be undone.')) return;
             const btn = document.getElementById('resetBtn');
             const banner = document.getElementById('drainBanner');
             const status = document.getElementById('drainBannerStatus');
@@ -1559,7 +2735,9 @@
             content.innerHTML = '<div style="color: var(--text-secondary);">Loading…</div>';
             let placements;
             try {
-                const resp = await fetch('http://' + window.location.hostname + ':8084/v1/ssp/placements');
+                const resp = await fetch('http://' + window.location.hostname + ':8084/v1/ssp/placements', {
+                    headers: { 'X-API-Key': DEV_API_KEY },
+                });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 placements = await resp.json();
             } catch (err) {
@@ -1701,9 +2879,9 @@
         // the change is immediately visible (without waiting for NATS
         // invalidate to propagate).
         async function ssperMutate(method, url, body) {
-            const opts = { method };
+            const opts = { method, headers: { 'X-API-Key': DEV_API_KEY } };
             if (body) {
-                opts.headers = { 'Content-Type': 'application/json' };
+                opts.headers['Content-Type'] = 'application/json';
                 opts.body = JSON.stringify(body);
             }
             const resp = await fetch(url, opts);
@@ -1718,51 +2896,58 @@
         }
 
         async function editPlacementFloor(id, current) {
-            const v = prompt('New floor price (USD CPM):', current.toFixed(2));
+            const v = await promptInput('New floor price (USD CPM):', current.toFixed(2));
             if (v === null) return;
             const floor = parseFloat(v);
-            if (!isFinite(floor) || floor < 0) { alert('Floor must be a non-negative number.'); return; }
+            if (!isFinite(floor) || floor < 0) { toast('Floor must be a non-negative number', 'error'); return; }
             try {
                 await ssperMutate('PATCH', `${SSP_URL}/v1/ssp/placements/${id}`, { floor_price: floor });
-            } catch (err) { alert(err.message); }
+                toast(`Floor updated to $${floor.toFixed(2)}`, 'success');
+            } catch (err) { toast(err.message, 'error'); }
         }
 
         async function togglePlacementStatus(id, currentStatus) {
             const next = currentStatus === 'paused' ? 'active' : 'paused';
             try {
                 await ssperMutate('PATCH', `${SSP_URL}/v1/ssp/placements/${id}`, { status: next });
-            } catch (err) { alert(err.message); }
+                toast(`Placement ${next}`, 'success');
+            } catch (err) { toast(err.message, 'error'); }
         }
 
         async function deletePlacement(id, name) {
-            if (!confirm(`Archive placement "${name}"? It will stop receiving traffic.`)) return;
+            if (!await confirmAction(`Archive placement "${name}"? It will stop receiving traffic.`)) return;
             try {
                 await ssperMutate('DELETE', `${SSP_URL}/v1/ssp/placements/${id}`);
-            } catch (err) { alert(err.message); }
+                toast(`Placement "${name}" archived`, 'success');
+            } catch (err) {
+                toast('Delete failed: ' + err.message, 'error');
+            }
         }
 
-        // newPlacement prompts for the basic fields and POSTs to create.
-        // Publisher is fixed (the row's parent publisher); other fields
-        // come from prompts. Lighter than a full modal but enough to demo
-        // the CRUD plumbing end-to-end.
+        // newPlacement walks the operator through the three required
+        // fields (name, size, floor) using in-app modal prompts instead
+        // of window.prompt. Cancelling any step aborts the flow without
+        // creating a partial row. Toast at the end so the operator sees
+        // confirmation without a sticky banner.
         async function newPlacement(publisherID, publisherName) {
-            const name = prompt(`New placement under "${publisherName}". Name:`);
+            const name = await promptInput(`New placement under "${publisherName}". Name:`);
             if (!name) return;
-            const sizeStr = prompt('Size (WxH, e.g. 300x250):', '300x250');
+            const sizeStr = await promptInput('Size (WxH, e.g. 300x250):', '300x250');
             if (!sizeStr) return;
             const m = sizeStr.match(/^(\d+)x(\d+)$/i);
-            if (!m) { alert('Invalid size format. Use WxH.'); return; }
+            if (!m) { toast('Invalid size format. Use WxH.', 'error'); return; }
             const width = parseInt(m[1], 10), height = parseInt(m[2], 10);
-            const floorStr = prompt('Floor price (USD CPM):', '1.00');
+            const floorStr = await promptInput('Floor price (USD CPM):', '1.00');
             if (floorStr === null) return;
             const floor = parseFloat(floorStr);
-            if (!isFinite(floor) || floor < 0) { alert('Floor must be a non-negative number.'); return; }
+            if (!isFinite(floor) || floor < 0) { toast('Floor must be a non-negative number', 'error'); return; }
             try {
                 await ssperMutate('POST', `${SSP_URL}/v1/ssp/placements`, {
                     publisher_id: publisherID,
                     name, format: 'display', width, height, floor_price: floor,
                 });
-            } catch (err) { alert(err.message); }
+                toast(`Placement "${name}" created`, 'success');
+            } catch (err) { toast(err.message, 'error'); }
         }
 
         async function refreshMgmt(opts = {}) {
@@ -1773,7 +2958,9 @@
                     try { await fetch(url + '/debug/cache/refresh', { method: 'POST' }); } catch (_) {}
                 }
                 try {
-                    const resp = await fetch(url + '/v1/dsp/campaigns');
+                    const resp = await fetch(url + '/v1/dsp/campaigns', {
+                        headers: { 'X-API-Key': DEV_API_KEY },
+                    });
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     const campaigns = await resp.json();
                     dspState[idx] = { campaigns: Array.isArray(campaigns) ? campaigns : [], error: null };
@@ -1913,7 +3100,7 @@
             try {
                 const resp = await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': DEV_API_KEY },
                     body: JSON.stringify({ base_bid, daily_budget })
                 });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -1930,7 +3117,7 @@
             const newStatus = currentStatus === 'live' ? 'paused' : 'live';
             await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-API-Key': DEV_API_KEY },
                 body: JSON.stringify({ status: newStatus })
             });
             await refreshMgmt({ force: true });
@@ -1939,8 +3126,12 @@
         // Delete (Phase C) — soft-delete by archiving (DSP filters status=live
         // anyway, so archived campaigns just stop appearing).
         async function deleteCampaign(dspIdx, id, name) {
-            if (!confirm(`Delete campaign "${name}"?`)) return;
-            await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, { method: 'DELETE' });
+            if (!await confirmAction(`Delete campaign "${name}"?`)) return;
+            await fetch(DSP_URLS[dspIdx] + '/v1/dsp/campaigns/' + id, {
+                method: 'DELETE',
+                headers: { 'X-API-Key': DEV_API_KEY },
+            });
+            toast(`Campaign "${name}" deleted`, 'success');
             await refreshMgmt({ force: true });
         }
 
@@ -1998,7 +3189,7 @@
             try {
                 const resp = await fetch(DSP_URLS[newCampaignDspIdx] + '/v1/dsp/campaigns', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': DEV_API_KEY },
                     body: JSON.stringify(body)
                 });
                 if (!resp.ok) {
@@ -2013,9 +3204,236 @@
             await refreshMgmt({ force: true });
         }
 
+        // ============================================================
+        // Cross-service warm-cache panels (Exchange / AdServer / Reporting).
+        // Each fetches its own debug endpoint and renders a compact table.
+        // Pattern mirrors refreshSSP / refreshMgmt — auto-fired after each
+        // ad serve so the operator sees state changes propagate.
+        // ============================================================
+
+        // Exchange Deals: dump from /debug/exchange/deals (already exposed
+        // for the e2e suite). Empty when the default profile is loaded;
+        // populated once a deals YAML profile is seeded. Endpoint is
+        // open (no auth gate) — exchange is internal-only.
+        async function refreshDeals() {
+            const el = document.getElementById('dealsContent');
+            try {
+                const resp = await fetch('http://' + window.location.hostname + ':8081/debug/exchange/deals');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const deals = await resp.json() || [];
+                if (!deals.length) {
+                    el.innerHTML = '<div style="color: var(--text-secondary);">No deals in cache. Seed a deals profile to populate.</div>';
+                    return;
+                }
+                const prio = { 0: 'PG', 1: 'Preferred', 2: 'PMP', 3: 'Open' };
+                el.innerHTML = `
+                <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+                    <thead>
+                        <tr style="text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle, #333);">
+                            <th style="padding: 4px 6px;">ID</th>
+                            <th style="padding: 4px 6px;">Type</th>
+                            <th style="padding: 4px 6px;">Publisher</th>
+                            <th style="padding: 4px 6px;">Price</th>
+                            <th style="padding: 4px 6px;">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${deals.map(d => `
+                            <tr style="border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05));">
+                                <td style="padding: 4px 6px; font-family: monospace; font-size: 11px;">${escSimHtml((d.id || d.ID || '').slice(0, 8))}…</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(prio[d.priority] || d.deal_type || d.DealType || '-')}</td>
+                                <td style="padding: 4px 6px; font-family: monospace; font-size: 11px;">${escSimHtml((d.publisher_id || d.PublisherID || '').slice(0, 8))}…</td>
+                                <td style="padding: 4px 6px;">$${(d.price || d.Price || 0).toFixed(2)}</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(d.status || d.Status || '-')}</td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>`;
+            } catch (err) {
+                el.innerHTML = `<div style="color: #e74c3c;">Exchange unreachable: ${escSimHtml(err.message)}</div>`;
+            }
+        }
+
+        // Adserver Creatives: dump from /v1/ad/creatives (default format
+        // returns rich metadata; ?format=ids returns the old id list).
+        async function refreshCreatives() {
+            const el = document.getElementById('creativesContent');
+            try {
+                const resp = await fetch('http://' + window.location.hostname + ':8085/v1/ad/creatives');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const creatives = await resp.json() || [];
+                if (!creatives.length) {
+                    el.innerHTML = '<div style="color: var(--text-secondary);">No creatives in cache.</div>';
+                    return;
+                }
+                el.innerHTML = `
+                <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+                    <thead>
+                        <tr style="text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle, #333);">
+                            <th style="padding: 4px 6px;">ID</th>
+                            <th style="padding: 4px 6px;">Name</th>
+                            <th style="padding: 4px 6px;">Format</th>
+                            <th style="padding: 4px 6px;">Size</th>
+                            <th style="padding: 4px 6px;">Source</th>
+                            <th style="padding: 4px 6px;">Review</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${creatives.map(c => `
+                            <tr style="border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05));">
+                                <td style="padding: 4px 6px; font-family: monospace; font-size: 11px;">${escSimHtml((c.id || '').slice(0, 8))}…</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(c.name || '-')}</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(c.format || '-')}</td>
+                                <td style="padding: 4px 6px;">${c.width || 0}x${c.height || 0}</td>
+                                <td style="padding: 4px 6px;">${c.has_html ? 'inline HTML' : (c.asset_url ? 'Minio' : '-')}</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(c.review_status || '-')}</td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>`;
+            } catch (err) {
+                el.innerHTML = `<div style="color: #e74c3c;">Ad server unreachable: ${escSimHtml(err.message)}</div>`;
+            }
+        }
+
+        // Reporting Billing Rates: dump from /debug/billing/rates (added
+        // alongside this panel). Reads the warm ContractStore so what's
+        // shown matches what billing.Engine.Settle actually applies.
+        async function refreshRates() {
+            const el = document.getElementById('ratesContent');
+            try {
+                const resp = await fetch('http://' + window.location.hostname + ':8086/debug/billing/rates');
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const rates = await resp.json() || [];
+                if (!rates.length) {
+                    el.innerHTML = '<div style="color: var(--text-secondary);">No contracts in cache (fallback applies: 20% fixed fee).</div>';
+                    return;
+                }
+                el.innerHTML = `
+                <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+                    <thead>
+                        <tr style="text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle, #333);">
+                            <th style="padding: 4px 6px;">Publisher</th>
+                            <th style="padding: 4px 6px;">Model</th>
+                            <th style="padding: 4px 6px;">Fee %</th>
+                            <th style="padding: 4px 6px;">Min CPM</th>
+                            <th style="padding: 4px 6px;">Currency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rates.map(r => `
+                            <tr style="border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05));">
+                                <td style="padding: 4px 6px; font-family: monospace; font-size: 11px;">${escSimHtml((r.publisher_id || '').slice(0, 8))}…</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(r.model || '-')}</td>
+                                <td style="padding: 4px 6px;">${(r.fee_pct ?? 0).toFixed(1)}%</td>
+                                <td style="padding: 4px 6px;">$${(r.guaranteed_min_cpm ?? 0).toFixed(2)}</td>
+                                <td style="padding: 4px 6px;">${escSimHtml(r.currency || 'USD')}</td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>`;
+            } catch (err) {
+                el.innerHTML = `<div style="color: #e74c3c;">Reporting unreachable: ${escSimHtml(err.message)}</div>`;
+            }
+        }
+
+        // Tiny HTML-escape helper for the new panels. The pub sim's main
+        // codepath uses inline DOM building so didn't need one; the
+        // table renderers above all use innerHTML string concat for
+        // table compactness, so escape any cell value that could
+        // include user-supplied text.
+        function escSimHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+            }[c]));
+        }
+
         // Initial load + refresh after each auction so changes are visible.
         refreshMgmt();
         refreshSSP();
+        refreshDeals();
+        refreshCreatives();
+        refreshRates();
+    </script>
+
+    {{/* Shared toast notifications + the irreversible-action confirm modal
+         used in place of window.confirm(). Both load their JS so callers
+         (toast(), confirmAction()) work anywhere on this page. */}}
+    {{ template "toast" . }}
+
+    {{/* Confirm/prompt modal bodies use raw inline styles + CSS-var
+         tokens (matching theme.css) so they look right on this page
+         which doesn't load Tailwind. The modal-start partial handles
+         the outer frame; the bits below are the body content. */}}
+    {{ template "modal-start" (dict "id" "simConfirmModal" "title" "Confirm") }}
+        <p id="simConfirmMessage" style="font-size: 13px; color: var(--text-primary, #e0e0e0); margin: 0 0 16px;"></p>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button id="simConfirmCancelBtn" type="button"
+                style="padding: 6px 14px; font-size: 13px; border-radius: 6px; border: 1px solid var(--border, #2a2a4a); background: transparent; color: var(--text-primary, #e0e0e0); cursor: pointer;">Cancel</button>
+            <button id="simConfirmOkBtn" type="button"
+                style="padding: 6px 14px; font-size: 13px; border-radius: 6px; border: none; background: var(--brand-error, #f87171); color: white; cursor: pointer; font-weight: 600;">Confirm</button>
+        </div>
+    {{ template "modal-end" . }}
+
+    {{ template "modal-start" (dict "id" "simPromptModal" "title" "Input") }}
+        <p id="simPromptMessage" style="font-size: 13px; color: var(--text-primary, #e0e0e0); margin: 0 0 12px;"></p>
+        <input id="simPromptInput" type="text"
+            style="width: 100%; padding: 8px 12px; margin-bottom: 16px; font-family: var(--font-mono, monospace); font-size: 13px; background: var(--bg-input, #1e1e3a); color: var(--text-primary, #e0e0e0); border: 1px solid var(--border-input, #3a3a5a); border-radius: 4px; outline: none; box-sizing: border-box;">
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button id="simPromptCancelBtn" type="button"
+                style="padding: 6px 14px; font-size: 13px; border-radius: 6px; border: 1px solid var(--border, #2a2a4a); background: transparent; color: var(--text-primary, #e0e0e0); cursor: pointer;">Cancel</button>
+            <button id="simPromptOkBtn" type="button"
+                style="padding: 6px 14px; font-size: 13px; border-radius: 6px; border: none; background: var(--brand-primary, #4361ee); color: white; cursor: pointer; font-weight: 600;">OK</button>
+        </div>
+    {{ template "modal-end" . }}
+
+    <script>
+        // confirmAction(message) → Promise<bool>. Replaces window.confirm
+        // with an in-app modal that respects the platform's "no native
+        // dialogs" preference. Single instance, idempotent — repeated
+        // calls reuse the same modal element.
+        function confirmAction(message) {
+            return new Promise(function(resolve) {
+                var modal = document.getElementById('simConfirmModal');
+                document.getElementById('simConfirmMessage').textContent = message;
+                modal.classList.remove('hidden');
+                var ok = document.getElementById('simConfirmOkBtn');
+                var cancel = document.getElementById('simConfirmCancelBtn');
+                // Clone-and-replace to drop any previous click listeners so
+                // resolving the previous Promise can't leak into the new one.
+                var newOk = ok.cloneNode(true); ok.parentNode.replaceChild(newOk, ok);
+                var newCancel = cancel.cloneNode(true); cancel.parentNode.replaceChild(newCancel, cancel);
+                newOk.addEventListener('click', function() {
+                    modal.classList.add('hidden'); resolve(true);
+                });
+                newCancel.addEventListener('click', function() {
+                    modal.classList.add('hidden'); resolve(false);
+                });
+            });
+        }
+
+        // promptInput(message, defaultValue) → Promise<string|null>.
+        // Replaces window.prompt. Returns null when the user cancels.
+        function promptInput(message, defaultValue) {
+            return new Promise(function(resolve) {
+                var modal = document.getElementById('simPromptModal');
+                document.getElementById('simPromptMessage').textContent = message;
+                var input = document.getElementById('simPromptInput');
+                input.value = defaultValue || '';
+                modal.classList.remove('hidden');
+                setTimeout(function() { input.focus(); input.select(); }, 0);
+                var ok = document.getElementById('simPromptOkBtn');
+                var cancel = document.getElementById('simPromptCancelBtn');
+                var newOk = ok.cloneNode(true); ok.parentNode.replaceChild(newOk, ok);
+                var newCancel = cancel.cloneNode(true); cancel.parentNode.replaceChild(newCancel, cancel);
+                function done(value) { modal.classList.add('hidden'); resolve(value); }
+                newOk.addEventListener('click', function() { done(input.value); });
+                newCancel.addEventListener('click', function() { done(null); });
+                // Enter submits, Escape cancels — keyboard parity with
+                // window.prompt() so muscle memory still works.
+                input.addEventListener('keydown', function handler(e) {
+                    if (e.key === 'Enter') { e.preventDefault(); input.removeEventListener('keydown', handler); done(input.value); }
+                    else if (e.key === 'Escape') { e.preventDefault(); input.removeEventListener('keydown', handler); done(null); }
+                });
+            });
+        }
     </script>
 </body>
 </html>
