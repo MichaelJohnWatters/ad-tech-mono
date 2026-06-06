@@ -119,6 +119,14 @@ func main() {
 			}
 		}
 
+		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"impression", "expired", q.Get("exp"), traceID, reqLog)
+			http.Error(w, "url expired", http.StatusGone)
+			return
+		}
+
 		// Real-time fraud check
 		fraudResult := fraudChecker.Check(fraud.Request{
 			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
@@ -208,6 +216,14 @@ func main() {
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("click", "campaign_id", q.Get("cid"), "redirect", redir)
 
+		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"click", "expired", q.Get("exp"), traceID, reqLog)
+			http.Error(w, "url expired", http.StatusGone)
+			return
+		}
+
 		if !dedup.FirstSeen(ctx, "click", traceID) {
 			reqLog.Debug("duplicate click, dropping", "trace_id", traceID)
 			go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -247,6 +263,14 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("conversion", "type", convType, "revenue", revenue)
+
+		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"conversion", "expired", q.Get("exp"), traceID, reqLog)
+			http.Error(w, "url expired", http.StatusGone)
+			return
+		}
 
 		if !dedup.FirstSeen(ctx, "conversion:"+convType, traceID) {
 			reqLog.Debug("duplicate conversion, dropping", "trace_id", traceID, "type", convType)
@@ -305,6 +329,14 @@ func main() {
 				http.Error(w, "invalid signature", http.StatusForbidden)
 				return
 			}
+		}
+
+		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"view", "expired", q.Get("exp"), traceID, reqLog)
+			http.Error(w, "url expired", http.StatusGone)
+			return
 		}
 
 		fraudResult := fraudChecker.Check(fraud.Request{
@@ -498,6 +530,25 @@ func (p *eventPublisher) publish(ctx context.Context, subject string, payload in
 		return false
 	}
 	return true
+}
+
+// isExpired returns true when the URL carries an exp=<unix-ts> param and
+// the current time is past it. Empty / missing exp returns false (no
+// expiry policy on this URL — the tracker accepts it). Unparseable exp
+// also returns false: bad data is logged elsewhere as an invalid sig,
+// not a freshness failure. Skew tolerance is +5s so a slightly fast
+// client clock relative to the tracker doesn't reject borderline-fresh
+// URLs.
+func isExpired(q url.Values, now time.Time) bool {
+	raw := q.Get("exp")
+	if raw == "" {
+		return false
+	}
+	ts, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return false
+	}
+	return now.Unix() > ts+5
 }
 
 // appendTraceQuery appends adtech_tid=<traceID> to the redirect target so

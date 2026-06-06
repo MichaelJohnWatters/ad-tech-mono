@@ -118,7 +118,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, adserverPub))
+	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, adserverPub, knobs.URLTTL.Value))
 
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -272,7 +272,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, adserverPub *events.Publisher) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -348,6 +348,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			Height:       req.Height,
 			TrackerURL:   trackerURL,
 			LandingURL:   creative.LandingURL,
+			URLTTL:       urlTTLFn(),
 		}
 
 		renderedHTML := adserving.SubstituteMacros(creative.HTML, macroCtx)
