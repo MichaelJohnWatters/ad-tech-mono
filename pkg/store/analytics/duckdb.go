@@ -83,6 +83,20 @@ func (d *DuckDB) createTables() error {
 			schema_version  INTEGER DEFAULT 1,
 			timestamp       TIMESTAMP NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS views (
+			trace_id        VARCHAR NOT NULL,
+			campaign_id     VARCHAR NOT NULL,
+			creative_id     VARCHAR,
+			placement_id    VARCHAR NOT NULL,
+			publisher_id    VARCHAR NOT NULL,
+			account_id      VARCHAR NOT NULL,
+			duration_ms     BIGINT NOT NULL,
+			percent_visible INTEGER NOT NULL,
+			area_px         BIGINT,
+			iab_viewable    BOOLEAN NOT NULL,
+			schema_version  INTEGER DEFAULT 1,
+			timestamp       TIMESTAMP NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS auctions (
 			trace_id         VARCHAR NOT NULL,
 			placement_id     VARCHAR NOT NULL,
@@ -98,6 +112,30 @@ func (d *DuckDB) createTables() error {
 			deal_id          VARCHAR,
 			schema_version   INTEGER DEFAULT 1,
 			timestamp        TIMESTAMP NOT NULL
+		)`,
+		// auction_wins is the row-per-win projection of an auction —
+		// the financial signal that bills downstream. Distinct from
+		// `auctions` (one row per auction, including no-bids) because
+		// queries that compute spend/CPM should join on this table
+		// alone. Populated by exchange's AuctionWinEvent, pubad's
+		// DirectWinEvent + PrebidOutboundWinEvent — every wire shape
+		// maps onto this row.
+		`CREATE TABLE IF NOT EXISTS auction_wins (
+			trace_id        VARCHAR NOT NULL,
+			auction_id      VARCHAR,
+			winner_dsp      VARCHAR,
+			campaign_id     VARCHAR,
+			creative_id     VARCHAR,
+			placement_id    VARCHAR,
+			publisher_id    VARCHAR,
+			advertiser_id   VARCHAR,
+			clearing_price  DOUBLE,
+			currency        VARCHAR,
+			bid_model       VARCHAR,
+			deal_id         VARCHAR,
+			channel         VARCHAR,
+			schema_version  INTEGER DEFAULT 1,
+			timestamp       TIMESTAMP NOT NULL
 		)`,
 	}
 
@@ -153,6 +191,21 @@ func (d *DuckDB) InsertConversion(ctx context.Context, e *ConversionEvent) error
 	return err
 }
 
+func (d *DuckDB) InsertView(ctx context.Context, e *ViewEvent) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO views (trace_id, campaign_id, creative_id, placement_id, publisher_id,
+			account_id, duration_ms, percent_visible, area_px, iab_viewable,
+			schema_version, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID,
+		e.AccountID, e.DurationMs, e.PercentVisible, e.AreaPx, e.IABViewable,
+		e.SchemaVersion, e.Timestamp)
+	return err
+}
+
 func (d *DuckDB) InsertAuction(ctx context.Context, e *AuctionEvent) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -168,12 +221,26 @@ func (d *DuckDB) InsertAuction(ctx context.Context, e *AuctionEvent) error {
 	return err
 }
 
-// InsertAuctionWin records a winning bid. Schema TODO: needs an
-// `auction_wins` table next to `auctions`. For now this stub keeps the
-// interface satisfied so the in-memory store path works in dev; wire the
-// real INSERT when DuckDB becomes the default analytics backend.
-func (d *DuckDB) InsertAuctionWin(_ context.Context, _ *AuctionWinEvent) error {
-	return nil
+// InsertAuctionWin records a winning bid into the `auction_wins`
+// table. Three handlers in cmd/reporting (handleAuctionWin,
+// handleDirectWin, handlePrebidOutboundWin) all land here — every
+// wire-shape gets normalised onto the AuctionWinEvent struct before
+// arriving. Before this was wired, all three calls silently dropped
+// on the DuckDB backend; analytics queries on auction_wins returned
+// empty results even though events flowed.
+func (d *DuckDB) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO auction_wins (
+			trace_id, auction_id, winner_dsp, campaign_id, creative_id,
+			placement_id, publisher_id, advertiser_id, clearing_price,
+			currency, bid_model, deal_id, channel, schema_version, timestamp
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		e.TraceID, e.AuctionID, e.WinnerDSP, e.CampaignID, e.CreativeID,
+		e.PlacementID, e.PublisherID, e.AdvertiserID, e.ClearingPrice,
+		e.Currency, e.BidModel, e.DealID, e.Channel, e.SchemaVersion, e.Timestamp)
+	return err
 }
 
 func (d *DuckDB) InsertBatch(ctx context.Context, events []Event) error {
@@ -186,6 +253,8 @@ func (d *DuckDB) InsertBatch(ctx context.Context, events []Event) error {
 			err = d.InsertClick(ctx, e.Click)
 		case EventConversion:
 			err = d.InsertConversion(ctx, e.Conversion)
+		case EventView:
+			err = d.InsertView(ctx, e.View)
 		case EventAuction:
 			err = d.InsertAuction(ctx, e.Auction)
 		default:

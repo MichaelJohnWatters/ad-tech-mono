@@ -24,7 +24,7 @@ flow. Cache invalidate subjects are in their own section.
 | 4 | `adtech.events.view` | `cmd/tracker/main.go:324` (`publisher.publishView`) | `cmd/reporting:handleView` + `handleViewabilityFromTracker` | `analytics.InsertView` | vCPM settle when `IABViewable=true` | ✅ |
 | 5 | `adtech.events.video` | `cmd/tracker/main.go:357` (`publisher.publishVideo`) | `cmd/reporting:handleVideo` | TBD — verify in handler | (none — analytics-only) | ✅ pub+consume; verify analytics |
 | 6 | `adtech.events.audio` | `cmd/tracker/main.go:369` (`publisher.publishAudio`) | `cmd/reporting:handleAudio` | TBD — verify in handler | (none — analytics-only) | ✅ pub+consume; verify analytics |
-| 7 | `adtech.auction.win` | `cmd/exchange/main.go:556` (`pub.AuctionWin`) | `cmd/reporting:handleAuctionWin` | `analytics.InsertAuctionWin` ⚠️ | (none — `AuctionWinEvent` shape is the trigger for `handleImpression`'s billing path) | ⚠️ DuckDB `InsertAuctionWin` is **no-op** (`duckdb.go:200` — "Schema TODO"). Memory store works. |
+| 7 | `adtech.auction.win` | `cmd/exchange/main.go:556` (`pub.AuctionWin`) | `cmd/reporting:handleAuctionWin` | `analytics.InsertAuctionWin` | (none — `AuctionWinEvent` shape is the trigger for `handleImpression`'s billing path) | ✅ (DuckDB schema + INSERT shipped 2026-06-06, Gap D) |
 | 8 | `adtech.auction.complete` | `cmd/exchange/main.go:581` (`pub.AuctionComplete`) | `cmd/reporting:handleAuction` | `analytics.InsertAuctionWin` | — | ✅ |
 | 9 | `adtech.direct.win` | `cmd/publisher-adserver/main.go:306` (`d.pub.DirectWin`) | `cmd/reporting:handleDirectWin` | `analytics.InsertAuctionWin` | (CPM only — direct CPC/CPA is backlog #4) | ✅ |
 | 10 | `adtech.prebid.outbound.win` | `cmd/publisher-adserver/main.go:488` (`d.pub.PrebidOutboundWin`) | `cmd/reporting:handlePrebidOutboundWin` | `analytics.InsertAuctionWin` | — | ✅ |
@@ -91,15 +91,14 @@ budget.depleted) and POSTs to registered URLs, then publish
 `adtech.webhooks` only as a delivery-trace stream; (b) demote
 `SubjectWebhook` since its purpose is unclear.
 
-**Gap D — `analytics.InsertAuctionWin` is a no-op in DuckDB.**
-`pkg/store/analytics/duckdb.go:200` returns nil without writing
-anywhere. Memory store works. So three handlers
-(`handleAuctionWin`, `handleDirectWin`, `handlePrebidOutboundWin`)
-land in memory but disappear from DuckDB. Effect: prod analytics
-queries on AuctionWin will return empty results, even though events
-flowed. *Fix:* add the auction_wins table to the DuckDB schema
-+ wire the insert. Schema is documented in the function's TODO
-comment.
+**Gap D — `analytics.InsertAuctionWin` is a no-op in DuckDB.** ✅ shipped 2026-06-06
+- Added `auction_wins` table to the DuckDB schema (15 columns mirroring
+  the `AuctionWinEvent` wire shape).
+- Wired `InsertAuctionWin` to actually `INSERT` instead of returning
+  `nil`. All three handlers (`handleAuctionWin`, `handleDirectWin`,
+  `handlePrebidOutboundWin`) now land in DuckDB.
+- Guard test `TestDuckDB_InsertAuctionWin` (build-tagged `duckdb`)
+  proves the schema + INSERT round-trip.
 
 **Gap E — Tracker rejection events not published.**
 When tracker drops a pixel (HMAC fail, fraud check, dedup hit) it
