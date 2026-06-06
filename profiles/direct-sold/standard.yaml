@@ -26,7 +26,7 @@ line_items:
     delivery_start: "2026-06-01T00:00:00Z"
     delivery_end: "2026-06-30T23:59:59Z"
     cpm: 25.00
-    landing_url: "https://acme.example.com"
+    landing_url: "http://localhost:8080/dev/landing/acme"
     creative_html: '<div style="width:728px;height:90px;background:#1a1a2e;color:#fff;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:18px;">ACME · Sponsorship · <a href="${CLICK_URL}" style="color:#4cc9f0;margin-left:8px;">Learn more</a><img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;"></div>'
 
   - id: pli-news-guaranteed-globex
@@ -41,7 +41,7 @@ line_items:
     delivery_end: "2026-06-30T23:59:59Z"
     cpm: 8.00
     pacing_mode: even
-    landing_url: "https://globex.example.com"
+    landing_url: "http://localhost:8080/dev/landing/globex"
     creative_html: '<a href="${CLICK_URL}" style="text-decoration:none;color:inherit;display:block;"><div style="width:300px;height:250px;background:#0a0a1a;color:#fff;display:flex;align-items:center;justify-content:center;font-family:sans-serif;">GLOBEX · Guaranteed<img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;"></div></a>'
 
   - id: pli-news-house-newsletter
@@ -51,5 +51,5 @@ line_items:
     priority_tier: house
     placements: []
     cpm: 0
-    landing_url: "https://daily-news.com/subscribe"
+    landing_url: "http://localhost:8080/dev/landing/daily-news"
     creative_html: '<div style="width:300px;height:250px;background:#f5f5f5;border:1px solid #ddd;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;"><h3 style="margin:0 0 8px;color:#1a1a2e;">Subscribe</h3><p style="margin:0 0 12px;color:#666;font-size:13px;">Daily News in your inbox</p><a href="${CLICK_URL}" style="background:#4361ee;color:white;padding:8px 20px;border-radius:4px;text-decoration:none;font-size:13px;">Sign up</a><img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;"></div>'

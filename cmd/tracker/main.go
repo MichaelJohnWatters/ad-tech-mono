@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -212,7 +213,7 @@ func main() {
 			go publisher.publishRejected(context.WithoutCancel(ctx),
 				"click", "dedup", "", traceID, reqLog)
 			if redir != "" {
-				http.Redirect(w, r, redir, http.StatusFound)
+				http.Redirect(w, r, appendTraceQuery(redir, traceID), http.StatusFound)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -234,7 +235,7 @@ func main() {
 			http.Error(w, "missing redirect URL", http.StatusBadRequest)
 			return
 		}
-		http.Redirect(w, r, redir, http.StatusFound)
+		http.Redirect(w, r, appendTraceQuery(redir, traceID), http.StatusFound)
 	})
 
 	// Conversion pixel
@@ -497,6 +498,25 @@ func (p *eventPublisher) publish(ctx context.Context, subject string, payload in
 		return false
 	}
 	return true
+}
+
+// appendTraceQuery appends adtech_tid=<traceID> to the redirect target so
+// the landing page (our demo gateway pages, or anyone else who wants to
+// stitch landing-side analytics to the click) can read the trace from
+// the URL. Idempotent — if the target already carries adtech_tid we
+// leave it alone. Empty traceID or redir → return redir unchanged.
+func appendTraceQuery(redir, traceID string) string {
+	if redir == "" || traceID == "" {
+		return redir
+	}
+	if strings.Contains(redir, "adtech_tid=") {
+		return redir
+	}
+	sep := "?"
+	if strings.Contains(redir, "?") {
+		sep = "&"
+	}
+	return redir + sep + "adtech_tid=" + url.QueryEscape(traceID)
 }
 
 func (p *eventPublisher) httpFallback(event analytics.Event, log *slog.Logger) {

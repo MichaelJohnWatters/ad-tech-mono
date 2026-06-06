@@ -131,6 +131,30 @@ func main() {
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})
+	// /dev/landing/{brand} is the demo destination the tracker redirects
+	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
+	// the last path segment; theme is picked from a small table so the
+	// landing page visually matches the creative the user clicked. The
+	// tracker appends ?adtech_tid=<trace_id> so this page can show the
+	// trace + deep-link to the trace explorer / Jaeger.
+	mux.HandleFunc("/dev/landing/", func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimPrefix(r.URL.Path, "/dev/landing/")
+		slug = strings.Trim(slug, "/")
+		if slug == "" {
+			slug = "default"
+		}
+		theme := landingThemeForSlug(slug)
+		data := struct {
+			Brand   string
+			Theme   landingTheme
+			TraceID string
+		}{
+			Brand:   theme.Brand,
+			Theme:   theme,
+			TraceID: r.URL.Query().Get("adtech_tid"),
+		}
+		templates.Render(w, "brand.html", data)
+	})
 	if cfg.GetBool("debug.endpoints_enabled", true) {
 		// Reset+reseed for the pub sim. NATS publisher is opened lazily so
 		// the cache-invalidate fan-out works even though the gateway has

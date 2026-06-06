@@ -88,8 +88,9 @@ func main() {
 		log.Warn("creative asset upload run failed", "error", err)
 	}
 	assetBase := cfg.Get("seed.creatives_url_base", "http://localhost:8080"+routes.ProxyCreatives[:len(routes.ProxyCreatives)-1])
+	landingBase := cfg.Get("seed.landing_url_base", "http://localhost:8080/dev/landing")
 
-	in := &inserter{db: db, log: log, creativeAssetBase: assetBase}
+	in := &inserter{db: db, log: log, creativeAssetBase: assetBase, landingURLBase: landingBase}
 	if err := in.SeedAll(ctx, profiles); err != nil {
 		log.Error("seed campaigns failed", "error", err)
 		os.Exit(1)
