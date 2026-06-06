@@ -1,6 +1,7 @@
 package adserving
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,32 @@ func TestBuildClickURL(t *testing.T) {
 	}
 	if !strings.Contains(url, "tid=trace-abc") {
 		t.Errorf("expected tid in: %s", url)
+	}
+	if strings.Contains(url, "redir=") {
+		t.Errorf("redir should be absent when LandingURL is empty: %s", url)
+	}
+}
+
+func TestBuildClickURLWithLanding(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID:   "trace-abc",
+		CampaignID:  "camp-1",
+		CreativeID:  "cr-1",
+		PlacementID: "pl-1",
+		PublisherID: "pub-1",
+		TrackerURL:  "http://tracker:8083",
+		LandingURL:  "https://example.com/landing?utm=a&utm2=b",
+	}
+	signed := BuildClickURL(ctx)
+	if !strings.Contains(signed, "redir=https%3A%2F%2Fexample.com%2Flanding") {
+		t.Errorf("expected url-encoded redir in signed URL: %s", signed)
+	}
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parse signed url: %v", err)
+	}
+	if !ValidateSignature(u.Path, u.Query(), DefaultSigningKey) {
+		t.Errorf("signature should cover the baked-in redir param: %s", signed)
 	}
 }
 

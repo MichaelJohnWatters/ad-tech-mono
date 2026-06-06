@@ -112,9 +112,11 @@ func uploadCreativeAssets(ctx context.Context, store objects.Store, bucket strin
 // (click first, then redirect; impression pixel hidden at the end)
 // but with the bulk of the visual coming from the SVG file rather
 // than inline emoji + gradient. assetURL is the browser-reachable
-// URL (gateway proxy), not the in-cluster Minio URL.
-func creativeAssetHTML(assetURL, landingURL string) string {
-	return `<a href="${CLICK_URL}` + landingURL + `" target="_blank" rel="noopener" style="text-decoration:none;display:block;width:${WIDTH}px;height:${HEIGHT}px;position:relative;">` +
+// URL (gateway proxy), not the in-cluster Minio URL. ${CLICK_URL} is
+// the full signed tracker URL with redir=landing baked in by the ad
+// server's macro substitution — no concatenation needed.
+func creativeAssetHTML(assetURL string) string {
+	return `<a href="${CLICK_URL}" target="_blank" rel="noopener" style="text-decoration:none;display:block;width:${WIDTH}px;height:${HEIGHT}px;position:relative;">` +
 		`<img src="` + assetURL + `" alt="" style="display:block;width:100%;height:100%;border-radius:4px;" />` +
 		`<img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;left:0;top:0;opacity:0;" alt="" />` +
 		`</a>`

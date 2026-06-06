@@ -347,6 +347,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			Width:        req.Width,
 			Height:       req.Height,
 			TrackerURL:   trackerURL,
+			LandingURL:   creative.LandingURL,
 		}
 
 		renderedHTML := adserving.SubstituteMacros(creative.HTML, macroCtx)

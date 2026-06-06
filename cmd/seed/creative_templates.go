@@ -145,10 +145,11 @@ func renderDefault(externalID, domain, landingURL string) string {
 // ${WIDTH}/${HEIGHT} macros). innerHTML contains the icon + headline
 // + tagline; ctaLabel + ctaBg + ctaFg style the click button.
 // The whole creative is wrapped in an anchor pointing at ${CLICK_URL}
-// (the tracker URL), which redirects to landingURL after the click
-// pixel fires. Impression pixel sits at the end as a hidden 1×1.
-func wrapTemplate(landingURL, surfaceCSS, innerHTML, ctaLabel, ctaBg, ctaFg string) string {
-	return `<a href="${CLICK_URL}` + landingURL + `" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:block;">` +
+// — the tracker URL with redir=landing baked in by the ad server's
+// macro substitution. Tracker fires the click event, then 302s to the
+// advertiser page. Impression pixel sits at the end as a hidden 1×1.
+func wrapTemplate(_landingURL, surfaceCSS, innerHTML, ctaLabel, ctaBg, ctaFg string) string {
+	return `<a href="${CLICK_URL}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:block;">` +
 		`<div style="width:${WIDTH}px;height:${HEIGHT}px;` + surfaceCSS +
 		`box-sizing:border-box;padding:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;` +
 		`font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;border-radius:4px;overflow:hidden;position:relative;cursor:pointer;">` +
