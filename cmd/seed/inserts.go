@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/lib/pq"
 )
@@ -27,6 +28,45 @@ type inserter struct {
 	// every creative falls back to inline HTML (degraded but
 	// functional in offline / no-Minio dev).
 	creativeAssetBase string
+	// landingURLBase is the browser-reachable URL prefix for the demo
+	// landing pages served by the gateway at /dev/landing/{slug}.
+	// landing_url for each seeded creative becomes "{base}/{brand-slug}"
+	// so clicks redirect into our own gateway instead of bouncing off
+	// the squatter who happens to own e.g. luxauto.com. Empty falls
+	// back to https://{creative_domain} (legacy behaviour) so the seed
+	// still works in environments without a gateway.
+	landingURLBase string
+}
+
+// brandSlugFromDomain reduces "acme-shoes.com" → "acme-shoes" and
+// "globex-tech.com" → "globex-tech" so the landing-page URL is stable
+// across the YAML's creative_domain and the landingThemes table in
+// cmd/gateway/landing.go.
+func brandSlugFromDomain(domain string) string {
+	if domain == "" {
+		return "default"
+	}
+	s := domain
+	if i := strings.IndexByte(s, '.'); i > 0 {
+		s = s[:i]
+	}
+	return strings.ToLower(s)
+}
+
+// landingURLFor returns the landing URL for a creative. When base is
+// set (the common case in dev — gateway hosts /dev/landing/{slug}) the
+// URL routes back into our own gateway so clicks land on a themed
+// mock page that shows the trace_id. When base is empty (offline /
+// no-gateway setup) it falls back to https://{creative_domain} so the
+// seed still produces something tracker-redirectable.
+func landingURLFor(base, domain string) string {
+	if base != "" {
+		return strings.TrimSuffix(base, "/") + "/" + brandSlugFromDomain(domain)
+	}
+	if domain == "" {
+		return "https://example.com"
+	}
+	return "https://" + domain
 }
 
 // SeedAll runs the full seed for a parsed set of DSP profiles. Idempotent.
@@ -231,7 +271,7 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 		// odd suffix → asset_url wrapper around a Minio-hosted SVG.
 		if c.CreativeID != "" {
 			creativeID := DeriveID("creative", c.CreativeID)
-			landing := "https://" + defaultStr(c.CreativeDomain, "example.com")
+			landing := landingURLFor(in.landingURLBase, c.CreativeDomain)
 			html := themedCreativeHTML(c.CreativeID, c.CreativeDomain)
 			if useAssetURL(c.CreativeID) && in.creativeAssetBase != "" {
 				key, _ := creativeAssetByTheme(c.CreativeDomain)

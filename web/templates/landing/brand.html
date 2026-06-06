@@ -1,0 +1,112 @@
+{{define "brand.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{{ .Brand }} — landing page (demo)</title>
+<style>
+  :root {
+    --bg: {{ .Theme.BG }};
+    --fg: {{ .Theme.FG }};
+    --accent: {{ .Theme.Accent }};
+    --muted: {{ .Theme.Muted }};
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+  }
+  .hero {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 64px 24px 32px;
+    text-align: center;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 12px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 999px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .glyph { font-size: 88px; line-height: 1; margin-bottom: 16px; }
+  h1 { font-size: 48px; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .tagline { font-size: 20px; opacity: 0.9; margin: 0 0 32px; }
+  .cta {
+    display: inline-block;
+    padding: 14px 32px;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .trace-card {
+    max-width: 720px;
+    margin: 48px auto;
+    padding: 20px 24px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .trace-card strong { color: var(--fg); }
+  .trace-card code {
+    display: inline-block;
+    padding: 2px 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+  }
+  .trace-card a { color: var(--accent); text-decoration: none; }
+  .trace-card a:hover { text-decoration: underline; }
+  footer {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <section class="hero">
+    <span class="badge">Mock landing page</span>
+    <div class="glyph">{{ .Theme.Glyph }}</div>
+    <h1>{{ .Brand }}</h1>
+    <p class="tagline">{{ .Theme.Tagline }}</p>
+    <a class="cta" href="#">{{ .Theme.CTA }}</a>
+  </section>
+
+  {{ if .TraceID }}
+  <div class="trace-card">
+    You arrived via a tracked click. Trace ID
+    <code>{{ .TraceID }}</code> &middot;
+    <a href="/dev/trace-explorer?trace_id={{ .TraceID }}">open in trace explorer</a>
+    &middot;
+    <a href="http://localhost:16686/trace/{{ .TraceID }}" target="_blank" rel="noopener">open in Jaeger</a>
+  </div>
+  {{ else }}
+  <div class="trace-card">
+    Direct visit (no <code>adtech_tid</code> query param). When the tracker
+    redirects here from a click, the trace ID appears in this card.
+  </div>
+  {{ end }}
+
+  <footer>
+    This page is served from the ad-tech-mono gateway as a demo landing
+    surface for seeded creatives. Brand is derived from the URL slug.
+  </footer>
+</body>
+</html>
+{{end}}
