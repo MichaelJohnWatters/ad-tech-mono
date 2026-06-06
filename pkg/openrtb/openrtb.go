@@ -44,28 +44,94 @@ type Banner struct {
 	Mimes []string `json:"mimes,omitempty"`
 }
 
-// Video represents a video ad opportunity.
+// Video represents a video ad opportunity. Field set targets OpenRTB
+// 2.6 — the fields beyond the obvious w/h/duration are what the rest of
+// Phase 9 (VAST, ad pods, SSAI, CTV) needs to make real bidding
+// decisions, so they're plumbed through now even though no consumer
+// reads them yet. Optional fields stay omitempty so existing minimal
+// bid requests serialise identically.
 type Video struct {
 	Mimes       []string `json:"mimes,omitempty"`
-	Protocols   []int    `json:"protocols,omitempty"`
+	Protocols   []int    `json:"protocols,omitempty"`     // VAST versions supported (2=VAST 2.0, 3=VAST 3.0, 5=VAST 4.0, 6=VAST 4.1, 7=VAST 4.2)
 	W           int      `json:"w,omitempty"`
 	H           int      `json:"h,omitempty"`
 	MinDuration int      `json:"minduration,omitempty"`
 	MaxDuration int      `json:"maxduration,omitempty"`
-	Linearity   int      `json:"linearity,omitempty"`
-	Placement   int      `json:"placement,omitempty"`
-	StartDelay  int      `json:"startdelay,omitempty"`
+	Linearity   int      `json:"linearity,omitempty"`     // 1=linear (pre-/mid-/post-roll), 2=non-linear (overlay)
+	Placement   int      `json:"placement,omitempty"`     // 1=instream, 2=in-banner, 3=in-article, 4=in-feed, 5=interstitial. Deprecated by Plcmt in 2.6.
+	Plcmt       int      `json:"plcmt,omitempty"`         // 2.6: 1=instream w/ audio, 2=accompanying content, 3=interstitial, 4=no content / standalone
+	Pos         int      `json:"pos,omitempty"`           // 0=unknown, 1=above the fold, 3=below the fold, 7=fullscreen
+	StartDelay  int      `json:"startdelay,omitempty"`    // 0=pre-roll, >0=mid-roll at seconds, -1=generic mid, -2=generic post
 	Skip        int      `json:"skip,omitempty"`
-	SkipAfter   int      `json:"skipafter,omitempty"`
+	SkipMin     int      `json:"skipmin,omitempty"`       // minimum duration before skip is allowed
+	SkipAfter   int      `json:"skipafter,omitempty"`     // seconds before user can skip
+	Sequence    int      `json:"sequence,omitempty"`      // position in a pod (1=first, 2=second…). Deprecated by SlotInPod in 2.6.
+	BAttr       []int    `json:"battr,omitempty"`         // blocked creative attributes (e.g. 13=user-initiated mid-roll, 17=adobe flash)
+	MaxExtended int      `json:"maxextended,omitempty"`   // max extension allowed past maxduration (seconds)
+	MinBitRate  int      `json:"minbitrate,omitempty"`    // kbps
+	MaxBitRate  int      `json:"maxbitrate,omitempty"`    // kbps
+	BoxingAllowed int    `json:"boxingallowed,omitempty"` // 1=letterboxing allowed when aspect doesn't match (default 1)
+	PlaybackMethod []int `json:"playbackmethod,omitempty"` // 1=autoplay sound on, 2=autoplay sound off, 3=click sound on, 4=mouseover sound on, 5=enter viewport sound on, 6=enter viewport sound off
+	PlaybackEnd    int   `json:"playbackend,omitempty"`    // 1=video completes, 2=user leaves viewport, 3=user closes/skips
+	Delivery       []int `json:"delivery,omitempty"`       // 1=streaming, 2=progressive, 3=download
+	API            []int `json:"api,omitempty"`            // 1=VPAID 1.0, 2=VPAID 2.0, 3=MRAID 1, 4=ORMMA, 5=MRAID 2, 6=MRAID 3, 7=OMID 1
+	CompanionAd    []Companion `json:"companionad,omitempty"`
+	CompanionType  []int       `json:"companiontype,omitempty"` // 1=static resource, 2=HTML resource, 3=iframe resource
+	// Ad pod fields (OpenRTB 2.6) — set when this imp is one slot in a
+	// pre-/mid-/post-roll pod rather than a standalone spot.
+	PodID         string  `json:"podid,omitempty"`          // identifier shared across all imps in the same pod
+	PodSeq        int     `json:"podseq,omitempty"`         // -1=last pod, 0=any pod, 1=first pod, 2=any mid pod
+	SlotInPod     int     `json:"slotinpod,omitempty"`      // -1=last slot, 0=any slot, 1=first slot, 2=first or any mid slot, 3=any last slot
+	RqdDurs       []int   `json:"rqddurs,omitempty"`        // required durations for slots in this pod
+	MinCPMPerSec  float64 `json:"mincpmpersec,omitempty"`   // floor price per second of ad duration in the pod
 }
 
-// Audio represents an audio ad opportunity.
+// Audio represents an audio ad opportunity. DAAST / podcast dynamic
+// insertion / streaming radio all build on this.
 type Audio struct {
 	Mimes       []string `json:"mimes,omitempty"`
+	Protocols   []int    `json:"protocols,omitempty"`      // 1=DAAST 1.0, 2=DAAST 1.0 wrapper, 9=VAST 3.0 (audio extension)
 	MinDuration int      `json:"minduration,omitempty"`
 	MaxDuration int      `json:"maxduration,omitempty"`
-	Feed        int      `json:"feed,omitempty"`    // 1=music, 2=podcast, 3=radio
-	Stitched    int      `json:"stitched,omitempty"` // 1=SSAI, 0=client-side
+	StartDelay  int      `json:"startdelay,omitempty"`
+	Sequence    int      `json:"sequence,omitempty"`       // pod position (legacy; use SlotInPod in 2.6 pods)
+	BAttr       []int    `json:"battr,omitempty"`
+	MaxExtended int      `json:"maxextended,omitempty"`
+	MinBitRate  int      `json:"minbitrate,omitempty"`
+	MaxBitRate  int      `json:"maxbitrate,omitempty"`
+	Delivery    []int    `json:"delivery,omitempty"`
+	API         []int    `json:"api,omitempty"`
+	CompanionAd []Companion `json:"companionad,omitempty"`
+	CompanionType []int    `json:"companiontype,omitempty"`
+	MaxSeq      int      `json:"maxseq,omitempty"`         // max number of ads in pod
+	Feed        int      `json:"feed,omitempty"`           // 1=music, 2=podcast, 3=radio
+	Stitched    int      `json:"stitched,omitempty"`       // 1=SSAI-stitched, 0=client-side insertion
+	NVol        int      `json:"nvol,omitempty"`           // volume normalization: 0=none, 1=ad volume avg normalized to content, 2=ad volume peak normalized, 3=loudness normalized (LUFS), 4=custom
+	// Ad pod fields (parallel to Video; see Video.PodID etc).
+	PodID        string  `json:"podid,omitempty"`
+	PodSeq       int     `json:"podseq,omitempty"`
+	SlotInPod    int     `json:"slotinpod,omitempty"`
+	RqdDurs      []int   `json:"rqddurs,omitempty"`
+	MinCPMPerSec float64 `json:"mincpmpersec,omitempty"`
+}
+
+// Companion describes a companion banner shown alongside a video or
+// audio ad. Same shape as a standard Banner plus a couple of companion-
+// specific fields. Used by Video.CompanionAd / Audio.CompanionAd.
+type Companion struct {
+	ID     string   `json:"id,omitempty"`
+	W      int      `json:"w,omitempty"`
+	H      int      `json:"h,omitempty"`
+	WMin   int      `json:"wmin,omitempty"`     // minimum width (for flexible inventory)
+	HMin   int      `json:"hmin,omitempty"`
+	WMax   int      `json:"wmax,omitempty"`
+	HMax   int      `json:"hmax,omitempty"`
+	BType  []int    `json:"btype,omitempty"`    // blocked creative types
+	BAttr  []int    `json:"battr,omitempty"`
+	Pos    int      `json:"pos,omitempty"`
+	Mimes  []string `json:"mimes,omitempty"`
+	API    []int    `json:"api,omitempty"`
+	Vcm    int      `json:"vcm,omitempty"`      // 1=companion concurrent with video, 0=after
 }
 
 // Native represents a native ad opportunity.
@@ -187,7 +253,8 @@ type BidObj struct {
 	AdID    string  `json:"adid,omitempty"`
 	NURL    string  `json:"nurl,omitempty"` // win notice URL
 	LURL    string  `json:"lurl,omitempty"` // loss notice URL
-	AdM     string  `json:"adm,omitempty"`  // ad markup
+	BURL    string  `json:"burl,omitempty"` // billing notice URL (fires when SSP records billable event — for video/audio this is when the player counts the impression, not just receives the bid)
+	AdM     string  `json:"adm,omitempty"`  // ad markup (display HTML for banners; VAST XML for video; DAAST XML for audio)
 	ADomain []string `json:"adomain,omitempty"`
 	CID     string  `json:"cid,omitempty"`  // campaign ID (line item)
 	CrID    string  `json:"crid,omitempty"` // creative ID
@@ -195,5 +262,21 @@ type BidObj struct {
 	DealID  string  `json:"dealid,omitempty"`
 	W       int     `json:"w,omitempty"`
 	H       int     `json:"h,omitempty"`
-	Dur     int     `json:"dur,omitempty"` // video/audio duration
+	Dur     int     `json:"dur,omitempty"` // video/audio duration (seconds)
+	// API / Protocol echo back what the bid's creative supports so the
+	// player can reject mismatches without having to fetch the VAST/
+	// DAAST. Values match the request's API/Protocols enums.
+	API      int `json:"api,omitempty"`
+	Protocol int `json:"protocol,omitempty"`
+	// Ad pod response fields (OpenRTB 2.6) — set when this bid claims
+	// a specific slot in the requested pod. Mirrors Imp.Video.PodID /
+	// SlotInPod from the request.
+	PodID     string `json:"podid,omitempty"`
+	SlotInPod int    `json:"slotinpod,omitempty"`
+	// BidModel is a non-standard extension (cpm/cpc/cpa/vcpm/cpcv) the DSP
+	// publishes so the SSP can pass it on to the ad server, which stamps
+	// it on the impression URL. The tracker reads it to route reserve vs
+	// bill-immediately in the billing engine. Standard OpenRTB has no
+	// concept of "what you're bidding on"; this is platform-internal.
+	BidModel string `json:"bm,omitempty"`
 }
