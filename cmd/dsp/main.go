@@ -7,10 +7,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
@@ -35,6 +38,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pacing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/targeting"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -44,14 +48,30 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceDSP)
-	sc := config.Setup(constants.ServiceDSP, log)
+
+	// Pre-Setup: read DSP_PROFILE from env (Tilt sets it per-pod) and
+	// load the YAML profile to extract per-pod default values for
+	// noise_pct and no_bid_rate. These get passed to Setup as seed
+	// overrides so the per-pod config row gets the right default value
+	// at first boot instead of the schema-wide 0 — without this, every
+	// DSP pod would have noise_pct=0 in Postgres regardless of profile,
+	// silently making competitor DSPs deterministic. Profile config key
+	// is "dsp.profile" with envKey DSP_PROFILE.
+	profileFromEnv := os.Getenv("DSP_PROFILE")
+	if profileFromEnv == "" {
+		profileFromEnv = "internal"
+	}
+	seedOverrides := dspSeedOverrides(profileFromEnv, log)
+
+	sc := config.Setup(constants.ServiceDSP, dspSchema, log,
+		config.WithSeedDefaults(seedOverrides))
 	cfg := sc.Cfg
-	_ = sc
+	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
 	port := cfg.Get("dsp.port", routes.PortDSP)
-	profile := cfg.Get("dsp.profile", "internal")
+	profile := knobs.Profile()
 
 	// OpenTelemetry: traces inbound from exchange via HTTP middleware,
 	// becomes a child of the exchange.auction span automatically.
@@ -64,11 +84,6 @@ func main() {
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	// Publish this service's schema to config_schema so the gateway's
-	// config-manager UI sees these keys. nil-tolerant on DB failures —
-	// the in-process registry still updates so local Validate calls work.
-	config.PublishSchemaWithURL(cfg.Get("database.url", ""), constants.ServiceDSP, dspSchema, log)
-
 	// DSP identity: look up this pod's own row in the `dsps` table by name.
 	// The row is the source of truth for noise_pct + no_bid_rate (replaces
 	// the old YAML+config triple). YAML profile becomes a back-compat
@@ -76,18 +91,67 @@ func main() {
 	// yet (fresh dev environment), we fall back to YAML defaults so the
 	// pod still boots.
 	dspProfile, dspRow := loadDSPIdentity(cfg, profile, log)
-	noisePct := float64(dspRow.NoisePct)
-	noBidRate := dspRow.NoBidRate
 	isCompetitor := dspRow.IsCompetitor()
+
+	// noise_pct and no_bid_rate are TierLive — both should re-read per
+	// request so SetConfigForPod can flip them at runtime (e.g. e2e tests
+	// switching a DSP into "always no-bid" mode). The dspRow values from
+	// loadDSPIdentity seed Postgres defaults via the registry but the
+	// runtime path goes through the config map.
+	noisePctFn := func() float64 {
+		// Knobs.NoisePct reads "dsp.noise_pct" from cfg with default 0; we
+		// fall back to the dspRow value if the key is unset (fresh DB).
+		if v := cfg.GetFloat("dsp.noise_pct", -1); v >= 0 {
+			return v
+		}
+		return float64(dspRow.NoisePct)
+	}
+	noBidRateFn := func() float64 {
+		if v := cfg.GetFloat("dsp.no_bid_rate", -1); v >= 0 {
+			return v
+		}
+		return dspRow.NoBidRate
+	}
 
 	// Redis budget tracker.
 	l2 := connectRedis(cfg, log)
-	budget := NewBudgetTracker(l2, cfg.GetDuration("dsp.budget_reset_interval", 24*time.Hour), log)
+	budget := NewBudgetTracker(l2, knobs.BudgetResetInterval.Value, log)
 	shadingTracker := bidshading.NewTracker()
 
 	// NATS bus for warm-cache invalidate subscription. nil-tolerant — the
 	// warm cache degrades to poll-only mode if NATS is unreachable.
 	bus := connectNATS(cfg, log)
+
+	// Separate bus for outbound event publishing (BudgetDepletedEvent). Same
+	// pattern as cmd/publisher-adserver — a dedicated *natsbus.Bus so we
+	// can call EnsureStream (not on the interface) and wrap with Publisher.
+	// Nil-tolerant: depletion events are best-effort observability, not the
+	// hot path.
+	natsURL := cfg.Get("dsp.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	var pub *events.Publisher
+	if pubBus, err := natsbus.New(natsURL, constants.ServiceDSP+"-events", log); err == nil {
+		pubBus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects})
+		pub = events.NewPublisher(pubBus, log)
+		lc.OnShutdown("dsp-publisher", func(_ context.Context) error { return pubBus.Close() })
+	} else {
+		log.Warn("dsp event publisher unavailable, BudgetDepleted events will be skipped", "error", err)
+	}
+
+	// Per-pod dedup state for budget-exhaustion publishes. Without this,
+	// every bid request hitting an exhausted campaign would publish a new
+	// event — potentially hundreds per second per campaign. sync.Map
+	// resets on pod restart; that's acceptable because true daily-budget
+	// reset already triggers a budget counter reset in Redis, after which
+	// the campaign would re-deplete and warrant a fresh event.
+	var depletedAlreadyPublished sync.Map
+
+	// Secrets warm cache. Loads the api_key + jwt_signing secrets this
+	// service needs for management-endpoint auth. /readyz waits for first
+	// successful load so the service won't accept auth-required traffic
+	// before the cache has rows.
+	secretsCache := secrets.Start(context.Background(), cfg, clk, log, constants.ServiceDSP)
+	lc.OnShutdown("secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
 
 	// Postgres + warm cache for campaigns. dspID is the filter — only
 	// campaigns under accounts where accounts.dsp_id matches this pod's
@@ -102,7 +166,7 @@ func main() {
 	// Path B: DSP-private audience segments. Looked up per bid request and
 	// unioned with SSP-stamped segments before targeting evaluation. Nil
 	// store = no enrichment, DSP keeps bidding on whatever the SSP sent.
-	audienceStore, audienceStop := openAudienceStore(cfg, l2, log)
+	audienceStore, audiencePreloader, audienceStop := openAudienceStore(cfg, l2, log)
 	lc.OnShutdown("audience-store", func(_ context.Context) error { audienceStop(); return nil })
 
 	// Readiness checks: only report ready when the L2 connection responds
@@ -128,7 +192,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, budget, isCompetitor, noisePct, noBidRate))
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, budget, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
@@ -162,13 +226,21 @@ func main() {
 	if mgmtDB != nil {
 		lc.OnShutdown("mgmt-db", func(_ context.Context) error { return mgmtDB.Close() })
 	}
-	mux.HandleFunc(routes.DSPCampaigns+"/", campaignByIDHandler(mgmtDB, bus, accountIDs, log))
-	mux.HandleFunc(routes.DSPCampaigns, campaignsCollectionHandler(campaignCache, mgmtDB, bus, dspRow.ID, dspRow.Name, budget, log))
+	// Management CRUD endpoints require X-API-Key — validated against the
+	// secrets warm cache via middleware.AuthAPIKey. /v1/openrtb/bid stays
+	// open (exchange→DSP call is internal). Phase 5 will add the same
+	// gate to the bid endpoint via service_s2s shared secrets.
+	auth := middleware.AuthAPIKey(secretsCache, log)
+	mux.Handle(routes.DSPCampaigns+"/", auth(http.HandlerFunc(campaignByIDHandler(mgmtDB, bus, accountIDs, log))))
+	mux.Handle(routes.DSPCampaigns, auth(http.HandlerFunc(campaignsCollectionHandler(campaignCache, mgmtDB, bus, dspRow.ID, dspRow.Name, budget, log))))
 
 	// Cache refresh stays debug-gated — it's purely a dev/test helper for
 	// forcing a synchronous reload, not a customer-facing operation.
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(campaignCache))
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(campaignCache, secretsCache.Cache))
+		if audiencePreloader != nil {
+			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
+		}
 	}
 
 	handler := tracing.HTTPMiddleware(constants.ServiceDSP)(metrics.Wrap(middleware.CORS(mux)))
@@ -181,6 +253,58 @@ func main() {
 		"is_competitor", isCompetitor,
 	)
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
+}
+
+// dspSeedOverrides returns the per-pod boot-seed overrides for this DSP's
+// profile-specific knobs. Source of truth order: YAML profile (for host
+// dev where ./profiles is on disk) → Postgres `dsps` row (for the k8s
+// pod image where YAML files aren't packaged) → nil (registry uses
+// schema defaults). The k8s path matters: without it the schema default
+// of 0 wins on first boot, and noisePctFn returns 0 forever — every
+// competitor bid is deterministic and one creative wins every auction.
+// Only runs at boot; per-pod row only gets the value on first-ever boot
+// per registry's exists-check semantics.
+func dspSeedOverrides(profileName string, log *slog.Logger) map[string]string {
+	if profile, err := FindProfile(profileName, log); err == nil {
+		return map[string]string{
+			"dsp.noise_pct":   strconv.FormatFloat(float64(profile.NoisePct), 'f', -1, 64),
+			"dsp.no_bid_rate": strconv.FormatFloat(profile.NoBidRate, 'f', -1, 64),
+		}
+	}
+	if row := dspRowFromEnvDB(profileName, log); row != nil {
+		log.Info("profile YAML not found, seeded from postgres dsps row", "profile", profileName, "noise_pct", row.NoisePct, "no_bid_rate", row.NoBidRate)
+		return map[string]string{
+			"dsp.noise_pct":   strconv.Itoa(row.NoisePct),
+			"dsp.no_bid_rate": strconv.FormatFloat(row.NoBidRate, 'f', -1, 64),
+		}
+	}
+	log.Warn("profile YAML and postgres dsps row both unavailable, skipping seed-default override", "profile", profileName)
+	return nil
+}
+
+// dspRowFromEnvDB does a one-shot Postgres lookup for the dsps row at
+// seed time (before pkg/config has fully wired up). Reads DATABASE_URL
+// directly from env so it doesn't depend on cfg, which is what we're
+// trying to seed. Returns nil on any error so the caller can fall back.
+func dspRowFromEnvDB(profileName string, log *slog.Logger) *postgres.DSPRow {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		return nil
+	}
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Debug("seed dsps lookup: open failed", "error", err)
+		return nil
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	row, err := postgres.DSPByName(ctx, db, profileName)
+	if err != nil {
+		log.Debug("seed dsps lookup: row not found", "profile", profileName, "error", err)
+		return nil
+	}
+	return row
 }
 
 // loadDSPIdentity returns this pod's DSP identity. Prefers the Postgres
@@ -245,37 +369,42 @@ func fallbackDSPRow(p *DSPProfile) *postgres.DSPRow {
 // or to postgres-direct if no L2 cache is present, or nil if no DB at all.
 //
 // Returns the Lookup + a Stop function the caller registers on shutdown.
-func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, func()) {
+// Returns (Lookup, preloader-or-nil, stopFn). The preloader is non-nil
+// only when the warm-preload variant is the active backend — the debug
+// /debug/audience/refresh endpoint uses it to force a sync refresh
+// without waiting for the 30s tick. Other backends (postgres-direct,
+// lazy cache) need no manual refresh because they always read fresh.
+func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, func()) {
 	dbURL := cfg.Get("database.url", "")
 	if dbURL == "" {
 		log.Warn("database.url not set, dsp audience store disabled")
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Warn("dsp audience store open failed", "error", err)
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		log.Warn("dsp audience store ping failed", "error", err)
 		_ = db.Close()
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	if l2 == nil {
 		log.Info("dsp audience store connected (postgres-direct, no L2 cache)")
-		return audiencepg.New(db), func() { _ = db.Close() }
+		return audiencepg.New(db), nil, func() { _ = db.Close() }
 	}
 	interval := cfg.GetDuration("audience.preload_interval", 30*time.Second)
 	ttl := cfg.GetDuration("audience.cache_ttl", 90*time.Second)
 	pre := audpreload.New(audpreload.Config{DB: db, L2: l2, Interval: interval, TTL: ttl, Log: log})
 	if err := pre.Start(context.Background()); err != nil {
 		log.Warn("audience preloader start failed, falling back to lazy cache", "error", err)
-		return audcached.New(audiencepg.New(db), l2, ttl, log), func() { _ = db.Close() }
+		return audcached.New(audiencepg.New(db), l2, ttl, log), nil, func() { _ = db.Close() }
 	}
 	log.Info("dsp audience store connected (redis warm preload)", "interval", interval, "ttl", ttl)
-	return pre, func() { pre.Stop(); _ = db.Close() }
+	return pre, pre, func() { pre.Stop(); _ = db.Close() }
 }
 
 // startCampaignCache wires the warm cache to Postgres, or to a YAML-derived
@@ -304,33 +433,33 @@ func startCampaignCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, p
 	return c
 }
 
-// pickCampaignLoader returns the Postgres loader, or a YAML-derived
-// in-memory loader if Postgres can't be reached. The interface is the same
-// either way so the warm cache doesn't care.
+// pickCampaignLoader returns a self-healing warm.Loader. The DSP keeps
+// its YAML-derived fallback when database.url is unset (so a fully
+// offline boot still produces some campaigns to bid with), but when a
+// URL is configured we wrap the Postgres path with RetryingLoader so a
+// transient Postgres outage doesn't pin the cache for the process
+// lifetime — the next 30s poll reconnects.
+//
+// DSPID is the primary filter (joins accounts.dsp_id). AccountIDs is
+// kept as a YAML-derived fallback for environments where the dsps row
+// doesn't exist yet or migration 022 hasn't run.
 func pickCampaignLoader(cfg *config.Config, log *slog.Logger, profile *DSPProfile, dspID string, accountIDs []string) warm.Loader[models.Campaign] {
 	dbURL := cfg.Get("database.url", "")
 	if dbURL == "" {
 		log.Warn("database.url not set, using YAML in-memory campaign loader")
 		return &yamlCampaignLoader{profile: profile}
 	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Warn("postgres open failed, using YAML loader", "error", err)
-		return &yamlCampaignLoader{profile: profile}
+	return &warm.RetryingLoader[models.Campaign]{
+		Log:   log,
+		KeyFn: func(c models.Campaign) string { return c.ID },
+		Construct: func() (warm.Loader[models.Campaign], error) {
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.CampaignLoader{Store: store, DSPID: dspID, AccountIDs: accountIDs}, nil
+		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("postgres ping failed, using YAML loader", "error", err)
-		_ = db.Close()
-		return &yamlCampaignLoader{profile: profile}
-	}
-	log.Info("postgres connected for campaign loader", "url_masked", maskedURL(dbURL), "dsp_id", dspID)
-	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
-	// DSPID is the primary filter (joins accounts.dsp_id). AccountIDs is
-	// kept as a YAML-derived fallback for environments where the dsps row
-	// doesn't exist yet or migration 022 hasn't run.
-	return &postgres.CampaignLoader{Store: store, DSPID: dspID, AccountIDs: accountIDs}
 }
 
 // connectNATS returns a JetStream-backed bus if reachable, else nil
@@ -413,7 +542,7 @@ func (l *yamlCampaignLoader) KeyOf(c models.Campaign) string { return c.ID }
 // connectRedis returns a real Redis L2 cache if reachable, falling back
 // to MemoryL2 with a warning so dev environments without Redis still boot.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", "localhost:6379")
+	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
 	pwd := cfg.Get("redis.password", "")
 	db := cfg.GetInt("redis.db", 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -427,7 +556,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	return client
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, budget *BudgetTracker, isCompetitor bool, noisePct, noBidRate float64) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, budget *BudgetTracker, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -526,12 +655,37 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				DayStartUTC: clk.Now().Truncate(24 * time.Hour),
 			})
 			currentSpend := budget.Spend(c.ID)
-			if !pacer.ShouldBid(currentSpend) {
-				reqLog.Debug("campaign throttled by pacing", "campaign", c.ID, "spend", currentSpend)
-				continue
-			}
+			// Exhaustion check FIRST. The pacer's ShouldBid also returns
+			// false when over-budget but conflates that with intra-day
+			// throttling — if we fall into the pacer branch we never get
+			// the chance to publish BudgetDepletedEvent. Exhaustion is a
+			// stronger signal than throttling and deserves its own log +
+			// event.
 			if currentSpend >= c.DailyBudget {
 				reqLog.Debug("campaign daily budget exhausted", "campaign", c.ID)
+				// Publish BudgetDepletedEvent once per (campaign, pod
+				// lifetime) so reporting + dashboards / alerts have a
+				// signal beyond log scraping. LoadOrStore returns the
+				// previous value's "exists" flag, so we publish only on
+				// the first detection — without this guard, every bid
+				// request hitting an exhausted campaign would emit a
+				// fresh event (potentially hundreds/sec/campaign).
+				if pub != nil {
+					if _, already := depletedAlreadyPublished.LoadOrStore(c.ID, struct{}{}); !already {
+						reqLog.Info("publishing budget depleted event", "campaign", c.ID, "spent", currentSpend, "budget", c.DailyBudget)
+						go pub.BudgetDepleted(context.WithoutCancel(ctx), events.BudgetDepletedEvent{
+							CampaignID: c.ID,
+							AccountID:  c.AccountID,
+							Budget:     c.DailyBudget,
+							Spent:      currentSpend,
+							Timestamp:  clk.Now(),
+						})
+					}
+				}
+				continue
+			}
+			if !pacer.ShouldBid(currentSpend) {
+				reqLog.Debug("campaign throttled by pacing", "campaign", c.ID, "spend", currentSpend)
 				continue
 			}
 
@@ -539,10 +693,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			adjustedBid, _ := targeting.ApplyModifiers(c.BaseBid, c.Modifiers, modCtx)
 
 			if isCompetitor {
+				noBidRate := noBidRateFn()
 				if rand.Float64() < noBidRate {
 					reqLog.Debug("competitor random no-bid", "campaign", c.ID)
 					continue
 				}
+				noisePct := noisePctFn()
 				noiseFraction := noisePct / 100.0
 				noiseMin := 1.0 - noiseFraction
 				noiseRange := noiseFraction * 2.0
@@ -558,12 +714,13 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				bestPrice = adjustedBid
 				bestCampaign = c
 				bestBid = &openrtb.BidObj{
-					ID:      "bid-" + bidReq.ID + "-" + c.ID,
-					ImpID:   bidReq.Imp[0].ID,
-					Price:   adjustedBid,
-					CID:     c.ID,
-					CrID:    c.CreativeID,
-					ADomain: []string{c.CreativeDomain},
+					ID:       "bid-" + bidReq.ID + "-" + c.ID,
+					ImpID:    bidReq.Imp[0].ID,
+					Price:    adjustedBid,
+					CID:      c.ID,
+					CrID:     c.CreativeID,
+					ADomain:  []string{c.CreativeDomain},
+					BidModel: c.BidModel,
 				}
 			}
 		}
@@ -685,6 +842,27 @@ func defaultStr(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// audienceRefreshHandler exposes the audience preloader's sync-refresh
+// method. Used by the e2e harness after inserting audience_segment_members
+// rows so the bid path sees the new mapping immediately. Gated by
+// debug.endpoints_enabled in the caller; this function trusts the
+// gate has already been checked.
+func audienceRefreshHandler(pre *audpreload.Preloader, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		start := time.Now()
+		if err := pre.Refresh(ctx); err != nil {
+			log.Warn("audience refresh failed", "error", err)
+			http.Error(w, "refresh failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"refreshed":true,"duration_ms":` +
+			strconv.FormatInt(time.Since(start).Milliseconds(), 10) + `}`))
+	}
 }
 
 func firstNonZeroDuration(ds ...time.Duration) time.Duration {
