@@ -58,3 +58,27 @@ func (p *Publisher) OptOut(ctx context.Context, event OptOutEvent) error {
 func (p *Publisher) CacheInvalidate(ctx context.Context, subject string, event CacheInvalidateEvent) error {
 	return p.PublishJSON(ctx, subject, event)
 }
+
+func (p *Publisher) DirectWin(ctx context.Context, event DirectWinEvent) error {
+	return p.PublishJSON(ctx, SubjectDirectWin, event)
+}
+
+func (p *Publisher) PrebidOutboundWin(ctx context.Context, event PrebidOutboundWinEvent) error {
+	return p.PublishJSON(ctx, SubjectPrebidOutboundWin, event)
+}
+
+func (p *Publisher) Video(ctx context.Context, event VideoEvent) error {
+	return p.PublishJSON(ctx, SubjectVideo, event)
+}
+
+func (p *Publisher) Audio(ctx context.Context, event AudioEvent) error {
+	return p.PublishJSON(ctx, SubjectAudio, event)
+}
+
+func (p *Publisher) ServeNoFill(ctx context.Context, event ServeNoFillEvent) error {
+	return p.PublishJSON(ctx, SubjectServeNoFill, event)
+}
+
+func (p *Publisher) TrackerRejected(ctx context.Context, event TrackerRejectedEvent) error {
+	return p.PublishJSON(ctx, SubjectTrackerRejected, event)
+}

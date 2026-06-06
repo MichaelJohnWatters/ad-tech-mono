@@ -77,3 +77,98 @@ type CacheInvalidateEvent struct {
 	ResourceID   string `json:"resource_id"`
 	Action       string `json:"action"` // update, delete
 }
+
+// VideoEvent is published by the tracker on /v1/t/video pixel hits.
+// EventType is the VAST event name (start, firstQuartile, midpoint,
+// thirdQuartile, complete, skip, mute, unmute, …). PositionMs carries
+// the playback offset if the player sent one.
+type VideoEvent struct {
+	TraceID    string    `json:"trace_id"`
+	EventType  string    `json:"event_type"`
+	PositionMs int64     `json:"position_ms,omitempty"`
+	Duration   int       `json:"duration_seconds,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+// AudioEvent — DAAST audio equivalent of VideoEvent published from
+// /v1/t/audio.
+type AudioEvent struct {
+	TraceID    string    `json:"trace_id"`
+	EventType  string    `json:"event_type"`
+	PositionMs int64     `json:"position_ms,omitempty"`
+	Duration   int       `json:"duration_seconds,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+// TrackerRejectedEvent is published by cmd/tracker every time a pixel
+// request is dropped before recording: invalid HMAC sig (strict mode),
+// fraud check blocked, or dedup hit. Negative signal — analytics
+// queries that compute true-cost-per-acquisition subtract these from
+// the denominator; ops dashboards alert on rate-of-change.
+//
+//   EventType: "impression" | "click" | "conversion" | "view" |
+//              "video" | "audio"
+//   Reason:    "invalid_signature" | "fraud" | "dedup"
+//   Detail:    free-form, populated for "fraud" with the underlying
+//              reasons array (joined by comma). Empty otherwise.
+type TrackerRejectedEvent struct {
+	TraceID   string    `json:"trace_id"`
+	EventType string    `json:"event_type"`
+	Reason    string    `json:"reason"`
+	Detail    string    `json:"detail,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ServeNoFillEvent is published by cmd/publisher-adserver when an ad
+// request fell through every demand source (no direct line item, no
+// programmatic bid, no house creative). Counterpart to AuctionWinEvent —
+// required for fill-rate computation. Without it, analytics could see
+// served impressions but had no record of misses except via log scraping.
+type ServeNoFillEvent struct {
+	TraceID     string    `json:"trace_id"`
+	PublisherID string    `json:"publisher_id"`
+	PlacementID string    `json:"placement_id"`
+	Reason      string    `json:"reason"` // free-form: which fallthroughs were exhausted
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// DirectWinEvent is published by cmd/publisher-adserver every time a
+// direct-sold line item (sponsorship/guaranteed/house) wins arbitration
+// and gets served. It's the "we just delivered a direct impression"
+// signal — the analogue of AuctionWinEvent for the non-programmatic path,
+// closing what was a billing-and-analytics blind spot where direct
+// serves only surfaced via the tracker pixel with no line-item context.
+//
+// Reporting consumes this to write to the analytics store and, for tiers
+// with a real CPM (sponsorship/guaranteed), accrue spend to the
+// publisher line item's owner.
+type DirectWinEvent struct {
+	TraceID            string    `json:"trace_id"`
+	PublisherLineItemID string   `json:"publisher_line_item_id"`
+	PublisherID        string    `json:"publisher_id"`
+	PlacementID        string    `json:"placement_id"`
+	PriorityTier       string    `json:"priority_tier"` // sponsorship | guaranteed | preferred | house
+	DemandSource       string    `json:"demand_source"` // brand name string from the line item
+	CreativeID         string    `json:"creative_id"`
+	CPM                float64   `json:"cpm"`
+	Currency           string    `json:"currency"`
+	Timestamp          time.Time `json:"timestamp"`
+}
+
+// PrebidOutboundWinEvent is published by cmd/publisher-adserver when an
+// external Prebid Server's bid wins the programmatic comparison against
+// our SSP. We don't bill these (the money flows outside our system), but
+// we record them so reporting can show "publisher X earned $Y from
+// external Prebid demand source Z" and so the trace explorer shows the
+// served impression rather than appearing as nobid.
+type PrebidOutboundWinEvent struct {
+	TraceID        string    `json:"trace_id"`
+	PublisherID    string    `json:"publisher_id"`
+	PlacementID    string    `json:"placement_id"`
+	PrebidEndpoint string    `json:"prebid_endpoint"` // which external server bid
+	Seat           string    `json:"seat"`            // their identifier for the buyer
+	ClearingPrice  float64   `json:"clearing_price"`
+	Currency       string    `json:"currency"`
+	DealID         string    `json:"deal_id,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+}

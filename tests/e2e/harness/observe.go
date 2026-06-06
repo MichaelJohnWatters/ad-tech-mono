@@ -123,6 +123,51 @@ func (h *Harness) AuctionWinByBidModel(t *testing.T, traceID, bidModel string) i
 	return out.Count
 }
 
+// TrackerRejection mirrors analytics.TrackerRejection — one record per
+// pixel dropped at the tracker gate (invalid sig in strict mode, fraud
+// blocked, dedup hit). Decoded from JSON over the debug endpoint.
+type TrackerRejection struct {
+	TraceID   string    `json:"TraceID"`
+	EventType string    `json:"EventType"`
+	Reason    string    `json:"Reason"`
+	Detail    string    `json:"Detail"`
+	Timestamp time.Time `json:"Timestamp"`
+}
+
+// TrackerRejectionsByTrace returns the recorded rejections for a
+// trace_id, optionally filtered by reason. Empty reason = all reasons.
+// Used by e2e to assert adtech.tracker.rejected events flowed for a
+// specific rejection class.
+func (h *Harness) TrackerRejectionsByTrace(t *testing.T, traceID, reason string) []TrackerRejection {
+	t.Helper()
+	q := "?trace_id=" + traceID
+	if reason != "" {
+		q += "&reason=" + reason
+	}
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugTrackerRejections+q)
+	var out []TrackerRejection
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode tracker rejections: %v\nbody: %s", err, string(body))
+	}
+	return out
+}
+
+// TrackerRejectionsByReason returns the total rejection count for a
+// given reason ("invalid_signature" / "fraud" / "dedup"). Used by
+// fraud-volume dashboards + tests that want to assert "at least one
+// of this reason landed since N".
+func (h *Harness) TrackerRejectionsByReason(t *testing.T, reason string) int {
+	t.Helper()
+	body := h.getJSON(t, h.URLs.Reporting+routes.DebugTrackerRejections+"?reason="+reason)
+	var out struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode rejection count: %v\nbody: %s", err, string(body))
+	}
+	return out.Count
+}
+
 // CampaignStateChange mirrors analytics.CampaignStateChange — the
 // per-event record reporting captured for a pause / resume / archive.
 // Fields decoded from JSON over the debug endpoint, so they're

@@ -200,6 +200,11 @@ const (
 	// order. Used by e2e tests to verify adtech.campaign.state_changed
 	// events reached reporting.
 	DebugCampaignStateChanges = "/debug/campaign_state_changes"
+	// DebugTrackerRejections returns the recorded tracker-rejection
+	// records, filterable by ?trace_id= and/or ?reason= (one of
+	// invalid_signature / fraud / dedup). Used by e2e to verify the
+	// adtech.tracker.rejected pathway + by ops dashboards.
+	DebugTrackerRejections = "/debug/tracker_rejections"
 	// DebugServeNoFills counts ServeNoFill records for a trace_id.
 	DebugServeNoFills = "/debug/serve_nofills"
 	// DebugMediaEvents counts MediaEvent records for a trace, optionally
