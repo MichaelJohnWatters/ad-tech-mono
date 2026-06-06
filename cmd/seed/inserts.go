@@ -220,7 +220,7 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 		// Larger assets (images, video) would point asset_url at Minio instead.
 		if c.CreativeID != "" {
 			creativeID := DeriveID("creative", c.CreativeID)
-			html := defaultCreativeHTML(c.CreativeID, c.CreativeDomain)
+			html := themedCreativeHTML(c.CreativeID, c.CreativeDomain)
 			const crQ = `
 INSERT INTO creatives (
   id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at

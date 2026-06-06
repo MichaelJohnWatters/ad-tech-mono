@@ -199,50 +199,31 @@ func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...S
 		}
 	}
 
+	// Initial Postgres attach. If postgres is unreachable at boot
+	// (cluster start-up race, brief outage during a recovery, etc.)
+	// we fall back to MemorySource so the service still boots — but
+	// also spawn a background goroutine that retries the attach
+	// indefinitely. Once postgres is reachable, the goroutine swaps
+	// the manager's source to PostgresSource and runs the same
+	// registry-register + seed-migration steps the boot path would
+	// have. Without this, pods that boot during a postgres flap stay
+	// on MemorySource forever and silently lose every config write.
+	var registry *Registry
 	db, err := sql.Open("postgres", dbURL)
 	if err == nil {
-		if err := db.Ping(); err == nil {
-			mgr.SetSource(NewPostgresSource(db))
-			log.Info("config source: postgres", "url", dbURL)
-			applyDBPoolKnobsLive(db, cfg, mgr, log)
+		if pingErr := db.Ping(); pingErr == nil {
+			registry = attachPostgres(mgr, cfg, db, serviceName, schema, fullSchema, o, envKeyMap, log, dbURL)
 		} else {
-			log.Warn("postgres unreachable, using memory config", "error", err)
+			log.Warn("postgres unreachable, using memory config; retrying in background", "error", pingErr)
 			mgr.SetSource(NewMemorySource(nil))
 			db = nil
+			go retryAttachPostgres(mgr, cfg, dbURL, serviceName, schema, fullSchema, o, envKeyMap, log)
 		}
 	} else {
-		log.Warn("postgres unavailable, using memory config", "error", err)
+		log.Warn("postgres open failed, using memory config; retrying in background", "error", err)
 		mgr.SetSource(NewMemorySource(nil))
 		db = nil
-	}
-
-	var registry *Registry
-	if db != nil {
-		registry = NewRegistry(db, log)
-		port := cfg.Get(serviceName+".port", "")
-		if err := registry.Register(context.Background(), serviceName, AppVersion, port, fullSchema); err != nil {
-			log.Warn("pod register failed", "error", err)
-		}
-		mgr.SetRegistry(registry, serviceName)
-
-		// Migrate already-seeded rows for any key that has both a seed
-		// override and a stored value that matches the ORIGINAL schema
-		// default. Without this, a deployment that booted with the old
-		// (buggy) defaults already has rows in Postgres, so Registry's
-		// "skip if exists" check fires and the override never lands.
-		// Operator-modified values are preserved (they won't match the
-		// schema default, so the WHERE clause filters them out).
-		migrateSeedDefaults(context.Background(), db, registry.PodID(), schema, o.seedDefaults, log)
-
-		// Force env-var overrides into Postgres so they win over the
-		// seeded schema default on the next config poll. registry.Register
-		// just seeded e.g. exchange.dsp_endpoints=localhost (the schema
-		// default for local-process mode); without this overwrite, the
-		// Postgres value beats the in-memory cfg.SetLive value above and
-		// pod-mode services dial localhost from inside the pod. Skipped
-		// on operator-modified rows: the WHERE clause matches only rows
-		// that still hold the schema default.
-		applyEnvOverridesToDB(context.Background(), db, registry.PodID(), schema, envKeyMap, log)
+		go retryAttachPostgres(mgr, cfg, dbURL, serviceName, schema, fullSchema, o, envKeyMap, log)
 	}
 
 	// Wire NATS bus so PUT /v1/config from any pod broadcasts an invalidate
@@ -264,6 +245,57 @@ func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...S
 	log.Info("config manager started", "service", serviceName, "poll_interval", pollInterval)
 
 	return &ServiceConfig{Cfg: cfg, Manager: mgr, Registry: registry}
+}
+
+// attachPostgres performs the full "we have a working postgres handle"
+// init sequence: SetSource(PostgresSource), live-tune the pool, build
+// the registry, register the pod, run the seed-default + env-override
+// migrations. Returns the registry (nil if registration failed). Used
+// from the boot path and from retryAttachPostgres after a recovery.
+func attachPostgres(mgr *Manager, cfg *Config, db *sql.DB, serviceName string, schema, fullSchema []SchemaEntry, o *setupOpts, envKeyMap []struct{ env, key string }, log *slog.Logger, dbURL string) *Registry {
+	mgr.SetSource(NewPostgresSource(db))
+	log.Info("config source: postgres", "url", dbURL)
+	applyDBPoolKnobsLive(db, cfg, mgr, log)
+
+	registry := NewRegistry(db, log)
+	port := cfg.Get(serviceName+".port", "")
+	if err := registry.Register(context.Background(), serviceName, AppVersion, port, fullSchema); err != nil {
+		log.Warn("pod register failed", "error", err)
+	}
+	mgr.SetRegistry(registry, serviceName)
+
+	migrateSeedDefaults(context.Background(), db, registry.PodID(), schema, o.seedDefaults, log)
+	applyEnvOverridesToDB(context.Background(), db, registry.PodID(), schema, envKeyMap, log)
+	return registry
+}
+
+// retryAttachPostgres loops in the background reopening + pinging the
+// Postgres handle until it succeeds. On success, runs attachPostgres
+// to swap the manager from MemorySource to PostgresSource. Without
+// this, a pod that boots while Postgres is briefly down (cluster
+// recovery, fresh-cluster race) stays on MemorySource forever and
+// silently drops every config write — PUT looks successful to the
+// gateway but the row never lands in Postgres.
+//
+// Backoff: 5 s, capped. We never give up — the alternative is to
+// require a pod restart after every postgres flap, which defeats the
+// "everything self-heals" platform promise.
+func retryAttachPostgres(mgr *Manager, cfg *Config, dbURL, serviceName string, schema, fullSchema []SchemaEntry, o *setupOpts, envKeyMap []struct{ env, key string }, log *slog.Logger) {
+	const retryInterval = 5 * time.Second
+	for {
+		time.Sleep(retryInterval)
+		db, err := sql.Open("postgres", dbURL)
+		if err != nil {
+			continue
+		}
+		if err := db.Ping(); err != nil {
+			_ = db.Close()
+			continue
+		}
+		log.Info("postgres reachable, swapping config source from memory to postgres")
+		attachPostgres(mgr, cfg, db, serviceName, schema, fullSchema, o, envKeyMap, log, dbURL)
+		return
+	}
 }
 
 // migrateSeedDefaults updates any per-pod config rows whose stored value
