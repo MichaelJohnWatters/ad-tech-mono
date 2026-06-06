@@ -30,7 +30,7 @@ flow. Cache invalidate subjects are in their own section.
 | 10 | `adtech.prebid.outbound.win` | `cmd/publisher-adserver/main.go:488` (`d.pub.PrebidOutboundWin`) | `cmd/reporting:handlePrebidOutboundWin` | `analytics.InsertAuctionWin` | — | ✅ |
 | 11 | `adtech.serve.nofill` | `cmd/publisher-adserver/main.go:469` (`d.pub.ServeNoFill`) | `cmd/reporting:handleServeNoFill` | TBD — verify in handler | — | ✅ pub+consume; verify analytics |
 | 12 | `adtech.budget.depleted` | `cmd/dsp/main.go:642` (`pub.BudgetDepleted`) | `cmd/reporting:handleBudgetDepleted` | `analytics.InsertBudgetDepletion` | — | ✅ |
-| 13 | `adtech.campaign.state_changed` | **declared, never published** | **no consumer** | — | — | ❌ Gap A |
+| 13 | `adtech.campaign.state_changed` | `cmd/dsp/management.go:publishCampaignStateChange` (handlePatch + handleDelete) | `cmd/reporting:handleCampaignState` | `analytics.InsertCampaignStateChange` | — | ✅ shipped 2026-06-06 (Gap A) |
 | 14 | `adtech.privacy.opt_out` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
 | 15 | `adtech.privacy.deletion_requested` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
 | 16 | `adtech.privacy.deletion_completed` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
@@ -66,18 +66,15 @@ opt-outs, webhooks, signing keys, DSP endpoints) — not bugs.
 
 ## Confirmed gaps
 
-**Gap A — Campaign state changes never flow.**
-`CampaignStateEvent` + `SubjectCampaignStateChanged` exist (in
-`pkg/events/payloads.go` and `pkg/events/subjects.go`) and there's a
-`Publisher.CampaignStateChanged` method — but no service ever calls
-it. When a campaign is paused/resumed/expires, downstream observers
-have no way to learn it asynchronously; they pick it up only on the
-next 30s warm-cache poll. Effect on accuracy: stale auction
-decisions for up to a poll interval after a pause, plus no audit
-trail of pause events anywhere except the `audit_log` row.
-*Fix:* add the publish in `cmd/dsp/management.go` next to the
-existing `SubjectCacheInvalidateCampaigns` publish on pause/resume.
-Reporting subscribes + records.
+**Gap A — Campaign state changes never flow.** ✅ shipped 2026-06-06
+- `cmd/dsp/management.go` (`handlePatch`, `handleDelete`) reads the
+  pre-update status and publishes `CampaignStateEvent` only on actual
+  transitions (no-op patches don't generate bus noise).
+- `cmd/reporting.handleCampaignState` consumes and records via
+  `analytics.InsertCampaignStateChange`.
+- Verified by `TestCampaignStateChangeReachesReporting` (e2e).
+- Bonus: a `DebugCampaignStateChanges` endpoint lets ops dashboards
+  show per-campaign pause/resume timelines.
 
 **Gap B — Privacy events are vapor.**
 Three subjects (`SubjectPrivacyOptOut`, `…DeletionRequested`,
