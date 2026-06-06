@@ -87,6 +87,11 @@ func main() {
 	exchangeURL := cfg.Get("gateway.exchange_url", routes.DefaultExchangeURL)
 	trackerURL := cfg.Get("gateway.tracker_url", routes.DefaultTrackerURL)
 	jaegerURL := cfg.Get("gateway.jaeger_url", routes.DefaultJaegerURL)
+	// Object-store forwarding target for /v1/creatives/* — the
+	// browser-reachable proxy for SVG / PNG / JPG assets stored in
+	// Minio or S3. Default points at the in-cluster Minio service;
+	// staging/prod overlays override with the real S3 endpoint.
+	creativesStoreURL := cfg.Get("gateway.creatives_store_url", "http://"+routes.DefaultMinioEndpoint+"/"+cfg.Get("s3.bucket", "adtech-creatives")+"/")
 
 	authMiddleware := middleware.Auth(signingKey, log)
 
@@ -228,6 +233,15 @@ func main() {
 	mux.Handle(routes.ProxyReporting, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	mux.Handle(routes.ProxyOpenRTB, middleware.CORS(middleware.ReverseProxy(exchangeURL, log)))
 	mux.Handle(routes.ProxyTracker, middleware.CORS(middleware.ReverseProxy(trackerURL, log)))
+	// Browser-side proxy for image creative assets (Minio / S3). The
+	// ad server emits creatives.asset_url pointing at this path so
+	// pixel HTML like <img src="https://gateway/v1/creatives/key.svg">
+	// works from any browser without exposing the object store
+	// directly. middleware.StripPrefix removes the /v1/creatives/
+	// prefix so the object key reaches the backend unchanged.
+	mux.Handle(routes.ProxyCreatives,
+		middleware.CORS(middleware.StripPrefix(routes.ProxyCreatives,
+			middleware.ReverseProxy(creativesStoreURL, log))))
 	mux.Handle(routes.ProxyAdServer, middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))

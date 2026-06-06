@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 250" width="300" height="250">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ff8a65"/>
+      <stop offset="1" stop-color="#e53935"/>
+    </linearGradient>
+    <linearGradient id="shoe" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ffe0b2"/>
+    </linearGradient>
+  </defs>
+  <rect width="300" height="250" fill="url(#bg)" rx="6"/>
+  <text x="150" y="32" font-family="-apple-system,Segoe UI,sans-serif" font-size="11" font-weight="600" fill="white" letter-spacing="2" text-anchor="middle" opacity="0.85">SUMMER SALE</text>
+  <text x="150" y="58" font-family="-apple-system,Segoe UI,sans-serif" font-size="26" font-weight="700" fill="white" text-anchor="middle">UP TO 40% OFF</text>
+  <!-- stylized sneaker -->
+  <g transform="translate(56,90)">
+    <path d="M0,55 Q10,15 60,12 Q105,9 140,30 Q170,46 188,55 L188,72 Q150,80 100,78 Q40,76 0,72 Z" fill="url(#shoe)" stroke="#bf360c" stroke-width="1.5"/>
+    <path d="M30,40 Q60,28 90,28 Q120,30 145,40" stroke="#bf360c" stroke-width="1.5" fill="none"/>
+    <circle cx="55" cy="45" r="4" fill="#e53935"/>
+    <circle cx="90" cy="42" r="4" fill="#e53935"/>
+    <circle cx="125" cy="45" r="4" fill="#e53935"/>
+  </g>
+  <rect x="60" y="195" width="180" height="34" fill="white" rx="17"/>
+  <text x="150" y="217" font-family="-apple-system,Segoe UI,sans-serif" font-size="14" font-weight="700" fill="#e53935" text-anchor="middle">Shop the Sale →</text>
+</svg>

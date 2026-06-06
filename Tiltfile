@@ -237,7 +237,15 @@ local_resource('seed-minimal',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
 local_resource('seed-standard',
-    cmd='go run ./cmd/seed --profile standard',
+    # S3_ENDPOINT points the seed at the port-forwarded Minio so it
+    # can upload themed creative SVGs for the asset_url half of the
+    # creative split. Without this seed logs "s3.endpoint not set"
+    # and every creative falls back to inline HTML — degraded but
+    # functional. SEED_CREATIVES_URL_BASE is the browser-facing prefix
+    # the inserter records in creatives.html_content (it wraps
+    # <img src=…>), so it must point at the gateway's /v1/creatives/*
+    # reverse proxy, not at Minio directly.
+    cmd='S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev SEED_CREATIVES_URL_BASE=http://localhost:8080/v1/creatives go run ./cmd/seed --profile standard',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
 local_resource('migrate',

@@ -19,6 +19,14 @@ import (
 type inserter struct {
 	db  *sql.DB
 	log *slog.Logger
+	// creativeAssetBase is the browser-reachable URL prefix for image
+	// creative assets stored in Minio. Used for the asset_url half of
+	// the split (see creative_assets.go). e.g.
+	// "http://localhost:8080/v1/creatives" → full URL becomes
+	// "{base}/themes/{theme}-300x250.svg". Empty = no asset path,
+	// every creative falls back to inline HTML (degraded but
+	// functional in offline / no-Minio dev).
+	creativeAssetBase string
 }
 
 // SeedAll runs the full seed for a parsed set of DSP profiles. Idempotent.
@@ -218,9 +226,18 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 		// creatives — small HTML banners go in html_content directly so the ad
 		// server's warm cache has everything it needs without a Minio roundtrip.
 		// Larger assets (images, video) would point asset_url at Minio instead.
+		// Split is 50/50 by creative-id parity (see useAssetURL in
+		// creative_assets.go): even suffix → inline themed HTML,
+		// odd suffix → asset_url wrapper around a Minio-hosted SVG.
 		if c.CreativeID != "" {
 			creativeID := DeriveID("creative", c.CreativeID)
+			landing := "https://" + defaultStr(c.CreativeDomain, "example.com")
 			html := themedCreativeHTML(c.CreativeID, c.CreativeDomain)
+			if useAssetURL(c.CreativeID) && in.creativeAssetBase != "" {
+				key, _ := creativeAssetByTheme(c.CreativeDomain)
+				assetURL := in.creativeAssetBase + "/" + key
+				html = creativeAssetHTML(assetURL, landing)
+			}
 			const crQ = `
 INSERT INTO creatives (
   id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at
@@ -230,7 +247,6 @@ ON CONFLICT (id) DO UPDATE SET
   landing_url = EXCLUDED.landing_url,
   html_content = EXCLUDED.html_content,
   updated_at = now()`
-			landing := "https://" + defaultStr(c.CreativeDomain, "example.com")
 			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, c.CreativeID, landing, html); err != nil {
 				return fmt.Errorf("creatives insert: %w", err)
 			}
