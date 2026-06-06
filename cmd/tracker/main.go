@@ -78,7 +78,12 @@ func main() {
 		}
 	}
 
-	publisher := &eventPublisher{bus: bus, reportingURL: reportingURL, log: log}
+	publisher := &eventPublisher{
+		bus:          bus,
+		typed:        events.NewPublisher(bus, log),
+		reportingURL: reportingURL,
+		log:          log,
+	}
 	fraudChecker := fraud.NewRealTimeChecker(fraud.DefaultConfig())
 	signingKey := cfg.Get("tracker.signing_key", adserving.DefaultSigningKey)
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
@@ -402,8 +407,15 @@ func main() {
 }
 
 // eventPublisher handles publishing to NATS or falling back to HTTP.
+// Wraps the typed events.Publisher for events that live in pkg/events
+// (Video / Audio / TrackerRejected) so those calls pick up the
+// CurrentSchemaVersion default automatically. Analytics-mirror types
+// (Impression / Click / Conversion / View) still go through the raw
+// `bus` because they have their own SchemaVersion field set explicitly
+// at the call site and need the HTTP fallback path when NATS is down.
 type eventPublisher struct {
 	bus          events.EventBus
+	typed        *events.Publisher
 	reportingURL string
 	log          *slog.Logger
 }
@@ -439,11 +451,16 @@ func (p *eventPublisher) publishConversion(ctx context.Context, e analytics.Conv
 // pixel handlers respectively. No HTTP fallback — engagement pings are
 // observability, not billing source-of-truth, so a NATS outage just
 // means the event is lost rather than triggering the standalone path.
+// Routed via the typed publisher so SchemaVersion gets stamped.
 func (p *eventPublisher) publishVideo(ctx context.Context, e events.VideoEvent, log *slog.Logger) {
-	p.publish(ctx, events.SubjectVideo, e, log)
+	if err := p.typed.Video(ctx, e); err != nil {
+		log.Warn("publish video failed", "error", err)
+	}
 }
 func (p *eventPublisher) publishAudio(ctx context.Context, e events.AudioEvent, log *slog.Logger) {
-	p.publish(ctx, events.SubjectAudio, e, log)
+	if err := p.typed.Audio(ctx, e); err != nil {
+		log.Warn("publish audio failed", "error", err)
+	}
 }
 
 // publishRejected fires whenever a pixel is dropped at the gate — HMAC
@@ -451,15 +468,18 @@ func (p *eventPublisher) publishAudio(ctx context.Context, e events.AudioEvent, 
 // (no HTTP fallback): the rejection itself isn't billable, so reporting
 // losing it isn't a billing-correctness issue, just an analytics gap.
 // Called via `go p.publishRejected(...)` from inside the pixel handlers
-// so the response path stays sub-10ms.
+// so the response path stays sub-10ms. Routed via the typed publisher
+// so SchemaVersion gets stamped.
 func (p *eventPublisher) publishRejected(ctx context.Context, eventType, reason, detail, traceID string, log *slog.Logger) {
-	p.publish(ctx, events.SubjectTrackerRejected, events.TrackerRejectedEvent{
+	if err := p.typed.TrackerRejected(ctx, events.TrackerRejectedEvent{
 		TraceID:   traceID,
 		EventType: eventType,
 		Reason:    reason,
 		Detail:    detail,
 		Timestamp: time.Now().UTC(),
-	}, log)
+	}); err != nil {
+		log.Warn("publish rejected failed", "error", err)
+	}
 }
 
 // publish marshals and publishes to NATS. Returns true if successful.

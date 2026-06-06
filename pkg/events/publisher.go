@@ -33,56 +33,101 @@ func (p *Publisher) PublishJSON(ctx context.Context, subject string, payload int
 	return nil
 }
 
-// Typed publish helpers for common events
+// Typed publish helpers for common events.
+//
+// Each method centralizes the SchemaVersion=1 default: callers that
+// leave the field at its zero value get the current schema version
+// stamped automatically. Bump CurrentSchemaVersion when wire format
+// changes and every method here propagates the new value. Events
+// passed by value, so the local mutation never escapes to the caller.
 
 func (p *Publisher) AuctionWin(ctx context.Context, event AuctionWinEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectAuctionWin, event)
 }
 
 func (p *Publisher) AuctionComplete(ctx context.Context, event AuctionCompleteEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectAuctionComplete, event)
 }
 
 func (p *Publisher) BudgetDepleted(ctx context.Context, event BudgetDepletedEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectBudgetDepleted, event)
 }
 
 func (p *Publisher) CampaignStateChanged(ctx context.Context, event CampaignStateEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectCampaignStateChanged, event)
 }
 
 func (p *Publisher) OptOut(ctx context.Context, event OptOutEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectPrivacyOptOut, event)
 }
 
 func (p *Publisher) CacheInvalidate(ctx context.Context, subject string, event CacheInvalidateEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, subject, event)
 }
 
 func (p *Publisher) DirectWin(ctx context.Context, event DirectWinEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectDirectWin, event)
 }
 
 func (p *Publisher) PrebidOutboundWin(ctx context.Context, event PrebidOutboundWinEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectPrebidOutboundWin, event)
 }
 
 func (p *Publisher) Video(ctx context.Context, event VideoEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectVideo, event)
 }
 
 func (p *Publisher) Audio(ctx context.Context, event AudioEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectAudio, event)
 }
 
 func (p *Publisher) ServeNoFill(ctx context.Context, event ServeNoFillEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectServeNoFill, event)
 }
 
 func (p *Publisher) TrackerRejected(ctx context.Context, event TrackerRejectedEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectTrackerRejected, event)
 }
 
 func (p *Publisher) AdserverRenderFailed(ctx context.Context, event AdserverRenderFailedEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
 	return p.PublishJSON(ctx, SubjectAdserverRenderFailed, event)
 }

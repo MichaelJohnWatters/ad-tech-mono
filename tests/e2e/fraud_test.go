@@ -7,6 +7,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -58,7 +59,12 @@ func TestTrackerRejectedEventDedup(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "rej-dedup")
 
-	traceID := "rej-dedup-trace-001"
+	// Unique trace per run — the in-memory analytics store accumulates
+	// across the whole reporting pod lifetime, so a deterministic
+	// trace_id would mix in rejections from earlier runs of this same
+	// test (e.g. 5 fires → 4 dedups, run twice → 8 dedups for the same
+	// trace). Time-based suffix isolates each run cleanly.
+	traceID := fmt.Sprintf("rej-dedup-%d", time.Now().UnixNano())
 	for i := 0; i < 5; i++ {
 		h.FireImpression(t, traceID,
 			w.Campaign.ID, w.Campaign.CreativeID,

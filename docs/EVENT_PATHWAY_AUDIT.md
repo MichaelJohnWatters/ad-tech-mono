@@ -152,11 +152,19 @@ The inventory above answers "who publishes/consumes what." It does
 - **Dashboards + observability** — no Grafana panel inventory exists
   per-subject yet. Prometheus scrape config covers `/metrics` but no
   per-subject publish-rate / consume-rate / lag dashboards.
-- **`schema_version`** — every payload type in `pkg/events/payloads.go`
-  should have `schema_version` field 1. (CLAUDE.md → "Protobuf"
-  says field 1, and `pkg/events/payloads.go` uses JSON not protobuf,
-  but the principle still applies.) Spot check: AuctionWinEvent has
-  it; ImpressionEvent does not. Inconsistent — pick a policy.
+- ~~**`schema_version`** — every payload type in `pkg/events/payloads.go`
+  should have `schema_version` field 1.~~ ✅ shipped 2026-06-06.
+  All 13 wire payloads (`pkg/events/payloads.go`) + all 6 analytics
+  mirrors (`pkg/store/analytics/analytics.go`) now carry
+  `SchemaVersion int \`json:"schema_version"\`` as their first field.
+  `pkg/events.CurrentSchemaVersion = 1` is the single bump-point.
+  Each typed `Publisher.X` method auto-sets the default when the
+  caller leaves it zero, and `cmd/dsp/management.go:publishCampaignStateChange`
+  + `cmd/tracker/main.go` route their `events.*` publishes through the
+  typed publisher so they pick up the same default.
+  `pkg/events/payloads_test.go:TestAllEventPayloadsHaveSchemaVersion`
+  is the regression net — adding a new payload without the field
+  fails the test.
 
 ## How to regenerate
 
