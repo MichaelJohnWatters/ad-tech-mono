@@ -261,10 +261,10 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 				return
 			}
 			d.publishNoFill(ctx, traceID, placement, "programmatic-nobid-and-no-house")
-			writeNoBid(w, traceID)
+			writeNoBid(w, traceID, "programmatic-nobid-and-no-house")
 		default:
 			d.publishNoFill(ctx, traceID, placement, "arbitration-default-branch")
-			writeNoBid(w, traceID)
+			writeNoBid(w, traceID, "arbitration-default-branch")
 		}
 	}
 }
@@ -304,14 +304,14 @@ func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqL
 	adResp, err := http.DefaultClient.Do(adReq)
 	if err != nil {
 		reqLog.Error("ad server call failed", "error", err)
-		http.Error(w, "ad server unavailable", http.StatusBadGateway)
+		writeNoBid(w, traceID, "adserver_unavailable")
 		return
 	}
 	defer adResp.Body.Close()
 	var sr models.ServeResponse
 	if err := json.NewDecoder(adResp.Body).Decode(&sr); err != nil {
 		reqLog.Error("ad server decode failed", "error", err)
-		http.Error(w, "ad server bad response", http.StatusBadGateway)
+		writeNoBid(w, traceID, "adserver_bad_response")
 		return
 	}
 
@@ -424,7 +424,7 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 			d.writePrebidWinner(ctx, w, placement, traceID, best)
 			return true
 		}
-		http.Error(w, "ssp unavailable", http.StatusBadGateway)
+		writeNoBid(w, traceID, "ssp_unavailable")
 		return true
 	}
 
@@ -704,11 +704,21 @@ func splitCSV(s string) []string {
 	return out
 }
 
-func writeNoBid(w http.ResponseWriter, traceID string) {
+// writeNoBid sends the structured no-fill response. status is always 200
+// so the SDK can branch on the body instead of a transport error code:
+// HTTP errors signal infrastructure problems, "no_fill: true" signals
+// "the auction ran but nobody bid / everyone was filtered". reason is a
+// short machine-readable token (freqcap, no_eligible_campaigns,
+// ssp_unavailable, …) the SDK can map to a publisher-friendly message
+// without parsing log lines. Same shape across every no-fill path —
+// gives ops a single field to filter / count by.
+func writeNoBid(w http.ResponseWriter, traceID, reason string) {
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(map[string]any{
 		"trace_id": traceID,
-		"nobid":    true,
+		"no_fill":  true,
+		"nobid":    true, // legacy field kept for older e2e fixtures; drop after Phase 9
+		"reason":   reason,
 		"source":   "none",
 	})
 }
