@@ -3,10 +3,17 @@
 package harness
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/lib/pq"
 )
 
@@ -153,6 +160,34 @@ func (h *Harness) setCampaignStatus(t *testing.T, c Campaign, status string) {
 	})
 }
 
+// PatchCampaignStatus drives the change through the DSP management API
+// (PATCH /v1/dsp/campaigns/{id}) instead of the direct-SQL setCampaignStatus
+// path. Required for tests that care about the event-publish side-effect
+// (campaign.state_changed) — direct SQL bypasses the handler and the
+// publish call.
+func (h *Harness) PatchCampaignStatus(t *testing.T, c Campaign, status string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"status": status})
+	url := h.URLs.DSP + routes.DSPCampaigns + "/" + c.ID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build PATCH: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", DevAPIKey)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PATCH status = %d (want 204); body=%s", resp.StatusCode, string(respBody))
+	}
+}
+
 // SetCampaignDailyBudget updates the daily budget on a line item under the
 // owning tenant's RLS context.
 func (h *Harness) SetCampaignDailyBudget(t *testing.T, c Campaign, budget float64) {
@@ -180,6 +215,21 @@ const OverbidCompetitors = 50.0
 // deal/preempt tests to push the test campaign clearly above the
 // competitor DSPs' noise range so the assertion isn't flaky. See
 // OverbidCompetitors for the safe overbid value.
+// SetCampaignBidStrategy flips a campaign between cpm / cpc / cpa / vcpm / cpcv.
+// Used by the billing-models tests to exercise reserve/settle on CPC + CPA
+// without standing up an entirely separate campaign-create flow per model.
+// Callers must trigger a DSP cache refresh after (RefreshAllCaches) so the
+// new bid_strategy makes it into the warm cache before the next auction.
+func (h *Harness) SetCampaignBidStrategy(t *testing.T, c Campaign, strategy string) {
+	t.Helper()
+	h.WithTenant(t, c.AccountID, func(tx *sql.Tx) {
+		const q = `UPDATE line_items SET bid_strategy = $1, updated_at = now() WHERE id = $2`
+		if _, err := tx.Exec(q, strategy, c.ID); err != nil {
+			t.Fatalf("set bid strategy: %v", err)
+		}
+	})
+}
+
 func (h *Harness) SetCampaignBaseBid(t *testing.T, c Campaign, baseBid float64) {
 	t.Helper()
 	h.WithTenant(t, c.AccountID, func(tx *sql.Tx) {

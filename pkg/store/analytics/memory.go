@@ -16,8 +16,63 @@ type MemoryStore struct {
 	impressions []ImpressionEvent
 	clicks      []ClickEvent
 	conversions []ConversionEvent
+	views       []ViewEvent
 	auctions    []AuctionEvent
 	auctionWins []AuctionWinEvent
+	// Operational signal counters — not bid events, but observable
+	// state transitions the analytics layer surfaces to dashboards.
+	budgetDepletions     []BudgetDepletion
+	serveNoFills         []ServeNoFill
+	mediaEvents          []MediaEvent
+	campaignStateChanges []CampaignStateChange
+}
+
+// CampaignStateChange records a campaign transitioning between
+// live/paused/archived/ended. Produced by reporting's
+// adtech.campaign.state_changed consumer; used by ops dashboards to
+// show pause/resume timelines + by e2e tests to assert the event
+// actually propagated.
+type CampaignStateChange struct {
+	CampaignID string
+	AccountID  string
+	OldState   string
+	NewState   string
+	Reason     string
+	Timestamp  time.Time
+}
+
+// MediaEvent records a video or audio engagement ping (VAST/DAAST event).
+// One bucket for both formats with `Channel` distinguishing them — the
+// shape is identical and analytics queries are typically grouped by
+// (channel, event_type).
+type MediaEvent struct {
+	TraceID    string
+	Channel    string // "video" or "audio"
+	EventType  string
+	PositionMs int64
+	Timestamp  time.Time
+}
+
+// BudgetDepletion records the moment a DSP detected a campaign had
+// exhausted its daily budget. One record per (campaign, pod lifetime)
+// produced by the DSP's bidHandler.
+type BudgetDepletion struct {
+	CampaignID string
+	AccountID  string
+	Budget     float64
+	Spent      float64
+	Timestamp  time.Time
+}
+
+// ServeNoFill records a publisher-adserver request that fell through
+// every demand source (direct miss + programmatic nobid + house miss).
+// Counterpart to AuctionWinEvent — required for fill-rate computation.
+type ServeNoFill struct {
+	TraceID     string
+	PublisherID string
+	PlacementID string
+	Reason      string // "no-direct-and-no-programmatic-and-no-house" etc.
+	Timestamp   time.Time
 }
 
 // NewMemory creates an in-memory analytics store.
@@ -43,6 +98,13 @@ func (s *MemoryStore) InsertConversion(_ context.Context, e *ConversionEvent) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conversions = append(s.conversions, *e)
+	return nil
+}
+
+func (s *MemoryStore) InsertView(_ context.Context, e *ViewEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.views = append(s.views, *e)
 	return nil
 }
 
@@ -74,6 +136,123 @@ func (s *MemoryStore) AuctionWinCount(traceID string) int {
 	return n
 }
 
+// InsertBudgetDepletion appends a depletion record. Called by reporting's
+// adtech.budget.depleted consumer.
+func (s *MemoryStore) InsertBudgetDepletion(d BudgetDepletion) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.budgetDepletions = append(s.budgetDepletions, d)
+}
+
+// InsertCampaignStateChange appends a state-transition record.
+// Called by reporting's adtech.campaign.state_changed consumer.
+func (s *MemoryStore) InsertCampaignStateChange(c CampaignStateChange) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.campaignStateChanges = append(s.campaignStateChanges, c)
+}
+
+// CampaignStateChangesByCampaign returns the recorded transitions for a
+// given campaign_id, in event-arrival order. Used by e2e tests to assert
+// that a pause/resume actually propagated through the bus.
+func (s *MemoryStore) CampaignStateChangesByCampaign(campaignID string) []CampaignStateChange {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []CampaignStateChange
+	for _, c := range s.campaignStateChanges {
+		if c.CampaignID == campaignID {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// BudgetDepletionsByCampaign returns how many depletion records have been
+// recorded for a given campaign_id. Used by e2e tests + ops dashboards
+// to verify the event flow.
+func (s *MemoryStore) BudgetDepletionsByCampaign(campaignID string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, d := range s.budgetDepletions {
+		if d.CampaignID == campaignID {
+			n++
+		}
+	}
+	return n
+}
+
+// InsertServeNoFill appends a no-fill record. Called by reporting's
+// adtech.serve.nofill consumer. Required for fill-rate computation —
+// AuctionWin records the numerator, ServeNoFill the denominator's miss.
+func (s *MemoryStore) InsertServeNoFill(n ServeNoFill) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serveNoFills = append(s.serveNoFills, n)
+}
+
+// ServeNoFillsByTrace returns how many no-fill records exist for the
+// trace. Used by e2e tests; ops queries would aggregate by publisher
+// or placement instead.
+func (s *MemoryStore) ServeNoFillsByTrace(traceID string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, x := range s.serveNoFills {
+		if x.TraceID == traceID {
+			n++
+		}
+	}
+	return n
+}
+
+// InsertMediaEvent appends a video/audio engagement record. Called by
+// reporting's adtech.events.video and adtech.events.audio consumers.
+func (s *MemoryStore) InsertMediaEvent(e MediaEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mediaEvents = append(s.mediaEvents, e)
+}
+
+// MediaEventsByTrace counts media events for a trace, optionally filtered
+// by channel ("video" / "audio") and event_type. Empty filters match all.
+func (s *MemoryStore) MediaEventsByTrace(traceID, channel, eventType string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, e := range s.mediaEvents {
+		if e.TraceID != traceID {
+			continue
+		}
+		if channel != "" && e.Channel != channel {
+			continue
+		}
+		if eventType != "" && e.EventType != eventType {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// AuctionWinByBidModel filters AuctionWins for a given trace_id by their
+// BidModel value. Used by e2e tests to distinguish records produced by
+// the standard programmatic path (bid_model="cpm"/"cpc"/...) from the
+// direct-sold (bid_model="direct:sponsorship" etc.) and outbound-Prebid
+// (bid_model="prebid_outbound") paths, all of which share the same
+// underlying analytics table.
+func (s *MemoryStore) AuctionWinByBidModel(traceID, bidModel string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, w := range s.auctionWins {
+		if w.TraceID == traceID && w.BidModel == bidModel {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {
 	for _, e := range events {
 		var err error
@@ -84,6 +263,8 @@ func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {
 			err = s.InsertClick(ctx, e.Click)
 		case EventConversion:
 			err = s.InsertConversion(ctx, e.Conversion)
+		case EventView:
+			err = s.InsertView(ctx, e.View)
 		case EventAuction:
 			err = s.InsertAuction(ctx, e.Auction)
 		default:
@@ -107,6 +288,8 @@ func (s *MemoryStore) Query(_ context.Context, params QueryParams) (*QueryResult
 		return s.queryClicks(params)
 	case "conversions":
 		return s.queryConversions(params)
+	case "views":
+		return s.queryViews(params)
 	case "auctions":
 		return s.queryAuctions(params)
 	default:
@@ -121,6 +304,15 @@ func (s *MemoryStore) Counts() (impressions, clicks, conversions, auctions int) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.impressions), len(s.clicks), len(s.conversions), len(s.auctions)
+}
+
+// Views returns all stored view events for test assertions.
+func (s *MemoryStore) Views() []ViewEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]ViewEvent, len(s.views))
+	copy(out, s.views)
+	return out
 }
 
 // Impressions returns all stored impressions for test assertions.
@@ -300,6 +492,44 @@ func (s *MemoryStore) queryConversions(params QueryParams) (*QueryResult, error)
 	return &QueryResult{
 		Columns: []string{"count", "sum_revenue"},
 		Rows:    [][]interface{}{{count, totalRevenue}},
+	}, nil
+}
+
+func (s *MemoryStore) queryViews(params QueryParams) (*QueryResult, error) {
+	var count, viewableCount int64
+	var totalDur int64
+	for _, v := range s.views {
+		if !params.TimeFrom.IsZero() && v.Timestamp.Before(params.TimeFrom) {
+			continue
+		}
+		if !params.TimeTo.IsZero() && v.Timestamp.After(params.TimeTo) {
+			continue
+		}
+		if !matchFilters(params.Filters, map[string]string{
+			"trace_id":     v.TraceID,
+			"campaign_id":  v.CampaignID,
+			"creative_id":  v.CreativeID,
+			"placement_id": v.PlacementID,
+			"publisher_id": v.PublisherID,
+			"account_id":   v.AccountID,
+		}) {
+			continue
+		}
+		count++
+		totalDur += v.DurationMs
+		if v.IABViewable {
+			viewableCount++
+		}
+	}
+	var avgDur float64
+	var viewableRate float64
+	if count > 0 {
+		avgDur = float64(totalDur) / float64(count)
+		viewableRate = float64(viewableCount) / float64(count)
+	}
+	return &QueryResult{
+		Columns: []string{"count", "viewable_count", "viewable_rate", "avg_duration_ms"},
+		Rows:    [][]interface{}{{count, viewableCount, viewableRate, avgDur}},
 	}, nil
 }
 
