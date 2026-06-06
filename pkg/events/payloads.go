@@ -2,9 +2,20 @@ package events
 
 import "time"
 
+// CurrentSchemaVersion is the version every wire-format event payload
+// carries today. Bump when we make a backwards-incompatible change to
+// any JSON payload; consumers in cmd/reporting (and the analytics
+// mirrors in pkg/store/analytics) branch on this when migration logic
+// lands. Today the field is informational only — see
+// docs/EVENT_PATHWAY_AUDIT.md "schema_version policy" sub-task for the
+// invariant and TestAllEventPayloadsHaveSchemaVersion for the
+// enforcement test.
+const CurrentSchemaVersion = 1
+
 // AuctionWinEvent is published by the Exchange after an auction completes.
 // Single source of truth for cost. Consumed by DSP (budget) and Reporting (billing).
 type AuctionWinEvent struct {
+	SchemaVersion int     `json:"schema_version"`
 	TraceID       string  `json:"trace_id"`
 	AuctionID     string  `json:"auction_id"`
 	WinnerDSP     string  `json:"winner_dsp"`
@@ -23,6 +34,7 @@ type AuctionWinEvent struct {
 
 // AuctionCompleteEvent includes all bids and timing (for analytics).
 type AuctionCompleteEvent struct {
+	SchemaVersion int            `json:"schema_version"`
 	TraceID       string         `json:"trace_id"`
 	PlacementID   string         `json:"placement_id"`
 	PublisherID   string         `json:"publisher_id"`
@@ -46,36 +58,40 @@ type BidSummary struct {
 
 // BudgetDepletedEvent is published by the DSP when a campaign runs out of budget.
 type BudgetDepletedEvent struct {
-	CampaignID string    `json:"campaign_id"`
-	AccountID  string    `json:"account_id"`
-	Budget     float64   `json:"budget"`
-	Spent      float64   `json:"spent"`
-	Timestamp  time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	CampaignID    string    `json:"campaign_id"`
+	AccountID     string    `json:"account_id"`
+	Budget        float64   `json:"budget"`
+	Spent         float64   `json:"spent"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // CampaignStateEvent is published when a campaign changes state.
 type CampaignStateEvent struct {
-	CampaignID string    `json:"campaign_id"`
-	AccountID  string    `json:"account_id"`
-	OldState   string    `json:"old_state"`
-	NewState   string    `json:"new_state"`
-	Reason     string    `json:"reason,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	CampaignID    string    `json:"campaign_id"`
+	AccountID     string    `json:"account_id"`
+	OldState      string    `json:"old_state"`
+	NewState      string    `json:"new_state"`
+	Reason        string    `json:"reason,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // OptOutEvent is published when a user opts out.
 type OptOutEvent struct {
-	UserID    string    `json:"user_id"`
-	Level     int       `json:"level"` // 1, 2, or 3
-	Source    string    `json:"source"`
-	Timestamp time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	UserID        string    `json:"user_id"`
+	Level         int       `json:"level"` // 1, 2, or 3
+	Source        string    `json:"source"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // CacheInvalidateEvent tells services to clear their L1 cache for a resource.
 type CacheInvalidateEvent struct {
-	ResourceType string `json:"resource_type"` // campaign, placement, creative, dsp-endpoint
-	ResourceID   string `json:"resource_id"`
-	Action       string `json:"action"` // update, delete
+	SchemaVersion int    `json:"schema_version"`
+	ResourceType  string `json:"resource_type"` // campaign, placement, creative, dsp-endpoint
+	ResourceID    string `json:"resource_id"`
+	Action        string `json:"action"` // update, delete
 }
 
 // VideoEvent is published by the tracker on /v1/t/video pixel hits.
@@ -83,21 +99,23 @@ type CacheInvalidateEvent struct {
 // thirdQuartile, complete, skip, mute, unmute, …). PositionMs carries
 // the playback offset if the player sent one.
 type VideoEvent struct {
-	TraceID    string    `json:"trace_id"`
-	EventType  string    `json:"event_type"`
-	PositionMs int64     `json:"position_ms,omitempty"`
-	Duration   int       `json:"duration_seconds,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	EventType     string    `json:"event_type"`
+	PositionMs    int64     `json:"position_ms,omitempty"`
+	Duration      int       `json:"duration_seconds,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // AudioEvent — DAAST audio equivalent of VideoEvent published from
 // /v1/t/audio.
 type AudioEvent struct {
-	TraceID    string    `json:"trace_id"`
-	EventType  string    `json:"event_type"`
-	PositionMs int64     `json:"position_ms,omitempty"`
-	Duration   int       `json:"duration_seconds,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	EventType     string    `json:"event_type"`
+	PositionMs    int64     `json:"position_ms,omitempty"`
+	Duration      int       `json:"duration_seconds,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // AdserverRenderFailedEvent is published by cmd/adserver when serve
@@ -112,14 +130,15 @@ type AudioEvent struct {
 //           requested creative_id; for render_error it's the
 //           underlying error string.
 type AdserverRenderFailedEvent struct {
-	TraceID     string    `json:"trace_id"`
-	CampaignID  string    `json:"campaign_id,omitempty"`
-	CreativeID  string    `json:"creative_id,omitempty"`
-	PlacementID string    `json:"placement_id,omitempty"`
-	PublisherID string    `json:"publisher_id,omitempty"`
-	Reason      string    `json:"reason"`
-	Detail      string    `json:"detail,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	CreativeID    string    `json:"creative_id,omitempty"`
+	PlacementID   string    `json:"placement_id,omitempty"`
+	PublisherID   string    `json:"publisher_id,omitempty"`
+	Reason        string    `json:"reason"`
+	Detail        string    `json:"detail,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // TrackerRejectedEvent is published by cmd/tracker every time a pixel
@@ -134,11 +153,12 @@ type AdserverRenderFailedEvent struct {
 //   Detail:    free-form, populated for "fraud" with the underlying
 //              reasons array (joined by comma). Empty otherwise.
 type TrackerRejectedEvent struct {
-	TraceID   string    `json:"trace_id"`
-	EventType string    `json:"event_type"`
-	Reason    string    `json:"reason"`
-	Detail    string    `json:"detail,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	EventType     string    `json:"event_type"`
+	Reason        string    `json:"reason"`
+	Detail        string    `json:"detail,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // ServeNoFillEvent is published by cmd/publisher-adserver when an ad
@@ -147,11 +167,12 @@ type TrackerRejectedEvent struct {
 // required for fill-rate computation. Without it, analytics could see
 // served impressions but had no record of misses except via log scraping.
 type ServeNoFillEvent struct {
-	TraceID     string    `json:"trace_id"`
-	PublisherID string    `json:"publisher_id"`
-	PlacementID string    `json:"placement_id"`
-	Reason      string    `json:"reason"` // free-form: which fallthroughs were exhausted
-	Timestamp   time.Time `json:"timestamp"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	PublisherID   string    `json:"publisher_id"`
+	PlacementID   string    `json:"placement_id"`
+	Reason        string    `json:"reason"` // free-form: which fallthroughs were exhausted
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // DirectWinEvent is published by cmd/publisher-adserver every time a
@@ -165,16 +186,17 @@ type ServeNoFillEvent struct {
 // with a real CPM (sponsorship/guaranteed), accrue spend to the
 // publisher line item's owner.
 type DirectWinEvent struct {
-	TraceID            string    `json:"trace_id"`
-	PublisherLineItemID string   `json:"publisher_line_item_id"`
-	PublisherID        string    `json:"publisher_id"`
-	PlacementID        string    `json:"placement_id"`
-	PriorityTier       string    `json:"priority_tier"` // sponsorship | guaranteed | preferred | house
-	DemandSource       string    `json:"demand_source"` // brand name string from the line item
-	CreativeID         string    `json:"creative_id"`
-	CPM                float64   `json:"cpm"`
-	Currency           string    `json:"currency"`
-	Timestamp          time.Time `json:"timestamp"`
+	SchemaVersion       int       `json:"schema_version"`
+	TraceID             string    `json:"trace_id"`
+	PublisherLineItemID string    `json:"publisher_line_item_id"`
+	PublisherID         string    `json:"publisher_id"`
+	PlacementID         string    `json:"placement_id"`
+	PriorityTier        string    `json:"priority_tier"` // sponsorship | guaranteed | preferred | house
+	DemandSource        string    `json:"demand_source"` // brand name string from the line item
+	CreativeID          string    `json:"creative_id"`
+	CPM                 float64   `json:"cpm"`
+	Currency            string    `json:"currency"`
+	Timestamp           time.Time `json:"timestamp"`
 }
 
 // PrebidOutboundWinEvent is published by cmd/publisher-adserver when an
@@ -184,6 +206,7 @@ type DirectWinEvent struct {
 // external Prebid demand source Z" and so the trace explorer shows the
 // served impression rather than appearing as nobid.
 type PrebidOutboundWinEvent struct {
+	SchemaVersion  int       `json:"schema_version"`
 	TraceID        string    `json:"trace_id"`
 	PublisherID    string    `json:"publisher_id"`
 	PlacementID    string    `json:"placement_id"`

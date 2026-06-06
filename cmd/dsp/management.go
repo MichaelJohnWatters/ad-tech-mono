@@ -506,19 +506,23 @@ func publishInvalidate(ctx context.Context, bus events.EventBus, log *slog.Logge
 // == newState (a no-op patch shouldn't generate bus noise) and when bus
 // is nil (single-process tests). Reporting subscribes for ops dashboards
 // + e2e tests assert on the recorded transition.
+//
+// Routes through events.Publisher so the schema_version default applies
+// (see pkg/events/payloads.go CurrentSchemaVersion). Direct bus.Publish
+// would skip the default and leave a 0 on the wire.
 func publishCampaignStateChange(ctx context.Context, bus events.EventBus, log *slog.Logger, campaignID, accountID, oldState, newState, reason string) {
 	if bus == nil || oldState == newState {
 		return
 	}
-	payload, _ := json.Marshal(events.CampaignStateEvent{
+	pub := events.NewPublisher(bus, log)
+	if err := pub.CampaignStateChanged(ctx, events.CampaignStateEvent{
 		CampaignID: campaignID,
 		AccountID:  accountID,
 		OldState:   oldState,
 		NewState:   newState,
 		Reason:     reason,
 		Timestamp:  time.Now(),
-	})
-	if err := bus.Publish(ctx, events.SubjectCampaignStateChanged, payload); err != nil {
+	}); err != nil {
 		log.Warn("publish campaign state change failed", "campaign_id", campaignID, "old", oldState, "new", newState, "error", err)
 		return
 	}

@@ -28,6 +28,7 @@ type Store interface {
 	InsertImpression(ctx context.Context, e *ImpressionEvent) error
 	InsertClick(ctx context.Context, e *ClickEvent) error
 	InsertConversion(ctx context.Context, e *ConversionEvent) error
+	InsertView(ctx context.Context, e *ViewEvent) error
 	InsertAuction(ctx context.Context, e *AuctionEvent) error
 	InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error
 	InsertBatch(ctx context.Context, events []Event) error
@@ -45,6 +46,7 @@ type Event struct {
 	Impression *ImpressionEvent `json:"impression,omitempty"`
 	Click      *ClickEvent      `json:"click,omitempty"`
 	Conversion *ConversionEvent `json:"conversion,omitempty"`
+	View       *ViewEvent       `json:"view,omitempty"`
 	Auction    *AuctionEvent    `json:"auction,omitempty"`
 }
 
@@ -55,11 +57,13 @@ const (
 	EventImpression EventType = "impression"
 	EventClick      EventType = "click"
 	EventConversion EventType = "conversion"
+	EventView       EventType = "view"
 	EventAuction    EventType = "auction"
 )
 
 // ImpressionEvent records a served impression.
 type ImpressionEvent struct {
+	SchemaVersion    int       `json:"schema_version"`
 	TraceID          string    `json:"trace_id"`
 	InsertionOrderID string    `json:"insertion_order_id,omitempty"`
 	CampaignID       string    `json:"campaign_id"`
@@ -76,12 +80,12 @@ type ImpressionEvent struct {
 	ClearingPriceUSD float64   `json:"clearing_price_usd"`
 	BidModel         string    `json:"bid_model,omitempty"`
 	DealID           string    `json:"deal_id,omitempty"`
-	SchemaVersion    int       `json:"schema_version"`
 	Timestamp        time.Time `json:"timestamp"`
 }
 
 // ClickEvent records a click on a served ad.
 type ClickEvent struct {
+	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`
 	CampaignID    string    `json:"campaign_id"`
 	CreativeID    string    `json:"creative_id"`
@@ -91,12 +95,51 @@ type ClickEvent struct {
 	LandingURL    string    `json:"landing_url,omitempty"`
 	Geo           string    `json:"geo,omitempty"`
 	Device        string    `json:"device,omitempty"`
-	SchemaVersion int       `json:"schema_version"`
 	Timestamp     time.Time `json:"timestamp"`
+}
+
+// ViewEvent records a viewability beacon for a served impression. Distinct
+// from ImpressionEvent because viewability is measured after the ad has
+// rendered (the client observes intersection + dwell time). One impression
+// can have zero or one view event — zero means the ad never met the
+// viewability bar, one means it did and the client beaconed back.
+//
+// IABViewable is computed server-side from DurationMs + PercentVisible
+// (and AreaPx when the client passes it) so the analytics row stores the
+// authoritative verdict, not the client's claim.
+type ViewEvent struct {
+	SchemaVersion  int       `json:"schema_version"`
+	TraceID        string    `json:"trace_id"`
+	CampaignID     string    `json:"campaign_id"`
+	CreativeID     string    `json:"creative_id,omitempty"`
+	PlacementID    string    `json:"placement_id"`
+	PublisherID    string    `json:"publisher_id"`
+	AccountID      string    `json:"account_id"`
+	DurationMs     int64     `json:"duration_ms"`
+	PercentVisible int       `json:"percent_visible"`
+	AreaPx         int64     `json:"area_px,omitempty"`
+	IABViewable    bool      `json:"iab_viewable"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
+// IsIABViewable applies the IAB MRC display-ad rule: at least 50% pixels
+// visible for at least 1 continuous second. Large ads (>= 242,500 px²)
+// drop to a 30% threshold per the IAB Large Format Standard. AreaPx == 0
+// means "client didn't tell us the area" and we use the default 50%.
+func IsIABViewable(durationMs int64, percentVisible int, areaPx int64) bool {
+	if durationMs < 1000 {
+		return false
+	}
+	threshold := 50
+	if areaPx >= 242500 {
+		threshold = 30
+	}
+	return percentVisible >= threshold
 }
 
 // ConversionEvent records a conversion (purchase, signup, etc.).
 type ConversionEvent struct {
+	SchemaVersion  int       `json:"schema_version"`
 	TraceID        string    `json:"trace_id"`
 	CampaignID     string    `json:"campaign_id"`
 	CreativeID     string    `json:"creative_id"`
@@ -106,12 +149,12 @@ type ConversionEvent struct {
 	Revenue        float64   `json:"revenue,omitempty"`
 	Currency       string    `json:"currency,omitempty"`
 	RevenueUSD     float64   `json:"revenue_usd,omitempty"`
-	SchemaVersion  int       `json:"schema_version"`
 	Timestamp      time.Time `json:"timestamp"`
 }
 
 // AuctionEvent records an auction outcome.
 type AuctionEvent struct {
+	SchemaVersion    int       `json:"schema_version"`
 	TraceID          string    `json:"trace_id"`
 	PlacementID      string    `json:"placement_id"`
 	PublisherID      string    `json:"publisher_id"`
@@ -124,7 +167,6 @@ type AuctionEvent struct {
 	WinnerDSP        string    `json:"winner_dsp,omitempty"`
 	DurationMs       int64     `json:"duration_ms"`
 	DealID           string    `json:"deal_id,omitempty"`
-	SchemaVersion    int       `json:"schema_version"`
 	Timestamp        time.Time `json:"timestamp"`
 }
 
@@ -136,6 +178,7 @@ type AuctionEvent struct {
 // Wire-format mirror of pkg/events.AuctionWinEvent. Kept here so the
 // analytics layer doesn't need to import pkg/events.
 type AuctionWinEvent struct {
+	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`
 	AuctionID     string    `json:"auction_id,omitempty"`
 	WinnerDSP     string    `json:"winner_dsp"`
@@ -149,7 +192,6 @@ type AuctionWinEvent struct {
 	BidModel      string    `json:"bid_model,omitempty"`
 	DealID        string    `json:"deal_id,omitempty"`
 	Channel       string    `json:"channel,omitempty"`
-	SchemaVersion int       `json:"schema_version"`
 	Timestamp     time.Time `json:"timestamp"`
 }
 
