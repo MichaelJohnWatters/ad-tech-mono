@@ -51,8 +51,12 @@ import (
 // other pod listening) refreshes immediately.
 
 // openManagementDB returns a writable Postgres connection for the campaign
-// management endpoints. Nil if Postgres isn't reachable — callers treat the
-// nil case as "management endpoints unavailable" and return 503.
+// management endpoints. sql.Open is lazy — it parses the URL but doesn't
+// dial — so we keep the handle even when the first Ping fails. Postgres
+// DNS often isn't ready when the DSP pod boots (cluster-startup race);
+// without this, mgmtDB stayed nil forever and every PATCH /v1/dsp/campaigns
+// 503'd. Handlers still defend against a nil handle, but the handle is
+// non-nil whenever the URL parses.
 func openManagementDB(cfg *config.Config, log *slog.Logger) *sql.DB {
 	dbURL := cfg.Get("database.url", "")
 	if dbURL == "" {
@@ -67,9 +71,9 @@ func openManagementDB(cfg *config.Config, log *slog.Logger) *sql.DB {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		log.Warn("dsp management db ping failed", "error", err)
-		_ = db.Close()
-		return nil
+		log.Warn("dsp management db ping failed at boot; handlers will retry on demand", "error", err)
+		// Don't close — leave the handle for on-demand reconnects.
+		return db
 	}
 	log.Info("dsp management db connected")
 	return db
