@@ -25,6 +25,19 @@ type MemoryStore struct {
 	serveNoFills         []ServeNoFill
 	mediaEvents          []MediaEvent
 	campaignStateChanges []CampaignStateChange
+	trackerRejections    []TrackerRejection
+}
+
+// TrackerRejection records a pixel dropped at the gate (invalid HMAC,
+// fraud block, dedup hit). Produced by reporting's
+// adtech.tracker.rejected consumer; used by ops fraud-volume alerts
+// and advertiser "we blocked X% of fraudulent traffic" reporting.
+type TrackerRejection struct {
+	TraceID   string
+	EventType string // impression / click / conversion / view
+	Reason    string // invalid_signature / fraud / dedup
+	Detail    string
+	Timestamp time.Time
 }
 
 // CampaignStateChange records a campaign transitioning between
@@ -142,6 +155,49 @@ func (s *MemoryStore) InsertBudgetDepletion(d BudgetDepletion) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.budgetDepletions = append(s.budgetDepletions, d)
+}
+
+// InsertTrackerRejection appends a rejection record. Called by
+// reporting's adtech.tracker.rejected consumer.
+func (s *MemoryStore) InsertTrackerRejection(r TrackerRejection) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trackerRejections = append(s.trackerRejections, r)
+}
+
+// TrackerRejectionsByTrace returns the rejection records for a
+// trace_id, optionally filtered by reason (empty reason = all). Used
+// by e2e tests to verify a specific rejection class propagated and by
+// ops to drill into a suspicious trace.
+func (s *MemoryStore) TrackerRejectionsByTrace(traceID, reason string) []TrackerRejection {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []TrackerRejection
+	for _, r := range s.trackerRejections {
+		if r.TraceID != traceID {
+			continue
+		}
+		if reason != "" && r.Reason != reason {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// TrackerRejectionsByReason counts the total rejections recorded for
+// a given reason ("invalid_signature" / "fraud" / "dedup"). Used by
+// the ops fraud-volume dashboard.
+func (s *MemoryStore) TrackerRejectionsByReason(reason string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, r := range s.trackerRejections {
+		if r.Reason == reason {
+			n++
+		}
+	}
+	return n
 }
 
 // InsertCampaignStateChange appends a state-transition record.

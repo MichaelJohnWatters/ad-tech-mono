@@ -7,6 +7,7 @@
 package e2e
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -46,6 +47,70 @@ func TestFraudDedupSameImpressionDropped(t *testing.T) {
 	if delta > 1.51 || delta < 1.49 {
 		t.Errorf("TotalSpend delta = %.4f, want ~1.50 (5 fires with same trace_id should dedup to 1)", delta)
 	}
+}
+
+// TestTrackerRejectedEventDedup — the dedup test already asserts the
+// billing side (deduped impression doesn't bill). Here we assert the
+// negative-signal side: the dropped impressions publish
+// adtech.tracker.rejected with reason="dedup" so reporting can count
+// them. 5 fires → 1 lands as impression + 4 land as rejected.
+func TestTrackerRejectedEventDedup(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "rej-dedup")
+
+	traceID := "rej-dedup-trace-001"
+	for i := 0; i < 5; i++ {
+		h.FireImpression(t, traceID,
+			w.Campaign.ID, w.Campaign.CreativeID,
+			w.Placement.ID, w.Publisher.ID, w.AdvAcc.ID,
+			"USD", 1.50)
+	}
+
+	harness.WaitFor(t, 5*time.Second, "dedup rejection events recorded", func() bool {
+		return len(h.TrackerRejectionsByTrace(t, traceID, "dedup")) >= 4
+	})
+
+	rejections := h.TrackerRejectionsByTrace(t, traceID, "dedup")
+	if got, want := len(rejections), 4; got != want {
+		t.Errorf("dedup rejections = %d, want %d (5 fires - 1 first-seen = 4 deduped)", got, want)
+	}
+	for _, r := range rejections {
+		if r.EventType != "impression" {
+			t.Errorf("EventType = %q, want impression", r.EventType)
+		}
+		if r.Reason != "dedup" {
+			t.Errorf("Reason = %q, want dedup", r.Reason)
+		}
+	}
+}
+
+// TestTrackerRejectedEventHMACStrict — flip
+// tracker.signature_validation=true, hit /v1/t/imp without a sig (403),
+// assert the rejected event lands with reason=invalid_signature.
+// Cleanup mirrors TestTrackerHMACStrictMode so we don't poison
+// downstream tests.
+func TestTrackerRejectedEventHMACStrict(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "rej-hmac")
+
+	const pod = "tracker-0"
+	const key = "tracker.signature_validation"
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, key, "false", pod)
+	})
+	h.SetConfigForPod(t, key, "true", pod)
+
+	traceID := "rej-hmac-trace-001"
+	url := h.URLs.Tracker + "/v1/t/imp?tid=" + traceID + "&cid=" + w.Campaign.ID
+	resp := get(t, h, url)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("strict-mode unsigned status = %d, want 403", resp.StatusCode)
+	}
+
+	harness.WaitFor(t, 5*time.Second, "invalid_signature rejection recorded", func() bool {
+		return len(h.TrackerRejectionsByTrace(t, traceID, "invalid_signature")) >= 1
+	})
 }
 
 func totalSpend(t *testing.T, h *harness.Harness) float64 {

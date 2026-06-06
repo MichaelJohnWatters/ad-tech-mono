@@ -35,6 +35,7 @@ flow. Cache invalidate subjects are in their own section.
 | 15 | `adtech.privacy.deletion_requested` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
 | 16 | `adtech.privacy.deletion_completed` | **declared, never published** | **no consumer** | — | — | ❌ Gap B (backlog #1) |
 | 17 | `adtech.webhooks` | **declared, never published** | **no consumer** | — | — | ❌ Gap C (the `cmd/webhooks` service is an empty shell) |
+| 18 | `adtech.tracker.rejected` | `cmd/tracker/main.go:publishRejected` (HMAC strict / fraud / dedup sites) | `cmd/reporting:handleTrackerRejected` | `analytics.InsertTrackerRejection` | — | ✅ shipped 2026-06-06 (Gap E) |
 
 ## Cache invalidate subjects (14 declared)
 
@@ -100,12 +101,21 @@ budget.depleted) and POSTs to registered URLs, then publish
 - Guard test `TestDuckDB_InsertAuctionWin` (build-tagged `duckdb`)
   proves the schema + INSERT round-trip.
 
-**Gap E — Tracker rejection events not published.**
-When tracker drops a pixel (HMAC fail, fraud check, dedup hit) it
-logs but doesn't publish — no `adtech.tracker.rejected` subject
-exists. Same as backlog #2. Ops can't alert on fraud-volume change;
-advertisers can't see "we blocked X% of fraudulent traffic." Lands
-as part of backlog #2.
+**Gap E — Tracker rejection events not published.** ✅ shipped 2026-06-06
+- New subject `adtech.tracker.rejected` + `TrackerRejectedEvent`
+  payload (TraceID, EventType, Reason, Detail, Timestamp).
+- `cmd/tracker/main.go` `publishRejected` fires from every rejection
+  site: HMAC strict-mode 403, fraud check blocked (with the underlying
+  reasons in Detail), and dedup hit. Goroutine-published so the pixel
+  response stays sub-10ms.
+- `cmd/reporting.handleTrackerRejected` records via
+  `analytics.InsertTrackerRejection`. Memory-store readers
+  (`TrackerRejectionsByTrace` filterable by reason +
+  `TrackerRejectionsByReason` for totals).
+- Debug endpoint `/debug/tracker_rejections?trace_id=` and `?reason=`.
+- Verified by `TestTrackerRejectedEventDedup` (5 fires → 4 dedup
+  rejections + 1 first-seen) and `TestTrackerRejectedEventHMACStrict`
+  (strict-mode unsigned → rejected with reason=invalid_signature).
 
 **Gap F — Ad server render failures not published.**
 Adserver 5xx and default-HTML-fallback for unknown creative are

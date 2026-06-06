@@ -106,6 +106,8 @@ func main() {
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if cfg.GetBool("tracker.signature_validation", false) {
+				go publisher.publishRejected(context.WithoutCancel(ctx),
+					"impression", "invalid_signature", "", traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
 				return
 			}
@@ -126,6 +128,8 @@ func main() {
 		}
 		if fraudResult.Blocked {
 			reqLog.Warn("fraud blocked", "score", fraudResult.Score, "reasons", fraudResult.Reasons)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"impression", "fraud", strings.Join(fraudResult.Reasons, ","), traceID, reqLog)
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 			// Dev-mode signal so the pub sim UI can show fraud was tripped.
 			// Real bots get the silent pixel-return treatment in prod (this
@@ -149,6 +153,8 @@ func main() {
 
 		if !dedup.FirstSeen(ctx, "impression", traceID) {
 			reqLog.Debug("duplicate impression, dropping", "trace_id", traceID)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"impression", "dedup", "", traceID, reqLog)
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 			w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
 			w.Write(pixel)
@@ -198,6 +204,8 @@ func main() {
 
 		if !dedup.FirstSeen(ctx, "click", traceID) {
 			reqLog.Debug("duplicate click, dropping", "trace_id", traceID)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"click", "dedup", "", traceID, reqLog)
 			if redir != "" {
 				http.Redirect(w, r, redir, http.StatusFound)
 				return
@@ -236,6 +244,8 @@ func main() {
 
 		if !dedup.FirstSeen(ctx, "conversion:"+convType, traceID) {
 			reqLog.Debug("duplicate conversion, dropping", "trace_id", traceID, "type", convType)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"conversion", "dedup", convType, traceID, reqLog)
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 			w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
 			w.Write(pixel)
@@ -284,6 +294,8 @@ func main() {
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if cfg.GetBool("tracker.signature_validation", false) {
+				go publisher.publishRejected(context.WithoutCancel(ctx),
+					"view", "invalid_signature", "", traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
 				return
 			}
@@ -295,6 +307,8 @@ func main() {
 		})
 		if fraudResult.Blocked {
 			reqLog.Warn("view fraud blocked", "score", fraudResult.Score, "reasons", fraudResult.Reasons)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"view", "fraud", strings.Join(fraudResult.Reasons, ","), traceID, reqLog)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -317,6 +331,8 @@ func main() {
 		// deduped here, same as impressions.
 		if !dedup.FirstSeen(ctx, "view", traceID) {
 			reqLog.Debug("duplicate view, dropping", "trace_id", traceID)
+			go publisher.publishRejected(context.WithoutCancel(ctx),
+				"view", "dedup", "", traceID, reqLog)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -428,6 +444,22 @@ func (p *eventPublisher) publishVideo(ctx context.Context, e events.VideoEvent, 
 }
 func (p *eventPublisher) publishAudio(ctx context.Context, e events.AudioEvent, log *slog.Logger) {
 	p.publish(ctx, events.SubjectAudio, e, log)
+}
+
+// publishRejected fires whenever a pixel is dropped at the gate — HMAC
+// strict-mode reject, fraud check blocked, or dedup hit. Fire-and-forget
+// (no HTTP fallback): the rejection itself isn't billable, so reporting
+// losing it isn't a billing-correctness issue, just an analytics gap.
+// Called via `go p.publishRejected(...)` from inside the pixel handlers
+// so the response path stays sub-10ms.
+func (p *eventPublisher) publishRejected(ctx context.Context, eventType, reason, detail, traceID string, log *slog.Logger) {
+	p.publish(ctx, events.SubjectTrackerRejected, events.TrackerRejectedEvent{
+		TraceID:   traceID,
+		EventType: eventType,
+		Reason:    reason,
+		Detail:    detail,
+		Timestamp: time.Now().UTC(),
+	}, log)
 }
 
 // publish marshals and publishes to NATS. Returns true if successful.

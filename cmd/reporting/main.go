@@ -167,6 +167,21 @@ func main() {
 			json.NewEncoder(w).Encode(store.CampaignStateChangesByCampaign(campaignID))
 		})
 
+		mux.HandleFunc(routes.DebugTrackerRejections, func(w http.ResponseWriter, r *http.Request) {
+			traceID := r.URL.Query().Get("trace_id")
+			reason := r.URL.Query().Get("reason")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			if traceID != "" {
+				json.NewEncoder(w).Encode(store.TrackerRejectionsByTrace(traceID, reason))
+				return
+			}
+			if reason != "" {
+				json.NewEncoder(w).Encode(map[string]int{"count": store.TrackerRejectionsByReason(reason)})
+				return
+			}
+			http.Error(w, `{"error":"trace_id or reason required"}`, http.StatusBadRequest)
+		})
+
 		mux.HandleFunc(routes.DebugServeNoFills, func(w http.ResponseWriter, r *http.Request) {
 			traceID := r.URL.Query().Get("trace_id")
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -244,6 +259,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectPrebidOutboundWin:  c.handlePrebidOutboundWin,
 		events.SubjectBudgetDepleted:        c.handleBudgetDepleted,
 		events.SubjectCampaignStateChanged:  c.handleCampaignState,
+		events.SubjectTrackerRejected:       c.handleTrackerRejected,
 		events.SubjectVideo:                 c.handleVideo,
 		events.SubjectAudio:                 c.handleAudio,
 		events.SubjectServeNoFill:           c.handleServeNoFill,
@@ -583,6 +599,37 @@ func (c *EventConsumer) handleServeNoFill(ctx context.Context, msg *events.Messa
 		})
 	}
 	c.log.Info("serve nofill recorded", "trace_id", src.TraceID, "publisher", src.PublisherID, "reason", src.Reason)
+	return msg.Ack()
+}
+
+// handleTrackerRejected records a tracker-published rejection (invalid
+// HMAC in strict mode, fraud check blocked, dedup hit). No billing
+// impact — the rejection by definition prevented any billing event
+// from firing. Useful purely for ops dashboards (fraud-volume alert)
+// and advertiser reports ("we blocked X% of fraudulent traffic").
+func (c *EventConsumer) handleTrackerRejected(ctx context.Context, msg *events.Message) error {
+	var src events.TrackerRejectedEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode tracker rejected event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertTrackerRejection(analytics.TrackerRejection{
+			TraceID:   src.TraceID,
+			EventType: src.EventType,
+			Reason:    src.Reason,
+			Detail:    src.Detail,
+			Timestamp: src.Timestamp,
+		})
+	}
+	c.log.Info("tracker rejection recorded",
+		"trace_id", src.TraceID,
+		"event_type", src.EventType,
+		"reason", src.Reason,
+		"detail", src.Detail)
 	return msg.Ack()
 }
 
