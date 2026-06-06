@@ -12,7 +12,6 @@ campaigns:
     advertiser_id: adv-megastore
     io_id: c1-io-001
     name: "MegaStore Summer Blowout"
-    creative_id: c1-cr-001
     creative_domain: megastore.com
     base_bid: 4.50
     currency: USD
@@ -30,13 +29,19 @@ campaigns:
       geo_country:
         USA: 25
         GBR: 15
+    # Big retail brand — full sizes including billboard.
+    creatives:
+      - { id: c1-cr-001, width: 300, height: 250 }
+      - { id: c1-cr-001-leader, width: 728, height: 90 }
+      - { id: c1-cr-001-billboard, width: 970, height: 250 }
+      - { id: c1-cr-001-mobile, width: 320, height: 50 }
+      - { id: c1-cr-001-halfpage, width: 300, height: 600 }
 
   - id: c1-002
     account_id: agency-omnicom
     advertiser_id: adv-luxauto
     io_id: c1-io-002
     name: "LuxAuto - Premium"
-    creative_id: c1-cr-002
     creative_domain: luxauto.com
     base_bid: 5.20
     currency: USD
@@ -51,13 +56,20 @@ campaigns:
     modifiers:
       device:
         desktop: 15
+    # Luxury auto — premium desktop placements (billboard, leaderboard,
+    # half-page, sky); skips mobile banner intentionally.
+    creatives:
+      - { id: c1-cr-002, width: 300, height: 250 }
+      - { id: c1-cr-002-leader, width: 728, height: 90 }
+      - { id: c1-cr-002-billboard, width: 970, height: 250 }
+      - { id: c1-cr-002-halfpage, width: 300, height: 600 }
+      - { id: c1-cr-002-sky, width: 160, height: 600 }
 
   - id: c1-003
     account_id: agency-omnicom
     advertiser_id: adv-fastfood
     io_id: c1-io-003
     name: "QuickBite App Install"
-    creative_id: c1-cr-003
     creative_domain: quickbite.app
     base_bid: 2.80
     currency: USD
@@ -73,3 +85,8 @@ campaigns:
       geo_country:
         USA: 40
         GBR: 20
+    # App install — mobile-only sizes.
+    creatives:
+      - { id: c1-cr-003, width: 300, height: 250 }
+      - { id: c1-cr-003-mobile, width: 320, height: 50 }
+      - { id: c1-cr-003-halfpage, width: 300, height: 600 }

@@ -28,8 +28,18 @@ type CampaignConfig struct {
 	AdvertiserID   string         `yaml:"advertiser_id"`
 	IOId           string         `yaml:"io_id"`
 	Name           string         `yaml:"name"`
+	// CreativeID + CreativeDomain are the legacy "one 300x250 creative
+	// per line item" fields. Still honoured when Creatives is empty so
+	// existing YAMLs don't need rewriting. When both legacy + Creatives
+	// are set, the Creatives array wins.
 	CreativeID     string         `yaml:"creative_id"`
 	CreativeDomain string         `yaml:"creative_domain"`
+	// Creatives is the new multi-size form. Each entry becomes one row
+	// in the creatives table linked to this line item via
+	// line_item_creatives. The DSP picks one whose w×h matches the bid
+	// request's banner.w/banner.h at bid time, so a single line item
+	// can compete on 300x250, 728x90, 970x250 etc. simultaneously.
+	Creatives      []CreativeYAML `yaml:"creatives,omitempty"`
 	BaseBid        float64        `yaml:"base_bid"`
 	Currency       string         `yaml:"currency"`
 	DailyBudget    float64        `yaml:"daily_budget"`
@@ -39,6 +49,18 @@ type CampaignConfig struct {
 	Status         string         `yaml:"status"`
 	Targeting      *TargetingYAML `yaml:"targeting,omitempty"`
 	Modifiers      *ModifiersYAML `yaml:"modifiers,omitempty"`
+}
+
+// CreativeYAML is one size-specific creative under a line item. Domain
+// optionally overrides the parent campaign's creative_domain (so a
+// single line item could mix brands in theory; in practice every entry
+// usually shares the parent's domain). Format defaults to "display".
+type CreativeYAML struct {
+	ID     string `yaml:"id"`
+	Width  int    `yaml:"width"`
+	Height int    `yaml:"height"`
+	Domain string `yaml:"domain,omitempty"`
+	Format string `yaml:"format,omitempty"`
 }
 
 type TargetingYAML struct {

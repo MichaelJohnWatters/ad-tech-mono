@@ -19,13 +19,31 @@ import (
 // of these; the bid handler iterates them in process. IDs are UUIDs stored
 // as their string text form — keeps Postgres, NATS, logs, and the in-memory
 // cache uniform without adding 16-byte parsing on the hot path.
+// CampaignCreative is one size variant attached to a line item. The DSP
+// bidder picks the entry whose Width × Height matches the bid request's
+// banner.w / banner.h before submitting a bid; campaigns with no matching
+// size simply no_bid on that request. Loaded from line_item_creatives ⋈
+// creatives at warm-cache time.
+type CampaignCreative struct {
+	ID     string // creatives.id (UUID)
+	Width  int
+	Height int
+}
+
 type Campaign struct {
 	ID             string // line_items.id (UUID text)
 	AccountID      string // owning advertiser account UUID
 	AdvertiserID   string // = AccountID for advertiser-owned IOs, distinct for agency
 	IOId           string // insertion_orders.id
 	Name           string
-	CreativeID     string // primary creative for now; rotation upgrade later
+	// CreativeID is the primary (highest-weight) creative's UUID. Kept
+	// for backwards compat with callers that don't care about size
+	// variants. New code should use Creatives + selectCreativeForSize
+	// in the DSP bidder.
+	CreativeID     string
+	// Creatives is the full set of size variants for this line item.
+	// At least one entry; ordered by weight DESC.
+	Creatives      []CampaignCreative
 	CreativeDomain string
 	BaseBid        float64
 	Currency       string
@@ -34,6 +52,10 @@ type Campaign struct {
 	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
 	PacingMode     string // even, asap, front_loaded
 	Status         string // live, paused, ended, ...
+	// ViewabilityTargetPct is the contractual viewability guarantee for
+	// this line item (0-100). nil = no guarantee. Used downstream for
+	// makegood reconciliation; not consulted on the hot bid path.
+	ViewabilityTargetPct *int
 	Targeting      targeting.Rules
 	Modifiers      targeting.Modifiers
 }
@@ -87,6 +109,9 @@ type LineItem struct {
 	CreativeRotation string // even, weighted, bandit, sequential
 	Timezone         string
 	RejectionReason  string
+	// ViewabilityTargetPct is the contractual viewability guarantee
+	// (0-100). nil = no guarantee.
+	ViewabilityTargetPct *int
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -167,6 +192,10 @@ type Deal struct {
 	EndDate         *time.Time
 	Status          string // draft, active, paused, ended
 	DealConfig      map[string]any // JSONB
+	// ViewabilityTargetPct is the publisher-side guarantee on this deal
+	// (0-100). nil = no guarantee. PMP/Preferred deals frequently carry
+	// this; open auctions don't.
+	ViewabilityTargetPct *int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -279,6 +308,7 @@ type ServeRequest struct {
 	AdvertiserID  string  `json:"advertiser_id"`
 	IOId          string  `json:"io_id"`
 	DealID        string  `json:"deal_id"`
+	BidModel      string  `json:"bid_model,omitempty"` // cpm, cpc, cpa, vcpm, cpcv — drives tracker billing routing
 	ClearingPrice float64 `json:"clearing_price"`
 	Currency      string  `json:"currency"`
 	SiteDomain    string  `json:"site_domain"`

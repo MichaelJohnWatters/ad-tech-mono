@@ -628,18 +628,36 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		}
 
 		floor := 0.0
+		var reqW, reqH int
 		if len(bidReq.Imp) > 0 {
 			floor = bidReq.Imp[0].BidFloor
+			if bidReq.Imp[0].Banner != nil {
+				reqW = bidReq.Imp[0].Banner.W
+				reqH = bidReq.Imp[0].Banner.H
+			}
 		}
 
 		all := campaigns.All()
 		var bestBid *openrtb.BidObj
 		var bestCampaign *models.Campaign
 		var bestPrice float64
+		// pickedCreativeID tracks the size-matched creative for the bestBid;
+		// holds across iterations because the chosen campaign comes with its
+		// matched creative UUID, not the line item's generic CreativeID.
+		var pickedCreativeID string
 
 		for i := range all {
 			c := &all[i]
 			if c.Status != constants.StatusLive {
+				continue
+			}
+
+			// Size filter: only bid if at least one of this line item's
+			// creatives matches the request banner size. Skips quietly —
+			// the request just isn't valid demand for this campaign.
+			crid := selectCreativeForSize(c, reqW, reqH)
+			if crid == "" {
+				reqLog.Debug("no size-matching creative", "campaign", c.ID, "want", fmt.Sprintf("%dx%d", reqW, reqH))
 				continue
 			}
 
@@ -713,12 +731,13 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			if adjustedBid > bestPrice {
 				bestPrice = adjustedBid
 				bestCampaign = c
+				pickedCreativeID = crid
 				bestBid = &openrtb.BidObj{
 					ID:       "bid-" + bidReq.ID + "-" + c.ID,
 					ImpID:    bidReq.Imp[0].ID,
 					Price:    adjustedBid,
 					CID:      c.ID,
-					CrID:     c.CreativeID,
+					CrID:     crid,
 					ADomain:  []string{c.CreativeDomain},
 					BidModel: c.BidModel,
 				}
@@ -748,9 +767,30 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			"campaign", bestCampaign.ID,
 			"campaign_name", bestCampaign.Name,
 			"price", bestPrice,
-			"creative", bestCampaign.CreativeID,
+			"creative", pickedCreativeID,
+			"size", fmt.Sprintf("%dx%d", reqW, reqH),
 		)
 	}
+}
+
+// selectCreativeForSize returns the UUID of a creative whose declared
+// width × height match the bid request's banner size, or "" when no
+// match exists. Walks the line item's Creatives slice (already ordered
+// by line_item_creatives.weight DESC, so the first match is the highest-
+// weight variant for that size). When the bid request carries no size
+// info (reqW=0 || reqH=0) we fall back to the line item's primary
+// creative — necessary so non-display channels (which don't have w/h)
+// keep bidding.
+func selectCreativeForSize(c *models.Campaign, reqW, reqH int) string {
+	if reqW == 0 || reqH == 0 {
+		return c.CreativeID
+	}
+	for _, cv := range c.Creatives {
+		if cv.Width == reqW && cv.Height == reqH {
+			return cv.ID
+		}
+	}
+	return ""
 }
 
 func pacingMode(s string) pacing.Mode {
