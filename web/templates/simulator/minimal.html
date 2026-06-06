@@ -1895,11 +1895,12 @@
             // No-bid path — SSP returned nobid:true, no HTML, no pixels.
             // Real publisher pages would fall back to a house ad / try
             // another SSP. We just log and stop.
-            if (serveResp.nobid) {
-                traceLog('ssp', 'SSP response: no fill', { cls: 'nobid', detail: `${sspMs}ms` });
+            if (serveResp.no_fill || serveResp.nobid) {
+                const reason = serveResp.reason || 'unknown';
+                traceLog('ssp', 'SSP response: no fill', { cls: 'nobid', detail: `${sspMs}ms · reason=${reason}` });
                 debugLog([
                     { label: 'Trace ID', value: traceID },
-                    { label: 'Status', value: `No fill (${sspMs}ms)`, status: 'fail' }
+                    { label: 'Status', value: `No fill (${sspMs}ms) — ${reason}`, status: 'fail' }
                 ]);
                 return;
             }
@@ -2176,9 +2177,10 @@
             }
             const pubAdMs = Math.round(performance.now() - auctionStart);
 
-            if (serveResp.no_bid || !serveResp.html) {
-                slot.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No fill from publisher ad server</div>';
-                traceLog('pubad', 'Pub-AdServer response: no fill', { cls: 'nobid', detail: `${pubAdMs}ms` });
+            if (serveResp.no_fill || serveResp.nobid || serveResp.no_bid || !serveResp.html) {
+                const reason = serveResp.reason || 'unknown';
+                slot.innerHTML = '<div style="padding: 20px; color: #888; text-align: center;">No fill from publisher ad server<div style="font-size:11px;color:#bbb;margin-top:4px;">reason: ' + reason + '</div></div>';
+                traceLog('pubad', 'Pub-AdServer response: no fill', { cls: 'nobid', detail: `${pubAdMs}ms · reason=${reason}` });
                 // Still kick off Jaeger polling — the upstream spans (SSP,
                 // exchange, DSPs) still happened even on no-bid and are
                 // worth surfacing for debugging.

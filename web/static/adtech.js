@@ -171,16 +171,19 @@
                     return resp.json();
                 })
                 .then(function(data) {
-                    if (!data.html) {
-                        el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No ad available</div>';
-                        if (config.debug) console.log('[adtech] no fill', data);
+                    if (data.no_fill || data.nobid || !data.html) {
+                        var reason = data.reason || 'no_fill';
+                        var label = noFillLabel(reason);
+                        el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;font-size:13px;">' +
+                            label + '<div style="font-size:11px;color:#bbb;margin-top:4px;">reason: ' + reason + '</div></div>';
+                        if (config.debug) console.log('[adtech] no fill', { reason: reason, trace_id: data.trace_id });
                         return;
                     }
                     renderAd(el, data);
                 })
                 .catch(function(err) {
                     if (config.debug) console.error('[adtech] request failed:', err);
-                    el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Ad unavailable</div>';
+                    el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Ad unavailable (transport error)</div>';
                 });
         },
 
@@ -287,6 +290,32 @@
         var arr = new Uint8Array(len);
         crypto.getRandomValues(arr);
         return Array.from(arr, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    }
+
+    // noFillLabel maps a backend reason token (returned in {reason: ...})
+    // to a publisher-friendly message rendered in the slot when there's
+    // no ad to show. Unknown reasons fall through to a generic label so
+    // a new backend reason doesn't blow up the slot — just shows the raw
+    // token so ops can grep without an SDK redeploy.
+    function noFillLabel(reason) {
+        switch (reason) {
+            case 'freqcap':
+                return 'Ad cap reached for this session';
+            case 'no_eligible_campaigns':
+                return 'No matching ads for this slot';
+            case 'all_bids_below_floor':
+                return 'No bids cleared the price floor';
+            case 'ssp_unavailable':
+            case 'adserver_unavailable':
+            case 'adserver_bad_response':
+                return 'Ad service temporarily unavailable';
+            case 'programmatic-nobid-and-no-house':
+                return 'No demand for this slot';
+            case 'arbitration-default-branch':
+                return 'No ad available';
+            default:
+                return 'No ad available';
+        }
     }
 
     // Export

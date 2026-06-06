@@ -216,6 +216,21 @@ func main() {
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("click", "campaign_id", q.Get("cid"), "redirect", redir)
 
+		// HMAC validates that the URL was issued by us and hasn't been
+		// tampered. Particularly important on click because the tracker
+		// 302s to the redir param — without sig validation an attacker
+		// could rewrite redir to a phishing landing page and use the
+		// tracker as an open redirect.
+		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+			reqLog.Warn("invalid signature", "path", r.URL.Path)
+			if cfg.GetBool("tracker.signature_validation", false) {
+				go publisher.publishRejected(context.WithoutCancel(ctx),
+					"click", "invalid_signature", "", traceID, reqLog)
+				http.Error(w, "invalid signature", http.StatusForbidden)
+				return
+			}
+		}
+
 		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
 			go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -263,6 +278,21 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("conversion", "type", convType, "revenue", revenue)
+
+		// HMAC validates the URL was issued by us. Conversions are the
+		// CPA billing trigger so an unsigned conv URL is a direct
+		// billing-fraud surface: anyone could fire /v1/t/conv with
+		// arbitrary cid/crid/rev and rack up spend on a campaign that
+		// didn't actually convert.
+		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+			reqLog.Warn("invalid signature", "path", r.URL.Path)
+			if cfg.GetBool("tracker.signature_validation", false) {
+				go publisher.publishRejected(context.WithoutCancel(ctx),
+					"conversion", "invalid_signature", convType, traceID, reqLog)
+				http.Error(w, "invalid signature", http.StatusForbidden)
+				return
+			}
+		}
 
 		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
