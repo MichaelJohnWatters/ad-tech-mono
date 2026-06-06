@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -51,10 +51,9 @@ type AdCreative struct {
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceAdServer)
-	sc := config.Setup(constants.ServiceAdServer, log)
-	config.PublishSchemaWithURL(sc.Cfg.Get("database.url", ""), constants.ServiceAdServer, adserverSchema, log)
+	sc := config.Setup(constants.ServiceAdServer, adserverSchema, log)
 	cfg := sc.Cfg
-	_ = sc
+	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
@@ -72,12 +71,7 @@ func main() {
 
 	// Redis freq cap
 	l2 := connectRedis(cfg, log)
-	freqCap := NewFreqCap(
-		l2,
-		cfg.GetInt("adserver.freq_cap_per_user_per_campaign", 5),
-		cfg.GetDuration("adserver.freq_cap_window", 24*time.Hour),
-		log,
-	)
+	freqCap := NewFreqCap(l2, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, log)
 
 	// Object store for large creative bodies
 	objStore := connectObjects(cfg, log)
@@ -88,6 +82,14 @@ func main() {
 	if metaCache != nil {
 		lc.OnShutdown("creative-meta", func(_ context.Context) error { metaCache.Stop(); return nil })
 	}
+
+	// Render-fail publisher — fires when serve can't resolve the
+	// requested creative or otherwise falls back. NATS-only, no HTTP
+	// fallback: the impression pixel still fires regardless, so missing
+	// a render-fail event is an observability gap, not a billing
+	// correctness issue. Nil bus = single-process tests; publisher
+	// becomes a no-op.
+	renderFailPub := events.NewPublisher(connectNATS(cfg, log), log)
 
 	// Readiness: L2 connection alive + creative cache has loaded at least once.
 	hlth.AddReadinessCheck("l2", func(ctx context.Context) error {
@@ -104,11 +106,7 @@ func main() {
 		return nil
 	})
 
-	resolver := NewCreativeResolver(
-		metaCache, objStore, bucket,
-		cfg.GetDuration("adserver.default_creative_ttl", 5*time.Minute),
-		clk, log,
-	)
+	resolver := NewCreativeResolver(metaCache, objStore, bucket, knobs.CreativeTTL.Value, clk, log)
 
 	// Bandit warm-start: use whatever creatives loaded into the metadata cache
 	creativeIDs := resolver.ListIDs()
@@ -120,7 +118,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL))
+	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, renderFailPub))
 
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -131,8 +129,31 @@ func main() {
 	})
 
 	mux.HandleFunc(routes.AdCreatives, func(w http.ResponseWriter, r *http.Request) {
+		// Returns the warm-cache snapshot projected to the fields the
+		// pub sim's Creatives panel renders. Format=full keeps the
+		// previous shape (id list only) for backwards compat with
+		// the bandit warm-start path. Default = rich projection
+		// (id, name, format, dimensions, review_status, has_html).
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(resolver.ListIDs())
+		if r.URL.Query().Get("format") == "ids" {
+			json.NewEncoder(w).Encode(resolver.ListIDs())
+			return
+		}
+		rows := resolver.MetaCache().All()
+		out := make([]map[string]any, 0, len(rows))
+		for _, c := range rows {
+			out = append(out, map[string]any{
+				"id":            c.ID,
+				"name":          c.Name,
+				"format":        c.Format,
+				"width":         c.Width,
+				"height":        c.Height,
+				"review_status": c.ReviewStatus,
+				"has_html":      c.HTMLContent != "",
+				"asset_url":     c.AssetURL,
+			})
+		}
+		json.NewEncoder(w).Encode(out)
 	})
 
 	if cfg.GetBool("debug.endpoints_enabled", true) {
@@ -176,37 +197,30 @@ func startCreativeMetaCache(cfg *config.Config, clk clock.Clock, log *slog.Logge
 	return c
 }
 
+// pickCreativeLoader returns a self-healing warm.Loader. Lazy-opens
+// Postgres on first LoadAll so an adserver that boots before Postgres
+// is reachable picks up creatives automatically on the next poll.
 func pickCreativeLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Creative] {
 	dbURL := cfg.Get("database.url", "")
-	if dbURL == "" {
-		log.Warn("database.url not set, creatives cache will be empty")
-		return emptyCreativeLoader{}
+	return &warm.RetryingLoader[models.Creative]{
+		Log:   log,
+		KeyFn: func(c models.Creative) string { return c.ID },
+		Construct: func() (warm.Loader[models.Creative], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.CreativeLoader{Store: store}, nil
+		},
 	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Warn("postgres open failed", "error", err)
-		return emptyCreativeLoader{}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("postgres ping failed", "error", err)
-		_ = db.Close()
-		return emptyCreativeLoader{}
-	}
-	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
-	log.Info("postgres connected for creative loader")
-	return &postgres.CreativeLoader{Store: store}
 }
-
-type emptyCreativeLoader struct{}
-
-func (emptyCreativeLoader) LoadAll(_ context.Context) ([]models.Creative, error) { return nil, nil }
-func (emptyCreativeLoader) KeyOf(c models.Creative) string                       { return c.ID }
 
 // connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", "localhost:6379")
+	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
 	pwd := cfg.Get("redis.password", "")
 	db := cfg.GetInt("redis.db", 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -258,7 +272,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, renderFailPub *events.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -282,6 +296,21 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 
 		creative, ok := resolver.Get(ctx, req.CreativeID)
 		if !ok {
+			reqLog.Warn("unknown creative, falling back to default HTML",
+				"requested_creative_id", req.CreativeID,
+				"campaign_id", req.CampaignID,
+				"placement_id", req.PlacementID)
+			go renderFailPub.AdserverRenderFailed(context.WithoutCancel(ctx),
+				events.AdserverRenderFailedEvent{
+					TraceID:     req.TraceID,
+					CampaignID:  req.CampaignID,
+					CreativeID:  req.CreativeID,
+					PlacementID: req.PlacementID,
+					PublisherID: req.PublisherID,
+					Reason:      "unknown_creative",
+					Detail:      req.CreativeID,
+					Timestamp:   time.Now().UTC(),
+				})
 			creative = AdCreative{
 				ID:   req.CreativeID,
 				Name: "Dynamic Creative",
@@ -300,6 +329,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			AdvertiserID: req.AdvertiserID,
 			IOId:         req.IOId,
 			DealID:       req.DealID,
+			BidModel:     req.BidModel,
 			SiteDomain:   req.SiteDomain,
 			Width:        req.Width,
 			Height:       req.Height,

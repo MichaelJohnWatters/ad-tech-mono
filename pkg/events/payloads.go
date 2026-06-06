@@ -100,6 +100,28 @@ type AudioEvent struct {
 	Timestamp  time.Time `json:"timestamp"`
 }
 
+// AdserverRenderFailedEvent is published by cmd/adserver when serve
+// can't produce the requested creative. The browser still gets a
+// rendered response (default placeholder HTML for unknown_creative,
+// or whatever the failure path returns) so failures are invisible to
+// the impression-tracking pixel path — reporting needs this signal
+// to detect broken creatives.
+//
+//   Reason: "unknown_creative" | "render_error" | "asset_missing"
+//   Detail: free-form context — for unknown_creative this is the
+//           requested creative_id; for render_error it's the
+//           underlying error string.
+type AdserverRenderFailedEvent struct {
+	TraceID     string    `json:"trace_id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
+	CreativeID  string    `json:"creative_id,omitempty"`
+	PlacementID string    `json:"placement_id,omitempty"`
+	PublisherID string    `json:"publisher_id,omitempty"`
+	Reason      string    `json:"reason"`
+	Detail      string    `json:"detail,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 // TrackerRejectedEvent is published by cmd/tracker every time a pixel
 // request is dropped before recording: invalid HMAC sig (strict mode),
 // fraud check blocked, or dedup hit. Negative signal — analytics
