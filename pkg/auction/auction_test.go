@@ -218,6 +218,9 @@ func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
 	engine := auction.NewEngine(clock.Real{})
 	bids := []auction.Bid{{DSPID: "dsp_1", Price: 5.00}}
 
+	// Pod (video/pod) is now implemented in step 84 — covered by the
+	// dedicated tests in pods_test.go. The remaining stubs stay until
+	// their channel lands later in Phase 9.
 	stubs := []struct {
 		channel string
 		format  string
@@ -225,7 +228,6 @@ func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
 		{"dooh", ""},
 		{"retail", ""},
 		{"ingame", "intrinsic"},
-		{"video", "pod"},
 	}
 
 	for _, tt := range stubs {
