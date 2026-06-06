@@ -1,9 +1,16 @@
 /**
  * Ad Tech Platform - Publisher Ad Tag SDK
  *
- * Drop-in script for publishers to serve ads on their sites.
- * Handles: platform ID management, bid requests via SSP, ad rendering,
- * impression/click/viewability tracking, consent, contextual signals.
+ * Drop-in tag publishers embed on their pages. Calls our publisher-side
+ * ad server (publisher-adserver / "pubad"), which arbitrates direct-sold
+ * inventory, Prebid demand, and the SSP+exchange path server-side and
+ * returns ready-to-render HTML plus pre-signed tracking URLs. This is the
+ * GPT-equivalent in our stack: one tag, the publisher gets the whole
+ * waterfall handled.
+ *
+ * Publishers running Prebid.js client-side use the separate
+ * prebid-adtechmono-adapter.js module instead — they don't load this
+ * tag (Prebid manages slot rendering itself).
  *
  * Usage:
  *   <script src="https://cdn.adtech.example/adtech.js"></script>
@@ -11,21 +18,23 @@
  *     adtech.init({ publisherId: 'pub-123', siteId: 'site-456' });
  *     adtech.setConsent({ gdpr: true, purposes: [1,2,3,4] });
  *     adtech.setPageContext({ categories: ['IAB17'], keywords: ['football'] });
- *     adtech.requestAd({ placementId: 'pl-001', size: '300x250', elementId: 'ad-slot-1' });
+ *     adtech.requestAd({ placementId: 'pl-news-mpu', elementId: 'ad-slot-1' });
  *   </script>
  */
 (function(window) {
     'use strict';
 
-    var SDK_VERSION = '1.0.0';
+    var SDK_VERSION = '2.0.0';
     var COOKIE_NAME = 'adtech_uid';
     var COOKIE_DAYS = 90;
+    // Server defaults to USA + UA-inferred device when these are blank;
+    // we still send the platform ID so DSPs can frequency-cap + segment-
+    // target without the SDK having to parse User-Agent itself.
 
     var config = {
         publisherId: null,
         siteId: null,
-        sspUrl: null,      // auto-detected or overridden
-        trackerUrl: null,
+        pubadUrl: null,   // resolved in init() — base of /v1/pubad/serve
         debug: false
     };
 
@@ -68,12 +77,16 @@
 
         /**
          * Initialise the SDK with publisher config.
+         *
+         * opts.pubadUrl overrides the publisher-adserver base URL.
+         * When omitted the SDK assumes it's served from the same gateway
+         * the publisher embedded the tag from (no CORS preflight cost).
          */
         init: function(opts) {
+            opts = opts || {};
             config.publisherId = opts.publisherId || null;
             config.siteId = opts.siteId || null;
-            config.sspUrl = opts.sspUrl || (window.location.protocol + '//' + window.location.hostname + ':8084');
-            config.trackerUrl = opts.trackerUrl || (window.location.protocol + '//' + window.location.hostname + ':8083');
+            config.pubadUrl = opts.pubadUrl || (window.location.protocol + '//' + window.location.host);
             config.debug = opts.debug || false;
 
             state.platformId = getPlatformId();
@@ -127,14 +140,15 @@
 
         /**
          * Request and render an ad.
+         *
+         * opts.placementId — required, the platform placement external ID.
+         * opts.elementId   — required, DOM id of the slot div.
+         * opts.geo / opts.device — optional overrides; server defaults are
+         *   USA + UA-inferred when these are blank.
          */
         requestAd: function(opts) {
             var placementId = opts.placementId;
-            var size = opts.size || '300x250';
             var elementId = opts.elementId;
-            var parts = size.split('x');
-            var w = parseInt(parts[0]);
-            var h = parseInt(parts[1]);
 
             var el = document.getElementById(elementId);
             if (!el) {
@@ -142,26 +156,27 @@
                 return;
             }
 
-            // Build SSP request
             var params = new URLSearchParams({
                 placement_id: placementId,
-                geo: '', // server-side geo detection
-                device: isMobile() ? 'mobile' : 'desktop',
                 user_id: state.platformId || ''
             });
+            if (opts.geo) params.set('geo', opts.geo);
+            if (opts.device) params.set('device', opts.device);
 
-            var url = config.sspUrl + '/v1/ssp/request?' + params.toString();
+            var url = config.pubadUrl + '/v1/pubad/serve?' + params.toString();
 
-            fetch(url)
-                .then(function(resp) { return resp.json(); })
+            fetch(url, { credentials: 'omit' })
+                .then(function(resp) {
+                    if (!resp.ok) throw new Error('pubad ' + resp.status);
+                    return resp.json();
+                })
                 .then(function(data) {
-                    if (!data.bid_response || data.bid_response.nobid) {
+                    if (!data.html) {
                         el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No ad available</div>';
+                        if (config.debug) console.log('[adtech] no fill', data);
                         return;
                     }
-
-                    var winner = data.bid_response.seatbid[0].bid[0];
-                    renderAd(el, winner, data, w, h);
+                    renderAd(el, data);
                 })
                 .catch(function(err) {
                     if (config.debug) console.error('[adtech] request failed:', err);
@@ -198,74 +213,51 @@
     // Ad Rendering
     // ============================================================
 
-    function renderAd(el, winner, data, w, h) {
-        var traceId = data.trace_id;
-        var trackerUrl = config.trackerUrl;
+    function renderAd(el, data) {
+        var w = data.width || 0;
+        var h = data.height || 0;
 
-        // Build impression pixel URL
-        var impParams = new URLSearchParams({
-            tid: traceId,
-            cid: winner.cid || '',
-            crid: winner.crid || '',
-            pid: data.placement_id || '',
-            pubid: data.publisher_id || '',
-            price: winner.price || '0',
-            cur: data.bid_response.cur || 'USD',
-            w: w, h: h
-        });
-        var impUrl = trackerUrl + '/v1/t/imp?' + impParams.toString();
+        if (w > 0) el.style.width = w + 'px';
+        if (h > 0) el.style.minHeight = h + 'px';
 
-        // Render ad
-        el.style.width = w + 'px';
-        el.style.minHeight = h + 'px';
-        el.innerHTML =
-            '<div style="width:' + w + 'px;height:' + h + 'px;background:#f8f8f8;border:1px solid #ddd;' +
-            'display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;">' +
-            '<p style="color:#666;font-size:13px;">Campaign: ' + (winner.cid || '') + '</p>' +
-            '<p style="color:#666;font-size:12px;">Creative: ' + (winner.crid || '') + '</p>' +
-            '</div>' +
-            '<img src="' + impUrl + '" width="1" height="1" style="position:absolute;opacity:0;">';
+        // Server has already substituted macros + signed every URL.
+        // Inserting the html as-is lets the creative anchor (the
+        // tracker click URL with redir= baked in) work without any
+        // client-side URL surgery.
+        var imp = data.impression_url || '';
+        el.innerHTML = data.html +
+            (imp ? '<img src="' + imp + '" width="1" height="1" style="position:absolute;opacity:0;" alt="" />' : '');
 
-        // Viewability tracking
-        observeViewability(el, traceId, winner, data);
+        if (data.viewability_url) {
+            observeViewability(el, data.viewability_url);
+        }
     }
 
     // ============================================================
     // Viewability Observer
     // ============================================================
 
-    function observeViewability(el, traceId, winner, data) {
+    function observeViewability(el, viewabilityURL) {
         if (!('IntersectionObserver' in window)) return;
 
         var startTime = null;
-        var totalVisible = 0;
         var reported = false;
 
         var observer = new IntersectionObserver(function(entries) {
             var entry = entries[0];
             if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
                 if (!startTime) startTime = Date.now();
-            } else {
-                if (startTime) {
-                    totalVisible += Date.now() - startTime;
-                    startTime = null;
-                }
+            } else if (startTime) {
+                startTime = null;
             }
 
-            // Report viewability after 1 second of 50%+ visibility
+            // IAB: 50% of pixels for ≥1 continuous second for display.
             if (!reported && startTime && (Date.now() - startTime) >= 1000) {
                 reported = true;
-                var pct = Math.round(entry.intersectionRatio * 100);
                 var dur = Date.now() - startTime;
-
-                var viewParams = new URLSearchParams({
-                    tid: traceId,
-                    cid: winner.cid || '',
-                    pid: data.placement_id || '',
-                    pubid: data.publisher_id || '',
-                    dur: dur, pct: pct
-                });
-                fetch(config.trackerUrl + '/v1/t/view?' + viewParams.toString());
+                var pct = Math.round(entry.intersectionRatio * 100);
+                var sep = viewabilityURL.indexOf('?') === -1 ? '?' : '&';
+                fetch(viewabilityURL + sep + 'dur=' + dur + '&pct=' + pct, { credentials: 'omit' });
 
                 if (config.debug) {
                     console.log('[adtech] viewable', { dur: dur, pct: pct });
@@ -295,10 +287,6 @@
         var arr = new Uint8Array(len);
         crypto.getRandomValues(arr);
         return Array.from(arr, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
-    }
-
-    function isMobile() {
-        return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     }
 
     // Export
