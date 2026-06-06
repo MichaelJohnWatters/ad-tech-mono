@@ -14,7 +14,7 @@ campaigns:
     name: "VPN Plus - Global RON"
     creative_id: c2-cr-001
     creative_domain: vpnplus.com
-    base_bid: 0.80
+    base_bid: 3.30
     currency: USD
     daily_budget: 10000
     total_budget: 200000
@@ -39,7 +39,7 @@ campaigns:
     name: "CryptoEx - High Value Geo"
     creative_id: c2-cr-002
     creative_domain: cryptoex.io
-    base_bid: 5.00
+    base_bid: 4.10
     currency: USD
     daily_budget: 1000
     total_budget: 20000
@@ -49,7 +49,9 @@ campaigns:
     targeting:
       include:
         geo: [USA, GBR]
-        device: [desktop]
+    modifiers:
+      device:
+        desktop: 20
 
   - id: c2-003
     account_id: dsp-perf-media
@@ -58,7 +60,7 @@ campaigns:
     name: "Epic Quest - Mobile Gamers"
     creative_id: c2-cr-003
     creative_domain: epicquest.game
-    base_bid: 4.00
+    base_bid: 4.70
     currency: USD
     daily_budget: 4000
     total_budget: 80000
@@ -78,20 +80,19 @@ campaigns:
     account_id: dsp-perf-media
     advertiser_id: adv-saas-crm
     io_id: c2-io-004
-    name: "CloudCRM - B2B Desktop"
+    name: "CloudCRM - B2B"
     creative_id: c2-cr-004
     creative_domain: cloudcrm.io
-    base_bid: 6.50
+    base_bid: 4.40
     currency: USD
     daily_budget: 800
     total_budget: 15000
     bid_model: cpm
     pacing_mode: even
     status: live
-    targeting:
-      include:
-        device: [desktop]
     modifiers:
+      device:
+        desktop: 20
       geo_country:
         USA: 30
         GBR: 20
