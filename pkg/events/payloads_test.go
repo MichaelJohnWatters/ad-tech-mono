@@ -36,6 +36,7 @@ func TestAllEventPayloadsHaveSchemaVersion(t *testing.T) {
 		{"events.VideoEvent", reflect.TypeOf(events.VideoEvent{})},
 		{"events.AudioEvent", reflect.TypeOf(events.AudioEvent{})},
 		{"events.AdserverRenderFailedEvent", reflect.TypeOf(events.AdserverRenderFailedEvent{})},
+		{"events.AdserverFreqCapBlockedEvent", reflect.TypeOf(events.AdserverFreqCapBlockedEvent{})},
 		{"events.TrackerRejectedEvent", reflect.TypeOf(events.TrackerRejectedEvent{})},
 		{"events.ServeNoFillEvent", reflect.TypeOf(events.ServeNoFillEvent{})},
 		{"events.DirectWinEvent", reflect.TypeOf(events.DirectWinEvent{})},

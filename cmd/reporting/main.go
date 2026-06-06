@@ -173,6 +173,12 @@ func main() {
 			json.NewEncoder(w).Encode(store.RenderFailuresByCreative(creativeID))
 		})
 
+		mux.HandleFunc(routes.DebugFreqCapBlocks, func(w http.ResponseWriter, r *http.Request) {
+			campaignID := r.URL.Query().Get("campaign_id")
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(store.FreqCapBlocksByCampaign(campaignID))
+		})
+
 		mux.HandleFunc(routes.DebugTrackerRejections, func(w http.ResponseWriter, r *http.Request) {
 			traceID := r.URL.Query().Get("trace_id")
 			reason := r.URL.Query().Get("reason")
@@ -266,7 +272,8 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectBudgetDepleted:        c.handleBudgetDepleted,
 		events.SubjectCampaignStateChanged:  c.handleCampaignState,
 		events.SubjectTrackerRejected:       c.handleTrackerRejected,
-		events.SubjectAdserverRenderFailed:  c.handleRenderFailed,
+		events.SubjectAdserverRenderFailed:    c.handleRenderFailed,
+		events.SubjectAdserverFreqCapBlocked:  c.handleFreqCapBlocked,
 		events.SubjectVideo:                 c.handleVideo,
 		events.SubjectAudio:                 c.handleAudio,
 		events.SubjectServeNoFill:           c.handleServeNoFill,
@@ -606,6 +613,37 @@ func (c *EventConsumer) handleServeNoFill(ctx context.Context, msg *events.Messa
 		})
 	}
 	c.log.Info("serve nofill recorded", "trace_id", src.TraceID, "publisher", src.PublisherID, "reason", src.Reason)
+	return msg.Ack()
+}
+
+// handleFreqCapBlocked records a serve suppression (user/campaign
+// freq-cap counter saturated). No billing impact — no impression
+// fired, no spend. Useful for ops dashboards (alert on suppression
+// rate change) and advertiser reports ("we suppressed N over-cap
+// impressions for your campaign").
+func (c *EventConsumer) handleFreqCapBlocked(ctx context.Context, msg *events.Message) error {
+	var src events.AdserverFreqCapBlockedEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode freq_cap_blocked event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	if mem, ok := c.store.(*analytics.MemoryStore); ok {
+		mem.InsertFreqCapBlock(analytics.FreqCapBlock{
+			TraceID:     src.TraceID,
+			UserID:      src.UserID,
+			CampaignID:  src.CampaignID,
+			PlacementID: src.PlacementID,
+			PublisherID: src.PublisherID,
+			Timestamp:   src.Timestamp,
+		})
+	}
+	c.log.Info("adserver freq cap block recorded",
+		"trace_id", src.TraceID,
+		"user_id", src.UserID,
+		"campaign_id", src.CampaignID)
 	return msg.Ack()
 }
 

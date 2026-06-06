@@ -25,6 +25,14 @@ const (
 	// "creative X is broken" without log scraping. Consumed by
 	// reporting for ops dashboards.
 	SubjectAdserverRenderFailed = "adtech.adserver.render_failed"
+	// SubjectAdserverFreqCapBlocked — fires when the ad server
+	// suppresses a serve because the (user, campaign) frequency cap
+	// counter is saturated. Distinct from tracker.rejected (those are
+	// post-serve drops); this is a pre-serve drop with no impression
+	// produced. Lets ops alert on suppression-rate change and gives
+	// advertisers visibility into "we suppressed N over-cap serves"
+	// without scraping logs.
+	SubjectAdserverFreqCapBlocked = "adtech.adserver.freq_cap_blocked"
 
 	// Auction subjects (Exchange → DSP, Reporting)
 	SubjectAuctionWin      = "adtech.auction.win"

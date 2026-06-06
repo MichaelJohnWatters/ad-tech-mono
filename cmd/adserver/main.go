@@ -83,13 +83,13 @@ func main() {
 		lc.OnShutdown("creative-meta", func(_ context.Context) error { metaCache.Stop(); return nil })
 	}
 
-	// Render-fail publisher — fires when serve can't resolve the
-	// requested creative or otherwise falls back. NATS-only, no HTTP
-	// fallback: the impression pixel still fires regardless, so missing
-	// a render-fail event is an observability gap, not a billing
-	// correctness issue. Nil bus = single-process tests; publisher
-	// becomes a no-op.
-	renderFailPub := events.NewPublisher(connectNATS(cfg, log), log)
+	// Ad-server event publisher — handles render_failed (resolver miss)
+	// and freq_cap_blocked (pre-serve suppression). NATS-only, no HTTP
+	// fallback: these are observability signals, not billing-correctness
+	// triggers, so a NATS outage just means the event is lost rather
+	// than triggering a standalone path. Nil bus = single-process tests;
+	// publisher becomes a no-op.
+	adserverPub := events.NewPublisher(connectNATS(cfg, log), log)
 
 	// Readiness: L2 connection alive + creative cache has loaded at least once.
 	hlth.AddReadinessCheck("l2", func(ctx context.Context) error {
@@ -118,7 +118,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, renderFailPub))
+	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, adserverPub))
 
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -272,7 +272,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, renderFailPub *events.Publisher) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, adserverPub *events.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -289,7 +289,20 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		reqLog := logger.WithContext(log, ctx)
 
 		if !freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID) {
-			reqLog.Info("ad blocked by freq cap", "user", req.UserID, "campaign", req.CampaignID)
+			reqLog.Info("ad blocked by freq cap",
+				"user", req.UserID,
+				"campaign", req.CampaignID,
+				"placement_id", req.PlacementID,
+				"publisher_id", req.PublisherID)
+			go adserverPub.AdserverFreqCapBlocked(context.WithoutCancel(ctx),
+				events.AdserverFreqCapBlockedEvent{
+					TraceID:     req.TraceID,
+					UserID:      req.UserID,
+					CampaignID:  req.CampaignID,
+					PlacementID: req.PlacementID,
+					PublisherID: req.PublisherID,
+					Timestamp:   time.Now().UTC(),
+				})
 			http.Error(w, "frequency cap exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -300,7 +313,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				"requested_creative_id", req.CreativeID,
 				"campaign_id", req.CampaignID,
 				"placement_id", req.PlacementID)
-			go renderFailPub.AdserverRenderFailed(context.WithoutCancel(ctx),
+			go adserverPub.AdserverRenderFailed(context.WithoutCancel(ctx),
 				events.AdserverRenderFailedEvent{
 					TraceID:     req.TraceID,
 					CampaignID:  req.CampaignID,

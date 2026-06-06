@@ -209,6 +209,10 @@ const (
 	// a ?creative_id=. Used by e2e to verify adtech.adserver.render_failed
 	// + by ops dashboards to surface broken creatives.
 	DebugRenderFailures = "/debug/render_failures"
+	// DebugFreqCapBlocks returns suppression records for a
+	// ?campaign_id=. Used by e2e to verify adtech.adserver.freq_cap_blocked
+	// + by ops dashboards to surface over-cap volume.
+	DebugFreqCapBlocks = "/debug/freq_cap_blocks"
 	// DebugServeNoFills counts ServeNoFill records for a trace_id.
 	DebugServeNoFills = "/debug/serve_nofills"
 	// DebugMediaEvents counts MediaEvent records for a trace, optionally

@@ -95,6 +95,54 @@ func TestFreqCapPerCampaignIsolation(t *testing.T) {
 	}
 }
 
+// TestFreqCapBlockedEventReachesReporting — saturate the freq cap,
+// fire one over-cap serve, and assert adtech.adserver.freq_cap_blocked
+// lands at reporting with the right campaign / user / placement.
+// Proves the new adserver → reporting suppression pathway.
+func TestFreqCapBlockedEventReachesReporting(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "fc-block-evt")
+
+	user := "fc-block-user"
+	startCount := len(h.FreqCapBlocksByCampaign(t, w.Campaign.ID))
+
+	// Saturate (default cap = 5). All 5 succeed.
+	for i := 0; i < 5; i++ {
+		if s := h.ServeAd(t, models.ServeRequest{
+			TraceID: "fc-block-warmup", UserID: user,
+			CampaignID: w.Campaign.ID, CreativeID: w.Campaign.CreativeID,
+			PlacementID: w.Placement.ID, PublisherID: w.Publisher.ID,
+			AdvertiserID: w.AdvAcc.ID,
+			SiteDomain:   w.Publisher.Domain, Width: 300, Height: 250, Currency: "USD",
+		}); s != 200 {
+			t.Fatalf("warmup serve #%d status=%d, want 200", i+1, s)
+		}
+	}
+
+	// 6th over-cap serve: 429 + event published.
+	if s := h.ServeAd(t, models.ServeRequest{
+		TraceID: "fc-block-over", UserID: user,
+		CampaignID: w.Campaign.ID, CreativeID: w.Campaign.CreativeID,
+		PlacementID: w.Placement.ID, PublisherID: w.Publisher.ID,
+		AdvertiserID: w.AdvAcc.ID,
+		SiteDomain:   w.Publisher.Domain, Width: 300, Height: 250, Currency: "USD",
+	}); s != 429 {
+		t.Fatalf("over-cap serve status=%d, want 429", s)
+	}
+
+	harness.WaitFor(t, 5*time.Second, "freq_cap_blocked recorded", func() bool {
+		return len(h.FreqCapBlocksByCampaign(t, w.Campaign.ID)) > startCount
+	})
+	records := h.FreqCapBlocksByCampaign(t, w.Campaign.ID)
+	last := records[len(records)-1]
+	if last.UserID != user {
+		t.Errorf("UserID = %q, want %q", last.UserID, user)
+	}
+	if last.PlacementID != w.Placement.ID {
+		t.Errorf("PlacementID = %q, want %q", last.PlacementID, w.Placement.ID)
+	}
+}
+
 // TestFreqCapWindowExpiry — flip adserver.freq_cap_window to a short
 // value via the live-config API, saturate the cap, sleep past the
 // window, then assert the next serve succeeds. Proves the TTL on the

@@ -129,6 +129,23 @@ type AudioEvent struct {
 //   Detail: free-form context — for unknown_creative this is the
 //           requested creative_id; for render_error it's the
 //           underlying error string.
+// AdserverFreqCapBlockedEvent fires when the ad server's
+// (user, campaign) freq-cap counter is saturated and the serve
+// request is suppressed before any creative is rendered. Distinct
+// from TrackerRejectedEvent (post-serve drops); this is the
+// pre-serve drop signal. Reporting consumes it for ops dashboards
+// (alert on suppression-rate change) + advertiser reports
+// ("we suppressed N over-cap impressions").
+type AdserverFreqCapBlockedEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	UserID        string    `json:"user_id"`
+	CampaignID    string    `json:"campaign_id"`
+	PlacementID   string    `json:"placement_id,omitempty"`
+	PublisherID   string    `json:"publisher_id,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
 type AdserverRenderFailedEvent struct {
 	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`

@@ -29,8 +29,17 @@ spec:
             # Stable pod_id — see tracker deployment for rationale.
             - name: POD_NAME
               value: "adserver-0"
+            # Browser-reachable URL used to template impression / click /
+            # viewability pixel hrefs into the served ad HTML. The
+            # operator's (or end-user's) browser fetches these; cluster
+            # DNS like `tracker:8083` is unreachable from a browser, so
+            # we point at the gateway's /v1/t/* reverse proxy instead.
+            # Gateway forwards to the in-cluster tracker (path preserved
+            # so HMAC signatures still validate). Local dev: gateway is
+            # port-forwarded to localhost:8080. Staging/prod overlays
+            # override with the public gateway URL.
             - name: ADSERVER_TRACKER_URL
-              value: "http://tracker:8083"
+              value: "http://localhost:8080"
             - name: REDIS_URL
               value: "redis:6379"
             - name: DATABASE_URL
