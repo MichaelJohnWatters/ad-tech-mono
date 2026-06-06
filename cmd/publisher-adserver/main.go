@@ -231,9 +231,20 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 
 		// Geo/device/user passed to programmatic so the Prebid fan-out
 		// builds an equivalent OpenRTB request to what the SSP sees.
+		// Defaults when the caller (e.g. the demo simulator) omits them:
+		// derive device from the User-Agent and assume USA geo. Without
+		// this every geo/device-targeted DSP campaign no-bids 100% and
+		// only run-of-network bidders compete, which collapses the
+		// auction to a single deterministic winner.
 		geo := r.URL.Query().Get("geo")
 		device := r.URL.Query().Get("device")
 		userID := r.URL.Query().Get("user_id")
+		if geo == "" {
+			geo = "USA"
+		}
+		if device == "" {
+			device = deviceFromUserAgent(r.UserAgent())
+		}
 
 		switch decision.Type {
 		case arbitration.DecisionDirect:
@@ -396,7 +407,7 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 	}
 	sspCh := make(chan sspResult, 1)
 	go func() {
-		res, err := d.callSSP(ctx, r, placementExt)
+		res, err := d.callSSP(ctx, r, placementExt, geo, device, userID)
 		sspCh <- sspResult{res, err}
 	}()
 
@@ -445,12 +456,26 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 }
 
 // callSSP is the existing SSP-call path lifted out so serveProgrammatic
-// can run it concurrently with the Prebid fan-out.
-func (d *serveDeps) callSSP(ctx context.Context, r *http.Request, placementExt string) (sspProgrammaticResult, error) {
-	url := d.sspURL + routes.SSPServe + "?" + r.URL.RawQuery
-	if r.URL.RawQuery == "" {
-		url = d.sspURL + routes.SSPServe + "?placement_id=" + placementExt
+// can run it concurrently with the Prebid fan-out. geo/device/userID
+// reflect the post-defaulting values computed at the top of the serve
+// handler (User-Agent inference + dev "USA" fallback), so the SSP-built
+// bid request matches the Prebid-built one and DSP targeting decisions
+// stay consistent across both paths.
+func (d *serveDeps) callSSP(ctx context.Context, r *http.Request, placementExt, geo, device, userID string) (sspProgrammaticResult, error) {
+	q := r.URL.Query()
+	if q.Get("placement_id") == "" {
+		q.Set("placement_id", placementExt)
 	}
+	if q.Get("geo") == "" && geo != "" {
+		q.Set("geo", geo)
+	}
+	if q.Get("device") == "" && device != "" {
+		q.Set("device", device)
+	}
+	if q.Get("user_id") == "" && userID != "" {
+		q.Set("user_id", userID)
+	}
+	url := d.sspURL + routes.SSPServe + "?" + q.Encode()
 	sspReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return sspProgrammaticResult{}, fmt.Errorf("build ssp request: %w", err)
@@ -644,6 +669,22 @@ func deviceTypeFromString(s string) int {
 		return 5
 	}
 	return 2
+}
+
+// deviceFromUserAgent picks "mobile" / "tablet" / "desktop" from the
+// User-Agent string. Cheap substring check, not a full UA-parsing library
+// — enough to drive DSP device-targeting from the demo simulator without
+// the caller having to set ?device=. Defaults to desktop when ambiguous.
+func deviceFromUserAgent(ua string) string {
+	ua = strings.ToLower(ua)
+	switch {
+	case strings.Contains(ua, "ipad") || strings.Contains(ua, "tablet"):
+		return "tablet"
+	case strings.Contains(ua, "mobi") || strings.Contains(ua, "android") || strings.Contains(ua, "iphone"):
+		return "mobile"
+	default:
+		return "desktop"
+	}
 }
 
 // splitCSV trims and skips empties so a trailing comma or whitespace in
