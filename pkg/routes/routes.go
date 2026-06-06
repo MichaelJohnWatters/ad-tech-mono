@@ -44,6 +44,13 @@ const (
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
 	ProxyTracker   = apiPrefix + "/t/"
+	// ProxyCreatives forwards browser GETs for creative assets (SVG /
+	// PNG / JPG in the S3/Minio bucket) to the gateway's configured
+	// object-store endpoint. Lets creatives.asset_url point at a
+	// browser-reachable URL even when the storage backend lives on
+	// cluster-internal DNS the browser can't resolve. Same pattern as
+	// ProxyTracker.
+	ProxyCreatives = apiPrefix + "/creatives/"
 	ProxyAdServer  = apiPrefix + "/ad/"
 	ProxySSP       = apiPrefix + "/ssp/"
 	ProxyDSP       = apiPrefix + "/dsp/"

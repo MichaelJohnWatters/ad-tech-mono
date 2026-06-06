@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 250" width="300" height="250">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#3a0ca3"/>
+      <stop offset="1" stop-color="#4361ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="300" height="250" fill="url(#bg)" rx="6"/>
+  <!-- mock dashboard -->
+  <rect x="40" y="50" width="220" height="120" fill="#1a1a2e" rx="6"/>
+  <rect x="50" y="62" width="60" height="6" fill="#4cc9f0" rx="3"/>
+  <rect x="50" y="76" width="120" height="4" fill="#5a5a72" rx="2"/>
+  <!-- chart bars -->
+  <rect x="55" y="135" width="14" height="20" fill="#7209b7" rx="2"/>
+  <rect x="73" y="125" width="14" height="30" fill="#7209b7" rx="2"/>
+  <rect x="91" y="110" width="14" height="45" fill="#4cc9f0" rx="2"/>
+  <rect x="109" y="115" width="14" height="40" fill="#4cc9f0" rx="2"/>
+  <rect x="127" y="100" width="14" height="55" fill="#f72585" rx="2"/>
+  <rect x="145" y="95" width="14" height="60" fill="#f72585" rx="2"/>
+  <!-- spark line -->
+  <polyline points="175,145 190,130 205,135 220,115 235,118 250,100" stroke="#06ffa5" stroke-width="2" fill="none"/>
+  <text x="150" y="30" font-family="-apple-system,Segoe UI,sans-serif" font-size="22" font-weight="700" fill="white" text-anchor="middle">GLOBEX</text>
+  <text x="150" y="195" font-family="-apple-system,Segoe UI,sans-serif" font-size="13" fill="white" opacity="0.85" text-anchor="middle">Real-time analytics for engineering teams</text>
+  <rect x="80" y="208" width="140" height="30" fill="#06ffa5" rx="15"/>
+  <text x="150" y="227" font-family="-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="700" fill="#3a0ca3" text-anchor="middle">Start Free Trial</text>
+</svg>
