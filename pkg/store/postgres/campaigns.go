@@ -66,7 +66,9 @@ SELECT
     COALESCE(tr.exclude_categories, '{}'),
     COALESCE(tr.bid_modifiers::text, '{}'),
     COALESCE(cr.id::text, '') AS creative_id,
-    COALESCE(SPLIT_PART(cr.landing_url, '/', 3), '') AS creative_domain
+    COALESCE(SPLIT_PART(cr.landing_url, '/', 3), '') AS creative_domain,
+    li.viewability_target_pct,
+    COALESCE(cv.creatives_json, '[]')::text AS creatives_json
 FROM line_items li
 JOIN insertion_orders io ON io.id = li.insertion_order_id
 JOIN accounts acc ON acc.id = li.account_id
@@ -79,6 +81,13 @@ LEFT JOIN LATERAL (
     ORDER BY lic.weight DESC, c.created_at ASC
     LIMIT 1
 ) cr ON true
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(jsonb_build_object('id', c.id::text, 'w', c.width, 'h', c.height)
+                     ORDER BY lic.weight DESC, c.created_at ASC) AS creatives_json
+    FROM line_item_creatives lic
+    JOIN creatives c ON c.id = lic.creative_id
+    WHERE lic.line_item_id = li.id
+) cv ON true
 WHERE li.status IN ('live', 'paused')`
 
 	var args []any
@@ -102,6 +111,8 @@ WHERE li.status IN ('live', 'paused')`
 		var c models.Campaign
 		var incGeo, excGeo, incDev, excDev, incSeg, excSeg, incDom, excDom, incCat, excCat pq.StringArray
 		var modifiersJSON string
+		var viewTarget sql.NullInt32
+		var creativesJSON string
 		if err := rows.Scan(
 			&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
 			&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
@@ -111,8 +122,15 @@ WHERE li.status IN ('live', 'paused')`
 			&incCat, &excCat,
 			&modifiersJSON,
 			&c.CreativeID, &c.CreativeDomain,
+			&viewTarget,
+			&creativesJSON,
 		); err != nil {
 			return nil, fmt.Errorf("scan campaign: %w", err)
+		}
+		c.Creatives = parseCreativesJSON(creativesJSON)
+		if viewTarget.Valid {
+			pct := int(viewTarget.Int32)
+			c.ViewabilityTargetPct = &pct
 		}
 		c.Targeting = targeting.Rules{
 			Include: targeting.TargetingSet{
@@ -136,6 +154,29 @@ WHERE li.status IN ('live', 'paused')`
 // KeyOf satisfies warm.Loader[models.Campaign].
 func (l *CampaignLoader) KeyOf(c models.Campaign) string { return c.ID }
 
+// parseCreativesJSON decodes the jsonb_agg(...) output emitted by the
+// CampaignLoader query into the runtime CampaignCreative slice. Tiny
+// shape: [{id, w, h}, …] — ordered by line_item_creatives.weight DESC
+// so the first element is also the legacy "primary" creative.
+func parseCreativesJSON(raw string) []models.CampaignCreative {
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var rows []struct {
+		ID string `json:"id"`
+		W  int    `json:"w"`
+		H  int    `json:"h"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	out := make([]models.CampaignCreative, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, models.CampaignCreative{ID: r.ID, Width: r.W, Height: r.H})
+	}
+	return out
+}
+
 // parseModifiers turns the bid_modifiers JSONB column into the runtime
 // targeting.Modifiers struct. Unknown keys are silently dropped — the column
 // is intentionally schemaless to allow new dimensions without migrations.
@@ -153,5 +194,3 @@ func parseModifiers(raw string) targeting.Modifiers {
 	return targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry}
 }
 
-// silence unused if read connection ever flips to read-write only.
-var _ *sql.DB = (*sql.DB)(nil)

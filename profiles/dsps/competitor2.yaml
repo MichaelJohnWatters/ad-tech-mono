@@ -12,7 +12,6 @@ campaigns:
     advertiser_id: adv-vpn-plus
     io_id: c2-io-001
     name: "VPN Plus - Global RON"
-    creative_id: c2-cr-001
     creative_domain: vpnplus.com
     base_bid: 3.30
     currency: USD
@@ -31,13 +30,20 @@ campaigns:
         DEU: 20
         FRA: 15
         JPN: 10
+    # Run of network — every common size.
+    creatives:
+      - { id: c2-cr-001, width: 300, height: 250 }
+      - { id: c2-cr-001-leader, width: 728, height: 90 }
+      - { id: c2-cr-001-mobile, width: 320, height: 50 }
+      - { id: c2-cr-001-halfpage, width: 300, height: 600 }
+      - { id: c2-cr-001-sky, width: 160, height: 600 }
+      - { id: c2-cr-001-billboard, width: 970, height: 250 }
 
   - id: c2-002
     account_id: dsp-perf-media
     advertiser_id: adv-crypto-ex
     io_id: c2-io-002
     name: "CryptoEx - High Value Geo"
-    creative_id: c2-cr-002
     creative_domain: cryptoex.io
     base_bid: 4.10
     currency: USD
@@ -52,13 +58,18 @@ campaigns:
     modifiers:
       device:
         desktop: 20
+    # Desktop-leaning finance — MPU + leaderboard + sky + billboard.
+    creatives:
+      - { id: c2-cr-002, width: 300, height: 250 }
+      - { id: c2-cr-002-leader, width: 728, height: 90 }
+      - { id: c2-cr-002-sky, width: 160, height: 600 }
+      - { id: c2-cr-002-billboard, width: 970, height: 250 }
 
   - id: c2-003
     account_id: dsp-perf-media
     advertiser_id: adv-game-studio
     io_id: c2-io-003
     name: "Epic Quest - Mobile Gamers"
-    creative_id: c2-cr-003
     creative_domain: epicquest.game
     base_bid: 4.70
     currency: USD
@@ -75,13 +86,17 @@ campaigns:
         USA: 20
         JPN: 35
         GBR: 10
+    # Mobile-only — MPU + mobile banner + half-page.
+    creatives:
+      - { id: c2-cr-003, width: 300, height: 250 }
+      - { id: c2-cr-003-mobile, width: 320, height: 50 }
+      - { id: c2-cr-003-halfpage, width: 300, height: 600 }
 
   - id: c2-004
     account_id: dsp-perf-media
     advertiser_id: adv-saas-crm
     io_id: c2-io-004
     name: "CloudCRM - B2B"
-    creative_id: c2-cr-004
     creative_domain: cloudcrm.io
     base_bid: 4.40
     currency: USD
@@ -96,3 +111,9 @@ campaigns:
       geo_country:
         USA: 30
         GBR: 20
+    # B2B SaaS — MPU + leaderboard + sky + half-page.
+    creatives:
+      - { id: c2-cr-004, width: 300, height: 250 }
+      - { id: c2-cr-004-leader, width: 728, height: 90 }
+      - { id: c2-cr-004-sky, width: 160, height: 600 }
+      - { id: c2-cr-004-halfpage, width: 300, height: 600 }

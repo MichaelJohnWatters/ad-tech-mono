@@ -9,7 +9,6 @@ campaigns:
     advertiser_id: adv-acme
     io_id: io-001
     name: "Acme Shoes - UK Mobile"
-    creative_id: cr-shoes-001
     creative_domain: acme-shoes.com
     base_bid: 3.20
     currency: USD
@@ -22,13 +21,17 @@ campaigns:
       include:
         geo: [GBR]
         device: [mobile]
+    # Mobile-first campaign — mobile banner + MPU + half-page.
+    creatives:
+      - { id: cr-shoes-001, width: 300, height: 250 }
+      - { id: cr-shoes-001-mobile, width: 320, height: 50 }
+      - { id: cr-shoes-001-halfpage, width: 300, height: 600 }
 
   - id: li-002
     account_id: adv-acme
     advertiser_id: adv-acme
     io_id: io-001
     name: "Acme Shoes - US All Devices"
-    creative_id: cr-shoes-002
     creative_domain: acme-shoes.com
     base_bid: 3.00
     currency: USD
@@ -44,13 +47,18 @@ campaigns:
       device:
         mobile: 15
         tablet: -10
+    # Run of network US — every common size.
+    creatives:
+      - { id: cr-shoes-002, width: 300, height: 250 }
+      - { id: cr-shoes-002-leader, width: 728, height: 90 }
+      - { id: cr-shoes-002-mobile, width: 320, height: 50 }
+      - { id: cr-shoes-002-halfpage, width: 300, height: 600 }
 
   - id: li-003
     account_id: adv-globex
     advertiser_id: adv-globex
     io_id: io-002
     name: "Globex Tech - Desktop Worldwide"
-    creative_id: cr-tech-001
     creative_domain: globex-tech.com
     base_bid: 3.80
     currency: USD
@@ -63,13 +71,17 @@ campaigns:
       geo_country:
         USA: 20
         GBR: 10
+    # Desktop-leaning tech brand — MPU + leaderboard + sky.
+    creatives:
+      - { id: cr-tech-001, width: 300, height: 250 }
+      - { id: cr-tech-001-leader, width: 728, height: 90 }
+      - { id: cr-tech-001-sky, width: 160, height: 600 }
 
   - id: li-004
     account_id: adv-initech
     advertiser_id: adv-initech
     io_id: io-003
     name: "Initech SaaS - Run of Network"
-    creative_id: cr-saas-001
     creative_domain: initech.io
     base_bid: 3.40
     currency: USD
@@ -85,3 +97,9 @@ campaigns:
         USA: 15
         GBR: 10
         DEU: 5
+    # Pure RoN — MPU + leaderboard + half-page + mobile banner.
+    creatives:
+      - { id: cr-saas-001, width: 300, height: 250 }
+      - { id: cr-saas-001-leader, width: 728, height: 90 }
+      - { id: cr-saas-001-halfpage, width: 300, height: 600 }
+      - { id: cr-saas-001-mobile, width: 320, height: 50 }

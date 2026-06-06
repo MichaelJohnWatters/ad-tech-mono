@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"fmt"
 	"log/slog"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
@@ -38,33 +39,59 @@ var creativeGamingSVG []byte
 //go:embed themes/privacy-300x250.svg
 var creativePrivacySVG []byte
 
-// creativeAssetByTheme returns the object-store key + SVG bytes for
-// a domain's theme. Themes mirror creative_templates.go so the HTML
-// and image halves of the split look like the same brand family.
-func creativeAssetByTheme(domain string) (key string, body []byte) {
+// themeSlugForDomain reduces a creative_domain to a theme slug from the
+// svgThemes catalog. Same substring matching cmd/gateway/landing.go uses
+// so a creative themed retail lands on a retail-themed landing page.
+func themeSlugForDomain(domain string) string {
 	d := domain
 	switch {
 	case containsAny(d, "shoes", "store", "shop", "bite", "retail"):
-		return "themes/retail-300x250.svg", creativeRetailSVG
+		return "retail"
 	case containsAny(d, "tech", "saas", "cloud", "soft", "crm", "init"):
-		return "themes/tech-300x250.svg", creativeTechSVG
+		return "tech"
 	case containsAny(d, "auto", "motors", "drive"):
-		return "themes/auto-300x250.svg", creativeAutoSVG
+		return "auto"
 	case containsAny(d, "crypto", "finance", "bank", "trade", "invest"):
-		return "themes/finance-300x250.svg", creativeFinanceSVG
+		return "finance"
 	case containsAny(d, "game", "quest", "play"):
-		return "themes/gaming-300x250.svg", creativeGamingSVG
+		return "gaming"
 	case containsAny(d, "vpn", "secure", "privacy", "shield"):
-		return "themes/privacy-300x250.svg", creativePrivacySVG
+		return "privacy"
 	default:
-		return "themes/tech-300x250.svg", creativeTechSVG
+		return "tech"
 	}
 }
 
-// useAssetURL decides whether a creative should land on the asset_url
-// path (vs the html_content path). Even suffix → HTML; odd suffix →
-// asset. Deterministic so re-running seed is idempotent and the same
-// creative ID always picks the same path.
+// creativeAssetByTheme returns the object-store key for a creative at
+// the requested size. Body bytes are no longer returned — every size
+// other than 300x250 is generated on the fly in uploadCreativeAssets,
+// so callers just need the key to build a URL and the actual SVG body
+// already lives in Minio.
+func creativeAssetByTheme(domain string, w, h int) string {
+	if w == 0 || h == 0 {
+		w, h = 300, 250
+	}
+	return fmt.Sprintf("themes/%s-%dx%d.svg", themeSlugForDomain(domain), w, h)
+}
+
+// useAssetForSize decides whether a creative at this size should embed
+// a Minio asset_url image or use inline html_content. The handcrafted
+// 300x250 SVGs in themes/ have the most polished look so we keep them
+// on the html_content path; every other size renders the procedurally
+// generated SVG referenced by an asset URL the gateway proxies. Means
+// the size variants are visually distinct from the MPU even when they
+// share a theme, which matches real-world creative behaviour where
+// agencies hand-tune MPU + programmatically scale the rest.
+func useAssetForSize(w, h int) bool {
+	if w == 300 && h == 250 {
+		return false
+	}
+	return true
+}
+
+// useAssetURL is the legacy ID-parity check; kept temporarily for
+// backwards-compat with callers that haven't been migrated to
+// useAssetForSize. Even-suffix ID → HTML; odd-suffix ID → asset URL.
 func useAssetURL(creativeID string) bool {
 	if creativeID == "" {
 		return false
@@ -73,11 +100,18 @@ func useAssetURL(creativeID string) bool {
 	return last == '1' || last == '3' || last == '5' || last == '7' || last == '9'
 }
 
-// uploadCreativeAssets writes every themed SVG into the Minio bucket
-// so the asset_url path resolves. Idempotent — Put overwrites in
-// place. Called once at seed boot before the campaign inserts run.
-// nil store = local-filesystem fallback (seed still completes; the
-// asset_url just won't resolve from the browser).
+// uploadCreativeAssets writes every (theme × size) themed SVG into the
+// Minio bucket so the asset_url path resolves. Idempotent — Put
+// overwrites in place. Called once at seed boot before the campaign
+// inserts run. nil store = local-filesystem fallback (seed still
+// completes; the asset_url just won't resolve from the browser).
+//
+// The 300x250 variants for each theme use the hand-crafted SVG files
+// embedded above so they keep their original polished look. Every
+// other size (728x90, 300x600, 320x50, 160x600, 970x250, 336x280) is
+// generated programmatically from the theme catalog in svg_generator.go
+// — same palette + glyph so generated and hand-crafted variants read
+// as the same brand family.
 func uploadCreativeAssets(ctx context.Context, store objects.Store, bucket string, log *slog.Logger) error {
 	if store == nil {
 		log.Warn("object store unavailable, skipping creative asset upload; asset_url paths will 404")
@@ -86,17 +120,40 @@ func uploadCreativeAssets(ctx context.Context, store objects.Store, bucket strin
 	if err := store.EnsureBucket(ctx, bucket); err != nil {
 		log.Warn("ensure bucket failed; asset uploads may fail", "bucket", bucket, "error", err)
 	}
-	uploads := []struct {
+
+	type asset struct {
 		key  string
 		body []byte
-	}{
-		{"themes/retail-300x250.svg", creativeRetailSVG},
-		{"themes/tech-300x250.svg", creativeTechSVG},
-		{"themes/auto-300x250.svg", creativeAutoSVG},
-		{"themes/finance-300x250.svg", creativeFinanceSVG},
-		{"themes/gaming-300x250.svg", creativeGamingSVG},
-		{"themes/privacy-300x250.svg", creativePrivacySVG},
 	}
+	var uploads []asset
+
+	// Hand-crafted 300x250 variants — preserved as the reference look.
+	handcrafted := map[string][]byte{
+		"retail":  creativeRetailSVG,
+		"tech":    creativeTechSVG,
+		"auto":    creativeAutoSVG,
+		"finance": creativeFinanceSVG,
+		"gaming":  creativeGamingSVG,
+		"privacy": creativePrivacySVG,
+	}
+	for slug, body := range handcrafted {
+		uploads = append(uploads, asset{fmt.Sprintf("themes/%s-300x250.svg", slug), body})
+	}
+
+	// Generated variants for every other (theme, size).
+	for _, t := range svgThemes {
+		for _, s := range standardSizes {
+			if s.W == 300 && s.H == 250 {
+				continue // handled above
+			}
+			body := generateThemedSVG(t, s.W, s.H)
+			uploads = append(uploads, asset{
+				fmt.Sprintf("themes/%s-%dx%d.svg", t.Slug, s.W, s.H),
+				body,
+			})
+		}
+	}
+
 	for _, u := range uploads {
 		if err := store.Put(ctx, bucket, u.key, bytes.NewReader(u.body), int64(len(u.body)), "image/svg+xml"); err != nil {
 			log.Warn("creative asset upload failed", "key", u.key, "error", err)
@@ -104,6 +161,7 @@ func uploadCreativeAssets(ctx context.Context, store objects.Store, bucket strin
 		}
 		log.Debug("creative asset uploaded", "key", u.key, "bytes", len(u.body))
 	}
+	log.Info("creative assets uploaded", "count", len(uploads), "bucket", bucket)
 	return nil
 }
 

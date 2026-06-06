@@ -53,6 +53,44 @@ func brandSlugFromDomain(domain string) string {
 	return strings.ToLower(s)
 }
 
+// materialiseCreatives expands a CampaignConfig into the list of
+// CreativeYAMLs the inserter writes. The new YAML shape is a Creatives
+// array (one entry per size variant). The legacy shape is a single
+// creative_id + creative_domain pair at the line-item level — we
+// synthesise a one-element 300x250 list from those so old YAMLs still
+// produce valid rows. If both shapes appear on the same campaign, the
+// explicit Creatives list wins (the legacy fields are ignored).
+func materialiseCreatives(c CampaignConfig) []CreativeYAML {
+	if len(c.Creatives) > 0 {
+		out := make([]CreativeYAML, 0, len(c.Creatives))
+		for _, cv := range c.Creatives {
+			w, h := cv.Width, cv.Height
+			if w == 0 || h == 0 {
+				w, h = 300, 250
+			}
+			id := cv.ID
+			if id == "" {
+				id = fmt.Sprintf("%s-%dx%d", c.ID, w, h)
+			}
+			domain := cv.Domain
+			if domain == "" {
+				domain = c.CreativeDomain
+			}
+			out = append(out, CreativeYAML{ID: id, Width: w, Height: h, Domain: domain, Format: cv.Format})
+		}
+		return out
+	}
+	if c.CreativeID == "" {
+		return nil
+	}
+	return []CreativeYAML{{
+		ID:     c.CreativeID,
+		Width:  300,
+		Height: 250,
+		Domain: c.CreativeDomain,
+	}}
+}
+
 // landingURLFor returns the landing URL for a creative. When base is
 // set (the common case in dev — gateway hosts /dev/landing/{slug}) the
 // URL routes back into our own gateway so clicks land on a themed
@@ -265,30 +303,45 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 
 		// creatives — small HTML banners go in html_content directly so the ad
 		// server's warm cache has everything it needs without a Minio roundtrip.
-		// Larger assets (images, video) would point asset_url at Minio instead.
-		// Split is 50/50 by creative-id parity (see useAssetURL in
-		// creative_assets.go): even suffix → inline themed HTML,
-		// odd suffix → asset_url wrapper around a Minio-hosted SVG.
-		if c.CreativeID != "" {
-			creativeID := DeriveID("creative", c.CreativeID)
-			landing := landingURLFor(in.landingURLBase, c.CreativeDomain)
-			html := themedCreativeHTML(c.CreativeID, c.CreativeDomain)
-			if useAssetURL(c.CreativeID) && in.creativeAssetBase != "" {
-				key, _ := creativeAssetByTheme(c.CreativeDomain)
+		// Larger assets (images, video) point asset_url at Minio instead.
+		// Each line item carries one row per size variant: the DSP picks the
+		// variant matching the bid request's banner.w/h at bid time. Split
+		// between inline HTML and asset_url is 50/50 by creative-id parity
+		// (see useAssetURL in creative_assets.go): even suffix → inline,
+		// odd suffix → asset_url. Legacy { creative_id, creative_domain }
+		// fields are translated into a single-element 300x250 Creatives
+		// list so older YAMLs keep working.
+		for _, cv := range materialiseCreatives(c) {
+			creativeID := DeriveID("creative", cv.ID)
+			domain := cv.Domain
+			if domain == "" {
+				domain = c.CreativeDomain
+			}
+			landing := landingURLFor(in.landingURLBase, domain)
+			html := themedCreativeHTML(cv.ID, domain)
+			if useAssetForSize(cv.Width, cv.Height) && in.creativeAssetBase != "" {
+				key := creativeAssetByTheme(domain, cv.Width, cv.Height)
 				assetURL := in.creativeAssetBase + "/" + key
 				html = creativeAssetHTML(assetURL)
 			}
 			const crQ = `
 INSERT INTO creatives (
   id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at
-) VALUES ($1, $2, $3, 'display', 300, 250, $4, $5, 'approved', now(), now())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
+  format = EXCLUDED.format,
+  width = EXCLUDED.width,
+  height = EXCLUDED.height,
   landing_url = EXCLUDED.landing_url,
   html_content = EXCLUDED.html_content,
   updated_at = now()`
-			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, c.CreativeID, landing, html); err != nil {
-				return fmt.Errorf("creatives insert: %w", err)
+			format := cv.Format
+			if format == "" {
+				format = "display"
+			}
+			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, html); err != nil {
+				return fmt.Errorf("creatives insert (%s): %w", cv.ID, err)
 			}
 
 			const linkQ = `
