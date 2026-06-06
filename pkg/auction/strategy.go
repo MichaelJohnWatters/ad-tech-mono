@@ -68,6 +68,37 @@ type AuctionRequest struct {
 	PriceMode     string // first_price, second_price
 	DealIDs       []string
 	TraceID       string
+	// Pod carries pod-specific constraints when this is an ad-break
+	// auction (video/audio Format == "pod"). nil for single-winner
+	// auctions. Populated by the exchange when it sees Imp.Video.PodID
+	// or Imp.Audio.PodID on the incoming bid request.
+	Pod *PodRequest
+}
+
+// PodRequest is the pod-specific bit of an AuctionRequest. Mirrors the
+// pod fields from OpenRTB 2.6 (Imp.Video / Imp.Audio: PodID, MaxSeq,
+// RqdDurs, MinCPMPerSec) plus competitive-separation knobs.
+//
+// Two pod shapes are supported:
+//
+//   - Variable-duration ("free-form" pod): MaxDuration is set, RqdDurs
+//     is empty. The auction picks any combination of bids whose total
+//     duration fits within MaxDuration. Real-world example: a 60s
+//     mid-roll break that can hold 2×30s, 4×15s, 1×30s+2×15s, etc.
+//
+//   - Fixed-slot pod: RqdDurs is non-empty. Each slot has a required
+//     duration; the auction picks one bid per slot whose Duration
+//     matches. Real-world example: SSAI pods on CTV where the SSAI
+//     server has pre-allocated stitched slots of specific durations.
+type PodRequest struct {
+	PodID         string  // pod identifier (shared across all slots in the pod)
+	MaxDuration   int     // seconds; total pod duration cap (variable-duration pods)
+	RqdDurs       []int   // seconds per slot (fixed-slot pods); zero entries match any duration
+	MaxAds        int     // 0 = no limit; otherwise refuse to fill more than N slots
+	MinCPMPerSec  float64 // per-second floor across the pod
+	NoSameAdvertiserAdjacent bool // when true, two adjacent slots cannot share AdvertiserID (industry default for instream pods)
+	UniqueAdvertiser         bool // when true, advertiser can appear at most once anywhere in the pod
+	UniqueCategory           bool // when true, IAB category can appear at most once anywhere in the pod
 }
 
 // Result contains the auction outcome.
