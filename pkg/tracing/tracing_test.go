@@ -9,6 +9,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func nopLogger() *slog.Logger {
@@ -65,5 +66,55 @@ func TestHTTPMiddleware_PropagatesTraceContext(t *testing.T) {
 
 	if !sawTraceparent {
 		t.Error("traceparent header was not propagated to downstream handler")
+	}
+}
+
+// Browser following the tracker click anchor in a new tab drops the
+// traceparent header, but the URL itself carries ?tid=<32-hex>. The
+// middleware must adopt that as the trace ID so the click span shows
+// up under the same trace as the impression/view in Jaeger.
+func TestHTTPMiddleware_AdoptsTraceIDFromQueryParam(t *testing.T) {
+	const tid = "0af7651916cd43dd8448eb211c80319c"
+	mw := HTTPMiddleware("test")
+	var serverSpanTraceID string
+
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		serverSpanTraceID = trace.SpanFromContext(r.Context()).SpanContext().TraceID().String()
+	})
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	srv := httptest.NewServer(mw(inner))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/t/click?tid=" + tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if serverSpanTraceID != tid {
+		t.Errorf("expected server span trace ID = %s, got %s", tid, serverSpanTraceID)
+	}
+}
+
+// When the query carries a malformed tid (not 32 hex) the middleware
+// must NOT adopt it — better to start a fresh root span than to corrupt
+// the trace ID space with junk inputs.
+func TestHTTPMiddleware_RejectsMalformedTraceIDQueryParam(t *testing.T) {
+	mw := HTTPMiddleware("test")
+	var serverSpanTraceID string
+
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		serverSpanTraceID = trace.SpanFromContext(r.Context()).SpanContext().TraceID().String()
+	})
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	srv := httptest.NewServer(mw(inner))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/t/click?tid=not-a-trace-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if serverSpanTraceID == "not-a-trace-id" {
+		t.Errorf("malformed tid must not be adopted as trace ID")
 	}
 }

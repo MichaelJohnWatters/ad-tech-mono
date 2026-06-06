@@ -14,6 +14,7 @@ package tracing
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
 	"net/http"
@@ -185,6 +186,7 @@ func HTTPMiddleware(serviceName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+			ctx = adoptTraceIDFromQuery(ctx, r)
 			ctx, span := Tracer().Start(ctx, serviceName+" "+r.Method+" "+r.URL.Path,
 				trace.WithSpanKind(trace.SpanKindServer),
 				trace.WithAttributes(
@@ -199,6 +201,51 @@ func HTTPMiddleware(serviceName string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// adoptTraceIDFromQuery handles the new-tab tracker case: a browser
+// follows a creative anchor or pixel <img> directly so the request has
+// no W3C traceparent header, but the URL itself carries ?tid=<32-hex>.
+// Without this the tracker would start a fresh root span and the click
+// / impression would orphan from the parent auction trace in Jaeger.
+//
+// When the extracted parent is already valid (traceparent header was
+// present) we leave the context alone. Otherwise we promote the URL
+// tid into a remote SpanContext so the next Tracer().Start treats it
+// as a continuation. The synthesised SpanID is derived deterministically
+// from the trace ID so dedup-rejected replays of the same URL still all
+// hang off the same parent, which is the right shape for Jaeger.
+func adoptTraceIDFromQuery(ctx context.Context, r *http.Request) context.Context {
+	if trace.SpanContextFromContext(ctx).IsValid() {
+		return ctx
+	}
+	tid := r.URL.Query().Get("tid")
+	if tid == "" {
+		return ctx
+	}
+	traceID, err := trace.TraceIDFromHex(tid)
+	if err != nil {
+		return ctx
+	}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     deriveParentSpanID(traceID),
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	})
+	return trace.ContextWithRemoteSpanContext(ctx, sc)
+}
+
+// deriveParentSpanID hashes the trace ID into an 8-byte span ID so the
+// synthesised parent is deterministic per trace. This means every
+// click/impression/view replay on the same URL produces the same parent
+// SpanID; Jaeger renders them as siblings under one synthesised parent
+// instead of disconnected roots.
+func deriveParentSpanID(traceID trace.TraceID) trace.SpanID {
+	h := sha256.Sum256(append([]byte("adopt-parent:"), traceID[:]...))
+	var sid trace.SpanID
+	copy(sid[:], h[:8])
+	return sid
 }
 
 // InjectHTTP copies the current span context into outbound request headers
