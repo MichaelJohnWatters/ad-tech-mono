@@ -237,6 +237,16 @@ func (m *Manager) poll(ctx context.Context) {
 
 	if registry != nil && serviceName != "" {
 		registry.Ping(ctx, serviceName)
+		// Idempotent prune of stale pods (k8s rolling-update remnants,
+		// scale-down residue). Runs from every pod's poll loop — the
+		// DELETE is cheap and runs only when stale rows actually exist.
+		// Threshold defaults to 5 min inside PruneStale (10× the
+		// default 30 s poll interval).
+		if cfgN, regN, err := registry.PruneStale(ctx, 0); err != nil {
+			m.log.Warn("registry prune failed", "error", err)
+		} else if cfgN > 0 || regN > 0 {
+			m.log.Info("registry pruned", "config_rows", cfgN, "registry_rows", regN)
+		}
 	}
 }
 

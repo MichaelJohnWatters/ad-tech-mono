@@ -154,7 +154,11 @@ func main() {
 	}))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
-	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
+	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
+	// across two warm caches (3 s per-Refresh inner timeout × 2 + JSON
+	// marshal + headroom). The /serve hot path is sub-second so the
+	// generous timeout doesn't affect it.
+	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second}
 
 	log.Info("publisher-adserver starting",
 		"port", port,
