@@ -26,6 +26,12 @@ func (c *Cache[T]) Name() string { return c.cfg.Name }
 // Query param `name` (optional) restricts the refresh to a single named
 // cache; absent means refresh everything. The response shape is stable so
 // tests and ops tools can parse it the same way across services.
+//
+// Each cache gets its own 3-second per-Refresh context. Without this,
+// a slow Loader (e.g. Postgres briefly under load) could hold the
+// handler past the server's WriteTimeout, causing the client to see
+// a raw EOF instead of a structured "error" entry in the response. 3
+// seconds matches typical postgres query budgets across the platform.
 func RefreshHandler(caches ...Refreshable) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter := r.URL.Query().Get("name")
@@ -46,7 +52,9 @@ func RefreshHandler(caches ...Refreshable) http.HandlerFunc {
 			}
 			anyMatched = true
 			start := time.Now()
-			n, err := c.Refresh(r.Context())
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			n, err := c.Refresh(ctx)
+			cancel()
 			res := result{
 				Cache:      c.Name(),
 				Count:      n,
