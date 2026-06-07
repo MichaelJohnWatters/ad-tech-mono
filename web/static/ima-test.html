@@ -25,6 +25,16 @@
       src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
     <div id="ad-container"></div>
   </div>
+  <div style="margin-top: 12px;">
+    <label style="font-size: 13px; margin-right: 8px;">
+      VAST URL:
+      <select id="vast-source" style="margin-left: 6px; padding: 4px 8px;">
+        <option value="local">Our endpoint (/v1/pubad/video/vast)</option>
+        <option value="google-single">Google sample — single linear inline</option>
+        <option value="google-skippable">Google sample — skippable</option>
+      </select>
+    </label>
+  </div>
   <div>
     <button id="play">Play</button>
     <button id="reset" style="background: #6e7681;">Reset</button>
@@ -65,9 +75,21 @@
       return parts.join(' ');
     }
 
+    // Known-good Google IMA sample tags (the same URLs used in the
+    // IMA SDK getting-started demo). If our endpoint fails but one of
+    // these works, the bug is in our VAST. If both fail, the issue is
+    // in the IMA wiring on this page.
+    var SAMPLE_TAGS = {
+      'google-single':    'https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dlinear&ciu_szs=300x250%2C728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator=',
+      'google-skippable': 'https://pubads.g.doubleclick.net/gampad/ads?iu=/21775744923/external/single_ad_samples&sz=640x480&cust_params=sample_ct%3Dskippablelinear&ciu_szs=300x250%2C728x90&gdfp_req=1&output=vast&unviewed_position_start=1&env=vp&impl=s&correlator='
+    };
+
     function go() {
       L.innerHTML = '';
-      var tag = window.location.origin + '/v1/pubad/video/vast?placement_id=pl-sport-live-preroll&t=' + Date.now();
+      var source = document.getElementById('vast-source').value;
+      var tag = source === 'local'
+        ? (window.location.origin + '/v1/pubad/video/vast?placement_id=pl-sport-live-preroll&t=' + Date.now())
+        : SAMPLE_TAGS[source] + Date.now();
       log('VAST URL: ' + tag);
       log('Fetching VAST to confirm…');
       fetch(tag).then(function(r){ return r.text(); }).then(function(t){
