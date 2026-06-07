@@ -31,6 +31,14 @@ type Store interface {
 	InsertView(ctx context.Context, e *ViewEvent) error
 	InsertAuction(ctx context.Context, e *AuctionEvent) error
 	InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error
+	// InsertMediaEvent stores one video / audio engagement record
+	// (start / firstQuartile / midpoint / thirdQuartile / complete /
+	// mute / pause / resume / skip / fullscreen, plus the analogous
+	// audio events). Used by the reporting service when consuming
+	// adtech.events.video / .audio off NATS. Channel is "video" or
+	// "audio"; the row stores both so a single media_events table
+	// can serve both consumers.
+	InsertMediaEvent(ctx context.Context, e *MediaEvent) error
 	InsertBatch(ctx context.Context, events []Event) error
 
 	// Read path

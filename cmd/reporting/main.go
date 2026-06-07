@@ -563,12 +563,12 @@ func (c *EventConsumer) handleVideo(ctx context.Context, msg *events.Message) er
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertMediaEvent(analytics.MediaEvent{
-			TraceID: src.TraceID, Channel: "video",
-			EventType: src.EventType, PositionMs: src.PositionMs,
-			Timestamp: src.Timestamp,
-		})
+	if err := c.store.InsertMediaEvent(ctx, &analytics.MediaEvent{
+		TraceID: src.TraceID, Channel: "video",
+		EventType: src.EventType, PositionMs: src.PositionMs,
+		Timestamp: src.Timestamp,
+	}); err != nil {
+		c.log.Error("insert video media event", "error", err, "trace_id", src.TraceID)
 	}
 	return msg.Ack()
 }
@@ -581,12 +581,12 @@ func (c *EventConsumer) handleAudio(ctx context.Context, msg *events.Message) er
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertMediaEvent(analytics.MediaEvent{
-			TraceID: src.TraceID, Channel: "audio",
-			EventType: src.EventType, PositionMs: src.PositionMs,
-			Timestamp: src.Timestamp,
-		})
+	if err := c.store.InsertMediaEvent(ctx, &analytics.MediaEvent{
+		TraceID: src.TraceID, Channel: "audio",
+		EventType: src.EventType, PositionMs: src.PositionMs,
+		Timestamp: src.Timestamp,
+	}); err != nil {
+		c.log.Error("insert audio media event", "error", err, "trace_id", src.TraceID)
 	}
 	return msg.Ack()
 }
