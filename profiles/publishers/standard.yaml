@@ -43,6 +43,18 @@ publishers:
         floor_price: 0.30
         page_url: "https://m.daily-news.com/article/123"
         categories: [IAB12]
+      # Video pre-roll on long-form article pages. Realistic video
+      # floors are $10–$30 CPM; seed values are tuned just above the
+      # display tier so the auction still clears with the seeded
+      # campaigns' video bids.
+      - id: pl-news-article-preroll
+        name: "Article Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 3.00
+        page_url: "https://daily-news.com/article/123"
+        categories: [IAB12]
 
   - id: pub-tech-review
     name: "Tech Review"
@@ -87,6 +99,17 @@ publishers:
         width: 300
         height: 250
         floor_price: 2.00
+        page_url: "https://sports-daily.com/live"
+        categories: [IAB17]
+      # Live-game pre-roll. Premium video tier — sports inventory
+      # commands the highest video CPMs in real markets. Floor
+      # capped so the seeded campaigns can still clear.
+      - id: pl-sport-live-preroll
+        name: "Live Game Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 4.00
         page_url: "https://sports-daily.com/live"
         categories: [IAB17]
       - id: pl-sport-pregame-billboard
