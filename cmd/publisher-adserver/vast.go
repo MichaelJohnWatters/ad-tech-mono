@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
@@ -238,7 +239,11 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 			ClickTracking: []string{clickURL + "&ev=click-tracking"},
 		},
 		Pricing: &vast.Pricing{
-			Model:    defaultStr2(winner.BidModel, "cpm"),
+			// VAST 4.x XSD enumerates Pricing/@model as CPM|CPC|CPV|CPA
+			// (uppercase). Strict parsers (IMA) reject lowercase values
+			// with vast=900 / inner=6 even though most reference VAST
+			// samples in the wild are lowercase.
+			Model:    strings.ToUpper(defaultStr2(winner.BidModel, "cpm")),
 			Currency: defaultStr2(winner.Currency, "USD"),
 			Value:    vast.Price(winner.ClearingPrice),
 		},

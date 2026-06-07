@@ -49,7 +49,8 @@ func TestBuildLinearAd_Video_Roundtrips(t *testing.T) {
 	}
 	s := string(xmlBytes)
 	for _, want := range []string{
-		`<VAST version="4.2">`,
+		`xsi:noNamespaceSchemaLocation="vast.xsd"`,
+		`version="4.2"`,
 		`<Ad id="ad-1">`,
 		`<AdSystem version="1.0">ad-tech-mono</AdSystem>`,
 		`<UniversalAdId idRegistry="ad-tech-mono">ad-1</UniversalAdId>`,
