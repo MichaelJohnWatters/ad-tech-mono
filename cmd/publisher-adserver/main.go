@@ -155,7 +155,7 @@ func main() {
 		prebidServersFn: prebidServersFn,
 		pub:             pub,
 	}))
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL))
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh

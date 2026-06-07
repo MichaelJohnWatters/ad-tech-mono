@@ -19,15 +19,18 @@ import (
 // of these; the bid handler iterates them in process. IDs are UUIDs stored
 // as their string text form — keeps Postgres, NATS, logs, and the in-memory
 // cache uniform without adding 16-byte parsing on the hot path.
-// CampaignCreative is one size variant attached to a line item. The DSP
-// bidder picks the entry whose Width × Height matches the bid request's
-// banner.w / banner.h before submitting a bid; campaigns with no matching
-// size simply no_bid on that request. Loaded from line_item_creatives ⋈
-// creatives at warm-cache time.
+// CampaignCreative is one variant attached to a line item. For display
+// it's a size; for video / audio it's a (format + duration + media URL).
+// The DSP bidder filters by these fields before submitting a bid —
+// campaigns with no matching creative simply no_bid on that request.
+// Loaded from line_item_creatives ⋈ creatives at warm-cache time.
 type CampaignCreative struct {
-	ID     string // creatives.id (UUID)
-	Width  int
-	Height int
+	ID       string // creatives.id (UUID)
+	Format   string // "display" / "video" / "audio"
+	Width    int
+	Height   int
+	Duration int    // seconds; video / audio creatives only
+	MediaURL string // video / audio media file URL (creatives.asset_url)
 }
 
 type Campaign struct {

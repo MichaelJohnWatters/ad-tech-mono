@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
@@ -43,8 +45,7 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceSSP)
-	sc := config.Setup(constants.ServiceSSP, log)
-	config.PublishSchemaWithURL(sc.Cfg.Get("database.url", ""), constants.ServiceSSP, sspSchema, log)
+	sc := config.Setup(constants.ServiceSSP, sspSchema, log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
@@ -73,7 +74,7 @@ func main() {
 	// and stamps user.ext.segments on the outbound OpenRTB. Nil-tolerant —
 	// if Postgres is unreachable the SSP keeps serving without segments.
 	l2 := connectRedis(cfg, log)
-	audienceStore, audienceStop := openAudienceStore(cfg, l2, log)
+	audienceStore, audiencePreloader, audienceStop := openAudienceStore(cfg, l2, log)
 	lc.OnShutdown("audience-store", func(_ context.Context) error { audienceStop(); return nil })
 
 	// Readiness: placement cache must have loaded at least once. The SSP
@@ -88,6 +89,11 @@ func main() {
 		}
 		return nil
 	})
+
+	// Secrets warm cache — same shape DSP uses for management-endpoint auth.
+	secretsCache := secrets.Start(context.Background(), cfg, clk, log, constants.ServiceSSP)
+	lc.OnShutdown("secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
 
 	metrics := middleware.NewMetrics(constants.ServiceSSP)
 
@@ -108,7 +114,12 @@ func main() {
 	if bus != nil {
 		lc.OnShutdown("ssp-mgmt-bus", func(ctx context.Context) error { return bus.Close() })
 	}
-	mux.HandleFunc(routes.SSPPlacements, func(w http.ResponseWriter, r *http.Request) {
+	// Management CRUD endpoints wrap with AuthAPIKey — operators present
+	// X-API-Key, validated against the secrets warm cache. The visitor-
+	// facing serve endpoints below stay open since they're called by
+	// browsers and need no per-call credentials (those use HMAC instead).
+	auth := middleware.AuthAPIKey(secretsCache, log)
+	placementsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -123,16 +134,21 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc(routes.SSPPlacements+"/", placementByIDHandler(mgmtDB, bus, log))
-	mux.HandleFunc(routes.SSPPublishers, publishersListHandler(mgmtDB, log))
+	mux.Handle(routes.SSPPlacements, auth(placementsHandler))
+	mux.Handle(routes.SSPPlacements+"/", auth(http.HandlerFunc(placementByIDHandler(mgmtDB, bus, log))))
+	mux.Handle(routes.SSPPublishers, auth(http.HandlerFunc(publishersListHandler(mgmtDB, log))))
 
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(placementCache))
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(placementCache, secretsCache.Cache))
+		if audiencePreloader != nil {
+			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
+		}
 	}
 
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL))
+	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, debugEnabledFn))
 	adServerURL := cfg.Get("ssp.adserver_url", routes.DefaultAdServerURL)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, debugEnabledFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -163,35 +179,27 @@ func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) 
 	return c
 }
 
+// pickPlacementLoader returns a self-healing warm.Loader. Lazy-opens
+// Postgres on first LoadAll and reconnects after any error so the SSP
+// picks up placements automatically if Postgres was unreachable at
+// boot (see also pkg/cache/warm.RetryingLoader doc comment).
 func pickPlacementLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgres.PlacementRow] {
 	dbURL := cfg.Get("database.url", "")
-	if dbURL == "" {
-		log.Warn("database.url not set, placement cache will be empty")
-		return emptyPlacementLoader{}
+	return &warm.RetryingLoader[postgres.PlacementRow]{
+		Log:   log,
+		KeyFn: func(r postgres.PlacementRow) string { return r.ID },
+		Construct: func() (warm.Loader[postgres.PlacementRow], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.PlacementLoader{Store: store}, nil
+		},
 	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Warn("postgres open failed", "error", err)
-		return emptyPlacementLoader{}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("postgres ping failed", "error", err)
-		_ = db.Close()
-		return emptyPlacementLoader{}
-	}
-	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
-	log.Info("postgres connected for placement loader")
-	return &postgres.PlacementLoader{Store: store}
 }
-
-type emptyPlacementLoader struct{}
-
-func (emptyPlacementLoader) LoadAll(_ context.Context) ([]postgres.PlacementRow, error) {
-	return nil, nil
-}
-func (emptyPlacementLoader) KeyOf(r postgres.PlacementRow) string { return r.ID }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	url := cfg.Get("ssp.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
@@ -203,41 +211,40 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-// openAudienceStore returns a Lookup for public segments. Same pattern as
-// the DSP wiring: warm Redis preloader when both DB + L2 are reachable,
-// lazy cache when preload fails, postgres-direct without L2, nil otherwise.
-// Returns the Lookup + a Stop function the caller registers on shutdown.
-func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, func()) {
+// openAudienceStore returns (Lookup, preloader-or-nil, stopFn). The
+// preloader is non-nil only when the warm-preload variant is active —
+// see DSP's matching function for the rationale (debug refresh endpoint).
+func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, func()) {
 	dbURL := cfg.Get("database.url", "")
 	if dbURL == "" {
 		log.Warn("database.url not set, audience store disabled")
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Warn("audience store open failed", "error", err)
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		log.Warn("audience store ping failed", "error", err)
 		_ = db.Close()
-		return nil, func() {}
+		return nil, nil, func() {}
 	}
 	if l2 == nil {
 		log.Info("audience store connected (postgres-direct, no L2 cache)")
-		return audiencepg.New(db), func() { _ = db.Close() }
+		return audiencepg.New(db), nil, func() { _ = db.Close() }
 	}
 	interval := cfg.GetDuration("audience.preload_interval", 30*time.Second)
 	ttl := cfg.GetDuration("audience.cache_ttl", 90*time.Second)
 	pre := audpreload.New(audpreload.Config{DB: db, L2: l2, Interval: interval, TTL: ttl, Log: log})
 	if err := pre.Start(context.Background()); err != nil {
 		log.Warn("audience preloader start failed, falling back to lazy cache", "error", err)
-		return audcached.New(audiencepg.New(db), l2, ttl, log), func() { _ = db.Close() }
+		return audcached.New(audiencepg.New(db), l2, ttl, log), nil, func() { _ = db.Close() }
 	}
 	log.Info("audience store connected (redis warm preload)", "interval", interval, "ttl", ttl)
-	return pre, func() { pre.Stop(); _ = db.Close() }
+	return pre, pre, func() { pre.Stop(); _ = db.Close() }
 }
 
 // connectRedis returns a real Redis L2 cache if reachable, falling back
@@ -246,7 +253,7 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 // whether the service is run alongside Redis or in a Redis-less unit
 // test environment.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", "localhost:6379")
+	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
 	pwd := cfg.Get("redis.password", "")
 	db := cfg.GetInt("redis.db", 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -278,11 +285,15 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string, debugEnabledFn func() bool) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
 	userID := r.URL.Query().Get("user_id")
+	// channel lets the publisher-adserver tell us "this is a video
+	// request" so we build a Video imp instead of a Banner. Defaults
+	// to display when omitted so existing callers keep their shape.
+	channel := r.URL.Query().Get("channel")
 
 	if placementExt == "" {
 		placementExt = "pl-news-mpu"
@@ -326,7 +337,37 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		},
 		TMax: 100,
 	}
-	if p.Format == "display" || p.Format == "banner" || p.Format == "" {
+	switch {
+	case channel == "video":
+		// Standard pre-roll request: HTTP-progressive MP4, VAST 4.x
+		// protocols, 5–30s duration window covers our seeded creatives.
+		// 640x360 dims signal a small-screen instream slot; the seeded
+		// video creatives produce the same dimensions so the DSP's
+		// format filter accepts them. Plcmt=1 (instream with audio)
+		// is the most common video placement type.
+		bidReq.Imp[0].Video = &openrtb.Video{
+			Mimes:       []string{"video/mp4", "video/webm"},
+			Protocols:   []int{2, 3, 5, 6, 7}, // VAST 2-4.2
+			W:           640,
+			H:           360,
+			MinDuration: 5,
+			MaxDuration: 30,
+			Linearity:   1, // linear (pre/mid/post-roll)
+			Plcmt:       1, // instream with audio
+			Skip:        1,
+			SkipAfter:   5,
+			SkipMin:     5,
+			API:         []int{7}, // OMID 1
+		}
+	case channel == "audio":
+		bidReq.Imp[0].Audio = &openrtb.Audio{
+			Mimes:       []string{"audio/mpeg", "audio/mp4"},
+			Protocols:   []int{1, 2}, // DAAST 1.0, DAAST 1.0 wrapper
+			MinDuration: 10,
+			MaxDuration: 60,
+			Feed:        2, // podcast
+		}
+	case p.Format == "display" || p.Format == "banner" || p.Format == "":
 		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
 	}
 	if geo != "" {
@@ -369,11 +410,14 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		return auctionContext{}, false
 	}
 	exReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
-	// Propagate the inbound X-Dev-Slow-DSPs so the pub sim's dev toggle
-	// reaches the exchange (and on to specific DSPs). Real publisher
-	// requests don't set this header so prod is unaffected.
-	if v := r.Header.Get("X-Dev-Slow-DSPs"); v != "" {
-		exReq.Header.Set("X-Dev-Slow-DSPs", v)
+	// Propagate the inbound X-Dev-Slow-DSPs only when debug endpoints are
+	// enabled. Real publisher requests don't set this header so prod is
+	// effectively unaffected, but defence-in-depth: prod with the flag
+	// off won't pass it through even if a malicious upstream injects it.
+	if debugEnabledFn() {
+		if v := r.Header.Get("X-Dev-Slow-DSPs"); v != "" {
+			exReq.Header.Set("X-Dev-Slow-DSPs", v)
+		}
 	}
 	tracing.InjectHTTP(ctx, exReq)
 	resp, err := http.DefaultClient.Do(exReq)
@@ -395,9 +439,9 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, debugEnabledFn)
 		if !ok {
 			return
 		}
@@ -417,19 +461,39 @@ func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.Placemen
 
 // serveAdResponse is what a visitor's ad SDK actually gets back: the
 // rendered HTML and the pixel URLs to fire on render/click/viewability.
-// Deliberately omits winner seat, clearing price, campaign id — those are
-// competitive-info that real OpenRTB never leaks to the browser. The
-// trace_id is included so the dev tool can pivot into Jaeger/Loki for the
-// full server-side picture.
+// ClearingPrice + DealID are included so the publisher-adserver can
+// compare the SSP's auction outcome against external Prebid Server bids
+// when fanning out to multiple demand sources. This DOES leak auction
+// internals to whatever calls /v1/ssp/serve — acceptable because the only
+// real callers today are publisher-adserver (trusted) and the pub sim
+// (dev tool). A future cleanup would add /v1/ssp/serve-internal that
+// exposes price + a public /v1/ssp/serve that hides it; out of scope now.
 type serveAdResponse struct {
-	TraceID        string `json:"trace_id"`
-	NoBid          bool   `json:"nobid,omitempty"`
-	HTML           string `json:"html,omitempty"`
-	ImpressionURL  string `json:"impression_url,omitempty"`
-	ClickURL       string `json:"click_url,omitempty"`
-	ViewabilityURL string `json:"viewability_url,omitempty"`
-	Width          int    `json:"width,omitempty"`
-	Height         int    `json:"height,omitempty"`
+	TraceID        string  `json:"trace_id"`
+	NoBid          bool    `json:"nobid,omitempty"`
+	HTML           string  `json:"html,omitempty"`
+	ImpressionURL  string  `json:"impression_url,omitempty"`
+	ClickURL       string  `json:"click_url,omitempty"`
+	ViewabilityURL string  `json:"viewability_url,omitempty"`
+	Width          int     `json:"width,omitempty"`
+	Height         int     `json:"height,omitempty"`
+	ClearingPrice  float64 `json:"clearing_price,omitempty"`
+	DealID         string  `json:"deal_id,omitempty"`
+	// Video / audio bids skip the HTML render and ship the raw winner
+	// fields the publisher-adserver needs to build VAST / DAAST. The
+	// VAST builder lives in publisher-adserver (pkg/vast) rather than
+	// here so the SSP stays format-agnostic.
+	Channel          string  `json:"channel,omitempty"`
+	CreativeID       string  `json:"creative_id,omitempty"`
+	CampaignID       string  `json:"campaign_id,omitempty"`
+	PlacementID      string  `json:"placement_id,omitempty"`
+	PublisherID      string  `json:"publisher_id,omitempty"`
+	AdvertiserID     string  `json:"advertiser_id,omitempty"`
+	AdvertiserDomain string  `json:"advertiser_domain,omitempty"`
+	BidModel         string  `json:"bid_model,omitempty"`
+	Currency         string  `json:"currency,omitempty"`
+	DurationSeconds  int     `json:"duration_seconds,omitempty"`
+	MediaURL         string  `json:"media_url,omitempty"`
 }
 
 // serveAdHandler is the realistic publisher-visitor endpoint. The SSP runs
@@ -440,9 +504,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL string, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, debugEnabledFn)
 		if !ok {
 			return
 		}
@@ -460,6 +524,38 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 		// Winner picked — call the ad server to render. Browser never sees
 		// these IDs/prices in our response; only the resulting HTML.
 		winner := ac.BidResp.SeatBid[0].Bid[0]
+
+		// Video / audio short-circuit: no HTML to render, just return
+		// the winner's media URL + duration + advertiser fields so the
+		// publisher-adserver can build VAST. Tracker URLs are signed
+		// inside publisher-adserver too, not here — keeps the SSP
+		// format-agnostic and avoids duplicating the macros plumbing.
+		if ch := r.URL.Query().Get("channel"); ch == "video" || ch == "audio" {
+			advDomain := ""
+			if len(winner.ADomain) > 0 {
+				advDomain = winner.ADomain[0]
+			}
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(serveAdResponse{
+				TraceID:          ac.TraceID,
+				Channel:          ch,
+				CreativeID:       winner.CrID,
+				CampaignID:       winner.CID,
+				PlacementID:      ac.Placement.ID,
+				PublisherID:      ac.Placement.PublisherID,
+				AdvertiserID:     ac.BidResp.SeatBid[0].Seat,
+				AdvertiserDomain: advDomain,
+				BidModel:         winner.BidModel,
+				ClearingPrice:    winner.Price,
+				Currency:         ac.BidResp.Cur,
+				Width:            winner.W,
+				Height:           winner.H,
+				DurationSeconds:  winner.Dur,
+				MediaURL:         winner.MediaURL,
+				DealID:           winner.DealID,
+			})
+			return
+		}
 		serveReq := models.ServeRequest{
 			TraceID:       ac.TraceID,
 			CampaignID:    winner.CID,
@@ -467,6 +563,7 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			PlacementID:   ac.Placement.ID,
 			PublisherID:   ac.Placement.PublisherID,
 			AdvertiserID:  ac.BidResp.SeatBid[0].Seat,
+			BidModel:      winner.BidModel,
 			ClearingPrice: winner.Price,
 			Currency:      ac.BidResp.Cur,
 			SiteDomain:    ac.Placement.PublisherDomain,
@@ -518,6 +615,8 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			ViewabilityURL: sr.ViewabilityURL,
 			Width:          ac.Placement.Width,
 			Height:         ac.Placement.Height,
+			ClearingPrice:  winner.Price,
+			DealID:         winner.DealID,
 		})
 	}
 }
@@ -534,6 +633,25 @@ func deviceTypeInt(s string) int {
 		return 5
 	default:
 		return 2
+	}
+}
+
+// audienceRefreshHandler — same shape as the DSP version. Forces a sync
+// preload so e2e tests' segment inserts are visible without waiting for
+// the 30s tick. Gated by debug.endpoints_enabled at the caller.
+func audienceRefreshHandler(pre *audpreload.Preloader, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		start := time.Now()
+		if err := pre.Refresh(ctx); err != nil {
+			log.Warn("audience refresh failed", "error", err)
+			http.Error(w, "refresh failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"refreshed":true,"duration_ms":` +
+			strconv.FormatInt(time.Since(start).Milliseconds(), 10) + `}`))
 	}
 }
 

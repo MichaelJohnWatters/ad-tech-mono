@@ -86,11 +86,13 @@ campaigns:
         USA: 20
         JPN: 35
         GBR: 10
-    # Mobile-only — MPU + mobile banner + half-page.
+    # Mobile-only display + a 15s video for in-app instream demos.
     creatives:
       - { id: c2-cr-003, width: 300, height: 250 }
       - { id: c2-cr-003-mobile, width: 320, height: 50 }
       - { id: c2-cr-003-halfpage, width: 300, height: 600 }
+      - { id: c2-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "https://storage.googleapis.com/interactive-media-ads/media/big_buck_bunny.mp4" }
 
   - id: c2-004
     account_id: dsp-perf-media
@@ -111,9 +113,12 @@ campaigns:
       geo_country:
         USA: 30
         GBR: 20
-    # B2B SaaS — MPU + leaderboard + sky + half-page.
+    # B2B SaaS — MPU + leaderboard + sky + half-page + 30s explainer
+    # video for mid-roll on long-form content.
     creatives:
       - { id: c2-cr-004, width: 300, height: 250 }
       - { id: c2-cr-004-leader, width: 728, height: 90 }
       - { id: c2-cr-004-sky, width: 160, height: 600 }
       - { id: c2-cr-004-halfpage, width: 300, height: 600 }
+      - { id: c2-cr-004-video-30s, format: video, width: 640, height: 360, duration: 30,
+          media_url: "https://storage.googleapis.com/interactive-media-ads/media/ima-tutorial.mp4" }

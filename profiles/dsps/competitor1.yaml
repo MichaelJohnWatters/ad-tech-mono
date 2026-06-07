@@ -57,13 +57,19 @@ campaigns:
       device:
         desktop: 15
     # Luxury auto — premium desktop placements (billboard, leaderboard,
-    # half-page, sky); skips mobile banner intentionally.
+    # half-page, sky); skips mobile banner intentionally. Two video
+    # variants for instream pre-roll auctions: 15s standard slot + 30s
+    # premium pod slot.
     creatives:
       - { id: c1-cr-002, width: 300, height: 250 }
       - { id: c1-cr-002-leader, width: 728, height: 90 }
       - { id: c1-cr-002-billboard, width: 970, height: 250 }
       - { id: c1-cr-002-halfpage, width: 300, height: 600 }
       - { id: c1-cr-002-sky, width: 160, height: 600 }
+      - { id: c1-cr-002-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "https://storage.googleapis.com/interactive-media-ads/media/android.mp4" }
+      - { id: c1-cr-002-video-30s, format: video, width: 640, height: 360, duration: 30,
+          media_url: "https://storage.googleapis.com/interactive-media-ads/media/ima-tutorial.mp4" }
 
   - id: c1-003
     account_id: agency-omnicom

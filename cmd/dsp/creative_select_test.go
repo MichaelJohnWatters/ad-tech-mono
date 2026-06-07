@@ -64,3 +64,66 @@ func TestSelectCreativeForSize(t *testing.T) {
 		}
 	})
 }
+
+func TestSelectCreativeForRequest_VideoMatching(t *testing.T) {
+	c := &models.Campaign{
+		Creatives: []models.CampaignCreative{
+			{ID: "mpu", Format: "display", Width: 300, Height: 250},
+			{ID: "vid-15s", Format: "video", Width: 640, Height: 360, Duration: 15, MediaURL: "https://x/15.mp4"},
+			{ID: "vid-30s", Format: "video", Width: 640, Height: 360, Duration: 30, MediaURL: "https://x/30.mp4"},
+		},
+	}
+
+	t.Run("video request within duration window picks first match", func(t *testing.T) {
+		// MinDuration=5, MaxDuration=20 → only 15s creative fits.
+		m := selectCreativeForRequest(c, "video", 0, 0, 5, 20)
+		if m == nil || m.ID != "vid-15s" {
+			t.Errorf("got %+v, want vid-15s", m)
+		}
+	})
+
+	t.Run("video request with wide window picks first in order", func(t *testing.T) {
+		// 1–60s window: both video creatives qualify; we take the
+		// first in cache order (highest weight).
+		m := selectCreativeForRequest(c, "video", 0, 0, 1, 60)
+		if m == nil || m.ID != "vid-15s" {
+			t.Errorf("got %+v, want vid-15s", m)
+		}
+	})
+
+	t.Run("video duration below window → no match", func(t *testing.T) {
+		// Window 31–60s excludes both video creatives.
+		if m := selectCreativeForRequest(c, "video", 0, 0, 31, 60); m != nil {
+			t.Errorf("got %+v, want nil (both video creatives below 31s min)", m)
+		}
+	})
+
+	t.Run("display request ignores video creatives", func(t *testing.T) {
+		m := selectCreativeForRequest(c, "display", 300, 250, 0, 0)
+		if m == nil || m.ID != "mpu" {
+			t.Errorf("got %+v, want mpu", m)
+		}
+	})
+
+	t.Run("video creative missing MediaURL is skipped", func(t *testing.T) {
+		// Defensive: a half-seeded video row (no media URL) must not
+		// be returned as a bid candidate — the SSP would build a VAST
+		// with an empty <MediaFile> and the player would fail.
+		c2 := &models.Campaign{
+			Creatives: []models.CampaignCreative{
+				{ID: "bad-vid", Format: "video", Duration: 15, MediaURL: ""},
+			},
+		}
+		if m := selectCreativeForRequest(c2, "video", 0, 0, 1, 30); m != nil {
+			t.Errorf("got %+v, expected nil for video creative without MediaURL", m)
+		}
+	})
+
+	t.Run("no creatives slice + display request + size 0 falls back to legacy ID", func(t *testing.T) {
+		legacy := &models.Campaign{CreativeID: "only-cr"}
+		m := selectCreativeForRequest(legacy, "display", 0, 0, 0, 0)
+		if m == nil || m.ID != "only-cr" {
+			t.Errorf("got %+v, want only-cr from CreativeID fallback", m)
+		}
+	})
+}
