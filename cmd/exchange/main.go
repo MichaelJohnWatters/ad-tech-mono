@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,7 +41,7 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceExchange)
-	sc := config.Setup(constants.ServiceExchange, log)
+	sc := config.Setup(constants.ServiceExchange, exchangeSchema, log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
@@ -58,21 +57,38 @@ func main() {
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	config.PublishSchemaWithURL(cfg.Get("database.url", ""), constants.ServiceExchange, exchangeSchema, log)
+	knobs := NewKnobs(sc)
 	port := cfg.Get("exchange.port", routes.PortExchange)
-	channel := cfg.Get("exchange.channel", constants.ChannelAll)
-	bidTimeout := cfg.GetDuration("exchange.bid_timeout", 500*time.Millisecond)
-	dspEndpoints := strings.Split(cfg.Get("exchange.dsp_endpoints", routes.DefaultDSPURL+",http://localhost:"+routes.PortDSPComp1+",http://localhost:"+routes.PortDSPComp2), ",")
+	// dspEndpointsFn reads the in-memory config map per auction (cheap;
+	// it's a sync.RWMutex-guarded map lookup, not a Postgres query). The
+	// freshness story: the config manager polls Postgres every 30s and
+	// also re-polls on adtech.cache.invalidate.config NATS messages
+	// (broadcast by SetConfigForPod / PUT /v1/config). So a config edit
+	// lands in this map within NATS round-trip time, and every subsequent
+	// auction sees the new value. Empty entries are filtered so a trailing
+	// comma doesn't introduce a phantom endpoint.
+	defaultEndpoints := routes.DefaultDSPURL + ",http://localhost:" + routes.PortDSPComp1 + ",http://localhost:" + routes.PortDSPComp2
+	dspEndpointsFn := func() []string {
+		raw := cfg.Get("exchange.dsp_endpoints", defaultEndpoints)
+		parts := strings.Split(raw, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
 
 	engine := auction.NewEngine(clk)
-	httpClient := &http.Client{Timeout: bidTimeout}
-
-	// React to live config changes
+	// httpClient.Timeout is the belt-and-braces fallback if the per-request
+	// context deadline doesn't fire. Live-updated on bid_timeout edits so
+	// the value never drifts from the auction-handler context deadline.
+	httpClient := &http.Client{Timeout: knobs.BidTimeout.Value()}
 	sc.Manager.OnChange("exchange.bid_timeout", func(_, _, newVal string) {
-		if d, err := time.ParseDuration(newVal); err == nil {
-			httpClient.Timeout = d
-			log.Info("bid timeout updated live", "new", newVal)
-		}
+		httpClient.Timeout = knobs.BidTimeout.Value()
+		log.Info("bid timeout updated live", "new", newVal)
 	})
 	adsTxtCache := fraud.NewAdsTxtCache()
 
@@ -127,38 +143,72 @@ func main() {
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
 
-	// Debug: list deals currently in the warm cache
-	mux.HandleFunc("/v1/openrtb/deals", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(dealCache.All())
-	})
-
+	// Debug surface — all behind debug.endpoints_enabled (default true in
+	// dev, expected false in prod overlays). Reads + mutations both gated
+	// so the prod surface is purely the auction/win/loss/Prebid paths.
 	if cfg.GetBool("debug.endpoints_enabled", true) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(dealCache))
+
+		// Dump the active deal warm-cache snapshot.
+		mux.HandleFunc(routes.DebugExchangeDeals, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(dealCache.All())
+		})
+
+		// Smart router inspector. Query params:
+		//   ?preview=true                 — returns the filtered DSP list
+		//                                   SelectDSPs would pick right now
+		//                                   (read-only).
+		//   ?preview=true&channel=display — preview against a specific channel.
+		//   ?reset=true                   — clears the router's learned stats.
+		//                                   Used by e2e tests for a deterministic
+		//                                   training baseline.
+		//   (no params)                   — full stats list (default).
+		mux.HandleFunc(routes.DebugExchangeRouting, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			q := r.URL.Query()
+			if q.Get("reset") == "true" {
+				router.Reset()
+				json.NewEncoder(w).Encode(map[string]any{"reset": true})
+				return
+			}
+			if q.Get("preview") == "true" {
+				channel := q.Get("channel")
+				if channel == "" {
+					channel = knobs.Channel()
+				}
+				selected := router.Preview(channel, dspEndpointsFn())
+				json.NewEncoder(w).Encode(map[string]any{
+					"channel":  channel,
+					"all":      dspEndpointsFn(),
+					"selected": selected,
+				})
+				return
+			}
+			json.NewEncoder(w).Encode(router.Stats())
+		})
 	}
 
-	// Debug: per-DSP routing stats so we can see what the smart router learned
-	mux.HandleFunc("/v1/openrtb/routing", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(router.Stats())
-	})
-
-	// Getter for the live bid_timeout config so the auction handler reads
-	// the current value per request (live config changes apply on next auction
-	// without restarts). Also used as the fan-out context deadline so the
-	// gather loop can early-finish via ctx.Done() once it elapses.
-	bidTimeoutFn := func() time.Duration {
-		return cfg.GetDuration("exchange.bid_timeout", 500*time.Millisecond)
-	}
-	mux.HandleFunc(routes.OpenRTBAuction, auctionHandler(log, clk, engine, httpClient, bidTimeoutFn, dspEndpoints, channel, pub, adsTxtCache, dealCache, router, auctionM))
+	// Auction handler reads bid_timeout via knobs.BidTimeout per request so
+	// UI edits land without a restart (also used as the fan-out context
+	// deadline).
+	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, dealCache, router, auctionM)
+	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	// Prebid Server-compatible bidder endpoint. See pkg/prebid + docs/PLAN.md
+	// → "Prebid Server Integration". Reuses the same auction path with the
+	// inbound floor policy + opaque deal-id logging applied first.
+	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, auction, log))
+	mux.HandleFunc(routes.PrebidSetUID, prebidSetUIDHandler(log))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceExchange)(metrics.Wrap(middleware.CORS(mux)))
 
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
-	log.Info("exchange starting", "port", port, "channel", channel, "dsps", dspEndpoints)
+	log.Info("exchange starting", "port", port, "channel", knobs.Channel(), "dsps", dspEndpointsFn())
 	lifecycle.ServeHTTP(lc, server, log, 30*time.Second)
 }
 
@@ -184,33 +234,28 @@ func startDealCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm
 	return c
 }
 
+// pickDealLoader returns a self-healing warm.Loader. The underlying
+// PostgresLoader is lazy-constructed on first LoadAll and re-constructed
+// after any error, so a service that boots before Postgres is reachable
+// will pick up rows automatically on the next 30s poll instead of being
+// pinned to an empty cache for its lifetime.
 func pickDealLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Deal] {
 	dbURL := cfg.Get("database.url", "")
-	if dbURL == "" {
-		log.Warn("database.url not set, deal cache will be empty")
-		return emptyDealLoader{}
+	return &warm.RetryingLoader[models.Deal]{
+		Log:   log,
+		KeyFn: func(d models.Deal) string { return d.ID },
+		Construct: func() (warm.Loader[models.Deal], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.DealLoader{Store: store}, nil
+		},
 	}
-	db, err := sql.Open("postgres", dbURL)
-	if err != nil {
-		log.Warn("postgres open failed", "error", err)
-		return emptyDealLoader{}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("postgres ping failed", "error", err)
-		_ = db.Close()
-		return emptyDealLoader{}
-	}
-	store, _ := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
-	log.Info("postgres connected for deal loader")
-	return &postgres.DealLoader{Store: store}
 }
-
-type emptyDealLoader struct{}
-
-func (emptyDealLoader) LoadAll(_ context.Context) ([]models.Deal, error) { return nil, nil }
-func (emptyDealLoader) KeyOf(d models.Deal) string                       { return d.ID }
 
 // connectInvalidateBus returns a NATS bus used only for cache invalidates.
 // The auction publisher uses its own bus instance already; this one stays
@@ -234,12 +279,16 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpoints []string, channel string, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		// Read the live channel knob once per request so UI edits to
+		// exchange.channel apply on the next auction without a restart.
+		channel := channelFn()
 
 		var bidReq openrtb.BidRequest
 		if err := json.NewDecoder(r.Body).Decode(&bidReq); err != nil {
@@ -273,6 +322,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// First-time/unseen DSPs get a neutral score and stay in. Heavy no-bid
 		// or timeout patterns drop a DSP for this auction (still gets occasional
 		// traffic via the periodic poll model — see optimise.SmartRouter).
+		dspEndpoints := dspEndpointsFn()
 		selectedEndpoints := router.SelectDSPs(channel, dspEndpoints)
 		if len(selectedEndpoints) == 0 {
 			// Safety floor: if the router would skip everyone (cold start edge
@@ -300,9 +350,14 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		)
 		// Dev-mode: publisher simulator can send a CSV of DSP indexes that
 		// should be deliberately slow this auction, so the UI can demo the
-		// timeout / early-finish behavior. Header is opt-in per request; an
-		// empty value means "all DSPs run normally."
-		slowDSPs := parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
+		// timeout / early-finish behavior. Header is opt-in per request;
+		// gated by debug.endpoints_enabled (read via debugEnabledFn) so
+		// prod ignores it even if an upstream forwarded it. Empty value
+		// means "all DSPs run normally."
+		var slowDSPs map[int]bool
+		if debugEnabledFn() {
+			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
+		}
 
 		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router)
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
@@ -414,17 +469,32 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		if winnerSeat == "" {
 			winnerSeat = winnerBid.DSPID
 		}
+		// Carry the winning bid's creative metadata (W/H/Dur/MediaURL/
+		// ADomain/BidModel) into the response so the SSP / publisher-
+		// adserver doesn't have to re-query the DSP. Critical for the
+		// video path: pubad needs the MediaURL + Duration to build the
+		// VAST without an extra hop.
+		adomain := []string(nil)
+		if winnerBid.AdomainHost != "" {
+			adomain = []string{winnerBid.AdomainHost}
+		}
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,
 			Cur: "USD",
 			SeatBid: []openrtb.SeatBid{{
 				Seat: winnerSeat,
 				Bid: []openrtb.BidObj{{
-					ID:    fmt.Sprintf("win-%s", traceID),
-					ImpID: bidReq.Imp[0].ID,
-					Price: clearingPrice,
-					CID:   winnerBid.CampaignID,
-					CrID:  winnerBid.CreativeID,
+					ID:       fmt.Sprintf("win-%s", traceID),
+					ImpID:    bidReq.Imp[0].ID,
+					Price:    clearingPrice,
+					CID:      winnerBid.CampaignID,
+					CrID:     winnerBid.CreativeID,
+					W:        winnerBid.Width,
+					H:        winnerBid.Height,
+					Dur:      winnerBid.Duration,
+					MediaURL: winnerBid.MediaURL,
+					ADomain:  adomain,
+					BidModel: winnerBid.BidModel,
 					// Deal ID flows into the response so SSPs/tools see which
 					// deal the auction cleared under. The auction handler
 					// computed this above (winningDealID); reusing here keeps
@@ -472,10 +542,13 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 
 		// Record the win for the smart router using the winner's endpoint URL
 		// (looked up from the bid records). This feeds back into SelectDSPs
-		// for future auctions.
+		// for future auctions. Also bump the Prometheus wins counter using
+		// the same endpoint label so the dashboard can chart bids vs wins
+		// per DSP on the same axis.
 		for _, rec := range bidRecords {
 			if rec.Bid.DSPID == winnerBid.DSPID {
 				router.RecordWin(channel, rec.Endpoint)
+				am.auctionsWonTotal.WithLabelValues(rec.Endpoint).Inc()
 				break
 			}
 		}
@@ -703,14 +776,27 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 					// Seat is the advertiser/account UUID set by the DSP. We
 					// use it for deal allowlist matching; ADomain is the creative
 					// landing domain and used elsewhere for safety/blocklists.
+					adomain := ""
+					if len(b.ADomain) > 0 {
+						adomain = b.ADomain[0]
+					}
+					bm := b.BidModel
+					if bm == "" {
+						bm = "cpm"
+					}
 					bid := auction.Bid{
 						DSPID:        dspID,
 						CampaignID:   b.CID,
 						CreativeID:   b.CrID,
 						Price:        b.Price,
 						Currency:     bidResp.Cur,
-						BidModel:     "cpm",
+						BidModel:     bm,
+						Duration:     b.Dur,
+						Width:        b.W,
+						Height:       b.H,
+						MediaURL:     b.MediaURL,
 						AdvertiserID: sb.Seat,
+						AdomainHost:  adomain,
 						ResponseTime: responseTime,
 					}
 					bids = append(bids, bid)

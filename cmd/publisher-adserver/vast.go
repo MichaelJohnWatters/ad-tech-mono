@@ -1,31 +1,64 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/vast"
 )
 
-// vastHandler serves a VAST 4.2 XML document players can consume to
-// play a pre-roll / mid-roll ad. End-to-end demo wiring for Phase 9 —
-// the response is a real VAST document but the auction it represents
-// is a stub: a single LuxAuto pre-roll creative pointing at a public-
-// CDN sample MP4. Subsequent steps (full DSP video bidding, transcoder
-// output) replace the stubbed bits with the real flow without changing
-// the wire format.
+// sspVideoWinner mirrors the cmd/ssp.serveAdResponse video shape — the
+// SSP returns this when channel=video so we can build VAST without
+// re-running the auction. Subset of the SSP type to keep this file
+// self-contained and avoid a cross-cmd import.
+type sspVideoWinner struct {
+	TraceID          string  `json:"trace_id"`
+	NoBid            bool    `json:"nobid"`
+	Channel          string  `json:"channel"`
+	CreativeID       string  `json:"creative_id"`
+	CampaignID       string  `json:"campaign_id"`
+	PlacementID      string  `json:"placement_id"`
+	PublisherID      string  `json:"publisher_id"`
+	AdvertiserID     string  `json:"advertiser_id"`
+	AdvertiserDomain string  `json:"advertiser_domain"`
+	BidModel         string  `json:"bid_model"`
+	Currency         string  `json:"currency"`
+	ClearingPrice    float64 `json:"clearing_price"`
+	Width            int     `json:"width"`
+	Height           int     `json:"height"`
+	DurationSeconds  int     `json:"duration_seconds"`
+	MediaURL         string  `json:"media_url"`
+	DealID           string  `json:"deal_id"`
+}
+
+// vastHandler serves a VAST 4.2 document built from a real auction
+// winner. Flow:
 //
-// Tracker URLs in the VAST are built via pkg/adserving.Build* — same
-// HMAC-signed shape display creatives use, so quartile beacons and the
-// click URL flow through the existing tracker dedup + signature gates.
-// The player firing AdComplete results in a /v1/t/view request the
-// tracker records exactly like an MPU viewability beacon.
-func vastHandler(log *slog.Logger, trackerURL string) http.HandlerFunc {
+//   1. Browser/IMA fetches /v1/pubad/video/vast?placement_id=...
+//   2. We call SSP /v1/ssp/serve with channel=video — SSP runs the
+//      auction (exchange → DSP fan-out), picks the winner, and returns
+//      the bid metadata (creative ID, media URL, duration, advertiser
+//      domain, etc.) as JSON.
+//   3. We construct the signed tracker URLs locally using the winner's
+//      identifiers in a MacroContext — same HMAC + exp signing display
+//      creatives use, so the existing tracker pipeline covers video
+//      unchanged.
+//   4. pkg/vast assembles the LinearSpec into VAST XML and we ship it.
+//
+// On any failure (SSP unreachable, no bid, missing media URL) we fall
+// back to a static demo VAST so the simulator never sees a broken
+// player. The failure reason gets logged but the response stays valid.
+func vastHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -34,101 +67,244 @@ func vastHandler(log *slog.Logger, trackerURL string) http.HandlerFunc {
 		}
 		reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
-		// MacroContext drives the signed tracker URLs. CampaignID /
-		// CreativeID / etc. are stub values for now (step 86 demo wiring);
-		// the full DSP video flow will populate these from the winning bid
-		// once it exists.
+		placementID := r.URL.Query().Get("placement_id")
+		if placementID == "" {
+			placementID = "pl-sport-mpu" // demo default
+		}
+
+		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID)
+		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
+			if err != nil {
+				reqLog.Warn("video auction failed, serving demo VAST", "error", err)
+			} else if winner == nil || winner.NoBid {
+				reqLog.Info("video auction: no bid, serving demo VAST")
+			} else {
+				reqLog.Warn("winner had empty MediaURL, serving demo VAST", "crid", winner.CreativeID)
+			}
+			writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			return
+		}
+
+		// Use the SSP's trace ID once the auction has actually run —
+		// keeps all downstream beacons (impression, quartile, click)
+		// on the same span tree as the auction itself.
+		auctionTrace := winner.TraceID
+		if auctionTrace == "" {
+			auctionTrace = traceID
+		}
+
 		macroCtx := adserving.MacroContext{
-			AuctionID:    traceID,
-			AuctionPrice: 14.50,
-			Currency:     "USD",
-			CampaignID:   "demo-video-li",
-			CreativeID:   "demo-video-cr",
-			PlacementID:  r.URL.Query().Get("placement_id"),
-			PublisherID:  "demo-pub",
-			AdvertiserID: "demo-luxauto",
-			BidModel:     "cpm",
-			Width:        640,
-			Height:       360,
+			AuctionID:    auctionTrace,
+			AuctionPrice: winner.ClearingPrice,
+			Currency:     defaultStr2(winner.Currency, "USD"),
+			CampaignID:   winner.CampaignID,
+			CreativeID:   winner.CreativeID,
+			PlacementID:  winner.PlacementID,
+			PublisherID:  winner.PublisherID,
+			AdvertiserID: winner.AdvertiserID,
+			BidModel:     defaultStr2(winner.BidModel, "cpm"),
+			DealID:       winner.DealID,
+			Width:        winner.Width,
+			Height:       winner.Height,
 			TrackerURL:   trackerURL,
-			LandingURL:   "http://localhost:8080/dev/landing/luxauto",
+			LandingURL:   landingForDomain(winner.AdvertiserDomain),
 			URLTTL:       time.Hour,
 		}
 
-		impURL := adserving.BuildImpressionURL(macroCtx)
-		clickURL := adserving.BuildClickURL(macroCtx)
-		// Quartile / start / complete beacons all reuse the viewability
-		// URL with an &ev= suffix so the tracker can branch on the
-		// event in one handler. The sig covers the original params; the
-		// appended ev is unsigned which is fine — events are publisher-
-		// observable anyway and the dedup gate handles replay.
-		viewURL := adserving.BuildViewabilityURL(macroCtx)
-		beacon := func(ev string) string {
-			sep := "?"
-			if i := indexByte(viewURL, '?'); i >= 0 {
-				sep = "&"
-			}
-			return viewURL + sep + "ev=" + ev
-		}
-
-		spec := vast.LinearSpec{
-			AdID:       traceID,
-			AdSystem:   "ad-tech-mono",
-			AdTitle:    "LuxAuto Pre-Roll Demo",
-			Advertiser: "luxauto.com",
-			Duration:   15 * time.Second,
-			// Sample MP4 from Google's public ad sample CDN. The transcoder
-			// step (Phase 9 step 85) will replace this with our own hosted
-			// renditions; for the demo this gives the player something
-			// real to render without depending on local file uploads.
-			MediaFiles: []vast.MediaFile{{
-				Delivery: "progressive",
-				Type:     "video/mp4",
-				Bitrate:  800,
-				Width:    640,
-				Height:   360,
-				URI:      "https://storage.googleapis.com/interactive-media-ads/media/android.mp4",
-			}},
-			Trackers: vast.LinearTrackers{
-				Impression:    []string{impURL},
-				Start:         []string{beacon("start")},
-				FirstQuartile: []string{beacon("firstQuartile")},
-				Midpoint:      []string{beacon("midpoint")},
-				ThirdQuartile: []string{beacon("thirdQuartile")},
-				Complete:      []string{beacon("complete")},
-				Mute:          []string{beacon("mute")},
-				Pause:         []string{beacon("pause")},
-				Resume:        []string{beacon("resume")},
-				Skip:          []string{beacon("skip")},
-				Fullscreen:    []string{beacon("fullscreen")},
-			},
-			Click: vast.ClickSpec{
-				ClickThrough:  clickURL,
-				ClickTracking: []string{clickURL + "&ev=click-tracking"},
-			},
-			Pricing: &vast.Pricing{
-				Model:    "cpm",
-				Currency: "USD",
-				Value:    macroCtx.AuctionPrice,
-			},
-		}
-
+		spec := buildVASTSpec(winner, macroCtx)
 		xmlBytes, err := vast.BuildLinearAd(spec)
 		if err != nil {
 			reqLog.Error("vast build failed", "error", err)
 			http.Error(w, "vast build failed", http.StatusInternalServerError)
 			return
 		}
-		reqLog.Info("vast served", "trace_id", traceID, "duration_s", int(spec.Duration/time.Second))
+		reqLog.Info("video bid served",
+			"trace_id", auctionTrace,
+			"creative", winner.CreativeID,
+			"advertiser", winner.AdvertiserDomain,
+			"duration_s", winner.DurationSeconds,
+			"price", winner.ClearingPrice)
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(xmlBytes)
 	}
 }
 
+// fetchVideoWinner calls SSP /v1/ssp/serve?channel=video to run the
+// auction and parses the winner JSON. Returns nil on no-bid; returns an
+// error only on transport / decode failure (a no-bid is a valid outcome,
+// not an error).
+func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string) (*sspVideoWinner, error) {
+	q := url.Values{
+		"placement_id": []string{placementID},
+		"channel":      []string{"video"},
+		"geo":          []string{"USA"},
+		"device":       []string{"desktop"},
+	}
+	target := sspURL + routes.SSPServe + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build ssp request: %w", err)
+	}
+	tracing.InjectHTTP(ctx, req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ssp call: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("ssp body read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ssp returned %d: %s", resp.StatusCode, string(body))
+	}
+	var winner sspVideoWinner
+	if err := json.Unmarshal(body, &winner); err != nil {
+		return nil, fmt.Errorf("ssp decode: %w", err)
+	}
+	if winner.NoBid {
+		return &winner, nil
+	}
+	return &winner, nil
+}
+
+// buildVASTSpec turns the SSP winner + a fully-populated MacroContext
+// into a LinearSpec the pkg/vast builder can render. Trackers are
+// constructed via the existing macros helpers so the HMAC + exp wiring
+// matches display.
+func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast.LinearSpec {
+	impURL := adserving.BuildImpressionURL(macroCtx)
+	clickURL := adserving.BuildClickURL(macroCtx)
+	viewURL := adserving.BuildViewabilityURL(macroCtx)
+	beacon := func(ev string) string {
+		sep := "?"
+		if indexByte(viewURL, '?') >= 0 {
+			sep = "&"
+		}
+		return viewURL + sep + "ev=" + ev
+	}
+
+	durationSec := winner.DurationSeconds
+	if durationSec <= 0 {
+		durationSec = 15
+	}
+	width := winner.Width
+	if width == 0 {
+		width = 640
+	}
+	height := winner.Height
+	if height == 0 {
+		height = 360
+	}
+
+	advTitle := winner.AdvertiserDomain
+	if advTitle == "" {
+		advTitle = "Video Ad"
+	}
+
+	return vast.LinearSpec{
+		AdID:       macroCtx.AuctionID,
+		AdSystem:   "ad-tech-mono",
+		AdTitle:    advTitle,
+		Advertiser: winner.AdvertiserDomain,
+		Duration:   time.Duration(durationSec) * time.Second,
+		MediaFiles: []vast.MediaFile{{
+			Delivery: "progressive",
+			Type:     "video/mp4",
+			Bitrate:  800,
+			Width:    width,
+			Height:   height,
+			URI:      winner.MediaURL,
+		}},
+		Trackers: vast.LinearTrackers{
+			Impression:    []string{impURL},
+			Start:         []string{beacon("start")},
+			FirstQuartile: []string{beacon("firstQuartile")},
+			Midpoint:      []string{beacon("midpoint")},
+			ThirdQuartile: []string{beacon("thirdQuartile")},
+			Complete:      []string{beacon("complete")},
+			Mute:          []string{beacon("mute")},
+			Pause:         []string{beacon("pause")},
+			Resume:        []string{beacon("resume")},
+			Skip:          []string{beacon("skip")},
+			Fullscreen:    []string{beacon("fullscreen")},
+		},
+		Click: vast.ClickSpec{
+			ClickThrough:  clickURL,
+			ClickTracking: []string{clickURL + "&ev=click-tracking"},
+		},
+		Pricing: &vast.Pricing{
+			Model:    defaultStr2(winner.BidModel, "cpm"),
+			Currency: defaultStr2(winner.Currency, "USD"),
+			Value:    winner.ClearingPrice,
+		},
+	}
+}
+
+// writeStubVAST is the fallback path: same shape as before the
+// auction-driven flow, used when SSP is unreachable or there's no bid.
+// Keeps the demo player from seeing a 500.
+func writeStubVAST(w http.ResponseWriter, reqLog *slog.Logger, trackerURL, traceID, placementID string) {
+	macroCtx := adserving.MacroContext{
+		AuctionID:    traceID,
+		AuctionPrice: 14.50,
+		Currency:     "USD",
+		CampaignID:   "demo-video-li",
+		CreativeID:   "demo-video-cr",
+		PlacementID:  placementID,
+		PublisherID:  "demo-pub",
+		AdvertiserID: "demo-luxauto",
+		BidModel:     "cpm",
+		Width:        640,
+		Height:       360,
+		TrackerURL:   trackerURL,
+		LandingURL:   "http://localhost:8080/dev/landing/luxauto",
+		URLTTL:       time.Hour,
+	}
+	spec := buildVASTSpec(&sspVideoWinner{
+		TraceID:          traceID,
+		Channel:          "video",
+		CreativeID:       "demo-video-cr",
+		CampaignID:       "demo-video-li",
+		PlacementID:      placementID,
+		AdvertiserDomain: "luxauto.com",
+		BidModel:         "cpm",
+		Currency:         "USD",
+		ClearingPrice:    14.50,
+		Width:            640,
+		Height:           360,
+		DurationSeconds:  15,
+		MediaURL:         "https://storage.googleapis.com/interactive-media-ads/media/android.mp4",
+	}, macroCtx)
+	xmlBytes, err := vast.BuildLinearAd(spec)
+	if err != nil {
+		reqLog.Error("stub vast build failed", "error", err)
+		http.Error(w, "vast build failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(xmlBytes)
+}
+
+// landingForDomain maps an advertiser domain to the corresponding
+// /dev/landing/{slug} mock URL — matches what the display flow does
+// via cmd/seed.brandSlugFromDomain. Inlined here so this file stays
+// self-contained.
+func landingForDomain(domain string) string {
+	if domain == "" {
+		return "http://localhost:8080/dev/landing/default"
+	}
+	slug := domain
+	if i := indexByte(slug, '.'); i > 0 {
+		slug = slug[:i]
+	}
+	return "http://localhost:8080/dev/landing/" + slug
+}
+
 // indexByte is strings.IndexByte without the strings import in this
-// tiny file. Keeps the imports minimal — the only other strings call
-// would warrant pulling the package in.
+// file. Keeps the imports minimal.
 func indexByte(s string, c byte) int {
 	for i := 0; i < len(s); i++ {
 		if s[i] == c {
@@ -136,4 +312,11 @@ func indexByte(s string, c byte) int {
 		}
 	}
 	return -1
+}
+
+func defaultStr2(s, dflt string) string {
+	if s == "" {
+		return dflt
+	}
+	return s
 }

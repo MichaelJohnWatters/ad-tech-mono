@@ -51,16 +51,28 @@ type CampaignConfig struct {
 	Modifiers      *ModifiersYAML `yaml:"modifiers,omitempty"`
 }
 
-// CreativeYAML is one size-specific creative under a line item. Domain
-// optionally overrides the parent campaign's creative_domain (so a
-// single line item could mix brands in theory; in practice every entry
-// usually shares the parent's domain). Format defaults to "display".
+// CreativeYAML is one creative variant under a line item.
+//
+// For display creatives: Width, Height define the slot size; the seed
+// inserter writes inline themed HTML or wraps a Minio-hosted SVG based
+// on the size split. Format defaults to "display".
+//
+// For video / audio creatives: set Format to "video" or "audio",
+// MediaURL to the MP4/WebM/MP3 URL the player should fetch, and
+// Duration to the playback length in seconds. Width/Height stay set on
+// video so a 640x360 creative matches a 640x360 video slot — the
+// player respects those even for letterboxing.
+//
+// Domain optionally overrides the parent campaign's creative_domain
+// (every entry in practice shares the parent's domain).
 type CreativeYAML struct {
-	ID     string `yaml:"id"`
-	Width  int    `yaml:"width"`
-	Height int    `yaml:"height"`
-	Domain string `yaml:"domain,omitempty"`
-	Format string `yaml:"format,omitempty"`
+	ID       string `yaml:"id"`
+	Width    int    `yaml:"width"`
+	Height   int    `yaml:"height"`
+	Domain   string `yaml:"domain,omitempty"`
+	Format   string `yaml:"format,omitempty"`    // "display" (default), "video", "audio"
+	MediaURL string `yaml:"media_url,omitempty"` // video/audio creatives only — URL the player fetches
+	Duration int    `yaml:"duration,omitempty"`  // seconds; video/audio only
 }
 
 type TargetingYAML struct {

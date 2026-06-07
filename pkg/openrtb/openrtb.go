@@ -279,4 +279,11 @@ type BidObj struct {
 	// bill-immediately in the billing engine. Standard OpenRTB has no
 	// concept of "what you're bidding on"; this is platform-internal.
 	BidModel string `json:"bm,omitempty"`
+	// MediaURL is a non-standard extension carrying the video/audio
+	// MediaFile URL from the DSP through the exchange back to the SSP.
+	// Standard OpenRTB expects the DSP to put the full VAST XML in AdM,
+	// but our DSPs don't generate VAST — they just ship the media URL
+	// and the publisher-adserver assembles the VAST. Empty for display
+	// bids.
+	MediaURL string `json:"media,omitempty"`
 }

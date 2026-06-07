@@ -76,7 +76,10 @@ func materialiseCreatives(c CampaignConfig) []CreativeYAML {
 			if domain == "" {
 				domain = c.CreativeDomain
 			}
-			out = append(out, CreativeYAML{ID: id, Width: w, Height: h, Domain: domain, Format: cv.Format})
+			out = append(out, CreativeYAML{
+				ID: id, Width: w, Height: h, Domain: domain,
+				Format: cv.Format, MediaURL: cv.MediaURL, Duration: cv.Duration,
+			})
 		}
 		return out
 	}
@@ -318,16 +321,34 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 				domain = c.CreativeDomain
 			}
 			landing := landingURLFor(in.landingURLBase, domain)
-			html := themedCreativeHTML(cv.ID, domain)
-			if useAssetForSize(cv.Width, cv.Height) && in.creativeAssetBase != "" {
-				key := creativeAssetByTheme(domain, cv.Width, cv.Height)
-				assetURL := in.creativeAssetBase + "/" + key
-				html = creativeAssetHTML(assetURL)
+			format := cv.Format
+			if format == "" {
+				format = "display"
+			}
+
+			// Video/audio: write media URL to asset_url, duration to
+			// duration_seconds; html_content is empty so DSP knows
+			// it's a non-display creative. Display creatives keep the
+			// existing inline-HTML / Minio-asset split.
+			var html, assetURL string
+			var durationPtr any
+			if format == "video" || format == "audio" {
+				assetURL = cv.MediaURL
+				if cv.Duration > 0 {
+					durationPtr = cv.Duration
+				}
+			} else {
+				html = themedCreativeHTML(cv.ID, domain)
+				if useAssetForSize(cv.Width, cv.Height) && in.creativeAssetBase != "" {
+					key := creativeAssetByTheme(domain, cv.Width, cv.Height)
+					assetURL = in.creativeAssetBase + "/" + key
+					html = creativeAssetHTML(assetURL)
+				}
 			}
 			const crQ = `
 INSERT INTO creatives (
-  id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'approved', now(), now())
+  id, account_id, name, format, width, height, landing_url, html_content, asset_url, duration_seconds, review_status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   format = EXCLUDED.format,
@@ -335,12 +356,10 @@ ON CONFLICT (id) DO UPDATE SET
   height = EXCLUDED.height,
   landing_url = EXCLUDED.landing_url,
   html_content = EXCLUDED.html_content,
+  asset_url = EXCLUDED.asset_url,
+  duration_seconds = EXCLUDED.duration_seconds,
   updated_at = now()`
-			format := cv.Format
-			if format == "" {
-				format = "display"
-			}
-			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, html); err != nil {
+			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, html, assetURL, durationPtr); err != nil {
 				return fmt.Errorf("creatives insert (%s): %w", cv.ID, err)
 			}
 

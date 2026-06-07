@@ -628,10 +628,22 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		}
 
 		floor := 0.0
-		var reqW, reqH int
+		var reqW, reqH, reqMinDur, reqMaxDur int
+		reqFormat := "display"
 		if len(bidReq.Imp) > 0 {
 			floor = bidReq.Imp[0].BidFloor
-			if bidReq.Imp[0].Banner != nil {
+			switch {
+			case bidReq.Imp[0].Video != nil:
+				reqFormat = "video"
+				reqW = bidReq.Imp[0].Video.W
+				reqH = bidReq.Imp[0].Video.H
+				reqMinDur = bidReq.Imp[0].Video.MinDuration
+				reqMaxDur = bidReq.Imp[0].Video.MaxDuration
+			case bidReq.Imp[0].Audio != nil:
+				reqFormat = "audio"
+				reqMinDur = bidReq.Imp[0].Audio.MinDuration
+				reqMaxDur = bidReq.Imp[0].Audio.MaxDuration
+			case bidReq.Imp[0].Banner != nil:
 				reqW = bidReq.Imp[0].Banner.W
 				reqH = bidReq.Imp[0].Banner.H
 			}
@@ -652,14 +664,20 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				continue
 			}
 
-			// Size filter: only bid if at least one of this line item's
-			// creatives matches the request banner size. Skips quietly —
-			// the request just isn't valid demand for this campaign.
-			crid := selectCreativeForSize(c, reqW, reqH)
-			if crid == "" {
-				reqLog.Debug("no size-matching creative", "campaign", c.ID, "want", fmt.Sprintf("%dx%d", reqW, reqH))
+			// Creative match: display creatives need a size match, video/
+			// audio creatives need a format + duration-window match. Bid
+			// response carries the matched creative's UUID + dimensions
+			// + duration so the SSP / VAST builder don't have to look
+			// them up again.
+			match := selectCreativeForRequest(c, reqFormat, reqW, reqH, reqMinDur, reqMaxDur)
+			if match == nil {
+				reqLog.Debug("no matching creative",
+					"campaign", c.ID,
+					"want_format", reqFormat,
+					"want", fmt.Sprintf("%dx%d / %d–%ds", reqW, reqH, reqMinDur, reqMaxDur))
 				continue
 			}
+			crid := match.ID
 
 			result := targeting.Evaluate(c.Targeting, tReq)
 			if !result.Matched {
@@ -740,6 +758,10 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 					CrID:     crid,
 					ADomain:  []string{c.CreativeDomain},
 					BidModel: c.BidModel,
+					W:        match.Width,
+					H:        match.Height,
+					Dur:      match.Duration,
+					MediaURL: match.MediaURL,
 				}
 			}
 		}
@@ -771,6 +793,61 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			"size", fmt.Sprintf("%dx%d", reqW, reqH),
 		)
 	}
+}
+
+// selectCreativeForRequest picks a creative variant that matches the
+// current bid request. Returns nil when no variant fits — the caller
+// no_bids on this request rather than serving a mismatched creative.
+//
+// Match rules:
+//   - display: format=="display" and Width×Height equals reqW×reqH
+//   - video:   format=="video" and Duration is within [minDur, maxDur]
+//              (W/H are NOT required to match; players letterbox/scale
+//              video creatives to fit slots, and our seed video sizes
+//              are coarse — 640x360 standard renders fine in any video
+//              slot at HD or below)
+//   - audio:   format=="audio" and Duration within [minDur, maxDur]
+//
+// For zero-or-missing constraints (e.g. the request didn't set a
+// max duration) we treat the constraint as "any" rather than zero.
+func selectCreativeForRequest(c *models.Campaign, format string, reqW, reqH, minDur, maxDur int) *models.CampaignCreative {
+	for i := range c.Creatives {
+		cv := &c.Creatives[i]
+		cvFmt := cv.Format
+		if cvFmt == "" {
+			cvFmt = "display"
+		}
+		if cvFmt != format {
+			continue
+		}
+		switch format {
+		case "display":
+			if reqW == 0 || reqH == 0 {
+				return cv
+			}
+			if cv.Width == reqW && cv.Height == reqH {
+				return cv
+			}
+		case "video", "audio":
+			if minDur > 0 && cv.Duration < minDur {
+				continue
+			}
+			if maxDur > 0 && cv.Duration > maxDur {
+				continue
+			}
+			if cv.MediaURL == "" {
+				continue
+			}
+			return cv
+		}
+	}
+	// Display: legacy CreativeID fallback when no Creatives are loaded
+	// AND no specific size was requested. Matches the historical
+	// selectCreativeForSize behaviour so nothing else regresses.
+	if format == "display" && reqW == 0 && reqH == 0 && len(c.Creatives) == 0 && c.CreativeID != "" {
+		return &models.CampaignCreative{ID: c.CreativeID, Format: "display"}
+	}
+	return nil
 }
 
 // selectCreativeForSize returns the UUID of a creative whose declared

@@ -82,8 +82,14 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) cr ON true
 LEFT JOIN LATERAL (
-    SELECT jsonb_agg(jsonb_build_object('id', c.id::text, 'w', c.width, 'h', c.height)
-                     ORDER BY lic.weight DESC, c.created_at ASC) AS creatives_json
+    SELECT jsonb_agg(jsonb_build_object(
+        'id', c.id::text,
+        'fmt', c.format,
+        'w', c.width,
+        'h', c.height,
+        'dur', COALESCE(c.duration_seconds, 0),
+        'media', COALESCE(c.asset_url, '')
+    ) ORDER BY lic.weight DESC, c.created_at ASC) AS creatives_json
     FROM line_item_creatives lic
     JOIN creatives c ON c.id = lic.creative_id
     WHERE lic.line_item_id = li.id
@@ -163,16 +169,26 @@ func parseCreativesJSON(raw string) []models.CampaignCreative {
 		return nil
 	}
 	var rows []struct {
-		ID string `json:"id"`
-		W  int    `json:"w"`
-		H  int    `json:"h"`
+		ID    string `json:"id"`
+		Fmt   string `json:"fmt"`
+		W     int    `json:"w"`
+		H     int    `json:"h"`
+		Dur   int    `json:"dur"`
+		Media string `json:"media"`
 	}
 	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
 		return nil
 	}
 	out := make([]models.CampaignCreative, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, models.CampaignCreative{ID: r.ID, Width: r.W, Height: r.H})
+		out = append(out, models.CampaignCreative{
+			ID:       r.ID,
+			Format:   r.Fmt,
+			Width:    r.W,
+			Height:   r.H,
+			Duration: r.Dur,
+			MediaURL: r.Media,
+		})
 	}
 	return out
 }

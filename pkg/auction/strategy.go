@@ -49,7 +49,12 @@ type Bid struct {
 	Currency     string
 	BidModel     string // cpm, cpc, cpa, vcpm, cpcv, cpi
 	Duration     int    // seconds (for video/audio)
+	Width        int    // creative pixel width
+	Height       int    // creative pixel height
+	MediaURL     string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
 	AdvertiserID string
+	AdomainHost  string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
+	                   // advertiser landing domain into the winner response without re-querying the DSP
 	Category     string // IAB category for competitive separation
 	DealID       string // if bidding on a specific deal
 	ResponseTime time.Duration
