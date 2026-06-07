@@ -131,6 +131,52 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	return SignURL(rawURL, DefaultSigningKey)
 }
 
+// BuildVideoEventURL builds a signed URL for a single video player
+// event (start, firstQuartile, midpoint, thirdQuartile, complete, mute,
+// pause, resume, skip, fullscreen). Mirrors BuildViewabilityURL's
+// param set so the tracker handler can read trace_id + campaign + etc.
+// for attribution, but routes to /v1/t/video so the downstream picks
+// up a typed VideoEvent on adtech.events.video instead of conflating
+// with display viewability events.
+//
+// event is part of the signed param set so a re-signed URL with a
+// different event token would invalidate. Empty event → omitted; the
+// tracker handler treats that as a generic video event with empty
+// EventType, which is what the existing /v1/t/video?event= contract
+// already supports.
+func BuildVideoEventURL(ctx MacroContext, event string) string {
+	params := url.Values{}
+	params.Set("tid", ctx.AuctionID)
+	params.Set("cid", ctx.CampaignID)
+	params.Set("crid", ctx.CreativeID)
+	params.Set("pid", ctx.PlacementID)
+	params.Set("pubid", ctx.PublisherID)
+	if event != "" {
+		params.Set("event", event)
+	}
+	setExp(params, ctx.URLTTL)
+	rawURL := ctx.TrackerURL + "/v1/t/video?" + params.Encode()
+	return SignURL(rawURL, DefaultSigningKey)
+}
+
+// BuildAudioEventURL is the audio analogue — same shape, different
+// path. Used for podcast / streaming-radio quartile + interaction
+// beacons in the audio sim flow.
+func BuildAudioEventURL(ctx MacroContext, event string) string {
+	params := url.Values{}
+	params.Set("tid", ctx.AuctionID)
+	params.Set("cid", ctx.CampaignID)
+	params.Set("crid", ctx.CreativeID)
+	params.Set("pid", ctx.PlacementID)
+	params.Set("pubid", ctx.PublisherID)
+	if event != "" {
+		params.Set("event", event)
+	}
+	setExp(params, ctx.URLTTL)
+	rawURL := ctx.TrackerURL + "/v1/t/audio?" + params.Encode()
+	return SignURL(rawURL, DefaultSigningKey)
+}
+
 // setExp adds an exp=<unix-seconds> param to a tracker-URL param set
 // when ttl > 0. Covered by the HMAC because it's added before SignURL,
 // so any rewrite invalidates the sig. The tracker rejects requests with
