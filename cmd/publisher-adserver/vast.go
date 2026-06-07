@@ -176,13 +176,13 @@ func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string) 
 func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast.LinearSpec {
 	impURL := adserving.BuildImpressionURL(macroCtx)
 	clickURL := adserving.BuildClickURL(macroCtx)
-	viewURL := adserving.BuildViewabilityURL(macroCtx)
+	// Quartile + interaction beacons route through /v1/t/video so the
+	// tracker publishes typed VideoEvent on adtech.events.video — not
+	// conflated with display viewability on adtech.events.view.
+	// The event token is part of the signed URL so a replay with a
+	// different event invalidates the HMAC.
 	beacon := func(ev string) string {
-		sep := "?"
-		if indexByte(viewURL, '?') >= 0 {
-			sep = "&"
-		}
-		return viewURL + sep + "ev=" + ev
+		return adserving.BuildVideoEventURL(macroCtx, ev)
 	}
 
 	durationSec := winner.DurationSeconds

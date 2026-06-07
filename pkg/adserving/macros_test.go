@@ -85,6 +85,58 @@ func TestBuildClickURL(t *testing.T) {
 	}
 }
 
+// Video / audio event URLs route through the typed tracker endpoints
+// (/v1/t/video, /v1/t/audio) so downstream consumers pick up
+// VideoEvent / AudioEvent on adtech.events.video|audio instead of
+// confusing video quartiles with display viewability events. The
+// event token is part of the signed param set; replaying with a
+// rewritten event invalidates the signature.
+func TestBuildVideoEventURL(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID:   "trace-abc",
+		CampaignID:  "li-1",
+		CreativeID:  "cr-1",
+		PlacementID: "pl-1",
+		PublisherID: "pub-1",
+		TrackerURL:  "http://tracker:8083",
+	}
+	signed := BuildVideoEventURL(ctx, "firstQuartile")
+	if !strings.Contains(signed, "/v1/t/video?") {
+		t.Errorf("URL must route through /v1/t/video, got %s", signed)
+	}
+	if !strings.Contains(signed, "event=firstQuartile") {
+		t.Errorf("URL must carry event=firstQuartile, got %s", signed)
+	}
+	u, _ := url.Parse(signed)
+	if !ValidateSignature(u.Path, u.Query(), DefaultSigningKey) {
+		t.Errorf("video event URL did not validate: %s", signed)
+	}
+	// Tampering with the event token must invalidate the signature.
+	q := u.Query()
+	q.Set("event", "complete") // rewrite without re-signing
+	if ValidateSignature(u.Path, q, DefaultSigningKey) {
+		t.Errorf("rewriting event= without re-signing must invalidate (URL=%s)", signed)
+	}
+}
+
+func TestBuildAudioEventURL(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID:   "trace-abc",
+		CampaignID:  "li-1",
+		CreativeID:  "cr-1",
+		PlacementID: "pl-1",
+		PublisherID: "pub-1",
+		TrackerURL:  "http://tracker:8083",
+	}
+	signed := BuildAudioEventURL(ctx, "complete")
+	if !strings.Contains(signed, "/v1/t/audio?") {
+		t.Errorf("audio URL must route through /v1/t/audio, got %s", signed)
+	}
+	if !strings.Contains(signed, "event=complete") {
+		t.Errorf("audio URL must carry event=complete, got %s", signed)
+	}
+}
+
 func TestSignedURLsCarryExpWhenTTLSet(t *testing.T) {
 	ctx := MacroContext{
 		AuctionID:   "trace-1",

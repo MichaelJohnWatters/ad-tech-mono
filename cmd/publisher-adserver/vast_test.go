@@ -157,6 +157,22 @@ func TestVASTHandler(t *testing.T) {
 	if !strings.Contains(clickURL, "redir=") {
 		t.Errorf("click URL missing redir= param: %s", clickURL)
 	}
+
+	// Quartile + interaction beacons must route through /v1/t/video
+	// so downstream consumers pick up typed VideoEvent on
+	// adtech.events.video instead of conflating with display
+	// viewability on adtech.events.view. Pin every tracker URI.
+	for _, te := range cr.Linear.TrackingEvents.Tracking {
+		if !strings.Contains(te.URI, "/v1/t/video") {
+			t.Errorf("tracking event %q must route to /v1/t/video, got %s", te.Event, te.URI)
+		}
+		if !strings.Contains(te.URI, "event="+te.Event) {
+			t.Errorf("tracking event %q URL must carry event=%s, got %s", te.Event, te.Event, te.URI)
+		}
+		if !urlIsHMACValid(t, te.URI) {
+			t.Errorf("tracking event %q URL did not validate: %s", te.Event, te.URI)
+		}
+	}
 }
 
 // urlIsHMACValid parses a tracker URL and replays the signature check
