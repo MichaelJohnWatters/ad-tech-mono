@@ -268,6 +268,14 @@ func main() {
 	mux.Handle(routes.ProxyCreatives,
 		middleware.CORS(middleware.StripPrefix(routes.ProxyCreatives,
 			middleware.ReverseProxy(creativesStoreURL, log))))
+	// Media proxy for the video sim's sample MP4s. Forwards
+	// /v1/media/* → test-videos.co.uk so the MediaFile URL is
+	// same-origin as the sim page, eliminating CORS as a variable
+	// when IMA SDK fetches the MP4. Range requests + content-type
+	// pass through unchanged.
+	mux.Handle("/v1/media/",
+		middleware.CORS(middleware.StripPrefix("/v1/media/",
+			middleware.ReverseProxy("https://test-videos.co.uk/vids/", log))))
 	mux.Handle(routes.ProxyAdServer, middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))

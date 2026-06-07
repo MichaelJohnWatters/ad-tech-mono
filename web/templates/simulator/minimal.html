@@ -3578,8 +3578,13 @@
                     logVideoEvent('Content resumed', '', 'success');
                 });
                 videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                    logVideoEvent('AD_ERROR', String(err.getError()), 'error');
-                    try { contentVideo.play(); } catch (e) {}
+                    var e = err.getError();
+                    var detail = 'code=' + e.getErrorCode() +
+                                 ' type=' + e.getType() +
+                                 ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
+                                 ' msg=' + e.getMessage();
+                    logVideoEvent('AD_ERROR', detail, 'error');
+                    try { contentVideo.play(); } catch (e2) {}
                 });
 
                 try {
@@ -3592,8 +3597,13 @@
                 }
             }, false);
             videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                logVideoEvent('AdsLoader error', String(err.getError()), 'error');
-                try { contentVideo.play(); } catch (e) {}
+                var e = err.getError();
+                var detail = 'code=' + e.getErrorCode() +
+                             ' type=' + e.getType() +
+                             ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
+                             ' msg=' + e.getMessage();
+                logVideoEvent('AdsLoader error', detail, 'error');
+                try { contentVideo.play(); } catch (ex) {}
             }, false);
             contentVideo.addEventListener('ended', function(){ if (videoAdsLoader) videoAdsLoader.contentComplete(); });
 
