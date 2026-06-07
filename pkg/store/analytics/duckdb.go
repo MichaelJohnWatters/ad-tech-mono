@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
 )
@@ -137,6 +138,22 @@ func (d *DuckDB) createTables() error {
 			schema_version  INTEGER DEFAULT 1,
 			timestamp       TIMESTAMP NOT NULL
 		)`,
+		// One row per player-fired engagement (start / firstQuartile /
+		// midpoint / thirdQuartile / complete / mute / pause / resume /
+		// skip / fullscreen for video; analogous events for audio).
+		// Channel column distinguishes video vs audio so a single
+		// table serves both consumers — keeps the rollup queries
+		// uniform (the channel column is just another filter).
+		// position_ms is the player position when the event fired
+		// (when the SDK reports it; some events leave it 0).
+		`CREATE TABLE IF NOT EXISTS media_events (
+			trace_id       VARCHAR NOT NULL,
+			channel        VARCHAR NOT NULL,
+			event_type     VARCHAR NOT NULL,
+			position_ms    BIGINT,
+			schema_version INTEGER DEFAULT 1,
+			timestamp      TIMESTAMP NOT NULL
+		)`,
 	}
 
 	for _, stmt := range statements {
@@ -203,6 +220,31 @@ func (d *DuckDB) InsertView(ctx context.Context, e *ViewEvent) error {
 		e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID,
 		e.AccountID, e.DurationMs, e.PercentVisible, e.AreaPx, e.IABViewable,
 		e.SchemaVersion, e.Timestamp)
+	return err
+}
+
+// InsertMediaEvent writes a video / audio engagement row. Reporting
+// calls this for every adtech.events.video / .audio NATS message;
+// without it those events were silently acked + dropped in DuckDB
+// deployments (only MemoryStore persisted them).
+func (d *DuckDB) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {
+	if e == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	ts := e.Timestamp
+	if ts.IsZero() {
+		// Defensive: reporting backfills now() when the publisher left
+		// the timestamp zero, but write paths should keep that
+		// invariant too so a queried row always has a valid time.
+		ts = time.Now()
+	}
+	_, err := d.db.ExecContext(ctx,
+		`INSERT INTO media_events (trace_id, channel, event_type, position_ms, schema_version, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		e.TraceID, e.Channel, e.EventType, e.PositionMs, 1, ts)
 	return err
 }
 

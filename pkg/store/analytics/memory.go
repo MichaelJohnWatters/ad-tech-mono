@@ -338,12 +338,19 @@ func (s *MemoryStore) ServeNoFillsByTrace(traceID string) int {
 	return n
 }
 
-// InsertMediaEvent appends a video/audio engagement record. Called by
-// reporting's adtech.events.video and adtech.events.audio consumers.
-func (s *MemoryStore) InsertMediaEvent(e MediaEvent) {
+// InsertMediaEvent implements the Store interface for video / audio
+// engagement records (called by reporting's adtech.events.video and
+// adtech.events.audio consumers). Context is accepted for interface
+// symmetry; MemoryStore ignores it because the append is always
+// synchronous and never blocks.
+func (s *MemoryStore) InsertMediaEvent(_ context.Context, e *MediaEvent) error {
+	if e == nil {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mediaEvents = append(s.mediaEvents, e)
+	s.mediaEvents = append(s.mediaEvents, *e)
+	return nil
 }
 
 // MediaEventsByTrace counts media events for a trace, optionally filtered
