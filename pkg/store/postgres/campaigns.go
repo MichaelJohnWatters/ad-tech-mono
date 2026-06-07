@@ -77,7 +77,7 @@ JOIN insertion_orders io ON io.id = li.insertion_order_id
 JOIN accounts acc ON acc.id = li.account_id
 LEFT JOIN targeting_rules tr ON tr.line_item_id = li.id
 LEFT JOIN LATERAL (
-    SELECT c.id, c.landing_url
+    SELECT c.id, c.landing_url, c.advertiser_domain
     FROM line_item_creatives lic
     JOIN creatives c ON c.id = lic.creative_id
     WHERE lic.line_item_id = li.id
