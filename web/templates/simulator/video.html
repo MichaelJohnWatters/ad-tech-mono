@@ -35,8 +35,8 @@
 </head>
 <body>
   <header>
-    <h1>Video Simulator — VAST 4.2 pre-roll demo</h1>
-    <p>Loads a sample content video, requests VAST from <code>/v1/pubad/video/vast</code>, plays the pre-roll via Google IMA SDK. Tracker beacons fire through our normal <code>/v1/t/*</code> endpoints.</p>
+    <h1>Video Simulator — VAST 4.2 + VMAP</h1>
+    <p>Loads a sample content video, requests a VAST single-roll or a VMAP pre/mid/post schedule, plays each break via Google IMA SDK. Every break runs its own auction back through SSP → exchange → DSPs. Tracker beacons fire through our normal <code>/v1/t/*</code> endpoints.</p>
   </header>
 
   <main>
@@ -47,8 +47,17 @@
         </video>
         <div id="ad-container"></div>
       </div>
-      <button id="play-btn" class="cta">Play content + pre-roll</button>
-      <button id="skip-content-btn" class="cta" style="background: #6e7681;">Reset</button>
+      <div style="margin: 16px 0 0 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+        <label style="color: #8b949e; font-size: 13px;">
+          Schedule:
+          <select id="schedule-mode" style="margin-left: 6px; background: #1c2532; color: #e6edf3; border: 1px solid #2f3a48; border-radius: 4px; padding: 4px 8px; font-size: 13px;">
+            <option value="vast">Single VAST (pre-roll only)</option>
+            <option value="vmap">VMAP — pre + mid (30s) + post</option>
+          </select>
+        </label>
+        <button id="play-btn" class="cta">Play</button>
+        <button id="skip-content-btn" class="cta" style="background: #6e7681;">Reset</button>
+      </div>
     </section>
 
     <aside>
@@ -114,15 +123,17 @@
       startTime = Date.now();
     }
 
-    // Build the VAST URL the IMA SDK will fetch. The placement_id query
-    // param threads through to the tracker URLs the pubad handler
-    // generates, so the trace tree links the player request back to a
-    // notional placement. trace_id stamp is browser-side just so the
-    // sim has a stable handle to show; the pubad handler generates the
-    // authoritative trace ID inside the VAST.
-    function buildVASTRequestURL() {
+    // Build the ad-tag URL the IMA SDK will fetch — either a single
+    // VAST (pre-roll only, original demo) or a VMAP schedule (pre +
+    // mid-roll at 30s + post-roll, each break runs its own independent
+    // auction back at our VAST endpoint). IMA's AdsRequest happily
+    // accepts either URL as adTagUrl; the SDK auto-detects which one
+    // it got and drives the player accordingly.
+    function buildAdTagURL() {
       var origin = window.location.origin;
-      return origin + '/v1/pubad/video/vast?placement_id=demo-video-mpu&t=' + Date.now();
+      var mode = document.getElementById('schedule-mode').value;
+      var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
+      return origin + path + '?placement_id=demo-video-mpu&t=' + Date.now();
     }
 
     function setupIMA() {
@@ -210,11 +221,12 @@
 
     function startDemo() {
       resetEvents();
-      log('Demo started', 'requesting VAST', 'ad-start');
+      var mode = document.getElementById('schedule-mode').value;
+      log('Demo started', mode === 'vmap' ? 'requesting VMAP schedule' : 'requesting VAST', 'ad-start');
 
       // Show the actual URL we'll hand to IMA for transparency, and
-      // preview the raw VAST XML for the dev panel.
-      lastVASTUrl = buildVASTRequestURL();
+      // preview the raw VAST/VMAP XML for the dev panel.
+      lastVASTUrl = buildAdTagURL();
       vastURLEl.textContent = lastVASTUrl;
       vastURLEl.setAttribute('href', lastVASTUrl);
 
@@ -222,11 +234,14 @@
         .then(function(r) { return r.text(); })
         .then(function(text) {
           vastXMLEl.textContent = text;
-          // Pull a trace ID out of the VAST so the panel can show it.
+          // For single VAST, pull the Ad id from the document; for
+          // VMAP there's no top-level Ad id (the per-break VAST docs
+          // each have their own when they're fetched later by IMA).
           var m = text.match(/<Ad id="([^"]+)"/);
           if (m) traceIdEl.textContent = m[1];
+          else if (mode === 'vmap') traceIdEl.textContent = '(per-break — see fetches)';
         })
-        .catch(function() { vastXMLEl.textContent = '(VAST fetch failed)'; });
+        .catch(function() { vastXMLEl.textContent = '(fetch failed)'; });
 
       setupIMA();
 
