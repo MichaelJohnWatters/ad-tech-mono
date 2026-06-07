@@ -66,7 +66,10 @@ SELECT
     COALESCE(tr.exclude_categories, '{}'),
     COALESCE(tr.bid_modifiers::text, '{}'),
     COALESCE(cr.id::text, '') AS creative_id,
-    COALESCE(SPLIT_PART(cr.landing_url, '/', 3), '') AS creative_domain,
+    -- Brand domain: prefer the explicit advertiser_domain column (set
+    -- by seed); fall back to the host part of landing_url for rows
+    -- that pre-date migration 028.
+    COALESCE(NULLIF(cr.advertiser_domain, ''), SPLIT_PART(cr.landing_url, '/', 3), '') AS creative_domain,
     li.viewability_target_pct,
     COALESCE(cv.creatives_json, '[]')::text AS creatives_json
 FROM line_items li
