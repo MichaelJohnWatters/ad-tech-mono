@@ -275,7 +275,7 @@ func writeStubVAST(w http.ResponseWriter, reqLog *slog.Logger, trackerURL, trace
 		Width:            640,
 		Height:           360,
 		DurationSeconds:  15,
-		MediaURL:         "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_2MB.mp4",
+		MediaURL:         "http://localhost:8080/v1/media/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_2MB.mp4",
 	}, macroCtx)
 	xmlBytes, err := vast.BuildLinearAd(spec)
 	if err != nil {
