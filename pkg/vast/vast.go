@@ -158,18 +158,20 @@ type UniversalAdID struct {
 // Linear is a pre/mid/post-roll video or audio ad — the player blocks
 // content playback until it finishes (or the user skips, if allowed).
 //
-// Field order matters: the IMA SDK parser (and a few other strict
-// VAST 4.x clients) expect the IAB-defined child element order
-// (Duration → AdParameters → MediaFiles → TrackingEvents → VideoClicks).
-// A creative with TrackingEvents before MediaFiles gets rejected as
-// VAST_LOAD_TIMEOUT / Error 6 even when the XML is otherwise valid.
+// Field order matters: the IMA SDK parser (and most other strict
+// VAST 4.x clients) follow the IAB XSD child sequence:
+// Duration → AdParameters → Icons → TrackingEvents → VideoClicks → MediaFiles.
+// MediaFiles is the LAST child, not the second. Putting it earlier
+// (the VAST 2/3 order, which is still common in the wild) trips
+// VAST_LOAD_TIMEOUT / inner=6 in IMA even though xmllint considers
+// the XML well-formed.
 type Linear struct {
 	SkipOffset     string          `xml:"skipoffset,attr,omitempty"` // "HH:MM:SS" or "N%"
 	Duration       Duration        `xml:"Duration"`
 	AdParameters   string          `xml:"AdParameters,omitempty"`
-	MediaFiles     MediaFiles      `xml:"MediaFiles"`
 	TrackingEvents *TrackingEvents `xml:"TrackingEvents,omitempty"`
 	VideoClicks    *VideoClicks    `xml:"VideoClicks,omitempty"`
+	MediaFiles     MediaFiles      `xml:"MediaFiles"`
 }
 
 // TrackingEvents holds the list of (event, URL) beacons the player
