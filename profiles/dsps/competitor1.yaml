@@ -67,9 +67,9 @@ campaigns:
       - { id: c1-cr-002-halfpage, width: 300, height: 600 }
       - { id: c1-cr-002-sky, width: 160, height: 600 }
       - { id: c1-cr-002-video-15s, format: video, width: 640, height: 360, duration: 15,
-          media_url: "https://storage.googleapis.com/interactive-media-ads/media/android.mp4" }
+          media_url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_2MB.mp4" }
       - { id: c1-cr-002-video-30s, format: video, width: 640, height: 360, duration: 30,
-          media_url: "https://storage.googleapis.com/interactive-media-ads/media/ima-tutorial.mp4" }
+          media_url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_5MB.mp4" }
 
   - id: c1-003
     account_id: agency-omnicom

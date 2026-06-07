@@ -3404,12 +3404,15 @@
         // this becomes a query into the placement cache filtered by
         // format.
         var VIDEO_PLACEMENTS = [
-            { value: 'pl-sport-mpu',       label: 'Live Page Pre-roll (Sport)' },
-            { value: 'pl-news-mpu',        label: 'Article Pre-roll (News)' },
-            { value: 'pl-news-leaderboard',label: 'Homepage Pre-roll (News)' },
-            { value: 'pl-news-halfpage',   label: 'Long-form Mid-roll (News)' },
-            { value: 'pl-tech-sidebar',    label: 'Reviews Mid-roll (Tech)' },
-            { value: 'pl-tech-top-leader', label: 'Article Pre-roll (Tech)' }
+            // Dedicated format=video placements seeded in
+            // profiles/publishers/standard.yaml.
+            { value: 'pl-sport-live-preroll',    label: 'Live Game Pre-Roll (Sport, $15 floor)' },
+            { value: 'pl-news-article-preroll',  label: 'Article Pre-Roll (News, $8 floor)' },
+            // Display placements the SSP also accepts as video slots
+            // when channel=video — useful for comparing how display
+            // floors behave under a video bid request.
+            { value: 'pl-sport-mpu',       label: 'Live Page MPU (Sport, display floor)' },
+            { value: 'pl-news-mpu',        label: 'Article MPU (News, display floor)' }
         ];
 
         // Cache the display dropdown's HTML on first channel-switch so
