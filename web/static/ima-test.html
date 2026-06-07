@@ -41,7 +41,11 @@
   </div>
   <div id="log">(events appear here)</div>
 
-  <script src="//imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+  <!-- Debug build of the IMA SDK — same API surface, but prints verbose
+       internal reasoning to the DevTools console. When IMA's public
+       error (vast=900 / inner=6) is too generic to act on, the console
+       output is the only way to see what the SDK actually rejected. -->
+  <script src="//imasdk.googleapis.com/js/sdkloader/ima3_debug.js"></script>
   <script>
     var v = document.getElementById('content-video');
     var ac = document.getElementById('ad-container');
