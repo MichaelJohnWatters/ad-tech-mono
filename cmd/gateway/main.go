@@ -122,15 +122,14 @@ func main() {
 	// manager so the new `dict` FuncMap is available and later phases
 	// can introduce shared layout/component partials without touching
 	// this wiring.
-	mux.HandleFunc("/dev/publisher-simulator", func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "minimal.html", nil)
-	})
-	mux.HandleFunc("/dev/publisher-simulator/minimal", func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "minimal.html", nil)
-	})
-	mux.HandleFunc("/dev/publisher-simulator/video", func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "video.html", nil)
-	})
+	// Publisher simulator is one page (minimal.html, with Display +
+	// Video tabs). The /minimal and trailing-slash URLs are kept as
+	// aliases so existing bookmarks keep working. /video used to be a
+	// separate template; removed once tabs landed in minimal.
+	renderSim := func(w http.ResponseWriter, r *http.Request) { templates.Render(w, "minimal.html", nil) }
+	mux.HandleFunc("/dev/publisher-simulator", renderSim)
+	mux.HandleFunc("/dev/publisher-simulator/", renderSim)
+	mux.HandleFunc("/dev/publisher-simulator/minimal", renderSim)
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})

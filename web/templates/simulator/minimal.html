@@ -3395,6 +3395,47 @@
         // handles the Video tab.
         // ----------------------------------------------------------------
 
+        // Video-channel placement list. Until format=video placements
+        // exist in the seed (placements table format column), the SSP
+        // treats any placement as a video slot when channel=video, so
+        // this list is curated by editorial intent — slots that read
+        // as "video-y" on real publisher pages (live games, article
+        // pre-roll surfaces). Once dedicated video placements land
+        // this becomes a query into the placement cache filtered by
+        // format.
+        var VIDEO_PLACEMENTS = [
+            { value: 'pl-sport-mpu',       label: 'Live Page Pre-roll (Sport)' },
+            { value: 'pl-news-mpu',        label: 'Article Pre-roll (News)' },
+            { value: 'pl-news-leaderboard',label: 'Homepage Pre-roll (News)' },
+            { value: 'pl-news-halfpage',   label: 'Long-form Mid-roll (News)' },
+            { value: 'pl-tech-sidebar',    label: 'Reviews Mid-roll (Tech)' },
+            { value: 'pl-tech-top-leader', label: 'Article Pre-roll (Tech)' }
+        ];
+
+        // Cache the display dropdown's HTML on first channel-switch so
+        // we can swap back to it without re-querying /v1/ssp/placements
+        // (which the page does on load + after auctions).
+        var _displayPlacementsHTML = null;
+
+        function applyPlacementListForChannel(channel) {
+            var sel = document.getElementById('placementSelect');
+            if (!sel) return;
+            if (channel === 'video') {
+                if (_displayPlacementsHTML === null) _displayPlacementsHTML = sel.innerHTML;
+                sel.innerHTML = VIDEO_PLACEMENTS.map(function(p){
+                    return '<option value="' + p.value + '">' + p.label + '</option>';
+                }).join('');
+                // Preserve previous selection where possible so toggling
+                // back and forth doesn't surprise the user.
+                sel.value = VIDEO_PLACEMENTS[0].value;
+            } else {
+                if (_displayPlacementsHTML !== null) {
+                    sel.innerHTML = _displayPlacementsHTML;
+                    _displayPlacementsHTML = null;
+                }
+            }
+        }
+
         function switchChannel(channel) {
             var displayBtn = document.getElementById('tab-display');
             var videoBtn = document.getElementById('tab-video');
@@ -3426,6 +3467,7 @@
                 displayCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
                 videoCtrls.forEach(function(el){ el.style.display = 'none'; });
             }
+            applyPlacementListForChannel(channel);
         }
 
         // playVideoDemo + resetVideoDemo mirror the standalone /video
