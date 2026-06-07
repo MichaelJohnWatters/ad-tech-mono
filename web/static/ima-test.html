@@ -48,13 +48,21 @@
       console.log('[ima-test]', line);
     }
     function errDetail(err) {
+      var e = err && err.getError ? err.getError() : err;
+      if (!e) return 'no error object';
+      var parts = [];
+      // IMA SDK getInnerError() returns a NATIVE Error (not an AdError),
+      // and getVastErrorCode() returns the IAB-defined VAST code — that's
+      // the one we actually need to map back to a fix.
+      try { parts.push('code=' + e.getErrorCode()); } catch (x) { parts.push('code=?'); }
+      try { parts.push('vast=' + e.getVastErrorCode()); } catch (x) {}
+      try { parts.push('type=' + e.getType()); } catch (x) {}
+      try { parts.push('msg="' + e.getMessage() + '"'); } catch (x) {}
       try {
-        var e = err.getError ? err.getError() : err;
-        return 'code=' + e.getErrorCode() +
-               ' type=' + e.getType() +
-               ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
-               ' msg=' + e.getMessage();
-      } catch (x) { return String(err); }
+        var inner = e.getInnerError && e.getInnerError();
+        if (inner) parts.push('inner="' + (inner.message || inner.toString()) + '"');
+      } catch (x) {}
+      return parts.join(' ');
     }
 
     function go() {
