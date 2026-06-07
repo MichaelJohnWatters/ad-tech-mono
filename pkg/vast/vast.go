@@ -18,6 +18,7 @@ package vast
 import (
 	"encoding/xml"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -80,10 +81,37 @@ type AdSystem struct {
 // Pricing is the floor / clearing price expressed inside the VAST. Most
 // players ignore it for actual billing (the exchange's win notice is
 // authoritative) but it's part of the spec and useful for debug.
+//
+// Value is stored as a typed float so callers don't need to format the
+// price themselves, but the XML marshaller rounds to 4 decimal places
+// to keep the printed value clean (Go's default %v would emit
+// floating-point artefacts like "6.864000000000001", which some VAST
+// parsers — including the IMA SDK — reject as malformed).
 type Pricing struct {
-	Model    string  `xml:"model,attr"` // "cpm", "cpc", "cpe", "cpv"
-	Currency string  `xml:"currency,attr"`
-	Value    float64 `xml:",chardata"`
+	Model    string `xml:"model,attr"` // "cpm", "cpc", "cpe", "cpv"
+	Currency string `xml:"currency,attr"`
+	Value    Price  `xml:",chardata"`
+}
+
+// Price is a float64 alias that rounds to 4 decimals on text marshal
+// so the VAST output doesn't carry the trailing precision artefacts
+// Go's default float formatting produces.
+type Price float64
+
+func (p Price) MarshalText() ([]byte, error) {
+	// 4 decimals is the IAB-recommended precision for CPM display
+	// pricing — enough to express sub-cent values while keeping the
+	// output free of floating-point artefacts like 6.864000000000001.
+	return []byte(strconv.FormatFloat(float64(p), 'f', 4, 64)), nil
+}
+
+func (p *Price) UnmarshalText(text []byte) error {
+	f, err := strconv.ParseFloat(string(text), 64)
+	if err != nil {
+		return err
+	}
+	*p = Price(f)
+	return nil
 }
 
 // Impression is a tracking URL the player pings exactly once when the
@@ -123,13 +151,19 @@ type UniversalAdID struct {
 
 // Linear is a pre/mid/post-roll video or audio ad — the player blocks
 // content playback until it finishes (or the user skips, if allowed).
+//
+// Field order matters: the IMA SDK parser (and a few other strict
+// VAST 4.x clients) expect the IAB-defined child element order
+// (Duration → AdParameters → MediaFiles → TrackingEvents → VideoClicks).
+// A creative with TrackingEvents before MediaFiles gets rejected as
+// VAST_LOAD_TIMEOUT / Error 6 even when the XML is otherwise valid.
 type Linear struct {
 	SkipOffset     string          `xml:"skipoffset,attr,omitempty"` // "HH:MM:SS" or "N%"
 	Duration       Duration        `xml:"Duration"`
+	AdParameters   string          `xml:"AdParameters,omitempty"`
+	MediaFiles     MediaFiles      `xml:"MediaFiles"`
 	TrackingEvents *TrackingEvents `xml:"TrackingEvents,omitempty"`
 	VideoClicks    *VideoClicks    `xml:"VideoClicks,omitempty"`
-	MediaFiles     MediaFiles      `xml:"MediaFiles"`
-	AdParameters   string          `xml:"AdParameters,omitempty"`
 }
 
 // TrackingEvents holds the list of (event, URL) beacons the player

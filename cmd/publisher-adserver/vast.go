@@ -237,7 +237,7 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 		Pricing: &vast.Pricing{
 			Model:    defaultStr2(winner.BidModel, "cpm"),
 			Currency: defaultStr2(winner.Currency, "USD"),
-			Value:    winner.ClearingPrice,
+			Value:    vast.Price(winner.ClearingPrice),
 		},
 	}
 }
