@@ -53,13 +53,19 @@ type Ad struct {
 // InLine is a fully-self-contained ad: media files + tracking URLs are
 // embedded directly. The other shape is Wrapper (a VASTAdTagURI redirect
 // to another VAST document), which we don't generate today.
+//
+// Field order matches the IAB VAST 4.x XSD: AdSystem → AdTitle →
+// Impression → Description → Advertiser → Pricing → Creatives. Strict
+// parsers (notably the IMA SDK) reject documents that emit these in
+// a different order — Impression after Pricing produces an
+// AD_LOAD_ERROR with no other diagnostic.
 type InLine struct {
 	AdSystem    AdSystem     `xml:"AdSystem"`
 	AdTitle     string       `xml:"AdTitle"`
+	Impressions []Impression `xml:"Impression"`
 	Description string       `xml:"Description,omitempty"`
 	Advertiser  string       `xml:"Advertiser,omitempty"`
 	Pricing     *Pricing     `xml:"Pricing,omitempty"`
-	Impressions []Impression `xml:"Impression"`
 	Creatives   Creatives    `xml:"Creatives"`
 }
 
