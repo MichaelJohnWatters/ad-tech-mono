@@ -347,19 +347,20 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 			}
 			const crQ = `
 INSERT INTO creatives (
-  id, account_id, name, format, width, height, landing_url, html_content, asset_url, duration_seconds, review_status, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'approved', now(), now())
+  id, account_id, name, format, width, height, landing_url, advertiser_domain, html_content, asset_url, duration_seconds, review_status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'approved', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   format = EXCLUDED.format,
   width = EXCLUDED.width,
   height = EXCLUDED.height,
   landing_url = EXCLUDED.landing_url,
+  advertiser_domain = EXCLUDED.advertiser_domain,
   html_content = EXCLUDED.html_content,
   asset_url = EXCLUDED.asset_url,
   duration_seconds = EXCLUDED.duration_seconds,
   updated_at = now()`
-			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, html, assetURL, durationPtr); err != nil {
+			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, domain, html, assetURL, durationPtr); err != nil {
 				return fmt.Errorf("creatives insert (%s): %w", cv.ID, err)
 			}
 
