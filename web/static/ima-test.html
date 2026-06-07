@@ -44,8 +44,18 @@
   <!-- Debug build of the IMA SDK — same API surface, but prints verbose
        internal reasoning to the DevTools console. When IMA's public
        error (vast=900 / inner=6) is too generic to act on, the console
-       output is the only way to see what the SDK actually rejected. -->
-  <script src="//imasdk.googleapis.com/js/sdkloader/ima3_debug.js"></script>
+       output is the only way to see what the SDK actually rejected.
+
+       HTTPS is explicit (not protocol-relative): the IMA SDK then loads
+       its bridge iframe over HTTPS, which is a *secure context* —
+       required by Chrome's Private Network Access policy for any
+       cross-origin fetch into a private/loopback address (our localhost
+       VAST endpoint). Loading the SDK over HTTP makes the iframe a
+       non-secure context, and Chrome refuses such PNA requests
+       outright regardless of the Access-Control-Allow-Private-Network
+       response header. The page itself can stay HTTP — HTTPS
+       sub-resources in an HTTP page are allowed. -->
+  <script src="https://imasdk.googleapis.com/js/sdkloader/ima3_debug.js"></script>
   <script>
     var v = document.getElementById('content-video');
     var ac = document.getElementById('ad-container');
