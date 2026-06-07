@@ -17,8 +17,20 @@ spec:
         - name: gateway
           image: adtech-gateway
           imagePullPolicy: IfNotPresent
-          ports: [{ containerPort: 8080, name: http }]
+          ports:
+            - { containerPort: 8080, name: http }
+            - { containerPort: 8443, name: https }
+          # TLS cert is mounted from the gateway-tls Secret that Tilt
+          # populates from dev/tls/*.pem on every 'tilt up'. The Secret
+          # is optional — if it isn't created (e.g. mkcert isn't
+          # installed) the volume mount silently uses an empty default
+          # via optional: true, and the gateway's TLS listener gracefully
+          # skips itself when the cert files are missing.
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
           env:
+            - { name: TLS_CERT_FILE, value: "/tls/cert.pem" }
+            - { name: TLS_KEY_FILE,  value: "/tls/key.pem" }
             # Stable pod_id so e2e tests target the pod's config row without
             # discovery (matches local-process POD_NAME=<service>-0 convention).
             - { name: POD_NAME, value: "gateway-0" }
@@ -40,3 +52,8 @@ spec:
           resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
           livenessProbe:  { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 5 }
           readinessProbe: { httpGet: { path: /readyz, port: 8080 }, periodSeconds: 2, failureThreshold: 5 }
+      volumes:
+        - name: tls
+          secret:
+            secretName: gateway-tls
+            optional: true
