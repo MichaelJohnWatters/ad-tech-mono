@@ -3477,6 +3477,36 @@
         // /v1/t/* endpoints display does.
         var videoAdsLoader = null;
         var videoAdsManager = null;
+        var videoTraceID = null;
+
+        // Resolve player dimensions even if the video pane was just
+        // unhidden. clientWidth reads 0 in the layout tick after a
+        // display: change; fall back to the wrap div or a sensible
+        // default so IMA doesn't bail on a 0×0 slot.
+        function playerSize() {
+            var v = document.getElementById('content-video');
+            var wrap = document.getElementById('video-player-wrap');
+            var w = v.clientWidth || (wrap && wrap.clientWidth) || 640;
+            var h = v.clientHeight || (wrap && wrap.clientHeight) || 360;
+            // Aspect-ratio CSS is 16/9 on the wrap; if height didn't
+            // resolve, derive it.
+            if (!h && w) h = Math.round(w * 9 / 16);
+            return { w: w, h: h };
+        }
+
+        // Surface IMA AdEvents into the same debug panel + trace
+        // timeline display uses. Mirrors the existing traceLog()
+        // shape so the two channels read consistently.
+        function logVideoEvent(name, meta, cls) {
+            if (typeof traceLog === 'function') {
+                traceLog('player', name, { detail: meta || '', cls: cls || '' });
+            }
+            if (typeof debugLog === 'function') {
+                var status = cls === 'success' ? 'success' : (cls === 'error' ? 'fail' : 'pending');
+                debugLog([{ label: name, value: meta || '', status: status }]);
+            }
+        }
+
         function playVideoDemo() {
             var contentVideo = document.getElementById('content-video');
             var adContainer = document.getElementById('ad-container');
@@ -3486,8 +3516,21 @@
             var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
             var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) + '&t=' + Date.now();
             preview.textContent = adTagUrl + '\n\n(fetching…)';
+
+            logVideoEvent('Video request', mode.toUpperCase() + ' · ' + placement, 'success');
+
             fetch(adTagUrl).then(function(r){ return r.text(); }).then(function(text){
                 preview.textContent = adTagUrl + '\n\n' + text.substring(0, 2000) + (text.length > 2000 ? '…' : '');
+                // Pull the auction trace_id out of the response so the
+                // trace timeline can stitch player events to the backend
+                // auction. VAST has <Ad id="<tid>">; VMAP has it on the
+                // first inline ad once IMA fetches the break.
+                var m = text.match(/<Ad id="([0-9a-f]{32})"/);
+                if (m) {
+                    videoTraceID = m[1];
+                    logVideoEvent('Auction trace', videoTraceID, 'success');
+                    if (typeof startJaegerPoll === 'function') startJaegerPoll(videoTraceID);
+                }
             }).catch(function(){ preview.textContent = adTagUrl + '\n\n(fetch failed)'; });
 
             var adDisplay = new google.ima.AdDisplayContainer(adContainer, contentVideo);
@@ -3497,23 +3540,65 @@
                 var settings = new google.ima.AdsRenderingSettings();
                 settings.restoreCustomPlaybackStateOnAdBreakComplete = true;
                 videoAdsManager = ev.getAdsManager(contentVideo, settings);
-                // CONTENT_PAUSE_REQUESTED / CONTENT_RESUME_REQUESTED keep
-                // the underlying content paused while ad plays.
-                videoAdsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_PAUSE_REQUESTED, function(){ contentVideo.pause(); });
-                videoAdsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_RESUME_REQUESTED, function(){ try { contentVideo.play(); } catch (e) {} });
-                videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(){ try { contentVideo.play(); } catch (e) {} });
+
+                var E = google.ima.AdEvent.Type;
+                // Wire every player event into the shared debug + trace
+                // panels so the Video flow shows up alongside Display
+                // calls in the same operator surfaces.
+                [
+                    ['LOADED',          E.LOADED,         'success'],
+                    ['STARTED',         E.STARTED,        'success'],
+                    ['IMPRESSION',      E.IMPRESSION,     'success'],
+                    ['FIRST_QUARTILE',  E.FIRST_QUARTILE, ''],
+                    ['MIDPOINT',        E.MIDPOINT,       ''],
+                    ['THIRD_QUARTILE',  E.THIRD_QUARTILE, ''],
+                    ['COMPLETE',        E.COMPLETE,       'success'],
+                    ['CLICK',           E.CLICK,          ''],
+                    ['PAUSED',          E.PAUSED,         ''],
+                    ['RESUMED',         E.RESUMED,        ''],
+                    ['SKIPPED',         E.SKIPPED,        ''],
+                    ['ALL_ADS_COMPLETED',E.ALL_ADS_COMPLETED, 'success'],
+                ].forEach(function(spec) {
+                    videoAdsManager.addEventListener(spec[1], function(e){
+                        var ad = e.getAd && e.getAd();
+                        var meta = ad ? ('#' + ad.getAdId() + ' · ' + ad.getDuration() + 's · ' + ad.getAdvertiserName()) : '';
+                        logVideoEvent(spec[0], meta, spec[2]);
+                    });
+                });
+
+                videoAdsManager.addEventListener(E.CONTENT_PAUSE_REQUESTED, function(){
+                    contentVideo.pause();
+                    logVideoEvent('Content paused for ad', '', 'success');
+                });
+                videoAdsManager.addEventListener(E.CONTENT_RESUME_REQUESTED, function(){
+                    try { contentVideo.play(); } catch (e) {}
+                    logVideoEvent('Content resumed', '', 'success');
+                });
+                videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
+                    logVideoEvent('AD_ERROR', String(err.getError()), 'error');
+                    try { contentVideo.play(); } catch (e) {}
+                });
+
                 try {
-                    videoAdsManager.init(contentVideo.clientWidth, contentVideo.clientHeight, google.ima.ViewMode.NORMAL);
+                    var sz = playerSize();
+                    videoAdsManager.init(sz.w, sz.h, google.ima.ViewMode.NORMAL);
                     videoAdsManager.start();
-                } catch (e) { try { contentVideo.play(); } catch (e2) {} }
+                } catch (e) {
+                    logVideoEvent('IMA init failed', String(e), 'error');
+                    try { contentVideo.play(); } catch (e2) {}
+                }
             }, false);
-            videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(){ try { contentVideo.play(); } catch (e) {} }, false);
+            videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
+                logVideoEvent('AdsLoader error', String(err.getError()), 'error');
+                try { contentVideo.play(); } catch (e) {}
+            }, false);
             contentVideo.addEventListener('ended', function(){ if (videoAdsLoader) videoAdsLoader.contentComplete(); });
 
             var req = new google.ima.AdsRequest();
             req.adTagUrl = adTagUrl;
-            req.linearAdSlotWidth = contentVideo.clientWidth;
-            req.linearAdSlotHeight = contentVideo.clientHeight;
+            var sz = playerSize();
+            req.linearAdSlotWidth = sz.w;
+            req.linearAdSlotHeight = sz.h;
             videoAdsLoader.requestAds(req);
         }
         function resetVideoDemo() {
@@ -3521,8 +3606,10 @@
             try { contentVideo.pause(); } catch (e) {}
             contentVideo.currentTime = 0;
             if (videoAdsManager) { try { videoAdsManager.destroy(); } catch (e) {} videoAdsManager = null; }
+            videoTraceID = null;
             var preview = document.getElementById('video-adtag-preview');
             if (preview) preview.textContent = '(load to populate)';
+            logVideoEvent('Reset', '', '');
         }
     </script>
 
