@@ -297,11 +297,47 @@ func main() {
 		templates.Render(w, "dashboard.html", nil)
 	})
 
+	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(mux))
+
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(mux)),
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
+	}
+
+	// Parallel HTTPS listener — runs only if both TLS_CERT_FILE and
+	// TLS_KEY_FILE point at readable files. Required so Google's IMA
+	// SDK iframe (which mirrors the host page's protocol) loads in a
+	// secure context — Chrome refuses Private Network Access fetches
+	// from non-secure contexts to loopback addresses regardless of any
+	// CORS header. Same handler / routes; only the transport differs.
+	// Best-effort: missing certs log a warning and skip the listener
+	// rather than aborting boot, so prod and CI environments without
+	// mounted certs continue to behave exactly as before.
+	if cert, key := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"); cert != "" && key != "" {
+		if _, errC := os.Stat(cert); errC != nil {
+			log.Warn("tls cert file not readable, https listener disabled", "path", cert, "error", errC)
+		} else if _, errK := os.Stat(key); errK != nil {
+			log.Warn("tls key file not readable, https listener disabled", "path", key, "error", errK)
+		} else {
+			tlsPort := os.Getenv("TLS_PORT")
+			if tlsPort == "" {
+				tlsPort = "8443"
+			}
+			tlsSrv := &http.Server{
+				Addr:         ":" + tlsPort,
+				Handler:      handler,
+				ReadTimeout:  10 * time.Second,
+				WriteTimeout: 30 * time.Second,
+			}
+			go func() {
+				log.Info("gateway https listener starting", "port", tlsPort, "cert", cert)
+				if err := tlsSrv.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
+					log.Error("https listener failed", "error", err)
+				}
+			}()
+		}
 	}
 
 	devMode := "enabled"

@@ -67,3 +67,8 @@ k6-results/
 /ssp
 /tracker
 /pipeline
+
+
+# mkcert-issued localhost certs for the dev gateway's HTTPS listener.
+# Per-developer; never checked in. Regenerate with scripts/setup-tls.sh.
+dev/tls/

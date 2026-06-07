@@ -186,10 +186,38 @@ if dev_mode == 'fast':
         only=['bin/gateway', 'bin/seed', 'web', 'profiles'],
         entrypoint='/app',
         live_update=[sync('bin/gateway', '/app'), sync('bin/seed', '/seed'), sync('web', '/web'), sync('profiles', '/profiles')])
+
+    # ---- Gateway TLS (mkcert-issued localhost cert) ----
+    # Why HTTPS at all: third-party SDKs (Google IMA, etc.) load helper
+    # iframes from public origins (e.g. https://imasdk.googleapis.com).
+    # Chrome's Private Network Access policy refuses fetches from those
+    # iframes to loopback addresses unless the iframe is a *secure
+    # context*, and Google's SDK mirrors the host page's protocol — so
+    # the host page must be HTTPS for the IMA bridge iframe to inherit
+    # secure-context. mkcert issues a cert from a per-user root CA that
+    # the system keychain already trusts, so browsers see no warning.
+    #
+    # setup-tls.sh is idempotent and always exits 0 — if mkcert isn't
+    # installed it prints brew instructions and skips. In that case
+    # the Secret below isn't created, the gateway's `optional: true`
+    # volume silently no-ops, and the HTTPS listener logs a warning and
+    # skips itself (HTTP on 8080 keeps working).
+    local('bash scripts/setup-tls.sh')
+    tls_cert_path = 'dev/tls/localhost.pem'
+    tls_key_path = 'dev/tls/localhost-key.pem'
+    if os.path.exists(tls_cert_path) and os.path.exists(tls_key_path):
+        # Use kubectl create secret generic --dry-run + apply, which is
+        # the canonical k8s pattern for syncing on-disk PEM files into
+        # a Secret without any base64 dance in Starlark.
+        local('kubectl create secret generic gateway-tls -n adtech ' +
+              '--from-file=cert.pem=' + tls_cert_path + ' ' +
+              '--from-file=key.pem=' + tls_key_path + ' ' +
+              '--dry-run=client -o yaml | kubectl apply -f -')
+
     k8s_yaml(['k8s/base/gateway/deployment.yaml', 'k8s/base/gateway/service.yaml', 'k8s/base/gateway/ingress.yaml'])
     k8s_resource('gateway', resource_deps=['gateway-build', 'postgres', 'redis'],
-        port_forwards=['8080:8080'], labels=['services'],
-        links=['http://localhost:8080', 'http://localhost:8080/dev/publisher-simulator', 'http://gateway.adtech.local'])
+        port_forwards=['8080:8080', '8443:8443'], labels=['services'],
+        links=['https://localhost:8443', 'https://localhost:8443/dev/publisher-simulator', 'http://localhost:8080', 'http://gateway.adtech.local'])
 
     # ---- Reporting (STAYS LOCAL — CGO cross-compile blocker) ----
     def ready(port):
