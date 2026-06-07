@@ -114,15 +114,6 @@
         <a href="/dev/trace-explorer">Trace Explorer</a>
         <button class="theme-toggle" onclick="toggleTheme()">☀️</button>
     </div>
-    <!-- Channel tabs: cross-links between display + video pages. Same
-         "publisher simulator" workflow but different ad format; the
-         underlying pages share the auction infra. Templates stay
-         separate (display sim is 3000+ lines) — these are just nav
-         entry points. -->
-    <div style="display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border, #1f2933); background: var(--bg-card, #161b22);">
-      <a href="/dev/publisher-simulator/minimal" style="padding: 12px 20px; text-decoration: none; color: var(--fg, #e6edf3); border-bottom: 2px solid #2d8cf0; font-weight: 600; font-size: 14px;">Display</a>
-      <a href="/dev/publisher-simulator/video" style="padding: 12px 20px; text-decoration: none; color: var(--fg-muted, #8b949e); border-bottom: 2px solid transparent; font-size: 14px;">Video (VAST / VMAP)</a>
-    </div>
     <!-- Observability quick-links. Each opens in a new tab so the pub sim
          workflow isn't interrupted. PromQL links pre-fill useful queries
          tied to the metrics middleware (request_duration_seconds histograms
@@ -277,40 +268,42 @@
             <select id="placementSelect" style="min-width: 280px;">
                 <option value="">Loading placements…</option>
             </select>
-            <button class="btn btn-primary" onclick="loadAd()">Load Ad</button>
-            <button class="btn btn-secondary" onclick="clearAd()">Clear</button>
-            <!-- Prebid mode: switches Load Ad from the realistic
-                 SSP-rendered flow to a Prebid-Server-style call that POSTs
-                 OpenRTB directly to the exchange's /v1/prebid/openrtb2/auction
-                 bidder endpoint. The request is built using the same shape
-                 our Prebid.js adapter (web/static/prebid-adtechmono-adapter.js)
-                 produces, so flipping this toggle is the closest local
-                 simulation of "real Prebid publisher calling us". The
-                 winning bid is rendered as a plain HTML block — no SSP
-                 ad-server render path, no macro substitution. -->
-            <label style="margin-left: 12px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
-                <input type="checkbox" id="prebidMode" onchange="if(this.checked){document.getElementById('pubAdMode').checked=false;}" /> Prebid mode
-            </label>
-            <!-- Publisher-led mode: routes through the publisher ad server
-                 (cmd/publisher-adserver, port 8088) instead of straight to
-                 the SSP. The publisher-adserver arbitrates direct-sold
-                 line items against programmatic (calling the SSP under
-                 the hood), then renders the winner. Mirrors what a real
-                 publisher running GAM / Kevel does. Mutually exclusive
-                 with Prebid mode — picking one auto-unchecks the other. -->
-            <label style="margin-left: 12px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
-                <input type="checkbox" id="pubAdMode" onchange="if(this.checked){document.getElementById('prebidMode').checked=false;}" /> Publisher ad server
-            </label>
-            <!-- Spam load-test: fires N concurrent /v1/ssp/serve requests
-                 across every active placement with rotating geo + device.
-                 Budgets drain via the OpenRTB nurl HTTP path the same way
-                 a single Load Ad does — just at scale. Watch the DSP State
-                 panel for the spent counter ticking up. -->
+
+            <!-- Display channel controls. Hidden when the Video tab is
+                 active. -->
+            <span class="display-only-controls" style="display: inline-flex; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="loadAd()">Load Ad</button>
+                <button class="btn btn-secondary" onclick="clearAd()">Clear</button>
+                <!-- Prebid mode: switches Load Ad from the realistic
+                     SSP-rendered flow to a Prebid-Server-style call that POSTs
+                     OpenRTB directly to the exchange's /v1/prebid/openrtb2/auction
+                     bidder endpoint. -->
+                <label style="margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
+                    <input type="checkbox" id="prebidMode" onchange="if(this.checked){document.getElementById('pubAdMode').checked=false;}" /> Prebid mode
+                </label>
+                <!-- Publisher-led mode: routes through the publisher ad server. -->
+                <label style="margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; font-size: 13px;">
+                    <input type="checkbox" id="pubAdMode" onchange="if(this.checked){document.getElementById('prebidMode').checked=false;}" /> Publisher ad server
+                </label>
+            </span>
+
+            <!-- Video channel controls. Shown when the Video tab is
+                 active. The video player + IMA SDK live in the
+                 sim-content video pane below; these are the request
+                 controls. -->
+            <span class="video-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <label style="font-size: 13px; color: var(--fg, #e6edf3); display: inline-flex; align-items: center; gap: 4px;">
+                    Schedule:
+                    <select id="videoScheduleMode" style="font-size: 13px; padding: 4px 8px;">
+                        <option value="vast">VAST (pre-roll)</option>
+                        <option value="vmap">VMAP (pre + mid + post)</option>
+                    </select>
+                </label>
+                <button class="btn btn-primary" onclick="playVideoDemo()">Play</button>
+                <button class="btn btn-secondary" onclick="resetVideoDemo()">Reset</button>
+            </span>
+
             <button class="btn btn-secondary" id="drainBtn" onclick="drainBudgets()" style="margin-left: 12px;">Drain budgets</button>
-            <!-- Reset+reseed: wipes tenant tables, FLUSHDBs Redis, re-runs
-                 cmd/seed --profile standard, publishes cache invalidates.
-                 Useful between drain experiments so you don't have to
-                 `tilt trigger migrate-reset` in a terminal. -->
             <button class="btn btn-secondary" id="resetBtn" onclick="resetAndReseed()" style="margin-left: 12px;">Reset &amp; reseed</button>
     </div>
 
@@ -318,12 +311,40 @@
     <div class="sim-container">
         <div class="sim-content">
             <h2>The Daily Simulator</h2>
-            <p>This is a simulated publisher page. The ad slot below runs a real auction through the full ad tech stack: SSP → Exchange → DSP → Ad Server → Tracker.</p>
-            <p>Click "Load Ad" to send an ad request to the SSP. The SSP then constructs an OpenRTB bid request, fans it out to DSPs, picks a winner, and returns the served ad. The debug panel on the right shows every event in real time.</p>
+            <!-- Channel tabs. Switching tabs hides one channel's content
+                 + button row and shows the other's. The geo / device /
+                 placement dropdowns above stay shared because both
+                 channels read them. -->
+            <div class="channel-tabs" style="display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border, #2a3441);">
+                <button type="button" id="tab-display" class="channel-tab active" onclick="switchChannel('display')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid #2d8cf0; color: var(--fg, #e6edf3); font-weight: 600; cursor: pointer; font-size: 13px;">Display</button>
+                <button type="button" id="tab-video" class="channel-tab" onclick="switchChannel('video')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Video (VAST / VMAP)</button>
+            </div>
 
-            <div class="ad-slot" id="adSlot" style="width: 300px; min-height: 250px;">
-                <span id="adSlotLabel">300x250 Ad Slot</span>
-                <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
+            <!-- Display pane: the original 300x250 ad slot. -->
+            <div id="pane-display" class="channel-pane">
+                <p>This is a simulated publisher page. The ad slot below runs a real auction through the full ad tech stack: SSP → Exchange → DSP → Ad Server → Tracker.</p>
+                <p>Click "Load Ad" to send an ad request to the SSP. The SSP then constructs an OpenRTB bid request, fans it out to DSPs, picks a winner, and returns the served ad. The debug panel on the right shows every event in real time.</p>
+
+                <div class="ad-slot" id="adSlot" style="width: 300px; min-height: 250px;">
+                    <span id="adSlotLabel">300x250 Ad Slot</span>
+                    <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
+                </div>
+            </div>
+
+            <!-- Video pane: HLS-served content video + IMA SDK overlays
+                 the ad. Tracker beacons fire on the same /v1/t/* endpoints
+                 display does (typed video events go to /v1/t/video). -->
+            <div id="pane-video" class="channel-pane" style="display: none;">
+                <p>Sample content video with an ad break served via VAST or VMAP. Each break runs a real auction through SSP → Exchange → DSP. Pick a schedule above, press Play.</p>
+                <div id="video-player-wrap" style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
+                    <video id="content-video" controls playsinline preload="metadata" style="width: 100%; height: 100%; display: block;"
+                        src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
+                    <div id="ad-container" style="position: absolute; inset: 0;"></div>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">VAST / VMAP request URL + raw response</summary>
+                    <pre id="video-adtag-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
             </div>
 
 
@@ -3362,6 +3383,105 @@
         refreshDeals();
         refreshCreatives();
         refreshRates();
+    </script>
+
+    <!-- Google IMA SDK: required for the video pane. Loaded once at
+         page-bottom so it doesn't block above-the-fold display sim. -->
+    <script src="//imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+    <script>
+        // ----------------------------------------------------------------
+        // Channel tab switch + video player wiring. Display sim lives
+        // above (functions loadAd / clearAd / etc.); this block only
+        // handles the Video tab.
+        // ----------------------------------------------------------------
+
+        function switchChannel(channel) {
+            var displayBtn = document.getElementById('tab-display');
+            var videoBtn = document.getElementById('tab-video');
+            var displayPane = document.getElementById('pane-display');
+            var videoPane = document.getElementById('pane-video');
+            var displayCtrls = document.querySelectorAll('.display-only-controls');
+            var videoCtrls = document.querySelectorAll('.video-only-controls');
+
+            if (channel === 'video') {
+                videoBtn.style.borderBottomColor = '#2d8cf0';
+                videoBtn.style.color = 'var(--fg, #e6edf3)';
+                videoBtn.style.fontWeight = '600';
+                displayBtn.style.borderBottomColor = 'transparent';
+                displayBtn.style.color = 'var(--fg-muted, #8b949e)';
+                displayBtn.style.fontWeight = '400';
+                displayPane.style.display = 'none';
+                videoPane.style.display = '';
+                displayCtrls.forEach(function(el){ el.style.display = 'none'; });
+                videoCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
+            } else {
+                displayBtn.style.borderBottomColor = '#2d8cf0';
+                displayBtn.style.color = 'var(--fg, #e6edf3)';
+                displayBtn.style.fontWeight = '600';
+                videoBtn.style.borderBottomColor = 'transparent';
+                videoBtn.style.color = 'var(--fg-muted, #8b949e)';
+                videoBtn.style.fontWeight = '400';
+                displayPane.style.display = '';
+                videoPane.style.display = 'none';
+                displayCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
+                videoCtrls.forEach(function(el){ el.style.display = 'none'; });
+            }
+        }
+
+        // playVideoDemo + resetVideoDemo mirror the standalone /video
+        // template's wiring but read the placement and schedule from
+        // the shared controls bar above (placementSelect +
+        // videoScheduleMode). Tracker beacons fire via the same
+        // /v1/t/* endpoints display does.
+        var videoAdsLoader = null;
+        var videoAdsManager = null;
+        function playVideoDemo() {
+            var contentVideo = document.getElementById('content-video');
+            var adContainer = document.getElementById('ad-container');
+            var preview = document.getElementById('video-adtag-preview');
+            var placement = document.getElementById('placementSelect').value || 'pl-sport-mpu';
+            var mode = document.getElementById('videoScheduleMode').value;
+            var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
+            var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) + '&t=' + Date.now();
+            preview.textContent = adTagUrl + '\n\n(fetching…)';
+            fetch(adTagUrl).then(function(r){ return r.text(); }).then(function(text){
+                preview.textContent = adTagUrl + '\n\n' + text.substring(0, 2000) + (text.length > 2000 ? '…' : '');
+            }).catch(function(){ preview.textContent = adTagUrl + '\n\n(fetch failed)'; });
+
+            var adDisplay = new google.ima.AdDisplayContainer(adContainer, contentVideo);
+            adDisplay.initialize();
+            videoAdsLoader = new google.ima.AdsLoader(adDisplay);
+            videoAdsLoader.addEventListener(google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED, function(ev){
+                var settings = new google.ima.AdsRenderingSettings();
+                settings.restoreCustomPlaybackStateOnAdBreakComplete = true;
+                videoAdsManager = ev.getAdsManager(contentVideo, settings);
+                // CONTENT_PAUSE_REQUESTED / CONTENT_RESUME_REQUESTED keep
+                // the underlying content paused while ad plays.
+                videoAdsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_PAUSE_REQUESTED, function(){ contentVideo.pause(); });
+                videoAdsManager.addEventListener(google.ima.AdEvent.Type.CONTENT_RESUME_REQUESTED, function(){ try { contentVideo.play(); } catch (e) {} });
+                videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(){ try { contentVideo.play(); } catch (e) {} });
+                try {
+                    videoAdsManager.init(contentVideo.clientWidth, contentVideo.clientHeight, google.ima.ViewMode.NORMAL);
+                    videoAdsManager.start();
+                } catch (e) { try { contentVideo.play(); } catch (e2) {} }
+            }, false);
+            videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(){ try { contentVideo.play(); } catch (e) {} }, false);
+            contentVideo.addEventListener('ended', function(){ if (videoAdsLoader) videoAdsLoader.contentComplete(); });
+
+            var req = new google.ima.AdsRequest();
+            req.adTagUrl = adTagUrl;
+            req.linearAdSlotWidth = contentVideo.clientWidth;
+            req.linearAdSlotHeight = contentVideo.clientHeight;
+            videoAdsLoader.requestAds(req);
+        }
+        function resetVideoDemo() {
+            var contentVideo = document.getElementById('content-video');
+            try { contentVideo.pause(); } catch (e) {}
+            contentVideo.currentTime = 0;
+            if (videoAdsManager) { try { videoAdsManager.destroy(); } catch (e) {} videoAdsManager = null; }
+            var preview = document.getElementById('video-adtag-preview');
+            if (preview) preview.textContent = '(load to populate)';
+        }
     </script>
 
     {{/* Shared toast notifications + the irreversible-action confirm modal
