@@ -124,7 +124,10 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
 			"advertiser", winner.AdvertiserDomain,
 			"duration_s", winner.DurationSeconds,
 			"price", winner.ClearingPrice)
-		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		// text/xml without a charset suffix — some VAST parsers (notably
+		// older builds of the IMA SDK) refuse application/xml or
+		// charset-qualified content types as "unknown ad response".
+		w.Header().Set("Content-Type", "text/xml")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(xmlBytes)
 	}
@@ -283,7 +286,7 @@ func writeStubVAST(w http.ResponseWriter, reqLog *slog.Logger, trackerURL, trace
 		http.Error(w, "vast build failed", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Content-Type", "text/xml")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(xmlBytes)
 }
