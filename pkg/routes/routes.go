@@ -164,6 +164,13 @@ const (
 	// URLs. Same auction shape under the hood as PublisherAdServe — the
 	// only difference is the response is XML, not JSON.
 	PublisherAdServeVAST = "/v1/pubad/video/vast"
+	// PublisherAdServeVMAP returns a VMAP 1.0 schedule describing one
+	// or more ad breaks (pre-roll / mid-roll / post-roll). Each break's
+	// AdSource is an AdTagURI pointing at PublisherAdServeVAST so the
+	// player fetches a fresh, independent VAST per break — separate
+	// auctions, independent winners, the shape long-form publishers
+	// expect for instream video.
+	PublisherAdServeVMAP = "/v1/pubad/video/vmap"
 )
 
 // ============================================================

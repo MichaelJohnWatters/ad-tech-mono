@@ -156,6 +156,12 @@ func main() {
 		pub:             pub,
 	}))
 	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL))
+	// publisher_adserver.public_url is the browser-reachable origin
+	// the VMAP schedule will tell the player to call back into for
+	// each break's VAST. Defaults to the gateway's local origin since
+	// every demo path runs through it.
+	publicBase := cfg.Get("publisher_adserver.public_url", "http://localhost:8080")
+	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
