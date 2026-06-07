@@ -3386,8 +3386,13 @@
     </script>
 
     <!-- Google IMA SDK: required for the video pane. Loaded once at
-         page-bottom so it doesn't block above-the-fold display sim. -->
-    <script src="//imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+         page-bottom so it doesn't block above-the-fold display sim.
+         HTTPS is explicit (not protocol-relative) so the SDK's bridge
+         iframe runs in a secure context — Chrome's Private Network
+         Access policy refuses cross-origin fetches into loopback
+         addresses (our localhost VAST endpoint) from non-secure
+         contexts, regardless of any server-side CORS / PNA header. -->
+    <script src="https://imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
     <script>
         // ----------------------------------------------------------------
         // Channel tab switch + video player wiring. Display sim lives
