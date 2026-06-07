@@ -35,9 +35,19 @@
 </head>
 <body>
   <header>
-    <h1>Video Simulator — VAST 4.2 + VMAP</h1>
-    <p>Loads a sample content video, requests a VAST single-roll or a VMAP pre/mid/post schedule, plays each break via Google IMA SDK. Every break runs its own auction back through SSP → exchange → DSPs. Tracker beacons fire through our normal <code>/v1/t/*</code> endpoints.</p>
+    <h1>Publisher Simulator</h1>
   </header>
+  <!-- Channel tabs: mirror the strip on the display sim so the user
+       can jump between formats without losing context. The display
+       page is a separate template (it's 3000+ lines) — these are
+       just nav anchors. -->
+  <div style="display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid #1f2933; background: #161b22;">
+    <a href="/dev/publisher-simulator/minimal" style="padding: 12px 20px; text-decoration: none; color: #8b949e; border-bottom: 2px solid transparent; font-size: 14px;">Display</a>
+    <a href="/dev/publisher-simulator/video" style="padding: 12px 20px; text-decoration: none; color: #e6edf3; border-bottom: 2px solid #2d8cf0; font-weight: 600; font-size: 14px;">Video (VAST / VMAP)</a>
+  </div>
+  <section style="padding: 16px 24px; background: #161b22; border-bottom: 1px solid #1f2933;">
+    <p style="margin: 0; color: #8b949e; font-size: 13px;">Loads a sample content video, requests a VAST single-roll or a VMAP pre/mid/post schedule, plays each break via Google IMA SDK. Every break runs its own auction back through SSP → exchange → DSPs. Tracker beacons fire through our normal <code>/v1/t/*</code> endpoints.</p>
+  </section>
 
   <main>
     <section>
@@ -48,6 +58,24 @@
         <div id="ad-container"></div>
       </div>
       <div style="margin: 16px 0 0 8px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+        <label style="color: #8b949e; font-size: 13px;">
+          Placement:
+          <select id="placement-select" style="margin-left: 6px; background: #1c2532; color: #e6edf3; border: 1px solid #2f3a48; border-radius: 4px; padding: 4px 8px; font-size: 13px;">
+            <!-- The SSP currently treats any placement as a video slot when
+                 channel=video is set, so this list mostly shapes which
+                 publisher context the auction runs against (different
+                 publishers have different direct-sold + targeting rules
+                 that affect the winner). Once dedicated video placements
+                 exist (format=video on the placements table) we'd swap
+                 this for a filtered list. -->
+            <option value="pl-sport-mpu" selected>Live Page MPU (Sport)</option>
+            <option value="pl-news-mpu">Article MPU (News)</option>
+            <option value="pl-news-leaderboard">Homepage Leaderboard (News)</option>
+            <option value="pl-news-halfpage">Article Half Page (News)</option>
+            <option value="pl-tech-sidebar">Reviews Sidebar (Tech)</option>
+            <option value="pl-tech-top-leader">Article Top Leaderboard (Tech)</option>
+          </select>
+        </label>
         <label style="color: #8b949e; font-size: 13px;">
           Schedule:
           <select id="schedule-mode" style="margin-left: 6px; background: #1c2532; color: #e6edf3; border: 1px solid #2f3a48; border-radius: 4px; padding: 4px 8px; font-size: 13px;">
@@ -132,8 +160,9 @@
     function buildAdTagURL() {
       var origin = window.location.origin;
       var mode = document.getElementById('schedule-mode').value;
+      var placement = document.getElementById('placement-select').value || 'pl-sport-mpu';
       var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
-      return origin + path + '?placement_id=demo-video-mpu&t=' + Date.now();
+      return origin + path + '?placement_id=' + encodeURIComponent(placement) + '&t=' + Date.now();
     }
 
     function setupIMA() {

@@ -114,6 +114,15 @@
         <a href="/dev/trace-explorer">Trace Explorer</a>
         <button class="theme-toggle" onclick="toggleTheme()">☀️</button>
     </div>
+    <!-- Channel tabs: cross-links between display + video pages. Same
+         "publisher simulator" workflow but different ad format; the
+         underlying pages share the auction infra. Templates stay
+         separate (display sim is 3000+ lines) — these are just nav
+         entry points. -->
+    <div style="display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border, #1f2933); background: var(--bg-card, #161b22);">
+      <a href="/dev/publisher-simulator/minimal" style="padding: 12px 20px; text-decoration: none; color: var(--fg, #e6edf3); border-bottom: 2px solid #2d8cf0; font-weight: 600; font-size: 14px;">Display</a>
+      <a href="/dev/publisher-simulator/video" style="padding: 12px 20px; text-decoration: none; color: var(--fg-muted, #8b949e); border-bottom: 2px solid transparent; font-size: 14px;">Video (VAST / VMAP)</a>
+    </div>
     <!-- Observability quick-links. Each opens in a new tab so the pub sim
          workflow isn't interrupted. PromQL links pre-fill useful queries
          tied to the metrics middleware (request_duration_seconds histograms
