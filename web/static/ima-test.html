@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>IMA minimal smoke test</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 880px; margin: 32px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  p.lede { color: #666; margin-top: 0; font-size: 14px; }
+  #player-wrap { position: relative; background: #000; aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; }
+  #content-video { width: 100%; height: 100%; display: block; }
+  #ad-container { position: absolute; inset: 0; }
+  button { padding: 10px 18px; background: #2d8cf0; color: white; border: 0; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 16px 8px 0 0; }
+  #log { background: #1c2532; color: #e6edf3; padding: 12px 16px; border-radius: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; margin-top: 16px; min-height: 200px; white-space: pre-wrap; word-break: break-all; }
+  .err { color: #ff6b6b; }
+  .ok { color: #51cf66; }
+</style>
+</head>
+<body>
+  <h1>IMA SDK smoke test — minimal</h1>
+  <p class="lede">No tabs, no shared state. Loads <code>/v1/pubad/video/vast?placement_id=pl-sport-live-preroll</code> and plays via IMA. If this fails, the issue is the VAST or media file — not the sim wiring. If this works, the issue is something the sim does on top.</p>
+
+  <div id="player-wrap">
+    <video id="content-video" controls playsinline preload="metadata"
+      src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
+    <div id="ad-container"></div>
+  </div>
+  <div>
+    <button id="play">Play</button>
+    <button id="reset" style="background: #6e7681;">Reset</button>
+  </div>
+  <div id="log">(events appear here)</div>
+
+  <script src="//imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+  <script>
+    var v = document.getElementById('content-video');
+    var ac = document.getElementById('ad-container');
+    var L = document.getElementById('log');
+    var loader, mgr;
+
+    function log(line, cls) {
+      var ts = new Date().toISOString().slice(11, 23);
+      var div = document.createElement('div');
+      div.className = cls || '';
+      div.textContent = ts + ' ' + line;
+      L.appendChild(div);
+      L.scrollTop = L.scrollHeight;
+      console.log('[ima-test]', line);
+    }
+    function errDetail(err) {
+      try {
+        var e = err.getError ? err.getError() : err;
+        return 'code=' + e.getErrorCode() +
+               ' type=' + e.getType() +
+               ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
+               ' msg=' + e.getMessage();
+      } catch (x) { return String(err); }
+    }
+
+    function go() {
+      L.innerHTML = '';
+      var tag = window.location.origin + '/v1/pubad/video/vast?placement_id=pl-sport-live-preroll&t=' + Date.now();
+      log('VAST URL: ' + tag);
+      log('Fetching VAST to confirm…');
+      fetch(tag).then(function(r){ return r.text(); }).then(function(t){
+        log('VAST: ' + r_status(t) + ' (' + t.length + ' bytes)', t.indexOf('<MediaFile') > 0 ? 'ok' : 'err');
+      }).catch(function(e){ log('VAST fetch failed: ' + e, 'err'); });
+
+      var disp = new google.ima.AdDisplayContainer(ac, v);
+      disp.initialize();
+      loader = new google.ima.AdsLoader(disp);
+      loader.addEventListener(google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED, function(ev){
+        log('ADS_MANAGER_LOADED', 'ok');
+        var rs = new google.ima.AdsRenderingSettings();
+        rs.restoreCustomPlaybackStateOnAdBreakComplete = true;
+        mgr = ev.getAdsManager(v, rs);
+        var E = google.ima.AdEvent.Type;
+        ['LOADED','STARTED','IMPRESSION','FIRST_QUARTILE','MIDPOINT','THIRD_QUARTILE','COMPLETE','CLICK','SKIPPED','ALL_ADS_COMPLETED'].forEach(function(n){
+          mgr.addEventListener(E[n], function(e){
+            var ad = e.getAd && e.getAd();
+            log(n + (ad ? ' ('+ad.getAdId()+' '+ad.getDuration()+'s)' : ''), 'ok');
+          });
+        });
+        mgr.addEventListener(E.CONTENT_PAUSE_REQUESTED, function(){ v.pause(); log('CONTENT_PAUSE_REQUESTED'); });
+        mgr.addEventListener(E.CONTENT_RESUME_REQUESTED, function(){ try { v.play(); } catch(e){} log('CONTENT_RESUME_REQUESTED'); });
+        mgr.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){ log('AD_ERROR ' + errDetail(err), 'err'); try { v.play(); } catch(e){} });
+        try {
+          mgr.init(v.clientWidth || 640, v.clientHeight || 360, google.ima.ViewMode.NORMAL);
+          mgr.start();
+        } catch (e) { log('init failed: ' + e, 'err'); }
+      }, false);
+      loader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){ log('AdsLoader AD_ERROR ' + errDetail(err), 'err'); }, false);
+      v.addEventListener('ended', function(){ if (loader) loader.contentComplete(); });
+
+      var req = new google.ima.AdsRequest();
+      req.adTagUrl = tag;
+      req.linearAdSlotWidth = v.clientWidth || 640;
+      req.linearAdSlotHeight = v.clientHeight || 360;
+      log('Calling AdsLoader.requestAds…');
+      loader.requestAds(req);
+    }
+    function r_status(t) { return t.indexOf('<VAST') >= 0 ? 'OK' : 'no VAST tag'; }
+
+    document.getElementById('play').addEventListener('click', go);
+    document.getElementById('reset').addEventListener('click', function(){
+      try { v.pause(); v.currentTime = 0; } catch (e) {}
+      if (mgr) { try { mgr.destroy(); } catch (e) {} mgr = null; }
+      L.innerHTML = '';
+    });
+  </script>
+</body>
+</html>
