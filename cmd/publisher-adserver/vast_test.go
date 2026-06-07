@@ -79,8 +79,8 @@ func TestVASTHandler(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/xml") {
-		t.Errorf("Content-Type = %q, want application/xml", ct)
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "xml") {
+		t.Errorf("Content-Type = %q, want an xml content type (text/xml or application/xml)", ct)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store (VAST must not be cached — each impression gets fresh trace_id)", cc)

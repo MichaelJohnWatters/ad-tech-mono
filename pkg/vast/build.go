@@ -83,8 +83,10 @@ type ClickSpec struct {
 // about whitespace either way.
 func BuildLinearAd(spec LinearSpec) ([]byte, error) {
 	doc := VAST{
-		Version: Version,
-		Ads:     []Ad{specToAd(spec)},
+		XMLNSXSI: xsiNamespace,
+		XSILoc:   xsdLocation,
+		Version:  Version,
+		Ads:      []Ad{specToAd(spec)},
 	}
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
@@ -100,7 +102,12 @@ func BuildLinearAd(spec LinearSpec) ([]byte, error) {
 // in order — the standard shape for pre/mid/post-roll pods. Players
 // iterate ads by Sequence and play them back-to-back.
 func BuildPod(specs []LinearSpec) ([]byte, error) {
-	doc := VAST{Version: Version, Ads: make([]Ad, 0, len(specs))}
+	doc := VAST{
+		XMLNSXSI: xsiNamespace,
+		XSILoc:   xsdLocation,
+		Version:  Version,
+		Ads:      make([]Ad, 0, len(specs)),
+	}
 	for i, s := range specs {
 		if s.Sequence == 0 {
 			s.Sequence = i + 1

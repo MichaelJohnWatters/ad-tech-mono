@@ -28,13 +28,26 @@ import (
 // the major players (Google IMA, JW Player, hls.js, etc.).
 const Version = "4.2"
 
-// VAST is the root element of a VAST document. xmlns and the XSD
-// reference are intentionally omitted — players accept the unqualified
-// form and most VAST samples in the wild don't include them.
+// xsiNamespace and xsdLocation are emitted on the root VAST element so
+// strict 4.x parsers (IMA) treat the document as schema-qualified.
+// The XSD itself is not fetched at parse time — it's a marker that
+// the document claims 4.x semantics.
+const (
+	xsiNamespace = "http://www.w3.org/2001/XMLSchema-instance"
+	xsdLocation  = "vast.xsd"
+)
+
+// VAST is the root element of a VAST document. The xsi:noNamespaceSchemaLocation
+// attribute is what strict VAST 4.x parsers (notably the IMA SDK) look
+// for to confirm the document is intended for the 4.x XSD — without it,
+// some clients refuse to load the document and surface a generic
+// vast=900 "problem requesting ads" error.
 type VAST struct {
-	XMLName xml.Name `xml:"VAST"`
-	Version string   `xml:"version,attr"`
-	Ads     []Ad     `xml:"Ad"`
+	XMLName  xml.Name `xml:"VAST"`
+	XMLNSXSI string   `xml:"xmlns:xsi,attr"`
+	XSILoc   string   `xml:"xsi:noNamespaceSchemaLocation,attr"`
+	Version  string   `xml:"version,attr"`
+	Ads      []Ad     `xml:"Ad"`
 }
 
 // Ad represents one ad in the response. Multiple Ads in a single VAST
