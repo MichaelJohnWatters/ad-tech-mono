@@ -63,8 +63,17 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 		}
 		defer resp.Body.Close()
 
-		// Copy response headers
+		// Copy response headers, but strip any Access-Control-* headers
+		// the upstream set. The gateway's own CORS middleware is the
+		// authoritative source for these — copying upstream's values
+		// would emit duplicates (Access-Control-Allow-Origin: *, *) and
+		// strict CORS clients (notably the IMA SDK iframe) treat
+		// concatenated wildcards as a mismatch with the request origin,
+		// failing the resource-sharing check post-fetch.
 		for k, vv := range resp.Header {
+			if strings.HasPrefix(strings.ToLower(k), "access-control-") {
+				continue
+			}
 			for _, v := range vv {
 				w.Header().Add(k, v)
 			}
