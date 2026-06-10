@@ -206,13 +206,21 @@ if dev_mode == 'fast':
     tls_cert_path = 'dev/tls/localhost.pem'
     tls_key_path = 'dev/tls/localhost-key.pem'
     if os.path.exists(tls_cert_path) and os.path.exists(tls_key_path):
-        # Use kubectl create secret generic --dry-run + apply, which is
-        # the canonical k8s pattern for syncing on-disk PEM files into
-        # a Secret without any base64 dance in Starlark.
+        # Apply the Secret via kubectl. Wrapped in a shell that returns 0
+        # even if kubectl fails — otherwise a transient cluster outage
+        # (Colima crashed, k3s API still booting) would abort the entire
+        # Tiltfile parse, which in turn blocks `tilt up` from running the
+        # recovery resources that would have brought the cluster back.
+        # The gateway's volume mount is marked optional so a missing
+        # Secret just means no HTTPS listener — HTTP on 8080 continues
+        # to work, and a later 'tilt trigger' picks up the Secret once
+        # k3s is healthy again.
         local('kubectl create secret generic gateway-tls -n adtech ' +
               '--from-file=cert.pem=' + tls_cert_path + ' ' +
               '--from-file=key.pem=' + tls_key_path + ' ' +
-              '--dry-run=client -o yaml | kubectl apply -f -')
+              '--dry-run=client -o yaml | kubectl apply -f - ' +
+              '|| echo "[tilt] kubectl apply failed (k3s may be down) — gateway-tls Secret skipped"',
+              quiet=True)
 
     k8s_yaml(['k8s/base/gateway/deployment.yaml', 'k8s/base/gateway/service.yaml', 'k8s/base/gateway/ingress.yaml'])
     k8s_resource('gateway', resource_deps=['gateway-build', 'postgres', 'redis'],
