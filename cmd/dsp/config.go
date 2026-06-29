@@ -24,6 +24,7 @@ var dspSchema = []config.SchemaEntry{
 	{Key: "dsp.no_bid_rate", Type: "float", Tier: config.TierLive, Default: "0", Description: "Probability (0-1) that the DSP randomly returns no_bid even when a campaign matches. Used by the competitor profiles to mimic flaky DSPs; leave at 0 for the real one.", Service: constants.ServiceDSP, Since: "v1.1"},
 	{Key: "dsp.budget_reset_interval", Type: "duration", Tier: config.TierLive, Default: "24h", Description: "How long Redis keeps a campaign's daily-spend counter before it expires back to zero. Effectively the rolling budget window length.", Service: constants.ServiceDSP, Since: "v1.1"},
 	{Key: "cache.warm.campaigns.poll_interval", Type: "duration", Tier: config.TierStatic, Default: "30s", Description: "How often the in-memory campaign cache refreshes from Postgres. Lower = faster pickup of campaign edits, higher = less DB load.", Service: constants.ServiceDSP, Since: "v1.1"},
+	{Key: "cache.warm.opt_outs.poll_interval", Type: "duration", Tier: config.TierStatic, Default: "30s", Description: "How often the user opt-out registry cache (consent enforcement on the bid path) refreshes from Postgres. Lower = faster pickup of new opt-outs, higher = less DB load. NATS invalidate on adtech.cache.invalidate.opt-outs propagates changes sub-second regardless.", Service: constants.ServiceDSP, Since: "v1.3"},
 }
 
 // Knobs is the DSP service's typed config accessor. Methods read live every

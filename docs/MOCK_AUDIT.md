@@ -42,7 +42,7 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 
 | # | Component | Degree | Evidence | Current behaviour |
 |---|---|---|---|---|
-| C1 | Consent / opt-out enforcement | STUB | `tests/e2e/privacy_test.go:10,14`; `pkg/privacy/privacy.go` | Full API exists but its registry is never populated from DB and never queried at bid time. DSP/adserver have zero consent checks. |
+| ~~C1~~ | Consent / opt-out enforcement | **DONE (DSP)** | `pkg/privacy/consent.go`, `cmd/dsp/main.go` | ✅ Opt-out registry warm cache in the DSP (`postgres.OptOutLoader` → `opt_out_registry`, NATS-invalidated), enforced on the bid path: `privacy.Evaluate` combines the registry level with OpenRTB regs (GDPR-no-consent / COPPA / US-privacy) → level 2/3 = no-bid, level 1 / reg signal = contextual-only (behavioural targeting stripped). `TestPrivacyOptOutBlocksServe` flipped from skip to a real assertion. **Remaining:** ad-server serve path doesn't check opt-outs (DSP no-bid already prevents the serve); regs-only contextual-downgrade lacks an e2e assertion (harness gap). |
 | C2 | Identity graph | SIMULATED | `pkg/identity/identity.go:51-58` | Link/Resolve logic is real but in-memory only (lost on restart) and not wired into any serving path — tests only. |
 | C3 | Audience segment write path | PARTIAL | `pkg/audience/store/postgres/postgres.go:1-12` | Read path fully wired; no production write API. Membership inserted only via seed / e2e raw SQL. |
 
@@ -107,7 +107,7 @@ Small, self-contained, removes the admin-bypass.
 ### Phase C — Privacy & identity (P1 compliance) `[C1, C2, C3]`
 Logic largely exists; this is wiring + persistence.
 
-- **C1 — Enforce consent/opt-out.** Add a `user_optouts` warm-cache consumer; insert a `CheckConsent()` gate in the DSP bid path (before targeting) and the ad-server serve path; honour OpenRTB `regs`/`user.consent`.
+- **C1 — Enforce consent/opt-out.** ✅ **Done (DSP).** `opt_out_registry` warm cache in the DSP (`postgres.OptOutLoader`, NATS-invalidated) + `privacy.Evaluate` gate on the bid path honouring the registry level and OpenRTB `regs`/`user.consent` (GDPR/COPPA/US-privacy). Level 2/3 → no-bid; level 1 or a reg signal → contextual-only. `TestPrivacyOptOutBlocksServe` now asserts it. **Open:** ad-server serve-path gate (belt-and-braces; DSP no-bid already blocks the serve) and an e2e assertion for the contextual-downgrade case.
 - **C2 — Persist the identity graph.** Add `identity_edges` table + Redis lookup + warm cache in DSP/exchange so `Resolve()` works cross-pod at auction time.
 - **C3 — Audience write API.** Endpoint/service for CRM uploads → `audience_segment_members` INSERT → publish `adtech.cache.invalidate.audience`.
 - **Done when:** `privacy_test.go` opt-out + consent tests pass; identity links survive restart; a CRM upload appears in DSP targeting within one invalidation cycle.
