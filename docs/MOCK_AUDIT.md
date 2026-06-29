@@ -50,7 +50,7 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 
 | # | Component | Degree | Evidence | Current behaviour |
 |---|---|---|---|---|
-| F1 | IP / UA blocklists | HARDCODED | `pkg/fraud/realtime.go:64,209-237`; `pkg/fraud/lists/` is empty | Bot patterns + datacenter CIDRs baked into Go; runtime `BlockIP()` is in-memory. |
+| ~~F1~~ | IP / UA blocklists | **DONE (DB-driven)** | `pkg/fraud/realtime.go`, `cmd/tracker/blocklist.go` | ✅ `fraud_blocklists` (ip/ua) loaded into a tracker warm cache (`postgres.BlocklistLoader`), pushed into the checker via `ReplaceBlocklists` on poll + `adtech.cache.invalidate.fraud-rules`. IP/UA blocks now manageable in the DB; hardcoded bot patterns + datacenter ranges retained as a floor. `TestFraudBotUARejected` flipped to a real assertion. **Remaining:** IP-block e2e needs the tracker to read `X-Forwarded-For` (reads `RemoteAddr` today); domain/app_bundle types not yet consulted. |
 | F2 | ads.txt verification | STUB | `pkg/fraud/adstxt.go`; `tests/e2e/fraud_test.go:148` | Parser exists; no fetcher (`cmd/adstxt` does not exist), exchange never enforces. |
 | F3 | Fraud scoring | HARDCODED | `pkg/fraud/scoring.go:34-44` | Static heuristic weights/thresholds; no model. (Lowest priority — heuristic is acceptable interim.) |
 
@@ -115,7 +115,7 @@ Logic largely exists; this is wiring + persistence.
 ### Phase D — Fraud to DB (P1) `[F1, F2]`
 Follows the warm-cache pattern already used everywhere.
 
-- **D1 — Blocklists to DB.** `fraud_blocklists` table (IP ranges + UA patterns) → warm cache → NATS invalidate. Seed current hardcoded lists as initial rows.
+- **D1 — Blocklists to DB.** ✅ **Done.** `fraud_blocklists` (ip/ua) → tracker warm cache (`cmd/tracker/blocklist.go`) → `RealTimeChecker.ReplaceBlocklists`, refreshed on poll + `adtech.cache.invalidate.fraud-rules`. Hardcoded bot patterns/datacenter ranges kept as a floor. `TestFraudBotUARejected` asserts it; unit-tested in `pkg/fraud`. **Open:** read `X-Forwarded-For` so IP blocks are drivable e2e; consult domain/app_bundle types; optionally seed the hardcoded lists as rows.
 - **D2 — ads.txt.** Create `cmd/adstxt` fetcher (HTTP GET `https://{domain}/ads.txt`, 24h TTL) → `publisher_ads_txt` table; add a pre-bid enforcement gate in the exchange.
 - **Done when:** `fraud_test.go` blocklist + UA + ads.txt tests pass.
 

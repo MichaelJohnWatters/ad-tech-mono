@@ -129,16 +129,38 @@ func totalSpend(t *testing.T, h *harness.Harness) float64 {
 	return v
 }
 
-// TestFraudIPBlocklistRejected — pending fraud rules table being wired.
-// pkg/fraud has a real-time checker but its IP/UA blocklists are loaded
-// from in-code defaults (pkg/fraud/lists), not from Postgres.
+// TestFraudIPBlocklistRejected — IP blocklist is now DB-driven and enforced
+// (see TestReplaceBlocklists_DBSourced for the unit-level proof), but the
+// tracker derives the client IP from RemoteAddr, which an HTTP client can't
+// set. Driving this end-to-end needs the tracker to honour X-Forwarded-For
+// (it's behind Traefik anyway) or a dev IP-override header.
 func TestFraudIPBlocklistRejected(t *testing.T) {
-	t.Skip("fraud blocklists are currently in-code (pkg/fraud/lists); test ready when blocklist warm-cache lands")
+	t.Skip("IP blocklist is DB-wired + enforced, but the tracker reads RemoteAddr (not X-Forwarded-For), so an e2e client can't spoof the IP yet; covered by pkg/fraud unit test")
 }
 
-// TestFraudBotUARejected — same.
+// TestFraudBotUARejected — a DB-added UA pattern must cause the tracker's
+// fraud check to block. Uses a custom pattern not in the hardcoded bot list
+// so it proves the fraud_blocklists warm-cache path specifically.
 func TestFraudBotUARejected(t *testing.T) {
-	t.Skip("UA blocklist is in-code; pending warm-cache wiring")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "fraud-ua")
+	const pattern = "evil-e2e-bot"
+
+	// Baseline: a normal UA is not blocked.
+	if h.FireImpressionUA(t, "fraud-ua-baseline", w.Campaign.ID, "Mozilla/5.0 (e2e)") {
+		t.Fatal("baseline UA should not be fraud-blocked")
+	}
+
+	h.AddFraudBlocklist(t, "ua", pattern)
+	h.RefreshAllCaches(t)
+
+	if !h.FireImpressionUA(t, "fraud-ua-blocked", w.Campaign.ID, "Mozilla/5.0 "+pattern+"/1.0") {
+		t.Errorf("UA matching DB blocklist pattern %q should be fraud-blocked", pattern)
+	}
+
+	// Cleanup the global row.
+	h.ClearFraudBlocklist(t, "ua", pattern)
+	h.RefreshAllCaches(t)
 }
 
 // TestFraudAdsTxtUnverifiedRejected — ads.txt is crawled by cmd/adstxt
