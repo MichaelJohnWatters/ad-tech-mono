@@ -35,8 +35,8 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 
 | # | Component | Degree | Evidence | Current behaviour |
 |---|---|---|---|---|
-| S1 | Secrets at rest | STUB (plaintext) | `pkg/secrets/loader.go:103-117`; migration 027 "encryption-at-rest TBD" | `secrets.value` is plaintext (JWT keys, API keys, HMAC, partner secrets). Masked only in HTTP responses. |
-| S2 | JWT signing / gateway auth | PARTIAL | `cmd/gateway/config.go:14`, `pkg/middleware/auth.go:29-46` | Empty signing key = dev bypass injecting `*` admin claims. Key sourced from config, not the `secrets` table. |
+| ~~S1~~ | ~~Secrets at rest~~ | **DONE** | `pkg/secrets/crypto.go` | ✅ AES-256-GCM at rest (`enc:v1:` marker), key from `SECRETS_ENCRYPTION_KEY`. Encrypt on every write (gateway create, bootstrap, seed), decrypt on warm-cache load + masked list. Passthrough when key unset (dev) and legacy plaintext rows read through, so no migration/backfill needed. |
+| S2 | JWT signing / gateway auth | PARTIAL | `cmd/gateway/config.go:14`, `pkg/middleware/auth.go:29-46` | Empty signing key = dev bypass injecting `*` admin claims. Key sourced from config, not the `secrets` table. **Next up.** |
 
 ### P1 — Serving correctness & compliance
 
@@ -100,8 +100,8 @@ The whole reporting/analytics surface is volatile today; this is the largest gap
 ### Phase B — Secrets & auth hardening (P0 security) `[S1, S2]`
 Small, self-contained, removes the admin-bypass.
 
-- **B1 — Encrypt secrets at rest.** Add `value_encrypted` (+ `kms_key_id`) column; encrypt on INSERT, decrypt on warm-cache load; keep plaintext only briefly in memory. Local: derived key from env; staging/prod: KMS/Vault per overlay.
-- **B2 — JWT key from secrets table.** Load `purpose=jwt_signing, status=active` at gateway boot; remove the empty-key dev bypass; fail boot if absent (the `cmd/gateway bootstrap` mint flow already exists).
+- **B1 — Encrypt secrets at rest. ✅ DONE.** `pkg/secrets/crypto.go` seals values with AES-256-GCM, stored as `enc:v1:<base64(nonce‖ct)>` in the existing `value` column (no migration). Key from `SECRETS_ENCRYPTION_KEY` (64 hex / base64, 32 bytes); unset = passthrough plaintext (dev). Wired into every write (gateway create/bootstrap/seed) and read (warm-cache loader decrypts; list endpoint decrypts before masking). Backward-compatible: values without the prefix read through as legacy plaintext, so enabling a key doesn't strand existing rows. **Prod/staging overlays must set `SECRETS_ENCRYPTION_KEY`** (KMS-sourced); a malformed key fails loud (ERROR log + `/readyz` stays red).
+- **B2 — JWT key from secrets table.** Load `purpose=jwt_signing, status=active` at gateway boot; remove the empty-key dev bypass; fail boot if absent (the `cmd/gateway bootstrap` mint flow already exists). ⚠️ Riskier than B1: dev + e2e currently rely on the empty-key bypass, so this needs a seeded `jwt_signing` row + a dev token-mint path or the local stack loses auth.
 - **Done when:** no plaintext secret material in Postgres; gateway refuses to start without a signing key; auth tests assert real claims (no `*` injection).
 
 ### Phase C — Privacy & identity (P1 compliance) `[C1, C2, C3]`

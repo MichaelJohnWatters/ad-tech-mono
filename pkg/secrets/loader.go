@@ -34,6 +34,11 @@ type PostgresLoader struct {
 	ServiceName string
 	Log         *slog.Logger
 
+	// Cipher decrypts the at-rest value column. Nil = passthrough
+	// (plaintext), which is the supported local-dev mode. Set from
+	// SECRETS_ENCRYPTION_KEY by pickLoader.
+	Cipher *Cipher
+
 	mu sync.Mutex
 	db *sql.DB
 }
@@ -147,6 +152,19 @@ WHERE purpose = ANY($1::text[])
 			t := expiresAt.Time
 			s.ExpiresAt = &t
 		}
+		// Decrypt the at-rest value. A key mismatch (wrong/rotated
+		// SECRETS_ENCRYPTION_KEY) means we'd otherwise cache garbage and
+		// silently reject every credential — log loudly and drop the row
+		// so the failure is visible rather than mysterious 401s.
+		plain, derr := l.Cipher.Decrypt(s.Value)
+		if derr != nil {
+			if l.Log != nil {
+				l.Log.Error("secrets loader: decrypt failed, dropping row",
+					"id", s.ID, "name", s.Name, "purpose", s.Purpose, "error", derr)
+			}
+			continue
+		}
+		s.Value = plain
 		out = append(out, s)
 	}
 	return out, rows.Err()

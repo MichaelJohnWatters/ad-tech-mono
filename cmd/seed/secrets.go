@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
 
 // DevAPIKey is the well-known operator API key seeded into dev / e2e
@@ -30,10 +32,21 @@ func (in *inserter) SeedDevSecrets(ctx context.Context) error {
 	if err != sql.ErrNoRows {
 		return fmt.Errorf("check existing dev api key: %w", err)
 	}
+	// Encrypt at rest, same as the gateway create path. With no key
+	// configured (dev default) this is a passthrough and the row stays
+	// plaintext — the warm-cache loader decrypts symmetrically either way.
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		return fmt.Errorf("seed dev api key: encryption key: %w", err)
+	}
+	storedValue, err := cipher.Encrypt(DevAPIKey)
+	if err != nil {
+		return fmt.Errorf("seed dev api key: encrypt: %w", err)
+	}
 	const q = `
 INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
 VALUES ('dev-ops-key', $1, 'api_key', 'platform', 'active', now(), now())`
-	if _, err := in.db.ExecContext(ctx, q, DevAPIKey); err != nil {
+	if _, err := in.db.ExecContext(ctx, q, storedValue); err != nil {
 		return fmt.Errorf("seed dev api key: %w", err)
 	}
 	in.log.Info("seeded dev api key", "purpose", "api_key", "owner", "platform", "value", "(dev only — rotate in prod)")

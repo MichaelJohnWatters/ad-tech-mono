@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
 
 // bootstrapHandler implements POST /v1/auth/bootstrap — the one-shot
@@ -50,6 +52,11 @@ import (
 // happens automatically because secrets.bus publishes).
 func bootstrapHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 	rootPassword := os.Getenv("PLATFORM_ROOT_PASSWORD")
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		log.Error("bootstrap: invalid encryption key, will write plaintext", "error", err)
+		cipher = &secrets.Cipher{}
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -107,10 +114,18 @@ func bootstrapHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 		}
 		keyValue := hex.EncodeToString(keyBytes)
 
+		// Encrypt at rest; keyValue (plaintext) is still returned once below.
+		storedValue, err := cipher.Encrypt(keyValue)
+		if err != nil {
+			log.Error("bootstrap: encrypt failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		const insert = `
 INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
 VALUES ('bootstrap-admin-key', $1, 'api_key', 'platform', 'active', now(), now())`
-		if _, err := db.ExecContext(r.Context(), insert, keyValue); err != nil {
+		if _, err := db.ExecContext(r.Context(), insert, storedValue); err != nil {
 			log.Error("bootstrap: insert failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
