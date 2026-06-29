@@ -250,7 +250,10 @@ func TestRefreshHandler_UnknownNameIs404(t *testing.T) {
 	srv := httptest.NewServer(RefreshHandler(c))
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"?name=does-not-exist", "application/json", nil)
+	resp, err := http.Post(srv.URL+"?name=does-not-exist", "application/json", nil)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
