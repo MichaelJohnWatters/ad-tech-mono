@@ -636,8 +636,8 @@ func (c *EventConsumer) handleServeNoFill(ctx context.Context, msg *events.Messa
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertServeNoFill(analytics.ServeNoFill{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertServeNoFill(analytics.ServeNoFill{
 			TraceID:     src.TraceID,
 			PublisherID: src.PublisherID,
 			PlacementID: src.PlacementID,
@@ -663,8 +663,8 @@ func (c *EventConsumer) handleFreqCapBlocked(ctx context.Context, msg *events.Me
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertFreqCapBlock(analytics.FreqCapBlock{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertFreqCapBlock(analytics.FreqCapBlock{
 			TraceID:     src.TraceID,
 			UserID:      src.UserID,
 			CampaignID:  src.CampaignID,
@@ -694,8 +694,8 @@ func (c *EventConsumer) handleRenderFailed(ctx context.Context, msg *events.Mess
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertRenderFailure(analytics.RenderFailure{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertRenderFailure(analytics.RenderFailure{
 			TraceID:     src.TraceID,
 			CampaignID:  src.CampaignID,
 			CreativeID:  src.CreativeID,
@@ -728,8 +728,8 @@ func (c *EventConsumer) handleTrackerRejected(ctx context.Context, msg *events.M
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertTrackerRejection(analytics.TrackerRejection{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertTrackerRejection(analytics.TrackerRejection{
 			TraceID:   src.TraceID,
 			EventType: src.EventType,
 			Reason:    src.Reason,
@@ -760,8 +760,8 @@ func (c *EventConsumer) handleCampaignState(ctx context.Context, msg *events.Mes
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertCampaignStateChange(analytics.CampaignStateChange{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertCampaignStateChange(analytics.CampaignStateChange{
 			CampaignID: src.CampaignID,
 			AccountID:  src.AccountID,
 			OldState:   src.OldState,
@@ -792,8 +792,8 @@ func (c *EventConsumer) handleBudgetDepleted(ctx context.Context, msg *events.Me
 	if src.Timestamp.IsZero() {
 		src.Timestamp = time.Now()
 	}
-	if mem, ok := c.store.(*analytics.MemoryStore); ok {
-		mem.InsertBudgetDepletion(analytics.BudgetDepletion{
+	if obs, ok := c.store.(analytics.ObservabilityWriter); ok {
+		obs.InsertBudgetDepletion(analytics.BudgetDepletion{
 			CampaignID: src.CampaignID,
 			AccountID:  src.AccountID,
 			Budget:     src.Budget,

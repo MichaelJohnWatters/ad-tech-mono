@@ -38,13 +38,13 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 		return analytics.NewMemory()
 	case "duckdb":
 		path := strings.TrimSpace(cfg.Get("reporting.duckdb_path", "/tmp/adtech-analytics.duckdb"))
-		store, err := newDuckDBStore(path)
+		store, err := newDuckDBStore(path, log)
 		if err != nil {
 			log.Error("analytics store: duckdb backend requested but unavailable", "path", path, "error", err)
 			os.Exit(1)
 		}
 		log.Info("analytics store: duckdb backend", "path", path)
-		log.Warn("analytics store: operational-signal events and /debug read-backs are not persisted on the duckdb backend yet (core events are); see docs/MOCK_AUDIT.md")
+		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/MOCK_AUDIT.md")
 		return store
 	default:
 		log.Error("analytics store: unknown backend, refusing to boot",

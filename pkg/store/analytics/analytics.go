@@ -48,6 +48,29 @@ type Store interface {
 	Close() error
 }
 
+// ObservabilityWriter is the set of operational-signal writes the
+// reporting consumer makes alongside the core Store events. These are
+// non-bid state transitions — serve suppressions, render failures, fraud
+// rejections, budget depletions, campaign state changes, serve no-fills —
+// surfaced to ops dashboards and advertiser reports rather than billed.
+//
+// Kept off the core Store interface (they're a reporting-side concern, not
+// every analytics consumer's), but both MemoryStore and DuckDB implement
+// it so reporting persists these on whichever backend is selected instead
+// of dropping them on anything but memory. Signatures intentionally take
+// no ctx/error to match the fire-and-forget call sites; implementations
+// log their own failures.
+type ObservabilityWriter interface {
+	InsertServeNoFill(ServeNoFill)
+	InsertFreqCapBlock(FreqCapBlock)
+	InsertRenderFailure(RenderFailure)
+	InsertTrackerRejection(TrackerRejection)
+	InsertCampaignStateChange(CampaignStateChange)
+	InsertBudgetDepletion(BudgetDepletion)
+}
+
+var _ ObservabilityWriter = (*MemoryStore)(nil)
+
 // Event is a tagged union for batch inserts.
 type Event struct {
 	Type       EventType        `json:"type"`

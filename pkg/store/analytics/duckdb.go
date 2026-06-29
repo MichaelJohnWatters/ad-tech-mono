@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -16,9 +17,12 @@ import (
 // Zero infrastructure - just a file on disk.
 // Used for local development and staging.
 type DuckDB struct {
-	db *sql.DB
-	mu sync.Mutex // DuckDB writes are single-threaded
+	db  *sql.DB
+	log *slog.Logger
+	mu  sync.Mutex // DuckDB writes are single-threaded
 }
+
+var _ ObservabilityWriter = (*DuckDB)(nil)
 
 // NewDuckDB opens (or creates) a DuckDB database at the given path.
 // Use ":memory:" for an in-memory database (testing).
@@ -28,12 +32,21 @@ func NewDuckDB(path string) (*DuckDB, error) {
 		return nil, fmt.Errorf("open duckdb %s: %w", path, err)
 	}
 
-	store := &DuckDB{db: db}
+	store := &DuckDB{db: db, log: slog.Default()}
 	if err := store.createTables(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)
 	}
 	return store, nil
+}
+
+// SetLogger sets the logger used to report operational-signal write
+// failures (those methods are fire-and-forget, so a failed insert is
+// logged rather than returned). No-op for a nil logger.
+func (d *DuckDB) SetLogger(log *slog.Logger) {
+	if log != nil {
+		d.log = log
+	}
 }
 
 func (d *DuckDB) createTables() error {
@@ -153,6 +166,57 @@ func (d *DuckDB) createTables() error {
 			position_ms    BIGINT,
 			schema_version INTEGER DEFAULT 1,
 			timestamp      TIMESTAMP NOT NULL
+		)`,
+		// Operational-signal tables — non-bid state transitions surfaced to
+		// ops dashboards (see ObservabilityWriter). MemoryStore keeps these
+		// as slices; here they're real tables so the signals survive restart
+		// on the durable backend instead of being dropped.
+		`CREATE TABLE IF NOT EXISTS serve_no_fills (
+			trace_id     VARCHAR NOT NULL,
+			publisher_id VARCHAR,
+			placement_id VARCHAR,
+			reason       VARCHAR,
+			timestamp    TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS freq_cap_blocks (
+			trace_id     VARCHAR NOT NULL,
+			user_id      VARCHAR,
+			campaign_id  VARCHAR,
+			placement_id VARCHAR,
+			publisher_id VARCHAR,
+			timestamp    TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS render_failures (
+			trace_id     VARCHAR NOT NULL,
+			campaign_id  VARCHAR,
+			creative_id  VARCHAR,
+			placement_id VARCHAR,
+			publisher_id VARCHAR,
+			reason       VARCHAR,
+			detail       VARCHAR,
+			timestamp    TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS tracker_rejections (
+			trace_id   VARCHAR NOT NULL,
+			event_type VARCHAR,
+			reason     VARCHAR,
+			detail     VARCHAR,
+			timestamp  TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS campaign_state_changes (
+			campaign_id VARCHAR NOT NULL,
+			account_id  VARCHAR,
+			old_state   VARCHAR,
+			new_state   VARCHAR,
+			reason      VARCHAR,
+			timestamp   TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS budget_depletions (
+			campaign_id VARCHAR NOT NULL,
+			account_id  VARCHAR,
+			budget      DOUBLE,
+			spent       DOUBLE,
+			timestamp   TIMESTAMP NOT NULL
 		)`,
 	}
 
@@ -283,6 +347,66 @@ func (d *DuckDB) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error
 		e.PlacementID, e.PublisherID, e.AdvertiserID, e.ClearingPrice,
 		e.Currency, e.BidModel, e.DealID, e.Channel, e.SchemaVersion, e.Timestamp)
 	return err
+}
+
+// execSignal runs a fire-and-forget operational-signal insert. These
+// methods match MemoryStore's no-error signatures (the call sites can't do
+// anything useful with the error), so a failed write is logged at ERROR
+// rather than returned — visible to ops, non-fatal to the event pipeline.
+func (d *DuckDB) execSignal(kind, query string, args ...any) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ts := time.Now()
+	for i, a := range args {
+		if t, ok := a.(time.Time); ok && t.IsZero() {
+			args[i] = ts
+		}
+	}
+	if _, err := d.db.Exec(query, args...); err != nil {
+		d.log.Error("duckdb: operational-signal insert failed", "signal", kind, "error", err)
+	}
+}
+
+func (d *DuckDB) InsertServeNoFill(n ServeNoFill) {
+	d.execSignal("serve_no_fill",
+		`INSERT INTO serve_no_fills (trace_id, publisher_id, placement_id, reason, timestamp)
+		 VALUES (?, ?, ?, ?, ?)`,
+		n.TraceID, n.PublisherID, n.PlacementID, n.Reason, n.Timestamp)
+}
+
+func (d *DuckDB) InsertFreqCapBlock(b FreqCapBlock) {
+	d.execSignal("freq_cap_block",
+		`INSERT INTO freq_cap_blocks (trace_id, user_id, campaign_id, placement_id, publisher_id, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		b.TraceID, b.UserID, b.CampaignID, b.PlacementID, b.PublisherID, b.Timestamp)
+}
+
+func (d *DuckDB) InsertRenderFailure(r RenderFailure) {
+	d.execSignal("render_failure",
+		`INSERT INTO render_failures (trace_id, campaign_id, creative_id, placement_id, publisher_id, reason, detail, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.TraceID, r.CampaignID, r.CreativeID, r.PlacementID, r.PublisherID, r.Reason, r.Detail, r.Timestamp)
+}
+
+func (d *DuckDB) InsertTrackerRejection(r TrackerRejection) {
+	d.execSignal("tracker_rejection",
+		`INSERT INTO tracker_rejections (trace_id, event_type, reason, detail, timestamp)
+		 VALUES (?, ?, ?, ?, ?)`,
+		r.TraceID, r.EventType, r.Reason, r.Detail, r.Timestamp)
+}
+
+func (d *DuckDB) InsertCampaignStateChange(c CampaignStateChange) {
+	d.execSignal("campaign_state_change",
+		`INSERT INTO campaign_state_changes (campaign_id, account_id, old_state, new_state, reason, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		c.CampaignID, c.AccountID, c.OldState, c.NewState, c.Reason, c.Timestamp)
+}
+
+func (d *DuckDB) InsertBudgetDepletion(b BudgetDepletion) {
+	d.execSignal("budget_depletion",
+		`INSERT INTO budget_depletions (campaign_id, account_id, budget, spent, timestamp)
+		 VALUES (?, ?, ?, ?, ?)`,
+		b.CampaignID, b.AccountID, b.Budget, b.Spent, b.Timestamp)
 }
 
 func (d *DuckDB) InsertBatch(ctx context.Context, events []Event) error {
