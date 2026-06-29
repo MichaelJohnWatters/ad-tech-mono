@@ -6,6 +6,67 @@ import (
 	"time"
 )
 
+func TestIsIABViewable(t *testing.T) {
+	cases := []struct {
+		name           string
+		durMs          int64
+		pct            int
+		areaPx         int64
+		wantIABViewable bool
+	}{
+		{"below time threshold", 999, 100, 0, false},
+		{"at time threshold, 50% visible", 1000, 50, 0, true},
+		{"at time threshold, 49% visible", 1000, 49, 0, false},
+		{"large ad, 30% suffices", 1500, 30, 250_000, true},
+		{"large ad, 29% fails", 1500, 29, 250_000, false},
+		{"large ad below time threshold still fails", 500, 100, 250_000, false},
+		{"zero values fail", 0, 0, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := IsIABViewable(c.durMs, c.pct, c.areaPx)
+			if got != c.wantIABViewable {
+				t.Errorf("IsIABViewable(%dms, %d%%, %dpx) = %v, want %v", c.durMs, c.pct, c.areaPx, got, c.wantIABViewable)
+			}
+		})
+	}
+}
+
+func TestMemoryStore_InsertView(t *testing.T) {
+	store := NewMemory()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := store.InsertView(ctx, &ViewEvent{
+		TraceID:        "tr-1",
+		CampaignID:     "camp-1",
+		CreativeID:     "cr-1",
+		PlacementID:    "pl-1",
+		PublisherID:    "pub-1",
+		AccountID:      "acc-1",
+		DurationMs:     2000,
+		PercentVisible: 75,
+		AreaPx:         90000,
+		IABViewable:    true,
+		Timestamp:      now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := store.Views(); len(got) != 1 || !got[0].IABViewable || got[0].DurationMs != 2000 {
+		t.Fatalf("Views() = %+v", got)
+	}
+
+	res, err := store.Query(ctx, QueryParams{Table: "views"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First column is "count", second is "viewable_count"
+	if res.Rows[0][0].(int64) != 1 || res.Rows[0][1].(int64) != 1 {
+		t.Errorf("query result: %+v, want count=1 viewable_count=1", res.Rows[0])
+	}
+}
+
 func TestMemoryStore_InsertAndQuery(t *testing.T) {
 	store := NewMemory()
 	ctx := context.Background()
