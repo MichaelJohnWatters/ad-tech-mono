@@ -134,10 +134,25 @@ func pickLoader(cfg *config.Config, log *slog.Logger, serviceName string) warm.L
 	if dbURL == "" {
 		log.Warn("secrets cache: database.url not set, cache will stay empty until configured")
 	}
+
+	// At-rest decryption key. A malformed key (set but invalid) is a hard
+	// misconfig — log ERROR and leave the cipher disabled so encrypted
+	// rows fail to decrypt and surface the problem via /readyz, rather
+	// than the service silently treating ciphertext as the credential.
+	cipher, err := NewCipherFromEnv()
+	if err != nil {
+		log.Error("secrets cache: invalid encryption key, secrets will not decrypt", "error", err)
+		cipher = &Cipher{}
+	}
+	if !cipher.Enabled() {
+		log.Warn("secrets cache: " + EncryptionKeyEnv + " not set, secret values stored/read as plaintext (dev mode)")
+	}
+
 	return &PostgresLoader{
 		DBURL:       dbURL,
 		ServiceName: serviceName,
 		Log:         log,
+		Cipher:      cipher,
 	}
 }
 

@@ -76,6 +76,16 @@ type secretsPatchRequest struct {
 // on every service refresh within a NATS round-trip. Without the
 // publish operators would wait up to 30s for the natural poll.
 func secretsHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+	// One cipher for the lifetime of the handler. A malformed key is a
+	// hard misconfig — log ERROR and run disabled so create writes
+	// plaintext (visibly wrong via the warm-cache decrypt path) rather
+	// than crashing the gateway at request time.
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		log.Error("secrets handler: invalid encryption key, writing plaintext", "error", err)
+		cipher = &secrets.Cipher{}
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if db == nil {
 			http.Error(w, "secrets store unavailable", http.StatusServiceUnavailable)
@@ -89,9 +99,9 @@ func secretsHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) http.Hand
 
 		switch {
 		case r.Method == http.MethodGet && idPart == "":
-			listSecrets(w, r, db, log)
+			listSecrets(w, r, db, cipher, log)
 		case r.Method == http.MethodPost && idPart == "":
-			createSecret(w, r, db, bus, log)
+			createSecret(w, r, db, bus, cipher, log)
 		case r.Method == http.MethodPatch && idPart != "":
 			patchSecret(w, r, db, bus, log, idPart)
 		case r.Method == http.MethodDelete && idPart != "":
@@ -102,7 +112,7 @@ func secretsHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) http.Hand
 	}
 }
 
-func listSecrets(w http.ResponseWriter, r *http.Request, db *sql.DB, log *slog.Logger) {
+func listSecrets(w http.ResponseWriter, r *http.Request, db *sql.DB, cipher *secrets.Cipher, log *slog.Logger) {
 	q := `SELECT id::text, name, value, purpose, owner, status,
 	             rotated_at, revokes_at, expires_at, created_at
 	      FROM secrets WHERE 1=1`
@@ -147,7 +157,16 @@ func listSecrets(w http.ResponseWriter, r *http.Request, db *sql.DB, log *slog.L
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		item.ValuePreview = maskValue(value)
+		// Decrypt before masking so the preview is a stable prefix of the
+		// real credential (an identifier the operator recognises), not a
+		// prefix of the ciphertext. A decrypt failure must never surface
+		// raw ciphertext — fall back to a fixed placeholder.
+		plain, derr := cipher.Decrypt(value)
+		if derr != nil {
+			log.Error("secrets list: decrypt failed", "id", item.ID, "error", derr)
+			plain = ""
+		}
+		item.ValuePreview = maskValue(plain)
 		if rotatedAt.Valid {
 			t := rotatedAt.Time
 			item.RotatedAt = &t
@@ -166,7 +185,7 @@ func listSecrets(w http.ResponseWriter, r *http.Request, db *sql.DB, log *slog.L
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-func createSecret(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, log *slog.Logger) {
+func createSecret(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, cipher *secrets.Cipher, log *slog.Logger) {
 	var req secretsCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -202,13 +221,23 @@ func createSecret(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 		value = hex.EncodeToString(b)
 	}
 
+	// Encrypt at rest. The plaintext `value` is still returned once in the
+	// response below (the only time it's ever exposed) — only the stored
+	// column is ciphertext.
+	storedValue, err := cipher.Encrypt(value)
+	if err != nil {
+		log.Error("secrets create: encrypt failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	const q = `
 INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, now(), now())
 RETURNING id::text`
 	var id string
 	if err := db.QueryRowContext(r.Context(), q,
-		req.Name, value, req.Purpose, req.Owner, req.Status,
+		req.Name, storedValue, req.Purpose, req.Owner, req.Status,
 	).Scan(&id); err != nil {
 		log.Error("secrets create insert failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
