@@ -12,7 +12,7 @@ import (
 )
 
 func TestEngine_CPM_BillImmediate(t *testing.T) {
-	ledger := NewLedger()
+	ledger := NewMemoryLedger()
 	contracts := NewContractStore()
 	clk := clock.NewFake(time.Now())
 	log := logger.New("billing-test")
@@ -57,7 +57,7 @@ func TestEngine_CPM_BillImmediate(t *testing.T) {
 }
 
 func TestEngine_CPC_ReserveSettle(t *testing.T) {
-	ledger := NewLedger()
+	ledger := NewMemoryLedger()
 	contracts := NewContractStore()
 	clk := clock.NewFake(time.Now())
 	log := logger.New("billing-test")
@@ -87,6 +87,89 @@ func TestEngine_CPC_ReserveSettle(t *testing.T) {
 	// Ledger should have 2 entries
 	if len(ledger.Entries()) != 2 {
 		t.Errorf("ledger entries = %d, want 2", len(ledger.Entries()))
+	}
+}
+
+func TestEngine_SettleByTrace_CPCHappyPath(t *testing.T) {
+	ledger := NewMemoryLedger()
+	engine := NewEngine(ledger, NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+
+	// Reserve via impression on a CPC campaign.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "trA", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPC, EventType: "impression",
+	})
+
+	// Click arrives — only the trace ID is in hand.
+	res, err := engine.SettleByTrace(context.Background(), "trA", "click")
+	if err != nil || res == nil {
+		t.Fatalf("SettleByTrace: res=%v err=%v", res, err)
+	}
+	if res.Action != "settled" {
+		t.Errorf("action = %s, want settled", res.Action)
+	}
+	if res.AdvertiserSpend != 2.00 {
+		t.Errorf("spend = %.2f, want 2.00 (recovered from reservation)", res.AdvertiserSpend)
+	}
+}
+
+func TestEngine_SettleByTrace_NoReservationNoOp(t *testing.T) {
+	ledger := NewMemoryLedger()
+	engine := NewEngine(ledger, NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+
+	// CPM impression — no reservation created.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "trB", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 3.00, Currency: "USD", BidModel: BidCPM, EventType: "impression",
+	})
+
+	res, err := engine.SettleByTrace(context.Background(), "trB", "click")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != nil {
+		t.Errorf("expected no-op (CPM has no reservation), got %+v", res)
+	}
+}
+
+func TestEngine_SettleByTrace_WrongEventNoOp(t *testing.T) {
+	ledger := NewMemoryLedger()
+	engine := NewEngine(ledger, NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+
+	// CPA campaign reserves at impression — click should NOT settle.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "trC", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 5.00, Currency: "USD", BidModel: BidCPA, EventType: "impression",
+	})
+
+	res, _ := engine.SettleByTrace(context.Background(), "trC", "click")
+	if res != nil {
+		t.Errorf("click on CPA must not settle, got %+v", res)
+	}
+
+	// Conversion does settle.
+	res, _ = engine.SettleByTrace(context.Background(), "trC", "conversion")
+	if res == nil || res.Action != "settled" {
+		t.Errorf("conversion on CPA: res=%+v, want settled", res)
+	}
+}
+
+func TestEngine_SettleByTrace_DoubleSettleBlocked(t *testing.T) {
+	ledger := NewMemoryLedger()
+	engine := NewEngine(ledger, NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "trD", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression",
+	})
+
+	first, _ := engine.SettleByTrace(context.Background(), "trD", "click")
+	if first == nil {
+		t.Fatal("first settle should succeed")
+	}
+	second, _ := engine.SettleByTrace(context.Background(), "trD", "click")
+	if second != nil {
+		t.Errorf("second settle should be a no-op (defends against double-fire), got %+v", second)
 	}
 }
 
@@ -163,7 +246,7 @@ func TestContract_DealTypeModifiers(t *testing.T) {
 }
 
 func TestLedger_BalanceFor(t *testing.T) {
-	ledger := NewLedger()
+	ledger := NewMemoryLedger()
 	ledger.Record(LedgerEntry{
 		Type: EntrySpend, DebitAccount: "advertiser:a1", CreditAccount: "publisher:p1",
 		Amount: 10.00, PublisherRevenue: 8.00, PlatformMargin: 2.00,
@@ -249,7 +332,7 @@ func TestAttribution_Expired(t *testing.T) {
 
 func TestReconciler_Verify(t *testing.T) {
 	store := analytics.NewMemory()
-	ledger := NewLedger()
+	ledger := NewMemoryLedger()
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -277,7 +360,7 @@ func TestReconciler_Verify(t *testing.T) {
 }
 
 func TestInvoiceGenerator(t *testing.T) {
-	ledger := NewLedger()
+	ledger := NewMemoryLedger()
 	now := time.Now().UTC()
 
 	ledger.Record(LedgerEntry{

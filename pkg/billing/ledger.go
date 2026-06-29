@@ -10,16 +10,22 @@ type EntryType string
 
 const (
 	EntrySpend       EntryType = "spend"       // immediate billing (CPM)
-	EntryReservation EntryType = "reservation"  // budget hold (CPC/CPA/vCPM/CPCV)
-	EntrySettlement  EntryType = "settlement"   // reservation fulfilled
-	EntryRelease     EntryType = "release"      // reservation expired/released
-	EntryAdjustment  EntryType = "adjustment"   // manual credit/debit
-	EntryRefund      EntryType = "refund"       // fraud refund
+	EntryReservation EntryType = "reservation" // budget hold (CPC/CPA/vCPM/CPCV)
+	EntrySettlement  EntryType = "settlement"  // reservation fulfilled
+	EntryRelease     EntryType = "release"     // reservation expired/released
+	EntryAdjustment  EntryType = "adjustment"  // manual credit/debit
+	EntryRefund      EntryType = "refund"      // fraud refund
 )
 
 // LedgerEntry is a single double-entry accounting record.
 // Every entry has a debit account and a credit account.
 // Debits increase spend (advertiser pays), credits increase revenue (publisher earns).
+//
+// BidModel + DealType are persisted on the reservation row so that a later
+// settle (click for CPC, conversion for CPA, view for vCPM, complete for
+// CPCV) can reconstruct the SpendEvent from the reservation alone — the
+// settle-side event payload (a click pixel, say) doesn't carry the
+// auction's clearing price or the deal type, but the reservation does.
 type LedgerEntry struct {
 	ID               int64
 	Timestamp        time.Time
@@ -28,31 +34,77 @@ type LedgerEntry struct {
 	PublisherID      string
 	AdvertiserID     string
 	Type             EntryType
-	DebitAccount     string  // e.g. "advertiser:adv-acme"
-	CreditAccount    string  // e.g. "publisher:pub-daily-news"
+	DebitAccount     string // e.g. "advertiser:adv-acme"
+	CreditAccount    string // e.g. "publisher:pub-daily-news"
 	Amount           float64
 	PublisherRevenue float64
 	PlatformMargin   float64
 	Currency         string
+	BidModel         string // cpm, cpc, cpa, vcpm, cpcv — needed at settle time
+	DealType         string // open, pmp, pg, preferred — needed for revenue split at settle
 	ReservationID    string // links reserve/settle/release
 	Description      string
 }
 
-// Ledger is an append-only double-entry accounting ledger.
-// In production this would be backed by Postgres with ACID guarantees.
-type Ledger struct {
+// Ledger is the append-only double-entry accounting store the billing
+// engine writes to and queries. Implementations:
+//
+//   - MemoryLedger — in-process slice, used by tests and dev-mode reporting.
+//   - pkg/billing/tigerbeetle.Ledger — TigerBeetle-backed, used in prod.
+//
+// All methods are safe for concurrent use; implementations are responsible
+// for their own synchronization.
+type Ledger interface {
+	// Record appends an entry and returns its assigned ID.
+	Record(entry LedgerEntry) int64
+	// Entries returns all entries (for debugging/export).
+	Entries() []LedgerEntry
+	// EntriesForTrace returns all entries for a given trace ID.
+	EntriesForTrace(traceID string) []LedgerEntry
+	// EntriesForAccount returns all entries that touch the given account
+	// (as either the debit or credit side).
+	EntriesForAccount(accountID string) []LedgerEntry
+	// ReservationByTrace returns the (most recent) reservation entry for a
+	// trace ID, used by Engine.SettleByTrace to reconstruct the original
+	// auction context at settle time.
+	ReservationByTrace(traceID string) (LedgerEntry, bool)
+	// HasSettlement reports whether trace_id has already been settled.
+	HasSettlement(traceID string) bool
+	// BalanceFor computes the net balance for an account.
+	BalanceFor(accountID string) BalanceSummary
+	// Summary returns aggregate billing stats.
+	Summary() LedgerSummary
+}
+
+// MemoryLedger is the in-process implementation of Ledger. Volatile —
+// restart wipes the slice — so production uses pkg/billing/tigerbeetle
+// behind the same interface.
+type MemoryLedger struct {
 	mu      sync.RWMutex
 	entries []LedgerEntry
 	nextID  int64
 }
 
-// NewLedger creates an in-memory ledger.
-func NewLedger() *Ledger {
-	return &Ledger{nextID: 1}
+// NewMemoryLedger creates an empty in-memory ledger.
+func NewMemoryLedger() *MemoryLedger {
+	return &MemoryLedger{nextID: 1}
 }
 
 // Record appends an entry to the ledger. Returns the entry ID.
-func (l *Ledger) Record(entry LedgerEntry) int64 {
+// Reset wipes all entries and rewinds the auto-increment counter. Used
+// by the reporting service's /debug/billing/reset endpoint so e2e tests
+// can run billing scenarios in isolation without inheriting ledger state
+// from prior tests in the same pod lifetime. Production deployments use
+// the TigerBeetle backend instead, which has its own reset story (replace
+// the pod, restart from snapshot, etc.) — Reset is in-memory only.
+func (l *MemoryLedger) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = nil
+	l.nextID = 1
+}
+
+func (l *MemoryLedger) Record(entry LedgerEntry) int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	entry.ID = l.nextID
@@ -62,7 +114,7 @@ func (l *Ledger) Record(entry LedgerEntry) int64 {
 }
 
 // Entries returns all ledger entries (for debugging/export).
-func (l *Ledger) Entries() []LedgerEntry {
+func (l *MemoryLedger) Entries() []LedgerEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	out := make([]LedgerEntry, len(l.entries))
@@ -70,8 +122,39 @@ func (l *Ledger) Entries() []LedgerEntry {
 	return out
 }
 
+// ReservationByTrace returns the (most recent) reservation entry for a
+// trace ID, used by Engine.SettleByTrace to reconstruct the original
+// auction context at settle time. Returns (zero, false) when no
+// reservation exists — either the impression was billed immediately
+// (CPM) or no impression event has been processed yet.
+func (l *MemoryLedger) ReservationByTrace(traceID string) (LedgerEntry, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for i := len(l.entries) - 1; i >= 0; i-- {
+		e := l.entries[i]
+		if e.TraceID == traceID && e.Type == EntryReservation {
+			return e, true
+		}
+	}
+	return LedgerEntry{}, false
+}
+
+// HasSettlement reports whether trace_id has already been settled —
+// guards against double-settle when an event fires twice and tracker
+// dedup doesn't catch it (cross-pod restart, dedup-disabled config, etc).
+func (l *MemoryLedger) HasSettlement(traceID string) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, e := range l.entries {
+		if e.TraceID == traceID && e.Type == EntrySettlement {
+			return true
+		}
+	}
+	return false
+}
+
 // EntriesForTrace returns all entries for a given trace ID.
-func (l *Ledger) EntriesForTrace(traceID string) []LedgerEntry {
+func (l *MemoryLedger) EntriesForTrace(traceID string) []LedgerEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var result []LedgerEntry
@@ -84,7 +167,7 @@ func (l *Ledger) EntriesForTrace(traceID string) []LedgerEntry {
 }
 
 // EntriesForAccount returns all entries where the account is debited or credited.
-func (l *Ledger) EntriesForAccount(accountID string) []LedgerEntry {
+func (l *MemoryLedger) EntriesForAccount(accountID string) []LedgerEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var result []LedgerEntry
@@ -98,7 +181,7 @@ func (l *Ledger) EntriesForAccount(accountID string) []LedgerEntry {
 
 // BalanceFor computes the net balance for an account.
 // Debits increase the balance (money owed/spent), credits decrease it (money earned).
-func (l *Ledger) BalanceFor(accountID string) BalanceSummary {
+func (l *MemoryLedger) BalanceFor(accountID string) BalanceSummary {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -128,7 +211,7 @@ func (l *Ledger) BalanceFor(accountID string) BalanceSummary {
 }
 
 // Summary returns aggregate billing stats.
-func (l *Ledger) Summary() LedgerSummary {
+func (l *MemoryLedger) Summary() LedgerSummary {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 

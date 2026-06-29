@@ -59,11 +59,11 @@ type PayoutLineItem struct {
 
 // InvoiceGenerator creates invoices and payouts from ledger data.
 type InvoiceGenerator struct {
-	ledger *Ledger
+	ledger Ledger
 }
 
-// NewInvoiceGenerator creates an invoice generator.
-func NewInvoiceGenerator(ledger *Ledger) *InvoiceGenerator {
+// NewInvoiceGenerator creates an invoice generator backed by any Ledger.
+func NewInvoiceGenerator(ledger Ledger) *InvoiceGenerator {
 	return &InvoiceGenerator{ledger: ledger}
 }
 

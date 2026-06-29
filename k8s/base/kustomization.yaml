@@ -12,6 +12,7 @@ resources:
   - nats/statefulset.yaml
   - redis/deployment.yaml
   - minio/deployment.yaml
+  - tigerbeetle/statefulset.yaml
   # Observability
   - grafana/deployment.yaml
   - grafana/dashboards.yaml

@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tigerbeetle
+  namespace: adtech
+  labels:
+    app: tigerbeetle
+spec:
+  serviceName: tigerbeetle
+  replicas: 1 # single replica locally; 3+ replicated cluster in prod overlay
+  selector:
+    matchLabels:
+      app: tigerbeetle
+  template:
+    metadata:
+      labels:
+        app: tigerbeetle
+    spec:
+      # tigerbeetle format must run once to create the data file before
+      # `tigerbeetle start` can open it. The init container is idempotent
+      # because format refuses to overwrite an existing file, so pod
+      # restarts on the same PVC skip formatting.
+      initContainers:
+        - name: format
+          image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ ! -f /data/0_0.tigerbeetle ]; then
+                /tigerbeetle format \
+                  --cluster=0 \
+                  --replica=0 \
+                  --replica-count=1 \
+                  /data/0_0.tigerbeetle
+              else
+                echo "data file already exists, skipping format"
+              fi
+          volumeMounts:
+            - name: tigerbeetle-data
+              mountPath: /data
+      containers:
+        - name: tigerbeetle
+          image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43
+          imagePullPolicy: IfNotPresent
+          command: ["/tigerbeetle"]
+          args:
+            - "start"
+            - "--addresses=0.0.0.0:3000"
+            - "/data/0_0.tigerbeetle"
+          ports:
+            - containerPort: 3000
+              name: tb
+          volumeMounts:
+            - name: tigerbeetle-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          # TB has no HTTP health endpoint. Use a TCP probe on the
+          # listening port — if it accepts a connection the binary is up.
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 2
+            periodSeconds: 2
+  volumeClaimTemplates:
+    - metadata:
+        name: tigerbeetle-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerbeetle
+  namespace: adtech
+spec:
+  selector:
+    app: tigerbeetle
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: tb
+  clusterIP: None # headless for StatefulSet
