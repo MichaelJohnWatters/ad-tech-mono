@@ -24,6 +24,12 @@ type auctionMetrics struct {
 	// endpoint. Labels: dsp_endpoint, decision = "bid" | "no_bid".
 	bidsReceivedTotal *prometheus.CounterVec
 
+	// Auctions WON per DSP endpoint. Paired with bidsReceivedTotal,
+	// this is what the dashboard needs to chart bids vs wins vs no-bids
+	// per DSP side by side. The smart router tracks the same thing
+	// in-memory via RecordWin; this counter is its Prometheus mirror.
+	auctionsWonTotal *prometheus.CounterVec
+
 	// Clearing-price sum — revenue counter. Increments by the cleared
 	// price (in USD, not cents) on each winning auction. Use
 	// rate()/increase() over time windows for revenue per minute / hour.
@@ -56,7 +62,12 @@ func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
 			Name:      "bids_below_floor_total",
 			Help:      "Bids dropped pre-auction because their price was below the placement floor.",
 		}, []string{"placement_id"}),
+		auctionsWonTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "auctions_won_total",
+			Help:      "Auctions won per DSP endpoint. Paired with bids_received_total to chart bid/win/loss by DSP.",
+		}, []string{"dsp_endpoint"}),
 	}
-	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal)
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal)
 	return m
 }
