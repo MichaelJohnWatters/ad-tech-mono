@@ -1,0 +1,55 @@
+# Reporting — CGO-enabled (DuckDB driver). Uses build/Dockerfile.reporting
+# which does `go build` inside the image (not Dockerfile.dev's pre-built
+# binary pattern), since cross-compiling CGO from macOS to Linux/musl is
+# painful. Trade-off: live_update doesn't apply; iteration requires a
+# full image rebuild (~30-60s vs ~3s for the others). Acceptable since
+# reporting isn't edited often.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reporting
+  namespace: adtech
+  labels:
+    app: reporting
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reporting
+  template:
+    metadata:
+      labels:
+        app: reporting
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: reporting
+          image: adtech-reporting
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8086
+              name: http
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: REPORTING_NATS_URL
+              value: "nats://nats:4222"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 1000m, memory: 512Mi }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8086 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8086 }
+            periodSeconds: 2
+            failureThreshold: 5

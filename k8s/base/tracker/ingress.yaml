@@ -1,0 +1,23 @@
+# Traefik routes tracker.adtech.local to the tracker Service.
+# /etc/hosts (via scripts/setup-hosts.sh) maps tracker.adtech.local
+# to Traefik's LoadBalancer IP (Colima k3s default: 192.168.5.1).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tracker
+  namespace: adtech
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: tracker.adtech.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tracker
+                port:
+                  number: 8083

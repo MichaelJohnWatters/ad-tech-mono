@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: reporting
+  namespace: adtech
+  labels: { app: reporting }
+spec:
+  selector: { app: reporting }
+  ports: [{ name: http, port: 8086, targetPort: 8086 }]
