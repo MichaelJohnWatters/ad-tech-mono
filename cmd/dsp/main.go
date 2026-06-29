@@ -37,6 +37,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pacing"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -169,6 +170,13 @@ func main() {
 	audienceStore, audiencePreloader, audienceStop := openAudienceStore(cfg, l2, log)
 	lc.OnShutdown("audience-store", func(_ context.Context) error { audienceStop(); return nil })
 
+	// Consent / opt-out registry warm cache — enforced on the bid path so
+	// the DSP doesn't bid on (or personalise to) opted-out users.
+	optOutCache := startOptOutCache(cfg, clk, log, bus)
+	if optOutCache != nil {
+		lc.OnShutdown("opt-out-cache", func(_ context.Context) error { optOutCache.Stop(); return nil })
+	}
+
 	// Readiness checks: only report ready when the L2 connection responds
 	// and the campaign cache has completed at least one successful load.
 	// Tilt and K8s use this to decide when to route traffic / show green.
@@ -192,7 +200,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, budget, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
@@ -237,7 +245,11 @@ func main() {
 	// Cache refresh stays debug-gated — it's purely a dev/test helper for
 	// forcing a synchronous reload, not a customer-facing operation.
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(campaignCache, secretsCache.Cache))
+		refreshables := []warm.Refreshable{campaignCache, secretsCache.Cache}
+		if optOutCache != nil {
+			refreshables = append(refreshables, optOutCache)
+		}
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(refreshables...))
 		if audiencePreloader != nil {
 			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
 		}
@@ -433,6 +445,48 @@ func startCampaignCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, p
 	return c
 }
 
+// startOptOutCache builds the user opt-out registry warm cache used to
+// enforce consent on the bid hot path. Returns nil when database.url is
+// unset — in that case the bid handler fails open (bids as if no opt-outs
+// exist), consistent with the platform's other "boot regardless of infra"
+// caches. An opted-out user is a small minority, so failing open on a
+// missing DB favours availability; the next poll repopulates the cache.
+func startOptOutCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, bus events.EventBus) *warm.Cache[privacy.OptOut] {
+	dbURL := cfg.Get("database.url", "")
+	if dbURL == "" {
+		log.Warn("database.url not set, opt-out enforcement disabled (no consent cache)")
+		return nil
+	}
+	pollInterval := firstNonZeroDuration(
+		cfg.GetDuration("cache.warm.opt_outs.poll_interval", 0),
+		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+	)
+	loader := &warm.RetryingLoader[privacy.OptOut]{
+		Log:   log,
+		KeyFn: func(o privacy.OptOut) string { return o.UserID },
+		Construct: func() (warm.Loader[privacy.OptOut], error) {
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.OptOutLoader{Store: store}, nil
+		},
+	}
+	c := warm.New(warm.Config[privacy.OptOut]{
+		Name:              "opt_outs",
+		Loader:            loader,
+		Clock:             clk,
+		Bus:               bus,
+		InvalidateSubject: events.SubjectCacheInvalidateOptOuts,
+		PollInterval:      pollInterval,
+		Log:               log,
+	})
+	if err := c.Start(context.Background()); err != nil {
+		log.Error("opt-out cache initial load failed", "error", err)
+	}
+	return c
+}
+
 // pickCampaignLoader returns a self-healing warm.Loader. The DSP keeps
 // its YAML-derived fallback when database.url is unset (so a fully
 // offline boot still produces some campaigns to bid with), but when a
@@ -556,7 +610,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	return client
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, budget *BudgetTracker, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -571,6 +625,37 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 
 		ctx := logger.WithTraceID(r.Context(), bidReq.ID)
 		reqLog := logger.WithContext(log, ctx)
+
+		// Consent / opt-out gate. Combine the platform opt-out registry
+		// (warm cache, keyed by user id) with the inbound OpenRTB
+		// regulatory signals. A no-bid verdict short-circuits before any
+		// targeting work; a no-personalise verdict strips behavioural
+		// targeting below so only contextual signals are used.
+		optLevel := privacy.LevelNone
+		if optOut != nil && bidReq.User != nil && bidReq.User.ID != "" {
+			if rec, ok := optOut.ByID(bidReq.User.ID); ok {
+				optLevel = rec.Level
+			}
+		}
+		var gdpr, coppa int
+		var tcfConsent, usPrivacy string
+		if bidReq.Regs != nil {
+			coppa = bidReq.Regs.COPPA
+			if bidReq.Regs.Ext != nil {
+				gdpr = bidReq.Regs.Ext.GDPR
+				usPrivacy = bidReq.Regs.Ext.USPrivacy
+			}
+		}
+		if bidReq.User != nil && bidReq.User.Ext != nil {
+			tcfConsent = bidReq.User.Ext.Consent
+		}
+		consent := privacy.Evaluate(optLevel, gdpr, tcfConsent, usPrivacy, coppa)
+		if !consent.Bid {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			reqLog.Info("no bid", "reason", "privacy", "privacy_reason", consent.Reason)
+			return
+		}
 
 		tReq := targeting.Request{
 			Device:        deviceTypeStr(bidReq.Device),
@@ -587,7 +672,10 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				tReq.Categories = classifier.Classify(bidReq.Site.Domain, bidReq.Site.Page, nil, nil)
 			}
 		}
-		if bidReq.User != nil && bidReq.User.Ext != nil {
+		// Behavioural segments only when the consent verdict allows
+		// personalisation; otherwise the bid proceeds on contextual
+		// signals (geo / domain / category) alone.
+		if consent.Personalise && bidReq.User != nil && bidReq.User.Ext != nil {
 			tReq.Segments = bidReq.User.Ext.Segments
 		}
 
@@ -616,7 +704,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// (5xx + no-bid). With our own 25ms cap, slow lookups degrade
 		// gracefully: bid proceeds without private segments instead of
 		// failing entirely.
-		if audienceStore != nil && bidReq.User != nil && bidReq.User.ID != "" {
+		if consent.Personalise && audienceStore != nil && bidReq.User != nil && bidReq.User.ID != "" {
 			lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
 			private, err := audienceStore.DSPSegmentsForUser(lookupCtx, bidReq.User.ID)
 			cancel()
