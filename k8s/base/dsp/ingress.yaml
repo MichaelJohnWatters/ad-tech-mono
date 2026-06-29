@@ -1,0 +1,46 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dsp-internal
+  namespace: adtech
+  annotations: { traefik.ingress.kubernetes.io/router.entrypoints: web }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: dsp.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: dsp-internal, port: { number: 8082 } } } }
+    - host: dsp-int.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: dsp-internal, port: { number: 8082 } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dsp-competitor1
+  namespace: adtech
+  annotations: { traefik.ingress.kubernetes.io/router.entrypoints: web }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: dsp-comp1.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: dsp-competitor1, port: { number: 8089 } } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dsp-competitor2
+  namespace: adtech
+  annotations: { traefik.ingress.kubernetes.io/router.entrypoints: web }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: dsp-comp2.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: dsp-competitor2, port: { number: 8090 } } } }

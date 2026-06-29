@@ -14,6 +14,7 @@ data:
         "time": {"from": "now-15m", "to": "now"},
         "panels": [
           {
+            "id": 1,
             "title": "Auction RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
@@ -26,6 +27,7 @@ data:
             ]
           },
           {
+            "id": 2,
             "title": "Auction Latency",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
@@ -47,6 +49,7 @@ data:
             "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
+            "id": 3,
             "title": "Bid RPS by DSP pod",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
@@ -59,6 +62,7 @@ data:
             ]
           },
           {
+            "id": 4,
             "title": "Impression RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
@@ -71,6 +75,7 @@ data:
             ]
           },
           {
+            "id": 5,
             "title": "Click RPS",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
@@ -83,6 +88,7 @@ data:
             ]
           },
           {
+            "id": 6,
             "title": "Bid latency p95 by DSP",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
@@ -96,6 +102,7 @@ data:
             "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
+            "id": 7,
             "title": "Service Error Rate (5xx + 4xx)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
@@ -108,6 +115,7 @@ data:
             ]
           },
           {
+            "id": 8,
             "title": "In-flight requests by service",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
@@ -120,6 +128,7 @@ data:
             ]
           },
           {
+            "id": 9,
             "title": "Service up",
             "type": "stat",
             "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
@@ -137,6 +146,7 @@ data:
             }
           },
           {
+            "id": 10,
             "title": "Goroutines",
             "type": "stat",
             "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
@@ -149,6 +159,7 @@ data:
             ]
           },
           {
+            "id": 11,
             "title": "Go heap (MiB)",
             "type": "stat",
             "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
@@ -162,6 +173,7 @@ data:
             "fieldConfig": {"defaults": {"unit": "MiB", "decimals": 1}}
           },
           {
+            "id": 12,
             "title": "Auction outcomes (fill rate)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
@@ -174,6 +186,7 @@ data:
             ]
           },
           {
+            "id": 13,
             "title": "Fill rate %",
             "type": "stat",
             "gridPos": {"h": 4, "w": 6, "x": 12, "y": 28},
@@ -194,6 +207,7 @@ data:
             }
           },
           {
+            "id": 14,
             "title": "Revenue/min (USD)",
             "type": "stat",
             "gridPos": {"h": 4, "w": 6, "x": 18, "y": 28},
@@ -207,6 +221,7 @@ data:
             "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2}}
           },
           {
+            "id": 15,
             "title": "Total revenue (last hour)",
             "type": "stat",
             "gridPos": {"h": 4, "w": 6, "x": 12, "y": 32},
@@ -219,6 +234,7 @@ data:
             "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2}}
           },
           {
+            "id": 16,
             "title": "Bids dropped below floor",
             "type": "timeseries",
             "gridPos": {"h": 4, "w": 6, "x": 18, "y": 32},
@@ -231,12 +247,34 @@ data:
             ]
           },
           {
+            "id": 17,
+            "title": "Bids / Wins / No-bids by DSP",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 36},
+            "description": "Per-DSP bid behaviour: bids submitted, no-bids returned, auctions won. dsp_endpoint label is the URL the exchange fans out to (one per DSP pod). Bids = bids_received with decision=bid. No-bids = same counter, decision=no_bid. Wins = auctions_won_total. Loss rate = bids - wins.",
+            "targets": [
+              {
+                "expr": "sum(rate(adtech_bids_received_total{decision=\"bid\"}[1m])) by (dsp_endpoint)",
+                "legendFormat": "bids — {{dsp_endpoint}}"
+              },
+              {
+                "expr": "sum(rate(adtech_bids_received_total{decision=\"no_bid\"}[1m])) by (dsp_endpoint)",
+                "legendFormat": "no-bids — {{dsp_endpoint}}"
+              },
+              {
+                "expr": "sum(rate(adtech_auctions_won_total[1m])) by (dsp_endpoint)",
+                "legendFormat": "wins — {{dsp_endpoint}}"
+              }
+            ]
+          },
+          {
+            "id": 18,
             "title": "Still-aspirational (need code)",
             "type": "text",
-            "gridPos": {"h": 3, "w": 24, "x": 0, "y": 36},
+            "gridPos": {"h": 3, "w": 24, "x": 0, "y": 44},
             "options": {
               "mode": "markdown",
-              "content": "These would round out the dashboard but need code emitting them: `adtech_campaign_spend_usd / _budget_usd` (DSP budget utilisation), `adtech_active_campaigns` (DSP gauge), `adtech_nats_consumer_pending_messages` (reporting consumer lag). The smart router's per-DSP bid_rate / win_rate are emitted by the JSON debug endpoint at `:8081/v1/openrtb/routing` — could be exported as Prometheus gauges as a small follow-up."
+              "content": "These would round out the dashboard but need code emitting them: `adtech_campaign_spend_usd / _budget_usd` (DSP budget utilisation), `adtech_active_campaigns` (DSP gauge), `adtech_nats_consumer_pending_messages` (reporting consumer lag)."
             }
           }
         ]
@@ -251,97 +289,92 @@ data:
         "time": {"from": "now-15m", "to": "now"},
         "panels": [
           {
+            "id": 1,
             "title": "Request Rate by handler",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
             "targets": [
               {
-                "expr": "sum(rate(adtech_http_requests_total{service=\"$service\"}[1m])) by (handler, method)",
+                "expr": "sum(rate(adtech_http_requests_total{service=~\"$service\"}[1m])) by (handler, method)",
                 "legendFormat": "{{method}} {{handler}}"
               }
             ]
           },
           {
+            "id": 2,
             "title": "Request Latency (p50/p95/p99)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
             "description": "Latency histogram quantiles across all handlers for the selected service.",
             "targets": [
               {
-                "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
+                "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
                 "legendFormat": "p99"
               },
               {
-                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
                 "legendFormat": "p95"
               },
               {
-                "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (le))",
+                "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
                 "legendFormat": "p50"
               }
             ],
             "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
+            "id": 3,
             "title": "Error Rate (4xx + 5xx)",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
             "description": "Errors per second derived from adtech_http_requests_total with status=~\"[45]..\" (we don't keep a separate counter).",
             "targets": [
               {
-                "expr": "sum(rate(adtech_http_requests_total{service=\"$service\",status=~\"[45]..\"}[1m])) by (status, handler)",
+                "expr": "sum(rate(adtech_http_requests_total{service=~\"$service\",status=~\"[45]..\"}[1m])) by (status, handler)",
                 "legendFormat": "{{status}} {{handler}}"
               }
             ]
           },
           {
+            "id": 4,
             "title": "p95 Latency by handler",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
             "description": "Breaks down latency per handler so you can spot which endpoint is causing the service-wide tail.",
             "targets": [
               {
-                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"$service\"}[1m])) by (handler, le))",
+                "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (handler, le))",
                 "legendFormat": "{{handler}}"
               }
             ],
             "fieldConfig": {"defaults": {"unit": "s"}}
           },
           {
+            "id": 5,
             "title": "In-flight requests",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
             "targets": [
               {
-                "expr": "adtech_http_in_flight_requests{service=\"$service\"}",
+                "expr": "adtech_http_in_flight_requests{service=~\"$service\"}",
                 "legendFormat": "in-flight"
               }
             ]
           },
           {
+            "id": 6,
             "title": "Goroutines + memory",
             "type": "timeseries",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
             "description": "Goroutine count and Go runtime total memory (in MiB). Goroutines climbing without coming down = leak. Memory climbing alongside RPS is fine; alongside no RPS is leak.",
             "targets": [
               {
-                "expr": "go_goroutines{service=\"$service\"}",
+                "expr": "go_goroutines{service=~\"$service\"}",
                 "legendFormat": "goroutines"
               },
               {
-                "expr": "go_memory_classes_total_bytes{service=\"$service\"} / 1024 / 1024",
+                "expr": "go_memory_classes_total_bytes{service=~\"$service\"} / 1024 / 1024",
                 "legendFormat": "memory (MiB)"
-              }
-            ]
-          },
-          {
-            "title": "Logs",
-            "type": "logs",
-            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
-            "targets": [
-              {
-                "datasource": "Loki",
-                "expr": "{service=\"$service\"} |= ``"
               }
             ]
           }
@@ -352,6 +385,9 @@ data:
               "name": "service",
               "type": "custom",
               "query": "exchange,dsp,tracker,gateway,ssp,adserver,reporting",
+              "multi": true,
+              "includeAll": true,
+              "allValue": ".+",
               "current": {"text": "dsp", "value": "dsp"}
             }
           ]

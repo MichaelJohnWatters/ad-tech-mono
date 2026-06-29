@@ -1,0 +1,14 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: gateway, namespace: adtech, annotations: { traefik.ingress.kubernetes.io/router.entrypoints: web } }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: gateway.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: gateway, port: { number: 8080 } } } }
+    - host: adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: gateway, port: { number: 8080 } } } }
