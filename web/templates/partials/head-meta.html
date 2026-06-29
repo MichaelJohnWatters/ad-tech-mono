@@ -1,0 +1,64 @@
+{{/* head-meta: canonical Tailwind config + theme persistence + HTMX.
+     Included by every Tailwind-styled page so the brand colour, surface
+     scale, service palette, semantic colours, and mono font stack live
+     in exactly one place. Earlier each page carried its own copy of
+     tailwind.config, which drifted (manager.html silently omitted
+     fontFamily.mono so its `font-mono` fell back to the Tailwind
+     default — see docs/UI_DESIGN_AUDIT.md).
+*/}}
+{{ define "head-meta" }}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+    darkMode: 'class',
+    theme: {
+        extend: {
+            colors: {
+                // Primary brand — keep this stable across the entire surface.
+                brand: { DEFAULT: '#4361ee', hover: '#3a56d4', light: '#818cf8' },
+                // Dark-mode surface scale. Light mode uses Tailwind's
+                // built-in gray.50/100/200 — no custom light surface.
+                surface: { dark: '#1a1a2e', 'dark-2': '#16162a', 'dark-3': '#1e1e3a', page: '#0f0f1a' },
+                // Semantic palette. Green is reserved for "live" / success
+                // signals; purple is reserved for "jaeger" / async signals.
+                // Service colours below deliberately avoid those hues so
+                // src/status badges always read distinctly.
+                success: '#4ade80', warn: '#fbbf24', error: '#f87171', info: '#22d3ee',
+                // Service palette — matches the trace-map node colours and
+                // the inline .node .service.* CSS in the pub sim so the
+                // diagram + textual timeline share one vocabulary.
+                svc: {
+                    browser:   '#94a3b8',
+                    gateway:   '#0ea5e9',
+                    pubad:     '#f43f5e',
+                    ssp:       '#60a5fa',
+                    exchange:  '#eab308',
+                    dsp:       '#14b8a6',
+                    adserver:  '#ec4899',
+                    tracker:   '#f97316',
+                    reporting: '#06b6d4',
+                },
+            },
+            fontFamily: {
+                mono: ['SF Mono', 'Monaco', 'Cascadia Code', 'monospace'],
+            },
+        },
+    },
+};
+</script>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+{{/* Inline theme persistence — runs before paint so the user never
+     sees a light-mode flash before the dark-mode class loads. Kept
+     inline (not in /static/theme.js) for that reason; the toggle
+     handler itself lives in theme.js. */}}
+<script>
+(function() {
+    var saved = localStorage.getItem('theme');
+    if (saved) document.documentElement.className = saved;
+    else if (window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.className = 'light';
+})();
+</script>
+<script src="/static/theme.js"></script>
+{{ end }}

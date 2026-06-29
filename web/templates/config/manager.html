@@ -1,33 +1,12 @@
 <!DOCTYPE html>
 <html class="dark" lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AdTech Console</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-    tailwind.config = {
-        darkMode: 'class',
-        theme: { extend: { colors: { brand: { DEFAULT: '#4361ee', hover: '#3a56d4' }, surface: { dark: '#1a1a2e', page: '#0f0f1a' } } } }
-    }
-    </script>
-    <script>
-    (function(){var s=localStorage.getItem('theme');if(s)document.documentElement.className=s})();
-    function toggleTheme(){var h=document.documentElement,n=h.classList.contains('dark')?'light':'dark';h.className=n;localStorage.setItem('theme',n)}
-    </script>
+    {{ template "head-meta" . }}
 </head>
 <body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-200 min-h-screen">
 
-<nav class="bg-white dark:bg-surface-dark border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center gap-4">
-    <a href="/" class="font-semibold text-lg text-gray-900 dark:text-white">Ad Tech</a>
-    <div class="flex gap-3 text-sm">
-        <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
-        <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
-        <a href="/dev/console" class="text-brand font-medium">Console</a>
-        <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
-    </div>
-    <button onclick="toggleTheme()" class="ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">&#9728;&#65039;</button>
-</nav>
+{{ template "nav" . }}
 
 <main class="max-w-5xl mx-auto px-5 py-6">
     <div class="flex items-center justify-between mb-4">
@@ -73,10 +52,14 @@
         <div id="podOverview" class="mb-4"></div>
     </section>
 
-    <!-- Config tab — the current key-table workflow. Contains search,
-         filter pills (tier + service), and the grouped config rows. -->
+    <!-- Config tab — per-service detail view. Service picker on top
+         + sub-tabs split the keys by tier (Live / Static / Secrets)
+         and per-service audit (History). "All" service stays available
+         for cross-service spelunking. The Secrets sub-tab is backed by
+         /v1/api/secrets (gateway-local CRUD); the other three reuse
+         the existing config table filtering. -->
     <section data-tab-pane="config" class="tab-pane hidden">
-        <!-- Search -->
+        <!-- Search (applies to whichever sub-tab is active) -->
         <div class="mb-4 flex gap-2">
             <input id="searchInput" type="text" placeholder="Search keys, services, descriptions..."
                 oninput="filterConfig()"
@@ -87,19 +70,100 @@
             </button>
         </div>
 
-        <!-- Tier filter pills (defaults to Live — operators rarely need to see
-             static infra or secrets, and we lock them anyway) -->
-        <div id="tierPills" class="flex flex-wrap gap-2 mb-2"></div>
-
-        <!-- Service filter pills -->
+        <!-- Service picker. Single-select; "All" pill keeps the
+             cross-service view available. Selecting a specific service
+             scopes every sub-tab below to that service. -->
         <div id="servicePills" class="flex flex-wrap gap-2 mb-4"></div>
 
-        <!-- Stats bar -->
+        <!-- Sub-tab nav. Live / Secrets / Static map to the config
+             tier model; History is the service-scoped audit log
+             (read from the existing /v1/config?history=true). Hash
+             route persists which sub-tab is active so deep links
+             survive refresh: #config/secrets, #config/history, etc. -->
+        <div class="border-b border-gray-200 dark:border-gray-800 mb-3">
+            <nav id="configSubTabBar" class="flex gap-1 -mb-px">
+                <button data-subtab="live"    onclick="selectConfigSubTab('live')"    class="subtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Live</button>
+                <button data-subtab="secrets" onclick="selectConfigSubTab('secrets')" class="subtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Secrets</button>
+                <button data-subtab="static"  onclick="selectConfigSubTab('static')"  class="subtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Static</button>
+                <button data-subtab="history" onclick="selectConfigSubTab('history')" class="subtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">History</button>
+            </nav>
+        </div>
+
+        <!-- Stats bar (Live/Static only — Secrets + History have their own counters inline) -->
         <div id="statsBar" class="text-xs text-gray-400 mb-4"></div>
 
-        <!-- Config table -->
-        <div id="configTable"></div>
+        <!-- Sub-tab panels. Live + Static share the existing #configTable
+             which is rendered OUTSIDE the panes so the renderer doesn't
+             have to know which sub-tab is active — selectConfigSubTab
+             just toggles visibility. Secrets + History have their own
+             dedicated content panes below. -->
+        <div id="configTable" class="mb-4"></div>
+        <div data-subtab-pane="live"    class="subtab-pane hidden"></div>
+        <div data-subtab-pane="static"  class="subtab-pane hidden"></div>
+        <div data-subtab-pane="secrets" class="subtab-pane hidden">
+            <div class="flex items-center justify-between mb-3 gap-2">
+                <span class="text-xs text-gray-400">Operator-managed credentials. Created here are returned ONCE — store the value.</span>
+                <div class="flex gap-2">
+                    <button onclick="loadSecrets()" class="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">Refresh</button>
+                    <button onclick="openSecretCreateModal()" class="px-3 py-1 text-xs rounded bg-brand text-white hover:bg-brand-hover">+ New secret</button>
+                </div>
+            </div>
+            <div id="secretsContent" class="text-gray-400 text-sm py-12 text-center">Loading secrets…</div>
+        </div>
+        <div data-subtab-pane="history" class="subtab-pane hidden">
+            <div class="flex items-center justify-between mb-3 gap-2">
+                <span class="text-xs text-gray-400" id="historySubTabCaption">Change log scoped to the selected service.</span>
+                <button onclick="loadAudit()" class="px-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">Refresh</button>
+            </div>
+            <div id="historyContent" class="text-gray-400 text-sm py-12 text-center">Loading history…</div>
+        </div>
     </section>
+
+    <!-- Secret create modal. Shown by openSecretCreateModal(); collects
+         name + purpose + (optional) value. On submit POSTs to
+         /v1/api/secrets and surfaces the full value once. -->
+    {{ template "modal-start" (dict "id" "secretCreateModal" "title" "New secret" "maxWidth" "max-w-md") }}
+        <div class="space-y-3 text-sm">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Name</label>
+                <input id="secretCreateName" type="text" placeholder="e.g. ops-key-jane" class="w-full px-3 py-2 font-mono text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Purpose</label>
+                <select id="secretCreatePurpose" class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded">
+                    <option value="api_key">api_key — operator CRUD</option>
+                    <option value="jwt_signing">jwt_signing — JWT HS/RS keys</option>
+                    <option value="hmac_tracker">hmac_tracker — pixel HMAC</option>
+                    <option value="partner_shared">partner_shared — external partners</option>
+                    <option value="service_s2s">service_s2s — internal S2S</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Owner</label>
+                <input id="secretCreateOwner" type="text" placeholder="platform" class="w-full px-3 py-2 font-mono text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded">
+                <p class="text-xs text-gray-500 mt-1">Use "platform" for shared keys, or a service name (dsp / ssp / …) for per-service.</p>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Value (optional)</label>
+                <input id="secretCreateValue" type="text" placeholder="leave empty to auto-generate 32 random bytes" class="w-full px-3 py-2 font-mono text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded">
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-5">
+            {{ template "button" (dict "label" "Cancel" "variant" "secondary" "onclick" "document.getElementById('secretCreateModal').classList.add('hidden')") }}
+            {{ template "button" (dict "label" "Create" "onclick" "submitSecretCreate()") }}
+        </div>
+    {{ template "modal-end" . }}
+
+    {{/* Secret-shown-once modal — the only place the full value appears
+         post-creation. Shown immediately after a successful POST. */}}
+    {{ template "modal-start" (dict "id" "secretValueModal" "title" "Secret created" "maxWidth" "max-w-lg") }}
+        <p class="text-xs text-gray-500 mb-3">This value is shown <strong>once</strong>. Copy it now — closing this dialog without saving loses it.</p>
+        <pre id="secretValueDisplay" class="bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-3 py-2 text-sm font-mono overflow-x-auto"></pre>
+        <div class="flex justify-end gap-2 mt-4">
+            {{ template "button" (dict "label" "Copy" "variant" "secondary" "onclick" "copySecretValue()") }}
+            {{ template "button" (dict "label" "Close" "onclick" "document.getElementById('secretValueModal').classList.add('hidden'); document.getElementById('secretValueDisplay').textContent='';") }}
+        </div>
+    {{ template "modal-end" . }}
 
     <!-- Audit tab — cross-key change log. Loads /v1/config?history=true
          which returns the platform-wide tail of the audit_log. -->
@@ -113,19 +177,11 @@
         <div id="auditContent"></div>
     </section>
 
-    <!-- Toast container -->
-    <div id="toastContainer" class="fixed bottom-4 right-4 flex flex-col gap-2 z-50"></div>
+    {{ template "toast" . }}
 
-    <!-- History modal -->
-    <div id="historyModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50" onclick="if(event.target===this)this.classList.add('hidden')">
-        <div class="bg-white dark:bg-surface-dark rounded-lg p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto border border-gray-200 dark:border-gray-800">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-semibold">Change History</h2>
-                <button onclick="document.getElementById('historyModal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
-            </div>
-            <div id="historyContent"></div>
-        </div>
-    </div>
+    {{ template "modal-start" (dict "id" "historyModal" "title" "Change History" "maxWidth" "max-w-2xl") }}
+        <div id="historyContent"></div>
+    {{ template "modal-end" . }}
 </main>
 
 <script>
@@ -134,12 +190,15 @@ let services = [];
 let schema = [];
 let selectedService = 'all';
 let selectedPod = null;
-let selectedTier = 'live'; // default: hide static/secret which can't be edited anyway
+let selectedTier = 'live'; // mirrors which sub-tab is active (live/static/secrets/history)
 
 // Tab navigation. The hash in the URL is the source of truth so deep
-// links and refreshes land on the right tab. Default = 'config' since
-// that's the most-used view today.
+// links and refreshes land on the right tab. Format:
+//   #config           → Config tab, default sub-tab (live)
+//   #config/secrets   → Config tab, Secrets sub-tab
+//   #config/history   → Config tab, History sub-tab scoped to selectedService
 const VALID_TABS = ['overview', 'services', 'pods', 'config', 'audit'];
+const VALID_CONFIG_SUBTABS = ['live', 'secrets', 'static', 'history'];
 
 function selectTab(name) {
     if (!VALID_TABS.includes(name)) name = 'config';
@@ -156,14 +215,67 @@ function selectTab(name) {
         btn.classList.toggle('border-transparent', !active);
         btn.classList.toggle('text-gray-500', !active);
     });
-    if (location.hash !== '#' + name) {
-        history.replaceState(null, '', '#' + name);
+    const hashTarget = '#' + name + (name === 'config' && currentConfigSubTab !== 'live' ? '/' + currentConfigSubTab : '');
+    if (location.hash !== hashTarget) {
+        history.replaceState(null, '', hashTarget);
+    }
+}
+
+// Config sub-tab state. Defaults to 'live' (the existing config-table
+// flow). Switching sub-tabs is purely a UI swap — data fetches stay
+// minimal because Live/Static reuse the same underlying schema state
+// and only the filter changes.
+let currentConfigSubTab = 'live';
+
+function selectConfigSubTab(name) {
+    if (!VALID_CONFIG_SUBTABS.includes(name)) name = 'live';
+    currentConfigSubTab = name;
+    selectedTier = (name === 'history') ? selectedTier : name;
+    document.querySelectorAll('.subtab-pane').forEach(el => {
+        el.classList.toggle('hidden', el.dataset.subtabPane !== name);
+    });
+    document.querySelectorAll('.subtab-btn').forEach(btn => {
+        const active = btn.dataset.subtab === name;
+        btn.classList.toggle('border-brand', active);
+        btn.classList.toggle('text-brand', active);
+        btn.classList.toggle('font-medium', active);
+        btn.classList.toggle('border-transparent', !active);
+        btn.classList.toggle('text-gray-500', !active);
+    });
+
+    // Hide the stats bar + shared config table for Secrets/History —
+    // those panes own their counters inline and don't use the table.
+    const showShared = (name === 'live' || name === 'static');
+    document.getElementById('statsBar').style.display = showShared ? '' : 'none';
+    document.getElementById('configTable').style.display = showShared ? '' : 'none';
+
+    // Per-sub-tab side effects: lazy-fetch Secrets / History on first
+    // visit so the page-load stays cheap when the operator's only
+    // editing live config.
+    if (name === 'secrets') {
+        loadSecrets();
+    } else if (name === 'history') {
+        loadHistoryForService();
+    } else if (name === 'live' || name === 'static') {
+        // Re-render the config table — the tier filter changed so the
+        // row set is different.
+        filterConfig();
+    }
+
+    // Persist in the hash so refreshes land back on this sub-tab.
+    const hashTarget = '#config' + (name === 'live' ? '' : '/' + name);
+    if (location.hash !== hashTarget) {
+        history.replaceState(null, '', hashTarget);
     }
 }
 
 function initTabsFromHash() {
-    const hash = location.hash.replace('#', '');
-    selectTab(VALID_TABS.includes(hash) ? hash : 'config');
+    const raw = location.hash.replace('#', '');
+    const [tab, subTab] = raw.split('/');
+    selectTab(VALID_TABS.includes(tab) ? tab : 'config');
+    if ((tab || 'config') === 'config') {
+        selectConfigSubTab(VALID_CONFIG_SUBTABS.includes(subTab) ? subTab : 'live');
+    }
 }
 
 window.addEventListener('hashchange', () => {
@@ -238,6 +350,250 @@ function renderAuditTab() {
                         <td class="px-3 py-2 text-xs text-gray-400">${escHtml(e.actor || '-')}</td>
                     </tr>`;
                 }).join('')}
+            </tbody>
+        </table>
+    </div>`;
+}
+
+// ============================================================
+// Secrets sub-tab — backed by gateway /v1/api/secrets CRUD.
+// The endpoint requires X-API-Key (operator-only); the console
+// sets it via the same DEV_API_KEY constant the pub sim uses,
+// so locally seeded environments work without extra setup. In
+// prod the operator's bootstrapped key would be injected via
+// session storage at login time (not yet wired).
+// ============================================================
+const DEV_API_KEY = 'dev-api-key-do-not-use-in-prod';
+
+let secretsRows = [];
+let secretsLoaded = false;
+let lastCreatedSecretValue = '';
+
+async function loadSecrets() {
+    const el = document.getElementById('secretsContent');
+    el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">Loading secrets…</div>';
+    try {
+        // Service scope: 'all' = no filter; otherwise pass ?service=X
+        // which the gateway resolves to (owner='platform' OR owner=X).
+        const qs = (selectedService && selectedService !== 'all')
+            ? '?service=' + encodeURIComponent(selectedService)
+            : '';
+        const resp = await fetch(GW + '/v1/api/secrets' + qs, {
+            headers: { 'X-API-Key': DEV_API_KEY },
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()));
+        secretsRows = await resp.json() || [];
+        secretsLoaded = true;
+        renderSecrets();
+    } catch (err) {
+        el.innerHTML = '<div class="text-red-500 text-sm py-12 text-center">Failed to load secrets: ' + escHtml(err.message) + '</div>';
+    }
+}
+
+function renderSecrets() {
+    const el = document.getElementById('secretsContent');
+    if (!secretsRows.length) {
+        el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">No secrets visible for this scope. Use + New secret to create one.</div>';
+        return;
+    }
+    el.innerHTML = `
+    <div class="text-xs text-gray-400 mb-2">${secretsRows.length} secret${secretsRows.length === 1 ? '' : 's'}</div>
+    <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-900/50 text-xs uppercase tracking-wider text-gray-400">
+                <tr>
+                    <th class="px-3 py-2 text-left">Name</th>
+                    <th class="px-3 py-2 text-left">Purpose</th>
+                    <th class="px-3 py-2 text-left">Owner</th>
+                    <th class="px-3 py-2 text-left">Status</th>
+                    <th class="px-3 py-2 text-left">Value</th>
+                    <th class="px-3 py-2 text-left">Created</th>
+                    <th class="px-3 py-2 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                ${secretsRows.map(s => {
+                    const statusCls = s.status === 'active' ? 'text-emerald-500'
+                                    : s.status === 'rotating' ? 'text-amber-500'
+                                    : 'text-red-500';
+                    const actions = secretActions(s);
+                    return `
+                    <tr>
+                        <td class="px-3 py-2 font-mono text-xs">${escHtml(s.name)}</td>
+                        <td class="px-3 py-2 text-xs">${escHtml(s.purpose)}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500">${escHtml(s.owner)}</td>
+                        <td class="px-3 py-2 text-xs ${statusCls}">${escHtml(s.status)}</td>
+                        <td class="px-3 py-2 font-mono text-xs text-gray-500">${escHtml(s.value_preview)}</td>
+                        <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">${timeAgo(s.created_at)}</td>
+                        <td class="px-3 py-2 text-xs text-right">${actions}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>
+    </div>`;
+}
+
+// Lifecycle button choices map to the canonical rotation workflow:
+//   active → rotating  (grace window starts)
+//   active → revoked   (emergency cut)
+//   rotating → active  (promote the rotating one)
+//   rotating → revoked (rolled back; delete the candidate)
+//   revoked → DELETE   (physical delete only allowed when revoked)
+function secretActions(s) {
+    const buttons = [];
+    if (s.status === 'active') {
+        buttons.push(actionBtn('Mark rotating', () => `patchSecret('${s.id}', 'rotating')`));
+        buttons.push(actionBtn('Revoke', () => `patchSecret('${s.id}', 'revoked')`, 'text-red-500'));
+    } else if (s.status === 'rotating') {
+        buttons.push(actionBtn('Promote to active', () => `patchSecret('${s.id}', 'active')`));
+        buttons.push(actionBtn('Revoke', () => `patchSecret('${s.id}', 'revoked')`, 'text-red-500'));
+    } else if (s.status === 'revoked') {
+        buttons.push(actionBtn('Delete row', () => `deleteSecret('${s.id}')`, 'text-red-500'));
+    }
+    return buttons.join('');
+}
+
+function actionBtn(label, onclickFn, extra) {
+    return `<button onclick="${onclickFn()}" class="ml-2 px-2 py-0.5 text-xs rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 ${extra || ''}">${label}</button>`;
+}
+
+async function patchSecret(id, newStatus) {
+    try {
+        const resp = await fetch(GW + '/v1/api/secrets/' + encodeURIComponent(id), {
+            method: 'PATCH',
+            headers: { 'X-API-Key': DEV_API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()));
+        toast('Status updated to ' + newStatus, 'success');
+        loadSecrets();
+    } catch (err) {
+        toast('Patch failed: ' + err.message, 'error');
+    }
+}
+
+async function deleteSecret(id) {
+    // Note: deliberately uses window.confirm here despite the platform
+    // preference for "toast + undo instead of dialogs" — this delete is
+    // irreversible (the secret row is already revoked; this removes the
+    // audit-trail row) and we don't keep the original value to restore.
+    // A modal would be more on-brand but adds a click without a real
+    // safety benefit. Revisit when we ship the modal-confirm partial.
+    if (!confirm('Delete this revoked secret row permanently?')) return;
+    try {
+        const resp = await fetch(GW + '/v1/api/secrets/' + encodeURIComponent(id), {
+            method: 'DELETE',
+            headers: { 'X-API-Key': DEV_API_KEY },
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()));
+        toast('Secret deleted', 'success');
+        loadSecrets();
+    } catch (err) {
+        toast('Delete failed: ' + err.message, 'error');
+    }
+}
+
+function openSecretCreateModal() {
+    // Default owner to whichever service the operator was viewing, so the
+    // common case (creating a service-scoped key) doesn't need a manual edit.
+    document.getElementById('secretCreateName').value = '';
+    document.getElementById('secretCreatePurpose').value = 'api_key';
+    document.getElementById('secretCreateOwner').value =
+        (selectedService && selectedService !== 'all') ? selectedService : 'platform';
+    document.getElementById('secretCreateValue').value = '';
+    document.getElementById('secretCreateModal').classList.remove('hidden');
+}
+
+async function submitSecretCreate() {
+    const body = {
+        name: document.getElementById('secretCreateName').value.trim(),
+        purpose: document.getElementById('secretCreatePurpose').value,
+        owner: document.getElementById('secretCreateOwner').value.trim() || 'platform',
+        value: document.getElementById('secretCreateValue').value.trim(),
+    };
+    if (!body.name) { toast('Name is required', 'error'); return; }
+    try {
+        const resp = await fetch(GW + '/v1/api/secrets', {
+            method: 'POST',
+            headers: { 'X-API-Key': DEV_API_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()));
+        const created = await resp.json();
+        lastCreatedSecretValue = created.value;
+        document.getElementById('secretValueDisplay').textContent = created.value;
+        document.getElementById('secretCreateModal').classList.add('hidden');
+        document.getElementById('secretValueModal').classList.remove('hidden');
+        loadSecrets();
+    } catch (err) {
+        toast('Create failed: ' + err.message, 'error');
+    }
+}
+
+function copySecretValue() {
+    if (!lastCreatedSecretValue) return;
+    navigator.clipboard.writeText(lastCreatedSecretValue).then(
+        () => toast('Copied', 'success'),
+        () => toast('Clipboard write failed (HTTPS-only on Chromium)', 'error'),
+    );
+}
+
+// History sub-tab: re-uses the audit fetch and renders a service-scoped
+// subset. Updates the caption to reflect the active scope. When the
+// operator switches the service pill, this re-runs so they see the
+// new scope's history without manually refreshing.
+async function loadHistoryForService() {
+    if (!auditLoaded) {
+        await loadAudit();
+    }
+    renderHistorySubTab();
+}
+
+function renderHistorySubTab() {
+    const el = document.getElementById('historyContent');
+    const caption = document.getElementById('historySubTabCaption');
+    const scope = (selectedService && selectedService !== 'all') ? selectedService : 'all services';
+    caption.textContent = 'Change log scoped to ' + scope + '.';
+
+    // The audit log key is service-prefixed (e.g. "dsp.noise_pct") so we
+    // filter on the prefix. Cross-service rows (platform-wide) are
+    // included regardless of selected service.
+    const entries = auditEntries.filter(e => {
+        if (!selectedService || selectedService === 'all') return true;
+        const k = e.key || '';
+        return k.startsWith(selectedService + '.') || k.startsWith('platform.') || !k.includes('.');
+    });
+
+    if (!entries.length) {
+        el.innerHTML = '<div class="text-gray-400 text-sm py-12 text-center">No history for this scope.</div>';
+        return;
+    }
+    el.innerHTML = `
+    <div class="text-xs text-gray-400 mb-2">${entries.length} entries</div>
+    <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-900/50 text-xs uppercase tracking-wider text-gray-400">
+                <tr>
+                    <th class="px-3 py-2 text-left">When</th>
+                    <th class="px-3 py-2 text-left">Action</th>
+                    <th class="px-3 py-2 text-left">Key</th>
+                    <th class="px-3 py-2 text-left">Change</th>
+                    <th class="px-3 py-2 text-left">Actor</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+                ${entries.map(e => `
+                    <tr>
+                        <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">${timeAgo(e.timestamp)}</td>
+                        <td class="px-3 py-2 text-xs">${escHtml((e.action || '').replace('config_', ''))}</td>
+                        <td class="px-3 py-2 font-mono text-xs">${escHtml(e.key)}</td>
+                        <td class="px-3 py-2 text-xs">
+                            <span class="text-gray-400 line-through">${escHtml(e.old_value || '∅')}</span>
+                            <span class="mx-1">→</span>
+                            <span>${escHtml(e.new_value || '∅')}</span>
+                        </td>
+                        <td class="px-3 py-2 text-xs text-gray-400">${escHtml(e.actor || '-')}</td>
+                    </tr>`).join('')}
             </tbody>
         </table>
     </div>`;
@@ -438,7 +794,12 @@ function renderOverviewTab() {
 }
 
 function renderTierPills() {
+    // Legacy tier-pills container was removed when the Config tab became
+    // sub-tab-driven (Live/Secrets/Static/History). Keep this function
+    // as a no-op so existing call sites don't crash, but skip the DOM
+    // write because the tierPills div no longer exists.
     const el = document.getElementById('tierPills');
+    if (!el) return;
     const tiers = [
         {key: 'live', label: 'Live', desc: 'runtime-tunable'},
         {key: 'static', label: 'Static', desc: 'redeploy to change'},
@@ -447,7 +808,7 @@ function renderTierPills() {
     ];
     el.innerHTML = tiers.map(t => {
         const active = selectedTier === t.key;
-        const count = t.key === 'all' ? schema.length : schema.filter(e => (e.Tier || 'live') === t.key).length;
+        const count = t.key === 'all' ? schema.length : schema.filter(e => (e.tier || 'live') === t.key).length;
         const cls = active
             ? 'bg-brand text-white border-brand'
             : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-brand';
@@ -465,7 +826,7 @@ function selectTier(t) {
 }
 
 function renderPills() {
-    const svcNames = [...new Set(schema.map(e => e.Service))].sort();
+    const svcNames = [...new Set(schema.map(e => e.service))].sort();
     const el = document.getElementById('servicePills');
     el.innerHTML = `
         <button onclick="selectService('all')"
@@ -473,7 +834,7 @@ function renderPills() {
             All (${schema.length})
         </button>
         ${svcNames.map(s => {
-            const count = schema.filter(e => e.Service === s).length;
+            const count = schema.filter(e => e.service === s).length;
             const group = services.find(g => g.service === s);
             const podCount = group ? group.pods.length : 0;
             const runningCount = group ? group.pods.filter(p => p.status === 'running').length : 0;
@@ -576,6 +937,15 @@ function selectService(name) {
     renderPills();
     renderPodOverview();
     filterConfig();
+    // Cascade into the active config sub-tab so the operator doesn't
+    // have to manually refresh after changing scope. Live/Static are
+    // already re-rendered by filterConfig above; Secrets + History
+    // need their own fetch/render trigger.
+    if (currentConfigSubTab === 'secrets') {
+        loadSecrets();
+    } else if (currentConfigSubTab === 'history') {
+        renderHistorySubTab();
+    }
 }
 
 let searchMode = 'fuzzy'; // 'fuzzy' or 'strict'
@@ -608,28 +978,29 @@ function filterConfig() {
     // Tier filter — applied first because "all" still has a tier. Missing
     // Tier field on a key (e.g. orphan from older schema) defaults to live.
     if (selectedTier !== 'all') {
-        filtered = filtered.filter(e => (e.Tier || 'live') === selectedTier);
+        filtered = filtered.filter(e => (e.tier || 'live') === selectedTier);
     }
 
     // Service/pod filter: show keys this service uses (service-specific + platform)
     if (selectedService !== 'all') {
         const group = services.find(g => g.service === selectedService);
-        // Use the pod's config_keys if available (includes platform keys)
+        // Use the pod's schema_entries if available (includes platform keys)
         const pod = selectedPod
             ? group?.pods?.find(p => p.pod_id === selectedPod)
             : group?.pods?.[0]; // any pod has the same key list
-        if (pod?.config_keys?.length) {
-            filtered = filtered.filter(e => pod.config_keys.includes(e.Key));
+        const podKeys = pod?.schema_entries?.map(e => e.key);
+        if (podKeys?.length) {
+            filtered = filtered.filter(e => podKeys.includes(e.key));
         } else {
             // Fallback: show service + platform keys
-            filtered = filtered.filter(e => e.Service === selectedService || e.Service === 'platform');
+            filtered = filtered.filter(e => e.service === selectedService || e.service === 'platform');
         }
     }
 
     // Fuzzy search across key, description, service, value, type
     if (query) {
         filtered = filtered.filter(e =>
-            matchSearch(e.Key + ' ' + e.Description + ' ' + e.Service + ' ' + e.current_value + ' ' + e.Type, query)
+            matchSearch(e.key + ' ' + e.description + ' ' + e.service + ' ' + e.current_value + ' ' + e.type, query)
         );
     }
 
@@ -652,8 +1023,8 @@ function renderTable(entries) {
     // Group by service
     const grouped = {};
     entries.forEach(e => {
-        if (!grouped[e.Service]) grouped[e.Service] = [];
-        grouped[e.Service].push(e);
+        if (!grouped[e.service]) grouped[e.service] = [];
+        grouped[e.service].push(e);
     });
 
     el.innerHTML = Object.entries(grouped).map(([svc, keys]) => `
@@ -662,10 +1033,10 @@ function renderTable(entries) {
             <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
                 ${keys.map(k => {
                     // Check if this key has a pod-specific override
-                    const podKey = selectedPod ? podScopedKey(k.Key, selectedPod) : null;
-                    const podOverride = podKey ? schema.find(s => s.Key === podKey) : null;
+                    const podKey = selectedPod ? podScopedKey(k.key, selectedPod) : null;
+                    const podOverride = podKey ? schema.find(s => s.key === podKey) : null;
                     const hasPodOverride = !!podOverride;
-                    const tier = k.Tier || 'live';
+                    const tier = k.tier || 'live';
                     const locked = tier === 'static' || tier === 'secret';
                     // Static/Secret rows can't be edited from the UI — Save/Undo/Reset
                     // are hidden, input is disabled, and a hover tooltip explains
@@ -676,48 +1047,48 @@ function renderTable(entries) {
                             ? 'Secret — sourced from K8s Secret; rotate via secret pipeline'
                             : '';
                     return `
-                    <div class="px-4 py-3 ${locked ? 'opacity-60' : ''}" id="row-${cssId(k.Key)}">
+                    <div class="px-4 py-3 ${locked ? 'opacity-60' : ''}" id="row-${cssId(k.key)}">
                         <div class="flex items-center justify-between mb-1">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-mono text-sm">${k.Key}</span>
+                                <span class="font-mono text-sm">${k.key}</span>
                                 <span class="px-1.5 py-0.5 text-[10px] rounded ${tierClass(tier)}" title="${tierTooltip(tier)}">${tier}</span>
-                                <span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${k.Type}</span>
-                                <span class="text-[10px] text-gray-400">${k.Since}</span>
+                                <span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-500">${k.type}</span>
+                                <span class="text-[10px] text-gray-400">${k.since}</span>
                                 ${selectedPod ? (hasPodOverride
                                     ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-brand/20 text-brand">pod override</span>'
                                     : '<span class="px-1.5 py-0.5 text-[10px] rounded bg-gray-100 dark:bg-gray-800 text-gray-400">service value</span>')
                                 : ''}
                                 ${sourceBadge(k)}
                                 ${k.status === 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">orphaned</span>' : ''}
-                                ${k.Deprecated && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">deprecated</span>' : ''}
-                                ${!locked && k.current_value !== k.Default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
+                                ${k.deprecated && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-red-100 dark:bg-red-900/30 text-red-500">deprecated</span>' : ''}
+                                ${!locked && k.current_value !== k.default && k.status !== 'orphaned' ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600">modified</span>' : ''}
                             </div>
                             <div class="flex gap-1">
                                 ${locked
                                     ? `<span class="px-2 py-1 text-[10px] text-gray-400 italic" title="${lockReason}">read-only</span>`
-                                    : `<button onclick="saveKey('${k.Key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover"
+                                    : `<button onclick="saveKey('${k.key}')" class="px-2 py-1 text-xs bg-brand text-white rounded hover:bg-brand-hover"
                                             title="${selectedPod ? 'Save for pod ' + selectedPod : 'Save for all pods'}">
                                             ${selectedPod ? 'Save (pod)' : 'Save'}
                                         </button>
-                                        ${selectedPod ? `<button onclick="saveKey('${k.Key}', true)" class="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500" title="Save for ALL pods of this service">Save All</button>` : ''}
-                                        <button onclick="rollbackKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
-                                        <button onclick="resetKey('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>`
+                                        ${selectedPod ? `<button onclick="saveKey('${k.key}', true)" class="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500" title="Save for ALL pods of this service">Save All</button>` : ''}
+                                        <button onclick="rollbackKey('${k.key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-gray-600" title="Revert to previous value">Undo</button>
+                                        <button onclick="resetKey('${k.key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-red-400" title="Reset to schema default">Reset</button>`
                                 }
-                                <button onclick="toggleKeyHistory('${k.Key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-brand" title="Change history">&darr; History</button>
+                                <button onclick="toggleKeyHistory('${k.key}')" class="px-2 py-1 text-xs text-gray-400 hover:text-brand" title="Change history">&darr; History</button>
                             </div>
                         </div>
-                        <div class="text-xs text-gray-500 mb-2">${k.Description}</div>
+                        <div class="text-xs text-gray-500 mb-2">${k.description}</div>
                         <div class="flex gap-2 items-center">
                             ${tier === 'secret'
                                 ? '<span class="font-mono text-xs text-gray-400 italic">(redacted — see K8s Secret)</span>'
                                 : inputForType(k, locked)}
-                            <span class="text-[10px] text-gray-400 whitespace-nowrap ${!locked && k.current_value !== k.Default ? 'text-amber-500' : ''}" title="Default value">
-                                default: ${escHtml(k.Default || '(empty)')}
+                            <span class="text-[10px] text-gray-400 whitespace-nowrap ${!locked && k.current_value !== k.default ? 'text-amber-500' : ''}" title="Default value">
+                                default: ${escHtml(k.default || '(empty)')}
                             </span>
-                            <span id="dirty-${cssId(k.Key)}" class="hidden text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 whitespace-nowrap">unsaved</span>
+                            <span id="dirty-${cssId(k.key)}" class="hidden text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 whitespace-nowrap">unsaved</span>
                         </div>
                         ${!selectedPod && !locked ? renderPodSubRows(k, svc) : ''}
-                        <div id="history-${cssId(k.Key)}" class="hidden mt-2 text-xs border-t border-gray-100 dark:border-gray-800 pt-2"></div>
+                        <div id="history-${cssId(k.key)}" class="hidden mt-2 text-xs border-t border-gray-100 dark:border-gray-800 pt-2"></div>
                     </div>`;
                 }).join('')}
             </div>
@@ -798,9 +1169,9 @@ async function putConfig(key, value, podID) {
 // the service that owns this key. "Save All" fans out to these only —
 // dead pods are skipped (their rows linger but we don't update them).
 function runningPodsForKey(key) {
-    const entry = schema.find(e => e.Key === key);
+    const entry = schema.find(e => e.key === key);
     if (!entry) return [];
-    const svcName = entry.Service === 'platform' ? selectedService : entry.Service;
+    const svcName = entry.service === 'platform' ? selectedService : entry.service;
     // Platform keys are owned by no single service — fall back to every
     // running pod across the whole registry.
     const groups = svcName && svcName !== 'all'
@@ -875,7 +1246,7 @@ async function toggleKeyHistory(key) {
     let history = await resp.json() || [];
 
     // Also fetch pod-specific history if pods exist for this service
-    const svc = schema.find(s => s.Key === key)?.Service;
+    const svc = schema.find(s => s.key === key)?.service;
     const group = services.find(g => g.service === svc);
     if (group?.pods?.length > 0) {
         for (const p of group.pods) {
@@ -946,8 +1317,8 @@ function reopenHistories() {
 }
 
 async function resetKey(key) {
-    const entry = schema.find(e => e.Key === key);
-    const defaultVal = entry ? entry.Default : '';
+    const entry = schema.find(e => e.key === key);
+    const defaultVal = entry ? entry.default : '';
 
     if (selectedPod) {
         // Reset pod override by deleting the pod-scoped key
@@ -1011,16 +1382,16 @@ async function showHistory() {
 
 // Type-appropriate input controls
 function inputForType(k, locked) {
-    const id = 'input-' + cssId(k.Key);
-    const onChange = locked ? '' : `markDirty('${k.Key}')`;
-    const onEnter = locked ? '' : `onkeydown="if(event.key==='Enter')saveKey('${k.Key}')"`;
+    const id = 'input-' + cssId(k.key);
+    const onChange = locked ? '' : `markDirty('${k.key}')`;
+    const onEnter = locked ? '' : `onkeydown="if(event.key==='Enter')saveKey('${k.key}')"`;
     // Static-tier rows still show the value (so operators can see what the
     // pod is using) but the control is disabled — visually greyed and not
     // tab-stoppable. Secret-tier rows skip this function entirely.
     const disabled = locked ? 'disabled' : '';
     const lockedClass = locked ? 'cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900';
 
-    switch (k.Type) {
+    switch (k.type) {
     case 'bool':
         return `<select id="${id}" onchange="${onChange}" ${disabled}
             class="px-2 py-1 text-sm font-mono ${lockedClass} border border-gray-200 dark:border-gray-700 rounded focus:border-brand focus:outline-none">
@@ -1053,7 +1424,7 @@ const openHistories = new Set();
 const uncheckedPods = JSON.parse(localStorage.getItem('configUncheckedPods') || '{}'); // {key: [podId, ...]}
 
 function storeOriginalValues() {
-    schema.forEach(k => { originalValues[k.Key] = k.current_value; });
+    schema.forEach(k => { originalValues[k.key] = k.current_value; });
 }
 
 function markDirty(key) {
@@ -1083,26 +1454,9 @@ function clearDirty(key) {
     dirtyKeys.delete(key);
 }
 
-// Toast notifications
-function toast(message, type) {
-    const container = document.getElementById('toastContainer');
-    const t = document.createElement('div');
-    const colors = {
-        success: 'bg-green-500',
-        error: 'bg-red-500',
-        info: 'bg-brand'
-    };
-    t.className = `${colors[type] || colors.info} text-white text-sm px-4 py-2 rounded-lg shadow-lg transition-all transform translate-y-2 opacity-0`;
-    t.textContent = message;
-    container.appendChild(t);
-    requestAnimationFrame(() => {
-        t.classList.remove('translate-y-2', 'opacity-0');
-    });
-    setTimeout(() => {
-        t.classList.add('translate-y-2', 'opacity-0');
-        setTimeout(() => t.remove(), 300);
-    }, 3000);
-}
+// toast() lives in /static/toast.js, loaded by the toast partial at the
+// bottom of <main>. All call sites in this file (toast('...', 'success'),
+// etc.) work unchanged.
 
 function renderPodSubRows(k, svc) {
     // Find all pods for this service
@@ -1114,9 +1468,9 @@ function renderPodSubRows(k, svc) {
         <div class="mt-2 border-t border-gray-100 dark:border-gray-800 pt-2">
             <div class="text-[10px] text-gray-400 mb-1">Per-pod values (${pods.length} pods)</div>
             ${pods.map(p => {
-                const hasKey = p.config_keys?.includes(k.Key);
-                const podKey = podScopedKey(k.Key, p.pod_id);
-                const podOverride = schema.find(s => s.Key === podKey);
+                const hasKey = p.schema_entries?.some(e => e.key === k.key);
+                const podKey = podScopedKey(k.key, p.pod_id);
+                const podOverride = schema.find(s => s.key === podKey);
                 const effectiveValue = podOverride ? podOverride.current_value : k.current_value;
                 const isOverridden = !!podOverride;
 
@@ -1128,10 +1482,10 @@ function renderPodSubRows(k, svc) {
                     </div>`;
                 }
 
-                const isUnchecked = (uncheckedPods[k.Key] || []).includes(p.pod_id);
+                const isUnchecked = (uncheckedPods[k.key] || []).includes(p.pod_id);
                 return `<div class="flex items-center gap-2 py-0.5 text-xs">
-                    <input type="checkbox" ${isUnchecked ? '' : 'checked'} data-pod="${p.pod_id}" data-key="${k.Key}"
-                        onchange="togglePodCheck('${k.Key}','${p.pod_id}', this.checked)"
+                    <input type="checkbox" ${isUnchecked ? '' : 'checked'} data-pod="${p.pod_id}" data-key="${k.key}"
+                        onchange="togglePodCheck('${k.key}','${p.pod_id}', this.checked)"
                         class="pod-checkbox rounded border-gray-300 dark:border-gray-600 text-brand focus:ring-brand w-3 h-3"
                         title="Include ${p.pod_id} in save">
                     <span class="w-2 h-2 rounded-full ${p.status === 'running' ? 'bg-green-500' : 'bg-red-400'}"></span>

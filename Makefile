@@ -37,6 +37,9 @@ lint: ## Run golangci-lint + buf lint
 	golangci-lint run ./...
 	buf lint
 
+audit-ui: ## Lint the web/ templates: inline styles, confirm/prompt, arbitrary hex
+	@bash scripts/audit-ui.sh
+
 # --- Building ---
 build: ## Build all service binaries
 	@for svc in dsp ssp exchange adserver tracker reporting gateway pipeline webhooks ssai transcoder; do \

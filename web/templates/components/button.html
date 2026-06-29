@@ -1,0 +1,45 @@
+{{/* button: shared button styles. Replaces the ~14 copies of
+     "px-3 py-1.5 text-sm bg-brand text-white rounded hover:bg-brand-hover"
+     scattered across manager.html + dashboard.html with a single
+     consistent component.
+
+     Args (dict):
+       label    — required, button text
+       variant  — primary (default) | secondary | ghost | danger
+       size     — sm | md (default) | lg
+       type     — button (default) | submit
+       id       — optional, sets id="..."
+       onclick  — optional JS handler
+       hx_get   — optional HTMX hx-get URL
+       hx_post  — optional HTMX hx-post URL
+       hx_target — optional HTMX hx-target selector
+       title    — optional tooltip
+       disabled — bool, sets disabled attribute
+
+     Usage:
+       {{ template "button" (dict "label" "Save" "onclick" "save()") }}
+       {{ template "button" (dict "label" "Refresh" "variant" "secondary" "size" "sm" "hx_post" "/v1/refresh" "hx_target" "#content") }}
+*/}}
+{{ define "button" }}
+{{- $base := "inline-flex items-center justify-center gap-1.5 font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-brand/40 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap" -}}
+{{- $variants := dict
+    "primary"   "bg-brand text-white hover:bg-brand-hover"
+    "secondary" "bg-white dark:bg-surface-dark text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
+    "ghost"     "bg-transparent text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+    "danger"    "bg-error text-white hover:bg-red-600" -}}
+{{- $sizes := dict
+    "sm" "px-2.5 py-1 text-xs"
+    "md" "px-3 py-1.5 text-sm"
+    "lg" "px-4 py-2 text-sm" -}}
+{{- $variant := or .variant "primary" -}}
+{{- $size := or .size "md" -}}
+<button type="{{ or .type "button" }}"
+        {{ with .id }}id="{{ . }}"{{ end }}
+        {{ with .onclick }}onclick="{{ . }}"{{ end }}
+        {{ with .hx_get }}hx-get="{{ . }}"{{ end }}
+        {{ with .hx_post }}hx-post="{{ . }}"{{ end }}
+        {{ with .hx_target }}hx-target="{{ . }}"{{ end }}
+        {{ with .title }}title="{{ . }}"{{ end }}
+        {{ if .disabled }}disabled{{ end }}
+        class="{{ $base }} {{ index $variants $variant }} {{ index $sizes $size }}">{{ .label }}</button>
+{{ end }}

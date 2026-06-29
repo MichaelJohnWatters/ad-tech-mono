@@ -1,0 +1,15 @@
+{{/* toast: container slot for toast notifications.
+
+     Include in any page that calls toast(msg, type). The JS lives in
+     /static/toast.js — included once here so callers don't need to
+     remember a second include.
+
+     Position is fixed bottom-right with a 16px margin, stacks up to
+     several toasts via flex-col gap. Tailwind utilities only.
+*/}}
+{{ define "toast" }}
+<div id="toastContainer"
+     class="fixed bottom-4 right-4 flex flex-col gap-2 z-50"
+     style="position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; pointer-events: none;"></div>
+<script src="/static/toast.js"></script>
+{{ end }}

@@ -1,57 +1,8 @@
 <!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}} - Ad Tech Platform</title>
-
-    <!-- Tailwind CSS (CDN play - no build pipeline) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-    tailwind.config = {
-        darkMode: 'class',
-        theme: {
-            extend: {
-                colors: {
-                    brand: {
-                        DEFAULT: '#4361ee',
-                        hover: '#3a56d4',
-                        light: '#818cf8',
-                    },
-                    surface: {
-                        dark: '#1a1a2e',
-                        'dark-2': '#16162a',
-                        'dark-3': '#1e1e3a',
-                        page: '#0f0f1a',
-                    }
-                },
-                fontFamily: {
-                    mono: ['SF Mono', 'Monaco', 'Cascadia Code', 'monospace'],
-                }
-            }
-        }
-    }
-    </script>
-
-    <!-- HTMX (server-side rendering, no JS framework) -->
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-
-    <!-- Theme persistence -->
-    <script>
-    (function() {
-        const saved = localStorage.getItem('theme');
-        if (saved) document.documentElement.className = saved;
-        else if (window.matchMedia('(prefers-color-scheme: light)').matches) document.documentElement.className = 'light';
-    })();
-    function toggleTheme() {
-        const html = document.documentElement;
-        const next = html.classList.contains('dark') ? 'light' : 'dark';
-        html.className = next;
-        localStorage.setItem('theme', next);
-        document.getElementById('themeIcon').textContent = next === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
-    }
-    </script>
-
+    {{ template "head-meta" . }}
     <style>
     /* Minimal overrides Tailwind can't do */
     .trace-node { transition: background 0.15s; }
@@ -59,18 +10,7 @@
 </head>
 <body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-200 min-h-screen">
 
-<!-- Top nav -->
-<nav class="bg-white dark:bg-surface-dark border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center gap-4">
-    <a href="/" class="font-semibold text-lg text-gray-900 dark:text-white hover:no-underline">Ad Tech</a>
-    <div class="flex gap-3 text-sm">
-        <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
-        <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
-        <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
-    </div>
-    <div class="ml-auto">
-        <button onclick="toggleTheme()" id="themeIcon" class="text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800">&#9728;&#65039;</button>
-    </div>
-</nav>
+{{ template "nav" . }}
 
 {{.Content}}
 

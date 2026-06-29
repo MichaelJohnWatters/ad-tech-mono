@@ -1,0 +1,45 @@
+{{/* modal: shared modal-dialog frame. Two-template "wrapper" pattern
+     because Go's html/template doesn't have named slots — caller does:
+
+       {{ template "modal-start" (dict "id" "secretCreateModal" "title" "New secret") }}
+         ...modal body HTML lives here, inline in the page...
+       {{ template "modal-end" . }}
+
+     The frame works on both Tailwind pages (manager.html) and CSS-var
+     pages (simulator/minimal.html) — uses inline styles with CSS
+     variables that resolve from theme.css when present, and Tailwind
+     classes alongside as a no-op fallback for pages without theme.css.
+     This dual-mode is intentional until the simulator's CSS-var
+     theming gets migrated to Tailwind in a future phase.
+
+     Behaviours baked in:
+       - Hidden by default. Show with `document.getElementById(id).classList.remove('hidden')`.
+       - Click-outside-to-close.
+       - Header X button closes.
+       - Centered, scrollable, max-height 80vh.
+
+     Args (dict):
+       id       — required, used for show/hide handles
+       title    — header text
+       maxWidth — Tailwind max-w class (default: max-w-lg) — applies on
+                  Tailwind pages; on CSS-var pages the inline style
+                  caps width at 560px.
+*/}}
+{{ define "modal-start" }}
+<div id="{{ .id }}" class="hidden fixed inset-0 flex items-center justify-center z-50"
+     style="background: rgba(0,0,0,0.55);"
+     onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 rounded-lg w-full {{ or .maxWidth "max-w-lg" }} max-h-[80vh] overflow-y-auto"
+         style="background: var(--bg-surface, #1a1a2e); color: var(--text-primary, #e0e0e0); border: 1px solid var(--border, #2a2a4a); border-radius: 8px; padding: 24px; max-width: 560px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="font-size: 16px; font-weight: 600; margin: 0;">{{ .title }}</h2>
+            <button onclick="document.getElementById('{{ .id }}').classList.add('hidden')"
+                    style="background: none; border: none; color: var(--text-muted, #888); font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px;"
+                    aria-label="Close">&times;</button>
+        </div>
+{{ end }}
+
+{{ define "modal-end" }}
+    </div>
+</div>
+{{ end }}
