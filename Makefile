@@ -27,10 +27,13 @@ test: ## Run unit tests
 test-integration: ## Run integration tests (requires Docker for testcontainers)
 	go test ./pkg/... ./cmd/... -tags=integration -count=1
 
+test-duckdb: ## Run the CGO DuckDB analytics tests (requires a C toolchain)
+	CGO_ENABLED=1 go test -tags=duckdb ./pkg/store/analytics/... ./cmd/reporting/... -count=1
+
 test-e2e: ## Run end-to-end tests on k3s
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
 
-test-all: test test-integration test-e2e ## Run all test layers
+test-all: test test-integration test-duckdb test-e2e ## Run all test layers
 
 # --- Linting ---
 lint: ## Run golangci-lint + buf lint
@@ -47,6 +50,10 @@ build: ## Build all service binaries
 		go build -o bin/$$svc ./cmd/$$svc; \
 	done
 	@echo "All services built."
+
+build-reporting-duckdb: ## Build reporting with the durable DuckDB analytics backend (CGO)
+	CGO_ENABLED=1 go build -tags duckdb -o bin/reporting ./cmd/reporting
+	@echo "Built bin/reporting with duckdb backend. Set reporting.analytics_backend=duckdb to use it."
 
 build-images: ## Build all Docker images locally
 	@for svc in dsp ssp exchange adserver tracker pipeline webhooks ssai; do \

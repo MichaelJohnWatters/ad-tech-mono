@@ -27,7 +27,7 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 
 | # | Component | Degree | Evidence | Current behaviour |
 |---|---|---|---|---|
-| D1 | Analytics store | STUB | `cmd/reporting/main.go:54` `analytics.NewMemory()` | Reporting/analytics data is volatile, lost on pod restart. DuckDB impl exists behind `//go:build duckdb` (off by default); ClickHouse impl does not exist. |
+| D1 | Analytics store | **PARTIAL (core done)** | `cmd/reporting/analytics.go` | ✅ Backend now selectable via `reporting.analytics_backend` (memory\|duckdb), mirroring `billing.ledger_backend`. With `duckdb` (build `-tags duckdb CGO_ENABLED=1`) core events persist to a file and survive restart — proven by `TestDuckDB_SurvivesReopen`. Memory stays default (e2e unaffected). **Remaining:** operational-signal tables (freq-cap/render/rejection/etc.) + `/debug` read-backs not yet on DuckDB (degrade to skip / 501); ClickHouse (prod, multi-replica) not implemented. |
 | D2 | Rollup engine | PARTIAL | `pkg/store/rollup/rollup.go:156-158` | Computes aggregates then discards them — never writes a rollup table. |
 | D3 | Data pipeline (Parquet / Delta Log) | SIMULATED | `pkg/store/datalake/datalake.go` | `Write()` appends to an in-memory slice and logs a fake `part-00001.parquet` path. Apache Arrow imported but unused. `cmd/pipeline` only serves health checks. |
 
@@ -92,7 +92,7 @@ Ordered by impact on the platform's core promise (accurate, durable data) and by
 ### Phase A — Durable analytics & data lake (P0 data) `[D1, D2, D3]`
 The whole reporting/analytics surface is volatile today; this is the largest gap vs. "zero data slippage."
 
-- **A1 — Activate DuckDB locally, add ClickHouse for prod.** Build reporting with `-tags duckdb` (file at a configured path); implement `pkg/store/analytics/clickhouse.go` (connection pool + batched insert) behind the existing `analytics.Store` interface. Select via a `reporting.analytics_backend` config key (`memory|duckdb|clickhouse`), same shape as `billing.ledger_backend`.
+- **A1 — Activate DuckDB locally, add ClickHouse for prod.** ✅ **DuckDB done.** `reporting.analytics_backend` (`memory`|`duckdb`) + `reporting.duckdb_path`, selected by a build-tagged `selectAnalyticsStore` (`cmd/reporting/analytics{,_duckdb,_noduckdb}.go`). Core events persist + survive restart (`make test-duckdb`, `make build-reporting-duckdb`). **Still open:** (a) implement `pkg/store/analytics/clickhouse.go` (pool + batched insert) and add it to the selector for prod multi-replica; (b) bring the 6 operational-signal tables + `/debug` read-backs to DuckDB (today they're memory-only — route debug through `Store.Query()` and add the tables) so the duckdb backend has full parity; (c) wire the Tiltfile/Dockerfile to build reporting with the tag if we want duckdb as the local default.
 - **A2 — Persist rollups.** Add `impressions_{minute,hourly,daily,monthly}` tables; in `rollup.runOne` upsert aggregated rows after `Query()`; schedule via a CronJob (`cmd/rollup`, to be created) at :00 / :15 / midnight / 1st.
 - **A3 — Real Parquet + Delta.** Implement `pkg/store/datalake/parquet.go` (Arrow→Parquet to Minio/S3) and `delta.go` (`_delta_log/NNN.json`); turn `cmd/pipeline` into a real worker (watch Minio → ingest → validate → write).
 - **Done when:** reporting survives a pod restart with no data loss; `TestMigrationForward/Rollback` unblocked; a rollup query returns persisted rows.

@@ -50,11 +50,17 @@ func main() {
 
 	port := cfg.Get("reporting.port", routes.PortReporting)
 
-	// Analytics store
-	store := analytics.NewMemory()
+	// Analytics store — memory (volatile, default) or durable DuckDB,
+	// selected by reporting.analytics_backend. Core events flow through
+	// the analytics.Store interface so they persist on whichever backend.
+	store := selectAnalyticsStore(cfg, log)
 	lc.OnShutdown("analytics-store", func(_ context.Context) error {
 		return store.Close()
 	})
+	// memStore is non-nil only on the memory backend. The /debug read-back
+	// endpoints + operational-signal handlers are MemoryStore-only; they
+	// guard on this and degrade to 501 (debug) / skip (signals) on duckdb.
+	memStore, _ := store.(*analytics.MemoryStore)
 
 	// Billing engine (unified with reporting - single consumer)
 	clk := clock.Real{}
@@ -139,73 +145,100 @@ func main() {
 	// {"count": N} so tests can verify exactly-once delivery (no dupes).
 	// Gated by debug.endpoints_enabled to keep it off prod surface.
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		// store is *analytics.MemoryStore in dev — direct method call. When
-		// DuckDB/ClickHouse get wired, replace this with a generic count
-		// query via the Store.Query interface.
+		// These read-back endpoints are MemoryStore-only (used by the e2e
+		// harness, which runs the memory backend). memGuard returns false
+		// and writes 501 when reporting.analytics_backend isn't memory, so
+		// the duckdb backend degrades honestly instead of nil-panicking.
+		// Core event persistence is unaffected — only these dev affordances.
+		memGuard := func(w http.ResponseWriter) bool {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			if memStore == nil {
+				http.Error(w, `{"error":"debug read-backs require reporting.analytics_backend=memory"}`, http.StatusNotImplemented)
+				return false
+			}
+			return true
+		}
+
 		mux.HandleFunc(routes.DebugAuctionWins, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			traceID := r.URL.Query().Get("trace_id")
 			bidModel := r.URL.Query().Get("bid_model")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			var count int
 			if bidModel != "" {
-				count = store.AuctionWinByBidModel(traceID, bidModel)
+				count = memStore.AuctionWinByBidModel(traceID, bidModel)
 			} else {
-				count = store.AuctionWinCount(traceID)
+				count = memStore.AuctionWinCount(traceID)
 			}
 			json.NewEncoder(w).Encode(map[string]int{"count": count})
 		})
 
 		mux.HandleFunc(routes.DebugBudgetDepletions, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(map[string]int{"count": store.BudgetDepletionsByCampaign(campaignID)})
+			json.NewEncoder(w).Encode(map[string]int{"count": memStore.BudgetDepletionsByCampaign(campaignID)})
 		})
 
 		mux.HandleFunc(routes.DebugCampaignStateChanges, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(store.CampaignStateChangesByCampaign(campaignID))
+			json.NewEncoder(w).Encode(memStore.CampaignStateChangesByCampaign(campaignID))
 		})
 
 		mux.HandleFunc(routes.DebugRenderFailures, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			creativeID := r.URL.Query().Get("creative_id")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(store.RenderFailuresByCreative(creativeID))
+			json.NewEncoder(w).Encode(memStore.RenderFailuresByCreative(creativeID))
 		})
 
 		mux.HandleFunc(routes.DebugFreqCapBlocks, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(store.FreqCapBlocksByCampaign(campaignID))
+			json.NewEncoder(w).Encode(memStore.FreqCapBlocksByCampaign(campaignID))
 		})
 
 		mux.HandleFunc(routes.DebugTrackerRejections, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			traceID := r.URL.Query().Get("trace_id")
 			reason := r.URL.Query().Get("reason")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			if traceID != "" {
-				json.NewEncoder(w).Encode(store.TrackerRejectionsByTrace(traceID, reason))
+				json.NewEncoder(w).Encode(memStore.TrackerRejectionsByTrace(traceID, reason))
 				return
 			}
 			if reason != "" {
-				json.NewEncoder(w).Encode(map[string]int{"count": store.TrackerRejectionsByReason(reason)})
+				json.NewEncoder(w).Encode(map[string]int{"count": memStore.TrackerRejectionsByReason(reason)})
 				return
 			}
 			http.Error(w, `{"error":"trace_id or reason required"}`, http.StatusBadRequest)
 		})
 
 		mux.HandleFunc(routes.DebugServeNoFills, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			traceID := r.URL.Query().Get("trace_id")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(map[string]int{"count": store.ServeNoFillsByTrace(traceID)})
+			json.NewEncoder(w).Encode(map[string]int{"count": memStore.ServeNoFillsByTrace(traceID)})
 		})
 
 		mux.HandleFunc(routes.DebugMediaEvents, func(w http.ResponseWriter, r *http.Request) {
+			if !memGuard(w) {
+				return
+			}
 			traceID := r.URL.Query().Get("trace_id")
 			channel := r.URL.Query().Get("channel")
 			eventType := r.URL.Query().Get("event_type")
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(map[string]int{"count": store.MediaEventsByTrace(traceID, channel, eventType)})
+			json.NewEncoder(w).Encode(map[string]int{"count": memStore.MediaEventsByTrace(traceID, channel, eventType)})
 		})
 
 		// Billing ledger reset — wipes in-memory ledger entries so e2e
