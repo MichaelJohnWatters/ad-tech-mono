@@ -1,0 +1,32 @@
+# Dockerfile.dev — pod-mode dev iteration image.
+#
+# Unlike build/Dockerfile (which runs `go build` INSIDE the image and
+# produces a fully-prod-shaped image), this one copies a pre-built
+# binary from the host's ./bin/${SERVICE} location. That makes it tiny
+# and trivially fast to rebuild, but more importantly it pairs with
+# Tilt's live_update feature: when the operator edits Go code, Tilt
+# rebuilds ./bin/${SERVICE} on the host (~1-2s for incremental Go
+# builds), then rsyncs the new binary into the running pod and
+# restart_container() bounces the process in <1s. No Docker layer
+# rebuild, no image pull, no pod scheduling overhead.
+#
+# Usage:
+#   docker build --build-arg SERVICE=dsp -f build/Dockerfile.dev -t adtech-dsp .
+#
+# Prerequisite: ./bin/${SERVICE} must exist on the host. The Tiltfile
+# wires this via a local_resource('${svc}-build') that runs
+# `go build -o ./bin/${svc} ./cmd/${svc}` before docker_build.
+#
+# For prod / CI use build/Dockerfile (or build/Dockerfile.gateway,
+# build/Dockerfile.reporting for the variants).
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+ARG SERVICE
+COPY bin/${SERVICE} /app
+# Optional service-specific assets (gateway needs web/, others don't).
+# We always COPY web/ if present so the same dev image works for
+# gateway too. Other services ignore it.
+COPY web /web
+WORKDIR /
+ENTRYPOINT ["/app"]

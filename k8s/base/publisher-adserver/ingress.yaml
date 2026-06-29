@@ -1,0 +1,10 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: publisher-adserver, namespace: adtech, annotations: { traefik.ingress.kubernetes.io/router.entrypoints: web } }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: pubad.adtech.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: publisher-adserver, port: { number: 8088 } } } }
