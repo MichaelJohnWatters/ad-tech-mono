@@ -5,6 +5,7 @@ package analytics
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,6 +110,57 @@ func TestDuckDB_OperationalSignalsSurviveReopen(t *testing.T) {
 		if n != tc.want {
 			t.Errorf("%s rows after reopen = %d, want %d", tc.table, n, tc.want)
 		}
+	}
+}
+
+// TestDuckDB_RollupsSurviveReopen proves persisted rollup rows survive a
+// restart, with their JSON dimensions/metrics intact.
+func TestDuckDB_RollupsSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollups.duckdb")
+	ctx := context.Background()
+	from := time.Date(2026, 6, 30, 13, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+
+	d1, err := NewDuckDB(path)
+	if err != nil {
+		t.Fatalf("open 1: %v", err)
+	}
+	rows := []RollupRow{
+		{Config: "events", Level: "hourly", WindowFrom: from, WindowTo: to,
+			Dimensions: map[string]string{"campaign_id": "c1", "geo": "GBR"},
+			Metrics:    map[string]float64{"count": 60, "sum_cost": 120.5}},
+		{Config: "events", Level: "hourly", WindowFrom: from, WindowTo: to,
+			Dimensions: map[string]string{"campaign_id": "c2", "geo": "USA"},
+			Metrics:    map[string]float64{"count": 40, "sum_cost": 80.0}},
+	}
+	if err := d1.InsertRollups(ctx, rows); err != nil {
+		t.Fatalf("insert rollups: %v", err)
+	}
+	if err := d1.Close(); err != nil {
+		t.Fatalf("close 1: %v", err)
+	}
+
+	d2, err := NewDuckDB(path)
+	if err != nil {
+		t.Fatalf("open 2: %v", err)
+	}
+	defer d2.Close()
+
+	var n int
+	if err := d2.db.QueryRow(`SELECT count(*) FROM rollups WHERE config='events' AND level='hourly'`).Scan(&n); err != nil {
+		t.Fatalf("count rollups: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("rollup rows after reopen = %d, want 2", n)
+	}
+
+	// JSON columns must round-trip.
+	var dims, mets string
+	if err := d2.db.QueryRow(`SELECT dimensions, metrics FROM rollups WHERE dimensions LIKE '%c1%'`).Scan(&dims, &mets); err != nil {
+		t.Fatalf("scan json: %v", err)
+	}
+	if !strings.Contains(dims, "GBR") || !strings.Contains(mets, "120.5") {
+		t.Fatalf("json columns lost data: dims=%q metrics=%q", dims, mets)
 	}
 }
 

@@ -56,6 +56,62 @@ func TestEngine_RunLevel(t *testing.T) {
 	}
 }
 
+func TestEngine_PersistsRollups(t *testing.T) {
+	store := analytics.NewMemory()
+	ctx := context.Background()
+
+	// Two campaigns × 60 minutes of impressions in the 13:00–14:00 hour.
+	base := time.Date(2024, 6, 15, 13, 0, 0, 0, time.UTC)
+	for i := 0; i < 60; i++ {
+		for _, cid := range []string{"camp-1", "camp-2"} {
+			store.InsertImpression(ctx, &analytics.ImpressionEvent{
+				TraceID: "t", CampaignID: cid, CreativeID: "cr",
+				PlacementID: "pl", PublisherID: "pub", AccountID: "acc",
+				Geo: "GBR", Device: "mobile",
+				ClearingPrice: 2.0, ClearingCurrency: "USD", ClearingPriceUSD: 2.0,
+				Timestamp: base.Add(time.Duration(i) * time.Minute),
+			})
+		}
+	}
+
+	clk := clock.NewFake(time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC))
+	engine := NewEngine(store, clk, logger.New("rollup-test"))
+	engine.Register(EventsConfig)
+
+	results, err := engine.RunLevel(ctx, Hourly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := results[0]
+	if r.RowsWritten == 0 {
+		t.Fatal("RowsWritten = 0, want rows persisted (engine no longer discards)")
+	}
+	if r.RowsWritten != r.RowsRead {
+		t.Errorf("RowsWritten=%d != RowsRead=%d", r.RowsWritten, r.RowsRead)
+	}
+
+	// The rows must actually be in the store, tagged with config + level.
+	if got := store.RollupCount("events", "hourly"); got != r.RowsWritten {
+		t.Fatalf("store has %d rollup rows, want %d", got, r.RowsWritten)
+	}
+
+	// Spot-check one persisted row carries dimensions + metrics.
+	rows := store.Rollups()
+	if len(rows) == 0 {
+		t.Fatal("no rollup rows stored")
+	}
+	row := rows[0]
+	if row.Config != "events" || row.Level != "hourly" {
+		t.Errorf("row config/level = %s/%s, want events/hourly", row.Config, row.Level)
+	}
+	if _, ok := row.Metrics["count"]; !ok {
+		t.Errorf("row missing 'count' metric: %+v", row.Metrics)
+	}
+	if _, ok := row.Dimensions["campaign_id"]; !ok {
+		t.Errorf("row missing 'campaign_id' dimension: %+v", row.Dimensions)
+	}
+}
+
 func TestWindowForLevel(t *testing.T) {
 	now := time.Date(2024, 6, 15, 14, 35, 22, 0, time.UTC)
 

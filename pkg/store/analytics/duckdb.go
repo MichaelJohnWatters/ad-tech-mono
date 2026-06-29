@@ -5,6 +5,7 @@ package analytics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -218,6 +219,18 @@ func (d *DuckDB) createTables() error {
 			spent       DOUBLE,
 			timestamp   TIMESTAMP NOT NULL
 		)`,
+		// rollups holds aggregated rows from the rollup engine. dimensions
+		// and metrics are JSON so one table serves every rollup config
+		// (universal framework). Queried back by tier for fast dashboards.
+		`CREATE TABLE IF NOT EXISTS rollups (
+			config      VARCHAR NOT NULL,
+			level       VARCHAR NOT NULL,
+			window_from TIMESTAMP NOT NULL,
+			window_to   TIMESTAMP NOT NULL,
+			dimensions  VARCHAR,
+			metrics     VARCHAR,
+			created_at  TIMESTAMP NOT NULL
+		)`,
 	}
 
 	for _, stmt := range statements {
@@ -407,6 +420,44 @@ func (d *DuckDB) InsertBudgetDepletion(b BudgetDepletion) {
 		`INSERT INTO budget_depletions (campaign_id, account_id, budget, spent, timestamp)
 		 VALUES (?, ?, ?, ?, ?)`,
 		b.CampaignID, b.AccountID, b.Budget, b.Spent, b.Timestamp)
+}
+
+// InsertRollups persists aggregated rollup rows. Implements RollupWriter.
+// Dimensions/metrics are JSON-encoded into VARCHAR columns. The whole
+// batch goes in one transaction so a rollup run is all-or-nothing.
+func (d *DuckDB) InsertRollups(ctx context.Context, rows []RollupRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rollup tx: %w", err)
+	}
+	now := time.Now()
+	for _, r := range rows {
+		dims, err := json.Marshal(r.Dimensions)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("marshal dimensions: %w", err)
+		}
+		mets, err := json.Marshal(r.Metrics)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("marshal metrics: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO rollups (config, level, window_from, window_to, dimensions, metrics, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			r.Config, r.Level, r.WindowFrom, r.WindowTo, string(dims), string(mets), now,
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("insert rollup: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (d *DuckDB) InsertBatch(ctx context.Context, events []Event) error {

@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
@@ -153,9 +154,49 @@ func (e *Engine) runOne(ctx context.Context, cfg Config, level Level) (Result, e
 
 	rowsRead := len(qr.Rows)
 
-	// In a full implementation, we'd write these aggregated rows to a
-	// rollup table (e.g. impressions_hourly). For now, we return the
-	// result for the caller to handle.
+	// Map each aggregated query row into a RollupRow (dimension columns →
+	// Dimensions, metric columns → Metrics) and persist them. metricSet
+	// classifies a column as a metric vs a dimension by name.
+	metricSet := make(map[string]bool, len(cfg.Metrics))
+	for _, m := range cfg.Metrics {
+		metricSet[m] = true
+	}
+	rollupRows := make([]analytics.RollupRow, 0, rowsRead)
+	for _, row := range qr.Rows {
+		rr := analytics.RollupRow{
+			Config:     cfg.Name,
+			Level:      string(level),
+			WindowFrom: from,
+			WindowTo:   to,
+			Dimensions: map[string]string{},
+			Metrics:    map[string]float64{},
+		}
+		for i, col := range qr.Columns {
+			if i >= len(row) {
+				break
+			}
+			if metricSet[col] {
+				rr.Metrics[col] = toFloat(row[i])
+			} else {
+				rr.Dimensions[col] = fmt.Sprint(row[i])
+			}
+		}
+		rollupRows = append(rollupRows, rr)
+	}
+
+	rowsWritten := 0
+	if rw, ok := e.store.(analytics.RollupWriter); ok {
+		if err := rw.InsertRollups(ctx, rollupRows); err != nil {
+			return Result{}, fmt.Errorf("write rollups: %w", err)
+		}
+		rowsWritten = len(rollupRows)
+	} else {
+		// Backend can't persist rollups — surface it rather than silently
+		// reporting success. (Both memory and duckdb implement RollupWriter,
+		// so this only fires on a future backend that forgot to.)
+		e.log.Warn("rollup: store does not implement RollupWriter, results not persisted",
+			"config", cfg.Name, "level", string(level))
+	}
 
 	return Result{
 		Config:      cfg.Name,
@@ -163,9 +204,31 @@ func (e *Engine) runOne(ctx context.Context, cfg Config, level Level) (Result, e
 		WindowFrom:  from,
 		WindowTo:    to,
 		RowsRead:    rowsRead,
-		RowsWritten: rowsRead, // 1:1 for now
+		RowsWritten: rowsWritten,
 		Duration:    e.clk.Since(start),
 	}, nil
+}
+
+// toFloat coerces a metric value from the analytics store (int64 counts,
+// float64 sums, or numeric strings) into a float64 for the rollup row.
+func toFloat(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case string:
+		f, _ := strconv.ParseFloat(n, 64)
+		return f
+	default:
+		return 0
+	}
 }
 
 // windowForLevel returns the time window to aggregate.

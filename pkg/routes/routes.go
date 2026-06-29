@@ -253,6 +253,10 @@ const (
 	DebugExchangeRouting = "/debug/exchange/routing"
 	// Publisher-adserver debug surface — direct-sold line item cache dump.
 	DebugPubAdLineItems = "/debug/pubad/line-items"
+	// DebugRollupRun triggers a synchronous rollup run for ?level=minute|
+	// hourly|daily|monthly (default minute). Lets ops + e2e force a rollup
+	// without waiting for the scheduler tick. Returns the per-config results.
+	DebugRollupRun = "/debug/rollup/run"
 )
 
 // ============================================================
