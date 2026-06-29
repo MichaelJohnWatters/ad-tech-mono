@@ -28,6 +28,7 @@ type MemoryStore struct {
 	trackerRejections    []TrackerRejection
 	renderFailures       []RenderFailure
 	freqCapBlocks        []FreqCapBlock
+	rollups              []RollupRow
 }
 
 // FreqCapBlock records a serve suppression — adserver's
@@ -390,6 +391,37 @@ func (s *MemoryStore) AuctionWinByBidModel(traceID, bidModel string) int {
 		}
 	}
 	return n
+}
+
+// InsertRollups appends aggregated rollup rows. Implements RollupWriter.
+func (s *MemoryStore) InsertRollups(_ context.Context, rows []RollupRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rollups = append(s.rollups, rows...)
+	return nil
+}
+
+// RollupCount returns how many rollup rows have been stored for a given
+// (config, level). Used by tests/ops to verify the rollup engine wrote.
+func (s *MemoryStore) RollupCount(config string, level string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, r := range s.rollups {
+		if r.Config == config && r.Level == level {
+			n++
+		}
+	}
+	return n
+}
+
+// Rollups returns a copy of all stored rollup rows for test assertions.
+func (s *MemoryStore) Rollups() []RollupRow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]RollupRow, len(s.rollups))
+	copy(out, s.rollups)
+	return out
 }
 
 func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {

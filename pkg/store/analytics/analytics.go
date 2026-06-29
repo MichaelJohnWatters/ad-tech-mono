@@ -71,6 +71,30 @@ type ObservabilityWriter interface {
 
 var _ ObservabilityWriter = (*MemoryStore)(nil)
 
+// RollupRow is one aggregated row produced by the rollup engine: a set of
+// dimension values + metric values for a (config, level, time-window).
+// Dimensions and metrics are maps rather than fixed columns so a single
+// rollups table serves every rollup config (events, auctions, …) — the
+// "universal rollup framework". Persisted as JSON columns.
+type RollupRow struct {
+	Config     string             `json:"config"`
+	Level      string             `json:"level"`
+	WindowFrom time.Time          `json:"window_from"`
+	WindowTo   time.Time          `json:"window_to"`
+	Dimensions map[string]string  `json:"dimensions"`
+	Metrics    map[string]float64 `json:"metrics"`
+}
+
+// RollupWriter persists aggregated rollup rows. Both MemoryStore and
+// DuckDB implement it so the rollup engine writes through whichever
+// analytics backend is selected. Kept off the core Store interface for the
+// same reason as ObservabilityWriter — it's a reporting/rollup concern.
+type RollupWriter interface {
+	InsertRollups(ctx context.Context, rows []RollupRow) error
+}
+
+var _ RollupWriter = (*MemoryStore)(nil)
+
 // Event is a tagged union for batch inserts.
 type Event struct {
 	Type       EventType        `json:"type"`

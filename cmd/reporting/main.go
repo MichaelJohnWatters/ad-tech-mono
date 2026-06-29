@@ -77,6 +77,13 @@ func main() {
 		lc.OnShutdown("contract-cache", func(_ context.Context) error { contractCache.Stop(); return nil })
 	}
 
+	// Rollup engine — aggregates raw events into minute/hour/day/month
+	// rows and persists them via the analytics store's RollupWriter. The
+	// scheduler only runs when reporting.rollup_enabled (off by default);
+	// the engine is always built so /debug/rollup/run works regardless.
+	rollupEngine := newRollupEngine(store, clk, log)
+	startRollupScheduler(rollupEngine, cfg, clk, log, lc)
+
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
 
@@ -240,6 +247,10 @@ func main() {
 			eventType := r.URL.Query().Get("event_type")
 			json.NewEncoder(w).Encode(map[string]int{"count": memStore.MediaEventsByTrace(traceID, channel, eventType)})
 		})
+
+		// Trigger a rollup run on demand (ops + e2e). Works on any backend
+		// since it goes through the analytics.Store / RollupWriter interfaces.
+		mux.HandleFunc(routes.DebugRollupRun, rollupRunHandler(rollupEngine, log))
 
 		// Billing ledger reset — wipes in-memory ledger entries so e2e
 		// billing tests can run in isolation. No-op on TigerBeetle backend
