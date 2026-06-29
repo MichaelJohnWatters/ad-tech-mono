@@ -79,7 +79,7 @@ func TestBuildSchedule_PreMidPost(t *testing.T) {
 		`<vmap:AdBreak breakType="linear" timeOffset="end" breakId="post">`,
 		`<vmap:AdSource id="pre"`,
 		`<vmap:VASTAdData>`,
-		`<VAST version="4.2">`, // inline VAST survives
+		`<VAST xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="vast.xsd" version="4.2">`, // inline VAST survives
 		`<Ad id="preroll">`,
 		`<Ad id="midroll1">`,
 		`<vmap:Tracking event="breakStart"><![CDATA[https://t/break-start?br=pre]]></vmap:Tracking>`,
