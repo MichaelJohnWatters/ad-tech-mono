@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 )
@@ -23,7 +24,7 @@ import (
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable"
+		dbURL = routes.DefaultPostgresURL
 	}
 
 	migrationsDir := os.Getenv("MIGRATIONS_DIR")

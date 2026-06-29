@@ -9,8 +9,12 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 )
 
+func dedupTTL() time.Duration { return time.Hour }
+func dedupOn() bool           { return true }
+func dedupOff() bool          { return false }
+
 func TestDedup_FirstSeen(t *testing.T) {
-	d := NewDedup(cache.NewMemoryL2(), time.Hour, true, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	d := NewDedup(cache.NewMemoryL2(), dedupTTL, dedupOn, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 
 	if !d.FirstSeen(ctx, "impression", "trace-1") {
@@ -22,7 +26,7 @@ func TestDedup_FirstSeen(t *testing.T) {
 }
 
 func TestDedup_DistinctEventTypes(t *testing.T) {
-	d := NewDedup(cache.NewMemoryL2(), time.Hour, true, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	d := NewDedup(cache.NewMemoryL2(), dedupTTL, dedupOn, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 
 	if !d.FirstSeen(ctx, "impression", "trace-1") {
@@ -34,7 +38,7 @@ func TestDedup_DistinctEventTypes(t *testing.T) {
 }
 
 func TestDedup_Disabled(t *testing.T) {
-	d := NewDedup(cache.NewMemoryL2(), time.Hour, false, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	d := NewDedup(cache.NewMemoryL2(), dedupTTL, dedupOff, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		if !d.FirstSeen(ctx, "impression", "trace-1") {
@@ -44,7 +48,7 @@ func TestDedup_Disabled(t *testing.T) {
 }
 
 func TestDedup_EmptyTraceBypass(t *testing.T) {
-	d := NewDedup(cache.NewMemoryL2(), time.Hour, true, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	d := NewDedup(cache.NewMemoryL2(), dedupTTL, dedupOn, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 	if !d.FirstSeen(ctx, "impression", "") {
 		t.Fatal("empty trace id should always return true (cannot dedup without an id)")

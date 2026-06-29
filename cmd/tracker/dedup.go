@@ -8,6 +8,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // Dedup is the SetNX-backed event dedup gate.
@@ -17,24 +18,26 @@ import (
 // (event_type, trace_id) are silently dropped so we don't double-count
 // in the analytics store.
 type Dedup struct {
-	l2      cache.L2Cache
-	ttl     time.Duration
-	enabled bool
-	log     *slog.Logger
+	l2        cache.L2Cache
+	ttlFn     func() time.Duration
+	enabledFn func() bool
+	log       *slog.Logger
 }
 
-func NewDedup(l2 cache.L2Cache, ttl time.Duration, enabled bool, log *slog.Logger) *Dedup {
-	return &Dedup{l2: l2, ttl: ttl, enabled: enabled, log: log}
+// ttlFn and enabledFn are called per request so live edits to
+// tracker.dedup_ttl / tracker.dedup_enabled take effect on the next pixel.
+func NewDedup(l2 cache.L2Cache, ttlFn func() time.Duration, enabledFn func() bool, log *slog.Logger) *Dedup {
+	return &Dedup{l2: l2, ttlFn: ttlFn, enabledFn: enabledFn, log: log}
 }
 
 // FirstSeen returns true if this is the first time we've seen (eventType, traceID).
 // Returns true on cache failure (fail-open) so events are never silently dropped.
 func (d *Dedup) FirstSeen(ctx context.Context, eventType, traceID string) bool {
-	if !d.enabled || traceID == "" {
+	if !d.enabledFn() || traceID == "" {
 		return true
 	}
 	key := "tracker:seen:" + eventType + ":" + traceID
-	ok, err := d.l2.SetNX(ctx, key, "1", d.ttl)
+	ok, err := d.l2.SetNX(ctx, key, "1", d.ttlFn())
 	if err != nil {
 		d.log.Warn("dedup setnx failed", "key", key, "error", err)
 		return true
@@ -44,7 +47,7 @@ func (d *Dedup) FirstSeen(ctx context.Context, eventType, traceID string) bool {
 
 // connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", "localhost:6379")
+	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
 	pwd := cfg.Get("redis.password", "")
 	db := cfg.GetInt("redis.db", 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -40,6 +40,12 @@ type World struct {
 func BuildBasicWorld(t *testing.T, h *Harness, suffix string) World {
 	t.Helper()
 	h.Reset(t)
+	// In-memory billing ledger doesn't reset with the DB truncate (it
+	// lives in the reporting pod's RAM). Wipe it here so billing tests
+	// inheriting BuildBasicWorld start with zero entries — without this,
+	// TestBillingViewabilityVCPMSettle flakes when scheduled after the
+	// CPC / CPA tests because the ledger carries their reservations.
+	h.ResetBillingLedger(t)
 
 	w := World{}
 	w.Admin = h.CreateAdmin(t, "e2e-admin-"+suffix)

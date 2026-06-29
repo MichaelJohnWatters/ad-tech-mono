@@ -31,8 +31,10 @@ func (h *Harness) Reset(t *testing.T) {
 	// tables when a future migration breaks the test.
 	tables := []string{
 		"line_item_creatives",
+		"publisher_line_item_creatives",
 		"targeting_rules",
 		"line_items",
+		"publisher_line_items",
 		"creatives",
 		"insertion_orders",
 		"placements",

@@ -10,7 +10,7 @@ import (
 
 func TestBudgetTracker_RecordAndSpend(t *testing.T) {
 	l2 := cache.NewMemoryL2()
-	b := NewBudgetTracker(l2, time.Hour, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	b := NewBudgetTracker(l2, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 
 	b.Record("camp-1", 2.50)
 	b.Record("camp-1", 0.75)
@@ -20,7 +20,7 @@ func TestBudgetTracker_RecordAndSpend(t *testing.T) {
 }
 
 func TestBudgetTracker_IndependentCampaigns(t *testing.T) {
-	b := NewBudgetTracker(cache.NewMemoryL2(), time.Hour, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	b := NewBudgetTracker(cache.NewMemoryL2(), func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	b.Record("camp-1", 1.00)
 	b.Record("camp-2", 2.00)
 	if b.Spend("camp-1") != 1.00 {
@@ -32,7 +32,7 @@ func TestBudgetTracker_IndependentCampaigns(t *testing.T) {
 }
 
 func TestBudgetTracker_ZeroForUnknownCampaign(t *testing.T) {
-	b := NewBudgetTracker(cache.NewMemoryL2(), time.Hour, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	b := NewBudgetTracker(cache.NewMemoryL2(), func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	if got := b.Spend("never-seen"); got != 0 {
 		t.Errorf("Spend = %f, want 0", got)
 	}
