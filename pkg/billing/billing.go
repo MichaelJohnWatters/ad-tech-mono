@@ -62,14 +62,16 @@ type SpendResult struct {
 
 // Engine processes billing events.
 type Engine struct {
-	ledger    *Ledger
+	ledger    Ledger
 	contracts *ContractStore
 	clk       clock.Clock
 	log       *slog.Logger
 }
 
-// NewEngine creates a billing engine.
-func NewEngine(ledger *Ledger, contracts *ContractStore, clk clock.Clock, log *slog.Logger) *Engine {
+// NewEngine creates a billing engine. The ledger arg is an interface so
+// callers can plug either MemoryLedger (dev/tests) or
+// pkg/billing/tigerbeetle.Ledger (prod) without behaviour change.
+func NewEngine(ledger Ledger, contracts *ContractStore, clk clock.Clock, log *slog.Logger) *Engine {
 	return &Engine{ledger: ledger, contracts: contracts, clk: clk, log: log}
 }
 
@@ -164,9 +166,11 @@ func (e *Engine) reserve(ctx context.Context, event SpendEvent) (*SpendResult, e
 		Type:          EntryReservation,
 		DebitAccount:  "advertiser:" + event.AdvertiserID,
 		CreditAccount: "escrow:" + resID,
-		Amount:         event.ClearingPrice,
-		Currency:       event.Currency,
-		ReservationID:  resID,
+		Amount:        event.ClearingPrice,
+		Currency:      event.Currency,
+		BidModel:      string(event.BidModel),
+		DealType:      event.DealType,
+		ReservationID: resID,
 	})
 
 	e.log.Debug("reserved",
@@ -223,6 +227,65 @@ func (e *Engine) settle(ctx context.Context, event SpendEvent) (*SpendResult, er
 		Action:           "settled",
 		ReservationID:    resID,
 	}, nil
+}
+
+// SettleByTrace settles the open reservation for traceID using the given
+// event type ("click" for CPC, "conversion" for CPA, "viewable" for vCPM,
+// "complete" for CPCV). BidModel, ClearingPrice, PublisherID,
+// AdvertiserID, CampaignID and DealType are recovered from the
+// reservation row so callers (the reporting service's click/conversion
+// consumers) don't have to thread the original auction context through
+// the tracker URL params.
+//
+// Returns (nil, nil) when:
+//   - no reservation exists for the trace (CPM impression, or impression
+//     event hasn't been processed yet — NATS subjects deliver independently)
+//   - the reservation has already been settled (defends against double-fire
+//     when tracker dedup misses)
+//   - the reservation's bid model doesn't match the event type (a click
+//     on a CPA campaign shouldn't settle — only conversion does)
+//
+// All three cases are normal in steady state; the caller just acks and moves on.
+func (e *Engine) SettleByTrace(ctx context.Context, traceID, eventType string) (*SpendResult, error) {
+	res, ok := e.ledger.ReservationByTrace(traceID)
+	if !ok {
+		return nil, nil
+	}
+	if e.ledger.HasSettlement(traceID) {
+		return nil, nil
+	}
+	if !settleEventMatches(BidModel(res.BidModel), eventType) {
+		return nil, nil
+	}
+	return e.ProcessEvent(ctx, SpendEvent{
+		TraceID:       traceID,
+		CampaignID:    res.CampaignID,
+		PublisherID:   res.PublisherID,
+		AdvertiserID:  res.AdvertiserID,
+		ClearingPrice: res.Amount,
+		Currency:      res.Currency,
+		BidModel:      BidModel(res.BidModel),
+		DealType:      res.DealType,
+		EventType:     eventType,
+		Timestamp:     e.clk.Now(),
+	})
+}
+
+// settleEventMatches returns true if the event type would route through
+// the settle branch of ProcessEvent for the given bid model. Keeps the
+// mapping in one place so adding a new bid model means one new line.
+func settleEventMatches(model BidModel, eventType string) bool {
+	switch model {
+	case BidCPC:
+		return eventType == "click"
+	case BidCPA:
+		return eventType == "conversion"
+	case BidVCPM:
+		return eventType == "viewable"
+	case BidCPCV:
+		return eventType == "complete"
+	}
+	return false
 }
 
 // BalanceSummary returns spend/revenue totals for an account.

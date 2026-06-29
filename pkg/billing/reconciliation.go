@@ -22,11 +22,12 @@ type ReconciliationResult struct {
 // Reconciler verifies that billing and reporting counts match.
 type Reconciler struct {
 	store  analytics.Store
-	ledger *Ledger
+	ledger Ledger
 }
 
-// NewReconciler creates a reconciler.
-func NewReconciler(store analytics.Store, ledger *Ledger) *Reconciler {
+// NewReconciler creates a reconciler. Ledger is an interface so memory
+// and TB-backed reconciliation share the same query path.
+func NewReconciler(store analytics.Store, ledger Ledger) *Reconciler {
 	return &Reconciler{store: store, ledger: ledger}
 }
 
