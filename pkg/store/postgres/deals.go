@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
@@ -30,7 +31,8 @@ SELECT
     COALESCE(guaranteed_volume, 0),
     start_date,
     end_date,
-    status
+    status,
+    viewability_target_pct
 FROM deals
 WHERE status = 'active'`
 
@@ -44,16 +46,22 @@ WHERE status = 'active'`
 	for rows.Next() {
 		var d models.Deal
 		var advIDs, plIDs pq.StringArray
+		var viewTarget sql.NullInt32
 		if err := rows.Scan(
 			&d.ID, &d.PublisherID, &d.AccountID, &d.Name,
 			&d.DealType, &d.Price, &d.PriceCurrency,
 			&advIDs, &plIDs, &d.GuaranteedVolume,
 			&d.StartDate, &d.EndDate, &d.Status,
+			&viewTarget,
 		); err != nil {
 			return nil, fmt.Errorf("scan deal: %w", err)
 		}
 		d.AdvertiserIDs = advIDs
 		d.PlacementIDs = plIDs
+		if viewTarget.Valid {
+			pct := int(viewTarget.Int32)
+			d.ViewabilityTargetPct = &pct
+		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
