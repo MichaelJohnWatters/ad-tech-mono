@@ -148,8 +148,28 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 	return result
 }
 
+// Preview returns the list of DSPs SelectDSPs would currently return for
+// (channel, allDSPs). Read-only — does not record a call. Used by the
+// /debug/exchange/routing?preview=true debug endpoint so tests and ops can
+// inspect the router's current filter decisions without having to run a
+// real auction (which would also mutate stats).
+func (r *SmartRouter) Preview(channel string, allDSPs []string) []string {
+	return r.SelectDSPs(channel, allDSPs)
+}
+
+// Reset clears all learned per-(channel, DSP) stats. Used by the e2e
+// suite's smart-router tests so a test can train the router with a known
+// sequence of outcomes without inheriting noise from earlier tests in
+// the same process. Not exposed to ops by default — wire only behind
+// debug.endpoints_enabled.
+func (r *SmartRouter) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stats = make(map[channelDSPKey]*DSPStats)
+}
+
 // Stats returns all (channel, DSP) stats for debugging. Used by the
-// /v1/openrtb/routing debug endpoint.
+// /debug/exchange/routing debug endpoint.
 func (r *SmartRouter) Stats() []DSPStats {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
