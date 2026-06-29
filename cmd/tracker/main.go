@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
@@ -86,6 +87,12 @@ func main() {
 		log:          log,
 	}
 	fraudChecker := fraud.NewRealTimeChecker(fraud.DefaultConfig())
+	// DB-driven IP/UA blocklists, refreshed into the checker on a poll +
+	// NATS invalidate. Nil when no database.url — hardcoded patterns remain.
+	blocklistCache := startFraudBlocklistCache(cfg, log, bus, fraudChecker)
+	if blocklistCache != nil {
+		lc.OnShutdown("fraud-blocklist-cache", func(_ context.Context) error { blocklistCache.Stop(); return nil })
+	}
 	signingKey := cfg.Get("tracker.signing_key", adserving.DefaultSigningKey)
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
@@ -96,6 +103,12 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
+
+	// Debug-gated synchronous cache refresh — lets the e2e harness force a
+	// reload after inserting a fraud_blocklists row.
+	if cfg.GetBool("debug.endpoints_enabled", true) && blocklistCache != nil {
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(blocklistCache))
+	}
 
 	// Impression pixel
 	mux.HandleFunc(routes.TrackerImpression, func(w http.ResponseWriter, r *http.Request) {

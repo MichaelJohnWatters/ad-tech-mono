@@ -57,6 +57,14 @@ func DefaultConfig() Config {
 	}
 }
 
+// BlocklistEntry is one DB-sourced fraud blocklist row (mirrors the
+// fraud_blocklists table). Loaded into the tracker's warm cache and pushed
+// into the checker via ReplaceBlocklists on every refresh.
+type BlocklistEntry struct {
+	Type  string // "ip" | "ua" | "domain" | "app_bundle"
+	Value string
+}
+
 // RealTimeChecker performs fast fraud checks on incoming requests.
 type RealTimeChecker struct {
 	mu          sync.RWMutex
@@ -65,6 +73,12 @@ type RealTimeChecker struct {
 	botPatterns []string
 	dcRanges    []*net.IPNet // data center IP ranges
 	rateCounts  map[string]*rateEntry
+
+	// DB-sourced blocklists, replaced wholesale on each warm-cache refresh.
+	// Kept separate from the hardcoded botPatterns and the manual
+	// ipBlocklist (BlockIP) so a refresh never clobbers either.
+	dbIPs        map[string]bool
+	dbUAPatterns []string
 }
 
 type rateEntry struct {
@@ -138,6 +152,27 @@ func (c *RealTimeChecker) Check(req Request) CheckResult {
 	}
 }
 
+// ReplaceBlocklists atomically swaps the DB-sourced IP set and UA patterns
+// from a warm-cache snapshot. The hardcoded bot patterns, datacenter
+// ranges, and any manually BlockIP'd addresses are unaffected — this only
+// owns the rows that came from fraud_blocklists.
+func (c *RealTimeChecker) ReplaceBlocklists(entries []BlocklistEntry) {
+	ips := make(map[string]bool)
+	var uas []string
+	for _, e := range entries {
+		switch e.Type {
+		case "ip":
+			ips[e.Value] = true
+		case "ua":
+			uas = append(uas, strings.ToLower(e.Value))
+		}
+	}
+	c.mu.Lock()
+	c.dbIPs = ips
+	c.dbUAPatterns = uas
+	c.mu.Unlock()
+}
+
 // BlockIP adds an IP to the blocklist.
 func (c *RealTimeChecker) BlockIP(ip string) {
 	c.mu.Lock()
@@ -166,12 +201,21 @@ func (c *RealTimeChecker) BlockedIPs() []string {
 func (c *RealTimeChecker) isBlockedIP(ip string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.ipBlocklist[ip]
+	return c.ipBlocklist[ip] || c.dbIPs[ip]
 }
 
 func (c *RealTimeChecker) isBot(ua string) bool {
 	lower := strings.ToLower(ua)
+	// Hardcoded patterns are immutable after construction — lock-free read.
 	for _, pattern := range c.botPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	// DB-sourced patterns are swapped under the lock by ReplaceBlocklists.
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, pattern := range c.dbUAPatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
