@@ -33,10 +33,17 @@ func (h *Harness) RefreshAllCaches(t *testing.T) {
 		h.URLs.SSP,
 		h.URLs.Exchange,
 		h.URLs.Reporting,
+		h.URLs.PublisherAdServer,
 	}
 	for _, base := range urls {
 		h.refreshOne(t, base)
 	}
+	// Audience preloader is a separate mechanism from the warm-cache
+	// /debug/cache/refresh path — it has its own ticker that doesn't
+	// participate in the warm.RefreshHandler registration. Hit its
+	// dedicated endpoint so tests inserting audience_segment_members
+	// rows see them on the next bid without waiting for the 30s tick.
+	h.RefreshAudiencePreloader(t)
 }
 
 // RefreshCache POSTs the debug endpoint on a single service base URL. Use
@@ -44,6 +51,72 @@ func (h *Harness) RefreshAllCaches(t *testing.T) {
 func (h *Harness) RefreshCache(t *testing.T, serviceBaseURL string) {
 	t.Helper()
 	h.refreshOne(t, serviceBaseURL)
+}
+
+// RefreshAudiencePreloader forces a synchronous audience preload on both
+// DSP and SSP. Use after inserting audience_segment_members rows so the
+// bid path sees the new mappings immediately instead of waiting up to
+// 30s for the natural preload tick.
+//
+// Failure modes:
+//   - Endpoint missing (audience preloader not active on that service):
+//     404 is tolerated silently — that service is in a fallback backend
+//     and doesn't need explicit refresh anyway.
+//   - Refresh returns 5xx: fails the test loudly. The harness depends on
+//     a fresh preloader snapshot; silent failure here would just defer
+//     the real assertion failure to an opaque "got NoBid".
+func (h *Harness) RefreshAudiencePreloader(t *testing.T) {
+	t.Helper()
+	for _, base := range []string{h.URLs.DSP, h.URLs.SSP, h.URLs.DSPComp1, h.URLs.DSPComp2} {
+		h.audienceRefreshOne(t, base)
+	}
+}
+
+// ResetBillingLedger wipes the in-memory billing ledger so a test starts
+// from zero state. No-op when the reporting service is running with the
+// TigerBeetle backend (the debug endpoint returns reset=false and we
+// silently accept that). Called from BuildBasicWorld so every test that
+// uses the standard fixture gets a clean ledger automatically.
+func (h *Harness) ResetBillingLedger(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Reporting+routes.DebugBillingReset, nil)
+	if err != nil {
+		t.Fatalf("build billing reset request: %v", err)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("billing reset call: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("billing reset status %d: %s", resp.StatusCode, string(body))
+	}
+}
+
+func (h *Harness) audienceRefreshOne(t *testing.T, base string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+routes.DebugAudienceRefresh, nil)
+	if err != nil {
+		t.Fatalf("build audience refresh request (%s): %v", base, err)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("audience refresh (%s): %v", base, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// Service isn't using the warm preloader backend — no refresh needed.
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("audience refresh (%s) status %d: %s", base, resp.StatusCode, string(body))
+	}
 }
 
 type refreshResult struct {

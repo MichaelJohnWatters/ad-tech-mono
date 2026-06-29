@@ -13,16 +13,21 @@ import (
 //
 // Spend is stored as fixed-point cents (price × 100) in an INT64 counter
 // so DECRBY/INCRBY remain atomic across pods. Each key gets a TTL equal to
-// the budget reset interval so daily budgets roll over without a separate job.
+// the budget reset interval so daily budgets roll over without a separate
+// job.
+//
+// ttlFn is called on every first-of-day write so a UI edit to
+// dsp.budget_reset_interval takes effect on the next campaign's first
+// spend of the day, not on next pod restart.
 type BudgetTracker struct {
-	l2  cache.L2Cache
-	ttl time.Duration
-	log *slog.Logger
+	l2    cache.L2Cache
+	ttlFn func() time.Duration
+	log   *slog.Logger
 }
 
 // NewBudgetTracker wires the tracker to an L2 cache (Redis in prod, in-memory in tests).
-func NewBudgetTracker(l2 cache.L2Cache, ttl time.Duration, log *slog.Logger) *BudgetTracker {
-	return &BudgetTracker{l2: l2, ttl: ttl, log: log}
+func NewBudgetTracker(l2 cache.L2Cache, ttlFn func() time.Duration, log *slog.Logger) *BudgetTracker {
+	return &BudgetTracker{l2: l2, ttlFn: ttlFn, log: log}
 }
 
 func budgetKey(campaignID string) string {
@@ -44,7 +49,8 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 }
 
 // Record adds amount (in major units) to today's spend for a campaign.
-// First write creates the key with TTL; subsequent writes just atomically increment.
+// First write creates the key with the current TTL; subsequent writes just
+// atomically increment.
 func (b *BudgetTracker) Record(campaignID string, amount float64) {
 	ctx := context.Background()
 	key := budgetKey(campaignID)
@@ -52,7 +58,7 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 
 	// Set the TTL on the first write of the day; INCRBY preserves it after.
 	if _, ok, _ := b.l2.Get(ctx, key); !ok {
-		if err := b.l2.Set(ctx, key, "0", b.ttl); err != nil {
+		if err := b.l2.Set(ctx, key, "0", b.ttlFn()); err != nil {
 			b.log.Warn("budget initial set failed", "campaign", campaignID, "error", err)
 			return
 		}

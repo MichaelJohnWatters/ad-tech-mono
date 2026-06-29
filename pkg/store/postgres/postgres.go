@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	_ "github.com/lib/pq"
 )
 
@@ -43,7 +44,7 @@ type Config struct {
 // DefaultConfig returns sensible defaults for local development.
 func DefaultConfig() Config {
 	return Config{
-		PrimaryURL:      "postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable",
+		PrimaryURL:      routes.DefaultPostgresURL,
 		ReadURL:         "", // same as primary in local
 		MaxOpenConns:    10,
 		MaxIdleConns:    5,

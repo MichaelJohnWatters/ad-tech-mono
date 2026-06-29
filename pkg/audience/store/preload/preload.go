@@ -110,6 +110,16 @@ func (p *Preloader) Stop() {
 	}
 }
 
+// Refresh runs preloadOnce synchronously. Used by the debug
+// /debug/audience/refresh endpoint so the e2e harness can guarantee a
+// fresh snapshot after inserting audience_segment_members rows, instead
+// of waiting up to 30s for the natural tick. Same routine the background
+// loop calls; concurrent invocations are safe because the goroutine
+// snapshots its own ticker context and lastLoad uses atomic writes.
+func (p *Preloader) Refresh(ctx context.Context) error {
+	return p.preloadOnce(ctx)
+}
+
 // LastLoaded reports the time of the last successful preload. Zero means
 // no preload has succeeded yet — /readyz uses that to gate readiness.
 func (p *Preloader) LastLoaded() time.Time {

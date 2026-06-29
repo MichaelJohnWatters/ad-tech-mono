@@ -282,19 +282,20 @@ const (
 // ============================================================
 
 const (
-	ServiceGateway   = "gateway"
-	ServiceExchange  = "exchange"
-	ServiceDSP       = "dsp"
-	ServiceTracker   = "tracker"
-	ServiceSSP       = "ssp"
-	ServiceAdServer  = "adserver"
-	ServiceReporting = "reporting"
-	ServicePipeline  = "pipeline"
-	ServiceSeed      = "seed"
-	ServiceBilling   = "billing"
-	ServiceWebhooks  = "webhooks"
-	ServiceFraud     = "fraud"
-	ServicePrivacy   = "privacy"
+	ServiceGateway          = "gateway"
+	ServiceExchange         = "exchange"
+	ServiceDSP              = "dsp"
+	ServiceTracker          = "tracker"
+	ServiceSSP              = "ssp"
+	ServiceAdServer         = "adserver"
+	ServiceReporting        = "reporting"
+	ServicePipeline         = "pipeline"
+	ServiceSeed             = "seed"
+	ServiceBilling          = "billing"
+	ServiceWebhooks         = "webhooks"
+	ServiceFraud            = "fraud"
+	ServicePrivacy          = "privacy"
+	ServicePublisherAdServer = "publisher-adserver"
 )
 
 // ============================================================

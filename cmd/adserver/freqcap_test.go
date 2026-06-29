@@ -12,7 +12,7 @@ import (
 func TestFreqCap_AllowAndRecord(t *testing.T) {
 	l2 := cache.NewMemoryL2()
 	log := slog.New(slog.NewTextHandler(nopWriter{}, nil))
-	fc := NewFreqCap(l2, 3, time.Hour, log)
+	fc := NewFreqCap(l2, func() int { return 3 }, func() time.Duration { return time.Hour }, log)
 	ctx := context.Background()
 
 	for i := 1; i <= 3; i++ {
@@ -26,7 +26,7 @@ func TestFreqCap_AllowAndRecord(t *testing.T) {
 }
 
 func TestFreqCap_NoUserBypass(t *testing.T) {
-	fc := NewFreqCap(cache.NewMemoryL2(), 1, time.Hour, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	fc := NewFreqCap(cache.NewMemoryL2(), func() int { return 1 }, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 	for i := 0; i < 10; i++ {
 		if !fc.AllowAndRecord(ctx, "", "c1") {
@@ -36,7 +36,7 @@ func TestFreqCap_NoUserBypass(t *testing.T) {
 }
 
 func TestFreqCap_PerCampaignIndependent(t *testing.T) {
-	fc := NewFreqCap(cache.NewMemoryL2(), 1, time.Hour, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	fc := NewFreqCap(cache.NewMemoryL2(), func() int { return 1 }, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 	if !fc.AllowAndRecord(ctx, "u1", "c1") {
 		t.Fatal("c1 should be allowed")

@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,35 +28,37 @@ func TestManager_OnChange(t *testing.T) {
 	log := logger.New("config-test")
 	mgr := NewManager(cfg, log)
 
-	var changed bool
-	var gotOld, gotNew string
-	mgr.OnChange("test.key", func(key, old, new_ string) {
+	// OnChange callbacks fire in goroutines (Manager.applyChanges); guard
+	// the captured state with a Mutex so -race stays clean.
+	var (
+		mu                sync.Mutex
+		changed           bool
+		gotOld, gotNew    string
+	)
+	mgr.OnChange("test.key", func(_, old, new_ string) {
+		mu.Lock()
 		changed = true
 		gotOld = old
 		gotNew = new_
+		mu.Unlock()
 	})
 
 	mgr.Set(context.Background(), "test.key", "value1")
-	time.Sleep(50 * time.Millisecond) // callbacks are async
+	waitFor(t, "first change", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return changed && gotNew == "value1"
+	})
 
-	if !changed {
-		t.Error("expected change callback to fire")
-	}
-	if gotNew != "value1" {
-		t.Errorf("new = %s, want value1", gotNew)
-	}
-
-	// Change again
+	mu.Lock()
 	changed = false
+	mu.Unlock()
 	mgr.Set(context.Background(), "test.key", "value2")
-	time.Sleep(50 * time.Millisecond)
-
-	if !changed {
-		t.Error("expected second change callback")
-	}
-	if gotOld != "value1" || gotNew != "value2" {
-		t.Errorf("old=%s new=%s, want value1/value2", gotOld, gotNew)
-	}
+	waitFor(t, "second change", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return changed && gotOld == "value1" && gotNew == "value2"
+	})
 }
 
 func TestManager_Polling(t *testing.T) {
@@ -64,27 +68,16 @@ func TestManager_Polling(t *testing.T) {
 
 	source := NewMemorySource(map[string]string{"poll.key": "initial"})
 	mgr.SetSource(source)
-	mgr.SetPollInterval(100 * time.Millisecond)
+	mgr.SetPollInterval(50 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mgr.Start(ctx)
 
-	// Initial poll should have loaded the value
-	time.Sleep(50 * time.Millisecond)
-	val := cfg.Get("poll.key", "")
-	if val != "initial" {
-		t.Errorf("got %s, want initial", val)
-	}
+	waitFor(t, "initial poll loaded", func() bool { return cfg.Get("poll.key", "") == "initial" })
 
-	// Update source, wait for next poll
 	source.Update(context.Background(), "poll.key", "updated")
-	time.Sleep(200 * time.Millisecond)
-
-	val = cfg.Get("poll.key", "")
-	if val != "updated" {
-		t.Errorf("got %s, want updated after poll", val)
-	}
+	waitFor(t, "poll picked up update", func() bool { return cfg.Get("poll.key", "") == "updated" })
 }
 
 func TestManager_History(t *testing.T) {
@@ -123,19 +116,17 @@ func TestManager_NoChangeNoCallback(t *testing.T) {
 	log := logger.New("config-test")
 	mgr := NewManager(cfg, log)
 
-	callCount := 0
-	mgr.OnChange("stable", func(_, _, _ string) { callCount++ })
+	var callCount atomic.Int32
+	mgr.OnChange("stable", func(_, _, _ string) { callCount.Add(1) })
 
 	mgr.Set(context.Background(), "stable", "val")
-	time.Sleep(50 * time.Millisecond)
-	if callCount != 1 {
-		t.Fatalf("expected 1 call, got %d", callCount)
-	}
+	waitFor(t, "first call fired", func() bool { return callCount.Load() == 1 })
 
-	// Set same value again - should NOT fire callback
+	// Set same value again — applyChanges sees oldVal == newVal and does not
+	// fire the callback. Give any spurious goroutine ample time to run.
 	mgr.Set(context.Background(), "stable", "val")
 	time.Sleep(50 * time.Millisecond)
-	if callCount != 1 {
-		t.Errorf("expected still 1 call (no change), got %d", callCount)
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("expected still 1 call (no change), got %d", got)
 	}
 }

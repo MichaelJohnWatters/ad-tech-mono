@@ -1,24 +1,73 @@
 package main
 
 import (
+	"time"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 )
 
-// dspSchema is the DSP service's owned config keys. Published to the
-// config_schema table at boot via config.PublishSchemaWithURL so the
-// gateway's config-manager UI sees them without importing this package.
-// Adding a new DSP knob = add an entry here.
+// dspSchema is the DSP's owned config keys. Passed to config.Setup at boot;
+// the pod writes the full schema (these entries + the platform-shared
+// defaults from pkg/config.defaultSchema) into its service_registry row so
+// the config-manager UI can render them. Adding a new DSP knob = add an
+// entry here.
 //
 // Platform-shared keys (database.*, redis.*, otel.*, etc.) live in
-// pkg/config.defaultSchema() — registered once for every service via the
-// init() in pkg/config, not duplicated here.
+// pkg/config.defaultSchema and are merged in automatically — don't repeat
+// them here.
 var dspSchema = []config.SchemaEntry{
-	{Key: "dsp.profile", Type: "string", Tier: config.TierStatic, Default: "internal", Description: "DSP name used to look up this pod's row in the dsps table (internal, competitor1, competitor2)", Service: constants.ServiceDSP, Since: "v1.0"},
-	{Key: "dsp.daily_budget_default", Type: "float", Tier: config.TierLive, Default: "1000", Description: "Default daily budget for new campaigns", Service: constants.ServiceDSP, Since: "v1.0"},
-	{Key: "dsp.max_bid_modifier", Type: "float", Tier: config.TierLive, Default: "200", Description: "Max bid modifier percentage (safety rail)", Service: constants.ServiceDSP, Since: "v1.0"},
-	{Key: "dsp.noise_pct", Type: "float", Tier: config.TierLive, Default: "0", Description: "Bid noise % override (e.g. 30 = ±30%). Defaults to the dsps row's noise_pct.", Service: constants.ServiceDSP, Since: "v1.1"},
-	{Key: "dsp.no_bid_rate", Type: "float", Tier: config.TierLive, Default: "0", Description: "Probability (0-1) of a random no-bid. Defaults to the dsps row's no_bid_rate.", Service: constants.ServiceDSP, Since: "v1.1"},
-	{Key: "dsp.budget_reset_interval", Type: "duration", Tier: config.TierLive, Default: "24h", Description: "TTL for daily budget keys in Redis", Service: constants.ServiceDSP, Since: "v1.1"},
-	{Key: "cache.warm.campaigns.poll_interval", Type: "duration", Tier: config.TierStatic, Default: "30s", Description: "Poll interval for DSP campaign cache", Service: constants.ServiceDSP, Since: "v1.1"},
+	{Key: "dsp.profile", Type: "string", Tier: config.TierStatic, Default: "internal", Description: "Which DSP identity this pod assumes (internal, competitor1, competitor2). Decides which dsps table row supplies noise_pct and no_bid_rate defaults.", Service: constants.ServiceDSP, Since: "v1.0"},
+	{Key: "dsp.daily_budget_default", Type: "float", Tier: config.TierLive, Default: "1000", Description: "Daily spend ceiling (USD) applied to a new campaign when the operator hasn't picked one. Per-campaign overrides win once a campaign is created.", Service: constants.ServiceDSP, Since: "v1.0"},
+	{Key: "dsp.max_bid_modifier", Type: "float", Tier: config.TierLive, Default: "200", Description: "Safety rail: maximum percentage a bid modifier can multiply a base bid (200 = 2x). Stops a runaway targeting rule from blowing through budget.", Service: constants.ServiceDSP, Since: "v1.0"},
+	{Key: "dsp.noise_pct", Type: "float", Tier: config.TierLive, Default: "0", Description: "Adds ±N% random jitter to every bid (e.g. 30 = ±30%). 0 = exact bids. Used to simulate market noise in the realism profiles; in prod leave at 0.", Service: constants.ServiceDSP, Since: "v1.1"},
+	{Key: "dsp.no_bid_rate", Type: "float", Tier: config.TierLive, Default: "0", Description: "Probability (0-1) that the DSP randomly returns no_bid even when a campaign matches. Used by the competitor profiles to mimic flaky DSPs; leave at 0 for the real one.", Service: constants.ServiceDSP, Since: "v1.1"},
+	{Key: "dsp.budget_reset_interval", Type: "duration", Tier: config.TierLive, Default: "24h", Description: "How long Redis keeps a campaign's daily-spend counter before it expires back to zero. Effectively the rolling budget window length.", Service: constants.ServiceDSP, Since: "v1.1"},
+	{Key: "cache.warm.campaigns.poll_interval", Type: "duration", Tier: config.TierStatic, Default: "30s", Description: "How often the in-memory campaign cache refreshes from Postgres. Lower = faster pickup of campaign edits, higher = less DB load.", Service: constants.ServiceDSP, Since: "v1.1"},
 }
+
+// Knobs is the DSP service's typed config accessor. Methods read live every
+// call (scalars are cheap RLock + map lookup); Live* fields are pre-bound
+// atomic.Pointer holders for keys whose value is consumed inside a
+// constructed object (e.g. BudgetTracker holds a TTL — has to be a Live*
+// so a UI edit actually takes effect on the next budget write).
+//
+// Defaults are duplicated with the schema above on purpose: the schema is
+// the source of truth for the UI + validation, while these defaults are
+// the fallback used when neither Postgres nor the env var is set. Both
+// must agree — change them in tandem.
+type Knobs struct {
+	cfg *config.Config
+
+	// Live (consumed inside a constructor; needs atomic swap on change)
+	BudgetResetInterval *config.LiveDuration
+}
+
+// NewKnobs binds the live keys to the manager and returns the typed
+// accessor. Called once at boot.
+func NewKnobs(sc *config.ServiceConfig) *Knobs {
+	return &Knobs{
+		cfg:                 sc.Cfg,
+		BudgetResetInterval: config.NewLiveDuration(sc.Manager, sc.Cfg, "dsp.budget_reset_interval", 24*time.Hour),
+	}
+}
+
+// Profile returns the DSP profile name (internal, competitor1, competitor2).
+// TierStatic — env var override at boot wins; UI edits don't apply.
+func (k *Knobs) Profile() string { return k.cfg.Get("dsp.profile", "internal") }
+
+// DailyBudgetDefault is the daily budget applied when a campaign doesn't
+// set its own. TierLive — read on every campaign creation path.
+func (k *Knobs) DailyBudgetDefault() float64 {
+	return k.cfg.GetFloat("dsp.daily_budget_default", 1000)
+}
+
+// MaxBidModifier caps how much a targeting rule can multiply a base bid.
+// TierLive — read at every bid evaluation.
+func (k *Knobs) MaxBidModifier() float64 { return k.cfg.GetFloat("dsp.max_bid_modifier", 200) }
+
+// NoisePct is the ±% jitter added to every bid. TierLive.
+func (k *Knobs) NoisePct() float64 { return k.cfg.GetFloat("dsp.noise_pct", 0) }
+
+// NoBidRate is the probability (0-1) of a random no-bid. TierLive.
+func (k *Knobs) NoBidRate() float64 { return k.cfg.GetFloat("dsp.no_bid_rate", 0) }

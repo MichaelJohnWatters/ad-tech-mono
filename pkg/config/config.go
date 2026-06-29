@@ -17,12 +17,20 @@ package config
 import (
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
 // Config holds configuration values loaded from all layers.
 // Lookup order: pod-specific -> service-level -> env var -> code default.
+//
+// All accesses to `values` go through the RWMutex so the Manager's 30s
+// poll (which writes new live values via SetLive) is safe against concurrent
+// reads from `cfg.Get*` on hot paths. The previous version had a latent
+// race here — concurrent map read+write in Go is undefined behaviour and
+// `-race` would flag it.
 type Config struct {
+	mu     sync.RWMutex
 	values map[string]string
 	podID  string
 }
@@ -41,11 +49,15 @@ func Load() *Config {
 
 // SetPodID sets the pod identifier for pod-level config lookups.
 func (c *Config) SetPodID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.podID = id
 }
 
 // PodID returns the current pod identifier.
 func (c *Config) PodID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.podID
 }
 
@@ -59,7 +71,10 @@ func (c *Config) PodID() string {
 // the right value for this pod. The old key-prefix trick
 // ("exchange.pod-X.bid_timeout") is gone — same key, scoped row.
 func (c *Config) Get(key string, defaultValue string) string {
-	if v, ok := c.values[key]; ok {
+	c.mu.RLock()
+	v, ok := c.values[key]
+	c.mu.RUnlock()
+	if ok {
 		return v
 	}
 	envKey := envKeyFromConfigKey(key)
@@ -123,11 +138,15 @@ func (c *Config) GetDuration(key string, defaultValue time.Duration) time.Durati
 
 // SetLive sets a live config value (from Postgres or NATS invalidation).
 func (c *Config) SetLive(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.values[key] = value
 }
 
 // SetLiveBatch sets multiple live config values at once.
 func (c *Config) SetLiveBatch(values map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for k, v := range values {
 		c.values[k] = v
 	}
@@ -135,7 +154,31 @@ func (c *Config) SetLiveBatch(values map[string]string) {
 
 // ClearLive removes a live config value (key reverts to env/default).
 func (c *Config) ClearLive(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	delete(c.values, key)
+}
+
+// rawGet returns the current live value and whether the key existed.
+// Used by Manager to detect changes during poll/applyChanges. Distinct
+// from Get because Get folds env/default into the result.
+func (c *Config) rawGet(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.values[key]
+	return v, ok
+}
+
+// snapshot returns a copy of the live values map. Used by Manager.All for
+// the UI and by tests. Allocates — don't call on hot paths.
+func (c *Config) snapshot() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]string, len(c.values))
+	for k, v := range c.values {
+		out[k] = v
+	}
+	return out
 }
 
 // envKeyFromConfigKey converts "exchange.bid_timeout" to "EXCHANGE_BID_TIMEOUT"

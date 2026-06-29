@@ -28,9 +28,9 @@ type CreativeResolver struct {
 	meta    *warm.Cache[models.Creative]
 	objects objects.Store
 	bucket  string
-	bodyTTL time.Duration
-	clk     clock.Clock
-	log     *slog.Logger
+	bodyTTLFn func() time.Duration
+	clk       clock.Clock
+	log       *slog.Logger
 
 	mu     sync.RWMutex
 	bodies map[string]cachedBody
@@ -41,10 +41,13 @@ type cachedBody struct {
 	expires time.Time
 }
 
-func NewCreativeResolver(meta *warm.Cache[models.Creative], obj objects.Store, bucket string, bodyTTL time.Duration, clk clock.Clock, log *slog.Logger) *CreativeResolver {
+// bodyTTLFn is called on each cache write so live edits to
+// adserver.default_creative_ttl take effect on the next miss without a
+// pod restart.
+func NewCreativeResolver(meta *warm.Cache[models.Creative], obj objects.Store, bucket string, bodyTTLFn func() time.Duration, clk clock.Clock, log *slog.Logger) *CreativeResolver {
 	return &CreativeResolver{
 		meta: meta, objects: obj, bucket: bucket,
-		bodyTTL: bodyTTL, clk: clk, log: log,
+		bodyTTLFn: bodyTTLFn, clk: clk, log: log,
 		bodies: map[string]cachedBody{},
 	}
 }
@@ -98,7 +101,7 @@ func (r *CreativeResolver) fetchBody(ctx context.Context, assetURL string) strin
 	}
 	html := string(body)
 	r.mu.Lock()
-	r.bodies[assetURL] = cachedBody{html: html, expires: r.clk.Now().Add(r.bodyTTL)}
+	r.bodies[assetURL] = cachedBody{html: html, expires: r.clk.Now().Add(r.bodyTTLFn())}
 	r.mu.Unlock()
 	return html
 }
@@ -112,4 +115,11 @@ func (r *CreativeResolver) ListIDs() []string {
 		ids = append(ids, c.ID)
 	}
 	return ids
+}
+
+// MetaCache exposes the underlying warm cache for richer dump endpoints
+// that need full Creative records (pub sim Creatives panel). Read-only;
+// callers should not mutate the snapshot.
+func (r *CreativeResolver) MetaCache() *warm.Cache[models.Creative] {
+	return r.meta
 }
