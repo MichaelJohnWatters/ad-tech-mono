@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<title>Ad Tech Platform</title>
+{{ template "head-meta" . }}
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-200 min-h-screen">
+
+{{ template "nav" . }}
+
+<main class="max-w-2xl mx-auto px-5 py-8">
+
+<div class="bg-emerald-50 dark:bg-emerald-950/30 border-l-4 border-success p-4 rounded-r-lg mb-6 text-sm">
+  3 DSPs competing in real-time auctions. Full pipeline: SSP &rarr; Exchange &rarr; DSP &rarr; Ad Server &rarr; Tracker &rarr; Reporting.
+</div>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Developer Tools</h2>
+  <div class="grid gap-3">
+    <a href="/dev/publisher-simulator" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
+      <div class="font-medium text-brand">Publisher Simulator</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">Simulated publisher page with real auctions, ad sizes, and debug overlay</div>
+    </a>
+    <a href="/dev/trace-explorer" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
+      <div class="font-medium text-brand">Trace Explorer</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">Trace a single ad request through every service end-to-end</div>
+    </a>
+    <a href="/dev/console" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
+      <div class="font-medium text-brand">Operator Console</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">View and edit live config for all services, per-pod overrides, secrets, change history</div>
+    </a>
+    <a href="/docs" class="block p-4 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">
+      <div class="font-medium text-brand">API Docs (Swagger)</div>
+      <div class="text-sm text-gray-500 dark:text-gray-400">Full OpenAPI spec - Customer, Partner, and Internal endpoints with try-it-out</div>
+    </a>
+  </div>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Observability</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <a href="http://localhost:3000" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">Grafana</div><div class="text-xs text-gray-400">:3000</div>
+    </a>
+    <a href="http://localhost:9090" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">Prometheus</div><div class="text-xs text-gray-400">:9090</div>
+    </a>
+    <a href="http://localhost:16686" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">Jaeger</div><div class="text-xs text-gray-400">:16686</div>
+    </a>
+    <a href="http://localhost:10350" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">Tilt</div><div class="text-xs text-gray-400">:10350</div>
+    </a>
+    <a href="http://localhost:8222" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">NATS</div><div class="text-xs text-gray-400">:8222</div>
+    </a>
+    <a href="http://localhost:9001" target="_blank" class="block p-3 rounded-lg bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand text-center text-sm transition-colors">
+      <div class="font-medium">Minio</div><div class="text-xs text-gray-400">:9001</div>
+    </a>
+  </div>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Services</h2>
+  <div class="bg-white dark:bg-surface-dark rounded-lg border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800 text-sm">
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-gateway">Gateway</span><span class="text-gray-400 font-mono">:8080</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-exchange">Exchange</span><span class="text-gray-400 font-mono">:8081</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-dsp">DSP</span><span class="text-gray-400 font-mono">:8082 :8089 :8090</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-tracker">Tracker</span><span class="text-gray-400 font-mono">:8083</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-ssp">SSP</span><span class="text-gray-400 font-mono">:8084</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-adserver">Ad Server</span><span class="text-gray-400 font-mono">:8085</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-reporting">Reporting</span><span class="text-gray-400 font-mono">:8086</span></div>
+    <div class="px-4 py-2 flex justify-between"><span class="font-medium text-svc-pubad">Publisher AdSrv</span><span class="text-gray-400 font-mono">:8088</span></div>
+  </div>
+</section>
+
+<section class="mb-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Debug</h2>
+  <div class="flex flex-wrap gap-2 text-sm">
+    <a href="/v1/dsp/campaigns?api_key=dev-api-key-do-not-use-in-prod" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">DSP Campaigns</a>
+    <a href="/v1/ssp/placements?api_key=dev-api-key-do-not-use-in-prod" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">SSP Placements</a>
+    <a href="/v1/ad/creatives" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">Creatives</a>
+    <a href="/healthz" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">/healthz</a>
+    <a href="/readyz" class="px-3 py-1.5 rounded bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 hover:border-brand transition-colors">/readyz</a>
+  </div>
+</section>
+
+<section>
+  <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-3">Quick Test</h2>
+  <pre class="bg-white dark:bg-surface-dark border border-gray-200 dark:border-gray-800 rounded-lg p-4 text-sm font-mono overflow-x-auto">go run ./cmd/simulator single --geo GBR --device mobile</pre>
+</section>
+
+</main>
+
+<footer class="text-center py-6 text-xs text-gray-400 dark:text-gray-600">
+  Ad Tech Platform &middot; <a href="/docs" class="text-brand">API Docs</a> &middot; <a href="http://localhost:10350" target="_blank" class="text-brand">Tilt</a>
+</footer>
+</body>
+</html>

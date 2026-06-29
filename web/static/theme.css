@@ -308,11 +308,36 @@ select {
 .debug-entry .pending { color: var(--brand-warn); }
 
 /* ============================================================
-   Trace Flow Nodes
+   Utility classes
    ============================================================ */
-.trace-flow { display: flex; flex-direction: column; gap: 0; }
+/* Mirror Tailwind's .hidden so shared components/partials (which use
+   class="hidden" to default-collapse modals/toasts) work on CSS-var
+   pages that don't load the Tailwind config. Without this, the
+   simConfirmModal etc. would show an empty shell on page load
+   because Tailwind's .hidden { display: none } never resolved. */
+.hidden { display: none !important; }
 
-.trace-node {
+/* ============================================================
+   Trace Flow Nodes
+
+   Two class systems hit these rules:
+     - .trace-flow / .trace-node / .trace-service / .trace-time / .trace-msg
+       (the "platform" prefix; cleaner for newer pages)
+     - .flow / .node / .service / .time / .msg
+       (legacy short names used heavily by the JS-built rows in
+       trace/explorer.html and simulator/minimal.html — renaming all
+       those JS string templates is a bigger lift than just aliasing
+       here. The grouped selectors below mean both class systems share
+       one definition, so we're not maintaining two copies of the same
+       CSS rules.)
+
+   Phase 3 of docs/UI_DESIGN_AUDIT.md added these aliases so the
+   inline copies of these rules in trace/explorer.html could be
+   deleted without churning the JS.
+   ============================================================ */
+.trace-flow, .flow { display: flex; flex-direction: column; gap: 0; }
+
+.trace-node, .node {
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -321,13 +346,13 @@ select {
   margin-left: 60px;
   transition: background 0.15s;
 }
-.trace-node:hover { background: var(--bg-hover); }
-.trace-node.active { border-left-color: var(--brand-success); }
-.trace-node.warn { border-left-color: var(--brand-warn); }
-.trace-node.error { border-left-color: var(--brand-error); }
-.trace-node.nobid { border-left-color: var(--text-muted); opacity: 0.6; }
+.trace-node:hover, .node:hover { background: var(--bg-hover); }
+.trace-node.active, .node.active { border-left-color: var(--brand-success); }
+.trace-node.warn, .node.warn { border-left-color: var(--brand-warn); }
+.trace-node.error, .node.error { border-left-color: var(--brand-error); }
+.trace-node.nobid, .node.nobid { border-left-color: var(--text-muted); opacity: 0.6; }
 
-.trace-time {
+.trace-time, .time {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-muted);
@@ -338,22 +363,22 @@ select {
   margin-right: -60px;
 }
 
-.trace-service {
+.trace-service, .service {
   font-weight: 600;
   font-size: 13px;
   min-width: 100px;
 }
-.trace-service.exchange { color: #818cf8; }
-.trace-service.dsp { color: #34d399; }
-.trace-service.tracker { color: var(--brand-warn); }
-.trace-service.adserver { color: var(--brand-pink); }
-.trace-service.reporting { color: var(--brand-cyan); }
-.trace-service.billing { color: var(--brand-purple); }
-.trace-service.nats { color: var(--brand-orange); }
-.trace-service.browser { color: var(--text-secondary); }
+.trace-service.exchange, .service.exchange { color: #818cf8; }
+.trace-service.dsp, .service.dsp { color: #34d399; }
+.trace-service.tracker, .service.tracker { color: var(--brand-warn); }
+.trace-service.adserver, .service.adserver { color: var(--brand-pink); }
+.trace-service.reporting, .service.reporting { color: var(--brand-cyan); }
+.trace-service.billing, .service.billing { color: var(--brand-purple); }
+.trace-service.nats, .service.nats { color: var(--brand-orange); }
+.trace-service.browser, .service.browser { color: var(--text-secondary); }
 
-.trace-msg { font-size: 13px; color: var(--text-primary); }
-.trace-msg .detail { color: var(--text-muted); font-size: 12px; }
+.trace-msg, .msg { font-size: 13px; color: var(--text-primary); }
+.trace-msg .detail, .msg .detail { color: var(--text-muted); font-size: 12px; }
 
 /* ============================================================
    Metric Panels

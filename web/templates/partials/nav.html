@@ -1,0 +1,17 @@
+{{/* nav: canonical top navigation bar. Single source for the link set
+     + theme-toggle button across every Tailwind-styled page. Earlier
+     the same nav was duplicated in dashboard.html, layout.html, and
+     manager.html, with different link sets (manager.html omitted the
+     trace-explorer link, etc.) — that drift is what this fixes. */}}
+{{ define "nav" }}
+<nav class="bg-white dark:bg-surface-dark border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center gap-4">
+    <a href="/" class="font-semibold text-lg text-gray-900 dark:text-white">Ad Tech</a>
+    <div class="flex gap-3 text-sm">
+        <a href="/dev/publisher-simulator" class="text-gray-500 dark:text-gray-400 hover:text-brand">Simulator</a>
+        <a href="/dev/trace-explorer" class="text-gray-500 dark:text-gray-400 hover:text-brand">Traces</a>
+        <a href="/dev/console" class="text-gray-500 dark:text-gray-400 hover:text-brand">Console</a>
+        <a href="/docs" class="text-gray-500 dark:text-gray-400 hover:text-brand">API Docs</a>
+    </div>
+    <button onclick="toggleTheme()" class="theme-toggle ml-auto text-lg px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800" title="Toggle dark/light theme">&#9728;&#65039;</button>
+</nav>
+{{ end }}

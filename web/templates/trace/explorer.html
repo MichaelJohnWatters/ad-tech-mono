@@ -7,29 +7,14 @@
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
     <style>
+        /* Page-local styles: the .flow / .node / .service / .time / .msg
+           classes used by renderSteps() below all live in theme.css now
+           (grouped selectors with their .trace-* siblings, so both class
+           systems share one definition). Only keep the truly page-local
+           rules here: the empty-state hero and the demo-note banner. */
         .empty { text-align: center; padding: 80px 20px; color: var(--text-muted); }
         .empty h2 { color: var(--text-secondary); margin-bottom: 12px; font-size: 20px; }
         .empty p { max-width: 500px; margin: 0 auto; line-height: 1.6; }
-        /* Aliases for JS-generated classes */
-        .flow { display: flex; flex-direction: column; }
-        .node { display: flex; align-items: flex-start; gap: 12px; padding: 10px 16px; border-left: 3px solid var(--border); margin-left: 60px; transition: background 0.15s; }
-        .node:hover { background: var(--bg-hover); }
-        .node.active { border-left-color: var(--brand-success); }
-        .node.warn { border-left-color: var(--brand-warn); }
-        .node.error { border-left-color: var(--brand-error); }
-        .node.nobid { border-left-color: var(--text-muted); opacity: 0.6; }
-        .time { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); min-width: 60px; text-align: right; position: relative; left: -72px; margin-right: -60px; }
-        .service { font-weight: 600; font-size: 13px; min-width: 100px; }
-        .service.exchange { color: #818cf8; }
-        .service.dsp { color: #34d399; }
-        .service.tracker { color: var(--brand-warn); }
-        .service.adserver { color: var(--brand-pink); }
-        .service.reporting { color: var(--brand-cyan); }
-        .service.billing { color: var(--brand-purple); }
-        .service.nats { color: var(--brand-orange); }
-        .service.browser { color: var(--text-secondary); }
-        .msg { font-size: 13px; color: var(--text-primary); }
-        .msg .detail { color: var(--text-muted); font-size: 12px; }
         .demo-note { background: var(--bg-surface-3); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 24px; font-size: 13px; color: var(--text-secondary); }
     </style>
 </head>
