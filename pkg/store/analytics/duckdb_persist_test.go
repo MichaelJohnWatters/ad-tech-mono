@@ -67,6 +67,51 @@ func TestDuckDB_SurvivesReopen(t *testing.T) {
 	}
 }
 
+// TestDuckDB_OperationalSignalsSurviveReopen proves the operational-signal
+// writes (ObservabilityWriter) land in real tables and survive a restart —
+// on the memory backend these are slices lost on exit; on DuckDB they must
+// persist like any other event.
+func TestDuckDB_OperationalSignalsSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "signals.duckdb")
+	ts := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+
+	d1, err := NewDuckDB(path)
+	if err != nil {
+		t.Fatalf("open 1: %v", err)
+	}
+	d1.InsertFreqCapBlock(FreqCapBlock{TraceID: "t1", UserID: "u1", CampaignID: "c1", Timestamp: ts})
+	d1.InsertFreqCapBlock(FreqCapBlock{TraceID: "t2", UserID: "u2", CampaignID: "c1", Timestamp: ts})
+	d1.InsertServeNoFill(ServeNoFill{TraceID: "t3", PublisherID: "pub1", Reason: "no-fill", Timestamp: ts})
+	d1.InsertBudgetDepletion(BudgetDepletion{CampaignID: "c1", Budget: 100, Spent: 100, Timestamp: ts})
+	if err := d1.Close(); err != nil {
+		t.Fatalf("close 1: %v", err)
+	}
+
+	d2, err := NewDuckDB(path)
+	if err != nil {
+		t.Fatalf("open 2: %v", err)
+	}
+	defer d2.Close()
+
+	// Same-package test can read the unexported handle directly.
+	for _, tc := range []struct {
+		table string
+		want  int
+	}{
+		{"freq_cap_blocks", 2},
+		{"serve_no_fills", 1},
+		{"budget_depletions", 1},
+	} {
+		var n int
+		if err := d2.db.QueryRow("SELECT count(*) FROM " + tc.table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", tc.table, err)
+		}
+		if n != tc.want {
+			t.Errorf("%s rows after reopen = %d, want %d", tc.table, n, tc.want)
+		}
+	}
+}
+
 // toInt64 normalises whatever numeric type the driver returns for a
 // COUNT(*) so the assertion isn't coupled to DuckDB's scan type.
 func toInt64(v interface{}) (int64, bool) {
