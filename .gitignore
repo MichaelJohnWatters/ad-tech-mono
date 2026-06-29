@@ -67,6 +67,7 @@ k6-results/
 /ssp
 /tracker
 /pipeline
+/publisher-adserver
 
 
 # mkcert-issued localhost certs for the dev gateway's HTTPS listener.
