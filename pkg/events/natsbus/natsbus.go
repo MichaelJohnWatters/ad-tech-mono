@@ -179,17 +179,34 @@ func (b *Bus) Close() error {
 	return nil
 }
 
-// subjectToConsumerSuffix turns a dotted subject like "adtech.events.impression"
-// into "impression" — just the leaf segment. NATS consumer names can't contain
-// dots, and the full subject is redundant in the name since FilterSubject
-// already carries it.
+// subjectToConsumerSuffix turns a dotted subject into a NATS-safe consumer
+// name suffix. Strips the "adtech." namespace prefix and replaces remaining
+// dots with hyphens so the entire path is preserved:
+//
+//   adtech.events.impression          → events-impression
+//   adtech.auction.win                → auction-win
+//   adtech.direct.win                 → direct-win
+//   adtech.prebid.outbound.win        → prebid-outbound-win
+//
+// Earlier this function used only the leaf segment. That collided across
+// any pair of subjects sharing a leaf (e.g. every *.win subject became the
+// consumer name "win"), with the consequence that CreateOrUpdateConsumer
+// would overwrite the previous FilterSubject and only the last subscriber's
+// subject's messages would actually be delivered. Reporting silently
+// dropped DirectWin + PrebidOutboundWin events because both shared "win"
+// with the older auction.win consumer.
 func subjectToConsumerSuffix(subject string) string {
-	for i := len(subject) - 1; i >= 0; i-- {
-		if subject[i] == '.' {
-			return subject[i+1:]
+	const adtechPrefix = "adtech."
+	if len(subject) > len(adtechPrefix) && subject[:len(adtechPrefix)] == adtechPrefix {
+		subject = subject[len(adtechPrefix):]
+	}
+	out := []byte(subject)
+	for i := range out {
+		if out[i] == '.' {
+			out[i] = '-'
 		}
 	}
-	return subject
+	return string(out)
 }
 
 // streamForSubject maps a subject to its JetStream stream name.
