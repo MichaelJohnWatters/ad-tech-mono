@@ -2,11 +2,50 @@ package fraud
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
+
+// AdsTxtRecord is a persisted ads.txt result for one publisher domain.
+// Mirrors the ads_txt_cache table; loaded into the exchange's warm cache.
+type AdsTxtRecord struct {
+	Domain  string
+	Entries []AdsTxtEntry
+	Status  string // valid | missing | error
+}
+
+// FetchAdsTxt GETs https://{domain}/ads.txt and parses it. Status is
+// "valid" (HTTP 200 + parsed), "missing" (404 — publisher has no ads.txt,
+// which is a legitimate state, not an error), or "error" (network failure
+// or unexpected status). The crawler (cmd/adstxt) upserts the result.
+func FetchAdsTxt(ctx context.Context, client *http.Client, domain string) AdsTxtRecord {
+	url := "https://" + domain + "/ads.txt"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return AdsTxtRecord{Domain: domain, Status: "error"}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return AdsTxtRecord{Domain: domain, Status: "error"}
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return AdsTxtRecord{Domain: domain, Status: "missing"}
+	case resp.StatusCode != http.StatusOK:
+		return AdsTxtRecord{Domain: domain, Status: "error"}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5 MiB cap per IAB guidance
+	if err != nil {
+		return AdsTxtRecord{Domain: domain, Status: "error"}
+	}
+	return AdsTxtRecord{Domain: domain, Entries: ParseAdsTxt(string(body)), Status: "valid"}
+}
 
 // AdsTxtEntry represents a single line in an ads.txt file.
 type AdsTxtEntry struct {

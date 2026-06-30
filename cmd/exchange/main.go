@@ -116,6 +116,19 @@ func main() {
 		lc.OnShutdown("deal-cache", func(_ context.Context) error { dealCache.Stop(); return nil })
 	}
 
+	// ads.txt seller-authorisation cache + per-auction enforcement gate.
+	// The gate reads exchange.adstxt_enforcement live (off by default), so
+	// dev/e2e are unaffected unless explicitly switched to warn/strict.
+	var adsTxtBus events.EventBus
+	if natsBus != nil {
+		adsTxtBus = natsBus
+	}
+	adsTxtWarm := startAdsTxtCache(cfg, log, adsTxtBus, adsTxtCache)
+	if adsTxtWarm != nil {
+		lc.OnShutdown("adstxt-cache", func(_ context.Context) error { adsTxtWarm.Stop(); return nil })
+	}
+	adsTxtGate := adsTxtGateFn(cfg, adsTxtCache, log)
+
 	// Readiness: deal cache must have run at least once (an empty result
 	// is still "ready" — empty is a valid state for fresh seed). Exchange
 	// can run open auctions without deals, so the cache being available
@@ -147,7 +160,11 @@ func main() {
 	// dev, expected false in prod overlays). Reads + mutations both gated
 	// so the prod surface is purely the auction/win/loss/Prebid paths.
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(dealCache))
+		refreshables := []warm.Refreshable{dealCache}
+		if adsTxtWarm != nil {
+			refreshables = append(refreshables, adsTxtWarm)
+		}
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(refreshables...))
 
 		// Dump the active deal warm-cache snapshot.
 		mux.HandleFunc(routes.DebugExchangeDeals, func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +210,7 @@ func main() {
 	// UI edits land without a restart (also used as the fan-out context
 	// deadline).
 	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
-	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, dealCache, router, auctionM)
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, dealCache, router, auctionM)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -279,7 +296,7 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -308,6 +325,20 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		start := clk.Now()
+
+		// ads.txt seller-authorisation gate (before fan-out): if the
+		// publisher published an ads.txt that doesn't list us, strict mode
+		// rejects the request outright. Off by default; no-ops when the
+		// domain is unknown/unverifiable.
+		if bidReq.Site != nil {
+			if allow, reason := adsTxtGate(bidReq.Site.Domain); !allow {
+				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+				reqLog.Info("auction rejected", "reason", reason, "domain", bidReq.Site.Domain)
+				am.auctionsTotal.WithLabelValues("rejected_adstxt", channel).Inc()
+				return
+			}
+		}
 
 		// Application-level span — the HTTP middleware already opened a
 		// server span around the request, but we want the auction phases
