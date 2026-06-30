@@ -71,6 +71,7 @@ const (
 	SubjectCacheInvalidatePublishers   = "adtech.cache.invalidate.publishers"
 	SubjectCacheInvalidateDeals        = "adtech.cache.invalidate.deals"
 	SubjectCacheInvalidateFraudRules   = "adtech.cache.invalidate.fraud-rules"
+	SubjectCacheInvalidateAdsTxt       = "adtech.cache.invalidate.ads-txt"
 	SubjectCacheInvalidateOptOuts      = "adtech.cache.invalidate.opt-outs"
 	SubjectCacheInvalidateWebhookSubs  = "adtech.cache.invalidate.webhook-subs"
 	SubjectCacheInvalidateBillingRates = "adtech.cache.invalidate.billing-rates"

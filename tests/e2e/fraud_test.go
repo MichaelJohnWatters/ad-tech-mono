@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -163,10 +164,44 @@ func TestFraudBotUARejected(t *testing.T) {
 	h.RefreshAllCaches(t)
 }
 
-// TestFraudAdsTxtUnverifiedRejected — ads.txt is crawled by cmd/adstxt
-// but the exchange doesn't yet reject bid requests from unverified
-// publishers.
+// TestFraudAdsTxtUnverifiedRejected — when a publisher's ads.txt doesn't
+// list our platform as an authorised seller, strict enforcement makes the
+// exchange no-bid the request before fan-out.
+//
+// Assumes the exchange pod id is "exchange-0" and BuildBasicWorld stamps the
+// publisher domain as "e2e-<suffix>.test" (see world.go).
 func TestFraudAdsTxtUnverifiedRejected(t *testing.T) {
-	t.Skip("exchange does not currently enforce ads.txt verification before accepting bid requests; pending")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "adstxt")
+	const (
+		domain = "e2e-adstxt.test"
+		pod    = "exchange-0"
+	)
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, "exchange.adstxt_enforcement", "off", pod)
+		h.ClearAdsTxt(t, domain)
+		h.RefreshAllCaches(t)
+	})
+
+	// Declare our seller identity.
+	h.SetConfigForPod(t, "exchange.adstxt_seller_domain", "adtech.example", pod)
+	h.SetConfigForPod(t, "exchange.adstxt_seller_id", "seat-1", pod)
+
+	// Baseline: enforcement off → auction wins even without an ads.txt row.
+	h.RefreshAllCaches(t)
+	if h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u1")).NoBid {
+		t.Fatal("baseline (enforcement off): expected a winning bid")
+	}
+
+	// Publisher publishes an ads.txt that does NOT list us → not_listed.
+	h.SetAdsTxt(t, domain, []fraud.AdsTxtEntry{
+		{Domain: "other-ssp.com", AccountID: "999", Relationship: "DIRECT"},
+	}, "valid")
+	h.SetConfigForPod(t, "exchange.adstxt_enforcement", "strict", pod)
+	h.RefreshAllCaches(t)
+
+	if !h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u2")).NoBid {
+		t.Errorf("strict ads.txt: expected NoBid for a publisher whose ads.txt omits us")
+	}
 }
 

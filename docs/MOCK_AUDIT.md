@@ -51,7 +51,7 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 | # | Component | Degree | Evidence | Current behaviour |
 |---|---|---|---|---|
 | ~~F1~~ | IP / UA blocklists | **DONE (DB-driven)** | `pkg/fraud/realtime.go`, `cmd/tracker/blocklist.go` | ✅ `fraud_blocklists` (ip/ua) loaded into a tracker warm cache (`postgres.BlocklistLoader`), pushed into the checker via `ReplaceBlocklists` on poll + `adtech.cache.invalidate.fraud-rules`. IP/UA blocks now manageable in the DB; hardcoded bot patterns + datacenter ranges retained as a floor. `TestFraudBotUARejected` flipped to a real assertion. **Remaining:** IP-block e2e needs the tracker to read `X-Forwarded-For` (reads `RemoteAddr` today); domain/app_bundle types not yet consulted. |
-| F2 | ads.txt verification | STUB | `pkg/fraud/adstxt.go`; `tests/e2e/fraud_test.go:148` | Parser exists; no fetcher (`cmd/adstxt` does not exist), exchange never enforces. |
+| ~~F2~~ | ads.txt verification | **DONE** | `pkg/fraud/adstxt.go`, `cmd/adstxt/`, `cmd/exchange/adstxt.go` | ✅ `fraud.FetchAdsTxt` (real HTTP fetch + parse, httptest-covered) + `cmd/adstxt` crawler upserting `ads_txt_cache`. Exchange warm-caches the table (`postgres.AdsTxtLoader`) and gates the auction before fan-out via `exchange.adstxt_enforcement` (off\|warn\|strict, off by default): strict → no-bid for publishers whose ads.txt omits us; `no_ads_txt` stays allowed. `TestFraudAdsTxtUnverifiedRejected` flipped to a real assertion. **Remaining:** seed the platform's own seller rows / sellers.json cross-check; `warn`-mode metric. |
 | F3 | Fraud scoring | HARDCODED | `pkg/fraud/scoring.go:34-44` | Static heuristic weights/thresholds; no model. (Lowest priority — heuristic is acceptable interim.) |
 
 ### P2 — Feature completeness (code partly exists)
@@ -116,7 +116,7 @@ Logic largely exists; this is wiring + persistence.
 Follows the warm-cache pattern already used everywhere.
 
 - **D1 — Blocklists to DB.** ✅ **Done.** `fraud_blocklists` (ip/ua) → tracker warm cache (`cmd/tracker/blocklist.go`) → `RealTimeChecker.ReplaceBlocklists`, refreshed on poll + `adtech.cache.invalidate.fraud-rules`. Hardcoded bot patterns/datacenter ranges kept as a floor. `TestFraudBotUARejected` asserts it; unit-tested in `pkg/fraud`. **Open:** read `X-Forwarded-For` so IP blocks are drivable e2e; consult domain/app_bundle types; optionally seed the hardcoded lists as rows.
-- **D2 — ads.txt.** Create `cmd/adstxt` fetcher (HTTP GET `https://{domain}/ads.txt`, 24h TTL) → `publisher_ads_txt` table; add a pre-bid enforcement gate in the exchange.
+- **D2 — ads.txt.** ✅ **Done.** `fraud.FetchAdsTxt` + `cmd/adstxt` crawler → `ads_txt_cache`; exchange warm-caches it and enforces a pre-fan-out gate (`exchange.adstxt_enforcement`, off by default). `TestFraudAdsTxtUnverifiedRejected` asserts the strict path. **Open:** schedule the crawler as a K8s CronJob; `warn`-mode rejection metric; honour DIRECT-vs-RESELLER policy.
 - **Done when:** `fraud_test.go` blocklist + UA + ads.txt tests pass.
 
 ### Phase E — Feature completeness (P2) `[X1–X6]`

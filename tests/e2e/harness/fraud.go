@@ -4,12 +4,42 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 )
+
+// SetAdsTxt upserts an ads_txt_cache row for a publisher domain. entries is
+// marshalled with the same struct the exchange loader decodes, so it
+// round-trips. The exchange warm-caches this table; callers should
+// RefreshAllCaches afterwards.
+func (h *Harness) SetAdsTxt(t *testing.T, domain string, entries []fraud.AdsTxtEntry, status string) {
+	t.Helper()
+	b, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal ads.txt entries: %v", err)
+	}
+	const q = `
+INSERT INTO ads_txt_cache (domain, entries, last_fetched, status)
+VALUES ($1, $2, now(), $3)
+ON CONFLICT (domain) DO UPDATE SET entries=EXCLUDED.entries, last_fetched=now(), status=EXCLUDED.status`
+	if _, err := h.DB.Exec(q, domain, b, status); err != nil {
+		t.Fatalf("set ads.txt for %s: %v", domain, err)
+	}
+}
+
+// ClearAdsTxt removes an ads_txt_cache row (the table is global).
+func (h *Harness) ClearAdsTxt(t *testing.T, domain string) {
+	t.Helper()
+	if _, err := h.DB.Exec(`DELETE FROM ads_txt_cache WHERE domain=$1`, domain); err != nil {
+		t.Fatalf("clear ads.txt for %s: %v", domain, err)
+	}
+}
 
 // AddFraudBlocklist inserts a row into the global fraud_blocklists table
 // (type ∈ ip|ua|domain|app_bundle). The tracker enforces these from a warm
