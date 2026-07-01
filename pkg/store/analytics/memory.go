@@ -544,6 +544,37 @@ func (s *MemoryStore) InsertDSPCalls(_ context.Context, es []*DSPCallEvent) erro
 	return nil
 }
 
+// CreativeStats aggregates in-memory impressions + clicks per creative since a
+// cutoff (CreativeStatAggregator).
+func (s *MemoryStore) CreativeStats(_ context.Context, since time.Time) ([]CreativeStat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	imps := map[string]int64{}
+	clk := map[string]int64{}
+	for _, e := range s.impressions {
+		if since.IsZero() || !e.Timestamp.Before(since) {
+			imps[e.CreativeID]++
+		}
+	}
+	for _, e := range s.clicks {
+		if since.IsZero() || !e.Timestamp.Before(since) {
+			clk[e.CreativeID]++
+		}
+	}
+	seen := map[string]bool{}
+	var out []CreativeStat
+	for id, n := range imps {
+		out = append(out, CreativeStat{CreativeID: id, Impressions: n, Clicks: clk[id]})
+		seen[id] = true
+	}
+	for id, n := range clk {
+		if !seen[id] {
+			out = append(out, CreativeStat{CreativeID: id, Clicks: n})
+		}
+	}
+	return out, nil
+}
+
 // DSPCallStats aggregates the in-memory dsp_calls per (channel, endpoint)
 // since a cutoff (DSPCallAggregator).
 func (s *MemoryStore) DSPCallStats(_ context.Context, since time.Time) ([]DSPCallStat, error) {
