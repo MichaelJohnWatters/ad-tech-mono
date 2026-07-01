@@ -16,6 +16,17 @@
         .empty h2 { color: var(--text-secondary); margin-bottom: 12px; font-size: 20px; }
         .empty p { max-width: 500px; margin: 0 auto; line-height: 1.6; }
         .demo-note { background: var(--bg-surface-3); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 24px; font-size: 13px; color: var(--text-secondary); }
+        .controls-sep { color: var(--text-muted); margin: 0 6px; }
+        #batchN { width: 56px; text-align: center; }
+        .metric.red { color: var(--danger, #ef4444); }
+        .recon-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
+        .recon-table th, .recon-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+        .recon-table th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+        .recon-table td code { font-size: 12px; color: var(--text-secondary); }
+        .recon-table .ok { color: var(--success, #22c55e); font-weight: 700; }
+        .recon-table .bad { color: var(--danger, #ef4444); font-weight: 700; }
+        .jaeger-link { color: var(--brand, #6366f1); text-decoration: none; }
+        .jaeger-link:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -30,6 +41,9 @@
         <input type="text" id="traceInput" placeholder="Enter trace_id (e.g. req-abc123-def456)" />
         <button class="btn btn-primary" onclick="lookupTrace()">Trace</button>
         <button class="btn btn-success" onclick="fireSingleRequest()">Fire Single Request</button>
+        <span class="controls-sep">|</span>
+        <input type="number" id="batchN" value="10" min="1" max="50" title="how many ads to fire" />
+        <button class="btn" onclick="reconcileBatch()">Reconcile Batch</button>
     </div>
 
     <div class="page-content" id="content">
@@ -80,6 +94,11 @@
 
     async function fireSingleRequest() {
         const GW = window.location.protocol + '//' + window.location.hostname + ':8080';
+        // Reporting + billing are queried DIRECTLY (:8086), not via the gateway:
+        // reporting runs as a local process the gateway pod can't reach, so
+        // GW + /v1/reporting/* returns 502. The browser can reach :8086 (CORS
+        // enabled + port-forwarded).
+        const REP = window.location.protocol + '//' + window.location.hostname + ':8086';
         // No more client-side trace ID generation. The exchange creates the
         // OTel root span via HTTPMiddleware and returns its W3C trace ID in
         // the X-Trace-Id response header — we adopt that as THE trace ID
@@ -203,7 +222,7 @@
         const t3 = performance.now();
         let found = false;
         try {
-            const qResp = await fetch(GW + '/v1/reporting/query', {
+            const qResp = await fetch(REP + '/v1/reporting/query', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -228,7 +247,7 @@
         // Step 5: Query billing ledger for this trace
         let billingData = null;
         try {
-            const bResp = await fetch(GW + '/v1/billing/ledger?trace_id=' + traceId);
+            const bResp = await fetch(REP + '/v1/billing/ledger?trace_id=' + traceId);
             const bEntries = await bResp.json();
             if (bEntries && bEntries.length > 0) {
                 const entry = bEntries[0];
@@ -263,6 +282,116 @@
             html += `<div class="panel"><h3>Pipeline</h3><div class="metric purple">${totalMs}ms</div><div class="label">End-to-end</div></div>`;
         }
         html += '</div>';
+        content.innerHTML = html;
+    }
+
+    // ---- Batch reconciliation: fire N ads, prove every stage adds up ----
+
+    async function runOneAd(GW) {
+        const out = { traceId: '', price: 0, seat: '', won: false, served: false, impCount: 0 };
+        try {
+            const resp = await fetch(GW + '/v1/openrtb/auction', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    imp: [{ id: 'imp-1', banner: { w: 300, h: 250 }, bidfloor: 0.50 }],
+                    site: { domain: 'trace-explorer.local', page: '/batch' },
+                    device: { ua: navigator.userAgent, geo: { country: 'GBR' } }
+                })
+            });
+            out.traceId = resp.headers.get('X-Trace-Id') || '';
+            const ar = await resp.json();
+            if (!ar.seatbid || !ar.seatbid.length) return out;
+            out.won = true;
+            const seat = ar.seatbid[0], bid = seat.bid[0];
+            out.price = bid.price; out.seat = seat.seat;
+            const adResp = await fetch(GW + '/v1/ad/serve', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trace_id: out.traceId, campaign_id: bid.cid, creative_id: bid.crid,
+                    placement_id: 'imp-1', publisher_id: 'trace-explorer-pub', advertiser_id: seat.seat,
+                    clearing_price: bid.price, currency: ar.cur || 'USD',
+                    site_domain: 'trace-explorer.local', width: 300, height: 250
+                })
+            });
+            const adData = await adResp.json();
+            if (adData.impression_url) {
+                out.served = true;
+                // Fired from the browser -> a real UA, so the tracker's fraud
+                // filter doesn't treat it as a bot (a raw curl WOULD be blocked).
+                try { await fetch(adData.impression_url); } catch (e) {}
+            }
+        } catch (e) {}
+        return out;
+    }
+
+    async function reconcileBatch() {
+        const GW = window.location.protocol + '//' + window.location.hostname + ':8080';
+        const REP = window.location.protocol + '//' + window.location.hostname + ':8086';
+        const n = Math.max(1, Math.min(50, parseInt(document.getElementById('batchN').value, 10) || 10));
+        const content = document.getElementById('content');
+        const note = () => content.querySelector('.demo-note');
+        content.innerHTML = '<div class="demo-note">Firing ' + n + ' ads end-to-end…</div>';
+
+        let spendBefore = 0;
+        try { spendBefore = (await (await fetch(REP + '/v1/billing/summary')).json()).TotalSpend || 0; } catch (e) {}
+
+        const ads = [];
+        for (let i = 0; i < n; i++) {
+            note().textContent = 'Firing ad ' + (i + 1) + '/' + n + '…';
+            ads.push(await runOneAd(GW));
+        }
+
+        note().textContent = 'Waiting for analytics store (NATS → reporting)…';
+        await new Promise(r => setTimeout(r, 1500));
+
+        let repImp = 0, sumPrice = 0;
+        for (const ad of ads) {
+            if (!ad.won) continue;
+            sumPrice += ad.price;
+            try {
+                const q = await (await fetch(REP + '/v1/reporting/query', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ table: 'impressions', metrics: ['count'], filters: { trace_id: ad.traceId } })
+                })).json();
+                const rows = q.rows || q.Rows || [];
+                ad.impCount = rows.length ? rows[0][0] : 0;
+            } catch (e) { ad.impCount = 0; }
+            repImp += ad.impCount;
+        }
+
+        let spendAfter = spendBefore, pubRev = 0, margin = 0;
+        try {
+            const b = await (await fetch(REP + '/v1/billing/summary')).json();
+            spendAfter = b.TotalSpend || 0; pubRev = b.TotalPublisherRevenue || 0; margin = b.TotalPlatformMargin || 0;
+        } catch (e) {}
+
+        const won = ads.filter(a => a.won).length;
+        const served = ads.filter(a => a.served).length;
+        const spendDelta = spendAfter - spendBefore;
+        const colour = ok => ok ? 'green' : 'red';
+        const mark = ok => ok ? '✓' : '✗';
+        const impOk = repImp === served, billOk = Math.abs(spendDelta - sumPrice) < 0.05, idOk = Math.abs((pubRev + margin) - spendAfter) < 0.01;
+
+        const panel = (t, v, l, c) => '<div class="panel"><h3>' + t + '</h3><div class="metric ' + (c || 'blue') + '">' + v + '</div><div class="label">' + l + '</div></div>';
+
+        let html = '<div class="demo-note">Reconciliation of <b>' + n + '</b> ads — every stage should match. Fired live through the full pipeline; all data real.</div>';
+        html += '<div class="panels">';
+        html += panel('Fired', n, 'auctions', 'blue');
+        html += panel('Won', won, 'DSP bids', 'blue');
+        html += panel('Served', served, 'ad server', 'blue');
+        html += panel('Impressions', mark(impOk) + ' ' + repImp, 'in reporting (want ' + served + ')', colour(impOk));
+        html += panel('Billed', mark(billOk) + ' $' + spendDelta.toFixed(2), 'Δ (want $' + sumPrice.toFixed(2) + ')', colour(billOk));
+        html += '</div>';
+        html += '<div class="demo-note">Billing identity: publisher $' + pubRev.toFixed(2) + ' + margin $' + margin.toFixed(2) + ' = $' + (pubRev + margin).toFixed(2) + ' vs total spend $' + spendAfter.toFixed(2) + ' <span class="' + (idOk ? 'ok' : 'bad') + '">' + mark(idOk) + '</span></div>';
+        html += '<table class="recon-table"><thead><tr><th>#</th><th>trace_id</th><th>clearing</th><th>impression</th><th>trace</th></tr></thead><tbody>';
+        ads.forEach((a, i) => {
+            const short = a.traceId ? a.traceId.slice(0, 16) + '…' : '(no trace)';
+            const impCell = !a.won ? '<span class="bad">no-bid</span>' : (a.impCount > 0 ? '<span class="ok">✓ ' + a.impCount + '</span>' : '<span class="bad">✗ 0</span>');
+            const jl = (a.traceId && a.traceId.length === 32)
+                ? '<a class="jaeger-link" target="_blank" href="http://localhost:16686/trace/' + a.traceId + '">Jaeger →</a>' : '—';
+            html += '<tr><td>' + (i + 1) + '</td><td><code>' + short + '</code></td><td>' + (a.won ? '$' + a.price.toFixed(2) : '—') + '</td><td>' + impCell + '</td><td>' + jl + '</td></tr>';
+        });
+        html += '</tbody></table>';
         content.innerHTML = html;
     }
 
