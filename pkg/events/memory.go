@@ -20,6 +20,8 @@ type subscription struct {
 	handler Handler
 }
 
+var _ BatchSubscriber = (*MemoryBus)(nil)
+
 // NewMemoryBus creates an in-process event bus.
 func NewMemoryBus() *MemoryBus {
 	return &MemoryBus{
@@ -73,6 +75,23 @@ func (b *MemoryBus) Subscribe(_ context.Context, subject, group string, handler 
 		group:   group,
 		handler: handler,
 	})
+	return nil
+}
+
+// SubscribeBatch adapts the in-process bus to events.BatchSubscriber by
+// delivering each published message as a one-element batch. Enough for tests
+// and the HTTP/dev path; the real batching (a JetStream fetch of N) only
+// happens on the NATS bus.
+func (b *MemoryBus) SubscribeBatch(_ context.Context, subject, group string, handler BatchHandler) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return fmt.Errorf("bus closed")
+	}
+	wrapped := func(ctx context.Context, msg *Message) error {
+		return handler(ctx, []*Message{msg})
+	}
+	b.subscribers[subject] = append(b.subscribers[subject], subscription{group: group, handler: wrapped})
 	return nil
 }
 

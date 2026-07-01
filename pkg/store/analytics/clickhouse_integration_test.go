@@ -83,6 +83,55 @@ func chInt64(v interface{}) int64 {
 	}
 }
 
+// TestClickHouse_BatchInsert proves the bulk path lands N rows via one
+// PrepareBatch/Send (BatchInserter), and that they materialise as a SINGLE
+// MergeTree part — the whole point of batching (vs N parts from N single-row
+// inserts, the "too many parts" anti-pattern).
+func TestClickHouse_BatchInsert(t *testing.T) {
+	ch := testCH(t)
+	defer ch.Close()
+	ctx := context.Background()
+	trace := "ch-batch-" + time.Now().Format("150405.000")
+	ts := time.Now().UTC()
+
+	const n = 50
+	es := make([]*ImpressionEvent, n)
+	for i := 0; i < n; i++ {
+		es[i] = &ImpressionEvent{
+			TraceID: trace, CampaignID: "c1", CreativeID: "cr1", PlacementID: "p1",
+			PublisherID: "pub1", AccountID: "a1", ClearingPrice: 2.5, ClearingCurrency: "USD",
+			ClearingPriceUSD: 2.5, BidModel: "cpm", SchemaVersion: 1, Timestamp: ts,
+		}
+	}
+	if err := ch.InsertImpressions(ctx, es); err != nil {
+		t.Fatalf("batch insert impressions: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	res, err := ch.Query(ctx, QueryParams{
+		Table: "impressions", Metrics: []string{"count"},
+		Filters: map[string]string{"trace_id": trace},
+	})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res.Rows) != 1 || chInt64(res.Rows[0][0]) != n {
+		t.Fatalf("count = %v, want %d", res.Rows, n)
+	}
+
+	// One INSERT block ⇒ one part covering these rows. Count parts whose row
+	// count equals our batch (isolates this insert from any concurrent data).
+	var parts int
+	if err := ch.db.QueryRowContext(ctx,
+		`SELECT count() FROM system.parts WHERE database='adtech' AND table='impressions' AND active AND rows=?`,
+		n).Scan(&parts); err != nil {
+		t.Fatalf("system.parts query: %v", err)
+	}
+	if parts < 1 {
+		t.Errorf("expected at least one %d-row part from the batch, found %d", n, parts)
+	}
+}
+
 func TestClickHouse_RollupsAndSignals(t *testing.T) {
 	ch := testCH(t)
 	defer ch.Close()

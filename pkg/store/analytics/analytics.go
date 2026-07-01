@@ -95,6 +95,57 @@ type RollupWriter interface {
 
 var _ RollupWriter = (*MemoryStore)(nil)
 
+// BatchInserter is the bulk write path — one call inserts many rows of a
+// single event type as one atomic block. It's the ingest primitive behind
+// the reporting service's NATS batch consumer: a JetStream fetch of N
+// messages becomes one INSERT per table, instead of N single-row inserts
+// (the ClickHouse "too many parts" anti-pattern).
+//
+// Kept off the core Store interface (same convention as ObservabilityWriter
+// and RollupWriter — it's a reporting-side ingest concern, discovered by
+// type assertion). ClickHouse implements it with clickhouse-go's native
+// PrepareBatch; MemoryStore and DuckDB implement it by looping their
+// existing single-row inserts, so callers get parity on every backend.
+//
+// Each method is a no-op on an empty slice and is all-or-nothing: on the
+// ClickHouse backend a failed Send() commits zero rows, which is what lets
+// the batch consumer ack-all-or-nak-all without partial writes.
+type BatchInserter interface {
+	InsertImpressions(ctx context.Context, es []*ImpressionEvent) error
+	InsertClicks(ctx context.Context, es []*ClickEvent) error
+	InsertConversions(ctx context.Context, es []*ConversionEvent) error
+	InsertViews(ctx context.Context, es []*ViewEvent) error
+	InsertAuctions(ctx context.Context, es []*AuctionEvent) error
+	InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error
+	InsertMediaEvents(ctx context.Context, es []*MediaEvent) error
+}
+
+var _ BatchInserter = (*MemoryStore)(nil)
+
+// DebugReader is the set of read-back queries the reporting service's /debug
+// endpoints use (consumed by the e2e harness and ops tooling to assert an
+// event reached the store). Kept off the core Store interface — it's a debug
+// affordance. MemoryStore has always implemented these; ClickHouse implements
+// them too so the full-local stack (clickhouse backend) keeps the debug
+// endpoints working instead of degrading to 501.
+type DebugReader interface {
+	AuctionWinCount(traceID string) int
+	AuctionWinByBidModel(traceID, bidModel string) int
+	BudgetDepletionsByCampaign(campaignID string) int
+	CampaignStateChangesByCampaign(campaignID string) []CampaignStateChange
+	RenderFailuresByCreative(creativeID string) []RenderFailure
+	FreqCapBlocksByCampaign(campaignID string) []FreqCapBlock
+	TrackerRejectionsByTrace(traceID, reason string) []TrackerRejection
+	TrackerRejectionsByReason(reason string) int
+	ServeNoFillsByTrace(traceID string) int
+	MediaEventsByTrace(traceID, channel, eventType string) int
+}
+
+var (
+	_ DebugReader = (*MemoryStore)(nil)
+	_ DebugReader = (*ClickHouse)(nil)
+)
+
 // Event is a tagged union for batch inserts.
 type Event struct {
 	Type       EventType        `json:"type"`
