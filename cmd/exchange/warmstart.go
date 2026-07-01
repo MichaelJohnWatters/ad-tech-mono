@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"time"
@@ -11,6 +12,16 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
+
+// sampleTrace deterministically decides whether a trace is in the emit sample
+// for a given ratio (0..1). Same trace_id → same decision, so all of an
+// auction's per-DSP events are emitted together or not at all. No RNG, so it's
+// reproducible and lock-free.
+func sampleTrace(traceID string, ratio float64) bool {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(traceID))
+	return float64(h.Sum32()%10000)/10000.0 < ratio
+}
 
 // dspCallStat mirrors analytics.DSPCallStat's JSON — a local copy so the
 // exchange doesn't import the analytics package (and its ClickHouse driver)
