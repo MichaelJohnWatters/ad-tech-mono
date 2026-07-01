@@ -25,6 +25,13 @@ func main() {
 
 	port := cfg.Get("pipeline.port", routes.PortPipeline)
 
+	// Data-lake batch layer: consume the event stream (own NATS group, so it
+	// runs alongside reporting's real-time consumer) and land events as
+	// Parquet in object storage. Off only if pipeline.datalake_enabled=false.
+	if cfg.GetBool("pipeline.datalake_enabled", true) {
+		startDatalakeSink(cfg, log, lc)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
