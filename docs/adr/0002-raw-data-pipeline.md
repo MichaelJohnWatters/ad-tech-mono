@@ -1,6 +1,10 @@
 # ADR 0002 — Raw data pipeline: log-centric spine, Parquet archive, ClickHouse when it hurts
 
-**Status:** Proposed (2026-07-01). One decision still open (see "Open question").
+**Status:** Accepted (2026-07-01). ClickHouse is the raw-ingestion + hot-serving tier,
+built into the local stack now (not deferred) — it's the de-facto AdTech event store
+(Vibe, Admixer, AdGreetz: millions of events/sec, <100ms live reports). The earlier
+"defer ClickHouse until dashboards hurt" stance was too conservative and contradicted the
+full-local-build goal; corrected here.
 **Related:** ADR 0001 (analytics engines: ClickHouse vs DuckDB roles); `docs/PLAN.md` → "Build Status & Outstanding Work".
 
 ## The problem we're solving
@@ -57,23 +61,26 @@ Minute → hourly (→ daily/monthly later). Two placement options:
 Each rollup level re-aggregates from **raw** (not from a coarser rollup), so we can run just
 minute (and hourly) now and add coarser tiers with zero code change.
 
-## Recommendation for where we are (small; values zero-slippage + trace visibility)
+## Recommendation (build the real prod shape locally)
 
-1. **Make JetStream + the Parquet pipeline the durable backbone.** Get *everything*
-   reliably landing in Parquet on Minio. Highest-value work — it's the "on disk, forever"
-   guarantee.
-2. **Serve interactive/recent queries from a small store.** At current volume even the
-   memory/DuckDB analytics backend covers Trace-Explorer point-lookups; no ClickHouse needed
-   yet.
-3. **DuckDB-over-Parquet for ad-hoc / historical / ML** — reads the lake directly, no extra
-   infra.
-4. **Add ClickHouse when an interactive dashboard is genuinely too slow at our volume** —
-   a real signal, not a guess. Load it via a **minutely micro-batch** (one bulk INSERT/min):
-   the ideal ClickHouse write pattern (avoids "too many parts") and gives ~1-min-fresh live
-   dashboards (great for clicks).
+1. **JetStream = the durable source-of-truth log.** Fast appends, ordered, replayable.
+   Every downstream store is a rebuildable view on top of it.
+2. **ClickHouse = raw-ingestion + hot-serving tier, built now.** Ingest the event stream via
+   a **batched async writer** (buffer → one bulk INSERT/sec) — the single most important
+   detail; single-row inserts are the "too many parts" anti-pattern. Raw events land in
+   MergeTree; native `SummingMergeTree`/`AggregatingMergeTree` materialized views produce
+   rollups; live dashboards read them in <100ms. Use CH's AdTech strengths: `uniqExact`/HLL
+   (unique users), `windowFunnel` (funnel/attribution), `LowCardinality`+`ZSTD`/`Delta`
+   codecs (compression).
+3. **Parquet+Delta on Minio = the cold archive.** Async, permanent, open format. Survives
+   after events age out of JetStream / ClickHouse TTL.
+4. **DuckDB = ad-hoc / historical / ML over the Parquet archive.** No server; reads the lake
+   directly (`read_parquet`). The analyst/ops/back-testing engine, complementary to
+   ClickHouse's live serving — see ADR 0001.
 
-Lean summary: **log + Parquet archive = the raw-data foundation; a small serving store for
-recent point-lookups; ClickHouse is a later optimization for live aggregate dashboards.**
+Lean summary: **log (JetStream) is the source of truth; ClickHouse is the hot raw-ingest +
+live-dashboard store (batched); Parquet is the cold archive; DuckDB queries the archive for
+ad-hoc/historical work.**
 
 ## Current state (what's built vs not — 2026-07-01)
 
@@ -109,15 +116,17 @@ is making the **Parquet archive bulletproof and DuckDB-queryable**, not more Cli
 
 ## Proposed build order (for a fresh context to pick up)
 
-1. **Bulletproof the spine.** Pipeline reliably lands every event to Parquet on Minio at ~1
-   min flush; verify replay-from-JetStream rebuilds it. (Most of this exists — harden +
-   verify.)
-2. **DuckDB-over-Parquet read surface.** A small query path (`SELECT ... FROM
-   read_parquet('s3://…')`) so ops/dashboards can read the lake. Proves the read side E2E.
-3. **Parquet compaction job.** Minutely → hourly aggregated Parquet (idempotent; dedup-safe),
-   as a CronJob. Fixes small-files + gives cheap pre-aggregates.
-4. **(When dashboards hurt) ClickHouse micro-batch loader.** Buffer events, flush one bulk
-   INSERT/min; flip `reporting.analytics_backend=clickhouse`; wire rollup read-by-tier.
-5. **(Cleanup) reporting → normal pod**, ClickHouse as local-overlay default (ADR 0001).
-
-Until step 4, `memory` stays the default analytics backend so dev/CI/e2e are unaffected.
+1. **ClickHouse batched async writer.** Buffer events, flush on size **or** ~1s interval as
+   one bulk INSERT; fail-open to the log so a CH blip never drops events. Test proves
+   batching + idempotency. ← the one missing brick between "CH pod exists" and "CH is our
+   event store".
+2. **Flip local default to `clickhouse`** + wire rollup read-by-tier (replace the
+   `pkg/reporting/builder.go` `_ = tier` stub) so dashboards read rollups, not raw. Keep
+   `memory` as the CI/e2e default so those stay infra-free.
+3. **CH-native rollups.** `SummingMergeTree`/`AggregatingMergeTree` materialized views;
+   app-side `rollup.Engine` stays as the portable fallback.
+4. **Cold archive: bulletproof the Parquet spine.** Pipeline reliably lands every event to
+   Parquet on Minio; verify replay-from-JetStream rebuilds it. (Most exists — harden.)
+5. **DuckDB-over-Parquet read surface** (`read_parquet('s3://…')`) for ad-hoc / historical /
+   ML + **Parquet compaction** (minutely → hourly aggregated, idempotent CronJob).
+6. **(Cleanup) reporting → normal pod**; ClickHouse as local-overlay default (ADR 0001).
