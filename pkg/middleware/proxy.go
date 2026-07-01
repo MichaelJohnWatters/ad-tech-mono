@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
@@ -52,6 +53,17 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 			upstreamReq.Header.Set(constants.HeaderAccountID, claims.AccountID)
 			upstreamReq.Header.Set(constants.HeaderUserID, claims.UserID)
 		}
+
+		// Propagate the W3C trace context (traceparent) to the upstream so the
+		// downstream service continues THIS trace instead of forking a new one.
+		// The gateway's tracing.HTTPMiddleware put the authoritative span
+		// context in r.Context(); a request that arrived without a traceparent
+		// (a browser fetch, a raw curl) would otherwise start a fresh trace at
+		// each proxied hop — so the exchange's auction + AuctionWinEvent would
+		// land under a different trace_id than the served impression, breaking
+		// end-to-end continuity. Injecting from context makes the whole request
+		// (auction → win → serve → impression) share one trace_id.
+		tracing.InjectHTTP(r.Context(), upstreamReq)
 
 		// Forward
 		start := time.Now()
