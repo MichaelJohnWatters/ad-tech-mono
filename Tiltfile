@@ -234,13 +234,23 @@ if dev_mode == 'fast':
     # ---- Reporting (STAYS LOCAL — CGO cross-compile blocker) ----
     def ready(port):
         return probe(period_secs=2, http_get=http_get_action(port=port, path='/readyz'))
+    # Full-local analytics: ClickHouse is the event store (raw ingest + hot
+    # serving), consumed in bulk via the batched NATS consumer, with minute
+    # rollups on. Native protocol is forwarded to host :9010 (see above).
+    # Redis (optional) backs batch dedup; falls back to in-memory L2 if down.
+    # See docs/adr/0002-raw-data-pipeline.md.
     local_resource('reporting',
         cmd='go build -o ./bin/reporting ./cmd/reporting',
-        serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ./bin/reporting',
+        serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ' +
+            'REPORTING_ANALYTICS_BACKEND=clickhouse ' +
+            'REPORTING_CLICKHOUSE_ADDR=127.0.0.1:9010 ' +
+            'REPORTING_CLICKHOUSE_BATCH_CONSUMER=true ' +
+            'REPORTING_ROLLUP_ENABLED=true ' +
+            './bin/reporting',
         serve_dir='.',
         deps=['cmd/reporting', 'pkg/'],
         labels=['services'],
-        resource_deps=['nats', 'postgres'],
+        resource_deps=['nats', 'postgres', 'clickhouse'],
         readiness_probe=ready(8086))
 
 else:

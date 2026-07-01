@@ -20,8 +20,9 @@ import (
 // with the memory and DuckDB backends. All tables are MergeTree ordered by
 // timestamp — the dominant filter/group dimension for reporting.
 type ClickHouse struct {
-	db  *sql.DB
-	log *slog.Logger
+	db   *sql.DB
+	conn clickhouse.Conn // native protocol — hot bulk-insert path (PrepareBatch)
+	log  *slog.Logger
 }
 
 // ClickHouseConfig configures the connection. Addrs is host:port pairs.
@@ -54,13 +55,39 @@ func NewClickHouse(cfg ClickHouseConfig) (*ClickHouse, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping clickhouse: %w", err)
 	}
+
+	// Native protocol connection alongside the database/sql handle. The
+	// *sql.DB stays the path for reads, DDL, rollups and operational
+	// signals (unchanged); conn is used only for the hot bulk-insert path,
+	// where PrepareBatch is column-oriented and materially faster than the
+	// row-at-a-time database/sql INSERT. Two pools to one server is fine.
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: cfg.Addrs,
+		Auth: clickhouse.Auth{
+			Database: cfg.Database,
+			Username: cfg.Username,
+			Password: cfg.Password,
+		},
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open clickhouse native conn: %w", err)
+	}
+	if err := conn.Ping(ctx); err != nil {
+		db.Close()
+		conn.Close()
+		return nil, fmt.Errorf("ping clickhouse native conn: %w", err)
+	}
+
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	ch := &ClickHouse{db: db, log: log}
+	ch := &ClickHouse{db: db, conn: conn, log: log}
 	if err := ch.createTables(); err != nil {
 		db.Close()
+		conn.Close()
 		return nil, fmt.Errorf("create tables: %w", err)
 	}
 	return ch, nil
@@ -355,7 +382,15 @@ func (c *ClickHouse) Query(ctx context.Context, params QueryParams) (*QueryResul
 	return result, rows.Err()
 }
 
-func (c *ClickHouse) Close() error { return c.db.Close() }
+func (c *ClickHouse) Close() error {
+	err := c.db.Close()
+	if c.conn != nil {
+		if cerr := c.conn.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	return err
+}
 
 // sig backfills a zero timestamp so operational-signal rows always have a
 // valid DateTime (the fire-and-forget call sites don't always set it).

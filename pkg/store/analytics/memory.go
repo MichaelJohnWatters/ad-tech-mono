@@ -447,6 +447,71 @@ func (s *MemoryStore) Rollups() []RollupRow {
 	return out
 }
 
+// --- BatchInserter parity (loops single-row inserts) ---
+
+func (s *MemoryStore) InsertImpressions(ctx context.Context, es []*ImpressionEvent) error {
+	for _, e := range es {
+		if err := s.InsertImpression(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertClicks(ctx context.Context, es []*ClickEvent) error {
+	for _, e := range es {
+		if err := s.InsertClick(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertConversions(ctx context.Context, es []*ConversionEvent) error {
+	for _, e := range es {
+		if err := s.InsertConversion(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertViews(ctx context.Context, es []*ViewEvent) error {
+	for _, e := range es {
+		if err := s.InsertView(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctions(ctx context.Context, es []*AuctionEvent) error {
+	for _, e := range es {
+		if err := s.InsertAuction(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error {
+	for _, e := range es {
+		if err := s.InsertAuctionWin(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertMediaEvents(ctx context.Context, es []*MediaEvent) error {
+	for _, e := range es {
+		if err := s.InsertMediaEvent(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {
 	for _, e := range events {
 		var err error

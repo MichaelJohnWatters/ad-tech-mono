@@ -37,6 +37,22 @@ type EventBus interface {
 // Handler processes a single event message.
 type Handler func(ctx context.Context, msg *Message) error
 
+// BatchHandler processes a slice of messages delivered together (one
+// JetStream fetch). The handler owns ack/nak of each message — it decides
+// per message whether to Ack (processed / poison / duplicate) or Nak
+// (transient failure, redeliver). Returning an error is advisory (logged);
+// it does not ack/nak on the handler's behalf.
+type BatchHandler func(ctx context.Context, msgs []*Message) error
+
+// BatchSubscriber is the optional bulk-consume capability. Implemented by
+// the NATS bus (a JetStream fetch already returns N messages at once) so a
+// consumer can insert N rows as one atomic block instead of N single-row
+// writes. Discovered by type assertion on EventBus; the memory bus
+// implements a trivial size-1 version for tests.
+type BatchSubscriber interface {
+	SubscribeBatch(ctx context.Context, subject, group string, handler BatchHandler) error
+}
+
 // Message represents a received event.
 type Message struct {
 	Subject   string

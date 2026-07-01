@@ -24,6 +24,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+var (
+	_ events.EventBus        = (*Bus)(nil)
+	_ events.BatchSubscriber = (*Bus)(nil)
+)
+
 // Bus implements events.EventBus using NATS JetStream.
 type Bus struct {
 	conn    *nats.Conn
@@ -156,7 +161,7 @@ func (b *Bus) Subscribe(ctx context.Context, subject, group string, handler even
 					msg.Subject(),
 					msg.Data(),
 					traceID,
-					msg.Headers().Get("Nats-Msg-Id"),
+					msgID(msg),
 					func() error { return msg.Ack() },
 					func() error { return msg.Nak() },
 				)
@@ -174,19 +179,111 @@ func (b *Bus) Subscribe(ctx context.Context, subject, group string, handler even
 	return nil
 }
 
+// Batch-consumer tuning. A JetStream fetch already returns up to N messages;
+// SubscribeBatch hands that whole slice to the handler as one unit so it can
+// bulk-insert. Larger fetch + longer AckWait than the per-message path
+// because a batch flush (one bulk INSERT) is the ack unit.
+const (
+	batchFetchSize     = 500
+	batchFetchWait     = time.Second
+	batchAckWait       = 60 * time.Second
+	batchMaxAckPending = 2000
+)
+
+// SubscribeBatch is the bulk-consume path (events.BatchSubscriber). It uses
+// the same durable-consumer conventions as Subscribe (subject-scoped name,
+// explicit ack, MaxDeliver=5 → DLQ) but delivers each JetStream fetch to the
+// handler as a slice. The handler owns ack/nak of every message; the bus
+// does not ack/nak on its behalf (a batch handler needs per-message control
+// to drop poison rows and redeliver good-but-unwritten ones).
+func (b *Bus) SubscribeBatch(ctx context.Context, subject, group string, handler events.BatchHandler) error {
+	consumerName := fmt.Sprintf("%s-%s-%s", b.service, group, subjectToConsumerSuffix(subject))
+
+	consumer, err := b.js.CreateOrUpdateConsumer(ctx, streamForSubject(subject), jetstream.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		FilterSubject: subject,
+		DeliverPolicy: jetstream.DeliverNewPolicy,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       batchAckWait,
+		MaxAckPending: batchMaxAckPending,
+		MaxDeliver:    5,
+	})
+	if err != nil {
+		return fmt.Errorf("create batch consumer %s on %s: %w", consumerName, subject, err)
+	}
+
+	go func() {
+		for {
+			msgs, err := consumer.Fetch(batchFetchSize, jetstream.FetchMaxWait(batchFetchWait))
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+
+			batch := make([]*events.Message, 0, batchFetchSize)
+			for msg := range msgs.Messages() {
+				// Extract the publisher's trace context so each Message
+				// carries the same W3C trace_id (no new span per message on
+				// the batch path — the payload + logs carry trace_id, and
+				// opening a span per row would defeat the batching win).
+				msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
+				traceID := ""
+				if sc := trace.SpanContextFromContext(msgCtx); sc.HasTraceID() {
+					traceID = sc.TraceID().String()
+				}
+				m := msg // capture
+				batch = append(batch, events.NewMessage(
+					m.Subject(), m.Data(), traceID, msgID(m),
+					func() error { return m.Ack() },
+					func() error { return m.Nak() },
+				))
+			}
+			if len(batch) == 0 {
+				continue
+			}
+			if err := handler(ctx, batch); err != nil {
+				b.log.Error("batch handler failed", "subject", subject, "n", len(batch), "error", err)
+			}
+		}
+	}()
+
+	b.log.Info("subscribed (batch)", "subject", subject, "consumer", consumerName, "fetch", batchFetchSize)
+	return nil
+}
+
 func (b *Bus) Close() error {
 	b.conn.Close()
 	return nil
+}
+
+// msgID returns a stable dedup identity for a message. Prefer the publisher's
+// Nats-Msg-Id header when set; otherwise fall back to the JetStream stream
+// sequence, which is assigned at publish and is IDENTICAL across redeliveries
+// of the same message (and unique across distinct messages) — exactly what
+// consumer-side redelivery dedup needs. Publish doesn't currently set
+// Nats-Msg-Id, so the stream sequence is the effective key.
+func msgID(msg jetstream.Msg) string {
+	if id := msg.Headers().Get("Nats-Msg-Id"); id != "" {
+		return id
+	}
+	if md, err := msg.Metadata(); err == nil {
+		return fmt.Sprintf("seq-%d", md.Sequence.Stream)
+	}
+	return ""
 }
 
 // subjectToConsumerSuffix turns a dotted subject into a NATS-safe consumer
 // name suffix. Strips the "adtech." namespace prefix and replaces remaining
 // dots with hyphens so the entire path is preserved:
 //
-//   adtech.events.impression          → events-impression
-//   adtech.auction.win                → auction-win
-//   adtech.direct.win                 → direct-win
-//   adtech.prebid.outbound.win        → prebid-outbound-win
+//	adtech.events.impression          → events-impression
+//	adtech.auction.win                → auction-win
+//	adtech.direct.win                 → direct-win
+//	adtech.prebid.outbound.win        → prebid-outbound-win
 //
 // Earlier this function used only the leaf segment. That collided across
 // any pair of subjects sharing a leaf (e.g. every *.win subject became the

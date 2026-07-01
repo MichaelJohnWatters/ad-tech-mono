@@ -5,13 +5,14 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -57,10 +58,11 @@ func main() {
 	lc.OnShutdown("analytics-store", func(_ context.Context) error {
 		return store.Close()
 	})
-	// memStore is non-nil only on the memory backend. The /debug read-back
-	// endpoints + operational-signal handlers are MemoryStore-only; they
-	// guard on this and degrade to 501 (debug) / skip (signals) on duckdb.
-	memStore, _ := store.(*analytics.MemoryStore)
+	// dbg is the backend-agnostic read-back view for the /debug endpoints.
+	// Both MemoryStore and ClickHouse implement analytics.DebugReader, so the
+	// endpoints work on the full-local (clickhouse) stack as well as memory.
+	// DuckDB doesn't implement it yet → those endpoints degrade to 501 there.
+	dbg, _ := store.(analytics.DebugReader)
 
 	// Billing engine (unified with reporting - single consumer)
 	clk := clock.Real{}
@@ -86,6 +88,21 @@ func main() {
 
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
+
+	// Opt-in bulk NATS consumer for high-volume core events. Requires a
+	// backend that supports bulk inserts (ClickHouse today); on memory/duckdb
+	// the flag is a no-op warning and the per-message path is used. Dedup
+	// (Redis SetNX on the stream sequence) makes redelivery idempotent.
+	if cfg.GetBool("reporting.clickhouse_batch_consumer", false) {
+		if bi, ok := store.(analytics.BatchInserter); ok {
+			dedup := cache.NewDedupAdapter(connectReportingRedis(cfg, log))
+			ttl := cfg.GetDuration("reporting.dedup_ttl", 24*time.Hour)
+			consumer.EnableBatchConsumer(bi, dedup, ttl)
+			log.Info("reporting: batch consumer enabled for core events", "dedup_ttl", ttl)
+		} else {
+			log.Warn("reporting.clickhouse_batch_consumer set but analytics backend has no bulk-insert support; using per-message path")
+		}
+	}
 
 	// Connect to NATS for event consumption
 	natsURL := cfg.Get("reporting.nats_url", routes.DefaultNATSURL)
@@ -159,8 +176,8 @@ func main() {
 		// Core event persistence is unaffected — only these dev affordances.
 		memGuard := func(w http.ResponseWriter) bool {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			if memStore == nil {
-				http.Error(w, `{"error":"debug read-backs require reporting.analytics_backend=memory"}`, http.StatusNotImplemented)
+			if dbg == nil {
+				http.Error(w, `{"error":"debug read-backs require an analytics backend that implements DebugReader (memory or clickhouse)"}`, http.StatusNotImplemented)
 				return false
 			}
 			return true
@@ -174,9 +191,9 @@ func main() {
 			bidModel := r.URL.Query().Get("bid_model")
 			var count int
 			if bidModel != "" {
-				count = memStore.AuctionWinByBidModel(traceID, bidModel)
+				count = dbg.AuctionWinByBidModel(traceID, bidModel)
 			} else {
-				count = memStore.AuctionWinCount(traceID)
+				count = dbg.AuctionWinCount(traceID)
 			}
 			json.NewEncoder(w).Encode(map[string]int{"count": count})
 		})
@@ -186,7 +203,7 @@ func main() {
 				return
 			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			json.NewEncoder(w).Encode(map[string]int{"count": memStore.BudgetDepletionsByCampaign(campaignID)})
+			json.NewEncoder(w).Encode(map[string]int{"count": dbg.BudgetDepletionsByCampaign(campaignID)})
 		})
 
 		mux.HandleFunc(routes.DebugCampaignStateChanges, func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +211,7 @@ func main() {
 				return
 			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			json.NewEncoder(w).Encode(memStore.CampaignStateChangesByCampaign(campaignID))
+			json.NewEncoder(w).Encode(dbg.CampaignStateChangesByCampaign(campaignID))
 		})
 
 		mux.HandleFunc(routes.DebugRenderFailures, func(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +219,7 @@ func main() {
 				return
 			}
 			creativeID := r.URL.Query().Get("creative_id")
-			json.NewEncoder(w).Encode(memStore.RenderFailuresByCreative(creativeID))
+			json.NewEncoder(w).Encode(dbg.RenderFailuresByCreative(creativeID))
 		})
 
 		mux.HandleFunc(routes.DebugFreqCapBlocks, func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +227,7 @@ func main() {
 				return
 			}
 			campaignID := r.URL.Query().Get("campaign_id")
-			json.NewEncoder(w).Encode(memStore.FreqCapBlocksByCampaign(campaignID))
+			json.NewEncoder(w).Encode(dbg.FreqCapBlocksByCampaign(campaignID))
 		})
 
 		mux.HandleFunc(routes.DebugTrackerRejections, func(w http.ResponseWriter, r *http.Request) {
@@ -220,11 +237,11 @@ func main() {
 			traceID := r.URL.Query().Get("trace_id")
 			reason := r.URL.Query().Get("reason")
 			if traceID != "" {
-				json.NewEncoder(w).Encode(memStore.TrackerRejectionsByTrace(traceID, reason))
+				json.NewEncoder(w).Encode(dbg.TrackerRejectionsByTrace(traceID, reason))
 				return
 			}
 			if reason != "" {
-				json.NewEncoder(w).Encode(map[string]int{"count": memStore.TrackerRejectionsByReason(reason)})
+				json.NewEncoder(w).Encode(map[string]int{"count": dbg.TrackerRejectionsByReason(reason)})
 				return
 			}
 			http.Error(w, `{"error":"trace_id or reason required"}`, http.StatusBadRequest)
@@ -235,7 +252,7 @@ func main() {
 				return
 			}
 			traceID := r.URL.Query().Get("trace_id")
-			json.NewEncoder(w).Encode(map[string]int{"count": memStore.ServeNoFillsByTrace(traceID)})
+			json.NewEncoder(w).Encode(map[string]int{"count": dbg.ServeNoFillsByTrace(traceID)})
 		})
 
 		mux.HandleFunc(routes.DebugMediaEvents, func(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +262,7 @@ func main() {
 			traceID := r.URL.Query().Get("trace_id")
 			channel := r.URL.Query().Get("channel")
 			eventType := r.URL.Query().Get("event_type")
-			json.NewEncoder(w).Encode(map[string]int{"count": memStore.MediaEventsByTrace(traceID, channel, eventType)})
+			json.NewEncoder(w).Encode(map[string]int{"count": dbg.MediaEventsByTrace(traceID, channel, eventType)})
 		})
 
 		// Trigger a rollup run on demand (ops + e2e). Works on any backend
@@ -295,35 +312,67 @@ type EventConsumer struct {
 	log     *slog.Logger
 	store   analytics.Store
 	billing *billing.Engine
+
+	// Batch-consumer path (opt-in via reporting.clickhouse_batch_consumer).
+	// When enabled, the high-volume core subjects are consumed in bulk (one
+	// atomic block insert per fetch) with per-message dedup; see batch.go.
+	batch        analytics.BatchInserter
+	dedup        events.DedupStore
+	dedupTTL     time.Duration
+	batchEnabled bool
 }
 
 func NewEventConsumer(log *slog.Logger, store analytics.Store, billingEngine *billing.Engine) *EventConsumer {
 	return &EventConsumer{log: log, store: store, billing: billingEngine}
 }
 
+// EnableBatchConsumer turns on the bulk NATS consumer path for core events.
+// batch is the store's bulk-insert capability; dedup makes redelivery safe.
+func (c *EventConsumer) EnableBatchConsumer(batch analytics.BatchInserter, dedup events.DedupStore, ttl time.Duration) {
+	c.batch = batch
+	c.dedup = dedup
+	c.dedupTTL = ttl
+	c.batchEnabled = true
+}
+
 // RegisterNATSSubscriptions sets up NATS consumers for all event subjects.
 // Called when NATS is available.
 func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 	subjects := map[string]events.Handler{
-		events.SubjectImpression:         c.handleImpression,
-		events.SubjectClick:              c.handleClick,
-		events.SubjectConversion:         c.handleConversion,
-		events.SubjectView:               c.handleView,
-		events.SubjectAuctionComplete:    c.handleAuction,
-		events.SubjectAuctionWin:         c.handleAuctionWin,
-		events.SubjectDirectWin:          c.handleDirectWin,
-		events.SubjectPrebidOutboundWin:  c.handlePrebidOutboundWin,
-		events.SubjectBudgetDepleted:        c.handleBudgetDepleted,
-		events.SubjectCampaignStateChanged:  c.handleCampaignState,
-		events.SubjectTrackerRejected:       c.handleTrackerRejected,
-		events.SubjectAdserverRenderFailed:    c.handleRenderFailed,
-		events.SubjectAdserverFreqCapBlocked:  c.handleFreqCapBlocked,
-		events.SubjectVideo:                 c.handleVideo,
-		events.SubjectAudio:                 c.handleAudio,
-		events.SubjectServeNoFill:           c.handleServeNoFill,
+		events.SubjectImpression:             c.handleImpression,
+		events.SubjectClick:                  c.handleClick,
+		events.SubjectConversion:             c.handleConversion,
+		events.SubjectView:                   c.handleView,
+		events.SubjectAuctionComplete:        c.handleAuction,
+		events.SubjectAuctionWin:             c.handleAuctionWin,
+		events.SubjectDirectWin:              c.handleDirectWin,
+		events.SubjectPrebidOutboundWin:      c.handlePrebidOutboundWin,
+		events.SubjectBudgetDepleted:         c.handleBudgetDepleted,
+		events.SubjectCampaignStateChanged:   c.handleCampaignState,
+		events.SubjectTrackerRejected:        c.handleTrackerRejected,
+		events.SubjectAdserverRenderFailed:   c.handleRenderFailed,
+		events.SubjectAdserverFreqCapBlocked: c.handleFreqCapBlocked,
+		events.SubjectVideo:                  c.handleVideo,
+		events.SubjectAudio:                  c.handleAudio,
+		events.SubjectServeNoFill:            c.handleServeNoFill,
 	}
 
 	ctx := context.Background()
+
+	// Batch path: when enabled and the bus supports it, the high-volume core
+	// subjects are consumed in bulk (one atomic block insert per fetch). Those
+	// subjects are removed from the per-message map below so they aren't
+	// double-subscribed. Operational-signal subjects always stay per-message.
+	if batchSub, ok := bus.(events.BatchSubscriber); ok && c.batchEnabled && c.batch != nil && c.dedup != nil {
+		for subject, handler := range c.coreBatchHandlers() {
+			if err := batchSub.SubscribeBatch(ctx, subject, constants.NATSGroupReporting, handler); err != nil {
+				return err
+			}
+			delete(subjects, subject)
+			c.log.Info("subscribed to NATS subject (batch)", "subject", subject)
+		}
+	}
+
 	for subject, handler := range subjects {
 		if err := bus.Subscribe(ctx, subject, constants.NATSGroupReporting, handler); err != nil {
 			return err
