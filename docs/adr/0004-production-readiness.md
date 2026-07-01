@@ -101,7 +101,26 @@ Reporting only stayed a local Tilt process because DuckDB needs CGO. ClickHouse 
 
 ---
 
-## P4 — Day-boundary DB wiring (correctness)
+## P4 — Day-boundary DB wiring (correctness) — DEFERRED (schema reality)
+
+**Status: DEFERRED (2026-07-02).** Digging in, the plan under-scoped this:
+- `insertion_orders` has **no spend column** (verified migration 004) — spend lives in Redis
+  (DSP counters) + the billing ledger. So "deplete when spend ≥ budget" can't be done from
+  the table; it needs Redis/ledger integration.
+- Ending an IO must cascade status to its `line_items` (the bid path filters line-item
+  status) — the campaign-hierarchy propagation semantics need a deliberate design pass, not a
+  guess.
+- The daily-spend snapshot + budget reset needs a new table (migration) + timezone-aware
+  Redis reset — and a bad migration runs at `make migrate` boot, i.e. it can break the local
+  stack, which I can't validate in-session.
+- `cmd/dayboundary` isn't wired as a running CronJob today, so the demo-data version isn't
+  actively wrong in production — low urgency.
+Recommend doing this as its own focused change (with the migration run + live validation),
+not folded into a sweep.
+
+Original scope below (kept for when it's picked up).
+
+## P4 (original scope) — Day-boundary DB wiring
 
 `cmd/dayboundary` runs the right logic on **demo arrays** (`demoLineItems`/`demoIOs`); comments say "in production: Postgres queries." Effort: **M**. Schema note: **flight dates (start/end) live on `insertion_orders`, not `line_items`** — the real model is IO-driven, line-item status follows.
 
@@ -114,7 +133,17 @@ Reporting only stayed a local Tilt process because DuckDB needs CGO. ClickHouse 
 
 ---
 
-## P5 — Repo hygiene (cleanup)
+## P5 — Repo hygiene (cleanup) — REVISED (keep, don't delete)
+
+**Status: REVISED (2026-07-02).** The "delete these shells" call was too hasty on second look:
+`ssai` (server-side ad insertion), `transcoder` (creative/video transcode), and `cleanroom`
+(data clean room) are legitimate **Phase-9 roadmap placeholders** (video/CTV/privacy), not
+dead scaffolding. Deleting them would remove real roadmap markers. So: **keep the shells.**
+The genuinely-redundant ones (`billing`, `rollup`) keep their CLAUDE.md precisely because it
+documents *why* they're empty (logic lives in reporting). Net recommendation: leave the cmd/
+shells as-is; the only safe, positive action is adding one-line "intent" CLAUDE.md notes to
+undocumented dirs — low value, do opportunistically, not worth a dedicated sweep. Original
+proposal below.
 
 Reduce noise so "what's real" is legible. Effort: **S**. (Deletions are proposals — confirm before removing.)
 
