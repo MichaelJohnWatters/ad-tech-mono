@@ -480,6 +480,33 @@ func (c *ClickHouse) queryEventsMV(ctx context.Context, level string, from, to t
 	return out, rows.Err()
 }
 
+// DSPCallStats aggregates dsp_calls per (channel, endpoint) since a cutoff
+// (DSPCallAggregator) — the exchange's routing warm-start source.
+func (c *ClickHouse) DSPCallStats(ctx context.Context, since time.Time) ([]DSPCallStat, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT channel, dsp_endpoint, count() AS calls,
+			sum(bid_received) AS bids, sum(timed_out) AS timeouts,
+			avgIf(bid_price_usd, bid_received = 1) AS avg_bid, avg(latency_ms) AS avg_lat
+		 FROM dsp_calls WHERE timestamp >= ?
+		 GROUP BY channel, dsp_endpoint`, since)
+	if err != nil {
+		return nil, fmt.Errorf("dsp_call stats: %w", err)
+	}
+	defer rows.Close()
+	var out []DSPCallStat
+	for rows.Next() {
+		var s DSPCallStat
+		var avgBid, avgLat float64
+		if err := rows.Scan(&s.Channel, &s.DSPEndpoint, &s.TotalCalls, &s.TotalBids, &s.TotalTimeouts, &avgBid, &avgLat); err != nil {
+			return nil, fmt.Errorf("scan dsp_call stat: %w", err)
+		}
+		s.AvgBidUSD = avgBid
+		s.AvgLatencyMs = avgLat
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 func (c *ClickHouse) Query(ctx context.Context, params QueryParams) (*QueryResult, error) {
 	query, args := BuildQuery(params)
 	rows, err := c.db.QueryContext(ctx, query, args...)

@@ -45,6 +45,22 @@ func NewSmartRouter() *SmartRouter {
 	return &SmartRouter{stats: make(map[channelDSPKey]*DSPStats)}
 }
 
+// Seed pre-populates the router's per-(channel, DSP) stats from a prior
+// aggregate — the warm-start from ClickHouse on boot (ADR 0003). Routing then
+// survives a pod restart with real history instead of re-learning from cold.
+// Existing entries for a (channel, DSP) are replaced. Intended to be called
+// once at startup, before the handler serves traffic. WinRate isn't derivable
+// from dsp_calls alone, so it's left at whatever the caller set (typically 0)
+// and re-learned live from RecordWin.
+func (r *SmartRouter) Seed(stats []DSPStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range stats {
+		s := stats[i]
+		r.stats[channelDSPKey{channel: s.Channel, dspID: s.DSPID}] = &s
+	}
+}
+
 // RecordCall records a DSP call outcome for a given channel.
 func (r *SmartRouter) RecordCall(channel, dspID string, bidReceived bool, bidPrice float64, latency time.Duration, timedOut bool) {
 	r.mu.Lock()

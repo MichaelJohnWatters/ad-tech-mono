@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
@@ -268,6 +269,32 @@ func main() {
 		// Trigger a rollup run on demand (ops + e2e). Works on any backend
 		// since it goes through the analytics.Store / RollupWriter interfaces.
 		mux.HandleFunc(routes.DebugRollupRun, rollupRunHandler(rollupEngine, log))
+
+		// Routing warm-start source (ADR 0003): per-(channel, DSP) dsp_calls
+		// aggregate the exchange fetches on boot to seed its SmartRouter.
+		// ?since_hours=N (default 6). Works on any backend implementing
+		// DSPCallAggregator (memory, clickhouse).
+		mux.HandleFunc("/debug/routing/stats", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			agg, ok := store.(analytics.DSPCallAggregator)
+			if !ok {
+				http.Error(w, `{"error":"backend does not aggregate dsp_calls"}`, http.StatusNotImplemented)
+				return
+			}
+			hours := 6
+			if h := r.URL.Query().Get("since_hours"); h != "" {
+				if n, err := strconv.Atoi(h); err == nil && n > 0 {
+					hours = n
+				}
+			}
+			stats, err := agg.DSPCallStats(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
+			if err != nil {
+				log.Error("dsp_call stats query failed", "error", err)
+				http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(stats)
+		})
 
 		// Billing ledger reset — wipes in-memory ledger entries so e2e
 		// billing tests can run in isolation. No-op on TigerBeetle backend

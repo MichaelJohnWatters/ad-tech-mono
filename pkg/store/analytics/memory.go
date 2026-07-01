@@ -544,6 +544,50 @@ func (s *MemoryStore) InsertDSPCalls(_ context.Context, es []*DSPCallEvent) erro
 	return nil
 }
 
+// DSPCallStats aggregates the in-memory dsp_calls per (channel, endpoint)
+// since a cutoff (DSPCallAggregator).
+func (s *MemoryStore) DSPCallStats(_ context.Context, since time.Time) ([]DSPCallStat, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	type acc struct {
+		calls, bids, timeouts int64
+		bidSum, latSum        float64
+	}
+	agg := map[[2]string]*acc{}
+	for _, c := range s.dspCalls {
+		if !since.IsZero() && c.Timestamp.Before(since) {
+			continue
+		}
+		k := [2]string{c.Channel, c.DSPEndpoint}
+		a := agg[k]
+		if a == nil {
+			a = &acc{}
+			agg[k] = a
+		}
+		a.calls++
+		a.latSum += float64(c.LatencyMs)
+		if c.BidReceived {
+			a.bids++
+			a.bidSum += c.BidPriceUSD
+		}
+		if c.TimedOut {
+			a.timeouts++
+		}
+	}
+	var out []DSPCallStat
+	for k, a := range agg {
+		st := DSPCallStat{Channel: k[0], DSPEndpoint: k[1], TotalCalls: a.calls, TotalBids: a.bids, TotalTimeouts: a.timeouts}
+		if a.bids > 0 {
+			st.AvgBidUSD = a.bidSum / float64(a.bids)
+		}
+		if a.calls > 0 {
+			st.AvgLatencyMs = a.latSum / float64(a.calls)
+		}
+		out = append(out, st)
+	}
+	return out, nil
+}
+
 // DSPCallCount returns how many DSP-call rows were recorded for an endpoint
 // (optionally filtered to a channel). Test/ops helper.
 func (s *MemoryStore) DSPCallCount(channel, endpoint string) int {

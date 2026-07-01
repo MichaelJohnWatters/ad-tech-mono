@@ -316,6 +316,31 @@ type AuctionWinEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// DSPCallStat is a per-(channel, DSP endpoint) aggregate of dsp_calls over a
+// window — the shape the exchange warm-starts its SmartRouter from on boot.
+type DSPCallStat struct {
+	Channel       string  `json:"channel"`
+	DSPEndpoint   string  `json:"dsp_endpoint"`
+	TotalCalls    int64   `json:"total_calls"`
+	TotalBids     int64   `json:"total_bids"`
+	TotalTimeouts int64   `json:"total_timeouts"`
+	AvgBidUSD     float64 `json:"avg_bid_usd"`
+	AvgLatencyMs  float64 `json:"avg_latency_ms"`
+}
+
+// DSPCallAggregator returns per-(channel, endpoint) dsp_calls aggregates since
+// a cutoff. Implemented by ClickHouse (GROUP BY) and MemoryStore (in-process);
+// consumed by the reporting routing-stats endpoint that the exchange
+// warm-starts from. Optional capability, discovered by type assertion.
+type DSPCallAggregator interface {
+	DSPCallStats(ctx context.Context, since time.Time) ([]DSPCallStat, error)
+}
+
+var (
+	_ DSPCallAggregator = (*MemoryStore)(nil)
+	_ DSPCallAggregator = (*ClickHouse)(nil)
+)
+
 // DSPCallEvent is the analytics mirror of events.DSPCallEvent — one row per
 // DSP fan-out call in an auction (routing telemetry). Win attribution is by
 // join to auction_wins on trace_id, not a column here.
