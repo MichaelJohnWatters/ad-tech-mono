@@ -132,6 +132,7 @@ type BatchInserter interface {
 	InsertAuctions(ctx context.Context, es []*AuctionEvent) error
 	InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error
 	InsertMediaEvents(ctx context.Context, es []*MediaEvent) error
+	InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error
 }
 
 var _ BatchInserter = (*MemoryStore)(nil)
@@ -312,6 +313,22 @@ type AuctionWinEvent struct {
 	BidModel      string    `json:"bid_model,omitempty"`
 	DealID        string    `json:"deal_id,omitempty"`
 	Channel       string    `json:"channel,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+// DSPCallEvent is the analytics mirror of events.DSPCallEvent — one row per
+// DSP fan-out call in an auction (routing telemetry). Win attribution is by
+// join to auction_wins on trace_id, not a column here.
+type DSPCallEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	AuctionID     string    `json:"auction_id"`
+	Channel       string    `json:"channel"`
+	DSPEndpoint   string    `json:"dsp_endpoint"`
+	BidReceived   bool      `json:"bid_received"`
+	BidPriceUSD   float64   `json:"bid_price_usd"`
+	LatencyMs     int64     `json:"latency_ms"`
+	TimedOut      bool      `json:"timed_out"`
 	Timestamp     time.Time `json:"timestamp"`
 }
 

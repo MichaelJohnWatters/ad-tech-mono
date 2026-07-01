@@ -2,7 +2,10 @@
 
 package analytics
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // BatchInserter parity for DuckDB. Loops the existing single-row inserts —
 // correct and idempotent-neutral. A future optimisation could wrap each in a
@@ -71,6 +74,26 @@ func (d *DuckDB) InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) e
 func (d *DuckDB) InsertMediaEvents(ctx context.Context, es []*MediaEvent) error {
 	for _, e := range es {
 		if err := d.InsertMediaEvent(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *DuckDB) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, e := range es {
+		ts := e.Timestamp
+		if ts.IsZero() {
+			ts = time.Now()
+		}
+		if _, err := d.db.ExecContext(ctx,
+			`INSERT INTO dsp_calls (trace_id, auction_id, channel, dsp_endpoint, bid_received,
+				bid_price_usd, latency_ms, timed_out, schema_version, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.TraceID, e.AuctionID, e.Channel, e.DSPEndpoint, e.BidReceived,
+			e.BidPriceUSD, e.LatencyMs, e.TimedOut, schemaVer(e.SchemaVersion), ts); err != nil {
 			return err
 		}
 	}

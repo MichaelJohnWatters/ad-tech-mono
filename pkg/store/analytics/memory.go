@@ -29,6 +29,7 @@ type MemoryStore struct {
 	renderFailures       []RenderFailure
 	freqCapBlocks        []FreqCapBlock
 	rollups              []RollupRow
+	dspCalls             []DSPCallEvent
 }
 
 // FreqCapBlock records a serve suppression — adserver's
@@ -532,6 +533,29 @@ func (s *MemoryStore) InsertMediaEvents(ctx context.Context, es []*MediaEvent) e
 		}
 	}
 	return nil
+}
+
+func (s *MemoryStore) InsertDSPCalls(_ context.Context, es []*DSPCallEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range es {
+		s.dspCalls = append(s.dspCalls, *e)
+	}
+	return nil
+}
+
+// DSPCallCount returns how many DSP-call rows were recorded for an endpoint
+// (optionally filtered to a channel). Test/ops helper.
+func (s *MemoryStore) DSPCallCount(channel, endpoint string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, c := range s.dspCalls {
+		if c.DSPEndpoint == endpoint && (channel == "" || c.Channel == channel) {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *MemoryStore) InsertBatch(ctx context.Context, events []Event) error {

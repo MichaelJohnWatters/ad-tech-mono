@@ -15,37 +15,57 @@ const CurrentSchemaVersion = 1
 // AuctionWinEvent is published by the Exchange after an auction completes.
 // Single source of truth for cost. Consumed by DSP (budget) and Reporting (billing).
 type AuctionWinEvent struct {
-	SchemaVersion int     `json:"schema_version"`
-	TraceID       string  `json:"trace_id"`
-	AuctionID     string  `json:"auction_id"`
-	WinnerDSP     string  `json:"winner_dsp"`
-	CampaignID    string  `json:"campaign_id"`
-	CreativeID    string  `json:"creative_id"`
-	PlacementID   string  `json:"placement_id"`
-	PublisherID   string  `json:"publisher_id"`
-	AdvertiserID  string  `json:"advertiser_id"`
-	ClearingPrice float64 `json:"clearing_price"`
-	Currency      string  `json:"currency"`
-	BidModel      string  `json:"bid_model"`
-	DealID        string  `json:"deal_id,omitempty"`
-	Channel       string  `json:"channel"`
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	AuctionID     string    `json:"auction_id"`
+	WinnerDSP     string    `json:"winner_dsp"`
+	CampaignID    string    `json:"campaign_id"`
+	CreativeID    string    `json:"creative_id"`
+	PlacementID   string    `json:"placement_id"`
+	PublisherID   string    `json:"publisher_id"`
+	AdvertiserID  string    `json:"advertiser_id"`
+	ClearingPrice float64   `json:"clearing_price"`
+	Currency      string    `json:"currency"`
+	BidModel      string    `json:"bid_model"`
+	DealID        string    `json:"deal_id,omitempty"`
+	Channel       string    `json:"channel"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+// DSPCallEvent records the outcome of one DSP fan-out call in an auction —
+// bid received?, price, latency, timeout. The exchange emits one per DSP per
+// auction (fire-and-forget) so routing behaviour is analysable historically in
+// ClickHouse/Parquet and the SmartRouter can warm-start from it after a
+// restart. Win attribution is derived by joining to auction_wins on trace_id
+// (kept out of this event so it can be emitted at fan-out time, before the
+// winner is known).
+type DSPCallEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	AuctionID     string    `json:"auction_id"`
+	Channel       string    `json:"channel"`
+	DSPEndpoint   string    `json:"dsp_endpoint"`
+	BidReceived   bool      `json:"bid_received"`
+	BidPriceUSD   float64   `json:"bid_price_usd"`
+	LatencyMs     int64     `json:"latency_ms"`
+	TimedOut      bool      `json:"timed_out"`
 	Timestamp     time.Time `json:"timestamp"`
 }
 
 // AuctionCompleteEvent includes all bids and timing (for analytics).
 type AuctionCompleteEvent struct {
-	SchemaVersion int            `json:"schema_version"`
-	TraceID       string         `json:"trace_id"`
-	PlacementID   string         `json:"placement_id"`
-	PublisherID   string         `json:"publisher_id"`
-	Channel       string         `json:"channel"`
-	NumBids       int            `json:"num_bids"`
-	WinnerDSP     string         `json:"winner_dsp,omitempty"`
-	ClearingPrice float64        `json:"clearing_price,omitempty"`
-	FloorPrice    float64        `json:"floor_price"`
-	DurationMs    int64          `json:"duration_ms"`
-	Bids          []BidSummary   `json:"bids,omitempty"`
-	Timestamp     time.Time      `json:"timestamp"`
+	SchemaVersion int          `json:"schema_version"`
+	TraceID       string       `json:"trace_id"`
+	PlacementID   string       `json:"placement_id"`
+	PublisherID   string       `json:"publisher_id"`
+	Channel       string       `json:"channel"`
+	NumBids       int          `json:"num_bids"`
+	WinnerDSP     string       `json:"winner_dsp,omitempty"`
+	ClearingPrice float64      `json:"clearing_price,omitempty"`
+	FloorPrice    float64      `json:"floor_price"`
+	DurationMs    int64        `json:"duration_ms"`
+	Bids          []BidSummary `json:"bids,omitempty"`
+	Timestamp     time.Time    `json:"timestamp"`
 }
 
 // BidSummary is a single bid in the auction complete event.
@@ -125,10 +145,11 @@ type AudioEvent struct {
 // the impression-tracking pixel path — reporting needs this signal
 // to detect broken creatives.
 //
-//   Reason: "unknown_creative" | "render_error" | "asset_missing"
-//   Detail: free-form context — for unknown_creative this is the
-//           requested creative_id; for render_error it's the
-//           underlying error string.
+//	Reason: "unknown_creative" | "render_error" | "asset_missing"
+//	Detail: free-form context — for unknown_creative this is the
+//	        requested creative_id; for render_error it's the
+//	        underlying error string.
+//
 // AdserverFreqCapBlockedEvent fires when the ad server's
 // (user, campaign) freq-cap counter is saturated and the serve
 // request is suppressed before any creative is rendered. Distinct
@@ -164,11 +185,11 @@ type AdserverRenderFailedEvent struct {
 // queries that compute true-cost-per-acquisition subtract these from
 // the denominator; ops dashboards alert on rate-of-change.
 //
-//   EventType: "impression" | "click" | "conversion" | "view" |
-//              "video" | "audio"
-//   Reason:    "invalid_signature" | "fraud" | "dedup"
-//   Detail:    free-form, populated for "fraud" with the underlying
-//              reasons array (joined by comma). Empty otherwise.
+//	EventType: "impression" | "click" | "conversion" | "view" |
+//	           "video" | "audio"
+//	Reason:    "invalid_signature" | "fraud" | "dedup"
+//	Detail:    free-form, populated for "fraud" with the underlying
+//	           reasons array (joined by comma). Empty otherwise.
 type TrackerRejectedEvent struct {
 	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`

@@ -355,6 +355,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectVideo:                  c.handleVideo,
 		events.SubjectAudio:                  c.handleAudio,
 		events.SubjectServeNoFill:            c.handleServeNoFill,
+		events.SubjectDSPCall:                c.handleDSPCall,
 	}
 
 	ctx := context.Background()
@@ -862,6 +863,34 @@ func (c *EventConsumer) handleBudgetDepleted(ctx context.Context, msg *events.Me
 		})
 	}
 	c.log.Info("campaign budget depleted", "campaign_id", src.CampaignID, "budget", src.Budget, "spent", src.Spent)
+	return msg.Ack()
+}
+
+// handleDSPCall lands per-DSP routing telemetry (ADR 0003) on the per-message
+// path (the batch path uses handleDSPCallBatch). Any backend that implements
+// BatchInserter (memory/duckdb/clickhouse) stores it; others drop it.
+func (c *EventConsumer) handleDSPCall(ctx context.Context, msg *events.Message) error {
+	var src events.DSPCallEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode dsp_call event", "error", err)
+		return msg.Ack()
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	bi, ok := c.store.(analytics.BatchInserter)
+	if !ok {
+		return msg.Ack() // backend can't store dsp_calls; drop silently
+	}
+	e := analytics.DSPCallEvent{
+		TraceID: src.TraceID, AuctionID: src.AuctionID, Channel: src.Channel,
+		DSPEndpoint: src.DSPEndpoint, BidReceived: src.BidReceived, BidPriceUSD: src.BidPriceUSD,
+		LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, SchemaVersion: 1, Timestamp: src.Timestamp,
+	}
+	if err := bi.InsertDSPCalls(ctx, []*analytics.DSPCallEvent{&e}); err != nil {
+		c.log.Error("failed to write dsp_call", "error", err, "trace_id", e.TraceID)
+		return msg.Nak()
+	}
 	return msg.Ack()
 }
 

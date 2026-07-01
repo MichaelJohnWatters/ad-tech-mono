@@ -55,6 +55,13 @@ func (p *Publisher) AuctionComplete(ctx context.Context, event AuctionCompleteEv
 	return p.PublishJSON(ctx, SubjectAuctionComplete, event)
 }
 
+func (p *Publisher) DSPCall(ctx context.Context, event DSPCallEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.PublishJSON(ctx, SubjectDSPCall, event)
+}
+
 func (p *Publisher) BudgetDepleted(ctx context.Context, event BudgetDepletedEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion

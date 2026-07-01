@@ -158,6 +158,11 @@ func (c *ClickHouse) createTables() error {
 		`CREATE TABLE IF NOT EXISTS budget_depletions (
 			campaign_id String, account_id String, budget Float64, spent Float64, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		`CREATE TABLE IF NOT EXISTS dsp_calls (
+			trace_id String, auction_id String, channel String, dsp_endpoint String,
+			bid_received UInt8, bid_price_usd Float64, latency_ms Int64, timed_out UInt8,
+			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS rollups (
 			config String, level String, window_from DateTime64(3), window_to DateTime64(3),
 			dimensions String, metrics String, created_at DateTime64(3)

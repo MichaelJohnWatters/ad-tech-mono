@@ -38,6 +38,13 @@ const (
 	SubjectAuctionWin      = "adtech.auction.win"
 	SubjectAuctionComplete = "adtech.auction.complete"
 
+	// SubjectDSPCall fires once per DSP fan-out call per auction (Exchange →
+	// Reporting). Per-DSP routing telemetry — bid received?, price, latency,
+	// timeout — feeding the dsp_calls analytics table and the SmartRouter
+	// warm-start. Higher volume than auction.win (one per DSP, not per
+	// auction), so it's sample-able at the exchange.
+	SubjectDSPCall = "adtech.optimise.dsp_call"
+
 	// Publisher-adserver served-impression subjects. SubjectDirectWin
 	// fires every time a direct-sold line item (sponsorship / guaranteed
 	// / house) gets served; SubjectPrebidOutboundWin fires when an

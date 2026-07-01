@@ -342,6 +342,28 @@ func (c *EventConsumer) handleVideoBatch(ctx context.Context, msgs []*events.Mes
 	)
 }
 
+func (c *EventConsumer) handleDSPCallBatch(ctx context.Context, msgs []*events.Message) error {
+	return batchProcess(ctx, c, msgs,
+		func(data []byte) (*analytics.DSPCallEvent, bool) {
+			var src events.DSPCallEvent
+			if err := json.Unmarshal(data, &src); err != nil {
+				c.log.Error("batch: decode dsp_call", "error", err)
+				return nil, false
+			}
+			if src.Timestamp.IsZero() {
+				src.Timestamp = time.Now()
+			}
+			return &analytics.DSPCallEvent{
+				TraceID: src.TraceID, AuctionID: src.AuctionID, Channel: src.Channel,
+				DSPEndpoint: src.DSPEndpoint, BidReceived: src.BidReceived, BidPriceUSD: src.BidPriceUSD,
+				LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, SchemaVersion: 1, Timestamp: src.Timestamp,
+			}, true
+		},
+		c.batch.InsertDSPCalls,
+		nil,
+	)
+}
+
 func (c *EventConsumer) handleAudioBatch(ctx context.Context, msgs []*events.Message) error {
 	return batchProcess(ctx, c, msgs,
 		func(data []byte) (*analytics.MediaEvent, bool) {
@@ -377,6 +399,7 @@ func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
 		events.SubjectPrebidOutboundWin: c.handlePrebidOutboundWinBatch,
 		events.SubjectVideo:             c.handleVideoBatch,
 		events.SubjectAudio:             c.handleAudioBatch,
+		events.SubjectDSPCall:           c.handleDSPCallBatch,
 	}
 }
 
