@@ -55,3 +55,25 @@ func TestDatalakeSink_FlushDrainsPartialBuffers(t *testing.T) {
 		t.Errorf("clicks after Flush = %d, want 1", len(recs))
 	}
 }
+
+// Snapshot must reconcile to the exact number of events fed in — the on-disk
+// "zero data slippage" guarantee that the /debug/datalake/snapshot endpoint
+// surfaces. Snapshot() flushes first, so the count is immediately consistent
+// across the size-flush + buffered boundary.
+func TestDatalakeSink_SnapshotReconciles(t *testing.T) {
+	lake := datalake.NewMemory(quietLog())
+	sink := newDatalakeSink(lake, 10, quietLog()) // size-flush every 10
+	ctx := context.Background()
+
+	const n = 23 // 20 auto-flushed + 3 still buffered
+	for i := 0; i < n; i++ {
+		sink.record("impressions", datalake.Record{"trace_id": "t", "campaign_id": "c1"})
+	}
+	snap, err := sink.Snapshot(ctx, "impressions")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snap.TotalRows != n {
+		t.Fatalf("Parquet snapshot TotalRows = %d, want %d (every event lands)", snap.TotalRows, n)
+	}
+}

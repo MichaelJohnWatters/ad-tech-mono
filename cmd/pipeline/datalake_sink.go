@@ -18,13 +18,14 @@ import (
 
 // startDatalakeSink wires the sink to NATS + object storage and starts the
 // periodic flush. Fails open: if the object store or NATS is unavailable it
-// logs and returns (the pipeline still serves health checks).
-func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) {
+// logs and returns nil (the pipeline still serves health checks). Returns the
+// sink so the caller can expose a snapshot/verification endpoint.
+func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) *datalakeSink {
 	bucket := cfg.Get("pipeline.datalake_bucket", "adtech-datalake")
 	objStore := connectObjects(cfg, log)
 	if objStore == nil {
 		log.Warn("datalake sink disabled: no object store")
-		return
+		return nil
 	}
 	if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
 		log.Warn("datalake: ensure bucket failed", "bucket", bucket, "error", err)
@@ -35,7 +36,7 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	bus, err := natsbus.New(cfg.Get("pipeline.nats_url", routes.DefaultNATSURL), constants.ServicePipeline, log)
 	if err != nil {
 		log.Warn("datalake sink disabled: nats unavailable", "error", err)
-		return
+		return nil
 	}
 	if err := bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects}); err != nil {
 		log.Warn("datalake: ensure stream failed", "error", err)
@@ -43,7 +44,7 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	if err := sink.Subscribe(bus); err != nil {
 		log.Error("datalake sink subscribe failed", "error", err)
 		_ = bus.Close()
-		return
+		return nil
 	}
 	lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
 
@@ -67,6 +68,26 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 		}
 	}()
 	log.Info("datalake batch sink running", "bucket", bucket, "batch_size", batchSize, "flush_interval", flushInterval.String())
+	return sink
+}
+
+// Snapshot flushes buffered records for the table then returns the Parquet
+// table snapshot (active file set + total rows/bytes from the Delta log). The
+// flush makes the count immediately consistent — the verification affordance
+// the /debug/datalake/snapshot endpoint and e2e "did every event land?" checks
+// rely on, rather than waiting for the interval ticker.
+func (s *datalakeSink) Snapshot(ctx context.Context, table string) (*datalake.TableSnapshot, error) {
+	s.flushTable(ctx, table)
+	return s.lake.Snapshot(ctx, table)
+}
+
+// Tables returns the datalake table names the sink writes.
+func (s *datalakeSink) Tables() []string {
+	out := make([]string, 0, len(s.schemas))
+	for t := range s.schemas {
+		out = append(out, t)
+	}
+	return out
 }
 
 // The pipeline is the data lake's *batch layer*: it consumes the same event
@@ -79,11 +100,21 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 // trigger — one Parquet file per flush keeps files a sensible size rather
 // than one-row-per-file.
 
-func str(name string) datalake.Column  { return datalake.Column{Name: name, Type: "string", Nullable: true} }
-func f64(name string) datalake.Column  { return datalake.Column{Name: name, Type: "float64", Nullable: true} }
-func i64(name string) datalake.Column  { return datalake.Column{Name: name, Type: "int64", Nullable: true} }
-func boolC(name string) datalake.Column { return datalake.Column{Name: name, Type: "bool", Nullable: true} }
-func ts(name string) datalake.Column   { return datalake.Column{Name: name, Type: "timestamp", Nullable: true} }
+func str(name string) datalake.Column {
+	return datalake.Column{Name: name, Type: "string", Nullable: true}
+}
+func f64(name string) datalake.Column {
+	return datalake.Column{Name: name, Type: "float64", Nullable: true}
+}
+func i64(name string) datalake.Column {
+	return datalake.Column{Name: name, Type: "int64", Nullable: true}
+}
+func boolC(name string) datalake.Column {
+	return datalake.Column{Name: name, Type: "bool", Nullable: true}
+}
+func ts(name string) datalake.Column {
+	return datalake.Column{Name: name, Type: "timestamp", Nullable: true}
+}
 
 // eventTables maps a NATS subject → (datalake table, schema). Column names
 // match the analytics event JSON tags (reporting decodes the same wire
