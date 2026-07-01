@@ -355,6 +355,43 @@ func (c *ClickHouse) InsertRollups(ctx context.Context, rows []RollupRow) error 
 	return nil
 }
 
+// QueryRollups reads persisted rollup rows for (config, level) whose window
+// overlaps [from, to] (RollupReader), decoding the JSON dimension/metric
+// columns back into RollupRow.
+func (c *ClickHouse) QueryRollups(ctx context.Context, config, level string, from, to time.Time) ([]RollupRow, error) {
+	q := `SELECT config, level, window_from, window_to, dimensions, metrics FROM rollups WHERE config = ? AND level = ?`
+	args := []any{config, level}
+	if !to.IsZero() {
+		q += ` AND window_from < ?`
+		args = append(args, to)
+	}
+	if !from.IsZero() {
+		q += ` AND window_to > ?`
+		args = append(args, from)
+	}
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query rollups: %w", err)
+	}
+	defer rows.Close()
+	var out []RollupRow
+	for rows.Next() {
+		var r RollupRow
+		var dims, mets string
+		if err := rows.Scan(&r.Config, &r.Level, &r.WindowFrom, &r.WindowTo, &dims, &mets); err != nil {
+			return nil, fmt.Errorf("scan rollup: %w", err)
+		}
+		if err := json.Unmarshal([]byte(dims), &r.Dimensions); err != nil {
+			return nil, fmt.Errorf("decode rollup dimensions: %w", err)
+		}
+		if err := json.Unmarshal([]byte(mets), &r.Metrics); err != nil {
+			return nil, fmt.Errorf("decode rollup metrics: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (c *ClickHouse) Query(ctx context.Context, params QueryParams) (*QueryResult, error) {
 	query, args := BuildQuery(params)
 	rows, err := c.db.QueryContext(ctx, query, args...)
