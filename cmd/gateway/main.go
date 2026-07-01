@@ -22,6 +22,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -229,6 +230,14 @@ func main() {
 	secretsAuth := middleware.AuthAPIKey(secretsCache, log)
 	mux.Handle(routes.APISecrets, secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
 	mux.Handle(routes.APISecrets+"/", secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
+
+	// Audience CRM-upload endpoint — same operator-API-key auth as secrets.
+	// gwDB may be nil if Postgres was unreachable at boot; the handler 503s.
+	var audStore *audiencepg.Store
+	if gwDB != nil {
+		audStore = audiencepg.New(gwDB)
+	}
+	mux.Handle(routes.APIAudiences, secretsAuth(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
