@@ -1,7 +1,27 @@
 # ADR 0003 — Optimiser telemetry: routing/bandit outcomes → ClickHouse, warm-start from it
 
-**Status:** Proposed (2026-07-01).
+**Status:** Accepted (2026-07-01). Parts A, B, D landed; C deferred.
 **Related:** ADR 0002 (raw-data pipeline — batched ClickHouse ingest, rollups, Parquet); ADR 0001 (analytics engines).
+
+## Landed (with deviations from the plan below)
+
+- **A** — `events.DSPCallEvent` + `adtech.optimise.dsp_call`; exchange emits per
+  DSP fan-out call (fire-and-forget from `fanOutToDSPs`); `dsp_calls` ClickHouse
+  table + `InsertDSPCalls` on `BatchInserter` (memory/duckdb parity); reporting
+  batch + per-message handlers; Parquet archive via the pipeline. **Deviation:**
+  `Won` is *not* an event column — win attribution is a join to `auction_wins`
+  on `trace_id`, so the event can be emitted at fan-out before the winner is
+  known. The generic **rollup** (`DSPCallsConfig`) was deferred (it needs the
+  Query builder to learn the `dsp_calls` metrics); the warm-start uses a
+  dedicated aggregate instead.
+- **B** — `SmartRouter.Seed`; `analytics.DSPCallAggregator.DSPCallStats`
+  (ClickHouse GROUP BY + memory); reporting `GET /debug/routing/stats`; exchange
+  warm-starts async/fail-open on boot. `WinRate` is re-learned live (not in
+  `dsp_calls`), so the seed sets bid-rate / avg-bid / latency / timeout only.
+- **D** — local reporting flipped to `BILLING_LEDGER_BACKEND=tigerbeetle` +
+  tigerbeetle port-forward (`3033→3000`) + resource dep in the Tiltfile.
+- **C** — deferred (bandit warm-start from existing impressions/clicks); do when
+  creative optimisation is next touched.
 
 ## Context
 
