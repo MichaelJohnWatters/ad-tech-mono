@@ -64,6 +64,10 @@ k8s_resource('minio', labels=['infra'], port_forwards=['9000:9000', '9001:9001']
 # avoid colliding with Minio's :9000; HTTP UI/ping on :8123. Reporting uses
 # it when reporting.analytics_backend=clickhouse (see ADR 0001).
 k8s_resource('clickhouse', labels=['infra'], port_forwards=['9010:9000', '8123:8123'])
+# TigerBeetle billing ledger. Native port forwarded to host :3033 (in-cluster
+# 3000) so the local reporting process can use it as the durable ledger when
+# BILLING_LEDGER_BACKEND=tigerbeetle (ADR 0003 part D).
+k8s_resource('tigerbeetle', labels=['infra'], port_forwards=['3033:3000'])
 k8s_resource('grafana', labels=['observability'], port_forwards=['3000:3000'],
     links=['http://localhost:3000'])
 k8s_resource('prometheus', labels=['observability'], port_forwards=['9090:9090'],
@@ -246,11 +250,13 @@ if dev_mode == 'fast':
             'REPORTING_CLICKHOUSE_ADDR=127.0.0.1:9010 ' +
             'REPORTING_CLICKHOUSE_BATCH_CONSUMER=true ' +
             'REPORTING_ROLLUP_ENABLED=true ' +
+            'BILLING_LEDGER_BACKEND=tigerbeetle ' +
+            'BILLING_TIGERBEETLE_ADDRESSES=127.0.0.1:3033 ' +
             './bin/reporting',
         serve_dir='.',
         deps=['cmd/reporting', 'pkg/'],
         labels=['services'],
-        resource_deps=['nats', 'postgres', 'clickhouse'],
+        resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle'],
         readiness_probe=ready(8086))
 
 else:
