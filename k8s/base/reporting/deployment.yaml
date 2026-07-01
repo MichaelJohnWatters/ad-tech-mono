@@ -1,9 +1,7 @@
-# Reporting — CGO-enabled (DuckDB driver). Uses build/Dockerfile.reporting
-# which does `go build` inside the image (not Dockerfile.dev's pre-built
-# binary pattern), since cross-compiling CGO from macOS to Linux/musl is
-# painful. Trade-off: live_update doesn't apply; iteration requires a
-# full image rebuild (~30-60s vs ~3s for the others). Acceptable since
-# reporting isn't edited often.
+# Reporting — CGO-free pod (ADR 0004 P3). The default build (no `duckdb` tag)
+# uses the pure-Go ClickHouse driver + memory fallback, so it builds like every
+# other service via build/Dockerfile.dev with live_update. Analytics/billing
+# config lives here in the env, using in-cluster service DNS.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,6 +40,22 @@ spec:
               value: "http://loki:3100"
             - name: OTEL_ENDPOINT
               value: "jaeger:4318"
+            - name: REDIS_URL
+              value: "redis:6379"
+            # Analytics: ClickHouse event store + batched consumer + rollups
+            - name: REPORTING_ANALYTICS_BACKEND
+              value: "clickhouse"
+            - name: REPORTING_CLICKHOUSE_ADDR
+              value: "clickhouse:9000"
+            - name: REPORTING_CLICKHOUSE_BATCH_CONSUMER
+              value: "true"
+            - name: REPORTING_ROLLUP_ENABLED
+              value: "true"
+            # Billing: durable TigerBeetle ledger
+            - name: BILLING_LEDGER_BACKEND
+              value: "tigerbeetle"
+            - name: BILLING_TIGERBEETLE_ADDRESSES
+              value: "tigerbeetle:3000"
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits:   { cpu: 1000m, memory: 512Mi }

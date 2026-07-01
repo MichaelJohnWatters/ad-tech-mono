@@ -235,14 +235,16 @@ if dev_mode == 'fast':
         port_forwards=['8080:8080', '8443:8443'], labels=['services'],
         links=['https://localhost:8443', 'https://localhost:8443/dev/publisher-simulator', 'http://localhost:8080', 'http://gateway.adtech.local'])
 
-    # ---- Reporting (STAYS LOCAL — CGO cross-compile blocker) ----
+    # ---- Reporting (STAYS LOCAL) ----
+    # NOTE (ADR 0004 P3): reporting can't use the CGO-free Dockerfile.dev pod
+    # pattern the other services use — it imports tigerbeetle-go (the durable
+    # billing ledger, ADR 0003 part D), which is CGO-only, so
+    # `CGO_ENABLED=0 go build ./cmd/reporting` fails. The pod path requires the
+    # in-image CGO build (build/Dockerfile.reporting) — viable but slower, no
+    # live_update, and needs live validation. Kept local for now; the pod
+    # manifest env (k8s/base/reporting/deployment.yaml) is ready for that switch.
     def ready(port):
         return probe(period_secs=2, http_get=http_get_action(port=port, path='/readyz'))
-    # Full-local analytics: ClickHouse is the event store (raw ingest + hot
-    # serving), consumed in bulk via the batched NATS consumer, with minute
-    # rollups on. Native protocol is forwarded to host :9010 (see above).
-    # Redis (optional) backs batch dedup; falls back to in-memory L2 if down.
-    # See docs/adr/0002-raw-data-pipeline.md.
     local_resource('reporting',
         cmd='go build -o ./bin/reporting ./cmd/reporting',
         serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ' +
