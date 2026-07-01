@@ -437,6 +437,26 @@ func (d *DuckDB) InsertRollups(ctx context.Context, rows []RollupRow) error {
 		return fmt.Errorf("begin rollup tx: %w", err)
 	}
 	now := time.Now()
+
+	// Idempotent by (config, level, window_from): clear any prior rows for the
+	// windows in this batch before inserting, so a re-run replaces rather than
+	// duplicates. Each rollup.runOne batch is a single window, but we handle
+	// the general case.
+	seen := map[string]bool{}
+	for _, r := range rows {
+		k := r.Config + "\x00" + r.Level + "\x00" + r.WindowFrom.Format(time.RFC3339Nano)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM rollups WHERE config = ? AND level = ? AND window_from = ?`,
+			r.Config, r.Level, r.WindowFrom); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("delete prior rollups: %w", err)
+		}
+	}
+
 	for _, r := range rows {
 		dims, err := json.Marshal(r.Dimensions)
 		if err != nil {

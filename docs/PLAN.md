@@ -15050,12 +15050,23 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 
 ---
 
-## Next Steps
+## Build Plan & Status (single source of truth)
 
-### Phase 1: Foundation (COMPLETE)
+> **This section is the continuous plan.** The 123 numbered steps are the
+> backlog; each phase carries a live status glyph; the **Build Status &
+> Outstanding Work** ledger at the end of this section is the one place that
+> tracks "plan vs reality" (it folds in the former `MOCK_AUDIT.md` and
+> `OUTSTANDING_WORK.md`, both deleted). Reconciled against disk 2026-07-01.
+>
+> **Status glyphs:** ✅ done · ⚠️ partial (library real but no runnable binary,
+> or serves but hardcoded) · ❌ empty shell / pure stub · ⬜ not started.
+> **Done = the named `tests/e2e/*_test.go` case flips from `t.Skip` to a passing
+> assertion**, where one exists.
+
+### ✅ Phase 1: Foundation (COMPLETE)
 1-11. Go module, clock, protos, K8s/Tilt, migrations, shared packages (logger, health, lifecycle, config), event bus + idempotent consumer, Postgres store + RLS, cache (L1+L2), currency, auth/RBAC.
 
-### Phase 2: Core Ad Serving + Dev Tools (First Ad Served)
+### ✅ Phase 2: Core Ad Serving + Dev Tools (First Ad Served)
 12. Build the Exchange - first-price auction engine, 5 strategies, deal priority, competitive separation, OpenRTB (win + loss notices)
 13. Build the DSP - IO/line item hierarchy, targeting with exclusions, bid modifiers, bid shading, pacing (even/ASAP/front-loaded), budget (reserve/settle)
 14. Build the SSP - placements, bid request generation (site + app + regs), quality controls, deals (PMP/PG/preferred), floor prices
@@ -15072,7 +15083,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 25. **Dev tools (Phase 2):** First e2e test: trace a single ad request through all services
 26. Set up observability stack (Prometheus, Grafana dashboards, Loki, Promtail, Jaeger)
 
-### Phase 3: Data and Reporting + Dashboards
+### ✅ Phase 3: Data and Reporting + Dashboards
 27. Implement `pkg/store/analytics/` (DuckDB + ClickHouse interface) with dual-write
 28. Build the Reporting service (unified with billing) - NATS consumer, analytics + billing writes atomically
 29. Implement universal rollup framework (`pkg/store/rollup/`)
@@ -15083,7 +15094,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 34. **Dev tools (Phase 3):** Grafana dashboards (metrics + logs + deployment annotations)
 35. **Dev tools (Phase 3):** Trace Explorer enhanced - add reporting/billing events to trace view
 
-### Phase 4: Billing and Finance
+### ✅ Phase 4: Billing and Finance
 36. Billing in reporting service - AuctionWinEvent consumer, reserve/settle for CPM/CPC/CPA/vCPM/CPCV
 37. Double-entry accounting ledger (`pkg/billing/ledger.go`)
 38. View-through conversion attribution with configurable windows
@@ -15094,7 +15105,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 43. **Dev tools (Phase 4):** Trace Explorer - add budget impact panel ("was $100, cost $3, now $97")
 44. **Dev tools (Phase 4):** Publisher Simulator - billing debug in overlay (cost per impression, billing model)
 
-### Phase 5: Identity, Privacy, and Audience
+### ⚠️ Phase 5: Identity, Privacy, and Audience  — serving-path done; steps 45, 50 outstanding (see ledger)
 45. `pkg/identity/` - platform ID, identity graph, cross-device linking
 46. Unified audience store (`pkg/audience/store/`) - Redis + Postgres, access-controlled
 47. Audience management - segments, lookalike audiences, composite segments, retargeting builders
@@ -15107,7 +15118,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 54. **Dev tools (Phase 5):** Publisher Simulator - add user profile switching, consent toggle, geo switching
 55. **Dev tools (Phase 5):** Audience debug in overlay (show user's segments, access-filtered per DSP)
 
-### Phase 6: Fraud and Quality
+### ⚠️ Phase 6: Fraud and Quality  — real-time done; steps 58, 61 outstanding (see ledger)
 56. Real-time fraud checks (`pkg/fraud/realtime.go`) - bot detection, IP blocklist, rate limiting
 57. Fraud scoring (`pkg/fraud/scoring.go`)
 58. Batch fraud detection (`cmd/fraud/` CronJob)
@@ -15116,7 +15127,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 61. Serve `sellers.json` from Gateway
 62. **Dev tools (Phase 6):** Publisher Simulator - fraud score in debug overlay per impression
 
-### Phase 7: Optimisation
+### ⚠️ Phase 7: Optimisation  — libs wired in-process; step 63 (cmd/optimise) outstanding (see ledger)
 63. Bid optimisation pipeline (`cmd/optimise/`) - shading curve updates, placement scoring
 64. Creative performance - multi-arm bandit, DCO component-level optimisation
 65. Auto-optimisation - budget reallocation across line items within IO
@@ -15125,7 +15136,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 68. Set up Python training environment (`python/`)
 69. **Dev tools (Phase 7):** Campaign recommendations in dashboard UI
 
-### Phase 8: Testing, Ops, and Infrastructure
+### ⚠️ Phase 8: Testing, Ops, and Infrastructure  — steps 76, 77 outstanding; 70–72 thin (see ledger)
 70. Programmable simulator (`pkg/simulator/`) - Go library + HTTP API + CLI
 71. k6 performance test scripts (`tests/k6/`)
 72. Chaos testing framework (`pkg/chaos/`) + chaos profiles
@@ -15138,7 +15149,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 79. Audit log dashboard
 80. Stress + burst simulation profiles
 
-### Phase 9: Video, Audio, and Extended Channels (each with simulator template)
+### ⬜ Phase 9: Video, Audio, and Extended Channels (each with simulator template)  — not started
 81. OpenRTB `video` and `audio` objects in bid requests
 82. VAST 4.2 XML generation + DAAST for audio
 83. VMAP with pre-roll/mid-roll/post-roll scheduling
@@ -15159,14 +15170,14 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 98. In-game: rewarded ad verification, intrinsic billboard viewability, batch auctions
 99. **+ Publisher Simulator:** `game_scene` template (billboards + rewarded prompt)
 
-### Phase 10: Clean Rooms and Data Marketplace
+### ⬜ Phase 10: Clean Rooms and Data Marketplace  — not started
 100. Clean room computation engine (`pkg/cleanroom/`)
 101. Clean room isolated job runner (`cmd/cleanroom/`)
 102. Data marketplace - listings, expansion estimates, purchase flow
 103. Data bartering - proposals, fairness scoring, mutual activation
 104. Marketplace billing - CPM surcharge tracking, data provider payouts
 
-### Phase 11: Business Operations
+### ⬜ Phase 11: Business Operations  — not started
 105. Account closure and data export workflow
 106. adtech.js SDK versioning and CDN deployment pipeline
 107. Public status page
@@ -15176,7 +15187,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 111. Data residency controls
 112. External partner onboarding portal (sandbox, test endpoint, certification)
 
-### Phase 12: CI/CD and Production Readiness
+### ⬜ Phase 12: CI/CD and Production Readiness  — not started
 113. `ci.yml` - PR pipeline (lint, test, build, e2e, conditional A/B)
 114. `nightly.yml` - full nightly (build, test, perf, chaos, security, summary)
 115. `deploy-staging.yml` - auto-deploy on merge
@@ -15190,6 +15201,79 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 123. Final e2e testing with all simulation profiles + chaos scenarios
 
 ### Rule: every channel ships with its simulator template in the same PR.
+
+---
+
+## Build Status & Outstanding Work
+
+> Single source of truth for **plan vs reality** (folded from the former
+> `MOCK_AUDIT.md` + `OUTSTANDING_WORK.md`). Reconciled against disk 2026-07-01.
+
+**Reality vs the phase claims.** Phases 1–8 above are marked done, and that is
+true for the **synchronous serving spine** (SSP → Exchange → DSP → Ad Server →
+Tracker → Reporting) plus persistence (analytics, rollups, datalake, billing
+ledger) and security (secrets-at-rest, JWT). It **overstates the async / cron /
+compliance edges**: nothing in an e2e ad-trace touches them, so several were
+declared done on the strength of the hot path. Rule of thumb when picking up:
+**anything scheduled, batch, or outward-facing is the least likely to be real.**
+
+### Outstanding items (keyed by step #)
+
+| Step | Item | State | Where / seam | Done when |
+|---|---|---|---|---|
+| 45 | Identity graph wired into serving | ⚠️ in-memory, tests only | `pkg/identity/*.go`; add `identity_edges` table + warm cache in DSP/exchange | e2e asserts cross-device resolve affects targeting |
+| 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ❌ empty (`.gitkeep`) | reuse RLS tenant-tx from `pkg/audience/store/postgres`; `opt_out_registry` exists | `privacy_test.go` deletion-propagation flips |
+| 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven | F-series batch-sweep assertion |
+| 61 | `sellers.json` from DB | ⚠️ serves 4 hardcoded pubs | `cmd/gateway/main.go:203`; source from `publishers` warm cache | adding a publisher changes output, no code change |
+| 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
+| 76 | `cmd/webhooks` dispatcher | ❌ empty (`.gitkeep`+CLAUDE) | `pkg/events` subjects + reserved `webhook_subs` invalidate | subscribed endpoint receives a signed event |
+| 77 | `pkg/email` real SMTP + Mailpit | ❌ `Send()` only logs | `pkg/email/email.go:78`; add `net/smtp` + Mailpit to the stack | test reads a message out of Mailpit |
+| 70–72 | `pkg/simulator` / `tests/k6` / `pkg/chaos` | ⚠️ 1 file each (thin) | build `harness.ChaosKill*` first (see harness debt) | chaos/perf e2e cases flip |
+
+**Sub-items still open on things marked ✅** (not blockers): analytics `/debug`
+read-backs are memory-only; rollup query API doesn't read by tier;
+`cmd/pipeline` datalake worker + compaction; ClickHouse flip to local default +
+batch inserts; bind audience upload to JWT not body; two-key JWT rotation +
+seed a dev signing key.
+
+**Recently closed** (2026-07-01): TigerBeetle OOM crashloop (4Gi limit);
+gateway→exchange traceparent propagation (one trace_id end-to-end); rollup
+re-runs now idempotent (replace-by-window on all three backends); tracker reads
+`X-Forwarded-For` (IP-block e2e flipped); trace-explorer batch-reconciliation view.
+
+### Do NOT "fix" these — deliberate, not defects
+
+- 🟢 **Resilience fallbacks** (real path runs by default; stand-in triggers only
+  when infra is down): Redis L2 → `MemoryL2`; object store `s3` → `fs`; NATS →
+  HTTP bridge to reporting; Postgres warm caches → YAML / empty; config poll →
+  env → code defaults. *Prod caveat:* these are **fail-open** (freq-cap / dedup /
+  pacing mis-count if Redis is down) — for prod, make Redis a readiness
+  requirement so a cache-less pod drops out of rotation.
+- 🟡 **Intentional simulation:** competitor DSP `noise_pct` / `no_bid_rate`
+  (`cmd/dsp/main.go`) is the demo market generator.
+- `cmd/rollup` is empty but the rollup engine runs inside `cmd/reporting` — a
+  standalone binary may never be needed. `cmd/{ssai,transcoder,cleanroom}` are
+  empty because they are Phase 9/10 (correctly not started).
+
+### Test-harness debt (skips are missing helpers, not missing features)
+
+`pkg/billing` tiered-RS / guaranteed-minimum / deal-type / multi-currency are
+implemented but untestable until: `harness.ChaosKill{NATS,Redis,Postgres,Minio}`
+(4 chaos tests); a contract-write helper seeding `publishers.revshare_config`
+(4 billing tests); a bulk-auction helper + low-TTL config knob (tiered-RS,
+reservation-expiry); an `exchange_rates` seed + non-USD campaign
+(multi-currency); a Jaeger client wrapper + single-step migration mode
+(observability / migration).
+
+### Suggested pickup order
+
+1. `harness.ChaosKill*` helpers (72) — unblocks ~13 skipped e2e cases at once.
+2. SMTP + Mailpit (77) — small, removes a P2 stub.
+3. `sellers.json` from DB (61) — small, removes a hardcode.
+4. `cmd/webhooks` (76) — clear seam, customer-visible.
+5. `cmd/privacy-delete` / `-verify` (50) — compliance-critical, unblocks step 105.
+6. `cmd/fraud` + `cmd/optimise` CronJobs (58/63) — wrap existing libs.
+7. Identity-graph wiring (45) — lowest urgency, nothing depends on it.
 
 ---
 

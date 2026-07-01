@@ -286,12 +286,30 @@ func (c *ClickHouse) InsertBudgetDepletion(b BudgetDepletion) {
 		b.CampaignID, b.AccountID, b.Budget, b.Spent, sig(b.Timestamp))
 }
 
-// InsertRollups persists aggregated rollup rows (RollupWriter).
+// InsertRollups persists aggregated rollup rows (RollupWriter). Idempotent by
+// (config, level, window_from): a re-run replaces the window's prior rows via
+// a lightweight DELETE (GA in ClickHouse ≥23.3) before inserting, matching the
+// memory/DuckDB backends so retries/overlapping schedules don't double-count.
 func (c *ClickHouse) InsertRollups(ctx context.Context, rows []RollupRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	now := time.Now()
+
+	seen := map[string]bool{}
+	for _, r := range rows {
+		k := r.Config + "\x00" + r.Level + "\x00" + r.WindowFrom.Format(time.RFC3339Nano)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if _, err := c.db.ExecContext(ctx,
+			`DELETE FROM rollups WHERE config = ? AND level = ? AND window_from = ?`,
+			r.Config, r.Level, r.WindowFrom); err != nil {
+			return fmt.Errorf("delete prior rollups: %w", err)
+		}
+	}
+
 	for _, r := range rows {
 		dims, err := json.Marshal(r.Dimensions)
 		if err != nil {
