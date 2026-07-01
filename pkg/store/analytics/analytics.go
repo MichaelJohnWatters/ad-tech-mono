@@ -95,6 +95,20 @@ type RollupWriter interface {
 
 var _ RollupWriter = (*MemoryStore)(nil)
 
+// RollupReader reads back persisted rollup rows for a (config, level) whose
+// window overlaps [from, to]. It's the read side of the rollup framework: the
+// reporting builder's tiered-read path (AutoTier) selects a tier via
+// TierForRange and re-aggregates these rows instead of scanning raw events.
+// Implemented by MemoryStore, ClickHouse and DuckDB (all persist rollups).
+type RollupReader interface {
+	QueryRollups(ctx context.Context, config, level string, from, to time.Time) ([]RollupRow, error)
+}
+
+var (
+	_ RollupReader = (*MemoryStore)(nil)
+	_ RollupReader = (*ClickHouse)(nil)
+)
+
 // BatchInserter is the bulk write path — one call inserts many rows of a
 // single event type as one atomic block. It's the ingest primitive behind
 // the reporting service's NATS batch consumer: a JetStream fetch of N

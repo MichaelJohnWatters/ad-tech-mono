@@ -9,7 +9,10 @@ import "context"
 // single sql.Tx / appender for true bulk speed; parity is what the reporting
 // batch consumer needs on this backend today.
 
-var _ BatchInserter = (*DuckDB)(nil)
+var (
+	_ BatchInserter = (*DuckDB)(nil)
+	_ RollupReader  = (*DuckDB)(nil)
+)
 
 func (d *DuckDB) InsertImpressions(ctx context.Context, es []*ImpressionEvent) error {
 	for _, e := range es {

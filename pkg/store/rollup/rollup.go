@@ -64,10 +64,15 @@ type Config struct {
 }
 
 // EventsConfig is the standard rollup for impression/click/conversion events.
+//
+// account_id and publisher_id are in the dimension set so the tiered read path
+// (reporting.Builder.AutoTier) can serve tenant-scoped reports — every
+// advertiser report filters by account_id, every publisher report by
+// publisher_id — directly from rollups instead of falling back to raw.
 var EventsConfig = Config{
 	Name:       "events",
 	Source:     "impressions",
-	Dimensions: []string{"campaign_id", "creative_id", "placement_id", "geo", "device"},
+	Dimensions: []string{"account_id", "publisher_id", "campaign_id", "creative_id", "placement_id", "geo", "device"},
 	Metrics:    []string{"count", "sum_cost"},
 	Retention:  StandardRetention,
 }
@@ -83,13 +88,13 @@ var AuctionsConfig = Config{
 
 // Result holds the outcome of a rollup execution.
 type Result struct {
-	Config     string
-	Level      Level
-	WindowFrom time.Time
-	WindowTo   time.Time
-	RowsRead   int
+	Config      string
+	Level       Level
+	WindowFrom  time.Time
+	WindowTo    time.Time
+	RowsRead    int
 	RowsWritten int
-	Duration   time.Duration
+	Duration    time.Duration
 }
 
 // Engine runs rollup aggregations against the analytics store.

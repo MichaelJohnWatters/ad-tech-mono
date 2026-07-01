@@ -424,6 +424,28 @@ func (s *MemoryStore) InsertRollups(_ context.Context, rows []RollupRow) error {
 	return nil
 }
 
+// QueryRollups returns stored rollup rows for (config, level) whose window
+// overlaps [from, to] (RollupReader). Zero from/to means unbounded on that
+// side. Returns copies so callers can't mutate the store's slice.
+func (s *MemoryStore) QueryRollups(_ context.Context, config, level string, from, to time.Time) ([]RollupRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []RollupRow
+	for _, r := range s.rollups {
+		if r.Config != config || r.Level != level {
+			continue
+		}
+		if !to.IsZero() && !r.WindowFrom.Before(to) {
+			continue // window starts at/after the range end
+		}
+		if !from.IsZero() && !r.WindowTo.After(from) {
+			continue // window ends at/before the range start
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // RollupCount returns how many rollup rows have been stored for a given
 // (config, level). Used by tests/ops to verify the rollup engine wrote.
 func (s *MemoryStore) RollupCount(config string, level string) int {
