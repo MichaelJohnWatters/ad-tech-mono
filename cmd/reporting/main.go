@@ -296,6 +296,30 @@ func main() {
 			json.NewEncoder(w).Encode(stats)
 		})
 
+		// Creative warm-start source (ADR 0003 part C): per-creative
+		// impressions+clicks the ad server fetches on boot to seed its bandit.
+		mux.HandleFunc("/debug/creative/stats", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			agg, ok := store.(analytics.CreativeStatAggregator)
+			if !ok {
+				http.Error(w, `{"error":"backend does not aggregate creative stats"}`, http.StatusNotImplemented)
+				return
+			}
+			hours := 24
+			if h := r.URL.Query().Get("since_hours"); h != "" {
+				if n, err := strconv.Atoi(h); err == nil && n > 0 {
+					hours = n
+				}
+			}
+			stats, err := agg.CreativeStats(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
+			if err != nil {
+				log.Error("creative stats query failed", "error", err)
+				http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(stats)
+		})
+
 		// Billing ledger reset — wipes in-memory ledger entries so e2e
 		// billing tests can run in isolation. No-op on TigerBeetle backend
 		// (the type assertion fails and we return reset=false).

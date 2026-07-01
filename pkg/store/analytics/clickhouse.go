@@ -480,6 +480,32 @@ func (c *ClickHouse) queryEventsMV(ctx context.Context, level string, from, to t
 	return out, rows.Err()
 }
 
+// CreativeStats aggregates impressions + clicks per creative since a cutoff
+// (CreativeStatAggregator) — the ad server's bandit warm-start source. Two
+// GROUP BYs joined on creative_id so a creative with impressions but no clicks
+// still appears.
+func (c *ClickHouse) CreativeStats(ctx context.Context, since time.Time) ([]CreativeStat, error) {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT creative_id, sum(imps) AS imps, sum(clk) AS clk FROM (
+			SELECT creative_id, count() AS imps, 0 AS clk FROM impressions WHERE timestamp >= ? GROUP BY creative_id
+			UNION ALL
+			SELECT creative_id, 0 AS imps, count() AS clk FROM clicks WHERE timestamp >= ? GROUP BY creative_id
+		) GROUP BY creative_id`, since, since)
+	if err != nil {
+		return nil, fmt.Errorf("creative stats: %w", err)
+	}
+	defer rows.Close()
+	var out []CreativeStat
+	for rows.Next() {
+		var s CreativeStat
+		if err := rows.Scan(&s.CreativeID, &s.Impressions, &s.Clicks); err != nil {
+			return nil, fmt.Errorf("scan creative stat: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // DSPCallStats aggregates dsp_calls per (channel, endpoint) since a cutoff
 // (DSPCallAggregator) — the exchange's routing warm-start source.
 func (c *ClickHouse) DSPCallStats(ctx context.Context, since time.Time) ([]DSPCallStat, error) {

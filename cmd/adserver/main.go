@@ -4,9 +4,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -111,6 +111,10 @@ func main() {
 	// Bandit warm-start: use whatever creatives loaded into the metadata cache
 	creativeIDs := resolver.ListIDs()
 	bandit := optimise.NewBandit(creativeIDs)
+	// Seed the bandit's arms from reporting's historical per-creative CTR so a
+	// restart doesn't reset every creative to a uniform prior (ADR 0003 part C).
+	// Async + fail-open — never blocks boot, never touches the serve hot path.
+	go warmStartBandit(cfg, bandit, log)
 
 	metrics := middleware.NewMetrics(constants.ServiceAdServer)
 

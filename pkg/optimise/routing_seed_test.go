@@ -22,3 +22,26 @@ func TestSmartRouter_SeedDrivesRouting(t *testing.T) {
 		t.Errorf("dspB (unseen, neutral) should be included, got %v", got)
 	}
 }
+
+// SeedArm sets the Beta posterior from historical CTR: a proven high-CTR
+// creative gets a strong prior, an unseen one stays uniform.
+func TestBandit_SeedArm(t *testing.T) {
+	b := NewBandit([]string{"good", "bad", "fresh"})
+	b.SeedArm("good", 100, 40)    // 40% CTR
+	b.SeedArm("bad", 100, 1)      // 1% CTR
+	b.SeedArm("retired", 100, 50) // unknown arm — ignored
+
+	stats := map[string]ArmStats{}
+	for _, s := range b.Stats() {
+		stats[s.ID] = s
+	}
+	if stats["good"].Alpha != 41 || stats["good"].Beta != 61 {
+		t.Errorf("good arm posterior = a%v/b%v, want 41/61", stats["good"].Alpha, stats["good"].Beta)
+	}
+	if stats["fresh"].Alpha != 1 || stats["fresh"].Beta != 1 {
+		t.Errorf("fresh arm should stay uniform 1/1, got a%v/b%v", stats["fresh"].Alpha, stats["fresh"].Beta)
+	}
+	if _, ok := stats["retired"]; ok {
+		t.Errorf("unknown arm should not be created by SeedArm")
+	}
+}

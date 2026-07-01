@@ -341,6 +341,28 @@ var (
 	_ DSPCallAggregator = (*ClickHouse)(nil)
 )
 
+// CreativeStat is a per-creative impressions+clicks aggregate over a window —
+// the shape the ad server warm-starts its Thompson-sampling bandit from on boot
+// (ADR 0003 part C). No new event stream: derived from the impressions and
+// clicks already in the store.
+type CreativeStat struct {
+	CreativeID  string `json:"creative_id"`
+	Impressions int64  `json:"impressions"`
+	Clicks      int64  `json:"clicks"`
+}
+
+// CreativeStatAggregator returns per-creative impressions/clicks since a cutoff.
+// Implemented by ClickHouse and MemoryStore; consumed by the reporting
+// creative-stats endpoint the ad server warm-starts from. Optional capability.
+type CreativeStatAggregator interface {
+	CreativeStats(ctx context.Context, since time.Time) ([]CreativeStat, error)
+}
+
+var (
+	_ CreativeStatAggregator = (*MemoryStore)(nil)
+	_ CreativeStatAggregator = (*ClickHouse)(nil)
+)
+
 // DSPCallEvent is the analytics mirror of events.DSPCallEvent — one row per
 // DSP fan-out call in an auction (routing telemetry). Win attribution is by
 // join to auction_wins on trace_id, not a column here.

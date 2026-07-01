@@ -34,6 +34,32 @@ func NewBandit(armIDs []string) *Bandit {
 	return b
 }
 
+// SeedArm sets an arm's Beta posterior from historical impressions/clicks —
+// the boot warm-start (ADR 0003 part C) so a restarted ad server doesn't start
+// every creative from a uniform prior. Alpha = 1 + clicks (successes), Beta =
+// 1 + (impressions - clicks) (failures): the standard Beta posterior for a
+// Bernoulli CTR. Only seeds arms that already exist (built from the current
+// creative set) so retired creatives aren't resurrected. Pure in-memory — meant
+// to be called once at startup, before serving.
+func (b *Bandit) SeedArm(id string, impressions, clicks int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	arm, ok := b.arms[id]
+	if !ok {
+		return
+	}
+	if clicks > impressions {
+		clicks = impressions
+	}
+	arm.Impressions = impressions
+	arm.Clicks = clicks
+	arm.Alpha = 1 + float64(clicks)
+	arm.Beta = 1 + float64(impressions-clicks)
+	if arm.Beta < 1 {
+		arm.Beta = 1
+	}
+}
+
 // Select picks which creative to show using Thompson Sampling.
 // Each arm draws from its Beta distribution; highest sample wins.
 func (b *Bandit) Select() string {
