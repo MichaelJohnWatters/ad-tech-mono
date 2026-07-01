@@ -44,7 +44,7 @@ Degrees: **STUB** (returns canned data / no real path) · **SIMULATED** (struct-
 |---|---|---|---|---|
 | ~~C1~~ | Consent / opt-out enforcement | **DONE (DSP)** | `pkg/privacy/consent.go`, `cmd/dsp/main.go` | ✅ Opt-out registry warm cache in the DSP (`postgres.OptOutLoader` → `opt_out_registry`, NATS-invalidated), enforced on the bid path: `privacy.Evaluate` combines the registry level with OpenRTB regs (GDPR-no-consent / COPPA / US-privacy) → level 2/3 = no-bid, level 1 / reg signal = contextual-only (behavioural targeting stripped). `TestPrivacyOptOutBlocksServe` flipped from skip to a real assertion. **Remaining:** ad-server serve path doesn't check opt-outs (DSP no-bid already prevents the serve); regs-only contextual-downgrade lacks an e2e assertion (harness gap). |
 | C2 | Identity graph | SIMULATED | `pkg/identity/identity.go:51-58` | Link/Resolve logic is real but in-memory only (lost on restart) and not wired into any serving path — tests only. |
-| C3 | Audience segment write path | PARTIAL | `pkg/audience/store/postgres/postgres.go:1-12` | Read path fully wired; no production write API. Membership inserted only via seed / e2e raw SQL. |
+| ~~C3~~ | Audience segment write path | **DONE** | `pkg/audience/store/postgres/postgres.go`, `cmd/gateway/audiences.go` | ✅ Write methods `UpsertSegment`/`AddMembers` (RLS-scoped via a tenant tx, deterministic segment ID so re-uploads are idempotent) + a `POST /v1/api/audiences` CRM-upload endpoint on the gateway (operator-API-key auth), publishing `adtech.cache.invalidate.audience`. `TestAudienceUploadWritesMembers` covers create + idempotent re-upload. **Remaining:** bind account to the JWT instead of the body; wire DSP/SSP caches to subscribe to the invalidate (poll + `/debug/audience/refresh` cover freshness today); CSV/batch ingestion. |
 
 ### P1 — Fraud (only effective against baked-in lists)
 
@@ -109,7 +109,7 @@ Logic largely exists; this is wiring + persistence.
 
 - **C1 — Enforce consent/opt-out.** ✅ **Done (DSP).** `opt_out_registry` warm cache in the DSP (`postgres.OptOutLoader`, NATS-invalidated) + `privacy.Evaluate` gate on the bid path honouring the registry level and OpenRTB `regs`/`user.consent` (GDPR/COPPA/US-privacy). Level 2/3 → no-bid; level 1 or a reg signal → contextual-only. `TestPrivacyOptOutBlocksServe` now asserts it. **Open:** ad-server serve-path gate (belt-and-braces; DSP no-bid already blocks the serve) and an e2e assertion for the contextual-downgrade case.
 - **C2 — Persist the identity graph.** Add `identity_edges` table + Redis lookup + warm cache in DSP/exchange so `Resolve()` works cross-pod at auction time.
-- **C3 — Audience write API.** Endpoint/service for CRM uploads → `audience_segment_members` INSERT → publish `adtech.cache.invalidate.audience`.
+- **C3 — Audience write API.** ✅ **Done.** `UpsertSegment`/`AddMembers` (RLS tenant tx, idempotent) + `POST /v1/api/audiences` on the gateway → publishes `adtech.cache.invalidate.audience`. `TestAudienceUploadWritesMembers` asserts create + idempotent re-upload. **Open:** derive account from the JWT (currently body); DSP/SSP subscribe to the invalidate; CSV batch ingest.
 - **Done when:** `privacy_test.go` opt-out + consent tests pass; identity links survive restart; a CRM upload appears in DSP targeting within one invalidation cycle.
 
 ### Phase D — Fraud to DB (P1) `[F1, F2]`

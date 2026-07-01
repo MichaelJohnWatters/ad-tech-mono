@@ -39,6 +39,9 @@ const (
 	// by middleware.AuthAPIKey, not the JWT proxy chain — the Secrets
 	// tab in /dev/console drives this.
 	APISecrets = apiPrefix + "/api/secrets"
+	// APIAudiences is the CRM/audience upload endpoint (create segment +
+	// bulk-add members). POST only.
+	APIAudiences = apiPrefix + "/api/audiences"
 
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"

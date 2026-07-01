@@ -15,6 +15,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 )
 
 // Store reads audience segment memberships from Postgres.
@@ -74,4 +76,83 @@ WHERE m.user_id = $1 AND s.visibility = $2`
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// --- Write path (CRM upload / behavioural rollup / lookalike publish) ---
+//
+// Writes are account-scoped and RLS-enforced: each runs in a transaction
+// that sets app.current_account_id first, matching the tenant isolation the
+// read path relies on. In dev the DB role has BYPASSRLS so this is a no-op;
+// in prod the production role enforces the policy.
+
+// withTenant runs fn inside a transaction with the RLS tenant GUC set, so
+// INSERTs into account-scoped tables are admitted (and can't touch another
+// tenant's rows).
+func (s *Store) withTenant(ctx context.Context, accountID string, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("set tenant: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpsertSegment finds-or-creates a segment for (accountID, name) and returns
+// its deterministic ID (UUIDv5 over account+name, so re-uploading the same
+// named list targets the same segment rather than spawning duplicates).
+func (s *Store) UpsertSegment(ctx context.Context, accountID, name, typ, source, visibility string) (string, error) {
+	segmentID := idgen.Derive("segment", accountID+"/"+name)
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+INSERT INTO audience_segments (id, account_id, name, type, status, source, visibility, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'active', $5, $6, now(), now())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name, type = EXCLUDED.type, source = EXCLUDED.source,
+    visibility = EXCLUDED.visibility, updated_at = now()`
+		_, err := tx.ExecContext(ctx, q, segmentID, accountID, name, typ, source, visibility)
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("upsert segment %q: %w", name, err)
+	}
+	return segmentID, nil
+}
+
+// AddMembers bulk-inserts user memberships into a segment (idempotent) and
+// returns how many were newly added. The segment must belong to accountID.
+func (s *Store) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string) (int, error) {
+	if len(userIDs) == 0 {
+		return 0, nil
+	}
+	added := 0
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (segment_id, user_id) DO NOTHING`
+		for _, uid := range userIDs {
+			if uid == "" {
+				continue
+			}
+			res, err := tx.ExecContext(ctx, q, segmentID, uid, accountID)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				added++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("add members to %s: %w", segmentID, err)
+	}
+	return added, nil
 }
