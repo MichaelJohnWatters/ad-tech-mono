@@ -132,6 +132,44 @@ func TestClickHouse_BatchInsert(t *testing.T) {
 	}
 }
 
+// TestClickHouse_NativeMVRollup proves the SummingMergeTree materialized view
+// aggregates impressions on insert and that QueryRollups routes the events
+// hourly tier to it — count + sum_cost summed per (campaign) bucket.
+func TestClickHouse_NativeMVRollup(t *testing.T) {
+	ch := testCH(t)
+	defer ch.Close()
+	ctx := context.Background()
+	ts := time.Now().UTC()
+	acct := "mv-acct-" + ts.Format("150405.000")
+
+	es := make([]*ImpressionEvent, 4)
+	for i := range es {
+		es[i] = &ImpressionEvent{
+			TraceID: "mv", CampaignID: "c1", AccountID: acct, PublisherID: "pub1",
+			ClearingPriceUSD: 2.0, BidModel: "cpm", SchemaVersion: 1, Timestamp: ts,
+		}
+	}
+	if err := ch.InsertImpressions(ctx, es); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	rows, err := ch.QueryRollups(ctx, "events", "hourly", ts.Add(-time.Hour), ts.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("query rollups (MV): %v", err)
+	}
+	var count, sum float64
+	for _, r := range rows {
+		if r.Dimensions["account_id"] == acct && r.Dimensions["campaign_id"] == "c1" {
+			count += r.Metrics["count"]
+			sum += r.Metrics["sum_cost"]
+		}
+	}
+	if count != 4 || sum != 8.0 {
+		t.Fatalf("MV rollup for %s: count=%v sum_cost=%v, want 4 / 8.0", acct, count, sum)
+	}
+}
+
 func TestClickHouse_RollupsAndSignals(t *testing.T) {
 	ch := testCH(t)
 	defer ch.Close()

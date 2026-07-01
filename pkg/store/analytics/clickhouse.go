@@ -162,6 +162,35 @@ func (c *ClickHouse) createTables() error {
 			config String, level String, window_from DateTime64(3), window_to DateTime64(3),
 			dimensions String, metrics String, created_at DateTime64(3)
 		) ENGINE = MergeTree ORDER BY (config, level, window_from)`,
+
+		// Native, incrementally-maintained event rollups. SummingMergeTree
+		// target tables + materialized views collapse impressions into hourly
+		// and daily aggregates on insert — always fresh, no scheduler. The
+		// reporting read path (QueryRollups) prefers these for the events
+		// hourly/daily tiers; the app-side rollup engine still owns minute /
+		// monthly / auctions. Dimensions mirror rollup.EventsConfig.
+		// NB: MVs only capture rows inserted AFTER creation (insert-triggers);
+		// a fresh local stack starts empty, which is the intended dev flow.
+		`CREATE TABLE IF NOT EXISTS impressions_rollup_hourly (
+			hour DateTime, account_id String, publisher_id String, campaign_id String,
+			creative_id String, placement_id String, geo String, device String,
+			count UInt64, sum_cost Float64
+		) ENGINE = SummingMergeTree ORDER BY (hour, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device)`,
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS impressions_rollup_hourly_mv TO impressions_rollup_hourly AS
+			SELECT toStartOfHour(timestamp) AS hour, account_id, publisher_id, campaign_id, creative_id,
+				placement_id, geo, device, count() AS count, sum(clearing_price_usd) AS sum_cost
+			FROM impressions
+			GROUP BY hour, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device`,
+		`CREATE TABLE IF NOT EXISTS impressions_rollup_daily (
+			day DateTime, account_id String, publisher_id String, campaign_id String,
+			creative_id String, placement_id String, geo String, device String,
+			count UInt64, sum_cost Float64
+		) ENGINE = SummingMergeTree ORDER BY (day, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device)`,
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS impressions_rollup_daily_mv TO impressions_rollup_daily AS
+			SELECT toStartOfDay(timestamp) AS day, account_id, publisher_id, campaign_id, creative_id,
+				placement_id, geo, device, count() AS count, sum(clearing_price_usd) AS sum_cost
+			FROM impressions
+			GROUP BY day, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device`,
 	}
 	for _, stmt := range statements {
 		if _, err := c.db.Exec(stmt); err != nil {
@@ -356,9 +385,14 @@ func (c *ClickHouse) InsertRollups(ctx context.Context, rows []RollupRow) error 
 }
 
 // QueryRollups reads persisted rollup rows for (config, level) whose window
-// overlaps [from, to] (RollupReader), decoding the JSON dimension/metric
-// columns back into RollupRow.
+// overlaps [from, to] (RollupReader). For the events hourly/daily tiers it
+// reads the native SummingMergeTree materialized views (always-fresh,
+// maintained on insert); everything else reads the generic `rollups` table
+// populated by the app-side rollup engine.
 func (c *ClickHouse) QueryRollups(ctx context.Context, config, level string, from, to time.Time) ([]RollupRow, error) {
+	if config == "events" && (level == "hourly" || level == "daily") {
+		return c.queryEventsMV(ctx, level, from, to)
+	}
 	q := `SELECT config, level, window_from, window_to, dimensions, metrics FROM rollups WHERE config = ? AND level = ?`
 	args := []any{config, level}
 	if !to.IsZero() {
@@ -388,6 +422,55 @@ func (c *ClickHouse) QueryRollups(ctx context.Context, config, level string, fro
 			return nil, fmt.Errorf("decode rollup metrics: %w", err)
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// queryEventsMV reads the native impression rollup materialized view for the
+// given tier and maps each bucket to a RollupRow the builder re-aggregates
+// like any other rollup. SummingMergeTree rows may be partially merged, so we
+// GROUP BY + sum() to get the final per-bucket totals.
+func (c *ClickHouse) queryEventsMV(ctx context.Context, level string, from, to time.Time) ([]RollupRow, error) {
+	table, tcol, step := "impressions_rollup_hourly", "hour", time.Hour
+	if level == "daily" {
+		table, tcol, step = "impressions_rollup_daily", "day", 24*time.Hour
+	}
+	q := `SELECT ` + tcol + `, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device,
+		sum(count) AS count, sum(sum_cost) AS sum_cost FROM ` + table + ` WHERE 1=1`
+	args := []any{}
+	if !to.IsZero() {
+		q += ` AND ` + tcol + ` < ?`
+		args = append(args, to)
+	}
+	if !from.IsZero() {
+		// bucket_end = bucket_start + step must be after `from` to overlap.
+		q += ` AND ` + tcol + ` + INTERVAL ? SECOND > ?`
+		args = append(args, int64(step.Seconds()), from)
+	}
+	q += ` GROUP BY ` + tcol + `, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device`
+
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query events rollup MV: %w", err)
+	}
+	defer rows.Close()
+	var out []RollupRow
+	for rows.Next() {
+		var bucket time.Time
+		var accountID, publisherID, campaignID, creativeID, placementID, geo, device string
+		var count uint64
+		var sumCost float64
+		if err := rows.Scan(&bucket, &accountID, &publisherID, &campaignID, &creativeID, &placementID, &geo, &device, &count, &sumCost); err != nil {
+			return nil, fmt.Errorf("scan events rollup MV: %w", err)
+		}
+		out = append(out, RollupRow{
+			Config: "events", Level: level, WindowFrom: bucket, WindowTo: bucket.Add(step),
+			Dimensions: map[string]string{
+				"account_id": accountID, "publisher_id": publisherID, "campaign_id": campaignID,
+				"creative_id": creativeID, "placement_id": placementID, "geo": geo, "device": device,
+			},
+			Metrics: map[string]float64{"count": float64(count), "sum_cost": sumCost},
+		})
 	}
 	return out, rows.Err()
 }
