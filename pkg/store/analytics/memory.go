@@ -393,11 +393,34 @@ func (s *MemoryStore) AuctionWinByBidModel(traceID, bidModel string) int {
 	return n
 }
 
-// InsertRollups appends aggregated rollup rows. Implements RollupWriter.
+// InsertRollups persists aggregated rollup rows. Implements RollupWriter.
+// Idempotent by (config, level, window_from): re-running a rollup for the
+// same window REPLACES the prior rows for that window rather than
+// duplicating them — so a re-run (retry, overlapping schedule) doesn't
+// double-count. Each rollup.runOne batch is a single (config, level,
+// window), so this replaces exactly that window's rows.
 func (s *MemoryStore) InsertRollups(_ context.Context, rows []RollupRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rollups = append(s.rollups, rows...)
+
+	type winKey struct {
+		config, level string
+		from          int64
+	}
+	replacing := make(map[winKey]bool, len(rows))
+	for _, r := range rows {
+		replacing[winKey{r.Config, r.Level, r.WindowFrom.UnixNano()}] = true
+	}
+	kept := make([]RollupRow, 0, len(s.rollups))
+	for _, existing := range s.rollups {
+		if !replacing[winKey{existing.Config, existing.Level, existing.WindowFrom.UnixNano()}] {
+			kept = append(kept, existing)
+		}
+	}
+	s.rollups = append(kept, rows...)
 	return nil
 }
 

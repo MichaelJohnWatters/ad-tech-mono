@@ -178,3 +178,31 @@ func toInt64(v interface{}) (int64, bool) {
 		return 0, false
 	}
 }
+
+func TestDuckDB_RollupsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ridem.duckdb")
+	ctx := context.Background()
+	from := time.Date(2026, 7, 1, 13, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	d, err := NewDuckDB(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	batch := []RollupRow{
+		{Config: "events", Level: "hourly", WindowFrom: from, WindowTo: to, Dimensions: map[string]string{"campaign_id": "c1"}, Metrics: map[string]float64{"count": 60}},
+		{Config: "events", Level: "hourly", WindowFrom: from, WindowTo: to, Dimensions: map[string]string{"campaign_id": "c2"}, Metrics: map[string]float64{"count": 40}},
+	}
+	for i := 0; i < 3; i++ { // insert the same window 3 times
+		if err := d.InsertRollups(ctx, batch); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+	var n int
+	if err := d.db.QueryRow(`SELECT count(*) FROM rollups WHERE config='events' AND level='hourly'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("rollup rows after 3 identical inserts = %d, want 2 (idempotent)", n)
+	}
+}
