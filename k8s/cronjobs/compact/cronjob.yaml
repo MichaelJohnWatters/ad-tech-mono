@@ -1,0 +1,53 @@
+# Datalake compaction CronJob. Hourly (at :05, after the hour's minutely files
+# settle) it bin-packs each event table's small Parquet files into one and marks
+# the old ones removed in the Delta log — fixing the small-files problem that
+# frequent flushes create. Idempotent; a re-run is safe. Pure Go (CGO_ENABLED=0),
+# built from the shared Dockerfile with SERVICE=compact.
+#
+# Not yet added to a kustomization overlay — apply directly, or wire into an
+# overlay when the cron manifests are activated as a group.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: datalake-compact
+  labels:
+    app: datalake-compact
+    component: pipeline
+spec:
+  schedule: "5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app: datalake-compact
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: compact
+              image: adtech-compact
+              env:
+                - name: POD_NAME
+                  value: "compact"
+                - name: S3_ENDPOINT
+                  value: "http://minio:9000"
+                - name: S3_ACCESS_KEY
+                  value: "adtech"
+                - name: S3_SECRET_KEY
+                  value: "adtech-local-dev"
+                - name: PIPELINE_DATALAKE_BUCKET
+                  value: "adtech-datalake"
+                - name: LOKI_URL
+                  value: "http://loki:3100"
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"

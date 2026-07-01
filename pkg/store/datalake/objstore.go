@@ -211,6 +211,107 @@ func (o *ObjectStore) Snapshot(ctx context.Context, table string) (*TableSnapsho
 	}, nil
 }
 
+// CompactResult reports what a Compact pass did.
+type CompactResult struct {
+	Table       string
+	FilesBefore int
+	FilesAfter  int
+	Rows        int
+}
+
+// Compact bin-packs a table's active Parquet files into a single consolidated
+// file, marking the old files removed in the Delta log — fixing the small-files
+// problem that minutely flushes create. Row content is unchanged (this is
+// file-level compaction, not aggregation): a Read before and after returns the
+// same records. Idempotent: with ≤1 active file it's a no-op. Holds the write
+// lock so it's atomic w.r.t. concurrent writes (single-writer model).
+func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	txns, err := o.Log(ctx, table)
+	if err != nil {
+		return CompactResult{}, err
+	}
+	active := map[string]bool{}
+	var schema Schema
+	haveSchema := false
+	for _, t := range txns {
+		if t.Schema != nil {
+			schema = *t.Schema
+			haveSchema = true
+		}
+		switch t.Action {
+		case "add":
+			active[t.Path] = true
+		case "remove":
+			delete(active, t.Path)
+		}
+	}
+	res := CompactResult{Table: table, FilesBefore: len(active), FilesAfter: len(active)}
+	if len(active) <= 1 || !haveSchema {
+		return res, nil // nothing to compact (or no schema recorded yet)
+	}
+
+	paths := make([]string, 0, len(active))
+	for p := range active {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	var records []Record
+	for _, p := range paths {
+		recs, err := o.readParquet(ctx, p)
+		if err != nil {
+			return res, fmt.Errorf("read %s: %w", p, err)
+		}
+		records = append(records, recs...)
+	}
+
+	// Write the consolidated file at the next version, then remove the old
+	// files in subsequent log entries. Snapshot/Read replay handles the rest.
+	version := len(txns)
+	parquetBytes, err := o.encodeParquet(records, schema)
+	if err != nil {
+		return res, fmt.Errorf("encode parquet: %w", err)
+	}
+	pKey := parquetKey(table, version)
+	if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+		return res, fmt.Errorf("put compacted parquet: %w", err)
+	}
+	if err := o.putTxn(ctx, table, version, Transaction{
+		Version: version, Timestamp: time.Now().UTC(), Action: "add",
+		Path: pKey, NumRows: len(records), ByteSize: int64(len(parquetBytes)),
+	}); err != nil {
+		return res, err
+	}
+	v := version + 1
+	for _, p := range paths {
+		if err := o.putTxn(ctx, table, v, Transaction{
+			Version: v, Timestamp: time.Now().UTC(), Action: "remove", Path: p,
+		}); err != nil {
+			return res, err
+		}
+		v++
+	}
+
+	res.FilesAfter = 1
+	res.Rows = len(records)
+	o.log.Info("datalake compact", "table", table, "files_before", res.FilesBefore, "files_after", 1, "rows", res.Rows)
+	return res, nil
+}
+
+func (o *ObjectStore) putTxn(ctx context.Context, table string, version int, txn Transaction) error {
+	b, err := json.Marshal(txn)
+	if err != nil {
+		return fmt.Errorf("marshal txn: %w", err)
+	}
+	if err := o.obj.Put(ctx, o.bucket, deltaLogKey(table, version), bytes.NewReader(b), int64(len(b)), "application/json"); err != nil {
+		return fmt.Errorf("put delta log v%d: %w", version, err)
+	}
+	return nil
+}
+
 func (o *ObjectStore) Close() error { return nil }
 
 func (o *ObjectStore) getAll(ctx context.Context, key string) ([]byte, error) {
