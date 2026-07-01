@@ -47,6 +47,11 @@ spec:
           args:
             - "start"
             - "--addresses=0.0.0.0:3000"
+            # Local dev: shrink the grid cache from its 1 GiB default so the
+            # whole process fits under the container memory limit. Without
+            # this TB's startup allocation exceeds 2 GiB and gets OOMKilled
+            # (exit 137) in a tight crash loop. Prod overlays can raise it.
+            - "--cache-grid=256MiB"
             - "/data/0_0.tigerbeetle"
           ports:
             - containerPort: 3000
@@ -57,10 +62,13 @@ spec:
           resources:
             requests:
               cpu: "100m"
-              memory: "256Mi"
+              memory: "512Mi"
             limits:
               cpu: "1000m"
-              memory: "2Gi"
+              # TB statically pre-allocates its memory up front; even with a
+              # 256MiB grid cache the baseline exceeds 2 GiB and OOMKills.
+              # 4Gi gives headroom (the local VM has 24 GiB).
+              memory: "4Gi"
           # TB has no HTTP health endpoint. Use a TCP probe on the
           # listening port — if it accepts a connection the binary is up.
           livenessProbe:
