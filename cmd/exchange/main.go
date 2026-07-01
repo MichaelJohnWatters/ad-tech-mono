@@ -150,6 +150,9 @@ func main() {
 	router := optimise.NewSmartRouter()
 	routerMinCalls := cfg.GetInt("exchange.routing_min_calls", 20)
 	_ = routerMinCalls // SmartRouter uses 20 as a hardcoded threshold today
+	// Warm-start routing from reporting's dsp_calls history (ADR 0003) so a
+	// restarted exchange isn't cold. Async + fail-open — never blocks boot.
+	go warmStartRouter(cfg, router, log)
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())

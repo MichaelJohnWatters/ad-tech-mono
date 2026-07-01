@@ -8,10 +8,10 @@ import (
 
 func TestIsIABViewable(t *testing.T) {
 	cases := []struct {
-		name           string
-		durMs          int64
-		pct            int
-		areaPx         int64
+		name            string
+		durMs           int64
+		pct             int
+		areaPx          int64
 		wantIABViewable bool
 	}{
 		{"below time threshold", 999, 100, 0, false},
@@ -386,5 +386,37 @@ func TestBuildQuery(t *testing.T) {
 				t.Errorf("\ngot:  %s\nwant: %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMemory_DSPCallStats(t *testing.T) {
+	s := NewMemory()
+	ctx := context.Background()
+	now := time.Now()
+	if err := s.InsertDSPCalls(ctx, []*DSPCallEvent{
+		{Channel: "display", DSPEndpoint: "d1", BidReceived: true, BidPriceUSD: 2.0, LatencyMs: 10, Timestamp: now},
+		{Channel: "display", DSPEndpoint: "d1", BidReceived: false, LatencyMs: 20, TimedOut: true, Timestamp: now},
+		{Channel: "display", DSPEndpoint: "d2", BidReceived: true, BidPriceUSD: 4.0, LatencyMs: 30, Timestamp: now},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	stats, err := s.DSPCallStats(ctx, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	var d1 DSPCallStat
+	for _, st := range stats {
+		if st.DSPEndpoint == "d1" {
+			d1 = st
+		}
+	}
+	if d1.TotalCalls != 2 || d1.TotalBids != 1 || d1.TotalTimeouts != 1 {
+		t.Errorf("d1 aggregate = %+v, want calls=2 bids=1 timeouts=1", d1)
+	}
+	if d1.AvgBidUSD != 2.0 {
+		t.Errorf("d1 avg bid = %v, want 2.0 (avg over bids only)", d1.AvgBidUSD)
+	}
+	if d1.AvgLatencyMs != 15.0 {
+		t.Errorf("d1 avg latency = %v, want 15.0 (avg over all calls)", d1.AvgLatencyMs)
 	}
 }
