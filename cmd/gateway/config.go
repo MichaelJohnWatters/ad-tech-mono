@@ -11,7 +11,8 @@ import (
 // otherwise owns very few knobs — most behaviour is delegated to the
 // services it proxies.
 var gatewaySchema = []config.SchemaEntry{
-	{Key: "gateway.jwt_signing_key", Type: "string", Tier: config.TierSecret, Default: "", Description: "Secret used to sign and verify JWTs. Empty value = dev mode (auth bypassed). Set via K8s Secret in non-dev environments.", Service: constants.ServiceGateway, Since: "v1.0"},
+	{Key: "gateway.jwt_signing_key", Type: "string", Tier: config.TierSecret, Default: "", Description: "Fallback JWT signing key. Prefer an active jwt_signing secret in the secrets store (rotatable); this config key is the legacy/override path. Empty here AND no secret = auth bypassed (dev only — see gateway.require_auth).", Service: constants.ServiceGateway, Since: "v1.0"},
+	{Key: "gateway.require_auth", Type: "bool", Tier: config.TierStatic, Default: "false", Description: "When true, the gateway refuses to boot unless a JWT signing key is available (from the secrets store or gateway.jwt_signing_key) — i.e. the dev auth-bypass is forbidden. Set true in staging/prod overlays so a missing key fails loud instead of silently granting admin to every request.", Service: constants.ServiceGateway, Since: "v1.3"},
 	{Key: "gateway.dsp_url", Type: "string", Tier: config.TierStatic, Default: "http://localhost:8082", Description: "Internal DSP service URL the gateway proxies to for /v1/api/campaigns/*.", Service: constants.ServiceGateway, Since: "v1.0"},
 	{Key: "gateway.ssp_url", Type: "string", Tier: config.TierStatic, Default: "http://localhost:8084", Description: "Internal SSP service URL the gateway proxies to for /v1/api/placements/*.", Service: constants.ServiceGateway, Since: "v1.0"},
 	{Key: "gateway.adserver_url", Type: "string", Tier: config.TierStatic, Default: "http://localhost:8085", Description: "Internal ad server URL the gateway proxies to for /v1/api/creatives/*.", Service: constants.ServiceGateway, Since: "v1.0"},

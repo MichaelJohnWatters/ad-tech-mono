@@ -122,6 +122,22 @@ func (c *Cache) LookupActiveByName(name string) (Secret, bool) {
 	return Secret{}, false
 }
 
+// LookupActiveByPurpose returns the active (canonical) secret for a given
+// purpose, e.g. the JWT signing key (purpose=jwt_signing). When several are
+// active it returns the first — callers that rotate should use distinct
+// names and LookupActiveByName, or accept "any active key for this purpose".
+func (c *Cache) LookupActiveByPurpose(purpose string) (Secret, bool) {
+	if c.Cache == nil {
+		return Secret{}, false
+	}
+	for _, s := range c.Cache.All() {
+		if s.Purpose == purpose && s.Status == StatusActive {
+			return s, true
+		}
+	}
+	return Secret{}, false
+}
+
 // pickLoader returns a PostgresLoader keyed by dbURL. The loader is
 // self-healing: it lazily opens the connection on first LoadAll and
 // re-opens on every poll if the existing connection is dead. So even

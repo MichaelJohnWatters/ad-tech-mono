@@ -77,7 +77,30 @@ func main() {
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	port := cfg.Get("gateway.port", routes.PortGateway)
+
+	// Secrets warm cache — the source of truth for the JWT signing key (and
+	// the operator API keys the /v1/api handlers validate). Started here (not
+	// at its later use site) so the signing key is resolved before the auth
+	// middleware is built. Start does a synchronous initial load, so an
+	// active jwt_signing secret in Postgres is available immediately.
+	secretsCache := secrets.Start(context.Background(), cfg, clock.Real{}, log, constants.ServiceGateway)
+	lc.OnShutdown("gateway-secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+
+	// JWT signing key precedence: active jwt_signing secret > config key >
+	// empty. Empty means the dev auth-bypass (every request gets admin
+	// claims) — allowed only when gateway.require_auth is false.
 	signingKey := cfg.Get("gateway.jwt_signing_key", "")
+	if sec, ok := secretsCache.LookupActiveByPurpose(secrets.PurposeJWTSigning); ok {
+		signingKey = sec.Value
+		log.Info("jwt signing key loaded from secrets store", "name", sec.Name)
+	}
+	if signingKey == "" {
+		if cfg.GetBool("gateway.require_auth", false) {
+			log.Error("gateway.require_auth=true but no JWT signing key is available (no active jwt_signing secret, empty gateway.jwt_signing_key); refusing to boot with auth bypassed")
+			os.Exit(1)
+		}
+		log.Warn("SECURITY: no JWT signing key configured — auth is BYPASSED, every request receives admin claims. Dev only; set a jwt_signing secret (or gateway.require_auth=true) in staging/prod.")
+	}
 
 	// Internal service URLs (configurable for staging/prod)
 	dspURL := cfg.Get("gateway.dsp_url", routes.DefaultDSPURL)
@@ -222,9 +245,8 @@ func main() {
 	// Secrets management API. Backed by the secrets warm cache for auth
 	// (same gate as DSP/SSP CRUD); writes fan out via NATS so every
 	// service's secrets cache refreshes sub-second. UI lives in the
-	// Secrets sub-tab of /dev/console.
-	secretsCache := secrets.Start(context.Background(), cfg, clock.Real{}, log, constants.ServiceGateway)
-	lc.OnShutdown("gateway-secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+	// Secrets sub-tab of /dev/console. (Cache started earlier, before the
+	// auth middleware, so it can supply the JWT signing key.)
 	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
 	secretsBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway+"-secrets-mgmt", log)
 	secretsAuth := middleware.AuthAPIKey(secretsCache, log)
