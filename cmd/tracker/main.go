@@ -142,7 +142,7 @@ func main() {
 
 		// Real-time fraud check
 		fraudResult := fraudChecker.Check(fraud.Request{
-			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+			IP: clientIP(r), UserAgent: r.UserAgent(),
 			TraceID: traceID, Referer: r.Referer(),
 		})
 		// Dev-mode override: publisher simulator can append ?dev_force_fraud=1
@@ -383,7 +383,7 @@ func main() {
 		}
 
 		fraudResult := fraudChecker.Check(fraud.Request{
-			IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+			IP: clientIP(r), UserAgent: r.UserAgent(),
 			TraceID: traceID, Referer: r.Referer(),
 		})
 		if fraudResult.Blocked {
