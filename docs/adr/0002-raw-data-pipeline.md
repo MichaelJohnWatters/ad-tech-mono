@@ -82,22 +82,24 @@ Lean summary: **log (JetStream) is the source of truth; ClickHouse is the hot ra
 live-dashboard store (batched); Parquet is the cold archive; DuckDB queries the archive for
 ad-hoc/historical work.**
 
-## Current state (what's built vs not — 2026-07-01)
+## Current state (what's built vs not — updated 2026-07-01, phases 1–5 landed)
 
 | Piece | State |
 |---|---|
 | Event log (NATS JetStream) | ✅ built |
-| Pipeline → minutely Parquet + Delta log (Minio) | ✅ built (`cmd/pipeline/datalake_sink.go`; flush interval configurable — set ~60s for minutely) |
-| Analytics store interface (memory / DuckDB / ClickHouse) | ✅ built; **default = `memory` (volatile, in reporting RAM)** |
-| ClickHouse backend + local pod | ✅ built + running (`:9010`), but **single-row inserts** (not batched) and **not the default** |
-| Rollup engine (minute→monthly), idempotent, scheduled | ✅ built (`pkg/store/rollup`, `cmd/reporting/rollup.go`; off by default) |
-| Trace Explorer (point lookup by trace_id) + batch reconciliation | ✅ built |
-| **ClickHouse minutely micro-batch writes** | ⬜ not built (needed before ClickHouse handles heavy write load) |
-| **Parquet compaction (minutely → hourly, aggregated)** | ⬜ not built |
-| **DuckDB-over-Parquet query surface (`read_parquet`)** | ⬜ not built (ADR 0001's DuckDB role) |
-| **Rollup read-by-tier** (query API reads `rollups` via `TierForRange`) | ⬜ stub (`pkg/reporting/builder.go`: `_ = tier`) |
-| Rollup → Parquet target (land rollups in the lake, not just the DB) | ⬜ not built |
-| Reporting as a normal pod (CGO-free now) / ClickHouse as local default | ⬜ not built (ADR 0001 roadmap) |
+| Pipeline → Parquet + Delta log (Minio) | ✅ built (`cmd/pipeline/datalake_sink.go`) |
+| Analytics store interface (memory / DuckDB / ClickHouse) | ✅ built; code default `memory` (CI/e2e); **local stack default = `clickhouse`** |
+| ClickHouse backend + local pod | ✅ built + running (`:9010`), **local default** |
+| **ClickHouse batched ingest** | ✅ built — consumer-level batch (`BatchInserter` + `SubscribeBatch`), one atomic block per fetch + Redis dedup (phase 1) |
+| **Rollup read-by-tier** | ✅ built — `reporting.Builder` reads rollups via `TierForRange`, raw fallback (phase 2) |
+| **ClickHouse-native rollups** | ✅ built — `SummingMergeTree` MVs (impressions hourly/daily), `QueryRollups` routes to them (phase 3) |
+| Rollup engine (minute→monthly), idempotent, scheduled | ✅ built; on in local overlay (owns minute/monthly/auctions; MVs own events hourly/daily) |
+| **Parquet cold-archive verification** | ✅ built — `/debug/datalake/snapshot` reconciles TotalRows to the event count (phase 4) |
+| **Parquet compaction** | ✅ built — `ObjectStore.Compact` bin-packs + Delta removes; `cmd/compact` CronJob (phase 5) |
+| **DuckDB-over-Parquet query surface** | ✅ built — `datalake.ParquetReader` (httpfs + `delta_scan`/`read_parquet`), build tag `duckdb` (phase 5) |
+| Trace Explorer (point lookup) + batch reconciliation | ✅ built |
+| Rollup → Parquet target (land rollups in the lake, not just the DB) | ⬜ not built (optional; MV + compaction cover the hot/cold aggregate needs) |
+| Reporting as a normal pod (CGO-free now) / ClickHouse as overlay default across envs | ⬜ not built (ADR 0001 roadmap; local runs clickhouse today) |
 
 ## Open question (resolve this to finalize)
 
