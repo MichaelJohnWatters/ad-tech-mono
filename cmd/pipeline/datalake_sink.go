@@ -146,6 +146,10 @@ var eventTables = map[string]struct {
 		str("placement_id"), str("publisher_id"), str("advertiser_id"), f64("clearing_price"),
 		str("currency"), str("bid_model"), str("deal_id"), str("channel"), ts("timestamp"),
 	}}},
+	events.SubjectDSPCall: {"dsp_calls", datalake.Schema{Version: 1, Columns: []datalake.Column{
+		str("trace_id"), str("auction_id"), str("channel"), str("dsp_endpoint"), boolC("bid_received"),
+		f64("bid_price_usd"), i64("latency_ms"), boolC("timed_out"), ts("timestamp"),
+	}}},
 }
 
 // datalakeSink buffers decoded events per table and flushes them to Parquet.

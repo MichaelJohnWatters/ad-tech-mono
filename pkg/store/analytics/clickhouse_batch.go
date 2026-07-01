@@ -147,6 +147,26 @@ func (c *ClickHouse) InsertAuctionWins(ctx context.Context, es []*AuctionWinEven
 	return b.Send()
 }
 
+func (c *ClickHouse) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error {
+	if len(es) == 0 {
+		return nil
+	}
+	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO dsp_calls")
+	if err != nil {
+		return fmt.Errorf("prepare dsp_calls batch: %w", err)
+	}
+	for _, e := range es {
+		if err := b.Append(
+			e.TraceID, e.AuctionID, e.Channel, e.DSPEndpoint, b2u(e.BidReceived),
+			e.BidPriceUSD, e.LatencyMs, b2u(e.TimedOut), int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+		); err != nil {
+			b.Abort()
+			return fmt.Errorf("append dsp_call: %w", err)
+		}
+	}
+	return b.Send()
+}
+
 func (c *ClickHouse) InsertMediaEvents(ctx context.Context, es []*MediaEvent) error {
 	if len(es) == 0 {
 		return nil

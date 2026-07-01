@@ -231,6 +231,18 @@ func (d *DuckDB) createTables() error {
 			metrics     VARCHAR,
 			created_at  TIMESTAMP NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS dsp_calls (
+			trace_id      VARCHAR,
+			auction_id    VARCHAR,
+			channel       VARCHAR,
+			dsp_endpoint  VARCHAR,
+			bid_received  BOOLEAN,
+			bid_price_usd DOUBLE,
+			latency_ms    BIGINT,
+			timed_out     BOOLEAN,
+			schema_version INTEGER DEFAULT 1,
+			timestamp     TIMESTAMP NOT NULL
+		)`,
 	}
 
 	for _, stmt := range statements {

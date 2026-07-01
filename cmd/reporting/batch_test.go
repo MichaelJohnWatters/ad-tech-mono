@@ -61,6 +61,9 @@ func (f *fakeBatchInserter) InsertAuctionWins(_ context.Context, es []*analytics
 func (f *fakeBatchInserter) InsertMediaEvents(_ context.Context, es []*analytics.MediaEvent) error {
 	return f.record(len(es))
 }
+func (f *fakeBatchInserter) InsertDSPCalls(_ context.Context, es []*analytics.DSPCallEvent) error {
+	return f.record(len(es))
+}
 
 // fakeDedup is an in-memory events.DedupStore that records unmarks.
 type fakeDedup struct {
@@ -111,6 +114,34 @@ func newBatchConsumer(fi analytics.BatchInserter, fd events.DedupStore, eng *bil
 	c := NewEventConsumer(testLog(), analytics.NewMemory(), eng)
 	c.EnableBatchConsumer(fi, fd, time.Hour)
 	return c
+}
+
+func dspCallMsg(id string, st *ackState) *events.Message {
+	data, _ := json.Marshal(events.DSPCallEvent{
+		TraceID: "t", AuctionID: "t", Channel: "display", DSPEndpoint: "http://dsp1",
+		BidReceived: true, BidPriceUSD: 2.0, LatencyMs: 12,
+	})
+	return events.NewMessage(events.SubjectDSPCall, data, "", id,
+		func() error { atomic.AddInt32(&st.acks, 1); return nil },
+		func() error { atomic.AddInt32(&st.naks, 1); return nil },
+	)
+}
+
+// DSP-call telemetry batches into one insert and acks each message.
+func TestBatch_DSPCall_GroupsAndInserts(t *testing.T) {
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, newFakeDedup(), nil)
+	st := &ackState{}
+	msgs := []*events.Message{dspCallMsg("s1", st), dspCallMsg("s2", st), dspCallMsg("s3", st)}
+	if err := c.handleDSPCallBatch(context.Background(), msgs); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if fi.calls != 1 || fi.rows != 3 {
+		t.Errorf("InsertDSPCalls calls=%d rows=%d, want 1/3", fi.calls, fi.rows)
+	}
+	if st.acks != 3 || st.naks != 0 {
+		t.Errorf("acks=%d naks=%d, want 3/0", st.acks, st.naks)
+	}
 }
 
 // (a) A fetch of N messages becomes ONE InsertImpressions call of N rows, and

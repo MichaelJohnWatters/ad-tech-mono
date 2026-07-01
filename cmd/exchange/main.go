@@ -210,7 +210,8 @@ func main() {
 	// UI edits land without a restart (also used as the fan-out context
 	// deadline).
 	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
-	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, dealCache, router, auctionM)
+	emitDSPCallsFn := func() bool { return cfg.GetBool("exchange.emit_dsp_call_events", true) }
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, dealCache, router, auctionM, emitDSPCallsFn)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -296,7 +297,7 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallsFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -390,7 +391,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
 		}
 
-		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router)
+		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallsFn())
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
 
@@ -737,7 +738,7 @@ func parseSlowDSPs(csv string) map[int]bool {
 	return out
 }
 
-func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter) ([]auction.Bid, []dspBidRecord) {
+func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool) ([]auction.Bid, []dspBidRecord) {
 	type dspResult struct {
 		dspID    string
 		endpoint string
@@ -750,6 +751,27 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 	}
 
 	ch := make(chan dspResult, len(endpoints))
+
+	// Per-DSP routing telemetry (ADR 0003). Collect one DSPCallEvent per DSP
+	// that reports, then publish them fire-and-forget once fan-out finishes —
+	// never on the auction's hot path, never affecting the auction outcome. A
+	// detached context so the publish survives the handler returning.
+	emitEvents := emit && pub != nil
+	var callEvents []events.DSPCallEvent
+	if emitEvents {
+		defer func() {
+			if len(callEvents) == 0 {
+				return
+			}
+			evs := callEvents
+			pctx := context.WithoutCancel(ctx)
+			go func() {
+				for i := range evs {
+					_ = pub.DSPCall(pctx, evs[i])
+				}
+			}()
+		}()
+	}
 
 	for i, endpoint := range endpoints {
 		dspID := fmt.Sprintf("dsp-%d", i)
@@ -862,6 +884,14 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			// can shift if config changes, URLs don't).
 			bidReceived := len(result.bids) > 0
 			router.RecordCall(channel, result.endpoint, bidReceived, result.topBid, result.latency, result.timedOut)
+			if emitEvents {
+				callEvents = append(callEvents, events.DSPCallEvent{
+					TraceID: traceID, AuctionID: traceID, Channel: channel,
+					DSPEndpoint: result.endpoint, BidReceived: bidReceived,
+					BidPriceUSD: result.topBid, LatencyMs: result.latency.Milliseconds(),
+					TimedOut: result.timedOut, Timestamp: time.Now(),
+				})
+			}
 			if result.err != nil {
 				log.Warn("dsp call failed", "dsp", result.dspID, "endpoint", result.endpoint, "error", result.err)
 			} else {
@@ -877,7 +907,5 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 	}
 	return allBids, allRecords
 }
-
-
 
 // rebuild trigger
