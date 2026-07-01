@@ -13,6 +13,7 @@ resources:
   - redis/deployment.yaml
   - minio/deployment.yaml
   - tigerbeetle/statefulset.yaml
+  - clickhouse/statefulset.yaml
   # Observability
   - grafana/deployment.yaml
   - grafana/dashboards.yaml

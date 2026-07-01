@@ -44,9 +44,9 @@ So the `analytics.Store` selector becomes **`memory` (tests) | `clickhouse` (dev
 
 ## Roadmap
 
-1. Implement `pkg/store/analytics/clickhouse.go` against the `analytics.Store` interface (core events + operational signals + rollups for full parity with memory/DuckDB). Integration-test-tagged (needs a live CH), like the TigerBeetle ledger.
-2. Add `clickhouse` to `selectAnalyticsStore`; keep `memory` default for tests, make `clickhouse` the dev/staging/prod value.
-3. ClickHouse StatefulSet + `k8s/` wiring; Tiltfile runs reporting as a normal pod (drop the CGO special-case).
-4. Reposition DuckDB: a small data-lake query surface (`SELECT ... FROM read_parquet(...)` over the A3 Parquet), used by the pipeline / an ad-hoc endpoint — not the `analytics.Store` hot path.
+1. ✅ **Done.** `pkg/store/analytics/clickhouse.go` implements `analytics.Store` + `ObservabilityWriter` + `RollupWriter` (full parity). Pure-Go client (`clickhouse-go/v2`), no CGO. Integration-test-tagged (`make test-clickhouse`, `CLICKHOUSE_ADDR`).
+2. ✅ **Done.** `clickhouse` case added to `selectAnalyticsStore` + config keys (`reporting.clickhouse_*`). `memory` stays the test/CI default.
+3. ✅ **Partly done.** ClickHouse StatefulSet + service in `k8s/base/clickhouse`, kustomization entry, Tiltfile resource (native forwarded to host `:9010` to avoid Minio's `:9000`). **Still open:** make `clickhouse` the local-overlay default for `reporting.analytics_backend`, and migrate reporting from a Tilt `local_resource` to a normal pod (now possible — it's CGO-free with this backend).
+4. **Open.** Reposition DuckDB as a data-lake query surface (`SELECT ... FROM read_parquet(...)` over the A3 Parquet) for the pipeline / ad-hoc — not the `analytics.Store` hot path.
 
-Until step 1 lands, `memory` remains the default and DuckDB remains the selectable durable option, so nothing regresses.
+`memory` remains the default until the local overlay flips it, so nothing regresses; DuckDB stays a selectable durable option.

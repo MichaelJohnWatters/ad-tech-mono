@@ -60,6 +60,10 @@ k8s_resource('postgres', labels=['infra'], port_forwards=['5432:5432'])
 k8s_resource('nats', labels=['infra'], port_forwards=['4222:4222', '8222:8222'])
 k8s_resource('redis', labels=['infra'], port_forwards=['6379:6379'])
 k8s_resource('minio', labels=['infra'], port_forwards=['9000:9000', '9001:9001'])
+# ClickHouse analytics store. Native protocol forwarded to host :9010 to
+# avoid colliding with Minio's :9000; HTTP UI/ping on :8123. Reporting uses
+# it when reporting.analytics_backend=clickhouse (see ADR 0001).
+k8s_resource('clickhouse', labels=['infra'], port_forwards=['9010:9000', '8123:8123'])
 k8s_resource('grafana', labels=['observability'], port_forwards=['3000:3000'],
     links=['http://localhost:3000'])
 k8s_resource('prometheus', labels=['observability'], port_forwards=['9090:9090'],
