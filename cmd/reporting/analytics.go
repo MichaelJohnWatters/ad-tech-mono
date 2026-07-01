@@ -46,9 +46,28 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 		log.Info("analytics store: duckdb backend", "path", path)
 		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/MOCK_AUDIT.md")
 		return store
+	case "clickhouse":
+		addrs := splitAndTrim(cfg.Get("reporting.clickhouse_addr", "127.0.0.1:9000"))
+		store, err := analytics.NewClickHouse(analytics.ClickHouseConfig{
+			Addrs:    addrs,
+			Database: cfg.Get("reporting.clickhouse_database", "adtech"),
+			Username: cfg.Get("reporting.clickhouse_user", "adtech"),
+			Password: cfg.Get("reporting.clickhouse_password", "adtech-local-dev"),
+			Log:      log,
+		})
+		if err != nil {
+			// The ledger's posture: a requested durable backend that's
+			// unreachable is a config error, not a silent fall-back to
+			// volatile memory (which would lose every event on restart).
+			log.Error("analytics store: clickhouse backend requested but unreachable", "addrs", addrs, "error", err)
+			os.Exit(1)
+		}
+		log.Info("analytics store: clickhouse backend", "addrs", addrs)
+		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the clickhouse backend (core + operational + rollup events are persisted); see docs/MOCK_AUDIT.md")
+		return store
 	default:
 		log.Error("analytics store: unknown backend, refusing to boot",
-			"reporting.analytics_backend", backend, "valid", []string{"memory", "duckdb"})
+			"reporting.analytics_backend", backend, "valid", []string{"memory", "duckdb", "clickhouse"})
 		os.Exit(1)
 		return nil
 	}

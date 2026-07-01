@@ -30,6 +30,9 @@ test-integration: ## Run integration tests (requires Docker for testcontainers)
 test-duckdb: ## Run the CGO DuckDB analytics tests (requires a C toolchain)
 	CGO_ENABLED=1 go test -tags=duckdb ./pkg/store/analytics/... ./cmd/reporting/... -count=1
 
+test-clickhouse: ## Run the ClickHouse analytics integration tests (needs a live CH; tilt forwards :9010)
+	CLICKHOUSE_ADDR=$${CLICKHOUSE_ADDR:-127.0.0.1:9010} go test -tags=clickhouse_integration ./pkg/store/analytics/... -count=1 -run ClickHouse
+
 test-e2e: ## Run end-to-end tests on k3s
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
 
