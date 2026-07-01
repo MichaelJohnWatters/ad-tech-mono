@@ -18,6 +18,16 @@ The building blocks already exist: `pkg/auth` (`Claims`, `CanAccessAccount`, `Ro
 
 ## P1 — Tenant-scoped authorization + audit on management CRUD (security; highest)
 
+**Status: LANDED (2026-07-02).** `pkg/middleware.CallerScope`/`Scope.CanMutate` +
+`pkg/audit.Log` wired into DSP campaign PATCH/DELETE and SSP placement CREATE/PATCH/DELETE
+— account-scoped callers 403 on another account's resources; the seeded `owner='platform'`
+key stays superuser (pub sim/e2e unaffected); every mutation writes an audit_log row. Unit
+tests cover platform-superuser, account isolation (the IDOR), gateway-header scoping, and
+deny-on-unresolved. **Deferred follow-up:** method-aware RBAC at the gateway proxy +
+gateway→service credential forwarding — the JWT proxy path to DSP/SSP requires an API key at
+the service today, so that path isn't fully wired independent of this fix. The direct
+API-key path (how these endpoints are actually called) is now tenant-isolated + audited.
+
 The one "don't ship without this" item. Effort: **M** (wire existing middleware + one small package).
 
 1. **`pkg/audit`** (new) — generalize the config `audit_log` write (`pkg/config/postgres.go:113`). `audit.Log(ctx, entry)` where entry = {AccountID, ActorID, Action, ResourceType, ResourceID, Changes JSON, Timestamp}. Postgres-backed; no-op/log-only if DB unset. Actor resolved from context (API-key id via `middleware.SecretFromContext`, or claims).
