@@ -13,22 +13,22 @@ import (
 	"strings"
 	"time"
 
+	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
-	_ "github.com/lib/pq"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
-	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -261,6 +261,10 @@ func main() {
 	}
 	mux.Handle(routes.APIAudiences, secretsAuth(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
 
+	// Privacy opt-out intake — operator-API-key auth like the others. Records
+	// the opt-out + fans out so the DSP stops bidding for the user.
+	mux.Handle(routes.APIPrivacyOptOut, secretsAuth(http.HandlerFunc(privacyOptOutHandler(gwDB, secretsBus, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
@@ -444,7 +448,6 @@ func tokenHandler(signingKey string) http.HandlerFunc {
 		})
 	}
 }
-
 
 func swaggerUIHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
