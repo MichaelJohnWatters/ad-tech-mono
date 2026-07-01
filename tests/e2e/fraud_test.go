@@ -130,13 +130,31 @@ func totalSpend(t *testing.T, h *harness.Harness) float64 {
 	return v
 }
 
-// TestFraudIPBlocklistRejected — IP blocklist is now DB-driven and enforced
-// (see TestReplaceBlocklists_DBSourced for the unit-level proof), but the
-// tracker derives the client IP from RemoteAddr, which an HTTP client can't
-// set. Driving this end-to-end needs the tracker to honour X-Forwarded-For
-// (it's behind Traefik anyway) or a dev IP-override header.
+// TestFraudIPBlocklistRejected — a DB-added IP in fraud_blocklists must cause
+// the tracker's fraud check to block a request from that IP. The tracker now
+// derives the client IP from X-Forwarded-For (behind Traefik), so the e2e can
+// spoof it.
 func TestFraudIPBlocklistRejected(t *testing.T) {
-	t.Skip("IP blocklist is DB-wired + enforced, but the tracker reads RemoteAddr (not X-Forwarded-For), so an e2e client can't spoof the IP yet; covered by pkg/fraud unit test")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "fraud-ip")
+	const badIP = "203.0.113.66"
+
+	// Baseline: a clean IP is not blocked.
+	if h.FireImpressionFromIP(t, "fraud-ip-baseline", w.Campaign.ID, "203.0.113.1") {
+		t.Fatal("baseline IP should not be fraud-blocked")
+	}
+
+	h.AddFraudBlocklist(t, "ip", badIP)
+	h.RefreshAllCaches(t)
+
+	if !h.FireImpressionFromIP(t, "fraud-ip-blocked", w.Campaign.ID, badIP) {
+		t.Errorf("request from DB-blocklisted IP %q should be fraud-blocked", badIP)
+	}
+
+	t.Cleanup(func() {
+		h.ClearFraudBlocklist(t, "ip", badIP)
+		h.RefreshAllCaches(t)
+	})
 }
 
 // TestFraudBotUARejected — a DB-added UA pattern must cause the tracker's

@@ -62,6 +62,32 @@ func (h *Harness) ClearFraudBlocklist(t *testing.T, typ, value string) {
 	}
 }
 
+// FireImpressionFromIP fires an impression pixel spoofing the client IP via
+// X-Forwarded-For (the tracker derives the fraud-check IP from XFF behind the
+// proxy). Uses a normal browser UA so only the IP rule is under test. Reports
+// whether the tracker's fraud check blocked it.
+func (h *Harness) FireImpressionFromIP(t *testing.T, traceID, campaignID, ip string) bool {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&price=1.0000&cur=USD",
+		h.URLs.Tracker, traceID, campaignID)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("fire imp IP: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (e2e)")
+	req.Header.Set("Referer", "https://e2e.test/")
+	req.Header.Set("X-Forwarded-For", ip)
+	resp, err := noRedirectClient.Do(req)
+	if err != nil {
+		t.Fatalf("fire imp IP call: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.Header.Get("X-Dev-Fraud-Blocked") == "1"
+}
+
 // FireImpressionUA fires an impression pixel with a custom User-Agent and
 // reports whether the tracker's fraud check blocked it (via the
 // X-Dev-Fraud-Blocked debug header). Used to exercise UA blocklist rules.
