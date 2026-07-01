@@ -43,6 +43,19 @@ The one "don't ship without this" item. Effort: **M** (wire existing middleware 
 
 ## P2 — Privacy opt-out ingestion + propagation (compliance)
 
+**Status: LANDED (ingestion + DSP propagation, 2026-07-02).** `POST /v1/api/privacy/optout`
+upserts `opt_out_registry`, publishes the (previously-never-published) `OptOutEvent` +
+`adtech.cache.invalidate.opt-outs`; the DSP's opt-out warm cache reloads within a round-trip
+and no-bids / strips segments for the user. That's the upstream gate — an opted-out user is
+never bid on or served.
+
+**Tracker enforcement deferred (with reason):** tracker pixels are keyed by `tid` (trace_id),
+not a user id, so the tracker can't look up opt-out status without plumbing user ids into the
+pixel URLs — a separate design change that would itself expose user ids in URLs (a privacy
+regression). Since the DSP no-bid already prevents serving opted-out users upstream of the
+pixel, tracker-side rejection is redundant defense-in-depth, not a correctness gap. Revisit
+only if pixels gain a (hashed) user id for other reasons.
+
 Enforcement exists (DSP no-bids / strips segments via `privacy.Evaluate`); ingestion + fan-out don't. Effort: **M**.
 
 1. **Write path** — `postgres.RecordOptOut(ctx, userID, level, source)` UPSERT into `opt_out_registry` (only a `LoadAll` reader exists today).
