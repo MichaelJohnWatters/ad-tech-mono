@@ -160,3 +160,62 @@ func TestObjectStore_DeltaLogAccumulatesAndSnapshot(t *testing.T) {
 
 // Compile-time check that ObjectStore satisfies the Store interface.
 var _ Store = (*ObjectStore)(nil)
+
+// TestObjectStore_Compact proves file-level compaction: many small writes
+// become one active file, row content is preserved, the old files are removed
+// from the active set, and a second Compact is a no-op (idempotent).
+func TestObjectStore_Compact(t *testing.T) {
+	dl, _ := newFSDatalake(t)
+	ctx := context.Background()
+
+	// Five small single-row writes → five active Parquet files.
+	for i := 0; i < 5; i++ {
+		rec := []Record{{"campaign_id": "c1", "impressions": int64(10), "revenue": 1.5, "viewable": true, "geo": "GBR", "timestamp": time.Now().UTC()}}
+		if err := dl.Write(ctx, "impressions", rec, testSchema); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	before, err := dl.Snapshot(ctx, "impressions")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(before.ActiveFiles) != 5 || before.TotalRows != 5 {
+		t.Fatalf("pre-compact: files=%d rows=%d, want 5/5", len(before.ActiveFiles), before.TotalRows)
+	}
+
+	res, err := dl.Compact(ctx, "impressions")
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if res.FilesBefore != 5 || res.FilesAfter != 1 || res.Rows != 5 {
+		t.Fatalf("compact result = %+v, want 5→1 / 5 rows", res)
+	}
+
+	after, err := dl.Snapshot(ctx, "impressions")
+	if err != nil {
+		t.Fatalf("snapshot after: %v", err)
+	}
+	if len(after.ActiveFiles) != 1 {
+		t.Errorf("post-compact active files = %d, want 1", len(after.ActiveFiles))
+	}
+	if after.TotalRows != 5 {
+		t.Errorf("post-compact rows = %d, want 5 (content preserved)", after.TotalRows)
+	}
+	// Read must still return all 5 rows (old files removed, not lost).
+	recs, err := dl.Read(ctx, "impressions", Filter{})
+	if err != nil {
+		t.Fatalf("read after compact: %v", err)
+	}
+	if len(recs) != 5 {
+		t.Errorf("read after compact = %d rows, want 5", len(recs))
+	}
+
+	// Idempotent: compacting a single-file table is a no-op.
+	res2, err := dl.Compact(ctx, "impressions")
+	if err != nil {
+		t.Fatalf("compact 2: %v", err)
+	}
+	if res2.FilesBefore != 1 || res2.FilesAfter != 1 {
+		t.Errorf("second compact = %+v, want no-op 1→1", res2)
+	}
+}
