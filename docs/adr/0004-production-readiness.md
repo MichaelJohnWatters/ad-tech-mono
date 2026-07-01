@@ -56,7 +56,27 @@ Enforcement exists (DSP no-bids / strips segments via `privacy.Evaluate`); inges
 
 ---
 
-## P3 — Reporting as a pod (ops cleanup; quick win)
+## P3 — Reporting as a pod (ops cleanup) — BLOCKED, revised
+
+**Status: BLOCKED (2026-07-02).** The premise was wrong: reporting is *not* CGO-free.
+Beyond DuckDB, it imports **`tigerbeetle-go`** (the durable billing ledger wired in ADR
+0003-D), which is **CGO-only** — `CGO_ENABLED=0 go build ./cmd/reporting` fails with "build
+constraints exclude all Go files". So the easy CGO-free `Dockerfile.dev` + live_update
+pattern the other services use does not apply.
+
+Two viable paths, both needing a call + live validation (deferred rather than shipped blind):
+- **(a) In-image CGO build** — pod via `build/Dockerfile.reporting` (`docker_build`, builds
+  inside a linux/musl image so no host cross-compile), keeps TigerBeetle. Cost: slower
+  rebuilds, no live_update. This is what the original manifest was designed for.
+- **(b) Build-tag the TB backend** (like `duckdb`) so the default build is CGO-free and the
+  pod uses the memory ledger; TB only in a `-tags tigerbeetle` build. Cost: the pod loses
+  durable billing unless built with the tag — conflicts with ADR 0003-D's "durable local
+  spend."
+
+Landed now: the manifest env (`k8s/base/reporting/deployment.yaml`) is updated with the
+in-cluster analytics/billing addresses (clickhouse:9000, tigerbeetle:3000, redis:6379, batch
++ rollup on) so whichever path is chosen, the deployment is ready. Reporting stays a local
+Tilt process until then (works today via the host CGO build). Original text below.
 
 Reporting only stayed a local Tilt process because DuckDB needs CGO. ClickHouse is the default now and is pure-Go, so the default build is CGO-free (`analytics_noduckdb.go` when the `duckdb` tag is absent — verified no CGO import on that path). Effort: **S**.
 
