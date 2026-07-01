@@ -43,6 +43,10 @@ const (
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
 
+	// APIPrivacyOptOut is the user opt-out intake (level 1/2/3). POST only.
+	// Records opt_out_registry + publishes OptOutEvent + cache-invalidate.
+	APIPrivacyOptOut = apiPrefix + "/api/privacy/optout"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
@@ -71,7 +75,7 @@ const (
 	SellersJSON = "/sellers.json"
 
 	// Dev tools
-	DevPublisherSim = "/dev/publisher-simulator"
+	DevPublisherSim  = "/dev/publisher-simulator"
 	DevTraceExplorer = "/dev/trace-explorer"
 	// DevResetReseed wipes all tenant data and re-runs the seed profile.
 	// Gated by debug.endpoints_enabled. Used by the pub sim's "Reset &
@@ -107,9 +111,9 @@ const (
 // ============================================================
 
 const (
-	OpenRTBBid    = "/v1/openrtb/bid"
-	DSPCampaigns  = "/v1/dsp/campaigns"
-	DSPShading    = "/v1/dsp/shading"
+	OpenRTBBid   = "/v1/openrtb/bid"
+	DSPCampaigns = "/v1/dsp/campaigns"
+	DSPShading   = "/v1/dsp/shading"
 )
 
 // ============================================================
@@ -270,26 +274,26 @@ const (
 const DefaultHost = "localhost"
 
 const (
-	DefaultGatewayURL   = "http://" + DefaultHost + ":" + PortGateway
-	DefaultExchangeURL  = "http://" + DefaultHost + ":" + PortExchange
-	DefaultDSPURL       = "http://" + DefaultHost + ":" + PortDSP
-	DefaultTrackerURL   = "http://" + DefaultHost + ":" + PortTracker
-	DefaultSSPURL       = "http://" + DefaultHost + ":" + PortSSP
-	DefaultAdServerURL  = "http://" + DefaultHost + ":" + PortAdServer
-	DefaultReportingURL = "http://" + DefaultHost + ":" + PortReporting
-	DefaultPipelineURL  = "http://" + DefaultHost + ":" + PortPipeline
+	DefaultGatewayURL           = "http://" + DefaultHost + ":" + PortGateway
+	DefaultExchangeURL          = "http://" + DefaultHost + ":" + PortExchange
+	DefaultDSPURL               = "http://" + DefaultHost + ":" + PortDSP
+	DefaultTrackerURL           = "http://" + DefaultHost + ":" + PortTracker
+	DefaultSSPURL               = "http://" + DefaultHost + ":" + PortSSP
+	DefaultAdServerURL          = "http://" + DefaultHost + ":" + PortAdServer
+	DefaultReportingURL         = "http://" + DefaultHost + ":" + PortReporting
+	DefaultPipelineURL          = "http://" + DefaultHost + ":" + PortPipeline
 	DefaultPublisherAdServerURL = "http://" + DefaultHost + ":" + PortPublisherAdServer
-	DefaultNATSURL      = "nats://" + DefaultHost + ":" + PortNATSClient
-	DefaultDSPComp1URL  = "http://" + DefaultHost + ":" + PortDSPComp1
-	DefaultDSPComp2URL  = "http://" + DefaultHost + ":" + PortDSPComp2
-	DefaultJaegerURL    = "http://" + DefaultHost + ":" + PortJaeger
+	DefaultNATSURL              = "nats://" + DefaultHost + ":" + PortNATSClient
+	DefaultDSPComp1URL          = "http://" + DefaultHost + ":" + PortDSPComp1
+	DefaultDSPComp2URL          = "http://" + DefaultHost + ":" + PortDSPComp2
+	DefaultJaegerURL            = "http://" + DefaultHost + ":" + PortJaeger
 	// Infrastructure addresses. These point at the local Tilt-managed
 	// services. Staging/prod overlays override via env vars or the config
 	// manager — the constants exist so dev tools and the test harness don't
 	// hardcode the same strings independently.
-	DefaultRedisAddr      = DefaultHost + ":" + PortRedis
-	DefaultMinioEndpoint  = DefaultHost + ":" + PortMinioAPI
-	DefaultPostgresURL    = "postgres://adtech:adtech-local-dev@" + DefaultHost + ":" + PortPostgres + "/adtech?sslmode=disable"
+	DefaultRedisAddr     = DefaultHost + ":" + PortRedis
+	DefaultMinioEndpoint = DefaultHost + ":" + PortMinioAPI
+	DefaultPostgresURL   = "postgres://adtech:adtech-local-dev@" + DefaultHost + ":" + PortPostgres + "/adtech?sslmode=disable"
 )
 
 // ServiceURL builds a URL from host and port.
@@ -307,24 +311,24 @@ func NATSURL(host, port string) string {
 // ============================================================
 
 const (
-	PortGateway     = "8080"
-	PortExchange    = "8081"
-	PortDSP         = "8082"
-	PortDSPComp1    = "8089"
-	PortDSPComp2    = "8090"
-	PortTracker     = "8083"
-	PortSSP         = "8084"
-	PortAdServer    = "8085"
-	PortReporting   = "8086"
-	PortPipeline    = "8087"
+	PortGateway           = "8080"
+	PortExchange          = "8081"
+	PortDSP               = "8082"
+	PortDSPComp1          = "8089"
+	PortDSPComp2          = "8090"
+	PortTracker           = "8083"
+	PortSSP               = "8084"
+	PortAdServer          = "8085"
+	PortReporting         = "8086"
+	PortPipeline          = "8087"
 	PortPublisherAdServer = "8088"
-	PortGrafana     = "3000"
-	PortPrometheus  = "9090"
-	PortJaeger      = "16686"
-	PortNATSClient  = "4222"
-	PortNATSMonitor = "8222"
-	PortPostgres    = "5432"
-	PortRedis       = "6379"
-	PortMinioAPI    = "9000"
-	PortMinioUI     = "9001"
+	PortGrafana           = "3000"
+	PortPrometheus        = "9090"
+	PortJaeger            = "16686"
+	PortNATSClient        = "4222"
+	PortNATSMonitor       = "8222"
+	PortPostgres          = "5432"
+	PortRedis             = "6379"
+	PortMinioAPI          = "9000"
+	PortMinioUI           = "9001"
 )
