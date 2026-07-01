@@ -213,8 +213,25 @@ func main() {
 	// UI edits land without a restart (also used as the fan-out context
 	// deadline).
 	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
-	emitDSPCallsFn := func() bool { return cfg.GetBool("exchange.emit_dsp_call_events", true) }
-	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, dealCache, router, auctionM, emitDSPCallsFn)
+	// Per-auction decision to emit DSP-call telemetry: gated on/off, then
+	// sampled by a deterministic hash of trace_id so either all or none of an
+	// auction's per-DSP events fire (keeps the win-rate join consistent) and a
+	// high-QPS exchange can throttle background NATS volume without losing the
+	// signal. Both knobs are live-tunable.
+	emitDSPCallFn := func(traceID string) bool {
+		if !cfg.GetBool("exchange.emit_dsp_call_events", true) {
+			return false
+		}
+		ratio := cfg.GetFloat("exchange.dsp_call_sample_ratio", 1.0)
+		if ratio >= 1.0 {
+			return true
+		}
+		if ratio <= 0 {
+			return false
+		}
+		return sampleTrace(traceID, ratio)
+	}
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, dealCache, router, auctionM, emitDSPCallFn)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -300,7 +317,7 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallsFn func() bool) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallFn func(traceID string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -394,7 +411,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
 		}
 
-		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallsFn())
+		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID))
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
 
