@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
 // Placement management endpoints. Mirror the DSP campaign-management pattern
@@ -168,6 +170,15 @@ func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 		return
 	}
 
+	// Create names a publisher (hence a target account), so gate it: an
+	// account-scoped caller may only create placements under its own publisher.
+	scope := middleware.CallerScope(r)
+	if !scope.CanMutate(accountID) {
+		log.Warn("create placement forbidden: caller not authorised for publisher's account", "actor", scope.Actor, "target_account", accountID, "publisher_id", req.PublisherID)
+		http.Error(w, "forbidden: not authorised for this publisher", http.StatusForbidden)
+		return
+	}
+
 	id, err := writeNewPlacement(ctx, db, accountID, req)
 	if err != nil {
 		log.Error("create placement failed", "error", err, "name", req.Name)
@@ -176,6 +187,12 @@ func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 	}
 
 	publishPlacementInvalidate(ctx, bus, log, "create", id)
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "placement:create",
+		ResourceType: "placement", ResourceID: id, Changes: req,
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "placement:create", "id", id, "error", err)
+	}
 
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "created"})
@@ -249,12 +266,27 @@ func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bu
 		return
 	}
 
+	// Tenant isolation: account-scoped callers may only mutate their own
+	// publisher's placements; platform operator keys may mutate any.
+	scope := middleware.CallerScope(r)
+	if !scope.CanMutate(accountID) {
+		log.Warn("patch placement forbidden: caller not authorised for account", "actor", scope.Actor, "target_account", accountID, "id", id)
+		http.Error(w, "forbidden: not authorised for this account", http.StatusForbidden)
+		return
+	}
+
 	if err := updatePlacement(ctx, db, accountID, id, req); err != nil {
 		log.Error("patch placement failed", "error", err, "id", id)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	publishPlacementInvalidate(ctx, bus, log, "patch", id)
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "placement:update",
+		ResourceType: "placement", ResourceID: id, Changes: req,
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "placement:update", "id", id, "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -306,12 +338,24 @@ func handlePlacementDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	scope := middleware.CallerScope(r)
+	if !scope.CanMutate(accountID) {
+		log.Warn("delete placement forbidden: caller not authorised for account", "actor", scope.Actor, "target_account", accountID, "id", id)
+		http.Error(w, "forbidden: not authorised for this account", http.StatusForbidden)
+		return
+	}
 	if err := updatePlacement(ctx, db, accountID, id, patchPlacementRequest{Status: &archived}); err != nil {
 		log.Error("delete (archive) placement failed", "error", err, "id", id)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	publishPlacementInvalidate(ctx, bus, log, "delete", id)
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "placement:delete",
+		ResourceType: "placement", ResourceID: id, Reason: "archive",
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "placement:delete", "id", id, "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

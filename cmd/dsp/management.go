@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/lib/pq"
 )
@@ -233,6 +235,17 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 
 	publishInvalidate(ctx, bus, log, "create", lineItemID)
 
+	// Create targets the DSP's shared management-advertiser bucket (not a
+	// caller-supplied account), so there's no cross-tenant target to gate —
+	// but we still record who created what.
+	scope := middleware.CallerScope(r)
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "campaign:create",
+		ResourceType: "line_item", ResourceID: lineItemID, Changes: req,
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "campaign:create", "id", lineItemID, "error", err)
+	}
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(map[string]string{"id": lineItemID, "status": "created"})
 }
@@ -349,6 +362,16 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 
+	// Tenant isolation: an account-scoped caller may only mutate its own
+	// account's campaigns; a platform operator key may mutate any. Closes
+	// cross-tenant mutation (the IDOR the API-key-only gate left open).
+	scope := middleware.CallerScope(r)
+	if !scope.CanMutate(accountID) {
+		log.Warn("patch campaign forbidden: caller not authorised for account", "actor", scope.Actor, "target_account", accountID, "id", id)
+		http.Error(w, "forbidden: not authorised for this account", http.StatusForbidden)
+		return
+	}
+
 	if err := updateLineItem(ctx, db, accountID, id, req); err != nil {
 		log.Error("patch campaign failed", "error", err, "id", id)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -357,6 +380,12 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	publishInvalidate(ctx, bus, log, "patch", id)
 	if req.Status != nil {
 		publishCampaignStateChange(ctx, bus, log, id, accountID, oldStatus, *req.Status, "patch")
+	}
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "campaign:update",
+		ResourceType: "line_item", ResourceID: id, Changes: req,
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "campaign:update", "id", id, "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -413,6 +442,12 @@ func handleDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	scope := middleware.CallerScope(r)
+	if !scope.CanMutate(accountID) {
+		log.Warn("delete campaign forbidden: caller not authorised for account", "actor", scope.Actor, "target_account", accountID, "id", id)
+		http.Error(w, "forbidden: not authorised for this account", http.StatusForbidden)
+		return
+	}
 	if err := updateLineItem(ctx, db, accountID, id, patchCampaignRequest{Status: &archived}); err != nil {
 		log.Error("delete (archive) campaign failed", "error", err, "id", id)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -420,6 +455,12 @@ func handleDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	publishInvalidate(ctx, bus, log, "delete", id)
 	publishCampaignStateChange(ctx, bus, log, id, accountID, oldStatus, archived, "delete")
+	if err := audit.Log(ctx, db, audit.Entry{
+		AccountID: accountID, ActorID: scope.Actor, Action: "campaign:delete",
+		ResourceType: "line_item", ResourceID: id, Reason: "archive",
+	}); err != nil {
+		log.Warn("audit log write failed", "action", "campaign:delete", "id", id, "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
