@@ -93,7 +93,14 @@ func main() {
 	)
 }
 
-func runDayBoundary(ctx context.Context, store *postgres.Store, bus events.EventBus, log *slog.Logger, date time.Time) DayBoundaryResult {
+// flightStore is the slice of postgres.Store the job needs — an interface so
+// the orchestration (counts + event publishing) is unit-testable with a fake.
+type flightStore interface {
+	ActivateFlights(ctx context.Context, day time.Time) ([]postgres.FlightTransition, error)
+	EndFlights(ctx context.Context, day time.Time) ([]postgres.FlightTransition, error)
+}
+
+func runDayBoundary(ctx context.Context, store flightStore, bus events.EventBus, log *slog.Logger, date time.Time) DayBoundaryResult {
 	start := time.Now()
 	result := DayBoundaryResult{Date: date.Format("2006-01-02"), ProcessedAt: time.Now().UTC()}
 	var pub *events.Publisher
