@@ -235,31 +235,17 @@ if dev_mode == 'fast':
         port_forwards=['8080:8080', '8443:8443'], labels=['services'],
         links=['https://localhost:8443', 'https://localhost:8443/dev/publisher-simulator', 'http://localhost:8080', 'http://gateway.adtech.local'])
 
-    # ---- Reporting (STAYS LOCAL) ----
-    # NOTE (ADR 0004 P3): reporting can't use the CGO-free Dockerfile.dev pod
-    # pattern the other services use — it imports tigerbeetle-go (the durable
-    # billing ledger, ADR 0003 part D), which is CGO-only, so
-    # `CGO_ENABLED=0 go build ./cmd/reporting` fails. The pod path requires the
-    # in-image CGO build (build/Dockerfile.reporting) — viable but slower, no
-    # live_update, and needs live validation. Kept local for now; the pod
-    # manifest env (k8s/base/reporting/deployment.yaml) is ready for that switch.
-    def ready(port):
-        return probe(period_secs=2, http_get=http_get_action(port=port, path='/readyz'))
-    local_resource('reporting',
-        cmd='go build -o ./bin/reporting ./cmd/reporting',
-        serve_cmd='POD_NAME=reporting-0 LOKI_URL=http://localhost:3100 ' +
-            'REPORTING_ANALYTICS_BACKEND=clickhouse ' +
-            'REPORTING_CLICKHOUSE_ADDR=127.0.0.1:9010 ' +
-            'REPORTING_CLICKHOUSE_BATCH_CONSUMER=true ' +
-            'REPORTING_ROLLUP_ENABLED=true ' +
-            'BILLING_LEDGER_BACKEND=tigerbeetle ' +
-            'BILLING_TIGERBEETLE_ADDRESSES=127.0.0.1:3033 ' +
-            './bin/reporting',
-        serve_dir='.',
-        deps=['cmd/reporting', 'pkg/'],
-        labels=['services'],
-        resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle'],
-        readiness_probe=ready(8086))
+    # ---- Reporting (POD — in-image CGO build for TigerBeetle, ADR 0005 §1) ----
+    # reporting imports tigerbeetle-go (CGO). tigerbeetle-go bundles a
+    # self-contained musl-safe static lib, so build/Dockerfile.reporting builds
+    # it in-image (CGO_ENABLED=1, clickhouse + TB, no duckdb tag). Trade-off:
+    # no live_update — a reporting/pkg edit triggers a full image rebuild
+    # (~30-60s). Acceptable since reporting is edited rarely. All analytics /
+    # billing config lives in the deployment env (in-cluster service DNS).
+    docker_build('adtech-reporting', '.', dockerfile='build/Dockerfile.reporting')
+    k8s_yaml(['k8s/base/reporting/deployment.yaml', 'k8s/base/reporting/service.yaml'])
+    k8s_resource('reporting', resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle'],
+        port_forwards=['8086:8086'], labels=['services'])
 
 else:
     # --------------------------------------------------------
