@@ -1,0 +1,20 @@
+{{/* sparkline: a tiny inline-SVG trend line — no chart library. Colour
+     inherits from the surrounding text (use text-brand / text-success etc.)
+     unless `color` is set.
+
+     Args (dict):
+       values — []number series (via slice)
+       width  — px (default 120)
+       height — px (default 32)
+       color  — stroke (default currentColor)
+
+     Usage:
+       <span class="text-brand">{{ template "sparkline" (dict "values" (slice 3 5 4 8 6 9)) }}</span>
+*/}}
+{{ define "sparkline" }}
+{{- $w := or .width 120 -}}
+{{- $h := or .height 32 -}}
+<svg viewBox="0 0 {{ $w }} {{ $h }}" width="{{ $w }}" height="{{ $h }}" preserveAspectRatio="none" class="inline-block align-middle">
+  <polyline fill="none" stroke="{{ or .color "currentColor" }}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" points="{{ sparkline .values $w $h }}" />
+</svg>
+{{ end }}

@@ -1,0 +1,27 @@
+{{/* drawer: a right-side slide-over panel (detail/edit). Slot pattern like
+     modal — caller wraps the body:
+
+       {{ template "drawer-start" (dict "id" "campaignDrawer" "title" "Campaign detail") }}
+         ...body...
+       {{ template "drawer-end" . }}
+
+     Show/hide: document.getElementById(id).classList.toggle('hidden').
+     Args (dict) for drawer-start: id (required), title.
+*/}}
+{{ define "drawer-start" }}
+<div id="{{ .id }}" class="hidden fixed inset-0 z-50" style="background: rgba(0,0,0,0.4)"
+     onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="absolute right-0 top-0 h-full w-full max-w-md bg-white dark:bg-surface-dark border-l border-gray-200 dark:border-gray-800 shadow-xl overflow-y-auto">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+      <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ .title }}</h3>
+      <button onclick="document.getElementById('{{ .id }}').classList.add('hidden')"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none" aria-label="Close">&times;</button>
+    </div>
+    <div class="p-4">
+{{ end }}
+
+{{ define "drawer-end" }}
+    </div>
+  </div>
+</div>
+{{ end }}
