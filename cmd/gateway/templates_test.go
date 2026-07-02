@@ -79,7 +79,7 @@ func TestTemplateManagerLoadsAllPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTemplateManager: %v", err)
 	}
-	for _, name := range []string{"dashboard.html", "layout.html", "minimal.html", "explorer.html", "manager.html", "showcase.html", "login.html", "advertiser.html"} {
+	for _, name := range []string{"dashboard.html", "layout.html", "minimal.html", "explorer.html", "manager.html", "showcase.html", "login.html", "signup.html", "advertiser.html"} {
 		if mgr.tmpl.Lookup(name) == nil {
 			t.Errorf("template %q not loaded; available: %v", name, templateNames(mgr))
 		}
