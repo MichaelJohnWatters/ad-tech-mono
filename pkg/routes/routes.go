@@ -71,6 +71,11 @@ const (
 	// publish the webhook-subs cache invalidate so the dispatcher reloads.
 	APIWebhooks = apiPrefix + "/api/webhooks"
 
+	// APISavedReports is saved/scheduled report management (GET list, POST
+	// create, DELETE remove). JWT-gated on reports:read/reports:save;
+	// tenant-scoped.
+	APISavedReports = apiPrefix + "/api/reports/saved"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
