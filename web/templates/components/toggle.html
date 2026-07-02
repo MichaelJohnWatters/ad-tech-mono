@@ -1,0 +1,18 @@
+{{/* toggle: an on/off switch (settings, live-config bools).
+
+     Args (dict):
+       id       — optional input id
+       label    — optional trailing label
+       checked  — bool
+       onchange — optional JS
+
+     Usage:
+       {{ template "toggle" (dict "label" "Rollups enabled" "checked" true "onchange" "save(this.checked)") }}
+*/}}
+{{ define "toggle" }}
+<label class="inline-flex items-center gap-2 cursor-pointer">
+  <input type="checkbox" class="sr-only peer" {{ with .id }}id="{{ . }}"{{ end }} {{ if .checked }}checked{{ end }} {{ with .onchange }}onchange="{{ . }}"{{ end }}>
+  <span class="relative w-9 h-5 bg-gray-300 dark:bg-gray-700 rounded-full peer-checked:bg-brand transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-4"></span>
+  {{ with .label }}<span class="text-sm text-gray-700 dark:text-gray-300">{{ . }}</span>{{ end }}
+</label>
+{{ end }}

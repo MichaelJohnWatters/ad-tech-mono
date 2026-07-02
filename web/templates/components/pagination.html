@@ -1,0 +1,22 @@
+{{/* pagination: a summary line + prev/next controls. Wire the buttons to
+     HTMX or JS from the caller.
+
+     Args (dict):
+       summary      — e.g. "1–20 of 143"
+       prevDisabled — bool
+       nextDisabled — bool
+       prevOnclick  — optional JS
+       nextOnclick  — optional JS
+
+     Usage:
+       {{ template "pagination" (dict "summary" "1–20 of 143" "prevDisabled" true "nextOnclick" "page(2)") }}
+*/}}
+{{ define "pagination" }}
+<div class="flex items-center justify-between text-sm">
+  <span class="text-gray-500 dark:text-gray-400">{{ with .summary }}{{ . }}{{ end }}</span>
+  <div class="flex gap-1">
+    {{ template "button" (dict "label" "Prev" "variant" "secondary" "size" "sm" "disabled" .prevDisabled "onclick" (or .prevOnclick "")) }}
+    {{ template "button" (dict "label" "Next" "variant" "secondary" "size" "sm" "disabled" .nextDisabled "onclick" (or .nextOnclick "")) }}
+  </div>
+</div>
+{{ end }}

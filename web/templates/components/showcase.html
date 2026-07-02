@@ -132,6 +132,30 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- Sparklines, breadcrumb, toggle, pagination, drawer -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Charts &amp; controls</h2>
+      {{ template "card-start" . }}
+      <div class="mb-4">{{ template "breadcrumb" (dict "items" (slice (dict "label" "Campaigns" "href" "#") (dict "label" "Summer sale"))) }}</div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+          <div class="text-xs text-gray-500 mb-1">Spend (7d)</div>
+          <div class="text-brand">{{ template "sparkline" (dict "values" (slice 3 5 4 8 6 9 7)) }}</div>
+        </div>
+        <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+          <div class="text-xs text-gray-500 mb-1">Fill (7d)</div>
+          <div class="text-success">{{ template "sparkline" (dict "values" (slice 60 62 58 61 63 64 62)) }}</div>
+        </div>
+        <div class="flex items-center">{{ template "toggle" (dict "label" "Auto-optimise" "checked" true) }}</div>
+        <div class="flex items-center">{{ template "toggle" (dict "label" "Paused") }}</div>
+      </div>
+      {{ template "pagination" (dict "summary" "1–20 of 143" "prevDisabled" true "nextOnclick" "toast('Next page — TODO','info')") }}
+      {{ template "card-end" . }}
+      <div class="mt-3">
+        {{ template "button" (dict "label" "Open drawer" "variant" "secondary" "onclick" "document.getElementById('demoDrawer').classList.remove('hidden')") }}
+      </div>
+    </section>
+
     <!-- Modal + toast -->
     <section class="mb-8">
       <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Modal &amp; toasts</h2>
@@ -153,6 +177,15 @@
       {{ template "button" (dict "label" "Confirm" "onclick" "document.getElementById('demoModal').classList.add('hidden'); toast('Done.','success')") }}
     </div>
   {{ template "modal-end" . }}
+
+  {{ template "drawer-start" (dict "id" "demoDrawer" "title" "Campaign detail") }}
+    <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Drawers slide in from the right for detail/edit without leaving the list. Same slot pattern as cards/modals.</p>
+    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "d_budget" "type" "number" "value" "500") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('demoDrawer').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "onclick" "document.getElementById('demoDrawer').classList.add('hidden'); toast('Saved.','success')") }}
+    </div>
+  {{ template "drawer-end" . }}
 
   {{ template "toast" . }}
   <script src="/static/theme.js"></script>

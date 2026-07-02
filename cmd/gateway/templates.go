@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
@@ -23,8 +25,62 @@ const templatesRoot = "web/templates"
 // the canonical pattern is {{ template "button" (dict "label" "Save"
 // "variant" "primary") }}.
 var templateFuncs = template.FuncMap{
-	"dict":  dict,
-	"slice": sliceOf,
+	"dict":      dict,
+	"slice":     sliceOf,
+	"sparkline": sparkline,
+}
+
+// sparkline maps a series of numbers to an SVG polyline `points` string over a
+// w×h box (min→bottom, max→top). Used by the `sparkline` component so charts
+// need no JS/lib. Returns "" for an empty series.
+func sparkline(vals []any, w, h int) string {
+	if len(vals) == 0 {
+		return ""
+	}
+	nums := make([]float64, len(vals))
+	min, max := math.Inf(1), math.Inf(-1)
+	for i, v := range vals {
+		f := toFloat(v)
+		nums[i] = f
+		if f < min {
+			min = f
+		}
+		if f > max {
+			max = f
+		}
+	}
+	rng := max - min
+	if rng == 0 {
+		rng = 1
+	}
+	var b strings.Builder
+	for i, f := range nums {
+		x := 0.0
+		if len(nums) > 1 {
+			x = float64(i) / float64(len(nums)-1) * float64(w)
+		}
+		y := float64(h) - (f-min)/rng*float64(h)
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%.1f,%.1f", x, y)
+	}
+	return b.String()
+}
+
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	default:
+		return 0
+	}
 }
 
 // sliceOf collects its args into a slice — the companion to dict for passing
