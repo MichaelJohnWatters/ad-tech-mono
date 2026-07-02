@@ -83,7 +83,12 @@ CSS-var pages.
 - **Prompts:** brand palette final values? light theme surfaces? per-service colors (reconcile
   simulator vs explorer)? typography scale (display/body/mono)? density (comfortable vs compact)?
 
-### F2. App shell  ⬜
+### F2. App shell  🟡 (started)
+> Shipped: `partials/app-sidebar.html` (data-driven nav, active highlight, theme toggle) and
+> **portal design mocks** at `/dev/portal/advertiser` (composing sidebar + stat/sparkline/table/
+> badge/modal/drawer on demo data). Remaining: role-aware nav filtering (needs F4 claims),
+> topbar/user-menu partial, breadcrumb wiring, responsive, account switcher.
+
 Wire `layout.html` for real: `<head>` partial (tokens + HTMX + theme toggle), a **role-aware**
 top nav + left sidebar, breadcrumb slot, toast container, content block. One nav, driven by the
 user's permissions (hide what they can't see).

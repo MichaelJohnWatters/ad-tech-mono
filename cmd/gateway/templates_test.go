@@ -130,6 +130,26 @@ func TestAdvertiserPortalRenders(t *testing.T) {
 	}
 }
 
+// TestPublisherPortalRenders executes the publisher portal design mock.
+func TestPublisherPortalRenders(t *testing.T) {
+	chdirToRepoRoot(t)
+	mgr, err := newTemplateManager(true)
+	if err != nil {
+		t.Fatalf("newTemplateManager: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	mgr.Render(rec, "publisher.html", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Publisher", "Placements", "Earnings today", "Homepage leaderboard", "New placement"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered publisher portal missing %q", want)
+		}
+	}
+}
+
 func templateNames(m *templateManager) []string {
 	var names []string
 	for _, t := range m.tmpl.Templates() {
