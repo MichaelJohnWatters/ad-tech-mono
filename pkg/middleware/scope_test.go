@@ -2,12 +2,19 @@ package middleware
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
+
+func quietMWLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestCallerScope_PlatformKeyIsSuperuser(t *testing.T) {
 	r := httptest.NewRequest("PATCH", "/x", nil)
@@ -60,5 +67,32 @@ func TestCallerScope_NoIdentityCannotMutate(t *testing.T) {
 	}
 	if s.CanMutate("acct-a") {
 		t.Errorf("unresolved scope must never be allowed to mutate")
+	}
+}
+
+// Auth accepts a JWT from the session cookie (browser UI), not just the header.
+func TestAuth_CookieSession(t *testing.T) {
+	key := "test-signing-key"
+	claims := &auth.Claims{UserID: "u1", AccountID: "a1", AccountType: auth.AccountAdvertiser, Role: auth.RoleOwner, Permissions: []string{"campaigns:read"}, ExpiresAt: time.Now().Add(time.Hour)}
+	token, err := CreateToken(claims, key)
+	if err != nil {
+		t.Fatalf("CreateToken: %v", err)
+	}
+	var got *auth.Claims
+	h := Auth(key, quietMWLog())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = ClaimsFromContext(r.Context())
+	}))
+	req := httptest.NewRequest("GET", "/portal", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got == nil || got.AccountID != "a1" {
+		t.Fatalf("cookie session did not authenticate; claims=%+v", got)
+	}
+
+	// No header, no cookie → 401.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/portal", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no credentials code = %d, want 401", rec.Code)
 	}
 }

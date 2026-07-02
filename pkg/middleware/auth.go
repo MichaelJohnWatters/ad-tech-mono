@@ -16,6 +16,27 @@ import (
 
 type claimsKey struct{}
 
+// SessionCookieName is the httpOnly cookie the browser UI stores its JWT in,
+// so dashboard page loads authenticate without an Authorization header. API
+// clients keep using the header; the middleware accepts either.
+const SessionCookieName = "adtech_session"
+
+// tokenFromRequest pulls a bearer token from the Authorization header, falling
+// back to the session cookie (browser UI). Returns "" if neither is present or
+// the header is malformed.
+func tokenFromRequest(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); h != "" {
+		if t := strings.TrimPrefix(h, "Bearer "); t != h {
+			return t
+		}
+		return "" // header present but not "Bearer <token>"
+	}
+	if c, err := r.Cookie(SessionCookieName); err == nil {
+		return c.Value
+	}
+	return ""
+}
+
 // ClaimsFromContext retrieves auth claims from the request context.
 func ClaimsFromContext(ctx context.Context) *auth.Claims {
 	if c, ok := ctx.Value(claimsKey{}).(*auth.Claims); ok {
@@ -46,16 +67,10 @@ func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Extract token from Authorization header
-			header := r.Header.Get("Authorization")
-			if header == "" {
-				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
-				return
-			}
-
-			token := strings.TrimPrefix(header, "Bearer ")
-			if token == header {
-				http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
+			// Token from Authorization header or the session cookie (browser).
+			token := tokenFromRequest(r)
+			if token == "" {
+				http.Error(w, `{"error":"missing or invalid credentials"}`, http.StatusUnauthorized)
 				return
 			}
 

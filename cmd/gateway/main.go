@@ -175,6 +175,16 @@ func main() {
 	mux.HandleFunc("/dev/portal/staff", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "staff.html", nil)
 	})
+
+	// Real auth: browser login → JWT stored in an httpOnly session cookie
+	// (UI plan F4). Additive to the dev bypass — with no signing key set, the
+	// Auth middleware still admin-bypasses; this path becomes the real gate once
+	// gateway.require_auth + a jwt_signing secret are configured.
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "login.html", nil)
+	})
+	mux.HandleFunc("/v1/auth/login", loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
+	mux.HandleFunc("/v1/auth/logout", logoutHandler)
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the
