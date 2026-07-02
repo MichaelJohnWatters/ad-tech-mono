@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>Staff console — AdTech</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
+<div class="flex min-h-screen">
+
+  {{ template "app-sidebar" (dict "persona" "Staff" "items" (slice
+      (dict "label" "Moderation" "icon" "⚑" "href" "#" "active" true)
+      (dict "label" "Fraud rules" "icon" "⛨" "href" "#")
+      (dict "label" "Accounts"   "icon" "◍" "href" "#")
+      (dict "label" "Config"     "icon" "⚙" "href" "/dev/console")
+      (dict "label" "Secrets"    "icon" "🔑" "href" "/dev/console")
+      (dict "label" "Audit log"  "icon" "▤" "href" "#"))) }}
+
+  <main class="flex-1 min-w-0">
+    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
+      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Staff") (dict "label" "Moderation"))) }}
+      <div class="flex items-center gap-2">
+        {{ template "pill" (dict "label" "Pending" "active" true) }}
+        {{ template "pill" (dict "label" "Approved") }}
+        {{ template "pill" (dict "label" "Rejected") }}
+      </div>
+    </div>
+
+    <div class="p-6 space-y-6">
+      <!-- NOTE: demo data — design mock (UI plan Phase 3). Real data needs a
+           moderation API (list pending creatives, approve/reject + reason);
+           Config/Secrets already exist at /dev/console. -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Pending review" "value" "12" "hint" "creatives") }}
+        {{ template "stat" (dict "label" "Approved today" "value" "48" "delta" "+6" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Rejected today" "value" "3") }}
+        {{ template "stat" (dict "label" "Fraud blocks (24h)" "value" "1,204" "delta" "+9%" "deltaDir" "up") }}
+      </div>
+
+      {{ template "card-start" (dict "title" "Moderation queue") }}
+      {{ template "table-start" (dict "headers" (slice "Creative" "Advertiser" "Format" "Submitted" "Status" "")) }}
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">summer-sale-300x250</td>
+          <td class="px-3 py-2">Acme Corp</td>
+          <td class="px-3 py-2 font-mono">300×250</td>
+          <td class="px-3 py-2 text-gray-500">2m ago</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "pending" "variant" "info") }}</td>
+          <td class="px-3 py-2 text-right whitespace-nowrap">
+            {{ template "button" (dict "label" "Approve" "size" "sm" "onclick" "toast('Approved (demo).','success')") }}
+            {{ template "button" (dict "label" "Reject" "variant" "danger" "size" "sm" "onclick" "document.getElementById('rejectModal').classList.remove('hidden')") }}
+          </td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">crypto-ex-728x90</td>
+          <td class="px-3 py-2">CryptoEx</td>
+          <td class="px-3 py-2 font-mono">728×90</td>
+          <td class="px-3 py-2 text-gray-500">18m ago</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "pending" "variant" "info") }}</td>
+          <td class="px-3 py-2 text-right whitespace-nowrap">
+            {{ template "button" (dict "label" "Approve" "size" "sm" "onclick" "toast('Approved (demo).','success')") }}
+            {{ template "button" (dict "label" "Reject" "variant" "danger" "size" "sm" "onclick" "document.getElementById('rejectModal').classList.remove('hidden')") }}
+          </td>
+        </tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Recent audit log") }}
+      {{ template "table-start" (dict "headers" (slice "When" "Actor" "Action" "Resource")) }}
+        <tr><td class="px-3 py-2 text-gray-500">10:42</td><td class="px-3 py-2 font-mono">apikey:dev-ops-key</td><td class="px-3 py-2">campaign:update</td><td class="px-3 py-2 font-mono">line_item:li-001</td></tr>
+        <tr><td class="px-3 py-2 text-gray-500">10:39</td><td class="px-3 py-2 font-mono">user:staff-1</td><td class="px-3 py-2">creative:approve</td><td class="px-3 py-2 font-mono">creative:cr-88</td></tr>
+        <tr><td class="px-3 py-2 text-gray-500">10:31</td><td class="px-3 py-2 font-mono">config_manager</td><td class="px-3 py-2">config:update</td><td class="px-3 py-2 font-mono">exchange.bid_timeout</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </div>
+  </main>
+</div>
+
+{{ template "modal-start" (dict "id" "rejectModal" "title" "Reject creative") }}
+  {{ template "form-field" (dict "label" "Reason" "name" "reason" "placeholder" "e.g. misleading claim, policy violation" "required" true) }}
+  <div class="flex justify-end gap-2">
+    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('rejectModal').classList.add('hidden')") }}
+    {{ template "button" (dict "label" "Reject creative" "variant" "danger" "onclick" "document.getElementById('rejectModal').classList.add('hidden'); toast('Rejected (demo).','error')") }}
+  </div>
+{{ template "modal-end" . }}
+
+{{ template "toast" . }}
+<script src="/static/theme.js"></script>
+</body>
+</html>
