@@ -111,6 +111,10 @@ func main() {
 		log.Error("seed dev secrets failed", "error", err)
 		os.Exit(1)
 	}
+	if err := in.SeedDevUsers(ctx); err != nil {
+		log.Error("seed dev users failed", "error", err)
+		os.Exit(1)
+	}
 
 	campTotal, plTotal, dealTotal := 0, 0, 0
 	for _, p := range profiles {
