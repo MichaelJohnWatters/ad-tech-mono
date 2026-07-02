@@ -1,202 +1,151 @@
-// cmd/dayboundary runs at midnight UTC (or per-timezone) to handle
-// daily budget resets, flight date transitions, and IO budget checks.
+// cmd/dayboundary runs at the day boundary to handle flight-date transitions
+// (and, later, daily budget resets + IO depletion). Designed as a K8s CronJob;
+// idempotent — safe to re-run.
 //
-// Designed as a K8s CronJob. Idempotent - safe to run multiple times.
+// Phase 1 (ADR 0005 §2): IO flight transitions with an explicit line-item
+// cascade, driven off Postgres. Daily budget reset + IO budget depletion (which
+// need Redis spend + a snapshot table) are later phases and are logged as
+// pending for now.
 //
 // Usage:
 //
-//	go run ./cmd/dayboundary                    # run for current UTC day
-//	go run ./cmd/dayboundary --date 2024-06-15  # run for specific date
+//	go run ./cmd/dayboundary                    # today, UTC
+//	go run ./cmd/dayboundary --date 2024-06-15  # a specific date
 package main
 
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
-
-// LineItemState represents a line item's lifecycle state.
-type LineItemState struct {
-	ID          string
-	IOId        string
-	Status      string // approved, live, paused, ended
-	StartDate   time.Time
-	EndDate     time.Time
-	DailyBudget float64
-	TotalBudget float64
-	TotalSpend  float64
-	DailySpend  float64
-	Timezone    string
-}
-
-// IOState represents an insertion order's state.
-type IOState struct {
-	ID          string
-	Status      string
-	EndDate     time.Time
-	TotalBudget float64
-	TotalSpend  float64
-}
 
 // DayBoundaryResult tracks what the job did.
 type DayBoundaryResult struct {
-	Date              string
-	BudgetsReset      int
-	CampaignsStarted  int
-	CampaignsEnded    int
-	IOsDepleted       int
-	IOsEnded          int
-	ProcessedAt       time.Time
-	Duration          time.Duration
+	Date             string
+	CampaignsStarted int // line items cascaded approved → live
+	CampaignsEnded   int // line items cascaded live/paused → ended
+	IOsActivated     int
+	IOsEnded         int
+	ProcessedAt      time.Time
+	Duration         time.Duration
 }
 
 func main() {
 	dateStr := flag.String("date", "", "date to process (YYYY-MM-DD), defaults to today UTC")
 	flag.Parse()
 
-	log := logger.New("dayboundary") // not a long-running service, no constants entry needed
+	log := logger.New("dayboundary")
 
 	var processDate time.Time
 	if *dateStr != "" {
-		var err error
-		processDate, err = time.Parse("2006-01-02", *dateStr)
+		d, err := time.Parse("2006-01-02", *dateStr)
 		if err != nil {
 			log.Error("invalid date", "date", *dateStr, "error", err)
-			return
+			os.Exit(1)
 		}
+		processDate = d
 	} else {
 		processDate = time.Now().UTC().Truncate(24 * time.Hour)
 	}
 
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Error("DATABASE_URL not set; day-boundary job cannot run")
+		os.Exit(1)
+	}
+	store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+	if err != nil {
+		log.Error("postgres connect failed", "error", err)
+		os.Exit(1)
+	}
+
+	// Events are best-effort: without NATS the DB transitions still happen,
+	// caches just pick them up on their next poll instead of immediately.
+	var bus events.EventBus
+	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {
+		if b, err := natsbus.New(natsURL, "dayboundary", log); err != nil {
+			log.Warn("nats unavailable; transitions won't be broadcast (caches poll)", "error", err)
+		} else {
+			bus = b
+			defer b.Close()
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	log.Info("day boundary job starting", "date", processDate.Format("2006-01-02"))
-
-	result := runDayBoundary(context.Background(), log, processDate)
-
+	result := runDayBoundary(ctx, store, bus, log, processDate)
 	log.Info("day boundary job complete",
 		"date", result.Date,
-		"budgets_reset", result.BudgetsReset,
+		"ios_activated", result.IOsActivated,
 		"campaigns_started", result.CampaignsStarted,
-		"campaigns_ended", result.CampaignsEnded,
-		"ios_depleted", result.IOsDepleted,
 		"ios_ended", result.IOsEnded,
+		"campaigns_ended", result.CampaignsEnded,
 		"duration_ms", result.Duration.Milliseconds(),
 	)
 }
 
-func runDayBoundary(_ context.Context, log *slog.Logger, date time.Time) DayBoundaryResult {
+func runDayBoundary(ctx context.Context, store *postgres.Store, bus events.EventBus, log *slog.Logger, date time.Time) DayBoundaryResult {
 	start := time.Now()
-	result := DayBoundaryResult{
-		Date:        date.Format("2006-01-02"),
-		ProcessedAt: time.Now().UTC(),
+	result := DayBoundaryResult{Date: date.Format("2006-01-02"), ProcessedAt: time.Now().UTC()}
+	var pub *events.Publisher
+	if bus != nil {
+		pub = events.NewPublisher(bus, log)
 	}
 
-	// In production, these come from Postgres queries.
-	// For now, use demo data to prove the logic works.
-	lineItems := demoLineItems(date)
-	ios := demoIOs(date)
-
-	// Step 1: Daily budget resets
-	for _, li := range lineItems {
-		if li.Status == constants.StatusLive && li.DailyBudget > 0 {
-			// Snapshot today's spend
-			log.Info("budget reset",
-				"line_item", li.ID,
-				"daily_spend", li.DailySpend,
-				"daily_budget", li.DailyBudget,
-			)
-			// In production: write daily_spend_snapshots, reset Redis counter
-			result.BudgetsReset++
-		}
+	// Activate flights that started (IO draft → active, cascade approved → live).
+	if activated, err := store.ActivateFlights(ctx, date); err != nil {
+		log.Error("activate flights failed", "error", err)
+	} else {
+		result.CampaignsStarted = len(activated)
+		publishTransitions(ctx, pub, log, activated, "flight_start")
 	}
 
-	// Step 2: Flight date transitions
-	yesterday := date.AddDate(0, 0, -1)
-	for _, li := range lineItems {
-		// Start campaigns whose start_date is today
-		if li.Status == constants.StatusApproved && !li.StartDate.After(date) {
-			log.Info("campaign started",
-				"line_item", li.ID,
-				"start_date", li.StartDate.Format("2006-01-02"),
-			)
-			// In production: update Postgres status, load into Redis, publish NATS
-			result.CampaignsStarted++
-		}
+	// End flights that finished (IO active → ended, cascade live/paused → ended).
+	if ended, err := store.EndFlights(ctx, date); err != nil {
+		log.Error("end flights failed", "error", err)
+	} else {
+		result.CampaignsEnded = len(ended)
+		publishTransitions(ctx, pub, log, ended, "flight_end")
+	}
 
-		// End campaigns whose end_date was yesterday
-		if li.Status == constants.StatusLive && !li.EndDate.IsZero() && li.EndDate.Before(date) && !li.EndDate.Before(yesterday) {
-			log.Info("campaign ended",
-				"line_item", li.ID,
-				"end_date", li.EndDate.Format("2006-01-02"),
-			)
-			result.CampaignsEnded++
+	// One cache-invalidate so the DSP warm cache reloads immediately rather than
+	// waiting for its poll. Payload is advisory — the cache reloads wholesale.
+	if bus != nil && (result.CampaignsStarted > 0 || result.CampaignsEnded > 0) {
+		if err := bus.Publish(ctx, events.SubjectCacheInvalidateCampaigns, []byte(`{"source":"dayboundary"}`)); err != nil {
+			log.Warn("dayboundary: campaign cache invalidate failed", "error", err)
 		}
 	}
 
-	// Step 3: IO budget and flight checks
-	for _, io := range ios {
-		if io.Status == constants.StatusLive && io.TotalSpend >= io.TotalBudget {
-			log.Info("IO budget depleted",
-				"io", io.ID,
-				"spend", io.TotalSpend,
-				"budget", io.TotalBudget,
-			)
-			result.IOsDepleted++
-		}
-
-		if io.Status == constants.StatusLive && !io.EndDate.IsZero() && io.EndDate.Before(date) {
-			log.Info("IO ended",
-				"io", io.ID,
-				"end_date", io.EndDate.Format("2006-01-02"),
-			)
-			result.IOsEnded++
-		}
-	}
+	// Pending later phases (need Redis spend + a daily_spend_snapshots table):
+	//   - daily budget reset + snapshot
+	//   - IO budget depletion (spend >= budget)
+	// See docs/adr/0005-deferred-followups.md §2 Phases 2–3.
 
 	result.Duration = time.Since(start)
 	return result
 }
 
-// demoLineItems returns demo line items for testing the day boundary job.
-func demoLineItems(today time.Time) []LineItemState {
-	return []LineItemState{
-		{
-			ID: "li-001", IOId: "io-001", Status: constants.StatusLive,
-			StartDate: today.AddDate(0, 0, -7), EndDate: today.AddDate(0, 0, 23),
-			DailyBudget: 500, TotalBudget: 10000, TotalSpend: 2100, DailySpend: 350,
-		},
-		{
-			ID: "li-002", IOId: "io-001", Status: constants.StatusLive,
-			StartDate: today.AddDate(0, 0, -3), EndDate: today.AddDate(0, 0, 27),
-			DailyBudget: 1000, TotalBudget: 25000, TotalSpend: 2500, DailySpend: 850,
-		},
-		{
-			ID: "li-new", IOId: "io-002", Status: constants.StatusApproved,
-			StartDate: today, EndDate: today.AddDate(0, 1, 0),
-			DailyBudget: 300, TotalBudget: 5000, TotalSpend: 0, DailySpend: 0,
-		},
-		{
-			ID: "li-ending", IOId: "io-003", Status: constants.StatusLive,
-			StartDate: today.AddDate(0, -1, 0), EndDate: today.AddDate(0, 0, -1),
-			DailyBudget: 200, TotalBudget: 3000, TotalSpend: 2800, DailySpend: 180,
-		},
+// publishTransitions emits a CampaignStateEvent per cascaded line item so
+// reporting/ops see the pause/resume timeline. Best-effort.
+func publishTransitions(ctx context.Context, pub *events.Publisher, log *slog.Logger, transitions []postgres.FlightTransition, reason string) {
+	if pub == nil {
+		return
 	}
-}
-
-func demoIOs(today time.Time) []IOState {
-	return []IOState{
-		{ID: "io-001", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 35000, TotalSpend: 4600},
-		{ID: "io-002", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 5000, TotalSpend: 0},
-		{ID: "io-003", Status: constants.StatusLive, EndDate: today.AddDate(0, 0, -1), TotalBudget: 3000, TotalSpend: 2800},
-		{ID: "io-depleted", Status: constants.StatusLive, EndDate: today.AddDate(0, 1, 0), TotalBudget: 1000, TotalSpend: 1000},
+	for _, t := range transitions {
+		if err := pub.CampaignStateChanged(ctx, events.CampaignStateEvent{
+			CampaignID: t.LineItemID, AccountID: t.AccountID,
+			OldState: t.OldStatus, NewState: t.NewStatus, Reason: reason, Timestamp: time.Now(),
+		}); err != nil {
+			log.Warn("dayboundary: publish state change failed", "line_item", t.LineItemID, "error", err)
+		}
 	}
-}
-
-func init() {
-	// Suppress unused import warning for fmt
-	_ = fmt.Sprintf
 }

@@ -1,0 +1,50 @@
+# Day-boundary CronJob. Runs daily at 00:05 UTC to transition insertion-order
+# flights: activate IOs whose flight window opened (cascade approved line items
+# → live) and end IOs whose end_date passed (cascade live/paused → ended), so
+# the DSP starts/stops bidding on schedule. Emits CampaignStateEvents + a
+# campaign cache-invalidate. Idempotent; pure Go (CGO_ENABLED=0), shared
+# Dockerfile with SERVICE=dayboundary. See docs/adr/0005-deferred-followups.md §2.
+#
+# Not yet added to an overlay — apply directly, or wire into an overlay when the
+# cron manifests are activated as a group.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dayboundary
+  labels:
+    app: dayboundary
+    component: lifecycle
+spec:
+  schedule: "5 0 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: dayboundary
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: dayboundary
+              image: adtech-dayboundary
+              env:
+                - name: POD_NAME
+                  value: "dayboundary"
+                - name: DATABASE_URL
+                  value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+                - name: NATS_URL
+                  value: "nats://nats:4222"
+                - name: LOKI_URL
+                  value: "http://loki:3100"
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "256Mi"
