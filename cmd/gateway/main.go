@@ -338,6 +338,11 @@ func main() {
 	// tenant-scoped, placements:read gated).
 	mux.Handle(routes.APIAdTag, authMiddleware(http.HandlerFunc(adTagHandler(pgAdTagStore{db: gwDB}, log))))
 
+	// Topup — advertiser prepay credit (billing:view / billing:topup gated).
+	// Money-touching: idempotency-keyed, double-entry ledger + balance in one
+	// transaction; payment approval is the dev/fake path for now.
+	mux.Handle(routes.APIBillingTopup, authMiddleware(http.HandlerFunc(topupHandler(pgTopupStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

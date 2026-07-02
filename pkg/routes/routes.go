@@ -92,6 +92,13 @@ const (
 	// routes).
 	APIAdTag = apiPrefix + "/api/adtag"
 
+	// APIBillingTopup is the advertiser prepay topup (GET balance+history on
+	// billing:view, POST credit on billing:topup). Money-touching: POST is
+	// idempotent (client-supplied idempotency_key) and writes a double-entry
+	// ledger pair + balance upsert in one transaction. The payment leg is the
+	// dev/fake instant-approve path until a real provider is integrated.
+	APIBillingTopup = apiPrefix + "/api/billing/topup"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
