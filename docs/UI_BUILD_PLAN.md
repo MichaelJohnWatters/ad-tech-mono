@@ -73,15 +73,18 @@ no auth-gated app shell, no per-role navigation, no real login (dev bypass grant
 The enabler for everything else. **Build this first** — every portal composes from it. Detailed
 because you asked to "build a theme + component library."
 
-### F1. Design tokens (single source of truth)  ⬜
+### F1. Design tokens (single source of truth)  ✅
+> Shipped: `web/static/tokens.css` is the canonical token file (`--brand-*` + `-rgb` twins for
+> Tailwind alpha, surface/text scales light+dark, `--service-*` palette incl. billing/nats,
+> fonts, radii). `theme.css` @imports it and keeps only component classes; `head-meta.html`
+> links it and maps every Tailwind colour → the vars (`rgb(var(--x-rgb) / <alpha-value>)` for
+> semantics so `bg-brand/20` works). Service palette reconciled to the simulator/head-meta set
+> (`exchange #eab308, dsp #14b8a6, …`) — trace-explorer's stale `.trace-service` colours updated;
+> the sim's `TRACE_SVC_COLOR` JS keeps a documented hex copy (feeds `hexToRgba()`).
+
 Kill the 4× duplication (audit problems 1–7). One token set, consumed by both Tailwind pages and
 CSS-var pages.
-- **Deliver:** `web/static/theme.css` becomes the canonical token file (`--brand-*`, surface
-  scale `--bg-{page,surface,2,3}`, text scale, `--service-{dsp,ssp,exchange,tracker,…}` palette,
-  spacing, radius, font stacks, **light + dark** both defined). A tiny `tailwind.config` in the
-  head partial maps Tailwind color names → the CSS vars so utilities and vars never drift.
-- **Prompts:** brand palette final values? light theme surfaces? per-service colors (reconcile
-  simulator vs explorer)? typography scale (display/body/mono)? density (comfortable vs compact)?
+- **Prompts (remaining):** typography scale (display/body/mono)? density (comfortable vs compact)?
 
 ### F2. App shell  🟡 (started)
 > Shipped: `partials/app-sidebar.html` (data-driven nav, active highlight, theme toggle) and
