@@ -314,6 +314,10 @@ func main() {
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
 	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, log))))
 
+	// Fraud blocklists — staff manager (platform-wide, fraud:* gated); mutations
+	// invalidate the tracker fraud-rules warm cache.
+	mux.Handle(routes.APIFraudBlocklists, authMiddleware(http.HandlerFunc(fraudRulesHandler(pgFraudRuleStore{db: gwDB}, secretsBus, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

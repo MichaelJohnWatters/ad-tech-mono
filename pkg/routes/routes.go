@@ -60,6 +60,12 @@ const (
 	// scoped): staff review every account's creatives.
 	APIModeration = apiPrefix + "/api/moderation"
 
+	// APIFraudBlocklists is the staff fraud blocklist manager (GET list, POST
+	// add, DELETE remove). JWT-gated on fraud:* — platform-wide (fraud_blocklists
+	// has no account_id): a create/delete publishes the fraud-rules cache
+	// invalidate so the tracker warm cache reloads sub-second.
+	APIFraudBlocklists = apiPrefix + "/api/fraud/blocklists"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
