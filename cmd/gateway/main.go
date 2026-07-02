@@ -166,15 +166,17 @@ func main() {
 	// Advertiser portal design mock (UI plan Phase 1) — composes the component
 	// library + app shell with demo data. Wires to real APIs (campaigns/reports/
 	// billing) once F4 auth + handlers land; for now a visual/design reference.
-	mux.HandleFunc("/dev/portal/advertiser", func(w http.ResponseWriter, r *http.Request) {
+	// Portal pages gate on a real session (redirect to /login) once auth is on;
+	// in dev (no signing key) they pass through, same as the API bypass.
+	mux.HandleFunc("/dev/portal/advertiser", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "advertiser.html", nil)
-	})
-	mux.HandleFunc("/dev/portal/publisher", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/dev/portal/publisher", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "publisher.html", nil)
-	})
-	mux.HandleFunc("/dev/portal/staff", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/dev/portal/staff", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "staff.html", nil)
-	})
+	}))
 
 	// Real auth: browser login → JWT stored in an httpOnly session cookie
 	// (UI plan F4). Additive to the dev bypass — with no signing key set, the

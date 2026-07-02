@@ -92,6 +92,27 @@ func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
+// ParseSession extracts and validates the caller's JWT (Authorization header or
+// session cookie), returning (claims, true) only if the signature is valid and
+// the token isn't expired. Reusable by browser page handlers that want to gate
+// on a session and redirect to /login on failure (rather than the JSON 401 the
+// Auth middleware returns). signingKey must be non-empty — dev bypass is the
+// caller's concern.
+func ParseSession(r *http.Request, signingKey string) (*auth.Claims, bool) {
+	token := tokenFromRequest(r)
+	if token == "" {
+		return nil, false
+	}
+	claims, err := validateToken(token, signingKey)
+	if err != nil {
+		return nil, false
+	}
+	if claims.ExpiresAt.Before(time.Now()) {
+		return nil, false
+	}
+	return claims, true
+}
+
 // RequirePermission returns middleware that checks the user has a specific permission.
 func RequirePermission(permission string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
