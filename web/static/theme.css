@@ -1,114 +1,12 @@
-/* Ad Tech Platform - Theme System
-   Usage: add class="dark" or class="light" to <html>
-   Default: follows system preference via prefers-color-scheme
-   Toggle: theme.js handles switching and localStorage persistence
-*/
+/* Ad Tech Platform - component classes for CSS-var pages
+   (simulator, trace explorer, and other non-Tailwind surfaces).
 
-:root {
-  /* Shared brand colours */
-  --brand-primary: #4361ee;
-  --brand-primary-hover: #3a56d4;
-  --brand-success: #4ade80;
-  --brand-warn: #fbbf24;
-  --brand-error: #f87171;
-  --brand-purple: #a78bfa;
-  --brand-pink: #f472b6;
-  --brand-orange: #fb923c;
-  --brand-cyan: #22d3ee;
+   All tokens (colours, type, sizing, light+dark themes) live in
+   tokens.css — the single source of truth, also consumed by the
+   Tailwind config in partials/head-meta.html. This file only holds
+   the shared component classes built on those vars. */
 
-  /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-
-  /* Sizing */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --max-width: 1200px;
-}
-
-/* ============================================================
-   Dark Theme (default)
-   ============================================================ */
-:root,
-html.dark {
-  --bg-page: #0f0f1a;
-  --bg-surface: #1a1a2e;
-  --bg-surface-2: #16162a;
-  --bg-surface-3: #1e1e3a;
-  --bg-input: #1e1e3a;
-  --bg-hover: #252545;
-  --bg-status: #0d2818;
-
-  --border: #2a2a4a;
-  --border-subtle: #222240;
-  --border-input: #3a3a5a;
-
-  --text-primary: #e0e0e0;
-  --text-secondary: #a0a0b0;
-  --text-muted: #666680;
-  --text-inverse: #1a1a2e;
-
-  --status-border: #4ade80;
-
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
-
-  color-scheme: dark;
-}
-
-/* ============================================================
-   Light Theme
-   ============================================================ */
-html.light {
-  --bg-page: #f5f5f8;
-  --bg-surface: #ffffff;
-  --bg-surface-2: #f8f8fb;
-  --bg-surface-3: #eeeef2;
-  --bg-input: #ffffff;
-  --bg-hover: #f0f0f5;
-  --bg-status: #e8faf0;
-
-  --border: #e0e0e8;
-  --border-subtle: #eaeaf0;
-  --border-input: #d0d0d8;
-
-  --text-primary: #1a1a2e;
-  --text-secondary: #555566;
-  --text-muted: #888899;
-  --text-inverse: #ffffff;
-
-  --status-border: #22c55e;
-
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
-
-  color-scheme: light;
-}
-
-/* System preference fallback */
-@media (prefers-color-scheme: light) {
-  html:not(.dark):not(.light) {
-    --bg-page: #f5f5f8;
-    --bg-surface: #ffffff;
-    --bg-surface-2: #f8f8fb;
-    --bg-surface-3: #eeeef2;
-    --bg-input: #ffffff;
-    --bg-hover: #f0f0f5;
-    --bg-status: #e8faf0;
-    --border: #e0e0e8;
-    --border-subtle: #eaeaf0;
-    --border-input: #d0d0d8;
-    --text-primary: #1a1a2e;
-    --text-secondary: #555566;
-    --text-muted: #888899;
-    --text-inverse: #ffffff;
-    --status-border: #22c55e;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
-    --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
-    color-scheme: light;
-  }
-}
+@import url("/static/tokens.css");
 
 /* ============================================================
    Base Reset & Typography
@@ -368,14 +266,17 @@ select {
   font-size: 13px;
   min-width: 100px;
 }
-.trace-service.exchange, .service.exchange { color: #818cf8; }
-.trace-service.dsp, .service.dsp { color: #34d399; }
-.trace-service.tracker, .service.tracker { color: var(--brand-warn); }
-.trace-service.adserver, .service.adserver { color: var(--brand-pink); }
-.trace-service.reporting, .service.reporting { color: var(--brand-cyan); }
-.trace-service.billing, .service.billing { color: var(--brand-purple); }
-.trace-service.nats, .service.nats { color: var(--brand-orange); }
-.trace-service.browser, .service.browser { color: var(--text-secondary); }
+.trace-service.gateway, .service.gateway { color: var(--service-gateway); }
+.trace-service.pubad, .service.pubad { color: var(--service-pubad); }
+.trace-service.ssp, .service.ssp { color: var(--service-ssp); }
+.trace-service.exchange, .service.exchange { color: var(--service-exchange); }
+.trace-service.dsp, .service.dsp { color: var(--service-dsp); }
+.trace-service.tracker, .service.tracker { color: var(--service-tracker); }
+.trace-service.adserver, .service.adserver { color: var(--service-adserver); }
+.trace-service.reporting, .service.reporting { color: var(--service-reporting); }
+.trace-service.billing, .service.billing { color: var(--service-billing); }
+.trace-service.nats, .service.nats { color: var(--service-nats); }
+.trace-service.browser, .service.browser { color: var(--service-browser); }
 
 .trace-msg, .msg { font-size: 13px; color: var(--text-primary); }
 .trace-msg .detail, .msg .detail { color: var(--text-muted); font-size: 12px; }

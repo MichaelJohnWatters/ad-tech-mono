@@ -1,0 +1,151 @@
+/* Design tokens — the single source of truth for colour, type, and sizing.
+   (UI build plan F1; see docs/UI_BUILD_PLAN.md.)
+
+   Consumed two ways, by every page:
+     - CSS-var pages (simulator, trace explorer) get it via theme.css,
+       which @imports this file and keeps the component classes.
+     - Tailwind pages get it via partials/head-meta.html, whose inline
+       tailwind.config maps utility colour names onto these vars — so
+       `bg-brand` and `var(--brand-primary)` can never drift apart.
+
+   The *-rgb twins exist because Tailwind opacity modifiers (bg-brand/20)
+   need an `rgb(<triplet> / <alpha-value>)` colour definition; a hex var
+   can't take an alpha. Each twin MUST stay in sync with its hex line —
+   they are adjacent on purpose.
+
+   Theming: add class="dark" or class="light" to <html>. Default follows
+   system preference; theme.js persists the toggle in localStorage. */
+
+:root {
+  /* Brand */
+  --brand-primary: #4361ee;
+  --brand-primary-rgb: 67 97 238;
+  --brand-primary-hover: #3a56d4;
+  --brand-primary-light: #818cf8;
+
+  /* Semantic. Green is reserved for "live"/success signals; purple is
+     reserved for "jaeger"/async signals. The service palette below
+     deliberately avoids those hues so source/status badges always read
+     distinctly against service-coloured text. */
+  --brand-success: #4ade80;
+  --brand-success-rgb: 74 222 128;
+  --brand-warn: #fbbf24;
+  --brand-warn-rgb: 251 191 36;
+  --brand-error: #f87171;
+  --brand-error-rgb: 248 113 113;
+  --brand-cyan: #22d3ee;
+  --brand-cyan-rgb: 34 211 238;
+  --brand-purple: #a78bfa;
+  --brand-pink: #f472b6;
+  --brand-orange: #fb923c;
+
+  /* Service palette — one colour per service, shared by the trace
+     timeline (.trace-service / .service classes), the simulator's
+     trace map, and Tailwind's svc-* utilities. Same values in both
+     themes. NOTE: the simulator's TRACE_SVC_COLOR JS object carries a
+     hex copy of these (it feeds hexToRgba()) — tweak both. */
+  --service-browser: #94a3b8;
+  --service-gateway: #0ea5e9;
+  --service-pubad: #f43f5e;
+  --service-ssp: #60a5fa;
+  --service-exchange: #eab308;
+  --service-dsp: #14b8a6;
+  --service-adserver: #ec4899;
+  --service-tracker: #f97316;
+  --service-reporting: #06b6d4;
+  --service-billing: #a78bfa;
+  --service-nats: #fb923c;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+
+  /* Sizing */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --max-width: 1200px;
+}
+
+/* ============================================================
+   Dark Theme (default)
+   ============================================================ */
+:root,
+html.dark {
+  --bg-page: #0f0f1a;
+  --bg-surface: #1a1a2e;
+  --bg-surface-2: #16162a;
+  --bg-surface-3: #1e1e3a;
+  --bg-input: #1e1e3a;
+  --bg-hover: #252545;
+  --bg-status: #0d2818;
+
+  --border: #2a2a4a;
+  --border-subtle: #222240;
+  --border-input: #3a3a5a;
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0b0;
+  --text-muted: #666680;
+  --text-inverse: #1a1a2e;
+
+  --status-border: #4ade80;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+
+  color-scheme: dark;
+}
+
+/* ============================================================
+   Light Theme
+   ============================================================ */
+html.light {
+  --bg-page: #f5f5f8;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f8f8fb;
+  --bg-surface-3: #eeeef2;
+  --bg-input: #ffffff;
+  --bg-hover: #f0f0f5;
+  --bg-status: #e8faf0;
+
+  --border: #e0e0e8;
+  --border-subtle: #eaeaf0;
+  --border-input: #d0d0d8;
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #555566;
+  --text-muted: #888899;
+  --text-inverse: #ffffff;
+
+  --status-border: #22c55e;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+
+  color-scheme: light;
+}
+
+/* System preference fallback */
+@media (prefers-color-scheme: light) {
+  html:not(.dark):not(.light) {
+    --bg-page: #f5f5f8;
+    --bg-surface: #ffffff;
+    --bg-surface-2: #f8f8fb;
+    --bg-surface-3: #eeeef2;
+    --bg-input: #ffffff;
+    --bg-hover: #f0f0f5;
+    --bg-status: #e8faf0;
+    --border: #e0e0e8;
+    --border-subtle: #eaeaf0;
+    --border-input: #d0d0d8;
+    --text-primary: #1a1a2e;
+    --text-secondary: #555566;
+    --text-muted: #888899;
+    --text-inverse: #ffffff;
+    --status-border: #22c55e;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+    color-scheme: light;
+  }
+}

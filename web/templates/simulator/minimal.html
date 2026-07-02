@@ -67,22 +67,14 @@
         #traceFlow .node .service { min-width: 0; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
         #traceFlow .node .src { font-size: 9px; padding: 0 4px; flex: 0 0 auto; }
         #traceFlow .node .msg { font-size: 12px; flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        /* Service palette: green and purple are RESERVED for the source
-           badges (live = green, jaeger = purple) so a row's source signal
-           is always unambiguous against any service tag. Service colours
-           avoid those hues — exchange uses amber where it used to use
-           indigo, dsp uses teal where it used to use green. */
+        /* Service palette: --service-* vars from tokens.css (green and
+           purple are RESERVED for the source badges — live = green,
+           jaeger = purple — so a row's source signal is always
+           unambiguous against any service tag; the token palette avoids
+           those hues). theme.css's shared .service.* rules cover most
+           of these; kept here for the sim-only sizing + pubad alias. */
         .node .service { font-weight: 600; font-size: 13px; min-width: 100px; }
-        .node .service.exchange { color: #eab308; }
-        .node .service.dsp { color: #14b8a6; }
-        .node .service.tracker { color: #f97316; }
-        .node .service.adserver { color: #ec4899; }
-        .node .service.reporting { color: #06b6d4; }
-        .node .service.browser { color: var(--text-secondary, #aaa); }
-        .node .service.ssp { color: #60a5fa; }
-        .node .service.pubad { color: #f43f5e; }
-        .node .service[class*="publisher-adserver"] { color: #f43f5e; }
-        .node .service.gateway { color: #0ea5e9; }
+        .node .service[class*="publisher-adserver"] { color: var(--service-pubad); }
         .node .msg { font-size: 13px; color: var(--text-primary, #ddd); }
         .node .msg .detail { color: var(--text-muted, #888); font-size: 12px; }
         /* Source badge: shows whether the row came from a synchronous
@@ -855,9 +847,10 @@
         //     and doesn't fight the fan-out lanes.
         // ============================================================
 
-        // Service palette — matches the .node .service.* colours in the
-        // inline CSS at the top of the page so the diagram + timeline
-        // share a single visual language. If you tweak one, tweak both.
+        // Service palette — hex copy of the --service-* tokens in
+        // /static/tokens.css (the source of truth). Stays hex because
+        // hexToRgba() below derives translucent fills from it, which a
+        // CSS var can't feed. If you tweak tokens.css, tweak this too.
         //
         // Green and purple are reserved for the live / jaeger source
         // badges — no service uses those hues so a source badge always

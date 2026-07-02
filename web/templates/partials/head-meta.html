@@ -1,14 +1,20 @@
 {{/* head-meta: canonical Tailwind config + theme persistence + HTMX.
-     Included by every Tailwind-styled page so the brand colour, surface
-     scale, service palette, semantic colours, and mono font stack live
-     in exactly one place. Earlier each page carried its own copy of
-     tailwind.config, which drifted (manager.html silently omitted
-     fontFamily.mono so its `font-mono` fell back to the Tailwind
-     default — see docs/UI_DESIGN_AUDIT.md).
-*/}}
+     Included by every Tailwind-styled page.
+
+     All colour/type values live in /static/tokens.css (UI plan F1) —
+     the tailwind.config below maps utility names onto those CSS vars,
+     so Tailwind pages and CSS-var pages (simulator/explorer) share one
+     token set and can't drift. Semantic colours use the tokens' *-rgb
+     twins so opacity modifiers (bg-brand/20, ring-brand/40) keep
+     working; hex-in-a-var can't take an <alpha-value>.
+
+     Surface note: the surface-dark* names keep their dark hex in dark
+     mode via the vars (all current usage is dark:-prefixed); the vars
+     flip with the same html.dark class that gates dark: variants. */}}
 {{ define "head-meta" }}
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/static/tokens.css">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config = {
@@ -17,32 +23,48 @@ tailwind.config = {
         extend: {
             colors: {
                 // Primary brand — keep this stable across the entire surface.
-                brand: { DEFAULT: '#4361ee', hover: '#3a56d4', light: '#818cf8' },
-                // Dark-mode surface scale. Light mode uses Tailwind's
-                // built-in gray.50/100/200 — no custom light surface.
-                surface: { dark: '#1a1a2e', 'dark-2': '#16162a', 'dark-3': '#1e1e3a', page: '#0f0f1a' },
+                brand: {
+                    DEFAULT: 'rgb(var(--brand-primary-rgb) / <alpha-value>)',
+                    hover: 'var(--brand-primary-hover)',
+                    light: 'var(--brand-primary-light)',
+                },
+                // Surface scale. The dark* names are the historical ones
+                // (light mode uses Tailwind's gray.50/100/200); page/'2'/'3'
+                // resolve per-theme via the vars.
+                surface: {
+                    DEFAULT: 'var(--bg-surface)',
+                    dark: 'var(--bg-surface)', 'dark-2': 'var(--bg-surface-2)', 'dark-3': 'var(--bg-surface-3)',
+                    '2': 'var(--bg-surface-2)', '3': 'var(--bg-surface-3)',
+                    page: 'var(--bg-page)',
+                },
                 // Semantic palette. Green is reserved for "live" / success
                 // signals; purple is reserved for "jaeger" / async signals.
                 // Service colours below deliberately avoid those hues so
                 // src/status badges always read distinctly.
-                success: '#4ade80', warn: '#fbbf24', error: '#f87171', info: '#22d3ee',
-                // Service palette — matches the trace-map node colours and
-                // the inline .node .service.* CSS in the pub sim so the
+                success: 'rgb(var(--brand-success-rgb) / <alpha-value>)',
+                warn: 'rgb(var(--brand-warn-rgb) / <alpha-value>)',
+                error: 'rgb(var(--brand-error-rgb) / <alpha-value>)',
+                info: 'rgb(var(--brand-cyan-rgb) / <alpha-value>)',
+                // Service palette — same vars drive the trace-map node
+                // colours and the .trace-service / .service CSS, so the
                 // diagram + textual timeline share one vocabulary.
                 svc: {
-                    browser:   '#94a3b8',
-                    gateway:   '#0ea5e9',
-                    pubad:     '#f43f5e',
-                    ssp:       '#60a5fa',
-                    exchange:  '#eab308',
-                    dsp:       '#14b8a6',
-                    adserver:  '#ec4899',
-                    tracker:   '#f97316',
-                    reporting: '#06b6d4',
+                    browser:   'var(--service-browser)',
+                    gateway:   'var(--service-gateway)',
+                    pubad:     'var(--service-pubad)',
+                    ssp:       'var(--service-ssp)',
+                    exchange:  'var(--service-exchange)',
+                    dsp:       'var(--service-dsp)',
+                    adserver:  'var(--service-adserver)',
+                    tracker:   'var(--service-tracker)',
+                    reporting: 'var(--service-reporting)',
+                    billing:   'var(--service-billing)',
+                    nats:      'var(--service-nats)',
                 },
             },
             fontFamily: {
-                mono: ['SF Mono', 'Monaco', 'Cascadia Code', 'monospace'],
+                mono: ['var(--font-mono)'],
+                sans: ['var(--font-sans)'],
             },
         },
     },
