@@ -150,6 +150,26 @@ func TestPublisherPortalRenders(t *testing.T) {
 	}
 }
 
+// TestStaffPortalRenders executes the staff/ops console design mock.
+func TestStaffPortalRenders(t *testing.T) {
+	chdirToRepoRoot(t)
+	mgr, err := newTemplateManager(true)
+	if err != nil {
+		t.Fatalf("newTemplateManager: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	mgr.Render(rec, "staff.html", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Staff", "Moderation queue", "Pending review", "audit log"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered staff portal missing %q", want)
+		}
+	}
+}
+
 func templateNames(m *templateManager) []string {
 	var names []string
 	for _, t := range m.tmpl.Templates() {
