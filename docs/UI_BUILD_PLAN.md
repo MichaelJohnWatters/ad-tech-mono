@@ -93,7 +93,12 @@ user's permissions (hide what they can't see).
 - **Prompts:** IA — top-level sections per persona? sidebar vs top-nav split? account switcher
   placement (agencies)? mobile/responsive scope?
 
-### F3. Component library (Go template partials)  ⬜
+### F3. Component library (Go template partials)  🟡 (started)
+> Shipped: `stat`, `badge`, `pill`, `empty-state`, `form-field`, `card` (start/end),
+> `table` (start/end) — joining the existing `button`/`modal`/`toast`; a `slice` FuncMap
+> helper; and a live **showcase at `/dev/components`** (parse + render tested). Remaining:
+> tabs/subtab-bar, search-input, drawer, chart/sparkline, wizard, breadcrumb, pagination, toggle.
+
 Reusable, parameterised via `dict`. Start from the three that exist; add the rest. Each is a
 partial + (if needed) a `/static/*.js` behaviour + a doc snippet.
 - **Have:** `button`, `modal`, `toast`.
