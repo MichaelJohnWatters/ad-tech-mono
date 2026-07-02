@@ -55,6 +55,11 @@ const (
 	// tenant-scoped; a create must reference a publisher the caller owns.
 	APIDeals = apiPrefix + "/api/deals"
 
+	// APIModeration is the staff creative-review queue (GET pending, POST
+	// approve/reject). JWT-gated on moderation:* — platform-wide (not tenant
+	// scoped): staff review every account's creatives.
+	APIModeration = apiPrefix + "/api/moderation"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
