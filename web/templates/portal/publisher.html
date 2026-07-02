@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>Publisher — AdTech</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
+<div class="flex min-h-screen">
+
+  {{ template "app-sidebar" (dict "persona" "Publisher" "items" (slice
+      (dict "label" "Dashboard"  "icon" "▤" "href" "#" "active" true)
+      (dict "label" "Inventory"  "icon" "▣" "href" "#")
+      (dict "label" "Deals"      "icon" "◈" "href" "#")
+      (dict "label" "Quality"    "icon" "◉" "href" "#")
+      (dict "label" "Earnings"   "icon" "▦" "href" "#")
+      (dict "label" "Reports"    "icon" "▧" "href" "#")
+      (dict "label" "Ad tag"     "icon" "❮❯" "href" "#")
+      (dict "label" "Settings"   "icon" "⚙" "href" "#"))) }}
+
+  <main class="flex-1 min-w-0">
+    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
+      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Publisher") (dict "label" "Dashboard"))) }}
+      <div class="flex items-center gap-3">
+        {{ template "search-input" (dict "id" "topSearch" "placeholder" "Search…") }}
+        {{ template "button" (dict "label" "+ New placement" "onclick" "document.getElementById('newPlacement').classList.remove('hidden')") }}
+      </div>
+    </div>
+
+    <div class="p-6 space-y-6">
+      <!-- NOTE: demo data — design mock (UI plan Phase 2). Real data wires to
+           GET /v1/api/placements, /v1/billing/summary (rev side), reports. -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Earnings today" "value" "$842" "delta" "+5%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Fill rate" "value" "62%" "delta" "-3%" "deltaDir" "down") }}
+        {{ template "stat" (dict "label" "eCPM" "value" "$2.10" "delta" "+1%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Requests" "value" "2.1M" "hint" "last 24h") }}
+      </div>
+
+      {{ template "card-start" (dict "title" "Earnings — last 7 days") }}
+      <div class="text-success h-16">{{ template "sparkline" (dict "values" (slice 610 700 660 720 780 810 842) "width" 640 "height" 60) }}</div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Placements") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Size" "Floor" "Status" "Fill" "")) }}
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Homepage leaderboard</td>
+          <td class="px-3 py-2 font-mono">728×90</td>
+          <td class="px-3 py-2 font-mono">$1.50</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "active" "variant" "success") }}</td>
+          <td class="px-3 py-2 font-mono">71%</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Article MREC</td>
+          <td class="px-3 py-2 font-mono">300×250</td>
+          <td class="px-3 py-2 font-mono">$2.00</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "active" "variant" "success") }}</td>
+          <td class="px-3 py-2 font-mono">58%</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Sidebar skyscraper</td>
+          <td class="px-3 py-2 font-mono">160×600</td>
+          <td class="px-3 py-2 font-mono">$1.20</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "paused" "variant" "warn") }}</td>
+          <td class="px-3 py-2 font-mono">—</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
+        </tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </div>
+  </main>
+</div>
+
+{{ template "modal-start" (dict "id" "newPlacement" "title" "New placement") }}
+  {{ template "form-field" (dict "label" "Placement name" "name" "name" "placeholder" "Homepage leaderboard" "required" true) }}
+  <div class="grid grid-cols-2 gap-x-4">
+    {{ template "form-field" (dict "label" "Width" "name" "width" "type" "number" "placeholder" "728") }}
+    {{ template "form-field" (dict "label" "Height" "name" "height" "type" "number" "placeholder" "90") }}
+  </div>
+  {{ template "form-field" (dict "label" "Floor price (USD)" "name" "floor" "type" "number" "value" "1.50") }}
+  <div class="flex justify-end gap-2">
+    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newPlacement').classList.add('hidden')") }}
+    {{ template "button" (dict "label" "Create placement" "onclick" "document.getElementById('newPlacement').classList.add('hidden'); toast('Placement created (demo).','success')") }}
+  </div>
+{{ template "modal-end" . }}
+
+{{ template "drawer-start" (dict "id" "editPlacement" "title" "Edit placement") }}
+  {{ template "form-field" (dict "label" "Floor price (USD)" "name" "e_floor" "type" "number" "value" "1.50") }}
+  <div class="mb-4">{{ template "toggle" (dict "label" "Paused" "onchange" "toast(this.checked?'Paused':'Resumed','info')") }}</div>
+  <div class="flex justify-end gap-2">
+    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
+    {{ template "button" (dict "label" "Save" "onclick" "document.getElementById('editPlacement').classList.add('hidden'); toast('Saved (demo).','success')") }}
+  </div>
+{{ template "drawer-end" . }}
+
+{{ template "toast" . }}
+<script src="/static/theme.js"></script>
+</body>
+</html>

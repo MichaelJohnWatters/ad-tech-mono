@@ -169,6 +169,9 @@ func main() {
 	mux.HandleFunc("/dev/portal/advertiser", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "advertiser.html", nil)
 	})
+	mux.HandleFunc("/dev/portal/publisher", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "publisher.html", nil)
+	})
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the
