@@ -125,7 +125,16 @@ partial + (if needed) a `/static/*.js` behaviour + a doc snippet.
 - **Prompts:** which components does the first portal (advertiser) actually need? what's the
   minimal set to ship Phase 1? chart approach — inline SVG vs a 3KB lib?
 
-### F4. Real auth + session  ⬜  (blocks any non-dev portal)
+### F4. Real auth + session  🟡 (login shipped)
+> Shipped (F4a): cookie-based sessions (`middleware.Auth` reads the `adtech_session`
+> httpOnly cookie), a real login flow (`POST /v1/auth/login` → bcrypt-verify `team_members`
+> → JWT → cookie → persona redirect; `/login` page; `/v1/auth/logout`), and a seeded dev
+> admin (`admin@adtech.local` / `admin`). Additive — the dev bypass (empty signing key →
+> admin) is untouched, so it only becomes the real gate when `gateway.require_auth` + a
+> `jwt_signing` secret are set. Remaining (F4b): gate the portal routes on claims, pass
+> `*auth.Claims` to templates for **role-aware nav** (filter by `HasPermission`), agency
+> act-as, password reset (Mailpit).
+
 Today auth is bypassed (empty signing key → admin claims). A customer UI needs real login.
 - **Deliver:** login page → verify `team_members.password_hash` (bcrypt) → issue JWT
   (`middleware.CreateToken`) → httpOnly session cookie → gateway `Auth` middleware reads it →
