@@ -233,10 +233,10 @@ portals they unblock. Each becomes its own small design when picked up.
 
 | Gap | Unblocks | Sketch |
 |---|---|---|
-| **Real auth/login + session** | all portals | login → bcrypt verify `team_members` → JWT → cookie; logout/refresh; agency act-as. |
-| **Accounts + team + user CRUD + signup** | all | create account, invite user, assign role, onboarding status. Tables exist (accounts/team_members/api_keys). |
-| **Creative upload + CRUD** | advertiser | POST asset (image/HTML) → S3/Minio + `creatives` row + review_status=pending; list/edit/delete. |
-| **Deals CRUD** | publisher, advertiser | create/edit PG/Preferred/PMP; today only a read-only `/debug/exchange/deals`. |
+| **Real auth/login + session** | all portals | ✅ SHIPPED (F4a) — login → bcrypt verify → JWT → cookie; logout. Remaining: refresh, agency act-as, password reset. |
+| **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
+| **Creative upload** | advertiser | ✅ SHIPPED — `POST /v1/api/creatives` → `creatives` row, review_status=pending_review (→ moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
+| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list) — `GET/POST /v1/api/deals`, publisher-owned, invalidates the exchange cache. Remaining: edit/pause, allowlists, PG volume. |
 | **Saved + scheduled reports** | advertiser, publisher | persist `saved_reports`; schedule → email/export. Query API exists; persistence doesn't. |
 | **Moderation queue API** | staff | list pending creatives, approve/reject + reason, appeal. |
 | **Fraud rules CRUD** | staff | manage `fraud_blocklists` (IP/UA/domain); tracker already consumes them. |
