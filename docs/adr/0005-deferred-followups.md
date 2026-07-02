@@ -8,6 +8,12 @@ ledger); ADR 0002 (ClickHouse/analytics).
 
 # 1. Reporting as a pod (ADR 0004 P3)
 
+**Status: IMPLEMENTED via path (a), pending live validation (2026-07-02).** Tiltfile now runs
+reporting as a pod (`docker_build` with `build/Dockerfile.reporting`, in-image CGO); env in the
+deployment. CGO build confirmed to compile (host); the alpine/musl in-image build + pod
+networking need a `tilt up` (docker unavailable in-session). Revert = restore the
+`local_resource` block.
+
 ## Findings (verified)
 - The blocker isn't DuckDB — it's **TigerBeetle**. `cmd/reporting/ledger.go:10` imports
   `pkg/billing/tigerbeetle` **unconditionally** (package-level), which transitively imports
@@ -68,6 +74,12 @@ block to `local_resource`.
 ---
 
 # 2. Day-boundary lifecycle job (ADR 0004 P4)
+
+**Status: PHASE 1 IMPLEMENTED (2026-07-02).** `store.ActivateFlights`/`EndFlights` (IO flight
+transitions + explicit line-item cascade + captured old→new), the job rewired off Postgres with
+`CampaignStateEvent` + cache-invalidate per transition, and a daily CronJob
+(`k8s/cronjobs/dayboundary/`). Phases 2–4 (budget reset + snapshot migration, IO depletion,
+timezone) remain — logged as pending in the job. SQL needs a live DB to validate end-to-end.
 
 ## Findings (verified — the demo model doesn't match the schema)
 - **`line_items` has NO `start_date`/`end_date`** (migration 005). Flight dates live **only on
