@@ -237,13 +237,13 @@ portals they unblock. Each becomes its own small design when picked up.
 | **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
 | **Creative upload** | advertiser | ✅ SHIPPED — `POST /v1/api/creatives` → `creatives` row, review_status=pending_review (→ moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
 | **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list) — `GET/POST /v1/api/deals`, publisher-owned, invalidates the exchange cache. Remaining: edit/pause, allowlists, PG volume. |
-| **Saved + scheduled reports** | advertiser, publisher | persist `saved_reports`; schedule → email/export. Query API exists; persistence doesn't. |
-| **Moderation queue API** | staff | list pending creatives, approve/reject + reason, appeal. |
-| **Fraud rules CRUD** | staff | manage `fraud_blocklists` (IP/UA/domain); tracker already consumes them. |
-| **Publisher payouts/earnings** | publisher | statements, payout schedule, reconciliation on top of `payouts`/ledger. |
+| **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional cron schedule + delivery. Remaining: a runner that fires the schedule → email/export. |
+| **Moderation queue API** | staff | ✅ SHIPPED — `GET/POST /v1/api/moderation`, list pending creatives + approve/reject (reason required to reject), platform-wide. Remaining: appeal flow, bulk actions. |
+| **Fraud rules CRUD** | staff | ✅ SHIPPED — `GET/POST/DELETE /v1/api/fraud/blocklists`, manages `fraud_blocklists` (ip/ua/domain/app_bundle), invalidates the tracker warm cache. Remaining: rule expiry, ads.txt overrides. |
+| **Publisher payouts/earnings** | publisher | ✅ SHIPPED (read) — `GET /v1/api/payouts`, tenant-scoped history + pending/paid rollup on top of `payouts`. Remaining: downloadable statements, reconciliation vs ledger. |
+| **Webhooks CRUD** | advertiser/publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/webhooks`, per-account subs with a once-shown HMAC secret, invalidates the dispatcher cache. Remaining: pause/edit, delivery-log view, retries UI. |
 | **Quality controls CRUD** | publisher | `quality_controls` (bl/allowlists, category filters). |
 | **Ad-tag generator** | publisher | signed embed snippet (JS/Prebid/VAST) per placement. |
-| **Webhooks CRUD** | advertiser/publisher | register URL + events; `pkg/webhooks` exists, no binary/API. |
 | **Topup / billing actions** | advertiser | prepay/credit; `billing:topup` permission exists. |
 
 ---
