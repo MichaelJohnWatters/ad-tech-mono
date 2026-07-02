@@ -242,9 +242,9 @@ portals they unblock. Each becomes its own small design when picked up.
 | **Fraud rules CRUD** | staff | ✅ SHIPPED — `GET/POST/DELETE /v1/api/fraud/blocklists`, manages `fraud_blocklists` (ip/ua/domain/app_bundle), invalidates the tracker warm cache. Remaining: rule expiry, ads.txt overrides. |
 | **Publisher payouts/earnings** | publisher | ✅ SHIPPED (read) — `GET /v1/api/payouts`, tenant-scoped history + pending/paid rollup on top of `payouts`. Remaining: downloadable statements, reconciliation vs ledger. |
 | **Webhooks CRUD** | advertiser/publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/webhooks`, per-account subs with a once-shown HMAC secret, invalidates the dispatcher cache. Remaining: pause/edit, delivery-log view, retries UI. |
-| **Quality controls CRUD** | publisher | `quality_controls` (bl/allowlists, category filters). |
-| **Ad-tag generator** | publisher | signed embed snippet (JS/Prebid/VAST) per placement. |
-| **Topup / billing actions** | advertiser | prepay/credit; `billing:topup` permission exists. |
+| **Quality controls CRUD** | publisher | ✅ SHIPPED — `GET/POST/DELETE /v1/api/quality-controls`, one row per (publisher, type) across the 5 blocklist/allowlist types, publisher-ownership checked. Remaining: exchange/adserver consumption + a cache-invalidate subject. |
+| **Ad-tag generator** | publisher | ✅ SHIPPED — `GET /v1/api/adtag?placement_id=&tag_type=js\|prebid\|vast`, derives a paste-ready snippet from the placement + pubad routes. Remaining: signed/tokenized tags, size-list from creatives, copy-box UI. |
+| **Topup / billing actions** | advertiser | prepay/credit; `billing:topup` permission exists. **Money-touching — needs a ledger-backed design (idempotency key, TigerBeetle/ledger credit transfer), not a naive balance UPDATE.** |
 
 ---
 
