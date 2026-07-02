@@ -171,7 +171,7 @@
   </div>
 
   {{ template "modal-start" (dict "id" "demoModal" "title" "Example modal") }}
-    <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Modals use the shared <code class="font-mono">modal-start</code> / <code class="font-mono">modal-end</code> frame. No blocking <code class="font-mono">confirm()</code> — use toasts + undo.</p>
+    <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Modals use the shared <code class="font-mono">modal-start</code> / <code class="font-mono">modal-end</code> frame. No blocking <code class="font-mono">window.confirm()</code> — use toasts + undo.</p>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('demoModal').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Confirm" "onclick" "document.getElementById('demoModal').classList.add('hidden'); toast('Done.','success')") }}

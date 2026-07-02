@@ -27,24 +27,30 @@ cd "$ROOT"
 # Update when you change the actual code; the script complains if the
 # count drifts. If you legitimately need more, raise the budget; if
 # you cleaned some up, lower it.
-BUDGET_INLINE_STYLE=275   # web/templates/**/*.html inline style="..."
-                          # Raised from 260 to 275 (2026-06-03): added
-                          # inline CSS-var-based styles to the simulator's
-                          # confirm/prompt modal bodies + the side-by-side
-                          # trace layout. Simulator can't use Tailwind
-                          # classes since it loads theme.css instead.
-BUDGET_CONFIRM_CALLS=1    # confirm()/prompt() not preceded by window.
+BUDGET_INLINE_STYLE=290   # web/templates/**/*.html inline style="..."
+                          # Raised from 275 to 290 (2026-07-02): drift
+                          # accumulated in the simulator while nothing ran
+                          # this script — it's wired into CI now (see
+                          # .github/workflows/ci.yml) so the ratchet holds.
+                          # The component partials' 7 CSS-var inline styles
+                          # are intentional (they must render on both
+                          # Tailwind and theme.css pages).
+BUDGET_CONFIRM_CALLS=0    # confirm()/prompt() not preceded by window.
+                          # Zeroed 2026-07-02: manager.html's last confirm()
+                          # became a two-step arm/confirm delete.
 BUDGET_ARBITRARY_HEX=0    # Tailwind bg-[#abc]/text-[#fff]/border-[#000]
 BUDGET_ALERT_CALLS=0      # window-style alert()
 
 FAILED=0
 
 # inline_styles — count of style="..." attributes anywhere under
-# web/templates. Excludes the head-meta partial since the small inline
+# web/templates. Scoped to *.html (all checks are) so the components
+# README's documentation of these very rules doesn't trip them.
+# Excludes the head-meta partial since the small inline
 # styles it ships are intentional and won't be migrated to Tailwind
 # (theme persistence script, etc.).
 inline_styles() {
-    grep -rE 'style="[^"]+"' web/templates 2>/dev/null \
+    grep -rE --include='*.html' 'style="[^"]+"' web/templates 2>/dev/null \
         | grep -v 'web/templates/partials/head-meta.html' \
         | wc -l \
         | tr -d ' \n'
@@ -57,7 +63,7 @@ inline_styles() {
 # real call. confirmAction()/promptInput() are the platform
 # replacements and don't match this pattern.
 confirm_calls() {
-    grep -rE '\b(confirm|prompt)\(' web/templates 2>/dev/null \
+    grep -rE --include='*.html' '\b(confirm|prompt)\(' web/templates 2>/dev/null \
         | grep -vE 'window\.(confirm|prompt)' \
         | wc -l \
         | tr -d ' \n'
@@ -67,7 +73,7 @@ confirm_calls() {
 # values, which sidestep theme tokens. Catch them so operators reach
 # for the token (bg-svc-dsp, text-success, etc.).
 arbitrary_hex() {
-    grep -rEn '(bg|text|border)-\[#[0-9a-fA-F]{3,8}\]' web/templates 2>/dev/null \
+    grep -rEn --include='*.html' '(bg|text|border)-\[#[0-9a-fA-F]{3,8}\]' web/templates 2>/dev/null \
         | wc -l \
         | tr -d ' \n'
 }
@@ -75,7 +81,7 @@ arbitrary_hex() {
 # alert_calls — window.alert() calls. Replace with toast() from
 # /static/toast.js (loaded by the toast partial).
 alert_calls() {
-    grep -rE '\balert\(' web/templates 2>/dev/null \
+    grep -rE --include='*.html' '\balert\(' web/templates 2>/dev/null \
         | wc -l \
         | tr -d ' \n'
 }
