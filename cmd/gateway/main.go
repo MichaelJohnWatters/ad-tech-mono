@@ -187,6 +187,10 @@ func main() {
 	})
 	mux.HandleFunc("/v1/auth/login", loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
 	mux.HandleFunc("/v1/auth/logout", logoutHandler)
+	mux.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "signup.html", nil)
+	})
+	mux.HandleFunc("/v1/auth/signup", signupHandler(pgSignupStore{db: gwDB}, signingKey, log))
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the
