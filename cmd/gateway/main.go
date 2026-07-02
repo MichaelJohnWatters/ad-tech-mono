@@ -302,6 +302,11 @@ func main() {
 	// Team management — JWT-gated, tenant-scoped to the caller's account.
 	mux.Handle(routes.APITeam, authMiddleware(http.HandlerFunc(teamHandler(pgTeamStore{db: gwDB}, log))))
 
+	// Creative upload — POST to the exact (no-slash) path so it doesn't collide
+	// with the GET list proxy at APICreatives (trailing slash → ad server).
+	mux.Handle(strings.TrimSuffix(routes.APICreatives, "/"),
+		authMiddleware(http.HandlerFunc(creativeUploadHandler(pgCreativeStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
