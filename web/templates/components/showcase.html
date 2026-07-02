@@ -69,6 +69,21 @@
       </div>
     </section>
 
+    <!-- Tabs + search -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Tabs &amp; search</h2>
+      {{ template "card-start" . }}
+      {{ template "tab-bar" (dict "tabs" (slice
+          (dict "label" "Overview" "active" true)
+          (dict "label" "Campaigns")
+          (dict "label" "Creatives")
+          (dict "label" "Reports"))) }}
+      <div class="mt-4 max-w-sm">
+        {{ template "search-input" (dict "id" "demoSearch" "placeholder" "Search campaigns…") }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- Form fields -->
     <section class="mb-8">
       <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Form fields</h2>
