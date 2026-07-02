@@ -29,7 +29,7 @@ import (
 // On the duckdb backend the consumer skips them (the type assertion in
 // each handler fails) and the debug endpoints return 501 — core billing /
 // analytics events still persist. Full parity is tracked in
-// docs/MOCK_AUDIT.md (Phase A follow-up).
+// docs/PLAN.md -> "Build Status & Outstanding Work".
 func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store {
 	backend := strings.ToLower(strings.TrimSpace(cfg.Get("reporting.analytics_backend", "memory")))
 	switch backend {
@@ -44,7 +44,7 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 			os.Exit(1)
 		}
 		log.Info("analytics store: duckdb backend", "path", path)
-		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/MOCK_AUDIT.md")
+		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/PLAN.md \"Build Status & Outstanding Work\"")
 		return store
 	case "clickhouse":
 		addrs := splitAndTrim(cfg.Get("reporting.clickhouse_addr", "127.0.0.1:9000"))
@@ -63,7 +63,7 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 			os.Exit(1)
 		}
 		log.Info("analytics store: clickhouse backend", "addrs", addrs)
-		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the clickhouse backend (core + operational + rollup events are persisted); see docs/MOCK_AUDIT.md")
+		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the clickhouse backend (core + operational + rollup events are persisted); see docs/PLAN.md \"Build Status & Outstanding Work\"")
 		return store
 	default:
 		log.Error("analytics store: unknown backend, refusing to boot",

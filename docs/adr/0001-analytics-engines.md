@@ -1,7 +1,7 @@
 # ADR 0001 — Analytics engines: ClickHouse (event store) + DuckDB (ad-hoc over the data lake)
 
 **Status:** Accepted (2026-07-01)
-**Supersedes:** the earlier "DuckDB local / ClickHouse prod, swap by environment" framing in `docs/MOCK_AUDIT.md` (A1).
+**Supersedes:** the earlier "DuckDB local / ClickHouse prod, swap by environment" framing (formerly `docs/MOCK_AUDIT.md` A1, now folded into `docs/PLAN.md` -> "Build Status & Outstanding Work").
 
 ## Context
 

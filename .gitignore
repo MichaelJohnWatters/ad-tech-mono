@@ -29,6 +29,11 @@ go.work.sum
 
 # Build output
 bin/
+# Stray root-level binaries from `go build ./cmd/<svc>` (belong in bin/)
+/compact
+/migrate
+/seed
+/simulator
 
 # Editor/IDE
 .idea/
