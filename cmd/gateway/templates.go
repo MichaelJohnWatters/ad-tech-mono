@@ -23,8 +23,15 @@ const templatesRoot = "web/templates"
 // the canonical pattern is {{ template "button" (dict "label" "Save"
 // "variant" "primary") }}.
 var templateFuncs = template.FuncMap{
-	"dict": dict,
+	"dict":  dict,
+	"slice": sliceOf,
 }
+
+// sliceOf collects its args into a slice — the companion to dict for passing
+// a list literal to a component (e.g. a table's column headers):
+//
+//	{{ template "table-start" (dict "headers" (slice "Name" "Status" "Spend")) }}
+func sliceOf(vals ...any) []any { return vals }
 
 // dict converts an even-length list of key/value pairs into a map.
 // Used inside templates to pass named args to {{ template "name" .args }}

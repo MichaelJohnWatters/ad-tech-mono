@@ -1,0 +1,21 @@
+{{/* badge: a small status chip. Use for line-item/placement/creative status,
+     review states, etc.
+
+     Args (dict):
+       label   — required
+       variant — success | warn | error | info | neutral (default)
+
+     Usage:
+       {{ template "badge" (dict "label" "live" "variant" "success") }}
+       {{ template "badge" (dict "label" "pending review" "variant" "warn") }}
+*/}}
+{{ define "badge" }}
+{{- $variants := dict
+    "success" "bg-success/15 text-success"
+    "warn"    "bg-warn/15 text-warn"
+    "error"   "bg-error/15 text-error"
+    "info"    "bg-info/15 text-info"
+    "neutral" "bg-gray-500/15 text-gray-500 dark:text-gray-400" -}}
+{{- $v := or .variant "neutral" -}}
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {{ index $variants $v }}">{{ .label }}</span>
+{{ end }}

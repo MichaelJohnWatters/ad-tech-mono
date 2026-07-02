@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>Component Library — Ad Tech Platform</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100 min-h-screen">
+  <div class="max-w-5xl mx-auto px-6 py-8">
+
+    <header class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-xl font-semibold">Component Library</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400">The shared UI kit for the platform portals. See <code class="font-mono">docs/UI_BUILD_PLAN.md</code>.</p>
+      </div>
+      {{ template "button" (dict "label" "Toggle theme" "variant" "secondary" "size" "sm" "onclick" "toggleTheme()") }}
+    </header>
+
+    <!-- Buttons -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Buttons</h2>
+      {{ template "card-start" . }}
+      <div class="flex flex-wrap items-center gap-3">
+        {{ template "button" (dict "label" "Primary") }}
+        {{ template "button" (dict "label" "Secondary" "variant" "secondary") }}
+        {{ template "button" (dict "label" "Ghost" "variant" "ghost") }}
+        {{ template "button" (dict "label" "Danger" "variant" "danger") }}
+        {{ template "button" (dict "label" "Small" "size" "sm") }}
+        {{ template "button" (dict "label" "Large" "size" "lg") }}
+        {{ template "button" (dict "label" "Disabled" "disabled" true) }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- Stats -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Stat cards</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Spend today" "value" "$1,240" "delta" "+8%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Impressions" "value" "1.2M" "delta" "+3%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Fill rate" "value" "62%" "delta" "-4%" "deltaDir" "down") }}
+        {{ template "stat" (dict "label" "eCPM" "value" "$2.10" "hint" "last 24h") }}
+      </div>
+    </section>
+
+    <!-- Badges + pills -->
+    <section class="mb-8 grid md:grid-cols-2 gap-6">
+      <div>
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Status badges</h2>
+        {{ template "card-start" . }}
+        <div class="flex flex-wrap gap-2">
+          {{ template "badge" (dict "label" "live" "variant" "success") }}
+          {{ template "badge" (dict "label" "paused" "variant" "warn") }}
+          {{ template "badge" (dict "label" "ended" "variant" "neutral") }}
+          {{ template "badge" (dict "label" "rejected" "variant" "error") }}
+          {{ template "badge" (dict "label" "pending review" "variant" "info") }}
+        </div>
+        {{ template "card-end" . }}
+      </div>
+      <div>
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Filter pills</h2>
+        {{ template "card-start" . }}
+        <div class="flex flex-wrap gap-2">
+          {{ template "pill" (dict "label" "All" "active" true) }}
+          {{ template "pill" (dict "label" "Display") }}
+          {{ template "pill" (dict "label" "Video") }}
+          {{ template "pill" (dict "label" "Native") }}
+        </div>
+        {{ template "card-end" . }}
+      </div>
+    </section>
+
+    <!-- Form fields -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Form fields</h2>
+      {{ template "card-start" (dict "title" "New campaign") }}
+      <div class="grid md:grid-cols-2 gap-x-6">
+        {{ template "form-field" (dict "label" "Campaign name" "name" "name" "placeholder" "Summer sale" "required" true) }}
+        {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "daily_budget" "type" "number" "placeholder" "500" "help" "Spread evenly across the day.") }}
+        {{ template "form-field" (dict "label" "Base bid (USD)" "name" "base_bid" "type" "number" "value" "2.50") }}
+        {{ template "form-field" (dict "label" "Landing URL" "name" "url" "type" "url" "error" "Enter a valid URL") }}
+      </div>
+      <div class="flex justify-end gap-2 mt-2">
+        {{ template "button" (dict "label" "Cancel" "variant" "ghost") }}
+        {{ template "button" (dict "label" "Create campaign") }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- Table -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Data table</h2>
+      {{ template "card-start" (dict "title" "Campaigns") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Status" "Daily budget" "Spend today" "")) }}
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Summer sale</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "live" "variant" "success") }}</td>
+          <td class="px-3 py-2 font-mono">$500</td>
+          <td class="px-3 py-2 font-mono">$312</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm") }}</td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Retargeting Q3</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "paused" "variant" "warn") }}</td>
+          <td class="px-3 py-2 font-mono">$1,000</td>
+          <td class="px-3 py-2 font-mono">$0</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm") }}</td>
+        </tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- Empty state -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Empty state</h2>
+      {{ template "card-start" . }}
+      {{ template "empty-state" (dict "title" "No creatives yet" "message" "Upload your first creative to start serving ads." "actionLabel" "Upload creative" "actionOnclick" "toast('Upload flow — TODO','info')") }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- Modal + toast -->
+    <section class="mb-8">
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Modal &amp; toasts</h2>
+      {{ template "card-start" . }}
+      <div class="flex flex-wrap gap-3">
+        {{ template "button" (dict "label" "Open modal" "onclick" "document.getElementById('demoModal').classList.remove('hidden')") }}
+        {{ template "button" (dict "label" "Success toast" "variant" "secondary" "onclick" "toast('Saved.','success')") }}
+        {{ template "button" (dict "label" "Error toast" "variant" "secondary" "onclick" "toast('Something failed.','error')") }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+  </div>
+
+  {{ template "modal-start" (dict "id" "demoModal" "title" "Example modal") }}
+    <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">Modals use the shared <code class="font-mono">modal-start</code> / <code class="font-mono">modal-end</code> frame. No blocking <code class="font-mono">confirm()</code> — use toasts + undo.</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('demoModal').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Confirm" "onclick" "document.getElementById('demoModal').classList.add('hidden'); toast('Done.','success')") }}
+    </div>
+  {{ template "modal-end" . }}
+
+  {{ template "toast" . }}
+  <script src="/static/theme.js"></script>
+</body>
+</html>
