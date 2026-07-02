@@ -472,14 +472,20 @@ async function patchSecret(id, newStatus) {
     }
 }
 
+// Two-step arm/confirm: the first click arms the delete for 5s (toast
+// tells the operator to click again), the second click executes. This
+// delete is irreversible (the row is already revoked and we don't keep
+// the original value to restore), so toast+undo can't apply — the
+// re-click is the safety step, without a blocking dialog.
+const armedSecretDeletes = new Map(); // id -> disarm timeout
 async function deleteSecret(id) {
-    // Note: deliberately uses window.confirm here despite the platform
-    // preference for "toast + undo instead of dialogs" — this delete is
-    // irreversible (the secret row is already revoked; this removes the
-    // audit-trail row) and we don't keep the original value to restore.
-    // A modal would be more on-brand but adds a click without a real
-    // safety benefit. Revisit when we ship the modal-confirm partial.
-    if (!confirm('Delete this revoked secret row permanently?')) return;
+    if (!armedSecretDeletes.has(id)) {
+        armedSecretDeletes.set(id, setTimeout(() => armedSecretDeletes.delete(id), 5000));
+        toast('Click delete again within 5s to permanently remove this row', 'info');
+        return;
+    }
+    clearTimeout(armedSecretDeletes.get(id));
+    armedSecretDeletes.delete(id);
     try {
         const resp = await fetch(GW + '/v1/api/secrets/' + encodeURIComponent(id), {
             method: 'DELETE',

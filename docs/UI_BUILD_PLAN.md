@@ -147,7 +147,13 @@ Today auth is bypassed (empty signing key → admin claims). A customer UI needs
 - **Prompts:** session cookie vs Authorization header for the browser? refresh strategy? password
   reset + email (Mailpit exists)? MFA scope? real signup now or invite-only?
 
-### F5. Guardrails  ⬜
+### F5. Guardrails  ✅
+> Shipped: `scripts/audit-ui.sh` (ratcheting budgets — inline styles 290, confirm/prompt 0,
+> arbitrary hex 0, alert 0) now runs in CI via `.github/workflows/ci.yml` (audit-ui + build +
+> unit tests on push/PR — the repo's first CI). manager.html's last `confirm()` became a
+> two-step arm/confirm delete. `web/templates/components/README.md` documents the inventory,
+> compose-don't-copy rule, house style, and how to add a component.
+
 CI/lint: grep-fail on `style="`, `confirm(`, `prompt(` in `web/templates`; a components README so
 new screens compose instead of copy-paste.
 

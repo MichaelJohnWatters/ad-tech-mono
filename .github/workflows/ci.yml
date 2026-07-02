@@ -1,0 +1,31 @@
+# CI — unit tests + UI design-system guardrails.
+#
+# Deliberately minimal: no services, no docker. Integration tests
+# (testcontainers, -tags=integration), DuckDB (CGO), and e2e (full Tilt
+# stack) stay local/manual — see the Makefile test-* targets.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # UI guardrails (UI plan F5): ratcheting budgets for inline styles,
+  # confirm()/prompt()/alert(), and raw-hex Tailwind classes in
+  # web/templates. See scripts/audit-ui.sh for the budgets.
+  audit-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make audit-ui
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go test ./...
