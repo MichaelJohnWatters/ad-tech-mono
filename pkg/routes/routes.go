@@ -76,6 +76,11 @@ const (
 	// tenant-scoped.
 	APISavedReports = apiPrefix + "/api/reports/saved"
 
+	// APIPayouts is the publisher earnings/payout history (GET only). JWT-gated
+	// on earnings:view; tenant-scoped; read-only (payouts are created by the
+	// billing settlement job).
+	APIPayouts = apiPrefix + "/api/payouts"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"

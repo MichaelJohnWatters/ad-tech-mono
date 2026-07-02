@@ -326,6 +326,10 @@ func main() {
 	// reports:read/reports:save gated).
 	mux.Handle(routes.APISavedReports, authMiddleware(http.HandlerFunc(savedReportsHandler(pgSavedReportStore{db: gwDB}, log))))
 
+	// Payouts — publisher earnings/payout history (read-only, tenant-scoped,
+	// earnings:view gated).
+	mux.Handle(routes.APIPayouts, authMiddleware(http.HandlerFunc(payoutsHandler(pgPayoutStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
