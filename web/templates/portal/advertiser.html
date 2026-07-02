@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>Advertiser — AdTech</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
+<div class="flex min-h-screen">
+
+  {{ template "app-sidebar" (dict "persona" "Advertiser" "items" (slice
+      (dict "label" "Dashboard"  "icon" "▤" "href" "#" "active" true)
+      (dict "label" "Campaigns"  "icon" "◎" "href" "#")
+      (dict "label" "Creatives"  "icon" "▣" "href" "#")
+      (dict "label" "Audiences"  "icon" "◍" "href" "#")
+      (dict "label" "Reports"    "icon" "▧" "href" "#")
+      (dict "label" "Billing"    "icon" "▦" "href" "#")
+      (dict "label" "Settings"   "icon" "⚙" "href" "#"))) }}
+
+  <main class="flex-1 min-w-0">
+    <!-- Top bar -->
+    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
+      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Advertiser") (dict "label" "Dashboard"))) }}
+      <div class="flex items-center gap-3">
+        {{ template "search-input" (dict "id" "topSearch" "placeholder" "Search…") }}
+        {{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}
+      </div>
+    </div>
+
+    <div class="p-6 space-y-6">
+      <!-- NOTE: demo data — this is a design mock (UI plan Phase 1). Real data
+           wires to the existing APIs (GET /v1/api/campaigns, POST /v1/api/reports,
+           /v1/billing/summary) once F4 auth + handlers land. -->
+
+      <!-- KPI row -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Spend today" "value" "$1,240" "delta" "+8%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Impressions" "value" "1.24M" "delta" "+3%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Clicks" "value" "8,410" "delta" "-2%" "deltaDir" "down") }}
+        {{ template "stat" (dict "label" "CTR" "value" "0.68%" "hint" "vs 0.71% avg") }}
+      </div>
+
+      <!-- Trend -->
+      {{ template "card-start" (dict "title" "Spend — last 7 days") }}
+      <div class="text-brand h-16">{{ template "sparkline" (dict "values" (slice 820 910 760 1180 1040 1210 1240) "width" 640 "height" 60) }}</div>
+      {{ template "card-end" . }}
+
+      <!-- Campaigns table -->
+      {{ template "card-start" (dict "title" "Campaigns") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Status" "Daily budget" "Spend today" "CTR" "")) }}
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Summer sale</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "live" "variant" "success") }}</td>
+          <td class="px-3 py-2 font-mono">$500</td>
+          <td class="px-3 py-2 font-mono">$312</td>
+          <td class="px-3 py-2 font-mono">0.72%</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Retargeting Q3</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "paused" "variant" "warn") }}</td>
+          <td class="px-3 py-2 font-mono">$1,000</td>
+          <td class="px-3 py-2 font-mono">$0</td>
+          <td class="px-3 py-2 font-mono">0.55%</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
+        </tr>
+        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <td class="px-3 py-2 font-medium">Brand awareness</td>
+          <td class="px-3 py-2">{{ template "badge" (dict "label" "ended" "variant" "neutral") }}</td>
+          <td class="px-3 py-2 font-mono">$300</td>
+          <td class="px-3 py-2 font-mono">$0</td>
+          <td class="px-3 py-2 font-mono">0.61%</td>
+          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
+        </tr>
+      {{ template "table-end" . }}
+      <div class="mt-3">{{ template "pagination" (dict "summary" "1–3 of 3" "prevDisabled" true "nextDisabled" true) }}</div>
+      {{ template "card-end" . }}
+    </div>
+  </main>
+</div>
+
+<!-- New campaign modal -->
+{{ template "modal-start" (dict "id" "newCampaign" "title" "New campaign") }}
+  {{ template "form-field" (dict "label" "Campaign name" "name" "name" "placeholder" "Summer sale" "required" true) }}
+  <div class="grid grid-cols-2 gap-x-4">
+    {{ template "form-field" (dict "label" "Base bid (USD)" "name" "base_bid" "type" "number" "value" "2.50") }}
+    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "daily_budget" "type" "number" "placeholder" "500") }}
+  </div>
+  <div class="flex justify-end gap-2">
+    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
+    {{ template "button" (dict "label" "Create campaign" "onclick" "document.getElementById('newCampaign').classList.add('hidden'); toast('Campaign created (demo).','success')") }}
+  </div>
+{{ template "modal-end" . }}
+
+<!-- Edit campaign drawer -->
+{{ template "drawer-start" (dict "id" "editCampaign" "title" "Edit campaign") }}
+  {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "e_budget" "type" "number" "value" "500") }}
+  {{ template "form-field" (dict "label" "Base bid (USD)" "name" "e_bid" "type" "number" "value" "2.50") }}
+  <div class="mb-4">{{ template "toggle" (dict "label" "Paused" "onchange" "toast(this.checked?'Paused':'Resumed','info')") }}</div>
+  <div class="flex justify-end gap-2">
+    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
+    {{ template "button" (dict "label" "Save" "onclick" "document.getElementById('editCampaign').classList.add('hidden'); toast('Saved (demo).','success')") }}
+  </div>
+{{ template "drawer-end" . }}
+
+{{ template "toast" . }}
+<script src="/static/theme.js"></script>
+</body>
+</html>
