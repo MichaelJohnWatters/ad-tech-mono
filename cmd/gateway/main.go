@@ -163,6 +163,12 @@ func main() {
 	mux.HandleFunc("/dev/components", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "showcase.html", nil)
 	})
+	// Advertiser portal design mock (UI plan Phase 1) — composes the component
+	// library + app shell with demo data. Wires to real APIs (campaigns/reports/
+	// billing) once F4 auth + handlers land; for now a visual/design reference.
+	mux.HandleFunc("/dev/portal/advertiser", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "advertiser.html", nil)
+	})
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the

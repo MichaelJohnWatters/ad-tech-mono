@@ -1,0 +1,29 @@
+{{/* app-sidebar: the left navigation for the persona portals. Nav items are
+     data so the caller (eventually: filtered by the user's permissions) decides
+     what shows. Active item highlighted.
+
+     Args (dict):
+       brand   — wordmark (default "AdTech")
+       persona — small label under the wordmark (e.g. "Advertiser")
+       items   — []dict, each { label, href, icon(optional), active(bool) }
+
+     Usage: see web/templates/portal/advertiser.html.
+*/}}
+{{ define "app-sidebar" }}
+<aside class="w-56 shrink-0 border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark min-h-screen flex flex-col">
+  <div class="px-4 h-14 flex items-center gap-2 border-b border-gray-100 dark:border-gray-800">
+    <span class="font-semibold text-brand">{{ or .brand "AdTech" }}</span>
+    {{ with .persona }}<span class="text-xs px-1.5 py-0.5 rounded bg-brand/10 text-brand">{{ . }}</span>{{ end }}
+  </div>
+  <nav class="flex-1 p-2 space-y-0.5">
+    {{ range .items }}
+    <a href="{{ .href }}" class="flex items-center gap-2 px-3 py-2 rounded-md text-sm {{ if .active }}bg-brand/10 text-brand font-medium{{ else }}text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800{{ end }}">
+      {{ with .icon }}<span class="w-4 text-center">{{ . }}</span>{{ end }}<span>{{ .label }}</span>
+    </a>
+    {{ end }}
+  </nav>
+  <div class="p-2 border-t border-gray-100 dark:border-gray-800">
+    <button onclick="toggleTheme()" class="w-full text-left px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800">◐ Toggle theme</button>
+  </div>
+</aside>
+{{ end }}

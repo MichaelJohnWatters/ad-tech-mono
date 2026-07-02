@@ -109,6 +109,27 @@ func TestShowcaseRenders(t *testing.T) {
 	}
 }
 
+// TestAdvertiserPortalRenders executes the advertiser portal design mock — the
+// component library composed into a real screen with the app-sidebar shell.
+func TestAdvertiserPortalRenders(t *testing.T) {
+	chdirToRepoRoot(t)
+	mgr, err := newTemplateManager(true)
+	if err != nil {
+		t.Fatalf("newTemplateManager: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	mgr.Render(rec, "advertiser.html", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Advertiser", "Campaigns", "Spend today", "Summer sale", "New campaign"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered advertiser portal missing %q", want)
+		}
+	}
+}
+
 func templateNames(m *templateManager) []string {
 	var names []string
 	for _, t := range m.tmpl.Templates() {
