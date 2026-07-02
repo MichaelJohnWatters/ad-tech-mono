@@ -318,6 +318,10 @@ func main() {
 	// invalidate the tracker fraud-rules warm cache.
 	mux.Handle(routes.APIFraudBlocklists, authMiddleware(http.HandlerFunc(fraudRulesHandler(pgFraudRuleStore{db: gwDB}, secretsBus, log))))
 
+	// Webhooks — account subscription management (tenant-scoped, webhooks:*
+	// gated); mutations invalidate the dispatcher's webhook-subs warm cache.
+	mux.Handle(routes.APIWebhooks, authMiddleware(http.HandlerFunc(webhooksHandler(pgWebhookStore{db: gwDB}, secretsBus, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

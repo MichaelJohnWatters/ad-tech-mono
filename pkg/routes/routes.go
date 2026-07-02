@@ -66,6 +66,11 @@ const (
 	// invalidate so the tracker warm cache reloads sub-second.
 	APIFraudBlocklists = apiPrefix + "/api/fraud/blocklists"
 
+	// APIWebhooks is account webhook-subscription management (GET list, POST
+	// create, DELETE remove). JWT-gated on webhooks:*; tenant-scoped. Mutations
+	// publish the webhook-subs cache invalidate so the dispatcher reloads.
+	APIWebhooks = apiPrefix + "/api/webhooks"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
