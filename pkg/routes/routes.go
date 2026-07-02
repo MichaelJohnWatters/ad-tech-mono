@@ -81,6 +81,11 @@ const (
 	// billing settlement job).
 	APIPayouts = apiPrefix + "/api/payouts"
 
+	// APIQualityControls is publisher inventory quality-control management (GET
+	// list, POST upsert, DELETE remove). JWT-gated on quality:read/quality:update;
+	// tenant-scoped; a create must reference a publisher the caller owns.
+	APIQualityControls = apiPrefix + "/api/quality-controls"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"

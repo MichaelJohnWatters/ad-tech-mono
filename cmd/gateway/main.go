@@ -330,6 +330,10 @@ func main() {
 	// earnings:view gated).
 	mux.Handle(routes.APIPayouts, authMiddleware(http.HandlerFunc(payoutsHandler(pgPayoutStore{db: gwDB}, log))))
 
+	// Quality controls — publisher allow/block lists (tenant-scoped, quality:*
+	// gated); create verifies publisher ownership.
+	mux.Handle(routes.APIQualityControls, authMiddleware(http.HandlerFunc(qualityControlsHandler(pgQualityControlStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
