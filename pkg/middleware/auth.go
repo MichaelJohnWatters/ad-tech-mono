@@ -45,6 +45,12 @@ func ClaimsFromContext(ctx context.Context) *auth.Claims {
 	return nil
 }
 
+// WithClaims returns a context carrying the given claims. Exposed so handlers
+// and tests can attach an identity without routing through the Auth middleware.
+func WithClaims(ctx context.Context, c *auth.Claims) context.Context {
+	return context.WithValue(ctx, claimsKey{}, c)
+}
+
 // Auth returns middleware that validates JWT tokens and injects claims into context.
 // In dev mode (signingKey empty), it creates a default admin claim for all requests.
 func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
