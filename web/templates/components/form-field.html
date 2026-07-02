@@ -1,0 +1,27 @@
+{{/* form-field: label + input + help/error. The building block for forms.
+
+     Args (dict):
+       label       — required
+       name        — input id/name
+       type        — text (default) | number | email | password | date | url
+       value       — optional prefill
+       placeholder — optional
+       help        — optional hint (hidden when error is set)
+       error       — optional error message (reddens the field)
+       required    — bool
+
+     Usage:
+       {{ template "form-field" (dict "label" "Daily budget" "name" "daily_budget" "type" "number" "placeholder" "500" "required" true) }}
+*/}}
+{{ define "form-field" }}
+<div class="mb-4">
+  <label {{ with .name }}for="{{ . }}"{{ end }} class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">{{ .label }}{{ if .required }} <span class="text-error">*</span>{{ end }}</label>
+  <input type="{{ or .type "text" }}"
+         {{ with .name }}id="{{ . }}" name="{{ . }}"{{ end }}
+         {{ with .value }}value="{{ . }}"{{ end }}
+         {{ with .placeholder }}placeholder="{{ . }}"{{ end }}
+         {{ if .required }}required{{ end }}
+         class="w-full px-3 py-2 text-sm rounded-md border {{ if .error }}border-error{{ else }}border-gray-300 dark:border-gray-700{{ end }} bg-white dark:bg-surface-dark text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-brand/40">
+  {{ if .error }}<p class="mt-1 text-xs text-error">{{ .error }}</p>{{ else }}{{ with .help }}<p class="mt-1 text-xs text-gray-400">{{ . }}</p>{{ end }}{{ end }}
+</div>
+{{ end }}

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,9 +79,32 @@ func TestTemplateManagerLoadsAllPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTemplateManager: %v", err)
 	}
-	for _, name := range []string{"dashboard.html", "layout.html", "minimal.html", "explorer.html", "manager.html"} {
+	for _, name := range []string{"dashboard.html", "layout.html", "minimal.html", "explorer.html", "manager.html", "showcase.html"} {
 		if mgr.tmpl.Lookup(name) == nil {
 			t.Errorf("template %q not loaded; available: %v", name, templateNames(mgr))
+		}
+	}
+}
+
+// TestShowcaseRenders executes the component-library showcase end-to-end —
+// parsing (above) only proves syntax; this proves every component actually
+// renders (no bad index/field access, funcs resolve) by writing it to a
+// recorder and checking the output.
+func TestShowcaseRenders(t *testing.T) {
+	chdirToRepoRoot(t)
+	mgr, err := newTemplateManager(true)
+	if err != nil {
+		t.Fatalf("newTemplateManager: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	mgr.Render(rec, "showcase.html", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Component Library", "Stat cards", "Summer sale", "toggleTheme()", "New campaign"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered showcase missing %q", want)
 		}
 	}
 }

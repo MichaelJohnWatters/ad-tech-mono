@@ -1,0 +1,25 @@
+{{/* stat: a KPI card — big number + label + optional delta + hint.
+
+     Args (dict):
+       label    — required, small caption
+       value    — required, the number/text (rendered mono)
+       delta    — optional, e.g. "+12%"
+       deltaDir — up | down | flat (default) — colours the delta
+       hint     — optional sub-caption
+
+     Usage:
+       {{ template "stat" (dict "label" "Spend today" "value" "$1,240" "delta" "+8%" "deltaDir" "up") }}
+*/}}
+{{ define "stat" }}
+{{- $dir := or .deltaDir "flat" -}}
+<div class="rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4">
+  <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">{{ .label }}</div>
+  <div class="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-100 font-mono">{{ .value }}</div>
+  {{ with .delta }}
+  <div class="mt-1 text-xs font-medium {{ if eq $dir "up" }}text-success{{ else if eq $dir "down" }}text-error{{ else }}text-gray-500{{ end }}">
+    {{ if eq $dir "up" }}▲{{ else if eq $dir "down" }}▼{{ end }} {{ . }}
+  </div>
+  {{ end }}
+  {{ with .hint }}<div class="mt-1 text-xs text-gray-400">{{ . }}</div>{{ end }}
+</div>
+{{ end }}

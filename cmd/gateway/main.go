@@ -157,6 +157,12 @@ func main() {
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})
+	// Component-library showcase — the shared UI kit for the platform portals
+	// (docs/UI_BUILD_PLAN.md, foundation F3). A living reference so new screens
+	// compose from partials instead of copy-pasting markup.
+	mux.HandleFunc("/dev/components", func(w http.ResponseWriter, r *http.Request) {
+		templates.Render(w, "showcase.html", nil)
+	})
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the
