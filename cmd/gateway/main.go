@@ -322,6 +322,10 @@ func main() {
 	// gated); mutations invalidate the dispatcher's webhook-subs warm cache.
 	mux.Handle(routes.APIWebhooks, authMiddleware(http.HandlerFunc(webhooksHandler(pgWebhookStore{db: gwDB}, secretsBus, log))))
 
+	// Saved reports — account saved/scheduled reports (tenant-scoped,
+	// reports:read/reports:save gated).
+	mux.Handle(routes.APISavedReports, authMiddleware(http.HandlerFunc(savedReportsHandler(pgSavedReportStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
