@@ -299,6 +299,9 @@ func main() {
 	// the opt-out + fans out so the DSP stops bidding for the user.
 	mux.Handle(routes.APIPrivacyOptOut, secretsAuth(http.HandlerFunc(privacyOptOutHandler(gwDB, secretsBus, log))))
 
+	// Team management — JWT-gated, tenant-scoped to the caller's account.
+	mux.Handle(routes.APITeam, authMiddleware(http.HandlerFunc(teamHandler(pgTeamStore{db: gwDB}, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

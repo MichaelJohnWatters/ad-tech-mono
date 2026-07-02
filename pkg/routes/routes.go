@@ -47,6 +47,10 @@ const (
 	// Records opt_out_registry + publishes OptOutEvent + cache-invalidate.
 	APIPrivacyOptOut = apiPrefix + "/api/privacy/optout"
 
+	// APITeam manages the caller's account team members (GET list, POST invite).
+	// JWT-gated; tenant-scoped to the caller's account.
+	APITeam = apiPrefix + "/api/team"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
