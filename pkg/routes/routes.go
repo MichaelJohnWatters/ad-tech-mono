@@ -86,6 +86,12 @@ const (
 	// tenant-scoped; a create must reference a publisher the caller owns.
 	APIQualityControls = apiPrefix + "/api/quality-controls"
 
+	// APIAdTag generates a publisher embed snippet for a placement (GET only,
+	// ?placement_id=&tag_type=js|prebid|vast). JWT-gated on placements:read;
+	// tenant-scoped; read-only (derives the tag from the placement + pubad
+	// routes).
+	APIAdTag = apiPrefix + "/api/adtag"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
