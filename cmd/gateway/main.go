@@ -307,6 +307,10 @@ func main() {
 	mux.Handle(strings.TrimSuffix(routes.APICreatives, "/"),
 		authMiddleware(http.HandlerFunc(creativeUploadHandler(pgCreativeStore{db: gwDB}, log))))
 
+	// Deals — JWT-gated, tenant-scoped; create verifies publisher ownership +
+	// invalidates the exchange deal cache.
+	mux.Handle(routes.APIDeals, authMiddleware(http.HandlerFunc(dealsHandler(pgDealStore{db: gwDB}, secretsBus, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

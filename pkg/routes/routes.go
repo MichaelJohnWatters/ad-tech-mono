@@ -51,6 +51,10 @@ const (
 	// JWT-gated; tenant-scoped to the caller's account.
 	APITeam = apiPrefix + "/api/team"
 
+	// APIDeals is publisher deal management (GET list, POST create). JWT-gated;
+	// tenant-scoped; a create must reference a publisher the caller owns.
+	APIDeals = apiPrefix + "/api/deals"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
