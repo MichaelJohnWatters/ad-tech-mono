@@ -78,7 +78,15 @@ func publishersListHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		rows, err := db.QueryContext(ctx, "SELECT id::text, name, domain FROM publishers WHERE status != 'archived' ORDER BY name")
+		// Tenant read filter: a customer session (publisher via the gateway)
+		// only gets its own publishers as attach targets.
+		q := "SELECT id::text, name, domain FROM publishers WHERE status != 'archived' ORDER BY name"
+		args := []any{}
+		if scope := middleware.CallerScope(r); scope.Resolved && !scope.Platform {
+			q = "SELECT id::text, name, domain FROM publishers WHERE status != 'archived' AND account_id = $1::uuid ORDER BY name"
+			args = append(args, scope.AccountID)
+		}
+		rows, err := db.QueryContext(ctx, q, args...)
 		if err != nil {
 			log.Error("publishers list query failed", "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)

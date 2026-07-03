@@ -24,32 +24,64 @@ type Scope struct {
 	Resolved bool
 }
 
-// CallerScope resolves the tenant scope of a request. It prefers the API-key
-// secret (the direct management path — AuthAPIKey attached it to the context),
-// then falls back to the gateway-injected X-Account-ID / X-User-ID headers (the
-// JWT path, where the gateway already validated the token). Platform-owned API
-// keys (owner in {platform, staff, admin}) are unscoped superusers — this keeps
-// the seeded operator key and the pub sim / e2e harness working while making
-// account-scoped keys properly isolated.
+// CallerScope resolves the tenant scope of a request.
+//
+// Resolution order:
+//
+//  1. Account-scoped API key (AuthAPIKey attached the secret to the context,
+//     owner is an account) → scoped to that account. Headers can't widen it.
+//  2. Platform-owned API key (owner in {platform, staff, admin}) → the KEY
+//     authenticates the channel; if the gateway forwarded an end-user
+//     identity (X-Account-ID + X-Account-Type), that identity NARROWS the
+//     scope — customer types (advertiser/publisher/agency) are scoped to
+//     their account, staff/admin stay platform. Without forwarded headers
+//     (the pub sim, e2e harness, curl with the operator key) the key is an
+//     unscoped superuser, as before.
+//  3. No key → the gateway-injected headers alone (the JWT path, where the
+//     gateway already validated the token).
+//
+// Step 2 closes the proxy hole: the gateway presents its platform service
+// key on every proxied call, and without the narrowing an advertiser
+// browser session would arrive at internal services as a superuser.
 func CallerScope(r *http.Request) Scope {
 	if sec := SecretFromContext(r.Context()); sec != nil {
 		switch strings.ToLower(strings.TrimSpace(sec.Owner)) {
 		case "platform", "staff", "admin":
+			if hs, ok := headerScope(r); ok {
+				return hs
+			}
 			return Scope{Platform: true, Actor: "apikey:" + sec.Name, Resolved: true}
 		default:
 			return Scope{AccountID: sec.Owner, Actor: "apikey:" + sec.Name, Resolved: true}
 		}
 	}
-	acct := strings.TrimSpace(r.Header.Get(constants.HeaderAccountID))
-	if acct != "" {
-		user := strings.TrimSpace(r.Header.Get(constants.HeaderUserID))
-		actor := "user:" + user
-		if user == "" {
-			actor = "account:" + acct
-		}
-		return Scope{AccountID: acct, Actor: actor, Resolved: true}
+	if hs, ok := headerScope(r); ok {
+		return hs
 	}
 	return Scope{}
+}
+
+// headerScope resolves the gateway-forwarded end-user identity. Customer
+// account types are scoped to their account; staff/admin resolve platform so
+// operator consoles and the dev bypass keep full access. A missing/unknown
+// type header keeps the old semantics (scoped) — pre-HeaderAccountType
+// callers that set X-Account-ID directly meant "act as this account".
+func headerScope(r *http.Request) (Scope, bool) {
+	acct := strings.TrimSpace(r.Header.Get(constants.HeaderAccountID))
+	if acct == "" {
+		return Scope{}, false
+	}
+	user := strings.TrimSpace(r.Header.Get(constants.HeaderUserID))
+	actor := "user:" + user
+	if user == "" {
+		actor = "account:" + acct
+	}
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get(constants.HeaderAccountType))) {
+	case "staff", "admin":
+		return Scope{Platform: true, Actor: actor, Resolved: true}, true
+	default:
+		return Scope{AccountID: acct, Actor: actor, Resolved: true}, true
+	}
 }
 
 // CanMutate reports whether this scope may mutate a resource owned by
