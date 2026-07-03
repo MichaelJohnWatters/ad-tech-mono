@@ -93,10 +93,11 @@ if dev_mode == 'fast':
     # local_resource / host-process gap. See docs/PODS_MIGRATION.md
     # for the full plan + rollback steps.
     #
-    # Reporting stays as local_resource for now — CGO + DuckDB needs
-    # a cross-compile workaround that's been flaky. Will be migrated
-    # once the cross-compile path is stable.
+    # Reporting included: its CGO parts (tigerbeetle-go) cross-compile
+    # on the host via `zig cc` — see the reporting-build resource.
     # --------------------------------------------------------
+    if str(local('command -v zig || true', quiet=True)).strip() == '':
+        fail('zig is required (reporting CGO cross-compile fast path): brew install zig')
 
     # ---- Tracker (no DB deps, simplest to validate) ----
     local_resource('tracker-build',
@@ -235,16 +236,27 @@ if dev_mode == 'fast':
         port_forwards=['8080:8080', '8443:8443'], labels=['services'],
         links=['https://localhost:8443', 'https://localhost:8443/dev/publisher-simulator', 'http://localhost:8080', 'http://gateway.adtech.local'])
 
-    # ---- Reporting (POD — in-image CGO build for TigerBeetle, ADR 0005 §1) ----
-    # reporting imports tigerbeetle-go (CGO). tigerbeetle-go bundles a
-    # self-contained musl-safe static lib, so build/Dockerfile.reporting builds
-    # it in-image (CGO_ENABLED=1, clickhouse + TB, no duckdb tag). Trade-off:
-    # no live_update — a reporting/pkg edit triggers a full image rebuild
-    # (~30-60s). Acceptable since reporting is edited rarely. All analytics /
-    # billing config lives in the deployment env (in-cluster service DNS).
-    docker_build('adtech-reporting', '.', dockerfile='build/Dockerfile.reporting')
+    # ---- Reporting (POD — host cross-compile via zig, same fast path as
+    # every other service) ----
+    # reporting imports tigerbeetle-go (CGO), which used to force an in-image
+    # compile — the one heavy docker build left, and the thing that kept
+    # wedging the Colima VM under buildkit load. `zig cc` cross-compiles the
+    # CGO parts against musl on the HOST instead (tigerbeetle-go's static lib
+    # is musl-safe), producing a static Linux ELF: first build ~30min (zig
+    # populates its cache), incrementals ~2s, and the VM only ever does a
+    # trivial COPY. Prereq: `brew install zig` (checked at Tiltfile load).
+    # build/Dockerfile.reporting remains the prod/CI in-image build.
+    local_resource('reporting-build',
+        cmd='CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -o ./bin/reporting ./cmd/reporting',
+        deps=['cmd/reporting', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-reporting', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'reporting'},
+        only=['bin/reporting', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/reporting', '/app')])
     k8s_yaml(['k8s/base/reporting/deployment.yaml', 'k8s/base/reporting/service.yaml'])
-    k8s_resource('reporting', resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle'],
+    k8s_resource('reporting', resource_deps=['reporting-build', 'nats', 'postgres', 'clickhouse', 'tigerbeetle'],
         port_forwards=['8086:8086'], labels=['services'])
 
 else:
