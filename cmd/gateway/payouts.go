@@ -56,6 +56,12 @@ func payoutsHandler(store payoutStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		// The dev-bypass identity ("dev-account") isn't a real accounts row —
+		// serve an empty view instead of letting Postgres reject the uuid cast.
+		if !uuidRe.MatchString(claims.AccountID) {
+			_ = json.NewEncoder(w).Encode(payoutsResponse{Payouts: []payoutView{}, Currency: "USD"})
+			return
+		}
 		resp, err := store.ListPayouts(r.Context(), claims.AccountID)
 		if err != nil {
 			log.Error("payout list failed", "error", err)

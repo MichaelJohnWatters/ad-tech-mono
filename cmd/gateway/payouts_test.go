@@ -21,7 +21,7 @@ func (f *fakePayoutStore) ListPayouts(_ context.Context, accountID string) (payo
 }
 
 func TestPayoutsHandler(t *testing.T) {
-	pub := &auth.Claims{AccountID: "acc-9", AccountType: auth.AccountPublisher,
+	pub := &auth.Claims{AccountID: "99999999-9999-4999-8999-999999999999", AccountType: auth.AccountPublisher,
 		Permissions: []string{"earnings:view"}}
 
 	// GET scoped to caller's account, rollup echoed through.
@@ -34,7 +34,7 @@ func TestPayoutsHandler(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/api/payouts", nil), pub)
 	payoutsHandler(store, quietLog())(rec, req)
-	if rec.Code != http.StatusOK || store.gotAcc != "acc-9" {
+	if rec.Code != http.StatusOK || store.gotAcc != "99999999-9999-4999-8999-999999999999" {
 		t.Fatalf("get code=%d acc=%q body=%s", rec.Code, store.gotAcc, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"paid_cents":1250`) {
