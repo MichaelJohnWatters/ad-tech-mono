@@ -174,9 +174,12 @@ func main() {
 	advertiserPortal := requireLoginPage(signingKey, advertiserPortalHandler(templates, signingKey))
 	mux.HandleFunc("/portal/advertiser", advertiserPortal)
 	mux.HandleFunc("/dev/portal/advertiser", advertiserPortal)
-	mux.HandleFunc("/dev/portal/publisher", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "publisher.html", nil)
-	}))
+	// Publisher portal (UI plan Phase 2) — same shape for the supply side:
+	// dashboard (fill/eCPM/earnings), placements CRUD, ad-tag generator,
+	// earnings/payouts.
+	publisherPortal := requireLoginPage(signingKey, publisherPortalHandler(templates, signingKey))
+	mux.HandleFunc("/portal/publisher", publisherPortal)
+	mux.HandleFunc("/dev/portal/publisher", publisherPortal)
 	mux.HandleFunc("/dev/portal/staff", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "staff.html", nil)
 	}))
@@ -385,9 +388,25 @@ func main() {
 	mux.Handle(campaignsBase, authMiddleware(campaignsProxy))
 	mux.Handle(routes.APICampaigns, authMiddleware(campaignsProxy))
 
-	mux.Handle(routes.APIPlacements, authMiddleware(
+	// Placements: same exact+subtree registration as campaigns, with
+	// method-aware permissions (PATCH/DELETE /v1/api/placements/{id} reaches
+	// the SSP's by-ID handler; ownership is checked SSP-side via the
+	// forwarded identity).
+	placementsBase := strings.TrimSuffix(routes.APIPlacements, "/")
+	placementsProxy := middleware.RequirePermissionByMethod(map[string]string{
+		http.MethodGet:    "placements:read",
+		http.MethodPost:   "placements:create",
+		http.MethodPatch:  "placements:update",
+		http.MethodDelete: "placements:delete",
+	})(withServiceKey(middleware.StripPrefix(placementsBase, middleware.ReverseProxy(sspURL+routes.SSPPlacements, log))))
+	mux.Handle(placementsBase, authMiddleware(placementsProxy))
+	mux.Handle(routes.APIPlacements, authMiddleware(placementsProxy))
+
+	// Publishers list — the portal's tenant-scoped "my publishers" source
+	// (attach targets for new placements, dashboard filters, ad-tag picker).
+	mux.Handle(routes.APIPublishers, authMiddleware(
 		middleware.RequirePermission("placements:read")(withServiceKey(
-			middleware.StripPrefix(routes.APIPlacements, middleware.ReverseProxy(sspURL+routes.SSPPlacements, log))))))
+			middleware.StripPrefix(routes.APIPublishers, middleware.ReverseProxy(sspURL+routes.SSPPublishers, log))))))
 
 	mux.Handle(routes.APICreatives, authMiddleware(
 		middleware.RequirePermission("creatives:read")(withServiceKey(

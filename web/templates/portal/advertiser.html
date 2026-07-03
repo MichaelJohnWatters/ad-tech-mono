@@ -140,10 +140,11 @@
 <script src="/static/theme.js"></script>
 <script>
 // Tenant scope for report queries: advertisers see their slice, staff/admin
-// (and the dev bypass) see platform-wide. Set server-side from session claims.
+// (and the dev bypass) see platform-wide. Set server-side from session claims;
+// the gateway enforces the same scope server-side regardless.
 const PORTAL = {
   accountID: "{{ .AccountID }}",
-  isAdvertiser: {{ if .IsAdvertiser }}true{{ else }}false{{ end }},
+  scoped: {{ if .IsCustomer }}true{{ else }}false{{ end }},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -188,7 +189,7 @@ window.addEventListener('hashchange', () => showSection(location.hash.slice(1)))
 
 // ---- Reporting queries ----
 function reportQuery(body) {
-  if (PORTAL.isAdvertiser) body.filters = {...(body.filters || {}), account_id: PORTAL.accountID};
+  if (PORTAL.scoped) body.filters = {...(body.filters || {}), account_id: PORTAL.accountID};
   return fetchJSON('/v1/api/reports', {method: 'POST', body: JSON.stringify(body)});
 }
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };

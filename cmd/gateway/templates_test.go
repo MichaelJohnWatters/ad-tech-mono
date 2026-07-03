@@ -156,28 +156,56 @@ func TestAdvertiserPortalRenders(t *testing.T) {
 	if !strings.Contains(body, `href="#billing"`) {
 		t.Error("finance role should see the Billing nav link")
 	}
-	if !strings.Contains(body, `accountID: "adv-42"`) || !strings.Contains(body, "isAdvertiser: true") {
-		t.Error("tenant scope (accountID/isAdvertiser) not rendered into page JS")
+	if !strings.Contains(body, `accountID: "adv-42"`) || !strings.Contains(body, "scoped: true") {
+		t.Error("tenant scope (accountID/scoped) not rendered into page JS")
 	}
 }
 
-// TestPublisherPortalRenders executes the publisher portal design mock.
+// TestPublisherPortalRenders executes the real publisher portal through its
+// handler (UI plan Phase 2): session claims drive the sidebar filter and the
+// tenant scope the page JS uses.
 func TestPublisherPortalRenders(t *testing.T) {
 	chdirToRepoRoot(t)
 	mgr, err := newTemplateManager(true)
 	if err != nil {
 		t.Fatalf("newTemplateManager: %v", err)
 	}
+
+	// Dev bypass: admin view, full nav.
 	rec := httptest.NewRecorder()
-	mgr.Render(rec, "publisher.html", nil)
+	publisherPortalHandler(mgr, "")(rec, httptest.NewRequest("GET", "/portal/publisher", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Publisher", "Placements", "Earnings today", "Homepage leaderboard", "New placement"} {
+	for _, want := range []string{"Publisher", `href="#placements"`, `href="#adtag"`, `href="#earnings"`, "Earnings today", "New placement", "Get your ad tag"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered publisher portal missing %q", want)
 		}
+	}
+
+	// Analyst role (placements:read, no earnings:view): Earnings nav link
+	// filtered out; tenant scope rendered into the JS.
+	analyst := &auth.Claims{
+		AccountID:   "pub-77",
+		AccountType: auth.AccountPublisher,
+		Permissions: []string{"placements:read", "reports:read"},
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, _ := middleware.CreateToken(analyst, "key")
+	req := httptest.NewRequest("GET", "/portal/publisher", nil)
+	req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: token})
+	rec = httptest.NewRecorder()
+	publisherPortalHandler(mgr, "key")(rec, req)
+	body = rec.Body.String()
+	if strings.Contains(body, `href="#earnings"`) {
+		t.Error("analyst role should not see the Earnings nav link")
+	}
+	if !strings.Contains(body, `href="#placements"`) {
+		t.Error("analyst role should see the Placements nav link")
+	}
+	if !strings.Contains(body, `accountID: "pub-77"`) || !strings.Contains(body, "scoped: true") {
+		t.Error("tenant scope (accountID/scoped) not rendered into page JS")
 	}
 }
 

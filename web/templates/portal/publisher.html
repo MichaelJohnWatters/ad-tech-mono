@@ -7,94 +7,392 @@
 <body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
 <div class="flex min-h-screen">
 
-  {{ template "app-sidebar" (dict "persona" "Publisher" "items" (slice
-      (dict "label" "Dashboard"  "icon" "▤" "href" "#" "active" true)
-      (dict "label" "Inventory"  "icon" "▣" "href" "#")
-      (dict "label" "Deals"      "icon" "◈" "href" "#")
-      (dict "label" "Quality"    "icon" "◉" "href" "#")
-      (dict "label" "Earnings"   "icon" "▦" "href" "#")
-      (dict "label" "Reports"    "icon" "▧" "href" "#")
-      (dict "label" "Ad tag"     "icon" "❮❯" "href" "#")
-      (dict "label" "Settings"   "icon" "⚙" "href" "#"))) }}
+  {{ template "app-sidebar" (dict "persona" "Publisher" "items" .Nav) }}
 
   <main class="flex-1 min-w-0">
+    <!-- Top bar -->
     <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
-      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Publisher") (dict "label" "Dashboard"))) }}
+      <div class="text-sm text-gray-500 dark:text-gray-400">Publisher · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Dashboard</span></div>
       <div class="flex items-center gap-3">
-        {{ template "search-input" (dict "id" "topSearch" "placeholder" "Search…") }}
-        {{ template "button" (dict "label" "+ New placement" "onclick" "document.getElementById('newPlacement').classList.remove('hidden')") }}
+        <select id="pubSelect" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm hidden" onchange="onPublisherChange()"></select>
+        {{ template "button" (dict "label" "+ New placement" "onclick" "openNewPlacement()") }}
       </div>
     </div>
 
-    <div class="p-6 space-y-6">
-      <!-- NOTE: demo data — design mock (UI plan Phase 2). Real data wires to
-           GET /v1/api/placements, /v1/billing/summary (rev side), reports. -->
+    <!-- ============ Dashboard ============ -->
+    <section id="section-dashboard" class="portal-section p-6 space-y-6">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {{ template "stat" (dict "label" "Earnings today" "value" "$842" "delta" "+5%" "deltaDir" "up") }}
-        {{ template "stat" (dict "label" "Fill rate" "value" "62%" "delta" "-3%" "deltaDir" "down") }}
-        {{ template "stat" (dict "label" "eCPM" "value" "$2.10" "delta" "+1%" "deltaDir" "up") }}
-        {{ template "stat" (dict "label" "Requests" "value" "2.1M" "hint" "last 24h") }}
+        {{ template "stat" (dict "label" "Ad requests today" "value" "—" "id" "kpiAuctions") }}
+        {{ template "stat" (dict "label" "Impressions today" "value" "—" "id" "kpiImps") }}
+        {{ template "stat" (dict "label" "Fill rate" "value" "—" "id" "kpiFill") }}
+        {{ template "stat" (dict "label" "Earnings today" "value" "—" "id" "kpiEarnings" "hint" "gross, before rev-share") }}
       </div>
 
-      {{ template "card-start" (dict "title" "Earnings — last 7 days") }}
-      <div class="text-success h-16">{{ template "sparkline" (dict "values" (slice 610 700 660 720 780 810 842) "width" 640 "height" 60) }}</div>
+      {{ template "card-start" (dict "title" "Earnings — last 7 days (gross)") }}
+      <div id="earnTrend" class="text-brand h-20 flex items-end">
+        <span class="text-xs text-gray-400">loading…</span>
+      </div>
       {{ template "card-end" . }}
+    </section>
 
+    <!-- ============ Placements ============ -->
+    <section id="section-placements" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Placements") }}
-      {{ template "table-start" (dict "headers" (slice "Name" "Size" "Floor" "Status" "Fill" "")) }}
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Homepage leaderboard</td>
-          <td class="px-3 py-2 font-mono">728×90</td>
-          <td class="px-3 py-2 font-mono">$1.50</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "active" "variant" "success") }}</td>
-          <td class="px-3 py-2 font-mono">71%</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
-        </tr>
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Article MREC</td>
-          <td class="px-3 py-2 font-mono">300×250</td>
-          <td class="px-3 py-2 font-mono">$2.00</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "active" "variant" "success") }}</td>
-          <td class="px-3 py-2 font-mono">58%</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
-        </tr>
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Sidebar skyscraper</td>
-          <td class="px-3 py-2 font-mono">160×600</td>
-          <td class="px-3 py-2 font-mono">$1.20</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "paused" "variant" "warn") }}</td>
-          <td class="px-3 py-2 font-mono">—</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editPlacement').classList.remove('hidden')") }}</td>
-        </tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Site" "Format" "Size" "Floor" "Status" "")) }}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
-    </div>
+    </section>
+
+    <!-- ============ Ad tag ============ -->
+    <section id="section-adtag" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Get your ad tag") }}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mb-4">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Placement</span>
+          <select id="tagPlacement" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Tag type</span>
+          <select id="tagType" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="js">JavaScript (adtech.js)</option>
+            <option value="prebid">Prebid adapter</option>
+            <option value="vast">VAST URL (video)</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Generate" "onclick" "generateTag()") }}
+      </div>
+      <div id="tagOut" class="hidden">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-gray-500">Paste this on your page:</span>
+          {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyTag()") }}
+        </div>
+        <pre id="tagCode" class="text-xs font-mono bg-gray-50 dark:bg-surface-2 border border-gray-200 dark:border-gray-800 rounded-md p-4 overflow-x-auto whitespace-pre-wrap"></pre>
+      </div>
+      <div id="tagEmpty">
+        {{ template "empty-state" (dict "title" "No tag yet" "body" "Pick a placement and a tag type, then Generate.") }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Earnings ============ -->
+    <section id="section-earnings" class="portal-section p-6 space-y-6 hidden">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Pending payout" "value" "—" "id" "kpiPending") }}
+        {{ template "stat" (dict "label" "Paid out" "value" "—" "id" "kpiPaid") }}
+      </div>
+      {{ template "card-start" (dict "title" "Payout history") }}
+      {{ template "table-start" (dict "headers" (slice "Period" "Amount" "Platform fee" "Status")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
 
+<!-- New placement modal -->
 {{ template "modal-start" (dict "id" "newPlacement" "title" "New placement") }}
-  {{ template "form-field" (dict "label" "Placement name" "name" "name" "placeholder" "Homepage leaderboard" "required" true) }}
-  <div class="grid grid-cols-2 gap-x-4">
-    {{ template "form-field" (dict "label" "Width" "name" "width" "type" "number" "placeholder" "728") }}
-    {{ template "form-field" (dict "label" "Height" "name" "height" "type" "number" "placeholder" "90") }}
-  </div>
-  {{ template "form-field" (dict "label" "Floor price (USD)" "name" "floor" "type" "number" "value" "1.50") }}
-  <div class="flex justify-end gap-2">
-    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newPlacement').classList.add('hidden')") }}
-    {{ template "button" (dict "label" "Create placement" "onclick" "document.getElementById('newPlacement').classList.add('hidden'); toast('Placement created (demo).','success')") }}
-  </div>
+  <form onsubmit="createPlacement(event)">
+    {{/* form-field uses "name" as the input id — the JS reads these ids. */}}
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Site (publisher)</label>
+    <select id="np_publisher" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
+    {{ template "form-field" (dict "label" "Placement name" "name" "np_name" "placeholder" "Homepage leaderboard" "required" true) }}
+    <div class="grid grid-cols-3 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Format</span>
+        <select id="np_format" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option>display</option><option>native</option><option>video</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Width" "name" "np_width" "type" "number" "value" "728") }}
+      {{ template "form-field" (dict "label" "Height" "name" "np_height" "type" "number" "value" "90") }}
+    </div>
+    {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "np_floor" "type" "number" "value" "0.50") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newPlacement').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create placement" "type" "submit") }}
+    </div>
+  </form>
 {{ template "modal-end" . }}
 
+<!-- Edit placement drawer -->
 {{ template "drawer-start" (dict "id" "editPlacement" "title" "Edit placement") }}
-  {{ template "form-field" (dict "label" "Floor price (USD)" "name" "e_floor" "type" "number" "value" "1.50") }}
-  <div class="mb-4">{{ template "toggle" (dict "label" "Paused" "onchange" "toast(this.checked?'Paused':'Resumed','info')") }}</div>
-  <div class="flex justify-end gap-2">
-    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
-    {{ template "button" (dict "label" "Save" "onclick" "document.getElementById('editPlacement').classList.add('hidden'); toast('Saved (demo).','success')") }}
-  </div>
+  <form onsubmit="savePlacement(event)">
+    <input type="hidden" id="epID">
+    <div id="epName" class="mb-3 text-sm font-medium"></div>
+    {{ template "form-field" (dict "label" "Name" "name" "ep_name") }}
+    {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "ep_floor" "type" "number") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "type" "submit") }}
+    </div>
+  </form>
 {{ template "drawer-end" . }}
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
+<script>
+// Tenant scope: publisher sessions see their slice (and the gateway enforces
+// it server-side); staff/admin and the dev bypass see platform-wide.
+const PORTAL = {
+  accountID: "{{ .AccountID }}",
+  scoped: {{ if .IsCustomer }}true{{ else }}false{{ end }},
+};
+
+const $ = (id) => document.getElementById(id);
+// The table partial owns its <tbody>; grab it by section.
+const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
+const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtInt = (n) => Number(n || 0).toLocaleString();
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function fetchJSON(url, opts = {}) {
+  const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});
+  const text = await resp.text();
+  if (!resp.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch {}
+    throw new Error(`${resp.status}: ${msg}`);
+  }
+  return text ? JSON.parse(text) : null;
+}
+
+// ---- Publisher context (top-bar selector when the account has several) ----
+let publishers = [];
+const selectedPublisher = () => $('pubSelect').value || (publishers[0]?.id ?? '');
+
+async function loadPublishers() {
+  try {
+    publishers = await fetchJSON('/v1/api/publishers') || [];
+  } catch (err) {
+    toast('Publishers failed: ' + err.message, 'error');
+    publishers = [];
+  }
+  const sel = $('pubSelect');
+  sel.innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  sel.classList.toggle('hidden', publishers.length < 2);
+}
+
+function onPublisherChange() {
+  // Re-pull whatever is on screen for the newly selected site.
+  Object.keys(loaded).forEach(k => delete loaded[k]);
+  showSection(location.hash.slice(1) || 'dashboard');
+}
+
+// ---- Section switching (hash-driven; sidebar links are #anchors) ----
+const SECTIONS = ['dashboard', 'placements', 'adtag', 'earnings'];
+const loaded = {};
+function showSection(name) {
+  if (!SECTIONS.includes(name)) name = 'dashboard';
+  SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
+  $('crumbSection').textContent = name === 'adtag' ? 'Ad tag' : name[0].toUpperCase() + name.slice(1);
+  document.querySelectorAll('aside nav a').forEach(a => {
+    const active = a.getAttribute('href') === '#' + name;
+    a.classList.toggle('bg-brand/10', active);
+    a.classList.toggle('text-brand', active);
+    a.classList.toggle('font-medium', active);
+    a.classList.toggle('text-gray-600', !active);
+    a.classList.toggle('dark:text-gray-300', !active);
+  });
+  if (!loaded[name]) {
+    loaded[name] = true;
+    ({dashboard: loadDashboard, placements: loadPlacements, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
+  }
+}
+window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
+
+// ---- Reporting queries ----
+// Always sends the selected publisher_id; for publisher sessions the gateway
+// verifies it against the account's publishers server-side.
+function reportQuery(body) {
+  const pub = selectedPublisher();
+  if (pub) body.filters = {...(body.filters || {}), publisher_id: pub};
+  return fetchJSON('/v1/api/reports', {method: 'POST', body: JSON.stringify(body)});
+}
+const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
+const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
+// Result rows come back positionally; map columns -> value for row 0.
+const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [c, res.rows?.[0]?.[i]]));
+
+// ---- Dashboard ----
+async function loadDashboard() {
+  try {
+    const [aucs, imps] = await Promise.all([
+      reportQuery({table: 'auctions', metrics: ['count'], time_from: todayStart()}),
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], time_from: todayStart()}),
+    ]);
+    const a = firstRow(aucs), i = firstRow(imps);
+    $('kpiAuctions').textContent = fmtInt(a.count);
+    $('kpiImps').textContent = fmtInt(i.count);
+    $('kpiFill').textContent = a.count > 0 ? (100 * (i.count || 0) / a.count).toFixed(1) + '%' : '—';
+    $('kpiEarnings').textContent = fmtUSD(i.sum_cost);
+  } catch (err) { toast('KPIs failed: ' + err.message, 'error'); }
+  try {
+    const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
+    renderTrend(trend);
+  } catch (err) { $('earnTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
+}
+
+// Inline bar trend — data arrives after render, so bars are built client-side.
+function renderTrend(res) {
+  const di = res.columns.indexOf('day'), mi = res.columns.indexOf('sum_cost');
+  const rows = (res.rows || []).slice().sort((a, b) => String(a[di]).localeCompare(String(b[di])));
+  if (!rows.length) { $('earnTrend').innerHTML = '<span class="text-xs text-gray-400">no earnings in the last 7 days</span>'; return; }
+  const max = Math.max(...rows.map(r => Number(r[mi]) || 0), 0.01);
+  $('earnTrend').innerHTML = rows.map(r => {
+    const v = Number(r[mi]) || 0;
+    const h = Math.max(4, Math.round(64 * v / max));
+    return `<div class="flex-1 mx-0.5 flex flex-col items-center justify-end gap-1" title="${esc(r[di])}: ${fmtUSD(v)}">
+      <div class="w-full rounded-t bg-brand/70 hover:bg-brand" data-h="${h}"></div>
+      <div class="text-[10px] text-gray-400 font-mono">${esc(String(r[di]).slice(5))}</div>
+    </div>`;
+  }).join('');
+  // Heights are computed pixel values — set as a style property (the
+  // audit-ui lint bans inline style attributes in markup).
+  $('earnTrend').querySelectorAll('[data-h]').forEach(el => { el.style.height = el.dataset.h + 'px'; });
+}
+
+// ---- Placements ----
+const BADGE = {
+  active: 'bg-success/15 text-success', paused: 'bg-warn/15 text-warn',
+  inactive: 'bg-gray-200 dark:bg-gray-800 text-gray-500', archived: 'bg-gray-200 dark:bg-gray-800 text-gray-500',
+};
+let placementsCache = [];
+async function loadPlacements() {
+  const tbody = tbodyOf('placements');
+  try {
+    placementsCache = await fetchJSON('/v1/api/placements') || [];
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  if (!placementsCache.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">
+      No placements yet — create your first with “+ New placement”.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = placementsCache.map(p => `
+    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(p.Name)}</td>
+      <td class="px-3 py-2 text-gray-500">${esc(p.PublisherDomain || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(p.Format)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${p.Width}×${p.Height}</td>
+      <td class="px-3 py-2 font-mono">${fmtUSD(p.FloorPrice)}</td>
+      <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${BADGE[p.Status] || BADGE.inactive}">${esc(p.Status)}</span></td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="togglePlacement('${esc(p.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${p.Status === 'paused' ? 'Resume' : 'Pause'}</button>
+        <button onclick="openEditPlacement('${esc(p.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function openNewPlacement() {
+  if (!publishers.length) await loadPublishers();
+  if (!publishers.length) { toast('No publisher (site) on this account yet.', 'error'); return; }
+  $('np_publisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  $('newPlacement').classList.remove('hidden');
+}
+
+async function createPlacement(ev) {
+  ev.preventDefault();
+  const body = {
+    publisher_id: $('np_publisher').value,
+    name: $('np_name').value.trim(),
+    format: $('np_format').value,
+    width: parseInt($('np_width').value, 10) || 0,
+    height: parseInt($('np_height').value, 10) || 0,
+    floor_price: parseFloat($('np_floor').value) || 0,
+  };
+  try {
+    await fetchJSON('/v1/api/placements', {method: 'POST', body: JSON.stringify(body)});
+    $('newPlacement').classList.add('hidden');
+    toast('Placement created', 'success');
+    delete loaded.adtag; // tag picker list is stale now
+    loadPlacements();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+
+async function togglePlacement(id) {
+  const p = placementsCache.find(x => x.ID === id);
+  if (!p) return;
+  const next = p.Status === 'paused' ? 'active' : 'paused';
+  try {
+    await fetchJSON('/v1/api/placements/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({status: next})});
+    toast(next === 'paused' ? 'Placement paused' : 'Placement resumed', 'success');
+    loadPlacements();
+  } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+}
+
+function openEditPlacement(id) {
+  const p = placementsCache.find(x => x.ID === id);
+  if (!p) return;
+  $('epID').value = id;
+  $('epName').textContent = p.Name;
+  $('ep_name').value = p.Name;
+  $('ep_floor').value = p.FloorPrice;
+  $('editPlacement').classList.remove('hidden');
+}
+
+async function savePlacement(ev) {
+  ev.preventDefault();
+  const body = {name: $('ep_name').value.trim(), floor_price: parseFloat($('ep_floor').value)};
+  try {
+    await fetchJSON('/v1/api/placements/' + encodeURIComponent($('epID').value), {method: 'PATCH', body: JSON.stringify(body)});
+    $('editPlacement').classList.add('hidden');
+    toast('Placement updated', 'success');
+    loadPlacements();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Ad tag ----
+async function loadTagPicker() {
+  if (!placementsCache.length) {
+    try { placementsCache = await fetchJSON('/v1/api/placements') || []; } catch {}
+  }
+  $('tagPlacement').innerHTML = placementsCache.map(p =>
+    `<option value="${esc(p.ID)}">${esc(p.Name)} — ${p.Width}×${p.Height} (${esc(p.PublisherDomain || '')})</option>`).join('');
+}
+
+async function generateTag() {
+  const id = $('tagPlacement').value;
+  if (!id) { toast('Pick a placement first', 'info'); return; }
+  try {
+    const res = await fetchJSON('/v1/api/adtag?placement_id=' + encodeURIComponent(id) + '&tag_type=' + encodeURIComponent($('tagType').value));
+    $('tagCode').textContent = res.tag;
+    $('tagOut').classList.remove('hidden');
+    $('tagEmpty').classList.add('hidden');
+  } catch (err) { toast('Tag failed: ' + err.message, 'error'); }
+}
+
+async function copyTag() {
+  try {
+    await navigator.clipboard.writeText($('tagCode').textContent);
+    toast('Tag copied to clipboard', 'success');
+  } catch { toast('Copy failed — select and copy manually', 'error'); }
+}
+
+// ---- Earnings ----
+async function loadEarnings() {
+  const tbody = tbodyOf('earnings');
+  try {
+    const res = await fetchJSON('/v1/api/payouts');
+    $('kpiPending').textContent = fmtUSD((res.pending_cents || 0) / 100);
+    $('kpiPaid').textContent = fmtUSD((res.paid_cents || 0) / 100);
+    const rows = res.payouts || [];
+    tbody.innerHTML = rows.length ? rows.map(p => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.period_start)} → ${esc(p.period_end)}</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(p.amount)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${fmtUSD(p.platform_fee)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${p.status === 'paid' ? 'bg-success/15 text-success' : 'bg-warn/15 text-warn'}">${esc(p.status)}</span></td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No payouts yet — they appear after the billing settlement job runs.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+loadPublishers().then(() => showSection(location.hash.slice(1) || 'dashboard'));
+</script>
 </body>
 </html>
