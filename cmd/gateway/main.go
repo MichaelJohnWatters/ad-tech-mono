@@ -409,11 +409,19 @@ func main() {
 	mux.Handle(placementsBase, authMiddleware(placementsProxy))
 	mux.Handle(routes.APIPlacements, authMiddleware(placementsProxy))
 
-	// Publishers list — the portal's tenant-scoped "my publishers" source
-	// (attach targets for new placements, dashboard filters, ad-tag picker).
-	mux.Handle(routes.APIPublishers, authMiddleware(
-		middleware.RequirePermission("placements:read")(withServiceKey(
-			middleware.StripPrefix(routes.APIPublishers, middleware.ReverseProxy(sspURL+routes.SSPPublishers, log))))))
+	// Publishers — GET lists via the SSP proxy (tenant-scoped SSP-side);
+	// POST creates the caller's site locally (the onboarding step signup
+	// doesn't cover). One route, method-dispatched.
+	publishersList := middleware.RequirePermission("placements:read")(withServiceKey(
+		middleware.StripPrefix(routes.APIPublishers, middleware.ReverseProxy(sspURL+routes.SSPPublishers, log))))
+	publishersCreate := publisherCreateHandler(pgPublisherCreateStore{db: gwDB}, secretsBus, log)
+	mux.Handle(routes.APIPublishers, authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			publishersCreate(w, r)
+			return
+		}
+		publishersList.ServeHTTP(w, r)
+	})))
 
 	mux.Handle(routes.APICreatives, authMiddleware(
 		middleware.RequirePermission("creatives:read")(withServiceKey(
