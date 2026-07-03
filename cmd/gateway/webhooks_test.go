@@ -49,7 +49,7 @@ func whReq(method, target, body string, claims *auth.Claims) *http.Request {
 const whPath = "/v1/api/webhooks"
 
 func TestWebhooksHandler(t *testing.T) {
-	adv := &auth.Claims{AccountID: "acc-1", AccountType: auth.AccountAdvertiser,
+	adv := &auth.Claims{AccountID: "aaaaaaa5-5555-4555-8555-555555555555", AccountType: auth.AccountAdvertiser,
 		Permissions: []string{"webhooks:read", "webhooks:create", "webhooks:delete"}}
 
 	// List scoped to caller's account.
@@ -69,7 +69,7 @@ func TestWebhooksHandler(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d, want 201 (%s)", rec.Code, rec.Body.String())
 	}
-	if store.createdAcc != "acc-1" {
+	if store.createdAcc != "aaaaaaa5-5555-4555-8555-555555555555" {
 		t.Errorf("create account = %q, want acc-1", store.createdAcc)
 	}
 	if len(store.createdIn.Events) != 1 { // deduped + empties dropped
@@ -102,7 +102,7 @@ func TestWebhooksHandler(t *testing.T) {
 	store = &fakeWebhookStore{}
 	rec = httptest.NewRecorder()
 	webhooksHandler(store, nil, quietLog())(rec, whReq(http.MethodDelete, whPath+"?id=w1", "", adv))
-	if rec.Code != http.StatusOK || store.deletedID != "w1" || store.deletedAcc != "acc-1" {
+	if rec.Code != http.StatusOK || store.deletedID != "w1" || store.deletedAcc != "aaaaaaa5-5555-4555-8555-555555555555" {
 		t.Errorf("delete code=%d id=%q acc=%q", rec.Code, store.deletedID, store.deletedAcc)
 	}
 

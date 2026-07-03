@@ -1,16 +1,16 @@
 # Keep the docker build context lean. Every Dockerfile does `COPY . .`, so
-# without this the context ships ~440MB of junk (bin/ 342MB, .git/ 92MB) into
+# without this the context ships ~100MB of junk (.git/ 92MB + tests) into
 # the VM on every image build — sustained I/O that has repeatedly wedged the
 # Colima qemu VM mid-build.
 #
 # Deliberately KEPT in the context (images/handlers read them):
+#   bin/        — Tilt's dev fast path COPYs pre-built bin/<svc> binaries
 #   web/        — gateway image copies templates + static
 #   migrations/ — embedded by cmd/migrate
 #   docs/       — gateway serves docs/openapi.yaml from disk
 #   profiles/   — seed reads YAML profiles
 
 .git
-bin
 tests
 python
 .github

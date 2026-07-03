@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 
@@ -34,6 +36,16 @@ func selectLedger(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle)
 			log.Error("billing ledger: tigerbeetle backend requested but billing.tigerbeetle_addresses is empty")
 			os.Exit(1)
 		}
+		// The tigerbeetle client only accepts IP:port — a k8s service name
+		// ("tigerbeetle:3000") is rejected as "Invalid client cluster
+		// address". Resolve hostnames here so the same config works for the
+		// in-cluster pod (DNS service name) and a local process (127.0.0.1).
+		addrs, err := resolveAddrs(addrs)
+		if err != nil {
+			log.Error("billing ledger: failed to resolve tigerbeetle address",
+				"addresses", addrs, "error", err)
+			os.Exit(1)
+		}
 		client, err := tb.NewClient(addrs)
 		if err != nil {
 			log.Error("billing ledger: failed to connect to tigerbeetle",
@@ -63,4 +75,25 @@ func splitAndTrim(csv string) []string {
 		}
 	}
 	return out
+}
+
+// resolveAddrs rewrites host:port addresses whose host is a DNS name into
+// IP:port (first A record). Bare ports and IP literals pass through.
+func resolveAddrs(addrs []string) ([]string, error) {
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || host == "" || net.ParseIP(host) != nil {
+			// Bare port ("3000"), IP literal, or unparseable — pass through
+			// and let the client report it.
+			out = append(out, a)
+			continue
+		}
+		ips, err := net.LookupHost(host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("resolve %s: %w", host, err)
+		}
+		out = append(out, net.JoinHostPort(ips[0], port))
+	}
+	return out, nil
 }

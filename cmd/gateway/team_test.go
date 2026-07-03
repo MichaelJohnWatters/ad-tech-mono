@@ -36,19 +36,19 @@ func TestTeamHandler_ListRequiresPermAndScopes(t *testing.T) {
 	h := teamHandler(store, quietLog())
 
 	// Has team:read → 200, scoped to caller's account.
-	claims := &auth.Claims{AccountID: "acct-7", Permissions: []string{"team:read"}}
+	claims := &auth.Claims{AccountID: "aaaaaaa4-4444-4444-8444-444444444444", Permissions: []string{"team:read"}}
 	rec := httptest.NewRecorder()
 	h(rec, withClaims(httptest.NewRequest(http.MethodGet, "/v1/api/team", nil), claims))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list code = %d, want 200", rec.Code)
 	}
-	if store.gotAccount != "acct-7" {
+	if store.gotAccount != "aaaaaaa4-4444-4444-8444-444444444444" {
 		t.Errorf("list scoped to %q, want acct-7", store.gotAccount)
 	}
 
 	// No team:read → 403.
 	rec = httptest.NewRecorder()
-	h(rec, withClaims(httptest.NewRequest(http.MethodGet, "/v1/api/team", nil), &auth.Claims{AccountID: "acct-7"}))
+	h(rec, withClaims(httptest.NewRequest(http.MethodGet, "/v1/api/team", nil), &auth.Claims{AccountID: "aaaaaaa4-4444-4444-8444-444444444444"}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no perm code = %d, want 403", rec.Code)
 	}
@@ -64,7 +64,7 @@ func TestTeamHandler_ListRequiresPermAndScopes(t *testing.T) {
 func TestTeamHandler_Invite(t *testing.T) {
 	store := &fakeTeamStore{}
 	h := teamHandler(store, quietLog())
-	claims := &auth.Claims{AccountID: "acct-7", Permissions: []string{"team:invite"}}
+	claims := &auth.Claims{AccountID: "aaaaaaa4-4444-4444-8444-444444444444", Permissions: []string{"team:invite"}}
 
 	body := strings.NewReader(`{"email":"new@x.com","name":"New Person","role":"manager"}`)
 	rec := httptest.NewRecorder()
@@ -72,7 +72,7 @@ func TestTeamHandler_Invite(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("invite code = %d, want 201; body %s", rec.Code, rec.Body.String())
 	}
-	if store.gotCreate != [4]string{"acct-7", "new@x.com", "New Person", "manager"} {
+	if store.gotCreate != [4]string{"aaaaaaa4-4444-4444-8444-444444444444", "new@x.com", "New Person", "manager"} {
 		t.Errorf("create args = %v, want scoped to acct-7", store.gotCreate)
 	}
 	var resp map[string]string
@@ -90,7 +90,7 @@ func TestTeamHandler_Invite(t *testing.T) {
 
 	// No team:invite → 403.
 	rec = httptest.NewRecorder()
-	h(rec, withClaims(httptest.NewRequest(http.MethodPost, "/v1/api/team", strings.NewReader(`{"email":"x@x.com","name":"X"}`)), &auth.Claims{AccountID: "acct-7", Permissions: []string{"team:read"}}))
+	h(rec, withClaims(httptest.NewRequest(http.MethodPost, "/v1/api/team", strings.NewReader(`{"email":"x@x.com","name":"X"}`)), &auth.Claims{AccountID: "aaaaaaa4-4444-4444-8444-444444444444", Permissions: []string{"team:read"}}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no invite perm code = %d, want 403", rec.Code)
 	}

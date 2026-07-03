@@ -44,6 +44,87 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Deals ============ -->
+    <section id="section-deals" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Deals") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New deal" "variant" "secondary" "size" "sm" "onclick" "openNewDeal()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Price (CPM)" "Status")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Quality controls ============ -->
+    <section id="section-quality" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Add / replace a list") }}
+      <form class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" onsubmit="saveQuality(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Site</span>
+          <select id="qcPublisher" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">List type</span>
+          <select id="qcType" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="advertiser_blocklist">Advertiser blocklist</option>
+            <option value="advertiser_allowlist">Advertiser allowlist</option>
+            <option value="category_blocklist">Category blocklist</option>
+            <option value="creative_blocklist">Creative blocklist</option>
+            <option value="domain_blocklist">Domain blocklist</option>
+          </select>
+        </label>
+        <label class="block text-sm col-span-2">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Values (comma-separated)</span>
+          <input id="qcValues" placeholder="badbrand.com, IAB25" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" required>
+        </label>
+        {{ template "button" (dict "label" "Save list" "type" "submit") }}
+      </form>
+      <p class="mt-2 text-xs text-gray-400">One list per (site, type) — saving replaces the existing values.</p>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Active lists") }}
+      {{ template "table-start" (dict "headers" (slice "Type" "Values" "")) }}
+        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Reports ============ -->
+    <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Query") }}
+      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end" onsubmit="runReport(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
+          <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option>impressions</option><option>clicks</option><option>auctions</option><option>auction_wins</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics</span>
+          <input id="repMetrics" value="count,sum_cost" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by</span>
+          <input id="repDims" placeholder="placement_id,day" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
+          <select id="repRange" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Run query" "type" "submit") }}
+      </form>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Results") }}
+      <div id="reportOut" class="overflow-x-auto">
+        {{ template "empty-state" (dict "title" "No query yet" "body" "Pick a table and metrics above, then run the query.") }}
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Ad tag ============ -->
     <section id="section-adtag" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Get your ad tag") }}
@@ -129,6 +210,29 @@
   </form>
 {{ template "drawer-end" . }}
 
+<!-- New deal modal -->
+{{ template "modal-start" (dict "id" "newDeal" "title" "New deal") }}
+  <form onsubmit="createDeal(event)">
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Site (publisher)</label>
+    <select id="nd_publisher" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
+    {{ template "form-field" (dict "label" "Deal name" "name" "nd_name" "placeholder" "Q3 PMP — Acme" "required" true) }}
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Type</span>
+        <select id="nd_type" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="pmp">PMP</option><option value="preferred">Preferred</option>
+          <option value="pg">Programmatic guaranteed</option><option value="open">Open</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Price (USD CPM)" "name" "nd_price" "type" "number" "value" "5.00") }}
+    </div>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newDeal').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create deal" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
 <script>
@@ -180,7 +284,7 @@ function onPublisherChange() {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'placements', 'adtag', 'earnings'];
+const SECTIONS = ['dashboard', 'placements', 'deals', 'quality', 'reports', 'adtag', 'earnings'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -196,7 +300,8 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({dashboard: loadDashboard, placements: loadPlacements, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
+    ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
+      quality: loadQuality, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -342,6 +447,119 @@ async function savePlacement(ev) {
     toast('Placement updated', 'success');
     loadPlacements();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Deals ----
+async function loadDeals() {
+  const tbody = tbodyOf('deals');
+  try {
+    const deals = await fetchJSON('/v1/api/deals') || [];
+    tbody.innerHTML = deals.length ? deals.map(d => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(d.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs uppercase">${esc(d.deal_type)}</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(d.price)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${d.status === 'active' ? 'bg-success/15 text-success' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(d.status)}</span></td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No deals yet — cut your first with “+ New deal”.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function openNewDeal() {
+  if (!publishers.length) await loadPublishers();
+  if (!publishers.length) { toast('No publisher (site) on this account yet.', 'error'); return; }
+  $('nd_publisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  $('newDeal').classList.remove('hidden');
+}
+
+async function createDeal(ev) {
+  ev.preventDefault();
+  const body = {
+    publisher_id: $('nd_publisher').value,
+    name: $('nd_name').value.trim(),
+    deal_type: $('nd_type').value,
+    price: parseFloat($('nd_price').value) || 0,
+  };
+  try {
+    await fetchJSON('/v1/api/deals', {method: 'POST', body: JSON.stringify(body)});
+    $('newDeal').classList.add('hidden');
+    toast('Deal created — the exchange picks it up within a second', 'success');
+    loadDeals();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+
+// ---- Quality controls ----
+const QC_LABEL = {
+  advertiser_blocklist: 'Advertiser blocklist', advertiser_allowlist: 'Advertiser allowlist',
+  category_blocklist: 'Category blocklist', creative_blocklist: 'Creative blocklist',
+  domain_blocklist: 'Domain blocklist',
+};
+async function loadQuality() {
+  if (!publishers.length) await loadPublishers();
+  $('qcPublisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  const tbody = tbodyOf('quality');
+  try {
+    const controls = await fetchJSON('/v1/api/quality-controls') || [];
+    tbody.innerHTML = controls.length ? controls.map(c => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 whitespace-nowrap">${esc(QC_LABEL[c.type] || c.type)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc((c.values || []).join(', '))}</td>
+        <td class="px-3 py-2 text-right">
+          <button onclick="deleteQuality('${esc(c.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Remove</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No lists yet — inventory runs unfiltered until you add one.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function saveQuality(ev) {
+  ev.preventDefault();
+  const values = $('qcValues').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!values.length) { toast('Add at least one value', 'info'); return; }
+  const body = {publisher_id: $('qcPublisher').value, type: $('qcType').value, values};
+  try {
+    await fetchJSON('/v1/api/quality-controls', {method: 'POST', body: JSON.stringify(body)});
+    toast('List saved', 'success');
+    $('qcValues').value = '';
+    loadQuality();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+async function deleteQuality(id) {
+  try {
+    await fetchJSON('/v1/api/quality-controls?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('List removed — re-add it above to undo', 'success');
+    loadQuality();
+  } catch (err) { toast('Remove failed: ' + err.message, 'error'); }
+}
+
+// ---- Reports console ----
+async function runReport(ev) {
+  ev.preventDefault();
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    table: $('repTable').value,
+    metrics: split($('repMetrics').value),
+    dimensions: split($('repDims').value),
+    time_from: daysAgo(parseInt($('repRange').value, 10)),
+  };
+  const out = $('reportOut');
+  try {
+    const res = await reportQuery(body);
+    if (!res.rows?.length) {
+      out.innerHTML = '<div class="py-6 text-center text-sm text-gray-400">Query ran — zero rows in range.</div>';
+      return;
+    }
+    out.innerHTML = `<table class="w-full text-sm">
+      <thead><tr>${res.columns.map(c => `<th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${res.rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">${
+        r.map(v => `<td class="px-3 py-2 font-mono text-xs">${typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : esc(v)}</td>`).join('')
+      }</tr>`).join('')}</tbody></table>`;
+  } catch (err) { toast('Query failed: ' + err.message, 'error'); }
 }
 
 // ---- Ad tag ----

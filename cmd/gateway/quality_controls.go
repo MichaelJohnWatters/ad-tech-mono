@@ -63,6 +63,9 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []qualityControlView{}) {
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:

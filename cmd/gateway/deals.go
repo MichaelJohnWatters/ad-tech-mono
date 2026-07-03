@@ -54,6 +54,9 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []dealView{}) {
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:

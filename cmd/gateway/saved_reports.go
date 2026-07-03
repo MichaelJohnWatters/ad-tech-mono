@@ -49,6 +49,9 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []savedReportView{}) {
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:
