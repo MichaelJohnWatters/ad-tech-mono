@@ -104,6 +104,11 @@ const (
 	// a publisher session gets only its own publishers; platform users all.
 	APIPublishers = apiPrefix + "/api/publishers"
 
+	// APIAuditLog is the staff audit-log viewer (GET only, audit:read).
+	// Platform-wide by design (operator tool) with exact-match filters:
+	// ?account_id=&action=&resource_type=&resource_id=&limit=.
+	APIAuditLog = apiPrefix + "/api/audit"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
