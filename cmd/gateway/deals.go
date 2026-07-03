@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // errDealPublisherNotOwned is returned when a create references a publisher the
@@ -34,11 +36,21 @@ type dealView struct {
 	Status      string  `json:"status"`
 }
 
+// dealPatchInput is a partial update — nil fields are left unchanged.
+type dealPatchInput struct {
+	Name   *string  `json:"name,omitempty"`
+	Price  *float64 `json:"price,omitempty"`
+	Status *string  `json:"status,omitempty"` // active | paused
+}
+
 type dealStore interface {
 	ListDeals(ctx context.Context, accountID string) ([]dealView, error)
 	// CreateDeal must return errDealPublisherNotOwned if publisher_id isn't
 	// owned by accountID.
 	CreateDeal(ctx context.Context, accountID string, in dealInput) (id string, err error)
+	// UpdateDeal patches a deal owned by accountID; sql.ErrNoRows if the id
+	// is unknown or belongs to another tenant (indistinguishable on purpose).
+	UpdateDeal(ctx context.Context, accountID, id string, in dealPatchInput) error
 }
 
 var validDealTypes = map[string]bool{"open": true, "pmp": true, "pg": true, "preferred": true}
@@ -119,6 +131,67 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 	}
 }
 
+// dealByIDHandler serves PATCH /v1/api/deals/{id} (deals:update): edit
+// name/price or pause/resume. Tenant-scoped; publishes the deals cache
+// invalidate so the exchange reflects the change sub-second.
+func dealByIDHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, nil) {
+			return
+		}
+		if r.Method != http.MethodPatch {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "deals:update") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, routes.APIDeals+"/")
+		if id == "" || strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		var in dealPatchInput
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		if in.Name == nil && in.Price == nil && in.Status == nil {
+			http.Error(w, `{"error":"no fields to update"}`, http.StatusBadRequest)
+			return
+		}
+		if in.Status != nil && *in.Status != "active" && *in.Status != "paused" {
+			http.Error(w, `{"error":"status must be active or paused"}`, http.StatusBadRequest)
+			return
+		}
+		if in.Price != nil && *in.Price < 0 {
+			http.Error(w, `{"error":"price must be >= 0"}`, http.StatusBadRequest)
+			return
+		}
+		err := store.UpdateDeal(r.Context(), claims.AccountID, id, in)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, `{"error":"deal not found"}`, http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Error("deal update failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if bus != nil {
+			_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateDeals, []byte(`{"source":"gateway","id":"`+id+`"}`))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "updated"})
+	}
+}
+
 type pgDealStore struct{ db *sql.DB }
 
 func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealView, error) {
@@ -141,6 +214,29 @@ func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealVie
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (s pgDealStore) UpdateDeal(ctx context.Context, accountID, id string, in dealPatchInput) error {
+	if s.db == nil {
+		return sql.ErrConnDone
+	}
+	// COALESCE keeps unspecified fields; the account_id predicate is the
+	// tenant check (unknown id and foreign id both come back as no rows).
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE deals SET
+		   name = COALESCE($3, name),
+		   price = COALESCE($4, price),
+		   status = COALESCE($5, status),
+		   updated_at = now()
+		 WHERE id = $1::uuid AND account_id = $2::uuid`,
+		id, accountID, in.Name, in.Price, in.Status)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s pgDealStore) CreateDeal(ctx context.Context, accountID string, in dealInput) (string, error) {

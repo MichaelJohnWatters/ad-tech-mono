@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,8 @@ type fakeDealStore struct {
 	notOwned   bool
 	gotAccount string
 	gotInput   dealInput
+	gotPatchID string
+	gotPatch   dealPatchInput
 }
 
 func (f *fakeDealStore) ListDeals(_ context.Context, accountID string) ([]dealView, error) {
@@ -28,6 +31,15 @@ func (f *fakeDealStore) CreateDeal(_ context.Context, accountID string, in dealI
 	f.gotAccount = accountID
 	f.gotInput = in
 	return "deal-new", nil
+}
+func (f *fakeDealStore) UpdateDeal(_ context.Context, accountID, id string, in dealPatchInput) error {
+	if f.notOwned {
+		return sql.ErrNoRows
+	}
+	f.gotAccount = accountID
+	f.gotPatchID = id
+	f.gotPatch = in
+	return nil
 }
 
 func dealReq(method, body string, claims *auth.Claims) *http.Request {
@@ -79,5 +91,51 @@ func TestDealsHandler(t *testing.T) {
 	dealsHandler(&fakeDealStore{}, nil, quietLog())(rec, dealReq(http.MethodPost, `{"publisher_id":"p1","name":"X"}`, &auth.Claims{AccountID: "aaaaaaa1-1111-4111-8111-111111111111", Permissions: []string{"deals:read"}}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no create perm code = %d, want 403", rec.Code)
+	}
+}
+
+func dealPatchReq(id, body string, claims *auth.Claims) *http.Request {
+	req := httptest.NewRequest(http.MethodPatch, "/v1/api/deals/"+id, strings.NewReader(body))
+	if claims != nil {
+		req = withClaims(req, claims)
+	}
+	return req
+}
+
+func TestDealByIDHandler(t *testing.T) {
+	pub := &auth.Claims{AccountID: "aaaaaaa1-1111-4111-8111-111111111111", Permissions: []string{"deals:update"}}
+
+	// Pause → parsed, scoped.
+	store := &fakeDealStore{}
+	rec := httptest.NewRecorder()
+	dealByIDHandler(store, nil, quietLog())(rec, dealPatchReq("d1", `{"status":"paused"}`, pub))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch code = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	if store.gotPatchID != "d1" || store.gotPatch.Status == nil || *store.gotPatch.Status != "paused" {
+		t.Errorf("patch not parsed/scoped: id=%q patch=%+v", store.gotPatchID, store.gotPatch)
+	}
+
+	// Unknown / foreign deal → 404.
+	rec = httptest.NewRecorder()
+	dealByIDHandler(&fakeDealStore{notOwned: true}, nil, quietLog())(rec, dealPatchReq("other", `{"status":"paused"}`, pub))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("foreign deal code = %d, want 404", rec.Code)
+	}
+
+	// Bad status / empty patch → 400.
+	for _, body := range []string{`{"status":"archived"}`, `{}`} {
+		rec = httptest.NewRecorder()
+		dealByIDHandler(&fakeDealStore{}, nil, quietLog())(rec, dealPatchReq("d1", body, pub))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %s: code = %d, want 400", body, rec.Code)
+		}
+	}
+
+	// No deals:update → 403.
+	rec = httptest.NewRecorder()
+	dealByIDHandler(&fakeDealStore{}, nil, quietLog())(rec, dealPatchReq("d1", `{"status":"paused"}`, &auth.Claims{AccountID: "aaaaaaa1-1111-4111-8111-111111111111", Permissions: []string{"deals:read"}}))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no update perm code = %d, want 403", rec.Code)
 	}
 }
