@@ -55,6 +55,7 @@ func requireLoginPage(signingKey string, h http.HandlerFunc) http.HandlerFunc {
 var advertiserNav = []NavItem{
 	{Label: "Dashboard", Href: "#dashboard", Icon: "▤"},
 	{Label: "Campaigns", Href: "#campaigns", Icon: "◎", Perm: "campaigns:read"},
+	{Label: "Creatives", Href: "#creatives", Icon: "▣", Perm: "creatives:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
 }

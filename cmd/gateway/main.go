@@ -318,6 +318,7 @@ func main() {
 	// Deals — JWT-gated, tenant-scoped; create verifies publisher ownership +
 	// invalidates the exchange deal cache.
 	mux.Handle(routes.APIDeals, authMiddleware(http.HandlerFunc(dealsHandler(pgDealStore{db: gwDB}, secretsBus, log))))
+	mux.Handle(routes.APIDeals+"/", authMiddleware(http.HandlerFunc(dealByIDHandler(pgDealStore{db: gwDB}, secretsBus, log))))
 
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
 	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, log))))

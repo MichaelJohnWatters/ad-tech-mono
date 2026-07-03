@@ -43,6 +43,18 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Creatives ============ -->
+    <section id="section-creatives" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Creative library") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Upload creative" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newCreative').classList.remove('hidden')") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Format" "Size" "Landing" "Review")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
@@ -75,6 +87,21 @@
       {{ template "card-start" (dict "title" "Results") }}
       <div id="reportOut" class="overflow-x-auto">
         {{ template "empty-state" (dict "title" "No query yet" "body" "Pick a table and metrics above, then run the query.") }}
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Saved queries") }}
+      <form class="flex items-end gap-3 mb-4" onsubmit="saveQuery(event)">
+        <label class="block text-sm flex-1 max-w-xs">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Save the query above as</span>
+          <input id="svName" placeholder="Weekly spend by campaign" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" required>
+        </label>
+        {{ template "button" (dict "label" "Save query" "variant" "secondary" "type" "submit") }}
+      </form>
+      <div id="savedWrap">
+      {{ template "table-start" (dict "headers" (slice "Name" "Query" "")) }}
+        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
     </section>
@@ -118,6 +145,33 @@
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Create campaign" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
+<!-- Upload creative modal -->
+{{ template "modal-start" (dict "id" "newCreative" "title" "Upload creative") }}
+  <form onsubmit="uploadCreative(event)">
+    {{ template "form-field" (dict "label" "Name" "name" "cr_name" "placeholder" "summer-sale-300x250" "required" true) }}
+    <div class="grid grid-cols-3 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Format</span>
+        <select id="cr_format" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option>display</option><option>native</option><option>video</option><option>audio</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Width" "name" "cr_width" "type" "number" "value" "300") }}
+      {{ template "form-field" (dict "label" "Height" "name" "cr_height" "type" "number" "value" "250") }}
+    </div>
+    {{ template "form-field" (dict "label" "Landing URL" "name" "cr_landing" "type" "url" "placeholder" "https://example.com/sale" "required" true) }}
+    <label class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">HTML content (optional — banner markup)</span>
+      <textarea id="cr_html" rows="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-xs font-mono" placeholder="<div>…</div>"></textarea>
+    </label>
+    <p class="mb-4 text-xs text-gray-400">Uploads land in the staff moderation queue — the creative serves once approved.</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCreative').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Upload" "type" "submit") }}
     </div>
   </form>
 {{ template "modal-end" . }}
@@ -166,7 +220,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'campaigns', 'reports', 'billing'];
+const SECTIONS = ['dashboard', 'campaigns', 'creatives', 'reports', 'billing'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -182,7 +236,8 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({dashboard: loadDashboard, campaigns: loadCampaigns, billing: loadBilling}[name])?.();
+    ({dashboard: loadDashboard, campaigns: loadCampaigns, creatives: loadCreatives,
+      reports: loadSaved, billing: loadBilling}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -317,6 +372,112 @@ async function saveCampaign(ev) {
     toast('Campaign updated', 'success');
     loadCampaigns();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Creatives ----
+const REVIEW_BADGE = {
+  approved: 'bg-success/15 text-success', pending_review: 'bg-info/15 text-info',
+  rejected: 'bg-error/15 text-error', uploaded: 'bg-gray-200 dark:bg-gray-800 text-gray-500',
+};
+async function loadCreatives() {
+  const tbody = tbodyOf('creatives');
+  try {
+    const list = await fetchJSON('/v1/api/creatives') || [];
+    tbody.innerHTML = list.length ? list.map(c => `
+      <tr class="border-t border-gray-100 dark:border-gray-800" ${c.rejection_reason ? `title="Rejected: ${esc(c.rejection_reason)}"` : ''}>
+        <td class="px-3 py-2 font-medium">${esc(c.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(c.format)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${c.width}×${c.height}</td>
+        <td class="px-3 py-2 text-xs text-gray-500 max-w-[16rem] truncate">${esc(c.landing_url)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${REVIEW_BADGE[c.review_status] || REVIEW_BADGE.uploaded}">${esc(c.review_status)}</span>${c.rejection_reason ? ` <span class="text-xs text-error">${esc(c.rejection_reason)}</span>` : ''}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No creatives yet — upload your first above.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function uploadCreative(ev) {
+  ev.preventDefault();
+  const body = {
+    name: $('cr_name').value.trim(),
+    format: $('cr_format').value,
+    width: parseInt($('cr_width').value, 10) || 0,
+    height: parseInt($('cr_height').value, 10) || 0,
+    landing_url: $('cr_landing').value.trim(),
+    html_content: $('cr_html').value.trim(),
+  };
+  try {
+    await fetchJSON('/v1/api/creatives', {method: 'POST', body: JSON.stringify(body)});
+    $('newCreative').classList.add('hidden');
+    toast('Uploaded — awaiting moderation review', 'success');
+    loadCreatives();
+  } catch (err) { toast('Upload failed: ' + err.message, 'error'); }
+}
+
+// ---- Saved queries ----
+const savedTbody = () => document.querySelector('#savedWrap tbody');
+let savedCache = [];
+async function loadSaved() {
+  try {
+    savedCache = await fetchJSON('/v1/api/reports/saved') || [];
+  } catch (err) {
+    savedTbody().innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  savedTbody().innerHTML = savedCache.length ? savedCache.map(s => {
+    const q = s.query_config || {};
+    const desc = `${q.table || '?'} · ${(q.metrics || []).join(',')}${q.dimensions?.length ? ' by ' + q.dimensions.join(',') : ''}`;
+    return `<tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
+      <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
+        <button onclick="deleteSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
+      </td>
+    </tr>`;
+  }).join('')
+    : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+}
+
+function currentQueryConfig() {
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  return {
+    table: $('repTable').value,
+    metrics: split($('repMetrics').value),
+    dimensions: split($('repDims').value),
+    range_days: parseInt($('repRange').value, 10),
+  };
+}
+
+async function saveQuery(ev) {
+  ev.preventDefault();
+  const body = {name: $('svName').value.trim(), query_config: currentQueryConfig(), delivery: 'none'};
+  try {
+    await fetchJSON('/v1/api/reports/saved', {method: 'POST', body: JSON.stringify(body)});
+    toast('Query saved', 'success');
+    $('svName').value = '';
+    loadSaved();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+function runSaved(id) {
+  const s = savedCache.find(x => x.id === id);
+  if (!s) return;
+  const q = s.query_config || {};
+  $('repTable').value = q.table || 'impressions';
+  $('repMetrics').value = (q.metrics || []).join(',');
+  $('repDims').value = (q.dimensions || []).join(',');
+  if (q.range_days) $('repRange').value = String(q.range_days);
+  runReport(new Event('submit'));
+}
+
+async function deleteSaved(id) {
+  try {
+    await fetchJSON('/v1/api/reports/saved?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Saved query deleted — save it again to undo', 'success');
+    loadSaved();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // ---- Reports console ----

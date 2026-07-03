@@ -21,6 +21,11 @@ func (f *fakeCreativeStore) CreateCreative(_ context.Context, accountID string, 
 	return "cr-new", nil
 }
 
+func (f *fakeCreativeStore) ListCreatives(_ context.Context, accountID string) ([]creativeView, error) {
+	f.gotAccount = accountID
+	return []creativeView{{ID: "cr-1", Name: "banner", ReviewStatus: "approved"}}, nil
+}
+
 func postCreative(h http.HandlerFunc, body string, claims *auth.Claims) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/v1/api/creatives", strings.NewReader(body))
 	if claims != nil {
@@ -34,14 +39,14 @@ func postCreative(h http.HandlerFunc, body string, claims *auth.Claims) *httptes
 func TestCreativeUpload(t *testing.T) {
 	store := &fakeCreativeStore{}
 	h := creativeUploadHandler(store, quietLog())
-	adv := &auth.Claims{AccountID: "acct-9", Permissions: []string{"creatives:upload"}}
+	adv := &auth.Claims{AccountID: "aaaaaaa9-9999-4999-8999-999999999999", Permissions: []string{"creatives:upload"}}
 
 	// Valid → 201, tenant-scoped, pending_review.
 	rec := postCreative(h, `{"name":"banner","format":"display","width":300,"height":250,"landing_url":"https://x.test"}`, adv)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("upload code = %d, want 201; body %s", rec.Code, rec.Body.String())
 	}
-	if store.gotAccount != "acct-9" || store.gotInput.Name != "banner" {
+	if store.gotAccount != "aaaaaaa9-9999-4999-8999-999999999999" || store.gotInput.Name != "banner" {
 		t.Errorf("not scoped/parsed: account=%q input=%+v", store.gotAccount, store.gotInput)
 	}
 	if !strings.Contains(rec.Body.String(), "pending_review") {
@@ -57,7 +62,7 @@ func TestCreativeUpload(t *testing.T) {
 		t.Errorf("bad format code = %d, want 400", rec.Code)
 	}
 	// No perm → 403.
-	if rec := postCreative(h, `{"name":"x","landing_url":"https://x"}`, &auth.Claims{AccountID: "acct-9", Permissions: []string{"campaigns:read"}}); rec.Code != http.StatusForbidden {
+	if rec := postCreative(h, `{"name":"x","landing_url":"https://x"}`, &auth.Claims{AccountID: "aaaaaaa9-9999-4999-8999-999999999999", Permissions: []string{"campaigns:read"}}); rec.Code != http.StatusForbidden {
 		t.Errorf("no perm code = %d, want 403", rec.Code)
 	}
 	// No claims → 401.

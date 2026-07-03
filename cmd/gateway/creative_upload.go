@@ -21,32 +21,70 @@ type creativeInput struct {
 	LandingURL  string `json:"landing_url"`
 }
 
-// creativeStore persists uploads — interface for testing.
+// creativeView is one row of the advertiser's creative library — includes
+// review state so the portal can show pending/rejected alongside approved
+// (the adserver proxy at the APICreatives subtree only serves approved).
+type creativeView struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Format          string `json:"format"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	LandingURL      string `json:"landing_url"`
+	ReviewStatus    string `json:"review_status"`
+	RejectionReason string `json:"rejection_reason"`
+	CreatedAt       string `json:"created_at"`
+}
+
+// creativeStore persists uploads and lists the tenant's library.
 type creativeStore interface {
 	CreateCreative(ctx context.Context, accountID string, in creativeInput) (id string, err error)
+	ListCreatives(ctx context.Context, accountID string) ([]creativeView, error)
 }
 
 var validCreativeFormats = map[string]bool{"display": true, "native": true, "video": true, "audio": true}
 
-// creativeUploadHandler creates a creative under the caller's account with
-// review_status='pending_review' (it lands in the staff moderation queue).
-// JWT-gated on creatives:upload, tenant-scoped from claims.
+// creativeUploadHandler is the advertiser creative library: GET lists the
+// caller's creatives with review state (creatives:read), POST uploads one
+// with review_status='pending_review' → the staff moderation queue
+// (creatives:upload). Tenant-scoped from claims.
 func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-			return
-		}
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []creativeView{}) {
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			if !can(claims, "creatives:read") {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			list, err := store.ListCreatives(r.Context(), claims.AccountID)
+			if err != nil {
+				log.Error("creative list failed", "error", err)
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(list)
+			return
+		case http.MethodPost:
+			// fallthrough to the upload flow below
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
 		if !can(claims, "creatives:upload") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 
 		var in creativeInput
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -109,4 +147,30 @@ func (s pgCreativeStore) CreateCreative(ctx context.Context, accountID string, i
 		return "", err
 	}
 	return id, tx.Commit()
+}
+
+func (s pgCreativeStore) ListCreatives(ctx context.Context, accountID string) ([]creativeView, error) {
+	if s.db == nil {
+		return nil, sql.ErrConnDone
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id::text, name, format, COALESCE(width, 0), COALESCE(height, 0),
+		        COALESCE(landing_url, ''), review_status, COALESCE(rejection_reason, ''),
+		        created_at::text
+		 FROM creatives WHERE account_id = $1::uuid
+		 ORDER BY created_at DESC LIMIT 500`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []creativeView{}
+	for rows.Next() {
+		var c creativeView
+		if err := rows.Scan(&c.ID, &c.Name, &c.Format, &c.Width, &c.Height,
+			&c.LandingURL, &c.ReviewStatus, &c.RejectionReason, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

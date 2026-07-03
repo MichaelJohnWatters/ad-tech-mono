@@ -50,8 +50,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New deal" "variant" "secondary" "size" "sm" "onclick" "openNewDeal()") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Price (CPM)" "Status")) }}
-        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Price (CPM)" "Status" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -121,6 +121,21 @@
       {{ template "card-start" (dict "title" "Results") }}
       <div id="reportOut" class="overflow-x-auto">
         {{ template "empty-state" (dict "title" "No query yet" "body" "Pick a table and metrics above, then run the query.") }}
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Saved queries") }}
+      <form class="flex items-end gap-3 mb-4" onsubmit="saveQuery(event)">
+        <label class="block text-sm flex-1 max-w-xs">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Save the query above as</span>
+          <input id="svName" placeholder="Weekly fill by placement" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" required>
+        </label>
+        {{ template "button" (dict "label" "Save query" "variant" "secondary" "type" "submit") }}
+      </form>
+      <div id="savedWrap">
+      {{ template "table-start" (dict "headers" (slice "Name" "Query" "")) }}
+        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
     </section>
@@ -205,6 +220,20 @@
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "ep_floor" "type" "number") }}
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "type" "submit") }}
+    </div>
+  </form>
+{{ template "drawer-end" . }}
+
+<!-- Edit deal drawer -->
+{{ template "drawer-start" (dict "id" "editDeal" "title" "Edit deal") }}
+  <form onsubmit="saveDeal(event)">
+    <input type="hidden" id="edID">
+    <div id="edName" class="mb-3 text-sm font-medium"></div>
+    {{ template "form-field" (dict "label" "Name" "name" "ed_name") }}
+    {{ template "form-field" (dict "label" "Price (USD CPM)" "name" "ed_price" "type" "number") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editDeal').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
     </div>
   </form>
@@ -301,7 +330,7 @@ function showSection(name) {
   if (!loaded[name]) {
     loaded[name] = true;
     ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
-      quality: loadQuality, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
+      quality: loadQuality, reports: loadSaved, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -450,21 +479,123 @@ async function savePlacement(ev) {
 }
 
 // ---- Deals ----
+let dealsCache = [];
 async function loadDeals() {
   const tbody = tbodyOf('deals');
   try {
-    const deals = await fetchJSON('/v1/api/deals') || [];
-    tbody.innerHTML = deals.length ? deals.map(d => `
+    dealsCache = await fetchJSON('/v1/api/deals') || [];
+    tbody.innerHTML = dealsCache.length ? dealsCache.map(d => `
       <tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 font-medium">${esc(d.name)}</td>
         <td class="px-3 py-2 font-mono text-xs uppercase">${esc(d.deal_type)}</td>
         <td class="px-3 py-2 font-mono">${fmtUSD(d.price)}</td>
-        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${d.status === 'active' ? 'bg-success/15 text-success' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(d.status)}</span></td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${d.status === 'active' ? 'bg-success/15 text-success' : d.status === 'paused' ? 'bg-warn/15 text-warn' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(d.status)}</span></td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="toggleDeal('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${d.status === 'paused' ? 'Resume' : 'Pause'}</button>
+          <button onclick="openEditDeal('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+        </td>
       </tr>`).join('')
-      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No deals yet — cut your first with “+ New deal”.</td></tr>';
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No deals yet — cut your first with “+ New deal”.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+}
+
+async function toggleDeal(id) {
+  const d = dealsCache.find(x => x.id === id);
+  if (!d) return;
+  const next = d.status === 'paused' ? 'active' : 'paused';
+  try {
+    await fetchJSON('/v1/api/deals/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({status: next})});
+    toast(next === 'paused' ? 'Deal paused — exchange stops matching it' : 'Deal resumed', 'success');
+    loadDeals();
+  } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+}
+
+function openEditDeal(id) {
+  const d = dealsCache.find(x => x.id === id);
+  if (!d) return;
+  $('edID').value = id;
+  $('edName').textContent = d.name;
+  $('ed_name').value = d.name;
+  $('ed_price').value = d.price;
+  $('editDeal').classList.remove('hidden');
+}
+
+async function saveDeal(ev) {
+  ev.preventDefault();
+  const body = {name: $('ed_name').value.trim(), price: parseFloat($('ed_price').value)};
+  try {
+    await fetchJSON('/v1/api/deals/' + encodeURIComponent($('edID').value), {method: 'PATCH', body: JSON.stringify(body)});
+    $('editDeal').classList.add('hidden');
+    toast('Deal updated', 'success');
+    loadDeals();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Saved queries ----
+const savedTbody = () => document.querySelector('#savedWrap tbody');
+let savedCache = [];
+async function loadSaved() {
+  try {
+    savedCache = await fetchJSON('/v1/api/reports/saved') || [];
+  } catch (err) {
+    savedTbody().innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  savedTbody().innerHTML = savedCache.length ? savedCache.map(s => {
+    const q = s.query_config || {};
+    const desc = `${q.table || '?'} · ${(q.metrics || []).join(',')}${q.dimensions?.length ? ' by ' + q.dimensions.join(',') : ''}`;
+    return `<tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
+      <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
+        <button onclick="deleteSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
+      </td>
+    </tr>`;
+  }).join('')
+    : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+}
+
+async function saveQuery(ev) {
+  ev.preventDefault();
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    name: $('svName').value.trim(),
+    query_config: {
+      table: $('repTable').value,
+      metrics: split($('repMetrics').value),
+      dimensions: split($('repDims').value),
+      range_days: parseInt($('repRange').value, 10),
+    },
+    delivery: 'none',
+  };
+  try {
+    await fetchJSON('/v1/api/reports/saved', {method: 'POST', body: JSON.stringify(body)});
+    toast('Query saved', 'success');
+    $('svName').value = '';
+    loadSaved();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+function runSaved(id) {
+  const s = savedCache.find(x => x.id === id);
+  if (!s) return;
+  const q = s.query_config || {};
+  $('repTable').value = q.table || 'impressions';
+  $('repMetrics').value = (q.metrics || []).join(',');
+  $('repDims').value = (q.dimensions || []).join(',');
+  if (q.range_days) $('repRange').value = String(q.range_days);
+  runReport(new Event('submit'));
+}
+
+async function deleteSaved(id) {
+  try {
+    await fetchJSON('/v1/api/reports/saved?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Saved query deleted — save it again to undo', 'success');
+    loadSaved();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 async function openNewDeal() {

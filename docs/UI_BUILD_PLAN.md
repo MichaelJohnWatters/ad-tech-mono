@@ -183,8 +183,11 @@ F4 is the gate for real portals.
 > service API key on proxied campaign/placement/creative calls (`gateway.service_api_key`,
 > dev default = seeded key), campaigns/reports got exact+subtree registrations (no more 307s,
 > `PATCH /v1/api/campaigns/{id}` works through the gateway), method-aware permission gate
-> (`RequirePermissionByMethod`). Remaining: creatives/audiences/settings screens, campaign
-> drill-down (IO › line item), pacing viz, wizard.
+> (`RequirePermissionByMethod`). Phase 4 additions: Creatives screen (library list with review state +
+> upload modal → moderation queue; gateway creative handler grew a tenant-scoped GET) and
+> Saved queries (save/run/delete the report console's query via `/v1/api/reports/saved`).
+> Remaining: audiences/settings screens, campaign drill-down (IO › line item), pacing viz,
+> wizard, scheduled-report runner.
 - **Persona / gate:** `advertiser:{owner,manager,analyst,finance,viewer}` — `campaigns:*`,
   `creatives:*`, `audiences:*`, `reports:*`, `billing:*`.
 - **Job-to-be-done:** "Launch and optimise campaigns, watch spend/performance, manage creatives &
@@ -214,8 +217,9 @@ F4 is the gate for real portals.
 > switcher when an account has several). Shares `portalHandler` with the advertiser portal
 > (claims → filtered nav + tenant scope). Tenant enforcement is server-side: SSP filters
 > reads by the forwarded identity; the reports proxy verifies/injects `publisher_id`.
-> Remaining: deals/quality screens, reports console (copy from advertiser), fill-rate per
-> placement, payout statements, net (post-rev-share) earnings.
+> Phase 4 additions: deals pause/resume + edit (new `PATCH /v1/api/deals/{id}`,
+> publisher-owned, exchange cache invalidate) and Saved queries in the reports console.
+> Remaining: fill-rate per placement, payout statements, net (post-rev-share) earnings.
 - **Persona / gate:** `publisher:{owner,manager,ad_ops,analyst,finance,viewer}` — `placements:*`,
   `deals:*`, `quality:*`, `earnings:view`, `pipeline:*`.
 - **Job-to-be-done:** "Manage inventory & floors, cut deals, watch fill & earnings, get my ad tag."
@@ -281,9 +285,9 @@ portals they unblock. Each becomes its own small design when picked up.
 |---|---|---|
 | **Real auth/login + session** | all portals | ✅ SHIPPED (F4a) — login → bcrypt verify → JWT → cookie; logout. Remaining: refresh, agency act-as, password reset. |
 | **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
-| **Creative upload** | advertiser | ✅ SHIPPED — `POST /v1/api/creatives` → `creatives` row, review_status=pending_review (→ moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
-| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list) — `GET/POST /v1/api/deals`, publisher-owned, invalidates the exchange cache. Remaining: edit/pause, allowlists, PG volume. |
-| **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional cron schedule + delivery. Remaining: a runner that fires the schedule → email/export. |
+| **Creative upload** | advertiser | ✅ SHIPPED — `GET/POST /v1/api/creatives` (tenant-scoped library list with review state + upload → pending_review → moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
+| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status, tenant-checked, cache-invalidating). Remaining: allowlists, PG volume. |
+| **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional cron schedule + delivery. Portal UI shipped (save/run/delete in both report consoles). Remaining: a runner that fires the schedule → email/export. |
 | **Moderation queue API** | staff | ✅ SHIPPED — `GET/POST /v1/api/moderation`, list pending creatives + approve/reject (reason required to reject), platform-wide. Remaining: appeal flow, bulk actions. |
 | **Fraud rules CRUD** | staff | ✅ SHIPPED — `GET/POST/DELETE /v1/api/fraud/blocklists`, manages `fraud_blocklists` (ip/ua/domain/app_bundle), invalidates the tracker warm cache. Remaining: rule expiry, ads.txt overrides. |
 | **Publisher payouts/earnings** | publisher | ✅ SHIPPED (read) — `GET /v1/api/payouts`, tenant-scoped history + pending/paid rollup on top of `payouts`. Remaining: downloadable statements, reconciliation vs ledger. |
