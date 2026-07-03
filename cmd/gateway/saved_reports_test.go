@@ -47,7 +47,7 @@ func srReq(method, target, body string, claims *auth.Claims) *http.Request {
 const srPath = "/v1/api/reports/saved"
 
 func TestSavedReportsHandler(t *testing.T) {
-	adv := &auth.Claims{AccountID: "acc-1", AccountType: auth.AccountAdvertiser,
+	adv := &auth.Claims{AccountID: "aaaaaaa3-3333-4333-8333-333333333333", AccountType: auth.AccountAdvertiser,
 		Permissions: []string{"reports:read", "reports:save"}}
 
 	// List.
@@ -63,7 +63,7 @@ func TestSavedReportsHandler(t *testing.T) {
 	rec = httptest.NewRecorder()
 	savedReportsHandler(store, quietLog())(rec, srReq(http.MethodPost, srPath,
 		`{"name":"Weekly","query_config":{"dims":["campaign"]},"schedule":"0 9 * * 1","delivery":"email"}`, adv))
-	if rec.Code != http.StatusCreated || store.createdAcc != "acc-1" {
+	if rec.Code != http.StatusCreated || store.createdAcc != "aaaaaaa3-3333-4333-8333-333333333333" {
 		t.Fatalf("create code=%d acc=%q (%s)", rec.Code, store.createdAcc, rec.Body.String())
 	}
 	if store.createdIn.Schedule != "0 9 * * 1" || store.createdIn.Delivery != "email" {
@@ -95,7 +95,7 @@ func TestSavedReportsHandler(t *testing.T) {
 	store = &fakeSavedReportStore{}
 	rec = httptest.NewRecorder()
 	savedReportsHandler(store, quietLog())(rec, srReq(http.MethodDelete, srPath+"?id=r1", "", adv))
-	if rec.Code != http.StatusOK || store.deletedID != "r1" || store.deletedAcc != "acc-1" {
+	if rec.Code != http.StatusOK || store.deletedID != "r1" || store.deletedAcc != "aaaaaaa3-3333-4333-8333-333333333333" {
 		t.Errorf("delete code=%d id=%q acc=%q", rec.Code, store.deletedID, store.deletedAcc)
 	}
 

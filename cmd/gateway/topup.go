@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
@@ -85,18 +84,7 @@ func topupHandler(store topupStore, log *slog.Logger) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 
-		// The dev-bypass identity ("dev-account") isn't a real accounts row —
-		// balances are per-tenant UUIDs. Serve an empty view instead of
-		// letting Postgres reject the uuid cast as a 500, and refuse credits.
-		if !uuidRe.MatchString(claims.AccountID) {
-			switch r.Method {
-			case http.MethodGet:
-				_ = json.NewEncoder(w).Encode(topupBalanceResponse{Currency: "USD", Topups: []topupView{}})
-			case http.MethodPost:
-				http.Error(w, `{"error":"this session has no billable account — log in as an advertiser"}`, http.StatusBadRequest)
-			default:
-				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-			}
+		if devTenantGuard(w, r, claims, topupBalanceResponse{Currency: "USD", Topups: []topupView{}}) {
 			return
 		}
 
@@ -168,8 +156,6 @@ func topupHandler(store topupStore, log *slog.Logger) http.HandlerFunc {
 }
 
 type pgTopupStore struct{ db *sql.DB }
-
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func (s pgTopupStore) Topup(ctx context.Context, accountID, createdBy string, in topupInput) (topupResult, error) {
 	var out topupResult

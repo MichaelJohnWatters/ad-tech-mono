@@ -51,6 +51,9 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []webhookView{}) {
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:

@@ -46,6 +46,9 @@ func teamHandler(store teamStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []teamMemberView{}) {
+			return
+		}
 
 		switch r.Method {
 		case http.MethodGet:

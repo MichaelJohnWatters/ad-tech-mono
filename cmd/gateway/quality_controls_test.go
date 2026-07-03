@@ -50,7 +50,7 @@ func qcReq(method, target, body string, claims *auth.Claims) *http.Request {
 const qcPath = "/v1/api/quality-controls"
 
 func TestQualityControlsHandler(t *testing.T) {
-	pub := &auth.Claims{AccountID: "acc-1", AccountType: auth.AccountPublisher,
+	pub := &auth.Claims{AccountID: "aaaaaaa2-2222-4222-8222-222222222222", AccountType: auth.AccountPublisher,
 		Permissions: []string{"quality:read", "quality:update"}}
 
 	// List.
@@ -66,7 +66,7 @@ func TestQualityControlsHandler(t *testing.T) {
 	rec = httptest.NewRecorder()
 	qualityControlsHandler(store, quietLog())(rec, qcReq(http.MethodPost, qcPath,
 		`{"publisher_id":"pub-1","type":"advertiser_blocklist","values":["a","a",""]}`, pub))
-	if rec.Code != http.StatusOK || store.upsertAcc != "acc-1" {
+	if rec.Code != http.StatusOK || store.upsertAcc != "aaaaaaa2-2222-4222-8222-222222222222" {
 		t.Fatalf("upsert code=%d acc=%q (%s)", rec.Code, store.upsertAcc, rec.Body.String())
 	}
 	if len(store.upsertedIn.Values) != 1 {
@@ -91,7 +91,7 @@ func TestQualityControlsHandler(t *testing.T) {
 	store = &fakeQCStore{}
 	rec = httptest.NewRecorder()
 	qualityControlsHandler(store, quietLog())(rec, qcReq(http.MethodDelete, qcPath+"?id=q1", "", pub))
-	if rec.Code != http.StatusOK || store.deletedID != "q1" || store.deletedAcc != "acc-1" {
+	if rec.Code != http.StatusOK || store.deletedID != "q1" || store.deletedAcc != "aaaaaaa2-2222-4222-8222-222222222222" {
 		t.Errorf("delete code=%d id=%q acc=%q", rec.Code, store.deletedID, store.deletedAcc)
 	}
 

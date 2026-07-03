@@ -39,13 +39,13 @@ func dealReq(method, body string, claims *auth.Claims) *http.Request {
 }
 
 func TestDealsHandler(t *testing.T) {
-	pub := &auth.Claims{AccountID: "pub-1", Permissions: []string{"deals:read", "deals:create"}}
+	pub := &auth.Claims{AccountID: "aaaaaaa1-1111-4111-8111-111111111111", Permissions: []string{"deals:read", "deals:create"}}
 
 	// List, scoped.
 	store := &fakeDealStore{list: []dealView{{ID: "d1", Name: "PMP A"}}}
 	rec := httptest.NewRecorder()
 	dealsHandler(store, nil, quietLog())(rec, dealReq(http.MethodGet, "", pub))
-	if rec.Code != http.StatusOK || store.gotAccount != "pub-1" {
+	if rec.Code != http.StatusOK || store.gotAccount != "aaaaaaa1-1111-4111-8111-111111111111" {
 		t.Fatalf("list code=%d account=%q", rec.Code, store.gotAccount)
 	}
 
@@ -56,7 +56,7 @@ func TestDealsHandler(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d, want 201; body %s", rec.Code, rec.Body.String())
 	}
-	if store.gotAccount != "pub-1" || store.gotInput.Name != "Preferred X" {
+	if store.gotAccount != "aaaaaaa1-1111-4111-8111-111111111111" || store.gotInput.Name != "Preferred X" {
 		t.Errorf("create not scoped/parsed: %q %+v", store.gotAccount, store.gotInput)
 	}
 
@@ -76,7 +76,7 @@ func TestDealsHandler(t *testing.T) {
 
 	// No deals:create → 403.
 	rec = httptest.NewRecorder()
-	dealsHandler(&fakeDealStore{}, nil, quietLog())(rec, dealReq(http.MethodPost, `{"publisher_id":"p1","name":"X"}`, &auth.Claims{AccountID: "pub-1", Permissions: []string{"deals:read"}}))
+	dealsHandler(&fakeDealStore{}, nil, quietLog())(rec, dealReq(http.MethodPost, `{"publisher_id":"p1","name":"X"}`, &auth.Claims{AccountID: "aaaaaaa1-1111-4111-8111-111111111111", Permissions: []string{"deals:read"}}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no create perm code = %d, want 403", rec.Code)
 	}
