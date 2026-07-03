@@ -198,7 +198,18 @@ F4 is the gate for real portals.
 - **Prompts:** campaign hierarchy in one screen or drill-down? pacing viz? creative preview render?
   what's the "first campaign in 5 minutes" wizard?
 
-### Publisher portal  ⬜
+### Publisher portal  🟡 (MVP live)
+> Shipped (Phase 2 MVP): `/portal/publisher` (alias `/dev/portal/publisher`) — Dashboard
+> (ad requests / impressions / fill rate / gross earnings + 7-day trend from the reports
+> query, publisher-scoped), Placements (list/create/pause/edit-floor via `/v1/api/placements`
+> → SSP CRUD, exact+subtree registration with method-aware perms), Ad tag (placement picker →
+> `/v1/api/adtag` js/prebid/vast + copy button), Earnings (`/v1/api/payouts` pending/paid +
+> history). New `/v1/api/publishers` proxy = tenant-scoped "my sites" source (top-bar site
+> switcher when an account has several). Shares `portalHandler` with the advertiser portal
+> (claims → filtered nav + tenant scope). Tenant enforcement is server-side: SSP filters
+> reads by the forwarded identity; the reports proxy verifies/injects `publisher_id`.
+> Remaining: deals/quality screens, reports console (copy from advertiser), fill-rate per
+> placement, payout statements, net (post-rev-share) earnings.
 - **Persona / gate:** `publisher:{owner,manager,ad_ops,analyst,finance,viewer}` — `placements:*`,
   `deals:*`, `quality:*`, `earnings:view`, `pipeline:*`.
 - **Job-to-be-done:** "Manage inventory & floors, cut deals, watch fill & earnings, get my ad tag."

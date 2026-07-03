@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
@@ -78,7 +79,13 @@ func adTagHandler(store adTagStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		p, err := store.GetPlacementForTag(r.Context(), claims.AccountID, placementID)
+		// Platform users (staff/admin, dev bypass) may generate a tag for any
+		// placement — empty accountID skips the tenant filter in the store.
+		tenant := claims.AccountID
+		if auth.IsPlatformUser(claims) {
+			tenant = ""
+		}
+		p, err := store.GetPlacementForTag(r.Context(), tenant, placementID)
 		if err == sql.ErrNoRows {
 			http.Error(w, `{"error":"placement not found"}`, http.StatusNotFound)
 			return
@@ -141,9 +148,10 @@ func (s pgAdTagStore) GetPlacementForTag(ctx context.Context, accountID, placeme
 		return p, sql.ErrConnDone
 	}
 	var width, height sql.NullInt64
+	// Empty accountID = platform caller — no tenant filter.
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id::text, name, format, width, height FROM placements
-		 WHERE id = $1::uuid AND account_id = $2::uuid`, placementID, accountID).
+		 WHERE id = $1::uuid AND ($2 = '' OR account_id = $2::uuid)`, placementID, accountID).
 		Scan(&p.ID, &p.Name, &p.Format, &width, &height)
 	if err != nil {
 		return p, err

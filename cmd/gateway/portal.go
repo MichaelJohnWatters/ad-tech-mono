@@ -68,25 +68,41 @@ type advertiserPortalData struct {
 	Nav          []map[string]any
 }
 
-// advertiserPortalHandler renders the advertiser portal (UI plan Phase 1) with
-// session claims driving the nav and tenant scope. Dev bypass (no signing key)
-// renders with an admin-shaped view: full nav, platform-wide queries.
-func advertiserPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
+// publisherNav mirrors advertiserNav for the supply side.
+var publisherNav = []NavItem{
+	{Label: "Dashboard", Href: "#dashboard", Icon: "▤"},
+	{Label: "Placements", Href: "#placements", Icon: "▣", Perm: "placements:read"},
+	{Label: "Ad tag", Href: "#adtag", Icon: "⧉", Perm: "placements:read"},
+	{Label: "Earnings", Href: "#earnings", Icon: "▦", Perm: "earnings:view"},
+}
+
+// portalData is what the portal templates render with. AccountID/IsCustomer
+// feed the page's report-query filters (customer sessions see their tenant
+// slice; staff/admin see platform-wide). Nav is permission-filtered.
+type portalData struct {
+	AccountID  string
+	IsCustomer bool
+	Nav        []map[string]any
+}
+
+// portalHandler renders a persona portal page with session claims driving the
+// nav filter and tenant scope. customerType is the account type whose sessions
+// get tenant-scoped queries. Dev bypass (no signing key) renders the admin
+// view: full nav, platform-wide queries.
+func portalHandler(templates *templateManager, signingKey, page string, nav []NavItem, customerType auth.AccountType) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var claims *auth.Claims
 		if signingKey != "" {
 			claims, _ = middleware.ParseSession(r, signingKey)
 		}
-		data := advertiserPortalData{}
-		if claims != nil {
-			data.AccountID = claims.AccountID
-			data.IsAdvertiser = claims.AccountType == auth.AccountAdvertiser
-		}
+		data := portalData{}
 		// Dev bypass (nil claims) = admin view: full nav. With a real
 		// session, trim to the claims' permissions.
-		items := advertiserNav
+		items := nav
 		if claims != nil {
-			items = filterNav(advertiserNav, claims)
+			data.AccountID = claims.AccountID
+			data.IsCustomer = claims.AccountType == customerType
+			items = filterNav(nav, claims)
 		}
 		// app-sidebar's items are lowercase-keyed dicts (see the partial);
 		// convert the filtered NavItems to that shape.
@@ -95,6 +111,16 @@ func advertiserPortalHandler(templates *templateManager, signingKey string) http
 				"label": it.Label, "href": it.Href, "icon": it.Icon,
 			})
 		}
-		templates.Render(w, "advertiser.html", data)
+		templates.Render(w, page, data)
 	}
+}
+
+// advertiserPortalHandler renders the advertiser portal (UI plan Phase 1).
+func advertiserPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
+	return portalHandler(templates, signingKey, "advertiser.html", advertiserNav, auth.AccountAdvertiser)
+}
+
+// publisherPortalHandler renders the publisher portal (UI plan Phase 2).
+func publisherPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
+	return portalHandler(templates, signingKey, "publisher.html", publisherNav, auth.AccountPublisher)
 }
