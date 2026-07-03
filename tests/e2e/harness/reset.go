@@ -48,6 +48,7 @@ func (h *Harness) Reset(t *testing.T) {
 		"payouts",
 		"adjustments",
 		"advertiser_balances",
+		"topups",
 		"api_keys",
 		"team_members",
 		"accounts",
