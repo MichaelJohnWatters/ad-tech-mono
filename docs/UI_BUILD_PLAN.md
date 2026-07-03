@@ -128,6 +128,12 @@ partial + (if needed) a `/static/*.js` behaviour + a doc snippet.
 - **Prompts:** which components does the first portal (advertiser) actually need? what's the
   minimal set to ship Phase 1? chart approach — inline SVG vs a 3KB lib?
 
+> **Dev-bypass caveat:** the bypass identity is `AccountID: "dev-account"` — not a UUID, not
+> an accounts row. Tenant-scoped gateway handlers that cast it (`$1::uuid`) must guard and
+> serve an empty view (done: topup, payouts) or they 500 in dev. Sweep the remaining handlers
+> (deals/team/saved-reports/webhooks/quality-controls) or switch the bypass to a seeded dev
+> account UUID when picking up F4.
+
 ### F4. Real auth + session  🟡 (login shipped)
 > Shipped (F4a): cookie-based sessions (`middleware.Auth` reads the `adtech_session`
 > httpOnly cookie), a real login flow (`POST /v1/auth/login` → bcrypt-verify `team_members`
