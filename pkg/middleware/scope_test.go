@@ -59,6 +59,47 @@ func TestCallerScope_GatewayHeader(t *testing.T) {
 	}
 }
 
+// The gateway presents its platform service key on every proxied call AND
+// forwards the end-user identity. The forwarded identity must narrow the
+// platform key's scope — otherwise every browser session is a superuser at
+// the internal services.
+func TestCallerScope_PlatformKeyNarrowedByForwardedIdentity(t *testing.T) {
+	mk := func(acctType string) Scope {
+		r := httptest.NewRequest("PATCH", "/x", nil)
+		r = r.WithContext(context.WithValue(r.Context(), apiKeyCtxKey{}, &secrets.Secret{Name: "gw-key", Owner: "platform"}))
+		r.Header.Set(constants.HeaderAccountID, "acct-e")
+		r.Header.Set(constants.HeaderUserID, "user-9")
+		if acctType != "" {
+			r.Header.Set(constants.HeaderAccountType, acctType)
+		}
+		return CallerScope(r)
+	}
+
+	// Customer types: scoped to the forwarded account.
+	for _, typ := range []string{"advertiser", "publisher", "agency"} {
+		s := mk(typ)
+		if s.Platform || s.AccountID != "acct-e" || !s.Resolved {
+			t.Errorf("%s session: got %+v, want scoped to acct-e", typ, s)
+		}
+		if s.CanMutate("acct-other") {
+			t.Errorf("%s session must not mutate another account through the gateway key", typ)
+		}
+	}
+
+	// Operator types: stay platform (staff console, dev bypass).
+	for _, typ := range []string{"staff", "admin"} {
+		s := mk(typ)
+		if !s.Platform || !s.Resolved {
+			t.Errorf("%s session: got %+v, want platform", typ, s)
+		}
+	}
+
+	// No forwarded type (legacy X-Account-ID caller): scoped, old semantics.
+	if s := mk(""); s.Platform || s.AccountID != "acct-e" {
+		t.Errorf("typeless header: got %+v, want scoped to acct-e", s)
+	}
+}
+
 func TestCallerScope_NoIdentityCannotMutate(t *testing.T) {
 	r := httptest.NewRequest("DELETE", "/x", nil)
 	s := CallerScope(r)

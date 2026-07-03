@@ -47,10 +47,14 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 			}
 		}
 
-		// Inject account_id from auth claims for multi-tenancy
+		// Inject the caller's identity from auth claims for multi-tenancy.
+		// Account type lets the internal service distinguish an end-customer
+		// session (scope reads/writes to their account) from a platform
+		// operator (unscoped) — see middleware.CallerScope.
 		claims := ClaimsFromContext(r.Context())
 		if claims != nil {
 			upstreamReq.Header.Set(constants.HeaderAccountID, claims.AccountID)
+			upstreamReq.Header.Set(constants.HeaderAccountType, string(claims.AccountType))
 			upstreamReq.Header.Set(constants.HeaderUserID, claims.UserID)
 		}
 

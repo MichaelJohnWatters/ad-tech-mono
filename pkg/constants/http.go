@@ -21,7 +21,12 @@ const (
 	HeaderCacheControl  = "Cache-Control"
 	HeaderAuthorization = "Authorization"
 	HeaderAccountID     = "X-Account-ID"
-	HeaderUserID        = "X-User-ID"
+	// HeaderAccountType carries the session's account type (advertiser,
+	// publisher, agency, staff, admin) on gateway→internal proxied calls, so
+	// internal services can tell an end-customer identity (scope to their
+	// account) from a platform operator (unscoped). See middleware.CallerScope.
+	HeaderAccountType = "X-Account-Type"
+	HeaderUserID      = "X-User-ID"
 	HeaderTraceID       = "X-Trace-ID"
 	HeaderWebhookEvent  = "X-Webhook-Event"
 	HeaderWebhookSig    = "X-Webhook-Signature"

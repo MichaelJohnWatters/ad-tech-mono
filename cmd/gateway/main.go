@@ -396,9 +396,13 @@ func main() {
 	// Reports: exact + subtree registrations for the same reason as
 	// campaigns — the portal POSTs to the bare path and a ServeMux
 	// slash-redirect would cost every query an extra round trip.
+	// enforceReportTenant rewrites the query body so customer sessions can
+	// only query their own slice — the browser's filters are convenience,
+	// this is the guarantee.
 	reportsBase := strings.TrimSuffix(routes.APIReports, "/")
 	reportsProxy := middleware.RequirePermission("reports:read")(
-		middleware.StripPrefix(reportsBase, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log)))
+		enforceReportTenant(pgPublisherLookup{db: gwDB}, log)(
+			middleware.StripPrefix(reportsBase, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log))))
 	mux.Handle(reportsBase, authMiddleware(reportsProxy))
 	mux.Handle(routes.APIReports, authMiddleware(reportsProxy))
 

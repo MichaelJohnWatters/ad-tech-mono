@@ -123,7 +123,20 @@ func main() {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(placementCache.All())
+			all := placementCache.All()
+			// Tenant read filter: a customer session (publisher via the
+			// gateway) sees only its own placements; platform callers
+			// (operator key without forwarded identity) see all.
+			if scope := middleware.CallerScope(r); scope.Resolved && !scope.Platform {
+				scoped := all[:0:0]
+				for _, p := range all {
+					if p.AccountID == scope.AccountID {
+						scoped = append(scoped, p)
+					}
+				}
+				all = scoped
+			}
+			json.NewEncoder(w).Encode(all)
 		case http.MethodPost:
 			if mgmtDB == nil {
 				http.Error(w, "management db unavailable", http.StatusServiceUnavailable)

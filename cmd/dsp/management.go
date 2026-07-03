@@ -106,6 +106,18 @@ func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, 
 		case http.MethodGet:
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			all := cache.All()
+			// Tenant read filter: a customer session (advertiser/agency via
+			// the gateway) sees only its own campaigns; platform callers
+			// (operator key without forwarded identity, staff/admin) see all.
+			if scope := middleware.CallerScope(r); scope.Resolved && !scope.Platform {
+				scoped := all[:0:0]
+				for _, c := range all {
+					if c.AccountID == scope.AccountID || c.AdvertiserID == scope.AccountID {
+						scoped = append(scoped, c)
+					}
+				}
+				all = scoped
+			}
 			out := make([]campaignWithSpend, len(all))
 			for i, c := range all {
 				out[i] = campaignWithSpend{Campaign: c, SpentToday: budget.Spend(c.ID)}
@@ -205,16 +217,33 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// Get-or-create the DSP's "default management advertiser" — a single
-	// bucket account per DSP for ad-hoc campaigns created via the UI.
-	// Each DSP has its own (deterministic ID) and the account's dsp_id is
-	// set to this DSP, so the campaign appears only in this DSP's
-	// filtered cache.
-	accountID, err := ensureMgmtAdvertiser(ctx, db, dspID, dspName)
-	if err != nil {
-		log.Error("ensure mgmt advertiser failed", "error", err, "dsp", dspName)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	// Whose campaign is this? A customer session (advertiser via the
+	// gateway) creates under its own account — anything else and the tenant
+	// read filter above would hide their own campaign from them. Platform
+	// callers (pub sim, e2e, operator key) use the DSP's "default management
+	// advertiser" bucket, as before.
+	scope := middleware.CallerScope(r)
+	var accountID string
+	var err error
+	if scope.Resolved && !scope.Platform {
+		accountID = scope.AccountID
+		// Attach the account to this DSP on first use (the campaign warm
+		// cache filters by accounts.dsp_id). COALESCE keeps an existing
+		// attachment — an account already on another DSP isn't stolen.
+		if _, err := db.ExecContext(ctx,
+			`UPDATE accounts SET dsp_id = COALESCE(dsp_id, $1::uuid), updated_at = now() WHERE id = $2::uuid`,
+			dspID, accountID); err != nil {
+			log.Error("attach account to dsp failed", "error", err, "account_id", accountID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		accountID, err = ensureMgmtAdvertiser(ctx, db, dspID, dspName)
+		if err != nil {
+			log.Error("ensure mgmt advertiser failed", "error", err, "dsp", dspName)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Mirror the e2e harness CreateCampaign pattern: line_item + targeting +
@@ -235,10 +264,8 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 
 	publishInvalidate(ctx, bus, log, "create", lineItemID)
 
-	// Create targets the DSP's shared management-advertiser bucket (not a
-	// caller-supplied account), so there's no cross-tenant target to gate —
-	// but we still record who created what.
-	scope := middleware.CallerScope(r)
+	// Record who created what (scope resolved above — customer sessions
+	// created under their own account, platform callers under the bucket).
 	if err := audit.Log(ctx, db, audit.Entry{
 		AccountID: accountID, ActorID: scope.Actor, Action: "campaign:create",
 		ResourceType: "line_item", ResourceID: lineItemID, Changes: req,
