@@ -181,6 +181,41 @@ func TestRequirePermission(t *testing.T) {
 	}
 }
 
+func TestRequirePermissionByMethod(t *testing.T) {
+	log := logger.New("test")
+	authMW := Auth(testKey, log)
+	handler := authMW(RequirePermissionByMethod(map[string]string{
+		http.MethodGet:  "campaigns:read",
+		http.MethodPost: "campaigns:create",
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	// Read-only claims: GET passes, POST 403, unmapped method 405.
+	claims := &auth.Claims{
+		UserID: "u1", AccountID: "a1",
+		Permissions: []string{"campaigns:read"},
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, _ := CreateToken(claims, testKey)
+	for _, tc := range []struct {
+		method string
+		want   int
+	}{
+		{http.MethodGet, 200},
+		{http.MethodPost, 403},
+		{http.MethodDelete, 405},
+	} {
+		req := httptest.NewRequest(tc.method, "/", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.method, rec.Code, tc.want)
+		}
+	}
+}
+
 func TestCreateAndValidateToken(t *testing.T) {
 	claims := &auth.Claims{
 		UserID:      "user-1",

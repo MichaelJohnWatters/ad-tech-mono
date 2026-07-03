@@ -7,102 +7,385 @@
 <body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
 <div class="flex min-h-screen">
 
-  {{ template "app-sidebar" (dict "persona" "Advertiser" "items" (slice
-      (dict "label" "Dashboard"  "icon" "▤" "href" "#" "active" true)
-      (dict "label" "Campaigns"  "icon" "◎" "href" "#")
-      (dict "label" "Creatives"  "icon" "▣" "href" "#")
-      (dict "label" "Audiences"  "icon" "◍" "href" "#")
-      (dict "label" "Reports"    "icon" "▧" "href" "#")
-      (dict "label" "Billing"    "icon" "▦" "href" "#")
-      (dict "label" "Settings"   "icon" "⚙" "href" "#"))) }}
+  {{ template "app-sidebar" (dict "persona" "Advertiser" "items" .Nav) }}
 
   <main class="flex-1 min-w-0">
     <!-- Top bar -->
     <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
-      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Advertiser") (dict "label" "Dashboard"))) }}
+      <div id="crumb" class="text-sm text-gray-500 dark:text-gray-400">Advertiser · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Dashboard</span></div>
       <div class="flex items-center gap-3">
-        {{ template "search-input" (dict "id" "topSearch" "placeholder" "Search…") }}
         {{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}
       </div>
     </div>
 
-    <div class="p-6 space-y-6">
-      <!-- NOTE: demo data — this is a design mock (UI plan Phase 1). Real data
-           wires to the existing APIs (GET /v1/api/campaigns, POST /v1/api/reports,
-           /v1/billing/summary) once F4 auth + handlers land. -->
-
-      <!-- KPI row -->
+    <!-- ============ Dashboard ============ -->
+    <section id="section-dashboard" class="portal-section p-6 space-y-6">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {{ template "stat" (dict "label" "Spend today" "value" "$1,240" "delta" "+8%" "deltaDir" "up") }}
-        {{ template "stat" (dict "label" "Impressions" "value" "1.24M" "delta" "+3%" "deltaDir" "up") }}
-        {{ template "stat" (dict "label" "Clicks" "value" "8,410" "delta" "-2%" "deltaDir" "down") }}
-        {{ template "stat" (dict "label" "CTR" "value" "0.68%" "hint" "vs 0.71% avg") }}
+        {{ template "stat" (dict "label" "Spend today" "value" "—" "id" "kpiSpend") }}
+        {{ template "stat" (dict "label" "Impressions today" "value" "—" "id" "kpiImps") }}
+        {{ template "stat" (dict "label" "Clicks today" "value" "—" "id" "kpiClicks") }}
+        {{ template "stat" (dict "label" "CTR today" "value" "—" "id" "kpiCTR") }}
       </div>
 
-      <!-- Trend -->
       {{ template "card-start" (dict "title" "Spend — last 7 days") }}
-      <div class="text-brand h-16">{{ template "sparkline" (dict "values" (slice 820 910 760 1180 1040 1210 1240) "width" 640 "height" 60) }}</div>
+      <div id="spendTrend" class="text-brand h-20 flex items-end">
+        <span class="text-xs text-gray-400">loading…</span>
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Campaigns ============ -->
+    <section id="section-campaigns" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Campaigns") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Base bid" "Daily budget" "Spend today" "")) }}
+        <tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Reports ============ -->
+    <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Query") }}
+      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end" onsubmit="runReport(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
+          <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option>impressions</option><option>clicks</option><option>conversions</option>
+            <option>views</option><option>auctions</option><option>auction_wins</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics</span>
+          <input id="repMetrics" value="count,sum_cost" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by</span>
+          <input id="repDims" placeholder="campaign_id,day" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
+          <select id="repRange" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Run query" "type" "submit") }}
+      </form>
       {{ template "card-end" . }}
 
-      <!-- Campaigns table -->
-      {{ template "card-start" (dict "title" "Campaigns") }}
-      {{ template "table-start" (dict "headers" (slice "Name" "Status" "Daily budget" "Spend today" "CTR" "")) }}
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Summer sale</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "live" "variant" "success") }}</td>
-          <td class="px-3 py-2 font-mono">$500</td>
-          <td class="px-3 py-2 font-mono">$312</td>
-          <td class="px-3 py-2 font-mono">0.72%</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
-        </tr>
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Retargeting Q3</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "paused" "variant" "warn") }}</td>
-          <td class="px-3 py-2 font-mono">$1,000</td>
-          <td class="px-3 py-2 font-mono">$0</td>
-          <td class="px-3 py-2 font-mono">0.55%</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
-        </tr>
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">Brand awareness</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "ended" "variant" "neutral") }}</td>
-          <td class="px-3 py-2 font-mono">$300</td>
-          <td class="px-3 py-2 font-mono">$0</td>
-          <td class="px-3 py-2 font-mono">0.61%</td>
-          <td class="px-3 py-2 text-right">{{ template "button" (dict "label" "Edit" "variant" "ghost" "size" "sm" "onclick" "document.getElementById('editCampaign').classList.remove('hidden')") }}</td>
-        </tr>
-      {{ template "table-end" . }}
-      <div class="mt-3">{{ template "pagination" (dict "summary" "1–3 of 3" "prevDisabled" true "nextDisabled" true) }}</div>
+      {{ template "card-start" (dict "title" "Results") }}
+      <div id="reportOut" class="overflow-x-auto">
+        {{ template "empty-state" (dict "title" "No query yet" "body" "Pick a table and metrics above, then run the query.") }}
+      </div>
       {{ template "card-end" . }}
-    </div>
+    </section>
+
+    <!-- ============ Billing ============ -->
+    <section id="section-billing" class="portal-section p-6 space-y-6 hidden">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Balance" "value" "—" "id" "kpiBalance" "hint" "prepay funds available") }}
+      </div>
+
+      {{ template "card-start" (dict "title" "Add funds") }}
+      <form class="flex items-end gap-3" onsubmit="submitTopup(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Amount (USD)</span>
+          <input id="topupAmount" type="number" min="1" max="10000" step="0.01" placeholder="500"
+                 class="w-40 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" required>
+        </label>
+        {{ template "button" (dict "label" "Add funds" "type" "submit") }}
+        <span class="text-xs text-gray-400">Dev payment — approves instantly, credits the real ledger.</span>
+      </form>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Topup history") }}
+      {{ template "table-start" (dict "headers" (slice "When" "Amount" "Status" "Method")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
 
 <!-- New campaign modal -->
 {{ template "modal-start" (dict "id" "newCampaign" "title" "New campaign") }}
-  {{ template "form-field" (dict "label" "Campaign name" "name" "name" "placeholder" "Summer sale" "required" true) }}
-  <div class="grid grid-cols-2 gap-x-4">
-    {{ template "form-field" (dict "label" "Base bid (USD)" "name" "base_bid" "type" "number" "value" "2.50") }}
-    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "daily_budget" "type" "number" "placeholder" "500") }}
-  </div>
-  <div class="flex justify-end gap-2">
-    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
-    {{ template "button" (dict "label" "Create campaign" "onclick" "document.getElementById('newCampaign').classList.add('hidden'); toast('Campaign created (demo).','success')") }}
-  </div>
+  <form onsubmit="createCampaign(event)">
+    {{/* form-field uses "name" as the input id — the JS reads these ids. */}}
+    {{ template "form-field" (dict "label" "Campaign name" "name" "nc_name" "placeholder" "Summer sale" "required" true) }}
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Base bid (USD)" "name" "nc_base_bid" "type" "number" "value" "2.50") }}
+      {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "nc_daily_budget" "type" "number" "placeholder" "500") }}
+    </div>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create campaign" "type" "submit") }}
+    </div>
+  </form>
 {{ template "modal-end" . }}
 
 <!-- Edit campaign drawer -->
 {{ template "drawer-start" (dict "id" "editCampaign" "title" "Edit campaign") }}
-  {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "e_budget" "type" "number" "value" "500") }}
-  {{ template "form-field" (dict "label" "Base bid (USD)" "name" "e_bid" "type" "number" "value" "2.50") }}
-  <div class="mb-4">{{ template "toggle" (dict "label" "Paused" "onchange" "toast(this.checked?'Paused':'Resumed','info')") }}</div>
-  <div class="flex justify-end gap-2">
-    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
-    {{ template "button" (dict "label" "Save" "onclick" "document.getElementById('editCampaign').classList.add('hidden'); toast('Saved (demo).','success')") }}
-  </div>
+  <form onsubmit="saveCampaign(event)">
+    <input type="hidden" id="ecID">
+    <div id="ecName" class="mb-3 text-sm font-medium"></div>
+    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "ec_daily_budget" "type" "number") }}
+    {{ template "form-field" (dict "label" "Base bid (USD)" "name" "ec_base_bid" "type" "number") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "type" "submit") }}
+    </div>
+  </form>
 {{ template "drawer-end" . }}
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
+<script>
+// Tenant scope for report queries: advertisers see their slice, staff/admin
+// (and the dev bypass) see platform-wide. Set server-side from session claims.
+const PORTAL = {
+  accountID: "{{ .AccountID }}",
+  isAdvertiser: {{ if .IsAdvertiser }}true{{ else }}false{{ end }},
+};
+
+const $ = (id) => document.getElementById(id);
+// The table partial owns its <tbody>; grab it by section.
+const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
+const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtInt = (n) => Number(n || 0).toLocaleString();
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function fetchJSON(url, opts = {}) {
+  const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});
+  const text = await resp.text();
+  if (!resp.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch {}
+    throw new Error(`${resp.status}: ${msg}`);
+  }
+  return text ? JSON.parse(text) : null;
+}
+
+// ---- Section switching (hash-driven; sidebar links are #anchors) ----
+const SECTIONS = ['dashboard', 'campaigns', 'reports', 'billing'];
+const loaded = {};
+function showSection(name) {
+  if (!SECTIONS.includes(name)) name = 'dashboard';
+  SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
+  $('crumbSection').textContent = name[0].toUpperCase() + name.slice(1);
+  document.querySelectorAll('aside nav a').forEach(a => {
+    const active = a.getAttribute('href') === '#' + name;
+    a.classList.toggle('bg-brand/10', active);
+    a.classList.toggle('text-brand', active);
+    a.classList.toggle('font-medium', active);
+    a.classList.toggle('text-gray-600', !active);
+    a.classList.toggle('dark:text-gray-300', !active);
+  });
+  if (!loaded[name]) {
+    loaded[name] = true;
+    ({dashboard: loadDashboard, campaigns: loadCampaigns, billing: loadBilling}[name])?.();
+  }
+}
+window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
+
+// ---- Reporting queries ----
+function reportQuery(body) {
+  if (PORTAL.isAdvertiser) body.filters = {...(body.filters || {}), account_id: PORTAL.accountID};
+  return fetchJSON('/v1/api/reports', {method: 'POST', body: JSON.stringify(body)});
+}
+const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
+const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
+// Result rows come back positionally; map columns -> value for row 0.
+const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [c, res.rows?.[0]?.[i]]));
+
+// ---- Dashboard ----
+async function loadDashboard() {
+  try {
+    const [imps, clicks] = await Promise.all([
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], time_from: todayStart()}),
+      reportQuery({table: 'clicks', metrics: ['count'], time_from: todayStart()}),
+    ]);
+    const i = firstRow(imps), c = firstRow(clicks);
+    $('kpiSpend').textContent = fmtUSD(i.sum_cost);
+    $('kpiImps').textContent = fmtInt(i.count);
+    $('kpiClicks').textContent = fmtInt(c.count);
+    $('kpiCTR').textContent = i.count > 0 ? (100 * (c.count || 0) / i.count).toFixed(2) + '%' : '—';
+  } catch (err) { toast('KPIs failed: ' + err.message, 'error'); }
+  try {
+    const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
+    renderTrend(trend);
+  } catch (err) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
+}
+
+// Inline-SVG bar trend (JS twin of the server-side sparkline partial —
+// data arrives after render, so the bars are built client-side).
+function renderTrend(res) {
+  const di = res.columns.indexOf('day'), mi = res.columns.indexOf('sum_cost');
+  const rows = (res.rows || []).slice().sort((a, b) => String(a[di]).localeCompare(String(b[di])));
+  if (!rows.length) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no spend in the last 7 days</span>'; return; }
+  const max = Math.max(...rows.map(r => Number(r[mi]) || 0), 0.01);
+  $('spendTrend').innerHTML = rows.map(r => {
+    const v = Number(r[mi]) || 0;
+    const h = Math.max(4, Math.round(64 * v / max));
+    return `<div class="flex-1 mx-0.5 flex flex-col items-center justify-end gap-1" title="${esc(r[di])}: ${fmtUSD(v)}">
+      <div class="w-full rounded-t bg-brand/70 hover:bg-brand" data-h="${h}"></div>
+      <div class="text-[10px] text-gray-400 font-mono">${esc(String(r[di]).slice(5))}</div>
+    </div>`;
+  }).join('');
+  // Bar heights are data-driven pixel values — set as a style property
+  // (the audit-ui lint bans inline style attributes in markup, and a
+  // class can't carry a computed height).
+  $('spendTrend').querySelectorAll('[data-h]').forEach(el => { el.style.height = el.dataset.h + 'px'; });
+}
+
+// ---- Campaigns ----
+const BADGE = {
+  live: 'bg-success/15 text-success', paused: 'bg-warn/15 text-warn',
+  ended: 'bg-gray-200 dark:bg-gray-800 text-gray-500', archived: 'bg-gray-200 dark:bg-gray-800 text-gray-500',
+};
+let campaignsCache = [];
+async function loadCampaigns() {
+  const tbody = tbodyOf('campaigns');
+  try {
+    campaignsCache = await fetchJSON('/v1/api/campaigns') || [];
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  if (!campaignsCache.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">
+      No campaigns yet — create your first with “+ New campaign”.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = campaignsCache.map(c => `
+    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(c.Name)}</td>
+      <td class="px-3 py-2 text-gray-500">${esc(c.AdvertiserName || (c.AdvertiserID || '').slice(0, 8))}</td>
+      <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${BADGE[c.Status] || BADGE.ended}">${esc(c.Status)}</span></td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(c.BidModel || 'cpm')}</td>
+      <td class="px-3 py-2 font-mono">${fmtUSD(c.BaseBid)}</td>
+      <td class="px-3 py-2 font-mono">${fmtUSD(c.DailyBudget)}</td>
+      <td class="px-3 py-2 font-mono">${fmtUSD(c.SpentToday)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="togglePause('${esc(c.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${c.Status === 'paused' ? 'Resume' : 'Pause'}</button>
+        <button onclick="openEdit('${esc(c.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function createCampaign(ev) {
+  ev.preventDefault();
+  const body = {
+    name: $('nc_name').value.trim(),
+    base_bid: parseFloat($('nc_base_bid').value) || 0,
+    daily_budget: parseFloat($('nc_daily_budget').value) || 0,
+  };
+  try {
+    await fetchJSON('/v1/api/campaigns', {method: 'POST', body: JSON.stringify(body)});
+    $('newCampaign').classList.add('hidden');
+    toast('Campaign created', 'success');
+    loadCampaigns();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+
+async function togglePause(id) {
+  const c = campaignsCache.find(x => x.ID === id);
+  if (!c) return;
+  const next = c.Status === 'paused' ? 'live' : 'paused';
+  try {
+    await fetchJSON('/v1/api/campaigns/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({status: next})});
+    toast(next === 'paused' ? 'Campaign paused' : 'Campaign resumed', 'success');
+    loadCampaigns();
+  } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+}
+
+function openEdit(id) {
+  const c = campaignsCache.find(x => x.ID === id);
+  if (!c) return;
+  $('ecID').value = id;
+  $('ecName').textContent = c.Name;
+  $('ec_daily_budget').value = c.DailyBudget;
+  $('ec_base_bid').value = c.BaseBid;
+  $('editCampaign').classList.remove('hidden');
+}
+
+async function saveCampaign(ev) {
+  ev.preventDefault();
+  const body = {daily_budget: parseFloat($('ec_daily_budget').value), base_bid: parseFloat($('ec_base_bid').value)};
+  try {
+    await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
+    $('editCampaign').classList.add('hidden');
+    toast('Campaign updated', 'success');
+    loadCampaigns();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Reports console ----
+async function runReport(ev) {
+  ev.preventDefault();
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    table: $('repTable').value,
+    metrics: split($('repMetrics').value),
+    dimensions: split($('repDims').value),
+    time_from: daysAgo(parseInt($('repRange').value, 10)),
+  };
+  const out = $('reportOut');
+  try {
+    const res = await reportQuery(body);
+    if (!res.rows?.length) {
+      out.innerHTML = '<div class="py-6 text-center text-sm text-gray-400">Query ran — zero rows in range.</div>';
+      return;
+    }
+    out.innerHTML = `<table class="w-full text-sm">
+      <thead><tr>${res.columns.map(c => `<th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${res.rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">${
+        r.map(v => `<td class="px-3 py-2 font-mono text-xs">${typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : esc(v)}</td>`).join('')
+      }</tr>`).join('')}</tbody></table>`;
+  } catch (err) { toast('Query failed: ' + err.message, 'error'); }
+}
+
+// ---- Billing / topup ----
+// Fresh idempotency key per form "session": a double-click or retry of the
+// same submission replays server-side (no double credit); a new key is only
+// minted after a topup succeeds.
+let topupKey = crypto.randomUUID();
+async function loadBilling() {
+  try {
+    const b = await fetchJSON('/v1/api/billing/topup');
+    $('kpiBalance').textContent = fmtUSD(b.balance);
+    const rows = b.topups || [];
+    tbodyOf('billing').innerHTML = rows.length ? rows.map(t => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc((t.created_at || '').slice(0, 19))}</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(t.amount)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${t.status === 'succeeded' ? 'bg-success/15 text-success' : 'bg-warn/15 text-warn'}">${esc(t.status)}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(t.payment_method)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No topups yet — add funds above to start spending.</td></tr>';
+  } catch (err) {
+    tbodyOf('billing').innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function submitTopup(ev) {
+  ev.preventDefault();
+  const amount = parseFloat($('topupAmount').value);
+  try {
+    const res = await fetchJSON('/v1/api/billing/topup', {
+      method: 'POST',
+      body: JSON.stringify({amount, idempotency_key: topupKey}),
+    });
+    if (res.duplicate) {
+      toast('Already applied — that submission was a retry, no new charge.', 'info');
+    } else {
+      toast(`Added ${fmtUSD(res.amount)} — balance ${fmtUSD(res.balance)}`, 'success');
+    }
+    topupKey = crypto.randomUUID();
+    $('topupAmount').value = '';
+    loadBilling();
+  } catch (err) { toast('Topup failed: ' + err.message, 'error'); }
+}
+
+showSection(location.hash.slice(1) || 'dashboard');
+</script>
 </body>
 </html>

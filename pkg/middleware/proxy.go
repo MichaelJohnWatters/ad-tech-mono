@@ -108,10 +108,12 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 // so "/v1/api/campaigns/li-001" becomes "/li-001" at the upstream.
 func StripPrefix(prefix string, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A request for exactly the prefix strips to "" — leave it empty.
+		// ReverseProxy targets already carry the full upstream base path
+		// (e.g. dspURL + /v1/dsp/campaigns), so forcing "/" here produced
+		// ".../v1/dsp/campaigns/" upstream, which ServeMux routes to the
+		// by-ID subtree handler (empty id → 404) instead of the collection.
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
-		if r.URL.Path == "" {
-			r.URL.Path = "/"
-		}
 		handler.ServeHTTP(w, r)
 	})
 }
