@@ -241,7 +241,16 @@ F4 is the gate for real portals.
 - **Prompts:** how is `ManagedAccounts` populated/managed? cross-account roll-up metrics? per-client
   permissions?
 
-### Staff / Account-manager console  ⬜
+### Staff / Account-manager console  🟡 (MVP live)
+> Shipped (Phase 3 MVP): `/portal/staff` (alias `/dev/portal/staff`) — Moderation queue
+> (pending creatives platform-wide, approve / reject-with-reason via `/v1/api/moderation`),
+> Fraud rules (add/unblock the 4 blocklist types via `/v1/api/fraud/blocklists`, invalidates
+> the tracker cache), Audit log viewer on the NEW `GET /v1/api/audit` (audit:read, platform-
+> wide, exact-match filters action/resource_type/resource_id/account_id, limit≤500), and a
+> Tools section linking the operator surfaces (config manager/secrets, pub sim, trace
+> explorer, Grafana, Jaeger). Nav is permission-filtered — a moderation-only role sees just
+> its queue. Remaining: accounts admin, support/impersonation, moderation appeal flow,
+> graduating config manager into the shell proper.
 - **Persona / gate:** `staff:owner` — `moderation:*`, `fraud:*`, `support:*`, `config:*`, `ops:*`,
   `audit:read`. (Superuser via `CanAccessAccount`.)
 - **Job-to-be-done:** "Review creatives, tune fraud rules, manage config/secrets, support accounts,

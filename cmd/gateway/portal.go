@@ -127,3 +127,20 @@ func advertiserPortalHandler(templates *templateManager, signingKey string) http
 func publisherPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
 	return portalHandler(templates, signingKey, "publisher.html", publisherNav, auth.AccountPublisher)
 }
+
+// staffNav is the operator console. Everything is permission-gated — a
+// support-only role sees just what it can act on. The Tools section links
+// out to the existing operator surfaces (config manager, trace explorer).
+var staffNav = []NavItem{
+	{Label: "Moderation", Href: "#moderation", Icon: "⚑", Perm: "moderation:read"},
+	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
+	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
+	{Label: "Tools", Href: "#tools", Icon: "⚙", Perm: "config:read"},
+}
+
+// staffPortalHandler renders the staff console (UI plan Phase 3). Staff is
+// never tenant-scoped — AccountStaff as the "customer" type means IsCustomer
+// only trips for staff accounts, and the page doesn't use PORTAL.scoped.
+func staffPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
+	return portalHandler(templates, signingKey, "staff.html", staffNav, auth.AccountStaff)
+}

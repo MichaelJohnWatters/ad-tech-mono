@@ -7,82 +7,276 @@
 <body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
 <div class="flex min-h-screen">
 
-  {{ template "app-sidebar" (dict "persona" "Staff" "items" (slice
-      (dict "label" "Moderation" "icon" "⚑" "href" "#" "active" true)
-      (dict "label" "Fraud rules" "icon" "⛨" "href" "#")
-      (dict "label" "Accounts"   "icon" "◍" "href" "#")
-      (dict "label" "Config"     "icon" "⚙" "href" "/dev/console")
-      (dict "label" "Secrets"    "icon" "🔑" "href" "/dev/console")
-      (dict "label" "Audit log"  "icon" "▤" "href" "#"))) }}
+  {{ template "app-sidebar" (dict "persona" "Staff" "items" .Nav) }}
 
   <main class="flex-1 min-w-0">
-    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
-      {{ template "breadcrumb" (dict "items" (slice (dict "label" "Staff") (dict "label" "Moderation"))) }}
-      <div class="flex items-center gap-2">
-        {{ template "pill" (dict "label" "Pending" "active" true) }}
-        {{ template "pill" (dict "label" "Approved") }}
-        {{ template "pill" (dict "label" "Rejected") }}
-      </div>
+    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center px-6">
+      <div class="text-sm text-gray-500 dark:text-gray-400">Staff · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Moderation</span></div>
     </div>
 
-    <div class="p-6 space-y-6">
-      <!-- NOTE: demo data — design mock (UI plan Phase 3). Real data needs a
-           moderation API (list pending creatives, approve/reject + reason);
-           Config/Secrets already exist at /dev/console. -->
+    <!-- ============ Moderation ============ -->
+    <section id="section-moderation" class="portal-section p-6 space-y-6">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {{ template "stat" (dict "label" "Pending review" "value" "12" "hint" "creatives") }}
-        {{ template "stat" (dict "label" "Approved today" "value" "48" "delta" "+6" "deltaDir" "up") }}
-        {{ template "stat" (dict "label" "Rejected today" "value" "3") }}
-        {{ template "stat" (dict "label" "Fraud blocks (24h)" "value" "1,204" "delta" "+9%" "deltaDir" "up") }}
+        {{ template "stat" (dict "label" "Pending review" "value" "—" "id" "kpiPending" "hint" "creatives, platform-wide") }}
       </div>
-
       {{ template "card-start" (dict "title" "Moderation queue") }}
-      {{ template "table-start" (dict "headers" (slice "Creative" "Advertiser" "Format" "Submitted" "Status" "")) }}
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">summer-sale-300x250</td>
-          <td class="px-3 py-2">Acme Corp</td>
-          <td class="px-3 py-2 font-mono">300×250</td>
-          <td class="px-3 py-2 text-gray-500">2m ago</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "pending" "variant" "info") }}</td>
-          <td class="px-3 py-2 text-right whitespace-nowrap">
-            {{ template "button" (dict "label" "Approve" "size" "sm" "onclick" "toast('Approved (demo).','success')") }}
-            {{ template "button" (dict "label" "Reject" "variant" "danger" "size" "sm" "onclick" "document.getElementById('rejectModal').classList.remove('hidden')") }}
-          </td>
-        </tr>
-        <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-          <td class="px-3 py-2 font-medium">crypto-ex-728x90</td>
-          <td class="px-3 py-2">CryptoEx</td>
-          <td class="px-3 py-2 font-mono">728×90</td>
-          <td class="px-3 py-2 text-gray-500">18m ago</td>
-          <td class="px-3 py-2">{{ template "badge" (dict "label" "pending" "variant" "info") }}</td>
-          <td class="px-3 py-2 text-right whitespace-nowrap">
-            {{ template "button" (dict "label" "Approve" "size" "sm" "onclick" "toast('Approved (demo).','success')") }}
-            {{ template "button" (dict "label" "Reject" "variant" "danger" "size" "sm" "onclick" "document.getElementById('rejectModal').classList.remove('hidden')") }}
-          </td>
-        </tr>
+      {{ template "table-start" (dict "headers" (slice "Creative" "Advertiser" "Format" "Submitted" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Fraud rules ============ -->
+    <section id="section-fraud" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Add a blocklist entry") }}
+      <form class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end" onsubmit="addBlocklist(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Type</span>
+          <select id="fbType" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="ip">IP address</option>
+            <option value="ua">User agent</option>
+            <option value="domain">Domain</option>
+            <option value="app_bundle">App bundle</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Value</span>
+          <input id="fbValue" placeholder="203.0.113.7" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" required>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Reason</span>
+          <input id="fbReason" placeholder="datacenter traffic" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        </label>
+        {{ template "button" (dict "label" "Block" "type" "submit") }}
+      </form>
+      <p class="mt-2 text-xs text-gray-400">The tracker's warm cache picks changes up within a second.</p>
       {{ template "card-end" . }}
 
-      {{ template "card-start" (dict "title" "Recent audit log") }}
-      {{ template "table-start" (dict "headers" (slice "When" "Actor" "Action" "Resource")) }}
-        <tr><td class="px-3 py-2 text-gray-500">10:42</td><td class="px-3 py-2 font-mono">apikey:dev-ops-key</td><td class="px-3 py-2">campaign:update</td><td class="px-3 py-2 font-mono">line_item:li-001</td></tr>
-        <tr><td class="px-3 py-2 text-gray-500">10:39</td><td class="px-3 py-2 font-mono">user:staff-1</td><td class="px-3 py-2">creative:approve</td><td class="px-3 py-2 font-mono">creative:cr-88</td></tr>
-        <tr><td class="px-3 py-2 text-gray-500">10:31</td><td class="px-3 py-2 font-mono">config_manager</td><td class="px-3 py-2">config:update</td><td class="px-3 py-2 font-mono">exchange.bid_timeout</td></tr>
+      {{ template "card-start" (dict "title" "Active blocklist") }}
+      {{ template "table-start" (dict "headers" (slice "Type" "Value" "Reason" "")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
-    </div>
+    </section>
+
+    <!-- ============ Audit log ============ -->
+    <section id="section-audit" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Audit log") }}
+      <form class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end mb-4" onsubmit="loadAudit(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Action</span>
+          <input id="auAction" placeholder="campaign:update" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Resource type</span>
+          <input id="auType" placeholder="line_item" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Resource ID</span>
+          <input id="auResID" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Account (UUID)</span>
+          <input id="auAccount" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        {{ template "button" (dict "label" "Filter" "type" "submit") }}
+      </form>
+      {{ template "table-start" (dict "headers" (slice "When" "Actor" "Action" "Resource" "Reason")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Tools ============ -->
+    <section id="section-tools" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Operator tools") }}
+      <ul class="space-y-2 text-sm">
+        <li><a class="text-brand hover:underline" href="/dev/console">Config manager + Secrets</a> <span class="text-gray-400">— live config, per-pod overrides, secret rotation</span></li>
+        <li><a class="text-brand hover:underline" href="/dev/publisher-simulator">Publisher simulator</a> <span class="text-gray-400">— run real auctions, trace timeline</span></li>
+        <li><a class="text-brand hover:underline" href="/dev/trace-explorer">Trace explorer</a> <span class="text-gray-400">— trace lookup + batch reconciliation</span></li>
+        <li><a class="text-brand hover:underline" href="http://localhost:3001" target="_blank">Grafana</a> <span class="text-gray-400">— metrics + logs (Loki pivot)</span></li>
+        <li><a class="text-brand hover:underline" href="http://localhost:16686" target="_blank">Jaeger</a> <span class="text-gray-400">— distributed traces</span></li>
+      </ul>
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
 
+<!-- Reject modal -->
 {{ template "modal-start" (dict "id" "rejectModal" "title" "Reject creative") }}
-  {{ template "form-field" (dict "label" "Reason" "name" "reason" "placeholder" "e.g. misleading claim, policy violation" "required" true) }}
-  <div class="flex justify-end gap-2">
-    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('rejectModal').classList.add('hidden')") }}
-    {{ template "button" (dict "label" "Reject creative" "variant" "danger" "onclick" "document.getElementById('rejectModal').classList.add('hidden'); toast('Rejected (demo).','error')") }}
-  </div>
+  <form onsubmit="submitReject(event)">
+    <input type="hidden" id="rejID">
+    <div id="rejName" class="mb-3 text-sm font-medium"></div>
+    {{ template "form-field" (dict "label" "Reason" "name" "rej_reason" "placeholder" "e.g. misleading claim, policy violation" "required" true) }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('rejectModal').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Reject creative" "variant" "danger" "type" "submit") }}
+    </div>
+  </form>
 {{ template "modal-end" . }}
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function fetchJSON(url, opts = {}) {
+  const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});
+  const text = await resp.text();
+  if (!resp.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch {}
+    throw new Error(`${resp.status}: ${msg}`);
+  }
+  return text ? JSON.parse(text) : null;
+}
+
+// ---- Section switching ----
+const SECTIONS = ['moderation', 'fraud', 'audit', 'tools'];
+const loaded = {};
+function showSection(name) {
+  if (!SECTIONS.includes(name)) name = 'moderation';
+  SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
+  $('crumbSection').textContent = {moderation: 'Moderation', fraud: 'Fraud rules', audit: 'Audit log', tools: 'Tools'}[name];
+  document.querySelectorAll('aside nav a').forEach(a => {
+    const active = a.getAttribute('href') === '#' + name;
+    a.classList.toggle('bg-brand/10', active);
+    a.classList.toggle('text-brand', active);
+    a.classList.toggle('font-medium', active);
+    a.classList.toggle('text-gray-600', !active);
+    a.classList.toggle('dark:text-gray-300', !active);
+  });
+  if (!loaded[name]) {
+    loaded[name] = true;
+    ({moderation: loadModeration, fraud: loadFraud, audit: loadAudit}[name])?.();
+  }
+}
+window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
+
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return Math.round(s) + 's ago';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+};
+
+// ---- Moderation ----
+let queueCache = [];
+async function loadModeration() {
+  const tbody = tbodyOf('moderation');
+  try {
+    queueCache = await fetchJSON('/v1/api/moderation') || [];
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  $('kpiPending').textContent = queueCache.length;
+  tbody.innerHTML = queueCache.length ? queueCache.map(c => `
+    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(c.name)}</td>
+      <td class="px-3 py-2 text-gray-500">${esc(c.advertiser || (c.account_id || '').slice(0, 8))}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(c.format)}</td>
+      <td class="px-3 py-2 text-gray-500 text-xs">${ago(c.created_at)}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="decide('${esc(c.id)}','approve')" class="text-xs px-2 py-1 rounded bg-success/15 text-success hover:bg-success/25">Approve</button>
+        <button onclick="openReject('${esc(c.id)}')" class="text-xs px-2 py-1 rounded bg-error/15 text-error hover:bg-error/25">Reject</button>
+      </td>
+    </tr>`).join('')
+    : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">Queue is clear — nothing pending review.</td></tr>';
+}
+
+async function decide(id, action, reason = '') {
+  try {
+    await fetchJSON('/v1/api/moderation', {method: 'POST', body: JSON.stringify({creative_id: id, action, reason})});
+    toast(action === 'approve' ? 'Creative approved' : 'Creative rejected', action === 'approve' ? 'success' : 'info');
+    loadModeration();
+  } catch (err) { toast('Decision failed: ' + err.message, 'error'); }
+}
+
+function openReject(id) {
+  const c = queueCache.find(x => x.id === id);
+  $('rejID').value = id;
+  $('rejName').textContent = c ? c.name : id;
+  $('rej_reason').value = '';
+  $('rejectModal').classList.remove('hidden');
+}
+
+async function submitReject(ev) {
+  ev.preventDefault();
+  const reason = $('rej_reason').value.trim();
+  if (!reason) { toast('A reason is required to reject', 'info'); return; }
+  $('rejectModal').classList.add('hidden');
+  await decide($('rejID').value, 'reject', reason);
+}
+
+// ---- Fraud blocklist ----
+async function loadFraud() {
+  const tbody = tbodyOf('fraud');
+  try {
+    const entries = await fetchJSON('/v1/api/fraud/blocklists') || [];
+    tbody.innerHTML = entries.length ? entries.map(e => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs uppercase">${esc(e.type)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(e.value)}</td>
+        <td class="px-3 py-2 text-gray-500 text-xs">${esc(e.reason)}</td>
+        <td class="px-3 py-2 text-right">
+          <button onclick="unblock('${esc(e.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Unblock</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">Blocklist is empty.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function addBlocklist(ev) {
+  ev.preventDefault();
+  const body = {type: $('fbType').value, value: $('fbValue').value.trim(), reason: $('fbReason').value.trim()};
+  try {
+    await fetchJSON('/v1/api/fraud/blocklists', {method: 'POST', body: JSON.stringify(body)});
+    toast('Blocked — tracker cache invalidated', 'success');
+    $('fbValue').value = ''; $('fbReason').value = '';
+    loadFraud();
+  } catch (err) { toast('Block failed: ' + err.message, 'error'); }
+}
+
+async function unblock(id) {
+  try {
+    await fetchJSON('/v1/api/fraud/blocklists?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Unblocked — re-add above to undo', 'success');
+    loadFraud();
+  } catch (err) { toast('Unblock failed: ' + err.message, 'error'); }
+}
+
+// ---- Audit log ----
+async function loadAudit(ev) {
+  ev?.preventDefault();
+  const tbody = tbodyOf('audit');
+  const q = new URLSearchParams();
+  if ($('auAction').value.trim()) q.set('action', $('auAction').value.trim());
+  if ($('auType').value.trim()) q.set('resource_type', $('auType').value.trim());
+  if ($('auResID').value.trim()) q.set('resource_id', $('auResID').value.trim());
+  if ($('auAccount').value.trim()) q.set('account_id', $('auAccount').value.trim());
+  try {
+    const entries = await fetchJSON('/v1/api/audit' + (q.toString() ? '?' + q : '')) || [];
+    tbody.innerHTML = entries.length ? entries.map(e => `
+      <tr class="border-t border-gray-100 dark:border-gray-800" title="${esc(JSON.stringify(e.changes))}">
+        <td class="px-3 py-2 text-gray-500 text-xs whitespace-nowrap font-mono">${esc((e.timestamp || '').replace('T', ' ').slice(0, 19))}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(e.actor_id)}</td>
+        <td class="px-3 py-2 text-xs">${esc(e.action)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(e.resource_type)}:${esc((e.resource_id || '').slice(0, 12))}</td>
+        <td class="px-3 py-2 text-gray-500 text-xs">${esc(e.reason)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No audit entries match.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+showSection(location.hash.slice(1) || 'moderation');
+</script>
 </body>
 </html>

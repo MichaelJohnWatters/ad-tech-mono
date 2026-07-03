@@ -180,9 +180,11 @@ func main() {
 	publisherPortal := requireLoginPage(signingKey, publisherPortalHandler(templates, signingKey))
 	mux.HandleFunc("/portal/publisher", publisherPortal)
 	mux.HandleFunc("/dev/portal/publisher", publisherPortal)
-	mux.HandleFunc("/dev/portal/staff", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "staff.html", nil)
-	}))
+	// Staff console (UI plan Phase 3) — moderation queue, fraud blocklists,
+	// audit-log viewer, plus links to the operator tools.
+	staffPortal := requireLoginPage(signingKey, staffPortalHandler(templates, signingKey))
+	mux.HandleFunc("/portal/staff", staffPortal)
+	mux.HandleFunc("/dev/portal/staff", staffPortal)
 
 	// Real auth: browser login → JWT stored in an httpOnly session cookie
 	// (UI plan F4). Additive to the dev bypass — with no signing key set, the
@@ -348,6 +350,10 @@ func main() {
 	// Money-touching: idempotency-keyed, double-entry ledger + balance in one
 	// transaction; payment approval is the dev/fake path for now.
 	mux.Handle(routes.APIBillingTopup, authMiddleware(http.HandlerFunc(topupHandler(pgTopupStore{db: gwDB}, log))))
+
+	// Audit log — staff viewer over audit_log (read-only, audit:read gated,
+	// platform-wide by design).
+	mux.Handle(routes.APIAuditLog, authMiddleware(http.HandlerFunc(auditLogHandler(pgAuditLogStore{db: gwDB}, log))))
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the

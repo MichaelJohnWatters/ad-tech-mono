@@ -209,22 +209,47 @@ func TestPublisherPortalRenders(t *testing.T) {
 	}
 }
 
-// TestStaffPortalRenders executes the staff/ops console design mock.
+// TestStaffPortalRenders executes the real staff console through its handler
+// (UI plan Phase 3): permission-filtered nav over moderation/fraud/audit/tools.
 func TestStaffPortalRenders(t *testing.T) {
 	chdirToRepoRoot(t)
 	mgr, err := newTemplateManager(true)
 	if err != nil {
 		t.Fatalf("newTemplateManager: %v", err)
 	}
+
+	// Dev bypass: full nav.
 	rec := httptest.NewRecorder()
-	mgr.Render(rec, "staff.html", nil)
+	staffPortalHandler(mgr, "")(rec, httptest.NewRequest("GET", "/portal/staff", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Staff", "Moderation queue", "Pending review", "audit log"} {
+	for _, want := range []string{"Staff", `href="#moderation"`, `href="#fraud"`, `href="#audit"`, `href="#tools"`, "Moderation queue", "Audit log", "blocklist"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered staff portal missing %q", want)
+		}
+	}
+
+	// Moderation-only staff role: fraud/audit/tools nav links filtered out.
+	mod := &auth.Claims{
+		AccountID:   "staff-acct",
+		AccountType: auth.AccountStaff,
+		Permissions: []string{"moderation:read", "moderation:approve"},
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, _ := middleware.CreateToken(mod, "key")
+	req := httptest.NewRequest("GET", "/portal/staff", nil)
+	req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: token})
+	rec = httptest.NewRecorder()
+	staffPortalHandler(mgr, "key")(rec, req)
+	body = rec.Body.String()
+	if !strings.Contains(body, `href="#moderation"`) {
+		t.Error("moderation role should see the Moderation nav link")
+	}
+	for _, deny := range []string{`href="#fraud"`, `href="#audit"`, `href="#tools"`} {
+		if strings.Contains(body, deny) {
+			t.Errorf("moderation-only role should not see %s", deny)
 		}
 	}
 }
