@@ -292,6 +292,17 @@ local_resource('seed-standard',
     cmd='S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev SEED_CREATIVES_URL_BASE=http://localhost:8080/v1/creatives go run ./cmd/seed --profile standard',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
+local_resource('seed-via-api',
+    # The API twin of seed-standard: walks the real customer onboarding
+    # journey (signup → site → placement → campaign → topup → auction)
+    # through the gateway with real sessions, doubling as the golden-path
+    # e2e test. NOTE: resets tenant tables first for determinism — rerun
+    # seed-standard afterwards if you want the demo inventory + dev logins
+    # back. Requires real-auth mode (jwt_signing secret seeded + gateway
+    # restarted since).
+    cmd='go test -tags e2e -count=1 -run TestOnboardingJourney ./tests/e2e',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
+
 local_resource('migrate',
     cmd='go run ./cmd/migrate',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
