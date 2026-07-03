@@ -42,5 +42,37 @@ ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 
 	}
 
 	in.log.Info("seeded dev admin user", "email", DevAdminEmail, "password", "(dev only)")
+
+	// Dev CUSTOMER logins, attached to the standard-profile accounts so the
+	// portals are full of real data on first login (campaigns for the
+	// advertiser, placements/deals for the publisher). Skipped with a warn
+	// when the profile accounts aren't seeded (non-standard profiles).
+	customers := []struct {
+		email, name, userKey, accountKey string
+	}{
+		{"advertiser@adtech.local", "Dev Advertiser", "dev-advertiser", "adv-globex"},
+		{"publisher@adtech.local", "Dev Publisher", "dev-publisher", "pub-daily-news"},
+	}
+	for _, c := range customers {
+		accountID := idgen.Derive("account", c.accountKey)
+		var exists bool
+		if err := in.db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)`, accountID).Scan(&exists); err != nil {
+			return fmt.Errorf("check %s account: %w", c.accountKey, err)
+		}
+		if !exists {
+			in.log.Warn("profile account missing, skipping dev customer login",
+				"account_key", c.accountKey, "email", c.email)
+			continue
+		}
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO team_members (id, account_id, email, name, role, password_hash, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'owner', $5, 'active', now(), now())
+ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 'active', updated_at = now()`,
+			idgen.Derive("user", c.userKey), accountID, c.email, c.name, string(hash)); err != nil {
+			return fmt.Errorf("seed %s: %w", c.email, err)
+		}
+		in.log.Info("seeded dev customer login", "email", c.email, "account_key", c.accountKey, "password", "(dev only)")
+	}
 	return nil
 }

@@ -52,3 +52,44 @@ VALUES ('dev-ops-key', $1, 'api_key', 'platform', 'active', now(), now())`
 	in.log.Info("seeded dev api key", "purpose", "api_key", "owner", "platform", "value", "(dev only — rotate in prod)")
 	return nil
 }
+
+// DevJWTSigningKey is the well-known dev JWT signing key. Its presence as an
+// active jwt_signing secret flips the gateway to REAL auth (sessions
+// validated, dev bypass off) — UI plan F4. The value only matters locally;
+// real deployments rotate it via the secrets console.
+const DevJWTSigningKey = "dev-jwt-signing-key-do-not-use-in-prod"
+
+// SeedDevJWTSigningKey inserts the dev signing key with status='active'.
+// Idempotent, same pattern as the dev API key. NOTE: the gateway reads the
+// signing key at BOOT — after the very first seed, restart the gateway
+// (tilt trigger gateway) to activate real auth.
+func (in *inserter) SeedDevJWTSigningKey(ctx context.Context) error {
+	var existing string
+	err := in.db.QueryRowContext(ctx,
+		`SELECT id FROM secrets WHERE purpose = 'jwt_signing' AND status = 'active' LIMIT 1`,
+	).Scan(&existing)
+	if err == nil {
+		in.log.Info("active jwt_signing secret already present, skipping seed")
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check existing jwt signing key: %w", err)
+	}
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		return fmt.Errorf("seed jwt signing key: encryption key: %w", err)
+	}
+	storedValue, err := cipher.Encrypt(DevJWTSigningKey)
+	if err != nil {
+		return fmt.Errorf("seed jwt signing key: encrypt: %w", err)
+	}
+	const q = `
+INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
+VALUES ('dev-jwt-signing', $1, 'jwt_signing', 'platform', 'active', now(), now())`
+	if _, err := in.db.ExecContext(ctx, q, storedValue); err != nil {
+		return fmt.Errorf("seed jwt signing key: %w", err)
+	}
+	in.log.Info("seeded dev jwt signing key — gateway runs REAL auth once restarted",
+		"purpose", "jwt_signing", "logins", "admin@ / advertiser@ / publisher@ adtech.local (password: admin)")
+	return nil
+}

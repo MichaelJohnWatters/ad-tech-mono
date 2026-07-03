@@ -134,6 +134,16 @@ partial + (if needed) a `/static/*.js` behaviour + a doc snippet.
 > (deals/team/saved-reports/webhooks/quality-controls) or switch the bypass to a seeded dev
 > account UUID when picking up F4.
 
+> **Real-auth mode (F4c, shipped):** the seed now installs an active `jwt_signing` secret
+> (`dev-jwt-signing-key-…`) plus dev customer logins — `advertiser@adtech.local` (owner on
+> adv-globex) and `publisher@adtech.local` (owner on pub-daily-news), password `admin`, joining
+> the admin login. With the key present the gateway validates sessions for real: no more dev
+> bypass, portal writes work in dev, unauthenticated API calls 401. The gateway reads the key
+> at BOOT — restart it (`tilt trigger gateway`) after the first seed. e2e: `harness.LoginAs` /
+> `CreateLoginUser` give tests real tenant sessions; the topup suite now exercises the full
+> HTTP tenant flow (login → credit → idempotent replay → 409 on key reuse → ledger pair).
+> NOTE: harness Reset truncates team_members — reseed (or CreateLoginUser) after a reset.
+
 ### F4. Real auth + session  🟡 (login shipped)
 > Shipped (F4a): cookie-based sessions (`middleware.Auth` reads the `adtech_session`
 > httpOnly cookie), a real login flow (`POST /v1/auth/login` → bcrypt-verify `team_members`
