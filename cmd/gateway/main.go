@@ -163,14 +163,17 @@ func main() {
 	mux.HandleFunc("/dev/components", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "showcase.html", nil)
 	})
-	// Advertiser portal design mock (UI plan Phase 1) — composes the component
-	// library + app shell with demo data. Wires to real APIs (campaigns/reports/
-	// billing) once F4 auth + handlers land; for now a visual/design reference.
+	// Advertiser portal (UI plan Phase 1) — real screens on real APIs:
+	// dashboard KPIs + spend trend (reports query), campaigns table with
+	// create/pause/edit (DSP CRUD via /v1/api/campaigns), a report console,
+	// and billing (balance + ledger-backed topup). Session claims drive the
+	// nav filter and tenant scope; the dev bypass renders the admin view.
+	// Served at /portal/advertiser; /dev/portal/advertiser kept as an alias.
 	// Portal pages gate on a real session (redirect to /login) once auth is on;
 	// in dev (no signing key) they pass through, same as the API bypass.
-	mux.HandleFunc("/dev/portal/advertiser", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "advertiser.html", nil)
-	}))
+	advertiserPortal := requireLoginPage(signingKey, advertiserPortalHandler(templates, signingKey))
+	mux.HandleFunc("/portal/advertiser", advertiserPortal)
+	mux.HandleFunc("/dev/portal/advertiser", advertiserPortal)
 	mux.HandleFunc("/dev/portal/publisher", requireLoginPage(signingKey, func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "publisher.html", nil)
 	}))
@@ -352,21 +355,52 @@ func main() {
 	}
 
 	// API routes (auth required) - proxy to internal services
-	mux.Handle(routes.APICampaigns, authMiddleware(
-		middleware.RequirePermission("campaigns:read")(
-			middleware.StripPrefix(routes.APICampaigns, middleware.ReverseProxy(dspURL+routes.DSPCampaigns, log)))))
+	//
+	// The gateway is the auth boundary: browsers present a session (JWT
+	// cookie), while the internal management APIs (DSP campaigns, SSP
+	// placements) trust service API keys from the secrets store. The proxy
+	// translates one into the other by injecting the gateway's service key
+	// on the upstream request — without it every proxied call 401s at the
+	// internal service. Dev default is the seeded dev key.
+	serviceAPIKey := cfg.Get("gateway.service_api_key", "dev-api-key-do-not-use-in-prod")
+	withServiceKey := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Header.Set("X-API-Key", serviceAPIKey)
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	// Campaigns: method-aware gate (reads campaigns:read, writes their
+	// specific action). routes.APICampaigns carries a trailing slash, so it
+	// is the {id} subtree; the TrimSuffix registration serves the exact
+	// collection path without ServeMux's add-a-slash redirect (which turns
+	// a PATCH into a lossy 307 round-trip).
+	campaignsBase := strings.TrimSuffix(routes.APICampaigns, "/")
+	campaignsProxy := middleware.RequirePermissionByMethod(map[string]string{
+		http.MethodGet:    "campaigns:read",
+		http.MethodPost:   "campaigns:create",
+		http.MethodPatch:  "campaigns:update",
+		http.MethodDelete: "campaigns:delete",
+	})(withServiceKey(middleware.StripPrefix(campaignsBase, middleware.ReverseProxy(dspURL+routes.DSPCampaigns, log))))
+	mux.Handle(campaignsBase, authMiddleware(campaignsProxy))
+	mux.Handle(routes.APICampaigns, authMiddleware(campaignsProxy))
 
 	mux.Handle(routes.APIPlacements, authMiddleware(
-		middleware.RequirePermission("placements:read")(
-			middleware.StripPrefix(routes.APIPlacements, middleware.ReverseProxy(sspURL+routes.SSPPlacements, log)))))
+		middleware.RequirePermission("placements:read")(withServiceKey(
+			middleware.StripPrefix(routes.APIPlacements, middleware.ReverseProxy(sspURL+routes.SSPPlacements, log))))))
 
 	mux.Handle(routes.APICreatives, authMiddleware(
-		middleware.RequirePermission("creatives:read")(
-			middleware.StripPrefix(routes.APICreatives, middleware.ReverseProxy(adserverURL+routes.AdCreatives, log)))))
+		middleware.RequirePermission("creatives:read")(withServiceKey(
+			middleware.StripPrefix(routes.APICreatives, middleware.ReverseProxy(adserverURL+routes.AdCreatives, log))))))
 
-	mux.Handle(routes.APIReports, authMiddleware(
-		middleware.RequirePermission("reports:read")(
-			middleware.StripPrefix(routes.APIReports, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log)))))
+	// Reports: exact + subtree registrations for the same reason as
+	// campaigns — the portal POSTs to the bare path and a ServeMux
+	// slash-redirect would cost every query an extra round trip.
+	reportsBase := strings.TrimSuffix(routes.APIReports, "/")
+	reportsProxy := middleware.RequirePermission("reports:read")(
+		middleware.StripPrefix(reportsBase, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log)))
+	mux.Handle(reportsBase, authMiddleware(reportsProxy))
+	mux.Handle(routes.APIReports, authMiddleware(reportsProxy))
 
 	// Pass-through proxies (Swagger try-it-out, dev tools)
 	mux.Handle(routes.ProxyReporting, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))

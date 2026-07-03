@@ -43,13 +43,13 @@ func topupReq(method, body string, claims *auth.Claims) *http.Request {
 }
 
 func TestTopupHandler(t *testing.T) {
-	adv := &auth.Claims{AccountID: "adv-1", UserID: "user-1", Permissions: []string{"billing:view", "billing:topup"}}
+	adv := &auth.Claims{AccountID: "11111111-1111-4111-8111-111111111111", UserID: "user-1", Permissions: []string{"billing:view", "billing:topup"}}
 
 	// GET history, scoped.
 	store := &fakeTopupStore{history: topupBalanceResponse{Balance: 250, Currency: "USD", Topups: []topupView{{ID: "t1", Amount: 250}}}}
 	rec := httptest.NewRecorder()
 	topupHandler(store, quietLog())(rec, topupReq(http.MethodGet, "", adv))
-	if rec.Code != http.StatusOK || store.gotAccount != "adv-1" {
+	if rec.Code != http.StatusOK || store.gotAccount != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("get code=%d account=%q", rec.Code, store.gotAccount)
 	}
 
@@ -60,7 +60,7 @@ func TestTopupHandler(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d, want 201; body %s", rec.Code, rec.Body.String())
 	}
-	if store.gotAccount != "adv-1" || store.gotUser != "user-1" || store.gotInput.IdempotencyKey != "key-1" {
+	if store.gotAccount != "11111111-1111-4111-8111-111111111111" || store.gotUser != "user-1" || store.gotInput.IdempotencyKey != "key-1" {
 		t.Errorf("create not scoped/parsed: %q %q %+v", store.gotAccount, store.gotUser, store.gotInput)
 	}
 	if store.gotInput.Currency != "USD" {
@@ -107,7 +107,7 @@ func TestTopupHandler(t *testing.T) {
 	}
 
 	// billing:view only → can read, cannot topup.
-	viewer := &auth.Claims{AccountID: "adv-1", Permissions: []string{"billing:view"}}
+	viewer := &auth.Claims{AccountID: "11111111-1111-4111-8111-111111111111", Permissions: []string{"billing:view"}}
 	rec = httptest.NewRecorder()
 	topupHandler(&fakeTopupStore{}, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, viewer))
 	if rec.Code != http.StatusForbidden {
@@ -119,5 +119,20 @@ func TestTopupHandler(t *testing.T) {
 	topupHandler(&fakeTopupStore{}, quietLog())(rec, topupReq(http.MethodGet, "", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("no claims code = %d, want 401", rec.Code)
+	}
+
+	// Dev-bypass identity (non-UUID account): GET serves an empty view
+	// instead of a uuid-cast 500; POST refuses the credit; store untouched.
+	dev := &auth.Claims{AccountID: "dev-account", Permissions: []string{"*"}}
+	store = &fakeTopupStore{}
+	rec = httptest.NewRecorder()
+	topupHandler(store, quietLog())(rec, topupReq(http.MethodGet, "", dev))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"topups":[]`) {
+		t.Errorf("dev GET: code=%d body=%s, want 200 empty view", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, dev))
+	if rec.Code != http.StatusBadRequest || store.calls != 0 {
+		t.Errorf("dev POST: code=%d calls=%d, want 400/0", rec.Code, store.calls)
 	}
 }

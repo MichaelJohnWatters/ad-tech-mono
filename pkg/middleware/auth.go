@@ -137,6 +137,32 @@ func RequirePermission(permission string) func(http.Handler) http.Handler {
 	}
 }
 
+// RequirePermissionByMethod returns middleware that checks a different
+// permission per HTTP method — e.g. GET needs campaigns:read while POST
+// needs campaigns:create. Methods absent from the map are rejected with
+// 405 so a new verb can't slip through ungated.
+func RequirePermissionByMethod(perms map[string]string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			perm, ok := perms[r.Method]
+			if !ok {
+				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+				return
+			}
+			claims := ClaimsFromContext(r.Context())
+			if claims == nil {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			if !auth.HasPermission(claims, perm) && !auth.HasPermission(claims, "*") {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // CreateToken creates a signed JWT token from claims.
 // Uses HS256 (HMAC-SHA256) - simple and sufficient for internal use.
 func CreateToken(claims *auth.Claims, signingKey string) (string, error) {

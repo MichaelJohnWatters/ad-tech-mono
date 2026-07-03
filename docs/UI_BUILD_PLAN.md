@@ -167,7 +167,18 @@ F4 is the gate for real portals.
 
 > Fill these in as we build. APIs marked **GAP** need backend work (see API Gaps register).
 
-### Advertiser portal  ⬜
+### Advertiser portal  🟡 (MVP live)
+> Shipped (Phase 1 MVP): `/portal/advertiser` (alias `/dev/portal/advertiser`) is a real
+> 4-section portal on real APIs — Dashboard (today KPIs + 7-day spend trend from the reports
+> query), Campaigns (list/create/pause/edit via `/v1/api/campaigns` → DSP CRUD), Reports (query
+> console on `/v1/api/reports`), Billing (balance + ledger-backed topup + history). Session
+> claims drive the sidebar filter (`advertiserNav` + `filterNav`) and tenant scope (advertiser
+> sessions filter report queries by `account_id`). Enabling fixes: gateway now injects its
+> service API key on proxied campaign/placement/creative calls (`gateway.service_api_key`,
+> dev default = seeded key), campaigns/reports got exact+subtree registrations (no more 307s,
+> `PATCH /v1/api/campaigns/{id}` works through the gateway), method-aware permission gate
+> (`RequirePermissionByMethod`). Remaining: creatives/audiences/settings screens, campaign
+> drill-down (IO › line item), pacing viz, wizard.
 - **Persona / gate:** `advertiser:{owner,manager,analyst,finance,viewer}` — `campaigns:*`,
   `creatives:*`, `audiences:*`, `reports:*`, `billing:*`.
 - **Job-to-be-done:** "Launch and optimise campaigns, watch spend/performance, manage creatives &

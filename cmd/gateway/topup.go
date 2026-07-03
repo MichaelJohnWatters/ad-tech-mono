@@ -85,6 +85,21 @@ func topupHandler(store topupStore, log *slog.Logger) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 
+		// The dev-bypass identity ("dev-account") isn't a real accounts row —
+		// balances are per-tenant UUIDs. Serve an empty view instead of
+		// letting Postgres reject the uuid cast as a 500, and refuse credits.
+		if !uuidRe.MatchString(claims.AccountID) {
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(topupBalanceResponse{Currency: "USD", Topups: []topupView{}})
+			case http.MethodPost:
+				http.Error(w, `{"error":"this session has no billable account — log in as an advertiser"}`, http.StatusBadRequest)
+			default:
+				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			if !can(claims, "billing:view") {

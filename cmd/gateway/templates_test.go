@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
 // chdirToRepoRoot walks up from the test's CWD looking for a marker
@@ -109,24 +113,51 @@ func TestShowcaseRenders(t *testing.T) {
 	}
 }
 
-// TestAdvertiserPortalRenders executes the advertiser portal design mock — the
-// component library composed into a real screen with the app-sidebar shell.
+// TestAdvertiserPortalRenders executes the real advertiser portal through its
+// handler (UI plan Phase 1): session claims drive the sidebar filter and the
+// tenant scope the page JS uses for report queries.
 func TestAdvertiserPortalRenders(t *testing.T) {
 	chdirToRepoRoot(t)
 	mgr, err := newTemplateManager(true)
 	if err != nil {
 		t.Fatalf("newTemplateManager: %v", err)
 	}
+
+	// Dev bypass (no signing key): admin view, full nav.
 	rec := httptest.NewRecorder()
-	mgr.Render(rec, "advertiser.html", nil)
+	advertiserPortalHandler(mgr, "")(rec, httptest.NewRequest("GET", "/portal/advertiser", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Advertiser", "Campaigns", "Spend today", "Summer sale", "New campaign"} {
+	for _, want := range []string{"Advertiser", `href="#campaigns"`, `href="#billing"`, "Spend today", "New campaign", "Add funds"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered advertiser portal missing %q", want)
 		}
+	}
+
+	// Finance role (billing:view + reports:read, no campaigns:read): the
+	// Campaigns nav link is filtered out; tenant scope rendered into the JS.
+	finance := &auth.Claims{
+		AccountID:   "adv-42",
+		AccountType: auth.AccountAdvertiser,
+		Permissions: []string{"billing:view", "reports:read"},
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, _ := middleware.CreateToken(finance, "key")
+	req := httptest.NewRequest("GET", "/portal/advertiser", nil)
+	req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: token})
+	rec = httptest.NewRecorder()
+	advertiserPortalHandler(mgr, "key")(rec, req)
+	body = rec.Body.String()
+	if strings.Contains(body, `href="#campaigns"`) {
+		t.Error("finance role should not see the Campaigns nav link")
+	}
+	if !strings.Contains(body, `href="#billing"`) {
+		t.Error("finance role should see the Billing nav link")
+	}
+	if !strings.Contains(body, `accountID: "adv-42"`) || !strings.Contains(body, "isAdvertiser: true") {
+		t.Error("tenant scope (accountID/isAdvertiser) not rendered into page JS")
 	}
 }
 
