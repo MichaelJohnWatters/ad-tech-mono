@@ -139,8 +139,33 @@
     {{/* form-field uses "name" as the input id — the JS reads these ids. */}}
     {{ template "form-field" (dict "label" "Campaign name" "name" "nc_name" "placeholder" "Summer sale" "required" true) }}
     <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
+        <select id="nc_bid_strategy" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="cpm">CPM — pay per impression</option>
+          <option value="cpc">CPC — pay per click</option>
+          <option value="cpa">CPA — pay per conversion</option>
+          <option value="vcpm">vCPM — pay per viewable impression</option>
+          <option value="cpcv">CPCV — pay per completed view</option>
+        </select>
+      </label>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
+        <select id="nc_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="even">Even — spread across the day</option>
+          <option value="asap">ASAP — spend as fast as possible</option>
+          <option value="front_loaded">Front-loaded — bias early</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid grid-cols-2 gap-x-4">
       {{ template "form-field" (dict "label" "Base bid (USD)" "name" "nc_base_bid" "type" "number" "value" "2.50") }}
       {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "nc_daily_budget" "type" "number" "placeholder" "500") }}
+    </div>
+    <div class="grid grid-cols-3 gap-x-4">
+      {{ template "form-field" (dict "label" "Total budget (USD)" "name" "nc_total_budget" "type" "number" "placeholder" "auto (daily×30)") }}
+      {{ template "form-field" (dict "label" "Flight start" "name" "nc_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Flight end" "name" "nc_end" "type" "date") }}
     </div>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
@@ -183,6 +208,19 @@
     <div id="ecName" class="mb-3 text-sm font-medium"></div>
     {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "ec_daily_budget" "type" "number") }}
     {{ template "form-field" (dict "label" "Base bid (USD)" "name" "ec_base_bid" "type" "number") }}
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
+      <select id="ec_bid_strategy" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="cpm">CPM</option><option value="cpc">CPC</option><option value="cpa">CPA</option>
+        <option value="vcpm">vCPM</option><option value="cpcv">CPCV</option>
+      </select>
+    </label>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
+      <select id="ec_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="even">Even</option><option value="asap">ASAP</option><option value="front_loaded">Front-loaded</option>
+      </select>
+    </label>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -333,7 +371,13 @@ async function createCampaign(ev) {
     name: $('nc_name').value.trim(),
     base_bid: parseFloat($('nc_base_bid').value) || 0,
     daily_budget: parseFloat($('nc_daily_budget').value) || 0,
+    bid_strategy: $('nc_bid_strategy').value,
+    pacing_mode: $('nc_pacing').value,
   };
+  const total = parseFloat($('nc_total_budget').value);
+  if (total > 0) body.total_budget = total;
+  if ($('nc_start').value) body.start_date = $('nc_start').value;
+  if ($('nc_end').value) body.end_date = $('nc_end').value;
   try {
     await fetchJSON('/v1/api/campaigns', {method: 'POST', body: JSON.stringify(body)});
     $('newCampaign').classList.add('hidden');
@@ -360,12 +404,19 @@ function openEdit(id) {
   $('ecName').textContent = c.Name;
   $('ec_daily_budget').value = c.DailyBudget;
   $('ec_base_bid').value = c.BaseBid;
+  $('ec_bid_strategy').value = c.BidModel || 'cpm';
+  $('ec_pacing').value = c.PacingMode || 'even';
   $('editCampaign').classList.remove('hidden');
 }
 
 async function saveCampaign(ev) {
   ev.preventDefault();
-  const body = {daily_budget: parseFloat($('ec_daily_budget').value), base_bid: parseFloat($('ec_base_bid').value)};
+  const body = {
+    daily_budget: parseFloat($('ec_daily_budget').value),
+    base_bid: parseFloat($('ec_base_bid').value),
+    bid_strategy: $('ec_bid_strategy').value,
+    pacing_mode: $('ec_pacing').value,
+  };
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editCampaign').classList.add('hidden');
