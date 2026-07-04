@@ -321,7 +321,7 @@ func main() {
 	mux.Handle(routes.APIDeals+"/", authMiddleware(http.HandlerFunc(dealByIDHandler(pgDealStore{db: gwDB}, secretsBus, log))))
 
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
-	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, log))))
+	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, secretsBus, log))))
 
 	// Fraud blocklists — staff manager (platform-wide, fraud:* gated); mutations
 	// invalidate the tracker fraud-rules warm cache.

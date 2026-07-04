@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
@@ -33,8 +34,10 @@ type moderationStore interface {
 // moderationHandler is the staff review queue: GET lists pending creatives
 // (moderation:read), POST decides one (moderation:approve / moderation:reject).
 // Platform-wide — staff/admin review across all accounts, so it's permission-
-// gated, not tenant-scoped.
-func moderationHandler(store moderationStore, log *slog.Logger) http.HandlerFunc {
+// gated, not tenant-scoped. Every decision publishes the creatives cache
+// invalidate so the adserver serves (or stops serving) the creative within
+// NATS RTT instead of the 30s poll.
+func moderationHandler(store moderationStore, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -99,6 +102,10 @@ func moderationHandler(store moderationStore, log *slog.Logger) http.HandlerFunc
 				log.Error("moderation decide failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
+			}
+			if bus != nil {
+				_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateCreatives,
+					[]byte(`{"source":"gateway-moderation","id":"`+req.CreativeID+`"}`))
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": req.CreativeID, "review_status": newStatus})
 
