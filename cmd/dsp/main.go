@@ -177,6 +177,13 @@ func main() {
 		lc.OnShutdown("opt-out-cache", func(_ context.Context) error { optOutCache.Stop(); return nil })
 	}
 
+	// Prepay balance gate (money loop) — no funds, no bid, account-wide.
+	// Warm cache of advertiser_balances + Redis win mirror; see balance.go.
+	balanceGate, balanceCache := startBalanceGate(cfg, clk, log, bus, l2)
+	if balanceCache != nil {
+		lc.OnShutdown("balance-cache", func(_ context.Context) error { balanceCache.Stop(); return nil })
+	}
+
 	// Readiness checks: only report ready when the L2 connection responds
 	// and the campaign cache has completed at least one successful load.
 	// Tilt and K8s use this to decide when to route traffic / show green.
@@ -200,9 +207,9 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
 
-	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +255,9 @@ func main() {
 		refreshables := []warm.Refreshable{campaignCache, secretsCache.Cache}
 		if optOutCache != nil {
 			refreshables = append(refreshables, optOutCache)
+		}
+		if balanceCache != nil {
+			refreshables = append(refreshables, balanceCache)
 		}
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(refreshables...))
 		if audiencePreloader != nil {
@@ -610,7 +620,12 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	return client
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
+	// balanceDepletedPublished dedups the account-level depleted event the
+	// same way depletedAlreadyPublished dedups the campaign-level one.
+	// Entries are cleared when the gate sees funds again, so a re-depletion
+	// after a topup fires a fresh event.
+	var balanceDepletedPublished sync.Map
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -812,6 +827,27 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				reqLog.Debug("campaign throttled by pacing", "campaign", c.ID, "spend", currentSpend)
 				continue
 			}
+			// Prepay balance gate (money loop): after the campaign-level
+			// budget checks, the ACCOUNT must have funds. Fail-open when the
+			// gate isn't wired (no DB) — same posture as opt-outs.
+			if balanceGate != nil {
+				if ok, remaining := balanceGate.HasFunds(c.AccountID); !ok {
+					reqLog.Info("no bid", "reason", "balance_depleted", "campaign", c.ID, "account", c.AccountID)
+					if pub != nil {
+						if _, already := balanceDepletedPublished.LoadOrStore(c.AccountID, struct{}{}); !already {
+							go pub.BalanceDepleted(context.WithoutCancel(ctx), events.BalanceDepletedEvent{
+								AccountID: c.AccountID,
+								Balance:   remaining,
+								Timestamp: clk.Now(),
+							})
+						}
+					}
+					continue
+				}
+				// Funds present: re-arm the depleted event for this account
+				// so a future re-depletion (post-topup) fires again.
+				balanceDepletedPublished.Delete(c.AccountID)
+			}
 
 			modCtx := targeting.ModifierContext{Device: tReq.Device, GeoCountry: tReq.Geo}
 			adjustedBid, _ := targeting.ApplyModifiers(c.BaseBid, c.Modifiers, modCtx)
@@ -1000,7 +1036,7 @@ func inventoryType(req openrtb.BidRequest) string {
 // DSPs alike are notified through this endpoint. The parallel NATS
 // adtech.auction.win event is for non-DSP consumers (reporting analytics,
 // future billing ledger), not for re-driving the DSP's own budget.
-func winHandler(log *slog.Logger, budget *BudgetTracker, tracker *bidshading.Tracker) http.HandlerFunc {
+func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGate, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		bidID := q.Get("bid_id")
@@ -1010,6 +1046,14 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, tracker *bidshading.Tra
 
 		if campaignID != "" {
 			budget.Record(campaignID, price)
+			// Mirror the spend into the account-level balance counter so
+			// the prepay gate sees it before the billing drawdown lands in
+			// Postgres (money loop).
+			if balanceGate != nil && campaigns != nil {
+				if c, ok := campaigns.ByID(campaignID); ok {
+					balanceGate.RecordWin(c.AccountID, price)
+				}
+			}
 		}
 		if placementID != "" {
 			tracker.RecordWin(placementID, price, price)

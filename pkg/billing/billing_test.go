@@ -389,3 +389,75 @@ func TestInvoiceGenerator(t *testing.T) {
 		t.Errorf("payout gross = %.2f, want 12.00", payout.GrossRevenue)
 	}
 }
+
+// fakeBalanceSink records drawdown calls for assertions.
+type fakeBalanceSink struct {
+	calls []struct {
+		AdvertiserID, EventType string
+		Amount                  float64
+	}
+	err error
+}
+
+func (f *fakeBalanceSink) Debit(_ context.Context, advertiserID string, amount float64, _, _, eventType string) (float64, bool, error) {
+	f.calls = append(f.calls, struct {
+		AdvertiserID, EventType string
+		Amount                  float64
+	}{advertiserID, eventType, amount})
+	return 100 - amount, true, f.err
+}
+
+// The prepay drawdown fires exactly at the spend-realization points: CPM
+// bill-immediate and reserve/settle's settle — never on the reserve itself.
+func TestEngine_BalanceSink_DrawdownPoints(t *testing.T) {
+	sink := &fakeBalanceSink{}
+	engine := NewEngine(NewMemoryLedger(), NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+	engine.SetBalanceSink(sink)
+
+	// CPM impression → billed → one debit.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "bal-1", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 3.00, Currency: "USD", BidModel: BidCPM, EventType: "impression",
+	})
+	if len(sink.calls) != 1 || sink.calls[0].Amount != 3.00 || sink.calls[0].AdvertiserID != "adv1" {
+		t.Fatalf("CPM bill: sink calls = %+v, want one 3.00 debit for adv1", sink.calls)
+	}
+
+	// CPC impression → reserve only → NO debit.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "bal-2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression",
+	})
+	if len(sink.calls) != 1 {
+		t.Fatalf("reserve must not debit the balance; calls = %+v", sink.calls)
+	}
+
+	// CPC click → settle → the debit lands.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "bal-2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1",
+		ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "click",
+	})
+	if len(sink.calls) != 2 || sink.calls[1].Amount != 1.50 || sink.calls[1].EventType != "click" {
+		t.Fatalf("settle debit missing/wrong: calls = %+v", sink.calls)
+	}
+}
+
+// Nil sink (tests, deployments without prepay) and sink errors must never
+// fail the billing event — the engine ledger is the source of truth.
+func TestEngine_BalanceSink_NilAndErrorTolerated(t *testing.T) {
+	engine := NewEngine(NewMemoryLedger(), NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+	if _, err := engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "bal-3", AdvertiserID: "adv1", PublisherID: "pub1",
+		ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPM, EventType: "impression",
+	}); err != nil {
+		t.Fatalf("nil sink must be a no-op, got %v", err)
+	}
+
+	engine.SetBalanceSink(&fakeBalanceSink{err: context.DeadlineExceeded})
+	if _, err := engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "bal-4", AdvertiserID: "adv1", PublisherID: "pub1",
+		ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPM, EventType: "impression",
+	}); err != nil {
+		t.Fatalf("sink error must not fail the billing event, got %v", err)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
 
 type fakeTopupStore struct {
@@ -53,12 +54,17 @@ func TestTopupHandler(t *testing.T) {
 		t.Fatalf("get code=%d account=%q", rec.Code, store.gotAccount)
 	}
 
-	// POST valid → 201, scoped + parsed, INFO trail not asserted.
+	// POST valid → 201, scoped + parsed, and the balances cache invalidate
+	// published (new funds must unblock DSP bidding within NATS RTT).
 	store = &fakeTopupStore{result: topupResult{ID: "t2", Amount: 500, Currency: "USD", Status: "succeeded", Balance: 750}}
+	bus := &countingBus{}
 	rec = httptest.NewRecorder()
-	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
+	topupHandler(store, bus, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d, want 201; body %s", rec.Code, rec.Body.String())
+	}
+	if bus.published != 1 || bus.subject != events.SubjectCacheInvalidateAdvertiserBalances {
+		t.Errorf("topup invalidate: published=%d subject=%q, want 1 advertiser-balances", bus.published, bus.subject)
 	}
 	if store.gotAccount != "11111111-1111-4111-8111-111111111111" || store.gotUser != "user-1" || store.gotInput.IdempotencyKey != "key-1" {
 		t.Errorf("create not scoped/parsed: %q %q %+v", store.gotAccount, store.gotUser, store.gotInput)
@@ -67,12 +73,17 @@ func TestTopupHandler(t *testing.T) {
 		t.Errorf("currency default = %q, want USD", store.gotInput.Currency)
 	}
 
-	// Idempotent replay → 200 (not 201) with duplicate flag.
+	// Idempotent replay → 200 (not 201) with duplicate flag, and NO
+	// invalidate (no money moved).
 	store = &fakeTopupStore{result: topupResult{ID: "t2", Amount: 500, Status: "succeeded", Balance: 750, Duplicate: true}}
+	bus = &countingBus{}
 	rec = httptest.NewRecorder()
-	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
+	topupHandler(store, bus, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
 	if rec.Code != http.StatusOK {
 		t.Errorf("replay code = %d, want 200", rec.Code)
+	}
+	if bus.published != 0 {
+		t.Errorf("replay must not publish an invalidate, published=%d", bus.published)
 	}
 	var res topupResult
 	_ = json.Unmarshal(rec.Body.Bytes(), &res)
