@@ -10577,6 +10577,8 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.auction.win` | Exchange | DSP (budget reservation), Reporting (analytics + billing accrual in one consumer) | AuctionWinEvent (single source of truth for cost) |
 | `adtech.auction.complete` | Exchange | Reporting | AuctionCompleteEvent (includes all bids, winner, timing) |
 | `adtech.budget.depleted` | DSP | Exchange (stop bidding for this campaign) | BudgetDepletedEvent |
+| `adtech.balance.depleted` | DSP (bid gate), Reporting (billing sink) | Webhooks, Reporting | BalanceDepletedEvent (advertiser prepay balance hit zero — account-wide no-bid until topup) |
+| `adtech.cache.invalidate.advertiser-balances` | Gateway (topup credit), Reporting (spend drawdown, throttled per account) | DSP balance warm cache | invalidate ping (cache reloads wholesale) |
 | `adtech.campaign.state_changed` | DSP | Reporting, Webhooks | CampaignStateEvent (lifecycle transitions) |
 | `adtech.creative.review_completed` | Ad Server | Gateway (notifications), Webhooks | CreativeReviewEvent |
 | `adtech.billing.reservation_created` | Billing | Reporting | ReservationEvent (CPC/CPA budget hold) |

@@ -62,6 +62,12 @@ const (
 	// Budget subjects (DSP → Exchange)
 	SubjectBudgetDepleted = "adtech.budget.depleted"
 
+	// BalanceDepleted fires when an advertiser's prepay balance hits zero —
+	// the account-level sibling of BudgetDepleted. Published by the DSP
+	// (bid-path gate) and consumable by webhooks/reporting so the
+	// advertiser learns funds ran out.
+	SubjectBalanceDepleted = "adtech.balance.depleted"
+
 	// Campaign lifecycle (DSP → Reporting, Webhooks)
 	SubjectCampaignStateChanged = "adtech.campaign.state_changed"
 
@@ -83,6 +89,11 @@ const (
 	SubjectCacheInvalidateOptOuts      = "adtech.cache.invalidate.opt-outs"
 	SubjectCacheInvalidateWebhookSubs  = "adtech.cache.invalidate.webhook-subs"
 	SubjectCacheInvalidateBillingRates = "adtech.cache.invalidate.billing-rates"
+	// AdvertiserBalances: published by the gateway on topup (credit) and by
+	// reporting's billing sink on spend drawdown (throttled per account).
+	// Subscribed by the DSP's balance warm cache so the bid-path funds gate
+	// rebases within NATS RTT instead of the 30s poll.
+	SubjectCacheInvalidateAdvertiserBalances = "adtech.cache.invalidate.advertiser-balances"
 	SubjectCacheInvalidateSigningKeys  = "adtech.cache.invalidate.signing-keys"
 	// Publisher-side direct-sold line items consumed by cmd/publisher-adserver.
 	SubjectCacheInvalidatePublisherLineItems = "adtech.cache.invalidate.publisher-line-items"

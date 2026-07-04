@@ -86,6 +86,16 @@ type BudgetDepletedEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// BalanceDepletedEvent is published when an advertiser account's prepay
+// balance is exhausted — bidding stops platform-wide for that account
+// until the next topup (the account-level sibling of BudgetDepletedEvent).
+type BalanceDepletedEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	AccountID     string    `json:"account_id"`
+	Balance       float64   `json:"balance"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
 // CampaignStateEvent is published when a campaign changes state.
 type CampaignStateEvent struct {
 	SchemaVersion int       `json:"schema_version"`

@@ -145,6 +145,11 @@ func defaultSchema() []SchemaEntry {
 		// cache.warm.creatives.*, etc.) live in the owning service's
 		// cmd/<svc>/config.go and override this default at boot.
 		{Key: "cache.warm.poll_interval", Type: "duration", Tier: TierStatic, Default: "30s", Description: "Fallback refresh interval for warm caches with no per-cache override. Most caches set their own.", Service: "platform", Since: "v1.1"},
+
+		// Money loop (prepay balance gating + drawdown).
+		{Key: "cache.warm.advertiser_balances.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", Service: "dsp", Since: "v1.2"},
+		{Key: "dsp.balance_gate_enabled", Type: "bool", Tier: TierLive, Default: "true", Description: "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", Service: "dsp", Since: "v1.2"},
+		{Key: "billing.balance_invalidate_min_interval", Type: "duration", Tier: TierLive, Default: "5s", Description: "Per-account throttle on the advertiser-balance cache invalidates published by the billing drawdown sink.", Service: "reporting", Since: "v1.2"},
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
@@ -75,7 +76,7 @@ type topupStore interface {
 // topup row, a double-entry ledger pair, and the balance upsert in one
 // transaction, keyed by a client idempotency key. A real payment provider
 // later replaces only the approval step.
-func topupHandler(store topupStore, log *slog.Logger) http.HandlerFunc {
+func topupHandler(store topupStore, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -141,6 +142,12 @@ func topupHandler(store topupStore, log *slog.Logger) http.HandlerFunc {
 			if res.Duplicate {
 				status = http.StatusOK
 			} else {
+				// New funds: ping the DSP balance caches so bidding
+				// unblocks within NATS RTT instead of the next poll.
+				if bus != nil {
+					_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateAdvertiserBalances,
+						[]byte(`{"source":"gateway-topup","account_id":"`+claims.AccountID+`"}`))
+				}
 				// Money moved — always leave an operational trail.
 				log.Info("topup credited",
 					"account_id", claims.AccountID, "topup_id", res.ID,
