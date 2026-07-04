@@ -61,6 +61,10 @@ func TestEndToEnd(t *testing.T) {
 		// (profiles/dsps/internal.yaml) so the campaign lands in the DSP
 		// warm cache. See harness.BuildBasicWorld for the same trick.
 		advAccount = h.CreateAdvertiser(t, "adv-acme")
+		// Fund the account: the DSP balance gate fails closed for accounts
+		// with no advertiser_balances row (prepay posture), so an unfunded
+		// advertiser can't win the auction in step 07.
+		h.GrantBalance(t, advAccount.ID, 100_000, "e2e-narrative-grant")
 	})
 
 	t.Run("05_campaign_setup", func(t *testing.T) {
