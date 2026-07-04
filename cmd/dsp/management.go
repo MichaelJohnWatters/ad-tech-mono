@@ -177,12 +177,29 @@ func campaignByIDHandler(db *sql.DB, bus events.EventBus, accountIDs []string, l
 	}
 }
 
+// validBidStrategies / validPacingModes mirror the line_items CHECK
+// constraints (migration 005). Kept here so the API rejects bad values with
+// a clear 400 instead of leaking a raw Postgres constraint error.
+var validBidStrategies = map[string]bool{"cpm": true, "cpc": true, "cpa": true, "vcpm": true, "cpcv": true}
+var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded": true}
+
 type createCampaignRequest struct {
 	Name          string   `json:"name"`
 	BaseBid       float64  `json:"base_bid"`
 	DailyBudget   float64  `json:"daily_budget"`
 	IncludeGeo    []string `json:"include_geo,omitempty"`
 	IncludeDevice []string `json:"include_device,omitempty"`
+	// BidStrategy selects the billing model: cpm (default) bills on
+	// impression; cpc/cpa/vcpm/cpcv reserve on impression and settle on the
+	// trigger event (click/conversion/viewable/complete). Empty → cpm.
+	BidStrategy string `json:"bid_strategy,omitempty"`
+	// PacingMode spreads the daily budget: even (default), asap, front_loaded.
+	PacingMode string `json:"pacing_mode,omitempty"`
+	// TotalBudget is the campaign-level (IO) budget cap. Zero → daily×30.
+	TotalBudget float64 `json:"total_budget,omitempty"`
+	// Flight window (IO start/end). Empty → today .. +90d. Format YYYY-MM-DD.
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
 	// ViewabilityTargetPct is the contractual viewability guarantee
 	// (0-100). Optional — nil = no guarantee, no makegood reconciliation.
 	// Settlement mechanics for vCPM are a separate platform-level decision
@@ -205,6 +222,30 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if req.DailyBudget <= 0 {
 		req.DailyBudget = 500
+	}
+	if req.BidStrategy == "" {
+		req.BidStrategy = "cpm"
+	}
+	if !validBidStrategies[req.BidStrategy] {
+		http.Error(w, "bid_strategy must be cpm, cpc, cpa, vcpm or cpcv", http.StatusBadRequest)
+		return
+	}
+	if req.PacingMode == "" {
+		req.PacingMode = "even"
+	}
+	if !validPacingModes[req.PacingMode] {
+		http.Error(w, "pacing_mode must be even, asap or front_loaded", http.StatusBadRequest)
+		return
+	}
+	if req.StartDate != "" || req.EndDate != "" {
+		if !validDate(req.StartDate) || !validDate(req.EndDate) {
+			http.Error(w, "start_date and end_date must both be YYYY-MM-DD when set", http.StatusBadRequest)
+			return
+		}
+		if req.EndDate < req.StartDate {
+			http.Error(w, "end_date must be on or after start_date", http.StatusBadRequest)
+			return
+		}
 	}
 	if req.ViewabilityTargetPct != nil {
 		v := *req.ViewabilityTargetPct
@@ -313,24 +354,40 @@ func writeNewCampaign(ctx context.Context, db *sql.DB, accountID, ioID, lineItem
 		return fmt.Errorf("set tenant: %w", err)
 	}
 
-	// IO (parent budget container)
+	// IO (parent budget container). Total budget defaults to daily×30;
+	// flight window defaults to today .. +90d. Empty date strings fall back
+	// to those SQL defaults via COALESCE on a NULL cast.
+	totalBudget := req.TotalBudget
+	if totalBudget <= 0 {
+		totalBudget = req.DailyBudget * 30
+	}
+	var startArg, endArg any
+	if req.StartDate != "" {
+		startArg = req.StartDate
+	}
+	if req.EndDate != "" {
+		endArg = req.EndDate
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO insertion_orders (id, account_id, name, budget, daily_budget, currency, start_date, end_date, status, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $4, 'USD', current_date, current_date + interval '90 days', 'active', now(), now())
-ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, req.DailyBudget*30); err != nil {
+VALUES ($1, $2, $3, $4, $5, 'USD',
+        COALESCE($6::date, current_date),
+        COALESCE($7::date, current_date + interval '90 days'),
+        'active', now(), now())
+ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, req.DailyBudget, startArg, endArg); err != nil {
 		return fmt.Errorf("io insert: %w", err)
 	}
-	// Line item (the "campaign" in our parlance). viewability_target_pct
-	// is NULL when the request omits it — the row is otherwise unchanged
-	// from the pre-makegood era.
+	// Line item (the "campaign" in our parlance). bid_strategy + pacing_mode
+	// now come from the request (validated by the caller). viewability_target_pct
+	// is NULL when omitted.
 	var viewTarget any
 	if req.ViewabilityTargetPct != nil {
 		viewTarget = *req.ViewabilityTargetPct
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', $7, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.BaseBid, req.DailyBudget, viewTarget); err != nil {
+VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'bandit', 'UTC', $9, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting (geo + device)
@@ -360,6 +417,17 @@ type patchCampaignRequest struct {
 	BaseBid     *float64 `json:"base_bid,omitempty"`
 	DailyBudget *float64 `json:"daily_budget,omitempty"`
 	Status      *string  `json:"status,omitempty"`
+	BidStrategy *string  `json:"bid_strategy,omitempty"`
+	PacingMode  *string  `json:"pacing_mode,omitempty"`
+}
+
+// validDate reports whether s is a YYYY-MM-DD date (or empty).
+func validDate(s string) bool {
+	if s == "" {
+		return true
+	}
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
 }
 
 func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, id string, log *slog.Logger) {
@@ -368,7 +436,7 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil {
+	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil && req.BidStrategy == nil && req.PacingMode == nil {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
 	}
@@ -379,6 +447,14 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 			http.Error(w, "invalid status", http.StatusBadRequest)
 			return
 		}
+	}
+	if req.BidStrategy != nil && !validBidStrategies[*req.BidStrategy] {
+		http.Error(w, "bid_strategy must be cpm, cpc, cpa, vcpm or cpcv", http.StatusBadRequest)
+		return
+	}
+	if req.PacingMode != nil && !validPacingModes[*req.PacingMode] {
+		http.Error(w, "pacing_mode must be even, asap or front_loaded", http.StatusBadRequest)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -441,6 +517,14 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if req.Status != nil {
 		args = append(args, *req.Status)
 		sets = append(sets, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if req.BidStrategy != nil {
+		args = append(args, *req.BidStrategy)
+		sets = append(sets, fmt.Sprintf("bid_strategy = $%d", len(args)))
+	}
+	if req.PacingMode != nil {
+		args = append(args, *req.PacingMode)
+		sets = append(sets, fmt.Sprintf("pacing_mode = $%d", len(args)))
 	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE line_items SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))
