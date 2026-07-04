@@ -60,12 +60,46 @@ type SpendResult struct {
 	ReservationID     string  // for reserve/settle models
 }
 
+// BalanceSink applies realized advertiser spend to the prepay balance
+// (advertiser_balances + spend ledger pair). Optional — nil means no
+// drawdown (tests, deployments without prepay). Implementations must be
+// idempotent on (traceID, eventType): NATS delivers at-least-once, and a
+// replay must return applied=false rather than double-debit.
+type BalanceSink interface {
+	Debit(ctx context.Context, advertiserID string, amount float64, currency, traceID, eventType string) (newBalance float64, applied bool, err error)
+}
+
 // Engine processes billing events.
 type Engine struct {
 	ledger    Ledger
 	contracts *ContractStore
+	balances  BalanceSink // optional; see SetBalanceSink
 	clk       clock.Clock
 	log       *slog.Logger
+}
+
+// SetBalanceSink connects the prepay drawdown: every realized spend
+// (billImmediate + settle — the two places money becomes real) debits the
+// advertiser's balance through the sink. Reserves do NOT touch the balance;
+// they hold campaign budget, and settle is the realization point.
+func (e *Engine) SetBalanceSink(s BalanceSink) { e.balances = s }
+
+// drawdown pushes realized spend to the balance sink. Errors are logged at
+// ERROR and never fail the billing event: the engine ledger row is already
+// written (single source of truth), the sink is idempotent, and the next
+// event or a reconciliation replay can recover the drawdown.
+func (e *Engine) drawdown(ctx context.Context, event SpendEvent, action string) {
+	if e.balances == nil {
+		return
+	}
+	if event.AdvertiserID == "" || event.ClearingPrice <= 0 {
+		return
+	}
+	if _, _, err := e.balances.Debit(ctx, event.AdvertiserID, event.ClearingPrice, event.Currency, event.TraceID, event.EventType); err != nil {
+		e.log.Error("balance drawdown failed",
+			"trace_id", event.TraceID, "advertiser_id", event.AdvertiserID,
+			"amount", event.ClearingPrice, "action", action, "error", err)
+	}
 }
 
 // NewEngine creates a billing engine. The ledger arg is an interface so
@@ -143,6 +177,8 @@ func (e *Engine) billImmediate(ctx context.Context, event SpendEvent) (*SpendRes
 		Currency:         event.Currency,
 	})
 
+	e.drawdown(ctx, event, "billed")
+
 	e.log.Debug("billed",
 		"trace_id", event.TraceID,
 		"model", event.BidModel,
@@ -209,6 +245,8 @@ func (e *Engine) settle(ctx context.Context, event SpendEvent) (*SpendResult, er
 		Currency:         event.Currency,
 		ReservationID:    resID,
 	})
+
+	e.drawdown(ctx, event, "settled")
 
 	e.log.Debug("settled",
 		"trace_id", event.TraceID,

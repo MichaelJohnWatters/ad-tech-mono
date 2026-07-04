@@ -71,6 +71,11 @@ func main() {
 	contracts := billing.NewContractStore()
 	billingEngine := billing.NewEngine(ledger, contracts, clk, log)
 
+	// Prepay drawdown (money loop): every realized spend the engine bills or
+	// settles also debits advertiser_balances and pings the DSP's balance
+	// cache. Nil bus is tolerated (the DSP's poll keeps it fresh).
+	startBalanceSink(cfg, log, billingEngine, connectInvalidateBus(cfg, log))
+
 	// Publisher contracts come from Postgres via a warm cache. Each refresh
 	// re-populates the in-memory ContractStore the billing engine reads from,
 	// so editing a publisher's revshare_config takes effect within one poll

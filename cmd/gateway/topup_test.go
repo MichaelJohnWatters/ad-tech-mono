@@ -48,7 +48,7 @@ func TestTopupHandler(t *testing.T) {
 	// GET history, scoped.
 	store := &fakeTopupStore{history: topupBalanceResponse{Balance: 250, Currency: "USD", Topups: []topupView{{ID: "t1", Amount: 250}}}}
 	rec := httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodGet, "", adv))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodGet, "", adv))
 	if rec.Code != http.StatusOK || store.gotAccount != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("get code=%d account=%q", rec.Code, store.gotAccount)
 	}
@@ -56,7 +56,7 @@ func TestTopupHandler(t *testing.T) {
 	// POST valid → 201, scoped + parsed, INFO trail not asserted.
 	store = &fakeTopupStore{result: topupResult{ID: "t2", Amount: 500, Currency: "USD", Status: "succeeded", Balance: 750}}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create code = %d, want 201; body %s", rec.Code, rec.Body.String())
 	}
@@ -70,7 +70,7 @@ func TestTopupHandler(t *testing.T) {
 	// Idempotent replay → 200 (not 201) with duplicate flag.
 	store = &fakeTopupStore{result: topupResult{ID: "t2", Amount: 500, Status: "succeeded", Balance: 750, Duplicate: true}}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500,"idempotency_key":"key-1"}`, adv))
 	if rec.Code != http.StatusOK {
 		t.Errorf("replay code = %d, want 200", rec.Code)
 	}
@@ -83,7 +83,7 @@ func TestTopupHandler(t *testing.T) {
 	// Key reused with different amount → 409.
 	store = &fakeTopupStore{err: errTopupKeyReused}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":900,"idempotency_key":"key-1"}`, adv))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":900,"idempotency_key":"key-1"}`, adv))
 	if rec.Code != http.StatusConflict {
 		t.Errorf("key reuse code = %d, want 409", rec.Code)
 	}
@@ -91,7 +91,7 @@ func TestTopupHandler(t *testing.T) {
 	// Missing idempotency key → 400, store never called.
 	store = &fakeTopupStore{}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500}`, adv))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":500}`, adv))
 	if rec.Code != http.StatusBadRequest || store.calls != 0 {
 		t.Errorf("no key: code=%d calls=%d, want 400/0", rec.Code, store.calls)
 	}
@@ -100,7 +100,7 @@ func TestTopupHandler(t *testing.T) {
 	for _, body := range []string{`{"amount":0,"idempotency_key":"k"}`, `{"amount":-5,"idempotency_key":"k"}`, `{"amount":10001,"idempotency_key":"k"}`} {
 		store = &fakeTopupStore{}
 		rec = httptest.NewRecorder()
-		topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, body, adv))
+		topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, body, adv))
 		if rec.Code != http.StatusBadRequest || store.calls != 0 {
 			t.Errorf("body %s: code=%d calls=%d, want 400/0", body, rec.Code, store.calls)
 		}
@@ -109,14 +109,14 @@ func TestTopupHandler(t *testing.T) {
 	// billing:view only → can read, cannot topup.
 	viewer := &auth.Claims{AccountID: "11111111-1111-4111-8111-111111111111", Permissions: []string{"billing:view"}}
 	rec = httptest.NewRecorder()
-	topupHandler(&fakeTopupStore{}, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, viewer))
+	topupHandler(&fakeTopupStore{}, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, viewer))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("viewer topup code = %d, want 403", rec.Code)
 	}
 
 	// No claims → 401.
 	rec = httptest.NewRecorder()
-	topupHandler(&fakeTopupStore{}, quietLog())(rec, topupReq(http.MethodGet, "", nil))
+	topupHandler(&fakeTopupStore{}, nil, quietLog())(rec, topupReq(http.MethodGet, "", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("no claims code = %d, want 401", rec.Code)
 	}
@@ -126,12 +126,12 @@ func TestTopupHandler(t *testing.T) {
 	dev := &auth.Claims{AccountID: "dev-account", Permissions: []string{"*"}}
 	store = &fakeTopupStore{}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodGet, "", dev))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodGet, "", dev))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"topups":[]`) {
 		t.Errorf("dev GET: code=%d body=%s, want 200 empty view", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	topupHandler(store, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, dev))
+	topupHandler(store, nil, quietLog())(rec, topupReq(http.MethodPost, `{"amount":5,"idempotency_key":"k"}`, dev))
 	if rec.Code != http.StatusBadRequest || store.calls != 0 {
 		t.Errorf("dev POST: code=%d calls=%d, want 400/0", rec.Code, store.calls)
 	}

@@ -350,7 +350,7 @@ func main() {
 	// Topup — advertiser prepay credit (billing:view / billing:topup gated).
 	// Money-touching: idempotency-keyed, double-entry ledger + balance in one
 	// transaction; payment approval is the dev/fake path for now.
-	mux.Handle(routes.APIBillingTopup, authMiddleware(http.HandlerFunc(topupHandler(pgTopupStore{db: gwDB}, log))))
+	mux.Handle(routes.APIBillingTopup, authMiddleware(http.HandlerFunc(topupHandler(pgTopupStore{db: gwDB}, secretsBus, log))))
 
 	// Audit log — staff viewer over audit_log (read-only, audit:read gated,
 	// platform-wide by design).
