@@ -114,12 +114,14 @@ func TestTopupTenantFlow(t *testing.T) {
 		}
 	})
 
-	// THE MONEY LOOP: a won auction's spend draws the balance down. Run one
-	// real auction (the fixture campaign wins in the reset world), then poll
-	// the balance until the billing sink's drawdown lands (auction win →
-	// NATS → reporting bills CPM → advertiser_balances debit).
+	// THE MONEY LOOP: realized spend draws the balance down. Billing accrues
+	// on the tracked IMPRESSION (tracker → NATS → reporting bills CPM →
+	// balance debit), so run the auction AND fire the impression pixel the
+	// served ad would have fired, then poll until the drawdown lands.
 	balanceAtTopup := before + 150
-	h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "money-loop-user")
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "money-loop-user")
+	h.FireImpression(t, auc.TraceID, w.Campaign.ID, w.Campaign.CreativeID,
+		w.Placement.ID, w.Publisher.ID, w.AdvAcc.ID, "USD", 3.50)
 	deadline := time.Now().Add(15 * time.Second)
 	var after float64
 	for {
