@@ -265,8 +265,17 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 			UserData128:     traceUD,
 			UserData32:      userData,
 			Ledger:          tb.USDLedger,
-			Code:            tb.CodeSettlement,
-			Flags:           tbtypes.TransferFlags{Linked: true, PostPendingTransfer: true}.ToUint16(),
+			// Code 0 = inherit the pending reservation's code. TigerBeetle
+			// rejects a post-pending transfer whose (nonzero) code differs
+			// from the pending's (CodeReservation) with
+			// pending_transfer_has_different_code — which is exactly what
+			// forcing CodeSettlement here did. The "a settlement happened"
+			// signal is carried by the escrow→publisher transfer below
+			// (CodeSettlement), which HasSettlement / Summary key off, and
+			// this posting is still classified as a settlement via its
+			// PostPendingTransfer flag (see entryTypeForCode).
+			Code:  0,
+			Flags: tbtypes.TransferFlags{Linked: true, PostPendingTransfer: true}.ToUint16(),
 		},
 		{
 			ID:              tb.SpendTransferID(e.TraceID),

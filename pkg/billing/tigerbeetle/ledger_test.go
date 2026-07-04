@@ -247,6 +247,16 @@ func TestLedgerSettlementProducesThreeLinkedTransfers(t *testing.T) {
 	if post.PendingID != tb.ReservationID("trace-003") {
 		t.Error("post-pending must reference the reservation ID")
 	}
+	// The post-pending transfer MUST inherit the pending reservation's code
+	// (0), not force CodeSettlement — real TB rejects a code mismatch with
+	// pending_transfer_has_different_code. The "settlement happened" signal
+	// lives on the escrow→publisher transfer below (CodeSettlement).
+	if post.Code != 0 {
+		t.Errorf("post-pending code = %d, want 0 (inherit pending's code); a nonzero mismatch is rejected by TigerBeetle", post.Code)
+	}
+	if rev.Code != tb.CodeSettlement {
+		t.Errorf("revenue transfer code = %d, want CodeSettlement(%d) — the settlement signal", rev.Code, tb.CodeSettlement)
+	}
 
 	if !rev.TransferFlags().Linked {
 		t.Error("publisher revenue transfer must be Linked (middle of chain)")
