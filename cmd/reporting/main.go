@@ -76,6 +76,12 @@ func main() {
 	// cache. Nil bus is tolerated (the DSP's poll keeps it fresh).
 	startBalanceSink(cfg, log, billingEngine, connectInvalidateBus(cfg, log))
 
+	// Reserve/settle context store: reserve persists the auction context so
+	// settle can recover publisher/advertiser/campaign on a ledger backend
+	// (TigerBeetle) that can't retain strings. Without this, CPC/CPA/vCPM
+	// settle + drawdown break under TB.
+	startReservationStore(cfg, log, billingEngine)
+
 	// Publisher contracts come from Postgres via a warm cache. Each refresh
 	// re-populates the in-memory ContractStore the billing engine reads from,
 	// so editing a publisher's revshare_config takes effect within one poll

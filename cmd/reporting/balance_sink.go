@@ -29,6 +29,71 @@ import (
 // pickContractLoader): a sink error never fails the billing event — the
 // engine ledger row is the source of truth and the debit is idempotent, so
 // a reconciliation replay can recover missed drawdowns.
+// startReservationStore wires the Postgres reserve/settle context store into
+// the engine (money loop, TB settle fix). Lazy/self-healing connect, same
+// posture as the balance sink; disabled with a warn when database.url is
+// unset (the MemoryLedger retains context in-process, so only TB truly needs
+// this — but wiring it for both keeps settle backend-agnostic).
+func startReservationStore(cfg *config.Config, log *slog.Logger, engine *billing.Engine) {
+	dbURL := cfg.Get("database.url", "")
+	if dbURL == "" {
+		log.Warn("reservation store disabled: database.url not set — CPC/CPA/vCPM settle relies on the ledger retaining context (ok for memory, broken for tigerbeetle)")
+		return
+	}
+	engine.SetReservationStore(&lazyReservationStore{dbURL: dbURL, log: log})
+	log.Info("reservation context store wired: reserve/settle context persisted for backend-agnostic settlement")
+}
+
+// lazyReservationStore dials Postgres on first use and re-dials after an
+// error, so reporting boots before Postgres is reachable (mirrors
+// pgBalanceSink and pickContractLoader).
+type lazyReservationStore struct {
+	dbURL string
+	log   *slog.Logger
+	mu    sync.Mutex
+	store *postgres.ReservationContextStore
+}
+
+func (s *lazyReservationStore) connect() (*postgres.ReservationContextStore, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store != nil {
+		return s.store, nil
+	}
+	st, err := postgres.New(postgres.Config{PrimaryURL: s.dbURL, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute})
+	if err != nil {
+		return nil, fmt.Errorf("postgres connect: %w", err)
+	}
+	s.store = &postgres.ReservationContextStore{Store: st}
+	return s.store, nil
+}
+
+func (s *lazyReservationStore) dropOnErr(err error) error {
+	if err != nil {
+		s.mu.Lock()
+		s.store = nil
+		s.mu.Unlock()
+	}
+	return err
+}
+
+func (s *lazyReservationStore) SaveReservation(ctx context.Context, rc billing.ReservationContext) error {
+	st, err := s.connect()
+	if err != nil {
+		return err
+	}
+	return s.dropOnErr(st.SaveReservation(ctx, rc))
+}
+
+func (s *lazyReservationStore) GetReservation(ctx context.Context, traceID string) (billing.ReservationContext, bool, error) {
+	st, err := s.connect()
+	if err != nil {
+		return billing.ReservationContext{}, false, err
+	}
+	rc, ok, err := st.GetReservation(ctx, traceID)
+	return rc, ok, s.dropOnErr(err)
+}
+
 func startBalanceSink(cfg *config.Config, log *slog.Logger, engine *billing.Engine, bus events.EventBus) {
 	dbURL := cfg.Get("database.url", "")
 	if dbURL == "" {

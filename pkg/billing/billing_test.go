@@ -461,3 +461,97 @@ func TestEngine_BalanceSink_NilAndErrorTolerated(t *testing.T) {
 		t.Fatalf("sink error must not fail the billing event, got %v", err)
 	}
 }
+
+// stringlessLedger wraps MemoryLedger to mimic the TigerBeetle backend: it
+// retains the reservation's amount + bid model but DROPS the publisher/
+// advertiser/campaign strings on ReservationByTrace — exactly the round-trip
+// TB can't do. Used to prove SettleByTrace recovers context from the
+// reservation store.
+type stringlessLedger struct{ *MemoryLedger }
+
+func (l stringlessLedger) ReservationByTrace(traceID string) (LedgerEntry, bool) {
+	e, ok := l.MemoryLedger.ReservationByTrace(traceID)
+	if !ok {
+		return e, false
+	}
+	return LedgerEntry{
+		TraceID: e.TraceID, Type: e.Type, Amount: e.Amount, Currency: e.Currency,
+		BidModel: e.BidModel, ReservationID: e.ReservationID,
+		// strings intentionally blanked (TB can't store them)
+	}, true
+}
+
+// fakeReservationStore is an in-memory billing.ReservationStore.
+type fakeReservationStore struct {
+	saved map[string]ReservationContext
+}
+
+func newFakeReservationStore() *fakeReservationStore {
+	return &fakeReservationStore{saved: map[string]ReservationContext{}}
+}
+func (f *fakeReservationStore) SaveReservation(_ context.Context, rc ReservationContext) error {
+	f.saved[rc.TraceID] = rc
+	return nil
+}
+func (f *fakeReservationStore) GetReservation(_ context.Context, traceID string) (ReservationContext, bool, error) {
+	rc, ok := f.saved[traceID]
+	return rc, ok, nil
+}
+
+// The TB settle bug + fix: on a stringless (TB-like) ledger, reserve persists
+// the context and settle recovers it — so the settle event carries the
+// advertiser/publisher (ledger record succeeds) AND the balance drawdown
+// fires (guarded on a non-empty advertiser id).
+func TestEngine_ReservationStore_EnrichesSettleOnStringlessLedger(t *testing.T) {
+	store := newFakeReservationStore()
+	sink := &fakeBalanceSink{}
+	engine := NewEngine(stringlessLedger{NewMemoryLedger()}, NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+	engine.SetReservationStore(store)
+	engine.SetBalanceSink(sink)
+
+	// CPC impression → reserve. Context must be persisted.
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "res-1", CampaignID: "camp-1", PublisherID: "pub-1", AdvertiserID: "adv-1",
+		ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPC, EventType: "impression",
+	})
+	if rc, ok := store.saved["res-1"]; !ok || rc.AdvertiserID != "adv-1" || rc.PublisherID != "pub-1" {
+		t.Fatalf("reserve did not persist context: %+v", store.saved["res-1"])
+	}
+	// No drawdown on the reserve itself.
+	if len(sink.calls) != 0 {
+		t.Fatalf("reserve must not debit the balance; calls=%+v", sink.calls)
+	}
+
+	// CPC click → settle. The ledger returns a stringless reservation, so the
+	// engine must recover advertiser/publisher from the store.
+	res, err := engine.SettleByTrace(context.Background(), "res-1", "click")
+	if err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if res == nil || res.Action != "settled" {
+		t.Fatalf("settle result = %+v, want a settlement", res)
+	}
+	// The drawdown fired with the recovered advertiser id — the whole point.
+	if len(sink.calls) != 1 || sink.calls[0].AdvertiserID != "adv-1" || sink.calls[0].Amount != 2.00 {
+		t.Fatalf("settle drawdown = %+v, want one 2.00 debit for adv-1", sink.calls)
+	}
+}
+
+// With the MemoryLedger (which retains context), the store is not consulted
+// on settle — the ledger's own reservation is complete.
+func TestEngine_ReservationStore_MemoryLedgerNeedsNoEnrichment(t *testing.T) {
+	store := newFakeReservationStore()
+	engine := NewEngine(NewMemoryLedger(), NewContractStore(), clock.NewFake(time.Now()), logger.New("billing-test"))
+	engine.SetReservationStore(store)
+
+	_, _ = engine.ProcessEvent(context.Background(), SpendEvent{
+		TraceID: "res-2", CampaignID: "camp-2", PublisherID: "pub-2", AdvertiserID: "adv-2",
+		ClearingPrice: 1.00, Currency: "USD", BidModel: BidCPC, EventType: "impression",
+	})
+	// Remove the saved context to prove the memory ledger path doesn't need it.
+	delete(store.saved, "res-2")
+	res, err := engine.SettleByTrace(context.Background(), "res-2", "click")
+	if err != nil || res == nil || res.Action != "settled" {
+		t.Fatalf("memory-ledger settle failed without store: res=%+v err=%v", res, err)
+	}
+}

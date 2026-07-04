@@ -69,13 +69,41 @@ type BalanceSink interface {
 	Debit(ctx context.Context, advertiserID string, amount float64, currency, traceID, eventType string) (newBalance float64, applied bool, err error)
 }
 
+// ReservationContext is the auction context of a reserve/settle reservation
+// that a ledger backend may not retain. The MemoryLedger keeps it in-process;
+// the TigerBeetle ledger stores only numeric IDs + amount + trace/bid_model,
+// so the publisher/advertiser/campaign STRINGS are lost. Persisted on reserve
+// and recovered on settle so settlement is backend-agnostic.
+type ReservationContext struct {
+	TraceID      string
+	CampaignID   string
+	CreativeID   string
+	PlacementID  string
+	PublisherID  string
+	AdvertiserID string
+	DealType     string
+	Currency     string
+	Amount       float64
+	BidModel     string
+}
+
+// ReservationStore persists reservation context on reserve and recovers it
+// on settle. Optional — nil means rely on the ledger alone (fine for the
+// MemoryLedger, broken for TigerBeetle). Keyed by TraceID; Save must upsert
+// (NATS redelivers reserves).
+type ReservationStore interface {
+	SaveReservation(ctx context.Context, rc ReservationContext) error
+	GetReservation(ctx context.Context, traceID string) (ReservationContext, bool, error)
+}
+
 // Engine processes billing events.
 type Engine struct {
-	ledger    Ledger
-	contracts *ContractStore
-	balances  BalanceSink // optional; see SetBalanceSink
-	clk       clock.Clock
-	log       *slog.Logger
+	ledger       Ledger
+	contracts    *ContractStore
+	balances     BalanceSink      // optional; see SetBalanceSink
+	reservations ReservationStore // optional; see SetReservationStore
+	clk          clock.Clock
+	log          *slog.Logger
 }
 
 // SetBalanceSink connects the prepay drawdown: every realized spend
@@ -83,6 +111,10 @@ type Engine struct {
 // advertiser's balance through the sink. Reserves do NOT touch the balance;
 // they hold campaign budget, and settle is the realization point.
 func (e *Engine) SetBalanceSink(s BalanceSink) { e.balances = s }
+
+// SetReservationStore connects the settle-enrichment cache: reserve persists
+// the auction context, settle recovers it when the ledger can't (TigerBeetle).
+func (e *Engine) SetReservationStore(s ReservationStore) { e.reservations = s }
 
 // drawdown pushes realized spend to the balance sink. Errors are logged at
 // ERROR and never fail the billing event: the engine ledger row is already
@@ -209,6 +241,22 @@ func (e *Engine) reserve(ctx context.Context, event SpendEvent) (*SpendResult, e
 		ReservationID: resID,
 	})
 
+	// Persist the auction context so settle can recover it even on a ledger
+	// backend that doesn't retain strings (TigerBeetle). Best-effort — a
+	// failure here means TB settles will fall back to the (empty) ledger
+	// context, so log at ERROR but don't fail the reserve.
+	if e.reservations != nil {
+		if err := e.reservations.SaveReservation(ctx, ReservationContext{
+			TraceID: event.TraceID, CampaignID: event.CampaignID, CreativeID: event.CreativeID,
+			PlacementID: event.PlacementID, PublisherID: event.PublisherID,
+			AdvertiserID: event.AdvertiserID, DealType: event.DealType,
+			Currency: event.Currency, Amount: event.ClearingPrice, BidModel: string(event.BidModel),
+		}); err != nil {
+			e.log.Error("reservation context save failed",
+				"trace_id", event.TraceID, "error", err)
+		}
+	}
+
 	e.log.Debug("reserved",
 		"trace_id", event.TraceID,
 		"model", event.BidModel,
@@ -295,7 +343,7 @@ func (e *Engine) SettleByTrace(ctx context.Context, traceID, eventType string) (
 	if !settleEventMatches(BidModel(res.BidModel), eventType) {
 		return nil, nil
 	}
-	return e.ProcessEvent(ctx, SpendEvent{
+	settle := SpendEvent{
 		TraceID:       traceID,
 		CampaignID:    res.CampaignID,
 		PublisherID:   res.PublisherID,
@@ -306,7 +354,27 @@ func (e *Engine) SettleByTrace(ctx context.Context, traceID, eventType string) (
 		DealType:      res.DealType,
 		EventType:     eventType,
 		Timestamp:     e.clk.Now(),
-	})
+	}
+	// The ledger keeps the money (amount/model) but a backend like TigerBeetle
+	// can't retain the publisher/advertiser/campaign STRINGS. When they're
+	// missing, recover them from the reservation store so both the ledger
+	// settle record and the prepay drawdown have their account context.
+	if e.reservations != nil && settle.AdvertiserID == "" {
+		if rc, ok, err := e.reservations.GetReservation(ctx, traceID); err != nil {
+			e.log.Error("reservation context lookup failed", "trace_id", traceID, "error", err)
+		} else if ok {
+			settle.CampaignID = rc.CampaignID
+			settle.CreativeID = rc.CreativeID
+			settle.PlacementID = rc.PlacementID
+			settle.PublisherID = rc.PublisherID
+			settle.AdvertiserID = rc.AdvertiserID
+			settle.DealType = rc.DealType
+			if settle.Currency == "" {
+				settle.Currency = rc.Currency
+			}
+		}
+	}
+	return e.ProcessEvent(ctx, settle)
 }
 
 // settleEventMatches returns true if the event type would route through
