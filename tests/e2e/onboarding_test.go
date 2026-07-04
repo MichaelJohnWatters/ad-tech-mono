@@ -76,6 +76,19 @@ func TestOnboardingJourney(t *testing.T) {
 	t.Logf("journey complete: campaign %s won the auction on placement %s at %.2f",
 		w.CampaignID, w.PlacementID, br.SeatBid[0].Bid[0].Price)
 
+	// Fire the impression the served ad would have fired — billing accrues
+	// on tracked impressions, and that's what draws the balance down.
+	// The advertiser's account id comes from its own campaign list.
+	req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/campaigns", nil)
+	resp, _ = w.Advertiser.Do(req)
+	var cs []map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&cs)
+	resp.Body.Close()
+	advAccountID, _ := cs[0]["AccountID"].(string)
+	creativeID, _ := cs[0]["CreativeID"].(string)
+	h.FireImpression(t, auc.TraceID, w.CampaignID, creativeID, w.PlacementID, "", advAccountID,
+		"USD", br.SeatBid[0].Bid[0].Price)
+
 	// The money loop end-to-end: the topup funded the account, and the won
 	// auction's spend draws it back down (win → NATS → billing → balance).
 	// Poll until the drawdown lands.

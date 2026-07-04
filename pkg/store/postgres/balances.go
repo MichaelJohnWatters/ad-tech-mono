@@ -93,9 +93,9 @@ func (s *BalanceStore) DebitSpend(ctx context.Context, accountID string, amount 
 
 	if err := tx.QueryRowContext(ctx,
 		`INSERT INTO advertiser_balances (account_id, balance, currency, updated_at)
-		 VALUES ($1::uuid, -$2, $3, now())
+		 VALUES ($1::uuid, -($2::numeric), $3, now())
 		 ON CONFLICT (account_id) DO UPDATE
-		   SET balance = advertiser_balances.balance - $2, updated_at = now()
+		   SET balance = advertiser_balances.balance - $2::numeric, updated_at = now()
 		 RETURNING balance::float8`,
 		accountID, amount, currency).Scan(&newBalance); err != nil {
 		return 0, false, fmt.Errorf("decrement balance: %w", err)
