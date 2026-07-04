@@ -57,6 +57,10 @@ func BuildBasicWorld(t *testing.T, h *Harness, suffix string) World {
 	// "adv-acme" is in internal DSP's allowlist (profiles/dsps/internal.yaml).
 	// Required for the campaign to land in the DSP warm cache.
 	w.AdvAcc = h.CreateAdvertiser(t, "adv-acme")
+	// Prepay posture: the DSP's balance gate fails closed for accounts with
+	// no balance row, so the fixture advertiser gets a large ledger-honest
+	// grant — tests that exercise exhaustion top up their own accounts.
+	h.GrantBalance(t, w.AdvAcc.ID, 100_000, "e2e-world-grant")
 	w.IO = h.CreateInsertionOrder(t, w.AdvAcc, "e2e-io-"+suffix, 5000)
 	w.Campaign = h.CreateCampaign(t, w.AdvAcc, w.IO,
 		"e2e-li-"+suffix,

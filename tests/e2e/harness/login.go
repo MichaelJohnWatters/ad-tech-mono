@@ -59,6 +59,50 @@ func (h *Harness) LoginAs(t *testing.T, email, password string) *http.Client {
 	return nil
 }
 
+// GrantBalance credits an advertiser account's prepay balance directly —
+// the harness twin of the seed's initial grant. Ledger-honest (topups row +
+// double-entry pair + balance upsert, one tx) so balance == sum(ledger)
+// holds in tests too. Idempotent per (account, key).
+func (h *Harness) GrantBalance(t *testing.T, accountID string, amount float64, key string) {
+	t.Helper()
+	tx, err := h.DB.Begin()
+	if err != nil {
+		t.Fatalf("grant balance begin: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		t.Fatalf("grant balance tenant: %v", err)
+	}
+	var topupID string
+	err = tx.QueryRow(
+		`INSERT INTO topups (account_id, amount, currency, status, payment_method, idempotency_key)
+		 VALUES ($1::uuid, $2, 'USD', 'succeeded', 'seed', $3)
+		 ON CONFLICT (account_id, idempotency_key) DO NOTHING RETURNING id::text`,
+		accountID, amount, key).Scan(&topupID)
+	if err != nil {
+		_ = tx.Commit()
+		return // already granted under this key
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO ledger_entries (account_code, entry_type, amount, currency, reference_type, reference_id)
+		 VALUES ('platform:cash', 'debit', $1, 'USD', 'topup', $2),
+		        ('advertiser:' || $3 || ':balance', 'credit', $1, 'USD', 'topup', $2)`,
+		amount, topupID, accountID); err != nil {
+		t.Fatalf("grant balance ledger: %v", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO advertiser_balances (account_id, balance, currency, updated_at)
+		 VALUES ($1::uuid, $2, 'USD', now())
+		 ON CONFLICT (account_id) DO UPDATE
+		   SET balance = advertiser_balances.balance + $2, updated_at = now()`,
+		accountID, amount); err != nil {
+		t.Fatalf("grant balance upsert: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("grant balance commit: %v", err)
+	}
+}
+
 // CreateLoginUser inserts an active team member (bcrypt-hashed password)
 // under accountID so tests can LoginAs a real tenant session — self-contained
 // against harness Reset wiping the seeded dev users. The account row must
