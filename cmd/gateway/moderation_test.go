@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
 
 type fakeModStore struct {
@@ -42,37 +43,42 @@ func TestModerationHandler(t *testing.T) {
 	// List.
 	store := &fakeModStore{pending: []moderationItem{{ID: "c1", Name: "banner"}}}
 	rec := httptest.NewRecorder()
-	moderationHandler(store, quietLog())(rec, modReq(http.MethodGet, "", staff))
+	moderationHandler(store, nil, quietLog())(rec, modReq(http.MethodGet, "", staff))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "banner") {
 		t.Fatalf("list code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Approve.
+	// Approve — must publish the creatives cache invalidate so the adserver
+	// serves it now, not at the next 30s poll.
 	store = &fakeModStore{}
+	bus := &countingBus{}
 	rec = httptest.NewRecorder()
-	moderationHandler(store, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c1","action":"approve"}`, staff))
+	moderationHandler(store, bus, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c1","action":"approve"}`, staff))
 	if rec.Code != http.StatusOK || store.decided != [3]string{"c1", "approved", ""} {
 		t.Errorf("approve code=%d decided=%v", rec.Code, store.decided)
+	}
+	if bus.published != 1 || bus.subject != events.SubjectCacheInvalidateCreatives {
+		t.Errorf("approve invalidate: published=%d subject=%q, want 1 creatives invalidate", bus.published, bus.subject)
 	}
 
 	// Reject with reason.
 	store = &fakeModStore{}
 	rec = httptest.NewRecorder()
-	moderationHandler(store, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c2","action":"reject","reason":"policy"}`, staff))
+	moderationHandler(store, nil, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c2","action":"reject","reason":"policy"}`, staff))
 	if rec.Code != http.StatusOK || store.decided != [3]string{"c2", "rejected", "policy"} {
 		t.Errorf("reject code=%d decided=%v", rec.Code, store.decided)
 	}
 
 	// Reject without reason → 400.
 	rec = httptest.NewRecorder()
-	moderationHandler(&fakeModStore{}, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c2","action":"reject"}`, staff))
+	moderationHandler(&fakeModStore{}, nil, quietLog())(rec, modReq(http.MethodPost, `{"creative_id":"c2","action":"reject"}`, staff))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("reject-no-reason code = %d, want 400", rec.Code)
 	}
 
 	// Missing moderation perm → 403 (an advertiser can't moderate).
 	rec = httptest.NewRecorder()
-	moderationHandler(&fakeModStore{}, quietLog())(rec, modReq(http.MethodGet, "", &auth.Claims{Permissions: []string{"campaigns:read"}}))
+	moderationHandler(&fakeModStore{}, nil, quietLog())(rec, modReq(http.MethodGet, "", &auth.Claims{Permissions: []string{"campaigns:read"}}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no perm code = %d, want 403", rec.Code)
 	}
