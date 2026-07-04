@@ -304,7 +304,26 @@ portals they unblock. Each becomes its own small design when picked up.
 | **Webhooks CRUD** | advertiser/publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/webhooks`, per-account subs with a once-shown HMAC secret, invalidates the dispatcher cache. Remaining: pause/edit, delivery-log view, retries UI. |
 | **Quality controls CRUD** | publisher | ✅ SHIPPED — `GET/POST/DELETE /v1/api/quality-controls`, one row per (publisher, type) across the 5 blocklist/allowlist types, publisher-ownership checked. Remaining: exchange/adserver consumption + a cache-invalidate subject. |
 | **Ad-tag generator** | publisher | ✅ SHIPPED — `GET /v1/api/adtag?placement_id=&tag_type=js\|prebid\|vast`, derives a paste-ready snippet from the placement + pubad routes. Remaining: signed/tokenized tags, size-list from creatives, copy-box UI. |
-| **Topup / billing actions** | advertiser | ✅ SHIPPED (dev payment) — `GET/POST /v1/api/billing/topup` (billing:view / billing:topup). Idempotency-keyed (`UNIQUE(account_id, idempotency_key)`, replay → 200 + duplicate flag, key reuse w/ different amount → 409); one tx writes the topup row + double-entry `ledger_entries` pair (debit `platform:cash` / credit `advertiser:{id}:balance`) + `advertiser_balances` upsert, so balance stays ledger-derivable. Migration 029 (+RLS). Payment approval is the fake instant-success "dev" method. Remaining: real payment provider (replaces only the approval step → pending/webhook flow), TigerBeetle mirror once topups meet spend reconciliation, topup UI. |
+| **Topup / billing actions** | advertiser | ✅ SHIPPED (dev payment) + MONEY LOOP CLOSED — `GET/POST /v1/api/billing/topup` (billing:view / billing:topup), idempotency-keyed, ledger-honest (migration 029). The prepay balance now GATES bidding (DSP `BalanceGate`: fail-open Redis / fail-closed no-row) and DRAWS DOWN on realized spend (reporting billing `BalanceSink` writes a `spend` ledger pair + decrements balance, migration 030). Subjects `adtech.balance.depleted` + `adtech.cache.invalidate.advertiser-balances`. Verified live (topup→auction→impression→drawdown; exhaustion→no-bid→refill→resume). Remaining: real payment provider (pending/webhook flow), TigerBeetle mirror, topup UI already shipped in advertiser portal. |
+
+---
+
+## Depth backlog (recorded, not yet executed)
+
+Self-serve *breadth* is done (signup → site/placement/campaign/creative→moderation/deal/topup,
+and the money loop). What remains is *depth* — fields the seed/schema support but the create/edit
+APIs + portal forms don't yet expose:
+
+- **Campaign depth:** `bid_strategy` (cpc/cpa/vcpm/cpcv — API hardcodes cpm), `pacing_mode`,
+  `total_budget`, flight dates, `timezone`, non-display formats; targeting beyond geo/device
+  (segments/domains/categories/keywords/OS/freq-caps/bid-modifiers); creative weights/rotation.
+  Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + advertiser
+  portal forms.
+- **Deal depth:** advertiser/placement allowlists, flight dates, PG `guaranteed_volume`, `deal_config`.
+- **Placement:** `floor_config` (time/device/geo floors). **Publisher:** revshare / payment-terms
+  editing (staff). **Direct-sold** `publisher_line_items` CRUD (+ its orphan invalidate subject).
+- **Loose ends:** `adtech.cache.invalidate.ads-txt` has no publisher (adstxt cron candidate); IO
+  management (campaign API auto-creates one IO/campaign today); `dsps` table stays operator-only.
 
 ---
 
