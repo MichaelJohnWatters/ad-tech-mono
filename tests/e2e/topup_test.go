@@ -68,16 +68,19 @@ func TestTopupTenantFlow(t *testing.T) {
 		return resp.StatusCode, out
 	}
 
-	// Fresh world → zero balance, empty history.
-	if code, res := call(http.MethodGet, ""); code != http.StatusOK || res["balance"].(float64) != 0 {
-		t.Fatalf("initial GET = %d %v, want 200 balance 0", code, res)
+	// The world fixture grants the advertiser a prepay balance (the DSP
+	// gate fails closed without one) — assert against deltas, not absolutes.
+	code, res := call(http.MethodGet, "")
+	if code != http.StatusOK {
+		t.Fatalf("initial GET = %d %v", code, res)
 	}
+	before := res["balance"].(float64)
 
-	// Credit 150 → 201, balance 150.
+	// Credit 150 → 201, balance +150.
 	key := fmt.Sprintf("e2e-key-%d", time.Now().UnixNano())
-	code, res := call(http.MethodPost, fmt.Sprintf(`{"amount":150,"idempotency_key":%q}`, key))
-	if code != http.StatusCreated || res["balance"].(float64) != 150 {
-		t.Fatalf("topup = %d %v, want 201 balance 150", code, res)
+	code, res = call(http.MethodPost, fmt.Sprintf(`{"amount":150,"idempotency_key":%q}`, key))
+	if code != http.StatusCreated || res["balance"].(float64) != before+150 {
+		t.Fatalf("topup = %d %v, want 201 balance %v", code, res, before+150)
 	}
 	topupID, _ := res["id"].(string)
 
@@ -86,8 +89,8 @@ func TestTopupTenantFlow(t *testing.T) {
 	if code != http.StatusOK || res["duplicate"] != true {
 		t.Errorf("replay = %d %v, want 200 duplicate", code, res)
 	}
-	if code, res := call(http.MethodGet, ""); code != http.StatusOK || res["balance"].(float64) != 150 {
-		t.Errorf("balance after replay = %d %v, want 150 (no double credit)", code, res)
+	if code, res := call(http.MethodGet, ""); code != http.StatusOK || res["balance"].(float64) != before+150 {
+		t.Errorf("balance after replay = %d %v, want %v (no double credit)", code, res, before+150)
 	}
 
 	// Same key, different amount: caller bug → 409.
@@ -108,6 +111,39 @@ func TestTopupTenantFlow(t *testing.T) {
 		}
 		if debits != 150 || credits != 150 {
 			t.Errorf("ledger pair = debit %v / credit %v, want 150/150", debits, credits)
+		}
+	})
+
+	// THE MONEY LOOP: a won auction's spend draws the balance down. Run one
+	// real auction (the fixture campaign wins in the reset world), then poll
+	// the balance until the billing sink's drawdown lands (auction win →
+	// NATS → reporting bills CPM → advertiser_balances debit).
+	balanceAtTopup := before + 150
+	h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "money-loop-user")
+	deadline := time.Now().Add(15 * time.Second)
+	var after float64
+	for {
+		_, res := call(http.MethodGet, "")
+		after = res["balance"].(float64)
+		if after < balanceAtTopup || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if after >= balanceAtTopup {
+		t.Fatalf("spend drawdown never landed: balance still %v after auction (was %v)", after, balanceAtTopup)
+	}
+	// And the drawdown is ledger-honest: a 'spend' pair exists.
+	h.WithTenant(t, w.AdvAcc.ID, func(tx *sql.Tx) {
+		var n int
+		if err := tx.QueryRow(
+			`SELECT count(*) FROM ledger_entries
+			 WHERE reference_type='spend' AND account_code = 'advertiser:' || $1 || ':balance'`,
+			w.AdvAcc.ID).Scan(&n); err != nil {
+			t.Fatalf("spend ledger check: %v", err)
+		}
+		if n == 0 {
+			t.Errorf("no spend ledger entry for the drawdown")
 		}
 	})
 

@@ -76,16 +76,27 @@ func TestOnboardingJourney(t *testing.T) {
 	t.Logf("journey complete: campaign %s won the auction on placement %s at %.2f",
 		w.CampaignID, w.PlacementID, br.SeatBid[0].Bid[0].Price)
 
-	// The money side is wired too: the topup is on the balance.
-	req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/billing/topup", nil)
-	resp, err = w.Advertiser.Do(req)
-	if err != nil {
-		t.Fatalf("balance: %v", err)
+	// The money loop end-to-end: the topup funded the account, and the won
+	// auction's spend draws it back down (win → NATS → billing → balance).
+	// Poll until the drawdown lands.
+	deadline := time.Now().Add(15 * time.Second)
+	var balance float64
+	for {
+		req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/billing/topup", nil)
+		resp, err = w.Advertiser.Do(req)
+		if err != nil {
+			t.Fatalf("balance: %v", err)
+		}
+		var bal map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&bal)
+		resp.Body.Close()
+		balance = bal["balance"].(float64)
+		if balance < 500 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	var bal map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&bal)
-	resp.Body.Close()
-	if bal["balance"].(float64) != 500 {
-		t.Errorf("balance = %v, want 500 from the journey topup", bal["balance"])
+	if balance >= 500 || balance < 490 {
+		t.Errorf("balance = %v, want the 500 topup minus the auction's spend", balance)
 	}
 }

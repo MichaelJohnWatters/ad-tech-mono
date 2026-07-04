@@ -59,6 +59,14 @@ func (h *Harness) Signup(t *testing.T, name, email, password, accountType string
 	return client
 }
 
+// APIJSON runs one JSON call on a session client and decodes the response —
+// exported so tests can drive ad-hoc API steps with the same ergonomics the
+// world builder uses.
+func (h *Harness) APIJSON(t *testing.T, client *http.Client, method, path, body string) map[string]any {
+	t.Helper()
+	return h.apiJSON(t, client, method, path, body)
+}
+
 // apiJSON runs one JSON call on a session client and decodes the response.
 // Fails the test on any status >= 400 so journey steps read linearly.
 func (h *Harness) apiJSON(t *testing.T, client *http.Client, method, path, body string) map[string]any {
