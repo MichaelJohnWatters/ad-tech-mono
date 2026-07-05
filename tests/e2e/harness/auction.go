@@ -42,6 +42,7 @@ type AuctionParams struct {
 	COPPA     string // "1" sets Regs.coppa
 	GPP       string // GPP string → Regs.ext.gpp
 	GPPSID    string // GPP section ids → Regs.ext.gpp_sid
+	GPC       string // "1" sets Regs.ext.gpc (Global Privacy Control)
 }
 
 // RunAuction drives an auction through SSP → Exchange → DSPs as if a real
@@ -78,6 +79,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("coppa", p.COPPA)
 	add("gpp", p.GPP)
 	add("gpp_sid", p.GPPSID)
+	add("gpc", p.GPC)
 
 	url := h.URLs.SSP + "/v1/ssp/request"
 	if len(vals) > 0 {

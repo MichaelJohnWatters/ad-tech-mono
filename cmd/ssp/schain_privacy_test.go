@@ -82,7 +82,7 @@ func TestApplyPrivacySignals(t *testing.T) {
 		}
 	})
 
-	t.Run("Sec-GPC header maps to us privacy opt-out", func(t *testing.T) {
+	t.Run("Sec-GPC header sets first-class gpc flag", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/serve", nil)
 		req.Header.Set("Sec-GPC", "1")
 		bidReq := openrtb.BidRequest{ID: "1"}
@@ -90,21 +90,34 @@ func TestApplyPrivacySignals(t *testing.T) {
 		if bidReq.Regs == nil || bidReq.Regs.Ext == nil {
 			t.Fatal("expected Regs.Ext populated from GPC")
 		}
-		// The mapped string must trip the DSP's usPrivacyOptOut check
-		// (len 4, opt-out char at index 2 = 'Y').
-		usp := bidReq.Regs.Ext.USPrivacy
-		if len(usp) != 4 || usp[2] != 'Y' {
-			t.Errorf("GPC-mapped us_privacy = %q, want a len-4 opt-out string with 'Y' at index 2", usp)
+		if bidReq.Regs.Ext.GPC != 1 {
+			t.Errorf("gpc = %d, want 1", bidReq.Regs.Ext.GPC)
+		}
+		// GPC no longer fabricates a us_privacy string — it's carried distinctly.
+		if bidReq.Regs.Ext.USPrivacy != "" {
+			t.Errorf("us_privacy = %q, want empty (GPC is first-class, not a USP hack)", bidReq.Regs.Ext.USPrivacy)
 		}
 	})
 
-	t.Run("explicit us_privacy wins over GPC", func(t *testing.T) {
+	t.Run("?gpc=1 query param sets gpc flag", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/serve?gpc=1", nil)
+		bidReq := openrtb.BidRequest{ID: "1"}
+		applyPrivacySignals(req, &bidReq)
+		if bidReq.Regs == nil || bidReq.Regs.Ext.GPC != 1 {
+			t.Errorf("expected gpc=1 from query param, got %+v", bidReq.Regs)
+		}
+	})
+
+	t.Run("gpc and explicit us_privacy are independent", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/serve?us_privacy=1YNN", nil)
 		req.Header.Set("Sec-GPC", "1")
 		bidReq := openrtb.BidRequest{ID: "1"}
 		applyPrivacySignals(req, &bidReq)
 		if bidReq.Regs.Ext.USPrivacy != "1YNN" {
-			t.Errorf("us_privacy = %q, want explicit 1YNN preserved over GPC", bidReq.Regs.Ext.USPrivacy)
+			t.Errorf("us_privacy = %q, want 1YNN preserved", bidReq.Regs.Ext.USPrivacy)
+		}
+		if bidReq.Regs.Ext.GPC != 1 {
+			t.Errorf("gpc = %d, want 1 (carried alongside us_privacy)", bidReq.Regs.Ext.GPC)
 		}
 	})
 

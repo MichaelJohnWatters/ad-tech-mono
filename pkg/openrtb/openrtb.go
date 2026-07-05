@@ -273,11 +273,14 @@ type RegsExt struct {
 	USPrivacy     string `json:"us_privacy,omitempty"`
 	DataResidency string `json:"data_residency,omitempty"`
 	// GPP is the IAB Global Privacy Platform consent string; GPPSID lists the
-	// section ids present in it (e.g. "7" for US-CA). Carried end-to-end now so
-	// downstream consumers can pass it through; full GPP parsing is a later
-	// phase (see docs/STANDARDS.md).
+	// section ids present in it (e.g. "7" for US National). Decoded for US
+	// opt-out signals in pkg/privacy.
 	GPP    string `json:"gpp,omitempty"`
 	GPPSID string `json:"gpp_sid,omitempty"`
+	// GPC is the Global Privacy Control browser signal (1 = user asserts "do
+	// not sell/share"). Not a core OpenRTB field but a widely-used ext; the
+	// SSP sets it from the Sec-GPC request header.
+	GPC int `json:"gpc,omitempty"`
 }
 
 // BidResponse is the OpenRTB 2.6 bid response from a DSP.

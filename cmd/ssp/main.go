@@ -499,9 +499,9 @@ func originSChain(sellerDomain, publisherID, traceID string) *openrtb.Source {
 // on the outbound bid request. This is what makes the DSP's privacy.Evaluate
 // gate operate on real inputs rather than empty defaults.
 //
-// GPP is carried through as an opaque passthrough for now (full parsing is a
-// later phase); Global Privacy Control (Sec-GPC: 1) is mapped onto the US
-// Privacy opt-out so the existing enforcement path honours it.
+// Global Privacy Control (Sec-GPC: 1, or ?gpc=1) is carried first-class in
+// Regs.ext.gpc so the DSP can honour and log it distinctly; GPP is decoded for
+// US opt-out signals downstream in pkg/privacy.
 func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 	q := r.URL.Query()
 	gdpr := q.Get("gdpr")
@@ -513,12 +513,11 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 	gpp := q.Get("gpp")
 	gppSID := q.Get("gpp_sid")
 
-	// Global Privacy Control: a browser-level "do not sell/share" signal. Map it
-	// onto the US Privacy opt-out (version 1, opt-out of sale = Y) so the DSP's
-	// existing usPrivacyOptOut path enforces it — unless the tag already carried
-	// an explicit us_privacy string.
-	if usPrivacy == "" && r.Header.Get("Sec-GPC") == "1" {
-		usPrivacy = "1-Y-"
+	// Global Privacy Control: a browser-level "do not sell/share" signal,
+	// carried either as the Sec-GPC request header or an explicit ?gpc=1.
+	var gpc int
+	if r.Header.Get("Sec-GPC") == "1" || q.Get("gpc") == "1" {
+		gpc = 1
 	}
 
 	var coppa int
@@ -532,12 +531,13 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 
 	// Only attach Regs when at least one signal is present, so minimal bid
 	// requests (and any golden-file comparisons) serialise identically.
-	if gdpr != "" || usPrivacy != "" || gpp != "" || gppSID != "" || coppa == 1 {
+	if gdpr != "" || usPrivacy != "" || gpp != "" || gppSID != "" || coppa == 1 || gpc == 1 {
 		bidReq.Regs = &openrtb.Regs{COPPA: coppa, Ext: &openrtb.RegsExt{
 			GDPR:      gdprFlag,
 			USPrivacy: usPrivacy,
 			GPP:       gpp,
 			GPPSID:    gppSID,
+			GPC:       gpc,
 		}}
 	}
 
