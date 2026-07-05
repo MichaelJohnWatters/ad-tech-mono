@@ -245,17 +245,20 @@ F4 is the gate for real portals.
 - **Prompts:** floor-price editing UX (inline)? ad-tag formats (JS/Prebid/VAST)? payout statement
   shape?
 
-### Agency portal  🟡 (act-as mechanism shipped; portal UI pending)
+### Agency portal  ✅ (switcher shipped; portfolio roll-up pending)
 - **Persona / gate:** `agency:*` + `ManagedAccounts[]`.
 - **Job-to-be-done:** "Switch between the advertiser/publisher accounts I manage; portfolio view."
 - **Screens:** Account switcher (act-as) · Portfolio dashboard (roll-up across managed accounts) ·
   then reuse advertiser/publisher screens scoped to the selected account.
 - ✅ **Act-as mechanism + managed-accounts API shipped** (migration 032, agency roles, login loads
   ManagedAccounts, proxy validates X-Act-As-Account against the managed set + forwards the advertiser
-  tenant, staff `/v1/api/agency-accounts` assign/list/unassign — verified live). Remaining: the agency
-  **portal page** (portalHome sends agencies to `/` today) with the switcher wiring X-Act-As-Account
-  into every fetch + a portfolio roll-up.
-- **APIs:** reuses advertiser/publisher APIs with the switched `AccountID` via the X-Act-As-Account header.
+  tenant, staff `/v1/api/agency-accounts` assign/list/unassign — verified live). ✅ **Portal
+  SHIPPED**: agencies reuse the advertiser portal (portalHome → advertiser) with an "Acting as"
+  switcher (top bar, `.IsAgency` only) that sets an `act_as_account` cookie the proxy honours on
+  every proxied call — all screens scope to the chosen client. Remaining: portfolio roll-up
+  (cross-account dashboard).
+- **APIs:** reuses advertiser/publisher APIs with the switched `AccountID` via the X-Act-As-Account
+  header (API clients) or the act_as_account cookie (portal switcher).
 - **Prompts:** how is `ManagedAccounts` populated/managed? cross-account roll-up metrics? per-client
   permissions?
 
