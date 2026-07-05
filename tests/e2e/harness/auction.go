@@ -34,6 +34,14 @@ type AuctionParams struct {
 	OS        string // Device.os — for OS targeting
 	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
 	Segments  string // User.ext.segments (comma-separated) — for segment targeting
+	// Privacy signals the SSP stamps into Regs / User.ext.consent. Let privacy
+	// tests exercise the consent path end-to-end (SSP → exchange → DSP).
+	GDPR      string // "1" sets Regs.ext.gdpr
+	Consent   string // TCF consent string → User.ext.consent
+	USPrivacy string // IAB US Privacy string → Regs.ext.us_privacy
+	COPPA     string // "1" sets Regs.coppa
+	GPP       string // GPP string → Regs.ext.gpp
+	GPPSID    string // GPP section ids → Regs.ext.gpp_sid
 }
 
 // RunAuction drives an auction through SSP → Exchange → DSPs as if a real
@@ -64,6 +72,12 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("os", p.OS)
 	add("keywords", p.Keywords)
 	add("segments", p.Segments)
+	add("gdpr", p.GDPR)
+	add("gdpr_consent", p.Consent)
+	add("us_privacy", p.USPrivacy)
+	add("coppa", p.COPPA)
+	add("gpp", p.GPP)
+	add("gpp_sid", p.GPPSID)
 
 	url := h.URLs.SSP + "/v1/ssp/request"
 	if len(vals) > 0 {

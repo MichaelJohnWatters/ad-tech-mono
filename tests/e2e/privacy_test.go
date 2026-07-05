@@ -55,7 +55,7 @@ func TestPrivacyOptOutBlocksServe(t *testing.T) {
 }
 
 func TestPrivacyConsentSignalPropagated(t *testing.T) {
-	t.Skip("DSP now enforces OpenRTB regs (GDPR-no-consent / COPPA / US-privacy → contextual-only) and the opt-out registry, but asserting 'bid won WITHOUT behavioural targeting' needs a RunAuction variant that sets Regs + a way to observe which segments were used; pending that harness support. Registry opt-out → no-bid is covered by TestPrivacyOptOutBlocksServe.")
+	t.Skip("The SSP now stamps Regs/consent onto the outbound request and RunAuctionWith carries the privacy params (GDPR/Consent/USPrivacy/COPPA/GPP), so the Regs path reaches the DSP. Still blocked on observing WHICH segments the DSP used: asserting 'bid won but WITHOUT behavioural targeting' needs the auction response (or a DSP debug echo) to report the segments applied. Registry opt-out → no-bid is covered by TestPrivacyOptOutBlocksServe; the SSP signal-population logic is unit-tested in cmd/ssp (TestApplyPrivacySignals).")
 }
 
 func TestPrivacyPIINotInLogs(t *testing.T) {

@@ -54,6 +54,9 @@ func main() {
 
 	port := cfg.Get("ssp.port", routes.PortSSP)
 	exchangeURL := cfg.Get("ssp.exchange_url", routes.DefaultExchangeURL)
+	// This platform's advertising-system domain, used as the asi of the first
+	// schain node on outbound bid requests. Read once at boot (static tier).
+	sellerDomain := cfg.Get("ssp.seller_domain", "")
 
 	// OTel — required so HTTPMiddleware's server span has a real trace ID
 	// that flows into logs / NATS events / analytics store.
@@ -160,9 +163,9 @@ func main() {
 	}
 
 	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, debugEnabledFn))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, debugEnabledFn))
 	adServerURL := cfg.Get("ssp.adserver_url", routes.DefaultAdServerURL)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, debugEnabledFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, debugEnabledFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -299,7 +302,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string, debugEnabledFn func() bool) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, debugEnabledFn func() bool) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -417,6 +420,16 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		bidReq.User = user
 	}
 
+	// Supply chain: originate a complete one-node schain so downstream buyers
+	// can verify the path — the third leg of the transparency triad alongside
+	// ads.txt and sellers.json. Skipped when ssp.seller_domain is unset.
+	bidReq.Source = originSChain(sellerDomain, p.PublisherID, traceID)
+
+	// Forward consent/regulatory signals from the ad tag so the DSP's
+	// privacy.Evaluate runs on real inputs. Previously the SSP set no Regs and
+	// no consent, so downstream enforcement saw empty values.
+	applyPrivacySignals(r, &bidReq)
+
 	reqLog.Info("bid request generated",
 		"placement", p.ID,
 		"publisher", p.PublisherID,
@@ -456,14 +469,97 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp}, true
 }
 
+// originSChain builds the one-node SupplyChain this platform originates as the
+// seller of record for the publisher. The node's asi is this platform's domain
+// (matching sellers.json) and sid is the publisher's seller id (matching its
+// sellers.json entry and ads.txt account id); hp=1 as the platform handles
+// payment. Returns nil when sellerDomain is unset so schain is simply omitted.
+func originSChain(sellerDomain, publisherID, traceID string) *openrtb.Source {
+	if sellerDomain == "" {
+		return nil
+	}
+	return &openrtb.Source{
+		FD:  1,
+		TID: traceID,
+		Ext: &openrtb.SourceExt{SChain: &openrtb.SupplyChain{
+			Complete: 1,
+			Ver:      openrtb.SChainVersion,
+			Nodes: []openrtb.SupplyChainNode{{
+				ASI: sellerDomain,
+				SID: publisherID,
+				RID: traceID,
+				HP:  1,
+			}},
+		}},
+	}
+}
+
+// applyPrivacySignals reads consent/regulatory signals from the ad-tag request
+// (query params plus the Sec-GPC header) and populates Regs / User.Ext.Consent
+// on the outbound bid request. This is what makes the DSP's privacy.Evaluate
+// gate operate on real inputs rather than empty defaults.
+//
+// GPP is carried through as an opaque passthrough for now (full parsing is a
+// later phase); Global Privacy Control (Sec-GPC: 1) is mapped onto the US
+// Privacy opt-out so the existing enforcement path honours it.
+func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
+	q := r.URL.Query()
+	gdpr := q.Get("gdpr")
+	consent := q.Get("gdpr_consent")
+	if consent == "" {
+		consent = q.Get("consent")
+	}
+	usPrivacy := q.Get("us_privacy")
+	gpp := q.Get("gpp")
+	gppSID := q.Get("gpp_sid")
+
+	// Global Privacy Control: a browser-level "do not sell/share" signal. Map it
+	// onto the US Privacy opt-out (version 1, opt-out of sale = Y) so the DSP's
+	// existing usPrivacyOptOut path enforces it — unless the tag already carried
+	// an explicit us_privacy string.
+	if usPrivacy == "" && r.Header.Get("Sec-GPC") == "1" {
+		usPrivacy = "1-Y-"
+	}
+
+	var coppa int
+	if q.Get("coppa") == "1" {
+		coppa = 1
+	}
+	var gdprFlag int
+	if gdpr == "1" {
+		gdprFlag = 1
+	}
+
+	// Only attach Regs when at least one signal is present, so minimal bid
+	// requests (and any golden-file comparisons) serialise identically.
+	if gdpr != "" || usPrivacy != "" || gpp != "" || gppSID != "" || coppa == 1 {
+		bidReq.Regs = &openrtb.Regs{COPPA: coppa, Ext: &openrtb.RegsExt{
+			GDPR:      gdprFlag,
+			USPrivacy: usPrivacy,
+			GPP:       gpp,
+			GPPSID:    gppSID,
+		}}
+	}
+
+	if consent != "" {
+		if bidReq.User == nil {
+			bidReq.User = &openrtb.User{}
+		}
+		if bidReq.User.Ext == nil {
+			bidReq.User.Ext = &openrtb.UserExt{}
+		}
+		bidReq.User.Ext.Consent = consent
+	}
+}
+
 // requestAdHandler is the X-ray endpoint: returns the raw BidResponse so
 // the harness/tests can assert on auction outcomes (winner seat, clearing
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL string, debugEnabledFn func() bool) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, debugEnabledFn)
 		if !ok {
 			return
 		}
@@ -526,9 +622,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL string, debugEnabledFn func() bool) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, debugEnabledFn)
 		if !ok {
 			return
 		}

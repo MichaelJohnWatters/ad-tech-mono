@@ -52,6 +52,7 @@ type Campaign struct {
 	Currency       string
 	DailyBudget    float64
 	TotalBudget    float64
+	Format         string // display, native, video, audio (line_items.format)
 	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
 	PacingMode     string // even, asap, front_loaded
 	Status         string // live, paused, ended, ...

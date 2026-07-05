@@ -156,6 +156,14 @@
   <form onsubmit="createCampaign(event)">
     {{/* form-field uses "name" as the input id — the JS reads these ids. */}}
     {{ template "form-field" (dict "label" "Campaign name" "name" "nc_name" "placeholder" "Summer sale" "required" true) }}
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Format</span>
+      <select id="nc_format" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="display">Display</option><option value="native">Native</option>
+        <option value="video">Video</option><option value="audio">Audio</option>
+      </select>
+    </label>
+    <p class="text-xs text-gray-400 mb-3">Display gets a placeholder banner to serve immediately. Non-display campaigns start creative-less — attach an approved creative from Edit → Creatives.</p>
     <div class="grid grid-cols-2 gap-x-4">
       <label class="block text-sm">
         <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
@@ -599,6 +607,7 @@ async function createCampaign(ev) {
   ev.preventDefault();
   const body = {
     name: $('nc_name').value.trim(),
+    format: $('nc_format').value,
     base_bid: parseFloat($('nc_base_bid').value) || 0,
     daily_budget: parseFloat($('nc_daily_budget').value) || 0,
     bid_strategy: $('nc_bid_strategy').value,

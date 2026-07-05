@@ -358,6 +358,15 @@ local_resource('adstxt-crawl',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres', 'nats'])
 
+local_resource('appadstxt-crawl',
+    # app-ads.txt crawler (in-app sibling of adstxt-crawl; normally a daily
+    # CronJob). Fetches each app publisher's developer-domain app-ads.txt into
+    # app_ads_txt_cache. No NATS invalidate yet — no warm-cache consumer until
+    # app-ads.txt enforcement lands. 127.0.0.1 forces IPv4 (see adstxt-crawl).
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable go run ./cmd/appadstxt',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres'])
+
 local_resource('report-runner',
     # Scheduled-report runner (normally a periodic CronJob). Runs every saved
     # report whose interval schedule (@hourly/@daily/@weekly/@monthly) is due

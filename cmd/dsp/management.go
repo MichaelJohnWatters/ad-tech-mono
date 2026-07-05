@@ -182,6 +182,7 @@ func campaignByIDHandler(db *sql.DB, bus events.EventBus, accountIDs []string, l
 // constraints (migration 005). Kept here so the API rejects bad values with
 // a clear 400 instead of leaking a raw Postgres constraint error.
 var validBidStrategies = map[string]bool{"cpm": true, "cpc": true, "cpa": true, "vcpm": true, "cpcv": true}
+var validCampaignFormats = map[string]bool{"display": true, "native": true, "video": true, "audio": true}
 var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded": true}
 var validCreativeRotations = map[string]bool{"even": true, "weighted": true, "bandit": true, "sequential": true}
 
@@ -282,9 +283,14 @@ func (f *freqCapInput) validateAndJSON() (string, error) {
 }
 
 type createCampaignRequest struct {
-	Name          string   `json:"name"`
-	BaseBid       float64  `json:"base_bid"`
-	DailyBudget   float64  `json:"daily_budget"`
+	Name        string  `json:"name"`
+	BaseBid     float64 `json:"base_bid"`
+	DailyBudget float64 `json:"daily_budget"`
+	// Format is the line item's ad format (display|native|video|audio). Empty →
+	// display. A display campaign gets an auto-generated placeholder banner; a
+	// non-display campaign starts with no creative — attach one via PATCH
+	// `creatives` (only approved, format-matching creatives serve).
+	Format        string   `json:"format,omitempty"`
 	IncludeGeo    []string `json:"include_geo,omitempty"`
 	ExcludeGeo    []string `json:"exclude_geo,omitempty"`
 	IncludeDevice []string `json:"include_device,omitempty"`
@@ -356,6 +362,13 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if !validBidStrategies[req.BidStrategy] {
 		http.Error(w, "bid_strategy must be cpm, cpc, cpa, vcpm or cpcv", http.StatusBadRequest)
+		return
+	}
+	if req.Format == "" {
+		req.Format = "display"
+	}
+	if !validCampaignFormats[req.Format] {
+		http.Error(w, "format must be display, native, video or audio", http.StatusBadRequest)
 		return
 	}
 	if req.PacingMode == "" {
@@ -538,8 +551,8 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', $9, $10, $11, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget); err != nil {
+VALUES ($1, $2, $3, $4, 'live', $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
@@ -565,18 +578,24 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		modifiersJSON, freqCapsJSON); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
-	// Creative — auto-generated HTML banner
-	html := fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:linear-gradient(135deg,#4ECDC4,#556270);color:white;display:flex;align-items:center;justify-content:center;font-family:sans-serif;text-align:center;padding:8px;box-sizing:border-box;border-radius:4px;"><div><strong>%s</strong><br><small>via mgmt</small></div></div>`, req.Name)
-	if _, err := tx.ExecContext(ctx, `
+	// Auto-generate a placeholder banner only for DISPLAY campaigns so the
+	// campaign can serve immediately. Non-display (video/native/audio) campaigns
+	// start creative-less — the advertiser attaches a real, format-matching
+	// creative via PATCH `creatives` (an auto-generated video/native asset isn't
+	// something we can synthesise).
+	if req.Format == "display" {
+		html := fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:linear-gradient(135deg,#4ECDC4,#556270);color:white;display:flex;align-items:center;justify-content:center;font-family:sans-serif;text-align:center;padding:8px;box-sizing:border-box;border-radius:4px;"><div><strong>%s</strong><br><small>via mgmt</small></div></div>`, req.Name)
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO creatives (id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at)
 VALUES ($1, $2, $3, 'display', 300, 250, $4, $5, 'approved', now(), now())`,
-		creativeID, accountID, req.Name, "https://"+strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))+".test", html); err != nil {
-		return fmt.Errorf("creative insert: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
+			creativeID, accountID, req.Name, "https://"+strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))+".test", html); err != nil {
+			return fmt.Errorf("creative insert: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1, $2, 100)`,
-		lineItemID, creativeID); err != nil {
-		return fmt.Errorf("line_item_creatives insert: %w", err)
+			lineItemID, creativeID); err != nil {
+			return fmt.Errorf("line_item_creatives insert: %w", err)
+		}
 	}
 	return tx.Commit()
 }

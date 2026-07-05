@@ -51,6 +51,7 @@ SELECT
     li.bid_currency,
     COALESCE(li.daily_budget, 0)::float8,
     COALESCE(io.budget, 0)::float8,
+    COALESCE(li.format, 'display'),
     li.bid_strategy,
     li.pacing_mode,
     li.status,
@@ -132,7 +133,7 @@ WHERE li.status IN ('live', 'paused')`
 		if err := rows.Scan(
 			&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
 			&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
-			&c.BidModel, &c.PacingMode, &c.Status, &c.Timezone, &c.CreativeRotation,
+			&c.Format, &c.BidModel, &c.PacingMode, &c.Status, &c.Timezone, &c.CreativeRotation,
 			&incGeo, &excGeo, &incDev, &excDev,
 			&incSeg, &excSeg, &incDom, &excDom,
 			&incCat, &excCat,
