@@ -131,14 +131,42 @@ func placementByIDHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) htt
 	}
 }
 
+// floorConfigInput is the structured device/geo floor-override map stored in
+// placements.floor_config and resolved per-request by pkg/floors. Keys are
+// device names / country codes; values are CPM floors (>= 0).
+type floorConfigInput struct {
+	Device map[string]float64 `json:"device,omitempty"`
+	Geo    map[string]float64 `json:"geo,omitempty"`
+}
+
+// validate rejects negative floors; marshals to the JSONB the column stores.
+func (f *floorConfigInput) validateAndJSON() (string, error) {
+	if f == nil {
+		return "{}", nil
+	}
+	for _, m := range []map[string]float64{f.Device, f.Geo} {
+		for k, v := range m {
+			if v < 0 {
+				return "", fmt.Errorf("floor override %q must be >= 0", k)
+			}
+		}
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 type createPlacementRequest struct {
-	PublisherID    string  `json:"publisher_id"`
-	Name           string  `json:"name"`
-	Format         string  `json:"format"`
-	Width          int     `json:"width"`
-	Height         int     `json:"height"`
-	FloorPrice     float64 `json:"floor_price"`
-	PageURLPattern string  `json:"page_url_pattern,omitempty"`
+	PublisherID    string            `json:"publisher_id"`
+	Name           string            `json:"name"`
+	Format         string            `json:"format"`
+	Width          int               `json:"width"`
+	Height         int               `json:"height"`
+	FloorPrice     float64           `json:"floor_price"`
+	PageURLPattern string            `json:"page_url_pattern,omitempty"`
+	FloorConfig    *floorConfigInput `json:"floor_config,omitempty"`
 }
 
 func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, log *slog.Logger) {
@@ -164,6 +192,10 @@ func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 	}
 	if req.FloorPrice < 0 {
 		http.Error(w, "floor_price must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if _, err := req.FloorConfig.validateAndJSON(); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -225,11 +257,12 @@ func writeNewPlacement(ctx context.Context, db *sql.DB, accountID string, req cr
 	if page == "" {
 		page = "/" // sensible default; SSP doesn't enforce a particular shape
 	}
+	floorJSON, _ := req.FloorConfig.validateAndJSON() // already validated in handler
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO placements (publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'USD', $8, 'active', now(), now())
+INSERT INTO placements (publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, floor_config, status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'USD', $8, $9::jsonb, 'active', now(), now())
 RETURNING id::text`,
-		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.FloorPrice, page,
+		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.FloorPrice, page, floorJSON,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("placement insert: %w", err)
@@ -238,9 +271,10 @@ RETURNING id::text`,
 }
 
 type patchPlacementRequest struct {
-	Name       *string  `json:"name,omitempty"`
-	FloorPrice *float64 `json:"floor_price,omitempty"`
-	Status     *string  `json:"status,omitempty"`
+	Name        *string           `json:"name,omitempty"`
+	FloorPrice  *float64          `json:"floor_price,omitempty"`
+	Status      *string           `json:"status,omitempty"`
+	FloorConfig *floorConfigInput `json:"floor_config,omitempty"`
 }
 
 func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, id string, log *slog.Logger) {
@@ -249,7 +283,7 @@ func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bu
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Name == nil && req.FloorPrice == nil && req.Status == nil {
+	if req.Name == nil && req.FloorPrice == nil && req.Status == nil && req.FloorConfig == nil {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
 	}
@@ -263,6 +297,10 @@ func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bu
 	}
 	if req.FloorPrice != nil && *req.FloorPrice < 0 {
 		http.Error(w, "floor_price must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if _, err := req.FloorConfig.validateAndJSON(); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -320,6 +358,11 @@ func updatePlacement(ctx context.Context, db *sql.DB, accountID, id string, req 
 	if req.Status != nil {
 		args = append(args, *req.Status)
 		sets = append(sets, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if req.FloorConfig != nil {
+		floorJSON, _ := req.FloorConfig.validateAndJSON()
+		args = append(args, floorJSON)
+		sets = append(sets, fmt.Sprintf("floor_config = $%d::jsonb", len(args)))
 	}
 	args = append(args, id)
 	q := fmt.Sprintf("UPDATE placements SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))

@@ -28,12 +28,13 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/floors"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
@@ -335,12 +336,16 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	ctx := logger.WithTraceID(r.Context(), traceID)
 	reqLog := logger.WithContext(log, ctx)
 
+	// Effective floor: the placement's base floor raised by any device/geo
+	// override in floor_config that matches this request (publisher-favouring
+	// max). Empty config → base floor unchanged.
+	effectiveFloor := floors.Effective(p.FloorPrice, p.FloorConfig, device, geo)
 	bidReq := openrtb.BidRequest{
 		ID: traceID,
 		Imp: []openrtb.Imp{{
 			ID:       "imp-1",
 			TagID:    p.ID,
-			BidFloor: p.FloorPrice,
+			BidFloor: effectiveFloor,
 		}},
 		Site: &openrtb.Site{
 			Domain:    p.PublisherDomain,
@@ -411,7 +416,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	reqLog.Info("bid request generated",
 		"placement", p.ID,
 		"publisher", p.PublisherID,
-		"floor", p.FloorPrice,
+		"floor", effectiveFloor,
 		"size", fmt.Sprintf("%dx%d", p.Width, p.Height),
 	)
 
@@ -496,17 +501,17 @@ type serveAdResponse struct {
 	// fields the publisher-adserver needs to build VAST / DAAST. The
 	// VAST builder lives in publisher-adserver (pkg/vast) rather than
 	// here so the SSP stays format-agnostic.
-	Channel          string  `json:"channel,omitempty"`
-	CreativeID       string  `json:"creative_id,omitempty"`
-	CampaignID       string  `json:"campaign_id,omitempty"`
-	PlacementID      string  `json:"placement_id,omitempty"`
-	PublisherID      string  `json:"publisher_id,omitempty"`
-	AdvertiserID     string  `json:"advertiser_id,omitempty"`
-	AdvertiserDomain string  `json:"advertiser_domain,omitempty"`
-	BidModel         string  `json:"bid_model,omitempty"`
-	Currency         string  `json:"currency,omitempty"`
-	DurationSeconds  int     `json:"duration_seconds,omitempty"`
-	MediaURL         string  `json:"media_url,omitempty"`
+	Channel          string `json:"channel,omitempty"`
+	CreativeID       string `json:"creative_id,omitempty"`
+	CampaignID       string `json:"campaign_id,omitempty"`
+	PlacementID      string `json:"placement_id,omitempty"`
+	PublisherID      string `json:"publisher_id,omitempty"`
+	AdvertiserID     string `json:"advertiser_id,omitempty"`
+	AdvertiserDomain string `json:"advertiser_domain,omitempty"`
+	BidModel         string `json:"bid_model,omitempty"`
+	Currency         string `json:"currency,omitempty"`
+	DurationSeconds  int    `json:"duration_seconds,omitempty"`
+	MediaURL         string `json:"media_url,omitempty"`
 }
 
 // serveAdHandler is the realistic publisher-visitor endpoint. The SSP runs

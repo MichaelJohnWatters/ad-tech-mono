@@ -204,6 +204,14 @@
       {{ template "form-field" (dict "label" "Height" "name" "np_height" "type" "number" "value" "90") }}
     </div>
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "np_floor" "type" "number" "value" "0.50") }}
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Floor overrides (optional — raise the floor for specific device/geo)</summary>
+      <div class="mt-3">
+        {{ template "form-field" (dict "label" "Device floors (device:CPM, comma-separated)" "name" "np_floor_device" "placeholder" "mobile:1.50, desktop:2.00") }}
+        {{ template "form-field" (dict "label" "Geo floors (country:CPM)" "name" "np_floor_geo" "placeholder" "USA:2.50, GBR:1.80") }}
+        <p class="text-xs text-gray-400">The effective floor per request is the highest of the base and any matching override.</p>
+      </div>
+    </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newPlacement').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Create placement" "type" "submit") }}
@@ -218,6 +226,8 @@
     <div id="epName" class="mb-3 text-sm font-medium"></div>
     {{ template "form-field" (dict "label" "Name" "name" "ep_name") }}
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "ep_floor" "type" "number") }}
+    {{ template "form-field" (dict "label" "Device floors (device:CPM)" "name" "ep_floor_device" "placeholder" "mobile:1.50") }}
+    {{ template "form-field" (dict "label" "Geo floors (country:CPM)" "name" "ep_floor_geo" "placeholder" "USA:2.50") }}
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -442,6 +452,28 @@ async function openNewPlacement() {
   $('newPlacement').classList.remove('hidden');
 }
 
+// Parse "mobile:1.5, desktop:2.0" → {mobile:1.5, desktop:2.0}; drops bad pairs.
+function parseFloorMap(v) {
+  const out = {};
+  v.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => {
+    const [k, val] = pair.split(':').map(s => s.trim());
+    const n = parseFloat(val);
+    if (k && !isNaN(n)) out[k] = n;
+  });
+  return out;
+}
+// {mobile:1.5} → "mobile:1.5" for prefilling the edit inputs.
+const floorMapToStr = (m) => Object.entries(m || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+
+// Assemble the floor_config object from device/geo inputs; undefined if empty.
+function floorConfigBody(deviceId, geoId) {
+  const device = parseFloorMap($(deviceId).value), geo = parseFloorMap($(geoId).value);
+  const cfg = {};
+  if (Object.keys(device).length) cfg.device = device;
+  if (Object.keys(geo).length) cfg.geo = geo;
+  return Object.keys(cfg).length ? cfg : undefined;
+}
+
 async function createPlacement(ev) {
   ev.preventDefault();
   const body = {
@@ -452,6 +484,8 @@ async function createPlacement(ev) {
     height: parseInt($('np_height').value, 10) || 0,
     floor_price: parseFloat($('np_floor').value) || 0,
   };
+  const fc = floorConfigBody('np_floor_device', 'np_floor_geo');
+  if (fc) body.floor_config = fc;
   try {
     await fetchJSON('/v1/api/placements', {method: 'POST', body: JSON.stringify(body)});
     $('newPlacement').classList.add('hidden');
@@ -479,12 +513,17 @@ function openEditPlacement(id) {
   $('epName').textContent = p.Name;
   $('ep_name').value = p.Name;
   $('ep_floor').value = p.FloorPrice;
+  const fc = p.FloorConfig || {};
+  $('ep_floor_device').value = floorMapToStr(fc.device);
+  $('ep_floor_geo').value = floorMapToStr(fc.geo);
   $('editPlacement').classList.remove('hidden');
 }
 
 async function savePlacement(ev) {
   ev.preventDefault();
   const body = {name: $('ep_name').value.trim(), floor_price: parseFloat($('ep_floor').value)};
+  // Always send floor_config on edit so clearing the inputs clears overrides.
+  body.floor_config = floorConfigBody('ep_floor_device', 'ep_floor_geo') || {};
   try {
     await fetchJSON('/v1/api/placements/' + encodeURIComponent($('epID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editPlacement').classList.add('hidden');
