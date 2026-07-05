@@ -332,8 +332,9 @@ APIs + portal forms don't yet expose:
   (`pkg/floors` resolver + SSP bid-path + API + portal dayparts textarea/timezone; gates bidding
   — both verified live). Remaining: (none — floor depth complete).
   **Publisher:** ✅ revshare fee editing shipped (staff console `/v1/api/revshare` + billing-rates
-  invalidate); remaining: payment-terms, tiered/guaranteed revshare config. **Direct-sold** `publisher_line_items`
-  CRUD (+ its orphan invalidate subject).
+  invalidate); remaining: payment-terms, tiered/guaranteed revshare config. ✅ **Direct-sold**
+  `publisher_line_items` CRUD shipped (gateway `/v1/api/direct-line-items` + publisher portal
+  "Direct sold" section; publishes the publisher-line-items invalidate — verified live).
 - **Loose ends:** `adtech.cache.invalidate.ads-txt` has no publisher (adstxt cron candidate); IO
   management (campaign API auto-creates one IO/campaign today); `dsps` table stays operator-only.
 
