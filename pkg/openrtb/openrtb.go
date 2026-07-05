@@ -15,8 +15,50 @@ type BidRequest struct {
 	Device *Device  `json:"device,omitempty"`
 	User   *User    `json:"user,omitempty"`
 	Regs   *Regs    `json:"regs,omitempty"`
-	TMax   int      `json:"tmax,omitempty"` // max response time in ms
-	Cur    []string `json:"cur,omitempty"`  // allowed currencies
+	Source *Source  `json:"source,omitempty"` // supply-chain / transaction provenance
+	TMax   int      `json:"tmax,omitempty"`   // max response time in ms
+	Cur    []string `json:"cur,omitempty"`    // allowed currencies
+}
+
+// Source carries transaction provenance and the supply chain. Per OpenRTB
+// 2.6, the SupplyChain object lives at Source.Ext.schain — it declares every
+// intermediary between the publisher and this bid request so buyers can
+// verify the path (the third leg of the transparency triad alongside
+// ads.txt and sellers.json).
+type Source struct {
+	FD  int        `json:"fd,omitempty"`  // 0=exchange is final decision maker, 1=upstream chain
+	TID string     `json:"tid,omitempty"` // transaction id, common across the auction
+	Ext *SourceExt `json:"ext,omitempty"`
+}
+
+// SourceExt holds the SupplyChain object (OpenRTB moved schain from an
+// extension into Source in 2.6; buyers still read it at source.ext.schain
+// for backwards compatibility, so we serialise it there).
+type SourceExt struct {
+	SChain *SupplyChain `json:"schain,omitempty"`
+}
+
+// SupplyChain is the IAB SupplyChain object (spec version "1.0"). Complete=1
+// means every node from the publisher to here is present and the chain can be
+// fully verified; 0 means an upstream hop is missing/unknown.
+type SupplyChain struct {
+	Complete int               `json:"complete"`
+	Nodes    []SupplyChainNode `json:"nodes"`
+	Ver      string            `json:"ver,omitempty"`
+}
+
+// SupplyChainNode is one hop in the supply chain — an advertising system that
+// participated in selling this impression. ASI is that system's canonical
+// domain (matches the seller's sellers.json host); SID is the seller's account
+// id within that system (matches its sellers.json seller_id and the publisher's
+// ads.txt account id). HP=1 flags a node that handles payment for the inventory.
+type SupplyChainNode struct {
+	ASI    string `json:"asi"`
+	SID    string `json:"sid"`
+	RID    string `json:"rid,omitempty"` // request/transaction id issued by this node
+	HP     int    `json:"hp"`
+	Name   string `json:"name,omitempty"`
+	Domain string `json:"domain,omitempty"`
 }
 
 // Imp represents an impression opportunity.
@@ -230,6 +272,12 @@ type RegsExt struct {
 	GDPR          int    `json:"gdpr,omitempty"`
 	USPrivacy     string `json:"us_privacy,omitempty"`
 	DataResidency string `json:"data_residency,omitempty"`
+	// GPP is the IAB Global Privacy Platform consent string; GPPSID lists the
+	// section ids present in it (e.g. "7" for US-CA). Carried end-to-end now so
+	// downstream consumers can pass it through; full GPP parsing is a later
+	// phase (see docs/STANDARDS.md).
+	GPP    string `json:"gpp,omitempty"`
+	GPPSID string `json:"gpp_sid,omitempty"`
 }
 
 // BidResponse is the OpenRTB 2.6 bid response from a DSP.
