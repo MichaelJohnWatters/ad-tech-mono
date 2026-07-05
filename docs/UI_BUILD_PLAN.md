@@ -339,7 +339,12 @@ APIs + portal forms don't yet expose:
   `format` field (line_items.format hardcoded 'display' at create — the DSP matches on the
   creative's format so serving already works).
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
-- **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
+- **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal).
+  Video settings landed at the **placement** instead of `deal_config` (the SSP builds the video
+  request from the placement, before any deal is matched — `deal_config` had no consumer): ✅
+  placement `video_config` (skip/duration/mimes/protocols/plcmt, migration 034, applied by the SSP's
+  buildVideoImp + publisher portal — verified live). Remaining: portal placement multiselect for deal
+  allowlists (UUIDs are typed by hand today).
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
   (`pkg/floors` resolver + SSP bid-path + API + portal dayparts textarea/timezone; gates bidding
   — both verified live). Remaining: (none — floor depth complete).
