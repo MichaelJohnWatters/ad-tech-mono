@@ -597,6 +597,7 @@ func (l *yamlCampaignLoader) LoadAll(_ context.Context) ([]models.Campaign, erro
 		if cc.Modifiers != nil {
 			c.Modifiers = targeting.Modifiers{Device: cc.Modifiers.Device, GeoCountry: cc.Modifiers.GeoCountry}
 		}
+		c.Location = models.ResolveLocation(c.Timezone) // non-nil (UTC) even for YAML fallback
 		out = append(out, c)
 	}
 	return out, nil
@@ -774,6 +775,11 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// matched creative UUID, not the line item's generic CreativeID.
 		var pickedCreativeID string
 
+		// One timestamp for the whole request (consistent across all campaigns
+		// and cheaper than recomputing per candidate). Time-of-day modifiers
+		// shift it into each campaign's pre-resolved location below.
+		reqNow := clk.Now()
+
 		for i := range all {
 			c := &all[i]
 			if c.Status != constants.StatusLive {
@@ -863,16 +869,16 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 
 			// Time-of-day modifiers evaluate the hour in the campaign's
-			// timezone (line_items.timezone; UTC if empty/unparseable).
-			now := clk.Now()
-			if c.Timezone != "" {
-				if loc, err := time.LoadLocation(c.Timezone); err == nil {
-					now = now.In(loc)
-				}
+			// timezone. c.Location is pre-resolved at cache-load (UTC when the
+			// timezone is unset/unparseable), so the bid path does no per-bid
+			// time.LoadLocation — just an in-memory .In() shift.
+			campaignNow := reqNow
+			if c.Location != nil {
+				campaignNow = reqNow.In(c.Location)
 			}
 			modCtx := targeting.ModifierContext{
 				Device: tReq.Device, GeoCountry: tReq.Geo,
-				HourOfDay: now.Hour(),
+				HourOfDay: campaignNow.Hour(),
 			}
 			adjustedBid, _ := targeting.ApplyModifiers(c.BaseBid, c.Modifiers, modCtx)
 

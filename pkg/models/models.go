@@ -58,6 +58,11 @@ type Campaign struct {
 	// Timezone is the IANA name (line_items.timezone) used to evaluate
 	// time-of-day bid modifiers. Empty → UTC.
 	Timezone string
+	// Location is Timezone pre-resolved to a *time.Location at cache-load time
+	// so the bid hot path does no per-request time.LoadLocation. Never nil
+	// after a loader resolves it (falls back to time.UTC). json:"-" keeps it
+	// out of the campaign API responses.
+	Location *time.Location `json:"-"`
 	// CreativeRotation is the multi-creative rotation mode (even|weighted|
 	// bandit|sequential). Surfaced for the portal's edit prefill.
 	CreativeRotation string
@@ -67,6 +72,19 @@ type Campaign struct {
 	ViewabilityTargetPct *int
 	Targeting            targeting.Rules
 	Modifiers            targeting.Modifiers
+}
+
+// ResolveLocation turns an IANA timezone name into a *time.Location, falling
+// back to UTC for empty/"UTC"/unknown names. Loaders call it to pre-resolve
+// Campaign.Location so the bid hot path never does time.LoadLocation.
+func ResolveLocation(tz string) *time.Location {
+	if tz == "" || tz == "UTC" {
+		return time.UTC
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	return time.UTC
 }
 
 // FreqCapRule is a campaign's advertiser-configured frequency cap, read from
