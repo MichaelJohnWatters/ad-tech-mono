@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	sender := email.NewSMTP("localhost:1025") // Mailpit
+//	sender := email.NewSMTP("localhost:1025", "noreply@adtech.local", log) // Mailpit
 //	sender.Send(ctx, email.Message{To: "user@example.com", Subject: "Welcome", Body: "..."})
 package email
 
@@ -11,6 +11,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/smtp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,9 +36,9 @@ type Sender interface {
 
 // MemorySender stores emails in memory (for testing).
 type MemorySender struct {
-	mu    sync.Mutex
-	sent  []Message
-	log   *slog.Logger
+	mu   sync.Mutex
+	sent []Message
+	log  *slog.Logger
 }
 
 // NewMemory creates an in-memory email sender.
@@ -64,25 +67,94 @@ func (s *MemorySender) Sent() []Message {
 }
 
 // SMTPSender sends emails via SMTP (Mailpit locally, real SMTP in prod).
+//
+// host is "host:port" (e.g. Mailpit's "localhost:1025"). When auth is nil the
+// connection is unauthenticated — the local Mailpit case. Set auth (via
+// NewSMTPAuth) for providers that require login (SES/Sendgrid). now defaults to
+// time.Now and is overridable for deterministic tests of the wire format.
 type SMTPSender struct {
 	host string
 	from string
+	auth smtp.Auth
+	now  func() time.Time
 	log  *slog.Logger
 }
 
-// NewSMTP creates an SMTP sender.
+// NewSMTP creates an unauthenticated SMTP sender (Mailpit / open relay).
 func NewSMTP(host, from string, log *slog.Logger) *SMTPSender {
-	return &SMTPSender{host: host, from: from, log: log}
+	return &SMTPSender{host: host, from: from, now: time.Now, log: log}
+}
+
+// NewSMTPAuth creates an SMTP sender that authenticates with PLAIN credentials.
+// Use for production providers (SES, Sendgrid). host is "host:port".
+func NewSMTPAuth(host, from, username, password string, log *slog.Logger) *SMTPSender {
+	hostOnly := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostOnly = h
+	}
+	return &SMTPSender{
+		host: host,
+		from: from,
+		auth: smtp.PlainAuth("", username, password, hostOnly),
+		now:  time.Now,
+		log:  log,
+	}
 }
 
 func (s *SMTPSender) Send(_ context.Context, msg Message) error {
 	if msg.From == "" {
 		msg.From = s.from
 	}
-	// In production: use net/smtp.SendMail
-	// For now: just log
+	if msg.To == "" {
+		return fmt.Errorf("email: missing recipient")
+	}
+	wire := s.buildMIME(msg)
+	if err := smtp.SendMail(s.host, s.auth, msg.From, []string{msg.To}, wire); err != nil {
+		s.log.Error("email send failed", "to", msg.To, "subject", msg.Subject, "host", s.host, "error", err)
+		return fmt.Errorf("email: send to %s via %s: %w", msg.To, s.host, err)
+	}
 	s.log.Info("email sent (smtp)", "to", msg.To, "subject", msg.Subject, "host", s.host)
 	return nil
+}
+
+// buildMIME renders an RFC 5322 message. If both Body (text) and HTML are set it
+// emits multipart/alternative; if only one is set it emits that single part.
+func (s *SMTPSender) buildMIME(msg Message) []byte {
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	var b strings.Builder
+	writeHeader := func(k, v string) { b.WriteString(k + ": " + v + "\r\n") }
+
+	writeHeader("From", msg.From)
+	writeHeader("To", msg.To)
+	writeHeader("Subject", msg.Subject)
+	writeHeader("Date", now().Format(time.RFC1123Z))
+	writeHeader("MIME-Version", "1.0")
+
+	switch {
+	case msg.Body != "" && msg.HTML != "":
+		const boundary = "adtech-mixed-boundary-8f3a"
+		writeHeader("Content-Type", `multipart/alternative; boundary="`+boundary+`"`)
+		b.WriteString("\r\n")
+		b.WriteString("--" + boundary + "\r\n")
+		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+		b.WriteString(msg.Body + "\r\n")
+		b.WriteString("--" + boundary + "\r\n")
+		b.WriteString("Content-Type: text/html; charset=UTF-8\r\n\r\n")
+		b.WriteString(msg.HTML + "\r\n")
+		b.WriteString("--" + boundary + "--\r\n")
+	case msg.HTML != "":
+		writeHeader("Content-Type", "text/html; charset=UTF-8")
+		b.WriteString("\r\n")
+		b.WriteString(msg.HTML + "\r\n")
+	default:
+		writeHeader("Content-Type", "text/plain; charset=UTF-8")
+		b.WriteString("\r\n")
+		b.WriteString(msg.Body + "\r\n")
+	}
+	return []byte(b.String())
 }
 
 // Templates for common emails
@@ -188,10 +260,10 @@ func (a *AuditLog) Count() int {
 
 // DeploymentEntry records a service deployment.
 type DeploymentEntry struct {
-	Service   string
-	Version   string
-	Timestamp time.Time
-	CommitSHA string
+	Service    string
+	Version    string
+	Timestamp  time.Time
+	CommitSHA  string
 	DeployedBy string
 }
 
@@ -240,8 +312,4 @@ func (d *DeploymentLedger) ForService(service string) []DeploymentEntry {
 		}
 	}
 	return result
-}
-
-func init() {
-	_ = fmt.Sprintf // suppress unused import
 }

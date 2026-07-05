@@ -79,6 +79,11 @@ k8s_resource('jaeger', labels=['observability'],
     # Without 4318 forwarded, every service spams "dial tcp :4318 connection refused".
     port_forwards=['16686:16686', '4317:4317', '4318:4318'],
     links=['http://localhost:16686'])
+k8s_resource('mailpit', labels=['infra'],
+    # 1025 = SMTP (report-runner + any host process delivers here),
+    # 8025 = web inbox UI. Real emails land in Mailpit locally instead of a stub log.
+    port_forwards=['1025:1025', '8025:8025'],
+    links=['http://localhost:8025'])
 
 # ============================================================
 # Services
@@ -342,11 +347,11 @@ local_resource('adstxt-crawl',
 local_resource('report-runner',
     # Scheduled-report runner (normally a periodic CronJob). Runs every saved
     # report whose interval schedule (@hourly/@daily/@weekly/@monthly) is due
-    # and emails the result. No Mailpit locally → the in-memory sender logs each
-    # delivery. 127.0.0.1 forces IPv4 (see adstxt-crawl).
-    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable REPORT_RUNNER_REPORTING_URL=http://127.0.0.1:8086 go run ./cmd/report-runner',
+    # and emails the result via Mailpit (SMTP on 127.0.0.1:1025) — view deliveries
+    # at http://localhost:8025. 127.0.0.1 forces IPv4 (see adstxt-crawl).
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable REPORT_RUNNER_REPORTING_URL=http://127.0.0.1:8086 REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025 go run ./cmd/report-runner',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
-    resource_deps=['postgres', 'reporting'])
+    resource_deps=['postgres', 'reporting', 'mailpit'])
 
 # ============================================================
 # Simulation

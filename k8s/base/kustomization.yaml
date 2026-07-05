@@ -21,3 +21,5 @@ resources:
   - loki/deployment.yaml
   - promtail/deployment.yaml
   - jaeger/deployment.yaml
+  # Email (Mailpit locally; SES/Sendgrid via SMTP in prod)
+  - mailpit/deployment.yaml
