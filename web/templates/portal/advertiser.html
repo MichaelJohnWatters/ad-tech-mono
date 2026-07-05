@@ -157,7 +157,17 @@
           <option value="front_loaded">Front-loaded — bias early</option>
         </select>
       </label>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Creative rotation</span>
+        <select id="nc_rotation" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="bandit">Bandit — optimise for CTR</option>
+          <option value="weighted">Weighted</option>
+          <option value="even">Even</option>
+          <option value="sequential">Sequential</option>
+        </select>
+      </label>
     </div>
+    <p class="text-xs text-gray-400 -mt-2 mb-2">A default creative is generated for you. Attach your own uploaded creatives after creating, from the campaign’s Edit → Creatives.</p>
     <div class="grid grid-cols-2 gap-x-4">
       {{ template "form-field" (dict "label" "Base bid (USD)" "name" "nc_base_bid" "type" "number" "value" "2.50") }}
       {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "nc_daily_budget" "type" "number" "placeholder" "500") }}
@@ -308,6 +318,23 @@
             <option value="day">Day</option><option value="hour">Hour</option><option value="week">Week</option>
           </select>
         </label>
+      </div>
+    </details>
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Creatives</summary>
+      <div class="mt-3">
+        <label class="block text-sm mb-3">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Rotation</span>
+          <select id="ec_rotation" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="bandit">Bandit</option><option value="weighted">Weighted</option>
+            <option value="even">Even</option><option value="sequential">Sequential</option>
+          </select>
+        </label>
+        <p class="text-xs text-gray-600 dark:text-gray-300 mb-1">Attached creatives (checked serve; weight biases rotation). Only approved creatives are listed.</p>
+        <div id="ec_creatives" class="space-y-1 max-h-48 overflow-auto text-sm">
+          <p class="text-xs text-gray-400">loading…</p>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Leave all unchecked to keep the current attachments.</p>
       </div>
     </details>
     <div class="flex justify-end gap-2">
@@ -507,6 +534,7 @@ async function createCampaign(ev) {
     daily_budget: parseFloat($('nc_daily_budget').value) || 0,
     bid_strategy: $('nc_bid_strategy').value,
     pacing_mode: $('nc_pacing').value,
+    creative_rotation: $('nc_rotation').value,
   };
   const mods = bidModifiersBody('nc_mod_dev', 'nc_mod_geo', 'nc_mod_tod');
   if (mods) body.bid_modifiers = mods;
@@ -574,7 +602,41 @@ function openEdit(id) {
   $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
   $('ec_mod_tod').value = timeModsToStr(mods.TimeOfDay);
   $('ec_timezone').value = c.Timezone || '';
+  $('ec_rotation').value = c.CreativeRotation || 'bandit';
+  renderCreativePicker(c);
   $('editCampaign').classList.remove('hidden');
+}
+
+// renderCreativePicker fills the edit drawer's creative list: every approved
+// creative in the library, pre-checked (with weight) if attached to c.
+async function renderCreativePicker(c) {
+  const wrap = $('ec_creatives');
+  const attached = new Set((c.Creatives || []).map(x => x.ID));
+  try {
+    const lib = (await fetchJSON('/v1/api/creatives') || []).filter(x => x.review_status === 'approved');
+    if (!lib.length) { wrap.innerHTML = '<p class="text-xs text-gray-400">No approved creatives yet — upload some on the Creatives screen.</p>'; return; }
+    wrap.innerHTML = lib.map(cr => `
+      <label class="flex items-center gap-2">
+        <input type="checkbox" class="ec_cr_box" data-id="${esc(cr.id)}" ${attached.has(cr.id) ? 'checked' : ''}>
+        <span class="flex-1 truncate">${esc(cr.name)} <span class="text-xs text-gray-400">${cr.width}×${cr.height} ${esc(cr.format)}</span></span>
+        <input type="number" min="1" value="1" class="ec_cr_wt w-16 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-1 py-0.5 text-xs" title="weight">
+      </label>`).join('');
+  } catch (err) {
+    wrap.innerHTML = `<p class="text-xs text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+
+// collectCreatives returns the checked creatives with weights, or undefined
+// when none are checked (→ leave the campaign's attachments unchanged).
+function collectCreatives() {
+  const out = [];
+  document.querySelectorAll('#ec_creatives .ec_cr_box').forEach(box => {
+    if (box.checked) {
+      const wt = parseInt(box.parentElement.querySelector('.ec_cr_wt').value, 10);
+      out.push({creative_id: box.dataset.id, weight: wt > 0 ? wt : 1});
+    }
+  });
+  return out.length ? out : undefined;
 }
 
 async function saveCampaign(ev) {
@@ -607,6 +669,10 @@ async function saveCampaign(ev) {
     const n = parseInt(ecFcRaw, 10);
     body.frequency_cap = {limit: n > 0 ? n : 0, window: $('ec_fc_window').value};
   }
+  body.creative_rotation = $('ec_rotation').value;
+  // Only replace attachments when at least one creative is checked.
+  const creatives = collectCreatives();
+  if (creatives) body.creatives = creatives;
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editCampaign').classList.add('hidden');
