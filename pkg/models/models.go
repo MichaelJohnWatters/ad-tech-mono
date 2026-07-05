@@ -58,6 +58,9 @@ type Campaign struct {
 	// Timezone is the IANA name (line_items.timezone) used to evaluate
 	// time-of-day bid modifiers. Empty → UTC.
 	Timezone string
+	// CreativeRotation is the multi-creative rotation mode (even|weighted|
+	// bandit|sequential). Surfaced for the portal's edit prefill.
+	CreativeRotation string
 	// ViewabilityTargetPct is the contractual viewability guarantee for
 	// this line item (0-100). nil = no guarantee. Used downstream for
 	// makegood reconciliation; not consulted on the hot bid path.

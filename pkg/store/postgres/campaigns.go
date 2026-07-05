@@ -55,6 +55,7 @@ SELECT
     li.pacing_mode,
     li.status,
     COALESCE(li.timezone, 'UTC'),
+    COALESCE(li.creative_rotation, 'bandit'),
     COALESCE(tr.include_geo, '{}'),
     COALESCE(tr.exclude_geo, '{}'),
     COALESCE(tr.include_device, '{}'),
@@ -131,7 +132,7 @@ WHERE li.status IN ('live', 'paused')`
 		if err := rows.Scan(
 			&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
 			&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
-			&c.BidModel, &c.PacingMode, &c.Status, &c.Timezone,
+			&c.BidModel, &c.PacingMode, &c.Status, &c.Timezone, &c.CreativeRotation,
 			&incGeo, &excGeo, &incDev, &excDev,
 			&incSeg, &excSeg, &incDom, &excDom,
 			&incCat, &excCat,

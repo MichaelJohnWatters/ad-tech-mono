@@ -67,6 +67,27 @@ func (h *Harness) APIJSON(t *testing.T, client *http.Client, method, path, body 
 	return h.apiJSON(t, client, method, path, body)
 }
 
+// APIStatus issues a request and returns only the HTTP status code — for
+// asserting rejections (400/403/404) without decoding a body.
+func (h *Harness) APIStatus(t *testing.T, client *http.Client, method, path, body string) int {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, h.URLs.Gateway+path, rdr)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 // apiJSON runs one JSON call on a session client and decodes the response.
 // Fails the test on any status >= 400 so journey steps read linearly.
 func (h *Harness) apiJSON(t *testing.T, client *http.Client, method, path, body string) map[string]any {

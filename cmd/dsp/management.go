@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -182,6 +183,19 @@ func campaignByIDHandler(db *sql.DB, bus events.EventBus, accountIDs []string, l
 // a clear 400 instead of leaking a raw Postgres constraint error.
 var validBidStrategies = map[string]bool{"cpm": true, "cpc": true, "cpa": true, "vcpm": true, "cpcv": true}
 var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded": true}
+var validCreativeRotations = map[string]bool{"even": true, "weighted": true, "bandit": true, "sequential": true}
+
+// uuidRe validates a creative_id before it reaches a ::uuid[] cast (a clear
+// 400 beats a raw Postgres cast error).
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// creativeAttach is one creative attached to a campaign with a rotation weight.
+// The DSP picks the highest-weight size-matched creative at bid time; finer
+// rotation (bandit/sequential) is the ad server's job.
+type creativeAttach struct {
+	CreativeID string `json:"creative_id"`
+	Weight     int    `json:"weight"`
+}
 
 // bidModifiersInput is the structured bid-modifier map stored in
 // targeting_rules.bid_modifiers (JSONB) and read back by the CampaignLoader's
@@ -311,6 +325,9 @@ type createCampaignRequest struct {
 	EndDate   string `json:"end_date,omitempty"`
 	// Timezone (IANA) for time-of-day bid modifiers. Empty → UTC.
 	Timezone string `json:"timezone,omitempty"`
+	// CreativeRotation is the multi-creative rotation mode (even|weighted|
+	// bandit|sequential). Empty → bandit.
+	CreativeRotation string `json:"creative_rotation,omitempty"`
 	// ViewabilityTargetPct is the contractual viewability guarantee
 	// (0-100). Optional — nil = no guarantee, no makegood reconciliation.
 	// Settlement mechanics for vCPM are a separate platform-level decision
@@ -378,6 +395,13 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if _, err := time.LoadLocation(req.Timezone); err != nil {
 		http.Error(w, "invalid timezone: "+req.Timezone, http.StatusBadRequest)
+		return
+	}
+	if req.CreativeRotation == "" {
+		req.CreativeRotation = "bandit"
+	}
+	if !validCreativeRotations[req.CreativeRotation] {
+		http.Error(w, "creative_rotation must be even, weighted, bandit or sequential", http.StatusBadRequest)
 		return
 	}
 
@@ -514,8 +538,8 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'bandit', $9, $10, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.Timezone, viewTarget); err != nil {
+VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', $9, $10, $11, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
@@ -564,6 +588,10 @@ type patchCampaignRequest struct {
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
 	Timezone    *string  `json:"timezone,omitempty"`
+	// CreativeRotation changes the rotation mode; Creatives replaces the
+	// campaign's attached creatives (line_item_creatives) with the given set.
+	CreativeRotation *string           `json:"creative_rotation,omitempty"`
+	Creatives        *[]creativeAttach `json:"creatives,omitempty"`
 	// Targeting edits — nil leaves the column unchanged; a supplied list
 	// (even empty) replaces it. Lands in targeting_rules, same tx.
 	IncludeGeo           *[]string `json:"include_geo,omitempty"`
@@ -614,9 +642,30 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
-		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil && !req.hasTargeting() {
+		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil &&
+		req.CreativeRotation == nil && req.Creatives == nil && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
+	}
+	if req.CreativeRotation != nil && !validCreativeRotations[*req.CreativeRotation] {
+		http.Error(w, "creative_rotation must be even, weighted, bandit or sequential", http.StatusBadRequest)
+		return
+	}
+	if req.Creatives != nil {
+		if len(*req.Creatives) == 0 {
+			http.Error(w, "creatives must list at least one creative", http.StatusBadRequest)
+			return
+		}
+		for _, cr := range *req.Creatives {
+			if !uuidRe.MatchString(cr.CreativeID) {
+				http.Error(w, "creatives[].creative_id must be a UUID", http.StatusBadRequest)
+				return
+			}
+			if cr.Weight < 0 {
+				http.Error(w, "creatives[].weight must be >= 0", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	if req.Timezone != nil {
 		if _, err := time.LoadLocation(*req.Timezone); err != nil {
@@ -668,6 +717,10 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 
 	if err := updateLineItem(ctx, db, accountID, id, req); err != nil {
+		if errors.Is(err, errCreativeNotAttachable) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		log.Error("patch campaign failed", "error", err, "id", id)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -722,6 +775,10 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 		args = append(args, *req.Timezone)
 		sets = append(sets, fmt.Sprintf("timezone = $%d", len(args)))
 	}
+	if req.CreativeRotation != nil {
+		args = append(args, *req.CreativeRotation)
+		sets = append(sets, fmt.Sprintf("creative_rotation = $%d", len(args)))
+	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE line_items SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))
 	res, err := tx.ExecContext(ctx, q, args...)
@@ -739,7 +796,52 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 			return err
 		}
 	}
+	// Creative attachments replace line_item_creatives when supplied.
+	if req.Creatives != nil {
+		if err := replaceLineItemCreatives(ctx, tx, accountID, lineItemID, *req.Creatives); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+// errCreativeNotAttachable → 400: an attached creative isn't owned by the
+// account or isn't approved.
+var errCreativeNotAttachable = errors.New("creative not owned by account or not approved")
+
+// replaceLineItemCreatives swaps the campaign's attached creatives for the
+// supplied set. Every creative must belong to accountID and be approved
+// (only approved creatives are allowed to serve). Runs in updateLineItem's tx.
+func replaceLineItemCreatives(ctx context.Context, tx *sql.Tx, accountID, lineItemID string, attach []creativeAttach) error {
+	ids := make([]string, len(attach))
+	for i, a := range attach {
+		ids[i] = a.CreativeID
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM creatives
+		 WHERE id = ANY($1::uuid[]) AND account_id = $2::uuid AND review_status = 'approved'`,
+		pq.Array(ids), accountID).Scan(&n); err != nil {
+		return err
+	}
+	if n != len(ids) {
+		return errCreativeNotAttachable
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM line_item_creatives WHERE line_item_id = $1::uuid`, lineItemID); err != nil {
+		return err
+	}
+	for _, a := range attach {
+		w := a.Weight
+		if w <= 0 {
+			w = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1::uuid, $2::uuid, $3)`,
+			lineItemID, a.CreativeID, w); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // updateTargeting applies the supplied targeting arrays to the line item's
