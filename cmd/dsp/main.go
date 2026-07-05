@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -676,12 +677,24 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			Device:        deviceTypeStr(bidReq.Device),
 			InventoryType: inventoryType(bidReq),
 		}
-		if bidReq.Device != nil && bidReq.Device.Geo != nil {
-			tReq.Geo = bidReq.Device.Geo.Country
+		if bidReq.Device != nil {
+			if bidReq.Device.Geo != nil {
+				tReq.Geo = bidReq.Device.Geo.Country
+			}
+			tReq.OS = bidReq.Device.OS
 		}
 		if bidReq.Site != nil {
 			tReq.Domain = bidReq.Site.Domain
 			tReq.Categories = bidReq.Site.Cat
+			// OpenRTB Site.keywords is a comma-separated string; the engine
+			// matches against a slice of page keywords.
+			if kw := strings.TrimSpace(bidReq.Site.Keywords); kw != "" {
+				parts := strings.Split(kw, ",")
+				for i := range parts {
+					parts[i] = strings.TrimSpace(parts[i])
+				}
+				tReq.Keywords = parts
+			}
 			if len(tReq.Categories) == 0 {
 				classifier := targeting.NewClassifier()
 				tReq.Categories = classifier.Classify(bidReq.Site.Domain, bidReq.Site.Page, nil, nil)
@@ -926,10 +939,10 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 // Match rules:
 //   - display: format=="display" and Width×Height equals reqW×reqH
 //   - video:   format=="video" and Duration is within [minDur, maxDur]
-//              (W/H are NOT required to match; players letterbox/scale
-//              video creatives to fit slots, and our seed video sizes
-//              are coarse — 640x360 standard renders fine in any video
-//              slot at HD or below)
+//     (W/H are NOT required to match; players letterbox/scale
+//     video creatives to fit slots, and our seed video sizes
+//     are coarse — 640x360 standard renders fine in any video
+//     slot at HD or below)
 //   - audio:   format=="audio" and Duration within [minDur, maxDur]
 //
 // For zero-or-missing constraints (e.g. the request didn't set a
@@ -1140,7 +1153,3 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
-
-
-
-
