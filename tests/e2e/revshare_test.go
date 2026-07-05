@@ -27,8 +27,12 @@ func TestRevshareEditingViaAPI(t *testing.T) {
 	site := h.APIJSON(t, pub, http.MethodPost, "/v1/api/publishers", `{"name":"Rev Site","domain":"`+uniq+`.test"}`)
 	publisherID := site["id"].(string)
 
-	// Staff session (the seeded admin has "*", covers support:read/update).
-	staff := h.LoginAs(t, harness.DevAdminEmail, harness.DevPassword)
+	// Staff session — Reset wiped the seeded admin, so mint an admin account
+	// + login here (admin has "*", covers support:read/update).
+	admin := h.CreateAdmin(t, uniq+"-admin")
+	adminEmail := uniq + "-admin@login.test"
+	h.CreateLoginUser(t, admin.ID, adminEmail, "pw-e2e-1", "owner")
+	staff := h.LoginAs(t, adminEmail, "pw-e2e-1")
 
 	// GET the revshare list — the new publisher defaults to 20%.
 	req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/revshare", nil)
