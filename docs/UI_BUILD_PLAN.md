@@ -324,8 +324,13 @@ APIs + portal forms don't yet expose:
   portal; DSP applies before the floor check, time windows in the campaign tz — verified live).
   ✅ per-campaign frequency caps shipped (create + PATCH `frequency_cap {limit, window}` → ad-server
   warm cache over targeting_rules.frequency_caps; serve enforces advertiser cap, falls back to the
-  platform default — verified live). Remaining: non-display formats (needs creative-format
-  handling), creative weights/rotation (needs multi-creative upload).
+  platform default — verified live). ✅ creative attach + rotation shipped (campaign PATCH
+  `creatives [{creative_id, weight}]` replaces line_item_creatives, approved+owned only;
+  `creative_rotation` mode; advertiser portal edit-drawer creative picker — DSP serves the
+  attached creative, verified live). Non-display formats now largely enabled (creative upload
+  already supports video/audio/native + attach works); remaining nicety: campaign-level
+  `format` field (line_items.format hardcoded 'display' at create — the DSP matches on the
+  creative's format so serving already works).
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
