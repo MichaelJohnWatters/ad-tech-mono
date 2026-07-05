@@ -409,13 +409,26 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	}
 	if userID != "" {
 		user := &openrtb.User{ID: userID}
+		var segs []string
 		if audienceStore != nil {
-			segs, err := audienceStore.SegmentsForUser(ctx, userID)
+			looked, err := audienceStore.SegmentsForUser(ctx, userID)
 			if err != nil {
 				reqLog.Warn("segment lookup failed", "user_id", userID, "error", err)
-			} else if len(segs) > 0 {
-				user.Ext = &openrtb.UserExt{Segments: segs}
+			} else {
+				segs = looked
 			}
+		}
+		// Explicit ?segments= (comma-separated) lets a publisher/test pass the
+		// user's public audience segments directly; unioned with any looked up.
+		if q := r.URL.Query().Get("segments"); q != "" {
+			for _, s := range strings.Split(q, ",") {
+				if s = strings.TrimSpace(s); s != "" {
+					segs = append(segs, s)
+				}
+			}
+		}
+		if len(segs) > 0 {
+			user.Ext = &openrtb.UserExt{Segments: segs}
 		}
 		bidReq.User = user
 	}

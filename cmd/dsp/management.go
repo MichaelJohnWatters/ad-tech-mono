@@ -204,6 +204,10 @@ type createCampaignRequest struct {
 	IncludeKeywords      []string `json:"include_keywords,omitempty"`
 	ExcludeKeywords      []string `json:"exclude_keywords,omitempty"`
 	IncludeInventoryType []string `json:"include_inventory_type,omitempty"`
+	// Audience segment targeting — matched against the user's public segments
+	// (SSP-stamped) unioned with the DSP's private segments.
+	IncludeSegments []string `json:"include_segments,omitempty"`
+	ExcludeSegments []string `json:"exclude_segments,omitempty"`
 	// BidStrategy selects the billing model: cpm (default) bills on
 	// impression; cpc/cpa/vcpm/cpcv reserve on impression and settle on the
 	// trigger event (click/conversion/viewable/complete). Empty → cpm.
@@ -414,15 +418,17 @@ INSERT INTO targeting_rules (id, line_item_id, account_id,
     include_geo, exclude_geo, include_device, exclude_device,
     include_domains, exclude_domains, include_categories, exclude_categories,
     include_os, include_keywords, exclude_keywords, include_inventory_type,
+    include_segments, exclude_segments,
     bid_modifiers, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, '{}', now(), now())`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '{}', now(), now())`,
 		targetingID, lineItemID, accountID,
 		pq.StringArray(req.IncludeGeo), pq.StringArray(req.ExcludeGeo),
 		pq.StringArray(req.IncludeDevice), pq.StringArray(req.ExcludeDevice),
 		pq.StringArray(req.IncludeDomains), pq.StringArray(req.ExcludeDomains),
 		pq.StringArray(req.IncludeCategories), pq.StringArray(req.ExcludeCategories),
 		pq.StringArray(req.IncludeOS), pq.StringArray(req.IncludeKeywords),
-		pq.StringArray(req.ExcludeKeywords), pq.StringArray(req.IncludeInventoryType)); err != nil {
+		pq.StringArray(req.ExcludeKeywords), pq.StringArray(req.IncludeInventoryType),
+		pq.StringArray(req.IncludeSegments), pq.StringArray(req.ExcludeSegments)); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
 	// Creative — auto-generated HTML banner
@@ -461,6 +467,8 @@ type patchCampaignRequest struct {
 	IncludeKeywords      *[]string `json:"include_keywords,omitempty"`
 	ExcludeKeywords      *[]string `json:"exclude_keywords,omitempty"`
 	IncludeInventoryType *[]string `json:"include_inventory_type,omitempty"`
+	IncludeSegments      *[]string `json:"include_segments,omitempty"`
+	ExcludeSegments      *[]string `json:"exclude_segments,omitempty"`
 }
 
 // hasTargeting reports whether the patch touches any targeting column.
@@ -470,7 +478,8 @@ func (p patchCampaignRequest) hasTargeting() bool {
 		p.IncludeDomains != nil || p.ExcludeDomains != nil ||
 		p.IncludeCategories != nil || p.ExcludeCategories != nil ||
 		p.IncludeOS != nil || p.IncludeKeywords != nil ||
-		p.ExcludeKeywords != nil || p.IncludeInventoryType != nil
+		p.ExcludeKeywords != nil || p.IncludeInventoryType != nil ||
+		p.IncludeSegments != nil || p.ExcludeSegments != nil
 }
 
 // validDate reports whether s is a YYYY-MM-DD date (or empty).
@@ -623,6 +632,8 @@ func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req pat
 	add("include_keywords", req.IncludeKeywords)
 	add("exclude_keywords", req.ExcludeKeywords)
 	add("include_inventory_type", req.IncludeInventoryType)
+	add("include_segments", req.IncludeSegments)
+	add("exclude_segments", req.ExcludeSegments)
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE targeting_rules SET %s WHERE line_item_id = $%d", strings.Join(sets, ", "), len(args))
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
