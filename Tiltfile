@@ -329,6 +329,16 @@ local_resource('day-boundary',
     cmd='go run ./cmd/dayboundary',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
+local_resource('adstxt-crawl',
+    # ads.txt crawler (normally a daily CronJob). Runs on the host against the
+    # port-forwarded postgres + nats: fetches each publisher's ads.txt into
+    # ads_txt_cache and publishes the invalidate so the exchange re-reads.
+    # 127.0.0.1 (not localhost) forces IPv4 so pq doesn't try the ::1 the
+    # port-forward isn't listening on.
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable NATS_URL=nats://127.0.0.1:4222 go run ./cmd/adstxt',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres', 'nats'])
+
 # ============================================================
 # Simulation
 # ============================================================
