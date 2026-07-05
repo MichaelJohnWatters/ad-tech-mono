@@ -27,7 +27,8 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `rollup/` | Aggregates event data by time granularity. | Every minute/hour/day/month |
 | `optimise/` | Runs optimisation pipelines (bid, placement, creative). | Hourly/daily |
 | `fraud/` | Batch fraud detection and scoring. | Daily |
-| `adstxt/` | Crawls and caches publisher ads.txt files. | Every 24 hours |
+| `adstxt/` | Crawls and caches publisher ads.txt files; publishes the ads-txt cache invalidate on change. | Every 24 hours |
+| `report-runner/` | Runs due scheduled saved reports (interval schedules `@hourly`/`@daily`/`@weekly`/`@monthly`) and emails the account owner. Core in `pkg/reportrunner`. | Periodic (Tilt manual resource locally) |
 
 ## Conventions
 
