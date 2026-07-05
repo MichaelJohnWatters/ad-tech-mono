@@ -33,6 +33,7 @@ type AuctionParams struct {
 	UserID    string // User.id (drives segment lookup)
 	OS        string // Device.os — for OS targeting
 	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
+	Segments  string // User.ext.segments (comma-separated) — for segment targeting
 }
 
 // RunAuction drives an auction through SSP → Exchange → DSPs as if a real
@@ -62,6 +63,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("user_id", p.UserID)
 	add("os", p.OS)
 	add("keywords", p.Keywords)
+	add("segments", p.Segments)
 
 	url := h.URLs.SSP + "/v1/ssp/request"
 	if len(vals) > 0 {

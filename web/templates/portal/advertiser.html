@@ -188,6 +188,10 @@
         {{ template "form-field" (dict "label" "Keyword exclude" "name" "nc_kw_exc" "placeholder" "gambling") }}
       </div>
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "nc_inv_inc" "placeholder" "blank = site + app") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Segment include (audience IDs)" "name" "nc_seg_inc" "placeholder" "auto_intenders") }}
+        {{ template "form-field" (dict "label" "Segment exclude" "name" "nc_seg_exc" "placeholder" "existing_customers") }}
+      </div>
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
@@ -264,6 +268,10 @@
         {{ template "form-field" (dict "label" "Keyword exclude" "name" "ec_kw_exc") }}
       </div>
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Segment include" "name" "ec_seg_inc") }}
+        {{ template "form-field" (dict "label" "Segment exclude" "name" "ec_seg_exc") }}
+      </div>
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
@@ -432,6 +440,7 @@ async function createCampaign(ev) {
     include_os: csv('nc_os_inc'),
     include_keywords: csv('nc_kw_inc'), exclude_keywords: csv('nc_kw_exc'),
     include_inventory_type: csv('nc_inv_inc'),
+    include_segments: csv('nc_seg_inc'), exclude_segments: csv('nc_seg_exc'),
   };
   for (const [k, v] of Object.entries(targeting)) if (v.length) body[k] = v;
   try {
@@ -472,6 +481,7 @@ function openEdit(id) {
   $('ec_os_inc').value = join(inc.OS);
   $('ec_kw_inc').value = join(inc.Keywords); $('ec_kw_exc').value = join(exc.Keywords);
   $('ec_inv_inc').value = join(inc.InventoryType);
+  $('ec_seg_inc').value = join(inc.Segments); $('ec_seg_exc').value = join(exc.Segments);
   $('editCampaign').classList.remove('hidden');
 }
 
@@ -491,6 +501,7 @@ async function saveCampaign(ev) {
     include_os: csv('ec_os_inc'),
     include_keywords: csv('ec_kw_inc'), exclude_keywords: csv('ec_kw_exc'),
     include_inventory_type: csv('ec_inv_inc'),
+    include_segments: csv('ec_seg_inc'), exclude_segments: csv('ec_seg_exc'),
   };
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
