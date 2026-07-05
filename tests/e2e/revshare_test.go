@@ -80,6 +80,54 @@ func TestRevshareEditingViaAPI(t *testing.T) {
 		}
 	}
 
+	// PATCH a full tiered config + payment terms, then read it back.
+	req, _ = http.NewRequest(http.MethodPatch, h.URLs.Gateway+"/v1/api/revshare?id="+publisherID,
+		strings.NewReader(`{"revshare_model":"tiered","payment_terms":"net_60",
+			"tiers":[{"min_impressions":0,"max_impressions":1000000,"fee_pct":25},
+			         {"min_impressions":1000000,"max_impressions":0,"fee_pct":18}],
+			"guaranteed_min_cpm":0.5}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = staff.Do(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("tiered patch = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/revshare", nil)
+	resp, _ = staff.Do(req)
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	for _, p := range list {
+		if p["publisher_id"] != publisherID {
+			continue
+		}
+		if p["revshare_model"] != "tiered" || p["payment_terms"] != "net_60" {
+			t.Errorf("after tiered patch: model=%v terms=%v", p["revshare_model"], p["payment_terms"])
+		}
+		tiers, _ := p["tiers"].([]any)
+		if len(tiers) != 2 {
+			t.Fatalf("tiers round-trip = %v, want 2 entries", p["tiers"])
+		}
+		t0, _ := tiers[0].(map[string]any)
+		if t0["fee_pct"].(float64) != 25 || t0["max_impressions"].(float64) != 1000000 {
+			t.Errorf("tier[0] = %v, want fee 25 / max 1000000", t0)
+		}
+		if p["guaranteed_min_cpm"].(float64) != 0.5 {
+			t.Errorf("guaranteed_min_cpm = %v, want 0.5", p["guaranteed_min_cpm"])
+		}
+	}
+
+	// Non-contiguous tiers are rejected (money-touching validation).
+	req, _ = http.NewRequest(http.MethodPatch, h.URLs.Gateway+"/v1/api/revshare?id="+publisherID,
+		strings.NewReader(`{"revshare_model":"tiered","tiers":[{"min_impressions":0,"max_impressions":1000,"fee_pct":25},{"min_impressions":5000,"max_impressions":0,"fee_pct":18}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = staff.Do(req)
+	badCode := resp.StatusCode
+	resp.Body.Close()
+	if badCode != http.StatusBadRequest {
+		t.Errorf("non-contiguous tiers = %d, want 400", badCode)
+	}
+
 	// A publisher session is forbidden from the staff revshare editor.
 	req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/revshare", nil)
 	resp, _ = pub.Do(req)
