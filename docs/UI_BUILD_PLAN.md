@@ -340,7 +340,8 @@ APIs + portal forms don't yet expose:
   invalidate); remaining: payment-terms, tiered/guaranteed revshare config. ✅ **Direct-sold**
   `publisher_line_items` CRUD shipped (gateway `/v1/api/direct-line-items` + publisher portal
   "Direct sold" section; publishes the publisher-line-items invalidate — verified live).
-- **Loose ends:** `adtech.cache.invalidate.ads-txt` has no publisher (adstxt cron candidate); IO
+- **Loose ends:** ✅ `adtech.cache.invalidate.ads-txt` now published by the adstxt crawler on a
+  content change (crawler also wired into Tilt as a manual resource — verified live). IO
   management (campaign API auto-creates one IO/campaign today); `dsps` table stays operator-only.
 
 ---
