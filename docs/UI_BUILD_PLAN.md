@@ -304,7 +304,7 @@ portals they unblock. Each becomes its own small design when picked up.
 | **Real auth/login + session** | all portals | ✅ SHIPPED (F4a) — login → bcrypt verify → JWT → cookie; logout. Remaining: refresh, agency act-as, password reset. |
 | **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
 | **Creative upload** | advertiser | ✅ SHIPPED — `GET/POST /v1/api/creatives` (tenant-scoped library list with review state + upload → pending_review → moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
-| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause + depth) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status **+ advertiser/placement allowlists, flight dates, PG guaranteed_volume**; placement allowlist ownership-checked; empty allowlist = match-all, which the exchange matcher already consumes; cache-invalidating). Remaining: `deal_config` (video break/skip), a multiselect placement picker in the portal. |
+| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause + depth) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status **+ advertiser/placement allowlists, flight dates, PG guaranteed_volume**; placement allowlist ownership-checked; empty allowlist = match-all, which the exchange matcher already consumes; cache-invalidating). ✅ Portal placement allowlist is a checkbox multiselect (was hand-typed UUIDs). Remaining: none core. |
 | **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional schedule + delivery. Portal UI shipped (save/run/delete in both report consoles). ✅ **Runner SHIPPED** — `cmd/report-runner` (pkg/reportrunner) fires interval schedules (@hourly/@daily/@weekly/@monthly) → emails the owner (migration 033 last_run_at; Tilt resource; verified live). Remaining: webhook delivery + full cron syntax. |
 | **Moderation queue API** | staff | ✅ SHIPPED — `GET/POST /v1/api/moderation`, list pending creatives + approve/reject (reason required to reject), platform-wide. Remaining: appeal flow, bulk actions. |
 | **Fraud rules CRUD** | staff | ✅ SHIPPED — `GET/POST/DELETE /v1/api/fraud/blocklists`, manages `fraud_blocklists` (ip/ua/domain/app_bundle), invalidates the tracker warm cache. Remaining: rule expiry, ads.txt overrides. |
@@ -344,8 +344,8 @@ APIs + portal forms don't yet expose:
   Video settings landed at the **placement** instead of `deal_config` (the SSP builds the video
   request from the placement, before any deal is matched — `deal_config` had no consumer): ✅
   placement `video_config` (skip/duration/mimes/protocols/plcmt, migration 034, applied by the SSP's
-  buildVideoImp + publisher portal — verified live). Remaining: portal placement multiselect for deal
-  allowlists (UUIDs are typed by hand today).
+  buildVideoImp + publisher portal — verified live). ✅ Portal placement multiselect for deal allowlists
+  shipped (checkbox picker, was hand-typed UUIDs).
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
   (`pkg/floors` resolver + SSP bid-path + API + portal dayparts textarea/timezone; gates bidding
   — both verified live). Remaining: (none — floor depth complete).
