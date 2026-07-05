@@ -12,7 +12,7 @@ profile = os.getenv('PROFILE', 'full')
 # own port-forwards and their kubectl subprocesses — once services moved
 # to pods, those ports are owned by Tilt itself, and a blind `kill -9`
 # would terminate the running Tilt instance during a Tiltfile reload.
-local('''for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090; do
+local('''for port in 8080 8081 8082 8083 8084 8085 8086 8087 8089 8090 8091; do
     for pid in $(lsof -ti :$port 2>/dev/null); do
         pname=$(ps -p $pid -o comm= 2>/dev/null | tr -d ' ')
         case "$pname" in
@@ -117,6 +117,20 @@ if dev_mode == 'fast':
     k8s_yaml(['k8s/base/tracker/deployment.yaml', 'k8s/base/tracker/service.yaml', 'k8s/base/tracker/ingress.yaml'])
     k8s_resource('tracker', resource_deps=['tracker-build', 'nats', 'redis'],
         port_forwards=['8083:8083'], labels=['services'])
+
+    # ---- Webhooks dispatcher (background NATS consumer, no ingress) ----
+    local_resource('webhooks-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/webhooks ./cmd/webhooks',
+        deps=['cmd/webhooks', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-webhooks', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'webhooks'},
+        only=['bin/webhooks', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/webhooks', '/app')])
+    k8s_yaml(['k8s/base/webhooks/deployment.yaml', 'k8s/base/webhooks/service.yaml'])
+    k8s_resource('webhooks', resource_deps=['webhooks-build', 'nats', 'postgres'],
+        port_forwards=['8091:8091'], labels=['services'])
 
     # ---- Adserver ----
     local_resource('adserver-build',

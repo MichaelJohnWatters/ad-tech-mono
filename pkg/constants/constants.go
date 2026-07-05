@@ -326,6 +326,9 @@ const (
 	// NATSGroupReporting — reporting service's event-ingestion consumers
 	// (impression, click, conversion, auction.complete, auction.win).
 	NATSGroupReporting = "reporting"
+	// NATSGroupWebhooks — webhooks dispatcher's consumers of account-scoped
+	// business events (budget/balance depleted, campaign state changed).
+	NATSGroupWebhooks = "webhooks"
 )
 
 // ============================================================
