@@ -87,7 +87,10 @@ var publisherNav = []NavItem{
 type portalData struct {
 	AccountID  string
 	IsCustomer bool
-	Nav        []map[string]any
+	// IsAgency drives the advertiser portal's account switcher — an agency
+	// session picks which managed advertiser account it acts as.
+	IsAgency bool
+	Nav      []map[string]any
 }
 
 // portalHandler renders a persona portal page with session claims driving the
@@ -107,6 +110,7 @@ func portalHandler(templates *templateManager, signingKey, page string, nav []Na
 		if claims != nil {
 			data.AccountID = claims.AccountID
 			data.IsCustomer = claims.AccountType == customerType
+			data.IsAgency = claims.AccountType == auth.AccountAgency
 			items = filterNav(nav, claims)
 		}
 		// app-sidebar's items are lowercase-keyed dicts (see the partial);

@@ -14,6 +14,14 @@
     <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center justify-between px-6">
       <div id="crumb" class="text-sm text-gray-500 dark:text-gray-400">Advertiser · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Dashboard</span></div>
       <div class="flex items-center gap-3">
+        {{ if .IsAgency }}
+        <label class="flex items-center gap-2 text-sm">
+          <span class="text-xs text-gray-500 dark:text-gray-400">Acting as</span>
+          <select id="actAsSwitcher" onchange="setActAs(this.value)" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">— select a client —</option>
+          </select>
+        </label>
+        {{ end }}
         {{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}
       </div>
     </div>
@@ -353,6 +361,7 @@
 const PORTAL = {
   accountID: "{{ .AccountID }}",
   scoped: {{ if .IsCustomer }}true{{ else }}false{{ end }},
+  isAgency: {{ if .IsAgency }}true{{ else }}false{{ end }},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -854,6 +863,31 @@ async function submitTopup(ev) {
   } catch (err) { toast('Topup failed: ' + err.message, 'error'); }
 }
 
+// ---- Agency act-as switcher ----
+// Agencies reuse this portal; the switcher picks which managed advertiser
+// account to operate as. Selection is an act_as_account cookie the gateway
+// proxy validates + forwards on every API call, so all screens below scope to
+// the chosen client with no per-fetch wiring.
+const getCookie = (name) => document.cookie.split('; ').find(c => c.startsWith(name + '='))?.split('=')[1] || '';
+function setActAs(id) {
+  document.cookie = 'act_as_account=' + encodeURIComponent(id) + '; path=/; max-age=43200; samesite=lax';
+  location.reload(); // re-pull every screen as the newly selected client
+}
+async function initAgencySwitcher() {
+  const sel = $('actAsSwitcher');
+  if (!sel) return;
+  try {
+    const managed = await fetchJSON('/v1/api/agency-accounts') || [];
+    const current = decodeURIComponent(getCookie('act_as_account'));
+    sel.innerHTML = '<option value="">— select a client —</option>' +
+      managed.map(m => `<option value="${esc(m.managed_account_id)}" ${m.managed_account_id === current ? 'selected' : ''}>${esc(m.managed_account_name)}</option>`).join('');
+    if (!managed.length) {
+      sel.innerHTML = '<option value="">no clients assigned</option>';
+    }
+  } catch (err) { toast('Could not load managed accounts: ' + err.message, 'error'); }
+}
+
+if (PORTAL.isAgency) initAgencySwitcher();
 showSection(location.hash.slice(1) || 'dashboard');
 </script>
 </body>

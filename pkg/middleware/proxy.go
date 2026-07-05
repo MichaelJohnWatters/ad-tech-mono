@@ -12,6 +12,11 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
+// actAsCookieName is the portal switcher's selected managed account. The proxy
+// resolves it (validated against the agency's managed set) the same as the
+// X-Act-As-Account header.
+const actAsCookieName = "act_as_account"
+
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
 // to a backend service. Used by the gateway to proxy API calls to internal services.
 func ReverseProxy(target string, log *slog.Logger) http.Handler {
@@ -62,7 +67,16 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 			// advertiser tenant so downstream scoping applies to it. A target
 			// outside the managed set is rejected (never silently ignored).
 			if claims.AccountType == auth.AccountAgency {
-				if target := strings.TrimSpace(r.Header.Get(constants.HeaderActAs)); target != "" {
+				// Target comes from the X-Act-As-Account header (API clients) or
+				// the act_as_account cookie (the portal switcher, which can't set
+				// headers on navigations). Header wins if both are present.
+				target := strings.TrimSpace(r.Header.Get(constants.HeaderActAs))
+				if target == "" {
+					if ck, err := r.Cookie(actAsCookieName); err == nil {
+						target = strings.TrimSpace(ck.Value)
+					}
+				}
+				if target != "" {
 					if !auth.CanAccessAccount(claims, target) {
 						http.Error(w, "forbidden: not one of your managed accounts", http.StatusForbidden)
 						return
