@@ -319,8 +319,11 @@ APIs + portal forms don't yet expose:
   gates bidding — verified). ✅ editing targeting via PATCH shipped (targeting_rules updated in the campaign PATCH tx +
   edit-drawer UI). ✅ OS / keyword (include+exclude) / inventory-type / segment
   (include+exclude) targeting shipped (create + PATCH API + portal + SSP stamps
-  os/keywords/segments into the OpenRTB request; gates bidding — verified live). Remaining:
-  `timezone`, non-display formats, freq-caps/bid-modifiers, creative weights/rotation.
+  os/keywords/segments into the OpenRTB request; gates bidding — verified live).
+  ✅ bid modifiers device/geo/time-of-day + campaign `timezone` shipped (create + PATCH API +
+  portal; DSP applies before the floor check, time windows in the campaign tz — verified live).
+  Remaining: non-display formats (needs creative-format handling), frequency caps
+  (per-campaign, needs ad-server enforcement), creative weights/rotation (needs multi-creative upload).
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
