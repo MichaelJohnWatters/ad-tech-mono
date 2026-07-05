@@ -356,6 +356,10 @@ func main() {
 	// platform-wide by design).
 	mux.Handle(routes.APIAuditLog, authMiddleware(http.HandlerFunc(auditLogHandler(pgAuditLogStore{db: gwDB}, log))))
 
+	// Revshare — staff editor for publisher revenue-share splits (support:read
+	// list / support:update edit); invalidates the billing-rates cache.
+	mux.Handle(routes.APIRevshare, authMiddleware(http.HandlerFunc(revshareHandler(pgRevshareStore{db: gwDB}, secretsBus, log))))
+
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug

@@ -135,6 +135,7 @@ func publisherPortalHandler(templates *templateManager, signingKey string) http.
 var staffNav = []NavItem{
 	{Label: "Moderation", Href: "#moderation", Icon: "⚑", Perm: "moderation:read"},
 	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
+	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Tools", Href: "#tools", Icon: "⚙", Perm: "config:read"},
 }

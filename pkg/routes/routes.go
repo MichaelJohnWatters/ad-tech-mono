@@ -109,6 +109,12 @@ const (
 	// ?account_id=&action=&resource_type=&resource_id=&limit=.
 	APIAuditLog = apiPrefix + "/api/audit"
 
+	// APIRevshare is the staff revenue-share editor (GET list on support:read,
+	// PATCH ?id= on support:update). Platform-wide commercial term; updates
+	// publishers.revshare_config and invalidates the billing-rates cache so
+	// reporting's ContractLoader re-reads the split.
+	APIRevshare = apiPrefix + "/api/revshare"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"
