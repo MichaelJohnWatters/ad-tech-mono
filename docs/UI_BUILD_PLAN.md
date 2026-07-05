@@ -314,11 +314,13 @@ Self-serve *breadth* is done (signup → site/placement/campaign/creative→mode
 and the money loop). What remains is *depth* — fields the seed/schema support but the create/edit
 APIs + portal forms don't yet expose:
 
-- **Campaign depth:** `bid_strategy` (cpc/cpa/vcpm/cpcv — API hardcodes cpm), `pacing_mode`,
-  `total_budget`, flight dates, `timezone`, non-display formats; targeting beyond geo/device
-  (segments/domains/categories/keywords/OS/freq-caps/bid-modifiers); creative weights/rotation.
-  Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + advertiser
-  portal forms.
+- **Campaign depth:** ✅ `bid_strategy`/`pacing_mode`/`total_budget`/flight-dates shipped;
+  ✅ targeting geo/device/domain/category **include+exclude** shipped (create API + portal,
+  gates bidding — verified). Remaining: `timezone`, non-display formats, targeting for
+  segments/keywords/OS/inventory-type/freq-caps/bid-modifiers, creative weights/rotation, and
+  **editing targeting post-create via PATCH** (create-time only today; targeting_rules is a
+  separate row the campaign PATCH doesn't touch yet). Touch: `createCampaignRequest`/
+  `patchCampaignRequest` in `cmd/dsp/management.go` + advertiser portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
 - **Placement:** `floor_config` (time/device/geo floors). **Publisher:** revshare / payment-terms
   editing (staff). **Direct-sold** `publisher_line_items` CRUD (+ its orphan invalidate subject).
