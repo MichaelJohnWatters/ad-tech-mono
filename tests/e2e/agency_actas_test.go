@@ -118,6 +118,28 @@ func TestAgencyActAsViaAPI(t *testing.T) {
 		t.Errorf("no-act-as campaign count = %d, want 0 (agency's own account is empty)", n)
 	}
 
+	// Portfolio data path: the agency roll-up runs a report per managed account
+	// via act-as. A managed target is scoped + allowed (200); a non-managed one
+	// is rejected by the proxy (403).
+	reportAs := func(actAs string) int {
+		req, _ := http.NewRequest(http.MethodPost, h.URLs.Gateway+"/v1/api/reports",
+			strings.NewReader(`{"table":"impressions","metrics":["count"]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Act-As-Account", actAs)
+		resp, err := ag.Do(req)
+		if err != nil {
+			t.Fatalf("report act-as: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := reportAs(managed.ID); code != http.StatusOK {
+		t.Errorf("report as managed account = %d, want 200", code)
+	}
+	if code := reportAs(other.ID); code != http.StatusForbidden {
+		t.Errorf("report as non-managed account = %d, want 403", code)
+	}
+
 	// The portal switcher acts-as via an act_as_account COOKIE (not a header) —
 	// verify the proxy honours that path too. Setting the cookie on the jar
 	// makes a header-less GET scope to the managed account.

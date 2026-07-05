@@ -54,6 +54,9 @@ func requireLoginPage(signingKey string, h http.HandlerFunc) http.HandlerFunc {
 // they'd 403 on. Hrefs are hash-sections within the single portal page.
 var advertiserNav = []NavItem{
 	{Label: "Dashboard", Href: "#dashboard", Icon: "▤"},
+	// Portfolio is agency-only (agency:read) — a roll-up across the agency's
+	// managed accounts. Advertisers lack agency:read so it stays hidden.
+	{Label: "Portfolio", Href: "#portfolio", Icon: "▦", Perm: "agency:read"},
 	{Label: "Campaigns", Href: "#campaigns", Icon: "◎", Perm: "campaigns:read"},
 	{Label: "Creatives", Href: "#creatives", Icon: "▣", Perm: "creatives:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},

@@ -42,6 +42,16 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Portfolio (agency-only) ============ -->
+    <section id="section-portfolio" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Managed accounts — today") }}
+      <p class="mb-3 text-xs text-gray-400">Spend, impressions, and clicks across every advertiser account you manage. Use the switcher (top right) to drill into one.</p>
+      {{ template "table-start" (dict "headers" (slice "Client" "Spend" "Impressions" "Clicks" "CTR")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Campaigns ============ -->
     <section id="section-campaigns" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Campaigns") }}
@@ -383,7 +393,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'campaigns', 'creatives', 'reports', 'billing'];
+const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'reports', 'billing'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -399,8 +409,8 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({dashboard: loadDashboard, campaigns: loadCampaigns, creatives: loadCreatives,
-      reports: loadSaved, billing: loadBilling}[name])?.();
+    ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
+      creatives: loadCreatives, reports: loadSaved, billing: loadBilling}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -409,6 +419,56 @@ window.addEventListener('hashchange', () => showSection(location.hash.slice(1)))
 function reportQuery(body) {
   if (PORTAL.scoped) body.filters = {...(body.filters || {}), account_id: PORTAL.accountID};
   return fetchJSON('/v1/api/reports', {method: 'POST', body: JSON.stringify(body)});
+}
+
+// reportQueryFor runs a report as a specific managed account (agency act-as via
+// the header, which the gateway validates against the agency's managed set).
+function reportQueryFor(acctID, body) {
+  return fetchJSON('/v1/api/reports', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Act-As-Account': acctID},
+    body: JSON.stringify(body),
+  });
+}
+
+// ---- Portfolio (agency-only): roll-up across managed accounts ----
+async function loadPortfolio() {
+  const tbody = tbodyOf('portfolio');
+  try {
+    const managed = await fetchJSON('/v1/api/agency-accounts') || [];
+    if (!managed.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No managed accounts assigned yet.</td></tr>';
+      return;
+    }
+    // One spend+impressions and one clicks query per managed account, today.
+    const rows = await Promise.all(managed.map(async m => {
+      const [imps, clicks] = await Promise.all([
+        reportQueryFor(m.managed_account_id, {table: 'impressions', metrics: ['count', 'sum_cost'], time_from: todayStart()}),
+        reportQueryFor(m.managed_account_id, {table: 'clicks', metrics: ['count'], time_from: todayStart()}),
+      ]);
+      const i = firstRow(imps), c = firstRow(clicks);
+      return {name: m.managed_account_name, spend: +i.sum_cost || 0, imps: +i.count || 0, clicks: +c.count || 0};
+    }));
+    const tot = rows.reduce((a, r) => ({spend: a.spend + r.spend, imps: a.imps + r.imps, clicks: a.clicks + r.clicks}), {spend: 0, imps: 0, clicks: 0});
+    const ctr = (clk, imp) => imp ? (100 * clk / imp).toFixed(2) + '%' : '—';
+    tbody.innerHTML = rows.map(r => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(r.name)}</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(r.spend)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(r.imps)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(r.clicks)}</td>
+        <td class="px-3 py-2 font-mono">${ctr(r.clicks, r.imps)}</td>
+      </tr>`).join('') + `
+      <tr class="border-t-2 border-gray-200 dark:border-gray-700 font-medium">
+        <td class="px-3 py-2">Total (${rows.length})</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(tot.spend)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(tot.imps)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(tot.clicks)}</td>
+        <td class="px-3 py-2 font-mono">${ctr(tot.clicks, tot.imps)}</td>
+      </tr>`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
 }
 const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
 const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
