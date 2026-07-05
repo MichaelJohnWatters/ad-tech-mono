@@ -15225,9 +15225,9 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 |---|---|---|---|---|
 | 45 | Identity graph wired into serving | ⚠️ in-memory, tests only | `pkg/identity/*.go`; add `identity_edges` table + warm cache in DSP/exchange | e2e asserts cross-device resolve affects targeting |
 | 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ✅ SHIPPED (2026-07-05) | `pkg/privacydelete` (Deleter purges identity_graph + audience_segment_members for pending level-3 users, marks completed, announces `deletion_completed`; Verifier residual-checks + stamps verified_at) + both one-shot binaries + Tilt resources | ✅ `TestPrivacyDeletionPropagation` flipped |
-| 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven | F-series batch-sweep assertion |
+| 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary; **blocked on data** | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven. **NOTE (2026-07-06):** a velocity/IP sweep can't be built yet — the analytics `impressions`/`clicks` tables have **no IP column** (only geo/device), so there's nothing to aggregate suspicious IPs from. First add IP capture to the event schema, THEN the batch job scores + writes `fraud_blocklists` (tracker warm cache already consumes them). Detection logic lives in `pkg/fraud` (was under active app-ads.txt work — coordinate). | F-series batch-sweep assertion |
 | 61 | `sellers.json` from DB | ✅ SHIPPED (2026-07-05) | `cmd/gateway/sellers.go` — `pgSellerStore` reads active `publishers` (seller_id = UUID); adding a publisher changes the output with no code change. DB-down → valid file with empty seller list, not stale hardcodes | ✅ done (handler unit tests: from-DB + empty-on-error) |
-| 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
+| 63 | `cmd/optimise` pipeline CronJob | ⚠️ partly redundant; one clean seam | **NOTE (2026-07-06):** the **creative side is already live** — `cmd/adserver` `warmStartBandit` seeds the bandit from reporting's per-creative CTR on boot, so an offline creative-recompute job is redundant. The one real gap is **routing warm-start**: `optimise.SmartRouter.Seed([]DSPStats)` exists but `cmd/exchange/main.go` never calls it (line ~151 just `NewSmartRouter()`). Clean job = aggregate `dsp_calls` via `analytics.DSPCallAggregator` → persist per-(channel,DSP) stats → add a boot-seed call in `cmd/exchange` (that file was under active schain work — coordinate). | `routing_shading_test.go` offline-recompute assertion (none skipped today; the live-stats tests already pass) |
 | 76 | `cmd/webhooks` dispatcher | ✅ SHIPPED (2026-07-05) | `pkg/webhooks.Dispatcher` (store-backed, HMAC-signed envelope, retry+backoff, delivery log) + `cmd/webhooks` consuming `budget.depleted`/`balance.depleted`/`campaign.state_changed` from NATS → `webhooks`/`webhook_deliveries` tables; k8s pod + Tilt (port 8091). Remaining: more event types, delivery-log view API, DLQ on give-up | ✅ done (unit: httptest receiver verifies signed delivery + retry) |
 | 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
 | 72 | Chaos framework (`harness.ChaosKill*`) | ✅ SHIPPED (2026-07-05) | `tests/e2e/harness/chaos.go` — `WithChaos`/`ChaosKill{Redis,NATS,Postgres,Minio}`/`ChaosWaitReady` wrap `kubectl -n adtech delete pod` + recovery wait; the 4 `chaos_test.go` cases now assert graceful degradation (self-skip w/o kubectl) | ✅ 4 chaos e2e cases flipped |
@@ -15278,8 +15278,15 @@ Jaeger client wrapper + single-step migration mode.
 3. ~~`sellers.json` from DB (61)~~ ✅ done 2026-07-05 (served live from the publishers table).
 4. ~~`cmd/webhooks` (76)~~ ✅ done 2026-07-05 (dispatcher delivers signed events with retries).
 5. ~~`cmd/privacy-delete` / `-verify` (50)~~ ✅ done 2026-07-05 (level-3 deletion pipeline + verifier; e2e flipped).
-6. `cmd/fraud` + `cmd/optimise` CronJobs (58/63) — wrap existing libs.
-7. Identity-graph wiring (45) — lowest urgency, nothing depends on it.
+6. Contract-write helper (`harness.SetPublisherContract`) ✅ done 2026-07-06; `TestBillingGuaranteedMinimumSubsidy` flipped.
+
+**Next up (2026-07-06), in confidence order:**
+7. **Finish the billing-model tests** — collision-free, flips real skips. (a) deal-type modifier: verify `deal_type` propagates impression→`SpendEvent`, then flip `TestBillingDealTypeFeeModifier`; (b) tiered-RS: populate `Contract.MonthImpressions` on the settle path + `FireNAuctions` to cross a tier; (c) multi-currency: seed `exchange_rates` + a non-USD campaign. Helper already exists for (a)/(b).
+8. `cmd/optimise` routing warm-start (63) — small once `cmd/exchange` is free (see ledger note); creative side already done.
+9. `cmd/fraud` batch (58) — **needs IP added to the event schema first** (see ledger note), then wraps `pkg/fraud`.
+10. Identity-graph wiring (45) — lowest urgency, nothing depends on it.
+
+> Coordination: 58 and 63 both touch files (`pkg/fraud`, `cmd/exchange`) that were under concurrent edit on 2026-07-06 — sequence them after that work merges to avoid conflicts.
 
 ---
 
