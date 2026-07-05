@@ -335,10 +335,10 @@ APIs + portal forms don't yet expose:
   platform default — verified live). ✅ creative attach + rotation shipped (campaign PATCH
   `creatives [{creative_id, weight}]` replaces line_item_creatives, approved+owned only;
   `creative_rotation` mode; advertiser portal edit-drawer creative picker — DSP serves the
-  attached creative, verified live). Non-display formats now largely enabled (creative upload
-  already supports video/audio/native + attach works); remaining nicety: campaign-level
-  `format` field (line_items.format hardcoded 'display' at create — the DSP matches on the
-  creative's format so serving already works).
+  attached creative, verified live). ✅ Non-display campaign formats shipped: create accepts
+  `format` (display|native|video|audio) → line_items.format; display auto-generates a placeholder
+  banner, non-display starts creative-less (attach a real one via the creatives PATCH); portal
+  Format select; models.Campaign exposes Format — verified live.
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal).
   Video settings landed at the **placement** instead of `deal_config` (the SSP builds the video
