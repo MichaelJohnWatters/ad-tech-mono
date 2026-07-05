@@ -320,6 +320,12 @@ func main() {
 	mux.Handle(routes.APIDeals, authMiddleware(http.HandlerFunc(dealsHandler(pgDealStore{db: gwDB}, secretsBus, log))))
 	mux.Handle(routes.APIDeals+"/", authMiddleware(http.HandlerFunc(dealByIDHandler(pgDealStore{db: gwDB}, secretsBus, log))))
 
+	// Direct-sold line items — publisher's own commitments (sponsorship/
+	// guaranteed/preferred/house), served by the publisher-adserver. JWT-gated
+	// on deals:*, tenant-scoped; writes invalidate the publisher-line-items cache.
+	mux.Handle(routes.APIDirectLineItems, authMiddleware(http.HandlerFunc(directLineItemsHandler(pgDirectLineItemStore{db: gwDB}, secretsBus, log))))
+	mux.Handle(routes.APIDirectLineItems+"/", authMiddleware(http.HandlerFunc(directLineItemByIDHandler(pgDirectLineItemStore{db: gwDB}, secretsBus, log))))
+
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
 	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, secretsBus, log))))
 

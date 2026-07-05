@@ -56,6 +56,19 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Direct-sold line items ============ -->
+    <section id="section-directsold" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Direct-sold line items") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">Your own commitments — sponsorships, guaranteed campaigns, preferred deals, and house ads. The publisher ad server arbitrates these against programmatic on every request.</p>
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New line item" "variant" "secondary" "size" "sm" "onclick" "openNewDirect()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Tier" "Committed" "CPM" "Status" "")) }}
+        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Quality controls ============ -->
     <section id="section-quality" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Add / replace a list") }}
@@ -299,6 +312,73 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- New direct-sold line item modal -->
+{{ template "modal-start" (dict "id" "newDirect" "title" "New direct-sold line item") }}
+  <form onsubmit="createDirect(event)">
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Site (publisher)</label>
+    <select id="ndl_publisher" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
+    {{ template "form-field" (dict "label" "Line item name" "name" "ndl_name" "placeholder" "Nike homepage sponsorship — Q3" "required" true) }}
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Priority tier</span>
+        <select id="ndl_tier" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="sponsorship">Sponsorship</option><option value="guaranteed">Guaranteed</option>
+          <option value="preferred">Preferred</option><option value="house">House</option>
+        </select>
+      </label>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
+        <select id="ndl_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="even">Even</option><option value="asap">ASAP</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "CPM (USD — blank for house)" "name" "ndl_cpm" "type" "number") }}
+      {{ template "form-field" (dict "label" "Impressions committed (0 = none)" "name" "ndl_impr" "type" "number" "value" "0") }}
+    </div>
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Delivery start" "name" "ndl_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Delivery end" "name" "ndl_end" "type" "date") }}
+    </div>
+    {{ template "form-field" (dict "label" "Demand source (label — brand/advertiser)" "name" "ndl_demand" "placeholder" "Nike") }}
+    {{ template "form-field" (dict "label" "Placement allowlist (your placement UUIDs — blank = any placement)" "name" "ndl_placements" "placeholder" "leave blank for all placements") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newDirect').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create line item" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
+<!-- Edit direct-sold line item drawer -->
+{{ template "drawer-start" (dict "id" "editDirect" "title" "Edit direct-sold line item") }}
+  <form onsubmit="saveDirect(event)">
+    <input type="hidden" id="edlID">
+    <div id="edlName" class="mb-3 text-sm font-medium"></div>
+    {{ template "form-field" (dict "label" "Name" "name" "edl_name") }}
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Priority tier</span>
+        <select id="edl_tier" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="sponsorship">Sponsorship</option><option value="guaranteed">Guaranteed</option>
+          <option value="preferred">Preferred</option><option value="house">House</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "CPM (USD)" "name" "edl_cpm" "type" "number") }}
+    </div>
+    {{ template "form-field" (dict "label" "Impressions committed" "name" "edl_impr" "type" "number") }}
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Delivery start" "name" "edl_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Delivery end" "name" "edl_end" "type" "date") }}
+    </div>
+    {{ template "form-field" (dict "label" "Placement allowlist (UUIDs)" "name" "edl_placements") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editDirect').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "type" "submit") }}
+    </div>
+  </form>
+{{ template "drawer-end" . }}
+
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
 <script>
@@ -350,12 +430,12 @@ function onPublisherChange() {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'placements', 'deals', 'quality', 'reports', 'adtag', 'earnings'];
+const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'reports', 'adtag', 'earnings'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = name === 'adtag' ? 'Ad tag' : name[0].toUpperCase() + name.slice(1);
+  $('crumbSection').textContent = name === 'adtag' ? 'Ad tag' : name === 'directsold' ? 'Direct sold' : name[0].toUpperCase() + name.slice(1);
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -367,7 +447,8 @@ function showSection(name) {
   if (!loaded[name]) {
     loaded[name] = true;
     ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
-      quality: loadQuality, reports: loadSaved, adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
+      directsold: loadDirect, quality: loadQuality, reports: loadSaved,
+      adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -759,6 +840,106 @@ async function createDeal(ev) {
     toast('Deal created — the exchange picks it up within a second', 'success');
     loadDeals();
   } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+
+// ---- Direct-sold line items ----
+let directCache = [];
+async function loadDirect() {
+  const tbody = tbodyOf('directsold');
+  try {
+    directCache = await fetchJSON('/v1/api/direct-line-items') || [];
+    tbody.innerHTML = directCache.length ? directCache.map(d => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(d.name)}${d.demand_source ? ` <span class="text-xs text-gray-400">· ${esc(d.demand_source)}</span>` : ''}</td>
+        <td class="px-3 py-2 font-mono text-xs uppercase">${esc(d.priority_tier)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(d.impressions_committed)}</td>
+        <td class="px-3 py-2 font-mono">${d.cpm != null ? fmtUSD(d.cpm) : '—'}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${d.status === 'active' ? 'bg-success/15 text-success' : d.status === 'paused' ? 'bg-warn/15 text-warn' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(d.status)}</span></td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="toggleDirect('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${d.status === 'paused' ? 'Resume' : 'Pause'}</button>
+          <button onclick="openEditDirect('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No direct-sold line items yet — add one with “+ New line item”.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function openNewDirect() {
+  if (!publishers.length) await loadPublishers();
+  if (!publishers.length) { toast('No publisher (site) on this account yet.', 'error'); return; }
+  $('ndl_publisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  $('newDirect').classList.remove('hidden');
+}
+
+async function createDirect(ev) {
+  ev.preventDefault();
+  const body = {
+    publisher_id: $('ndl_publisher').value,
+    name: $('ndl_name').value.trim(),
+    priority_tier: $('ndl_tier').value,
+    pacing_mode: $('ndl_pacing').value,
+    demand_source: $('ndl_demand').value.trim(),
+    impressions_committed: parseInt($('ndl_impr').value, 10) || 0,
+    placement_ids: csvIDs($('ndl_placements').value),
+  };
+  const cpm = parseFloat($('ndl_cpm').value);
+  if (!isNaN(cpm)) body.cpm = cpm;
+  if ($('ndl_start').value) body.delivery_start = $('ndl_start').value;
+  if ($('ndl_end').value) body.delivery_end = $('ndl_end').value;
+  try {
+    await fetchJSON('/v1/api/direct-line-items', {method: 'POST', body: JSON.stringify(body)});
+    $('newDirect').classList.add('hidden');
+    toast('Line item created — the publisher ad server picks it up within a second', 'success');
+    loadDirect();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+
+async function toggleDirect(id) {
+  const d = directCache.find(x => x.id === id);
+  if (!d) return;
+  const next = d.status === 'paused' ? 'active' : 'paused';
+  try {
+    await fetchJSON('/v1/api/direct-line-items/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({status: next})});
+    toast(next === 'paused' ? 'Line item paused' : 'Line item resumed', 'success');
+    loadDirect();
+  } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+}
+
+function openEditDirect(id) {
+  const d = directCache.find(x => x.id === id);
+  if (!d) return;
+  $('edlID').value = id;
+  $('edlName').textContent = d.name;
+  $('edl_name').value = d.name;
+  $('edl_tier').value = d.priority_tier;
+  $('edl_cpm').value = d.cpm != null ? d.cpm : '';
+  $('edl_impr').value = d.impressions_committed;
+  $('edl_start').value = d.delivery_start || '';
+  $('edl_end').value = d.delivery_end || '';
+  $('edl_placements').value = (d.placement_ids || []).join(', ');
+  $('editDirect').classList.remove('hidden');
+}
+
+async function saveDirect(ev) {
+  ev.preventDefault();
+  const body = {
+    name: $('edl_name').value.trim(),
+    priority_tier: $('edl_tier').value,
+    impressions_committed: parseInt($('edl_impr').value, 10) || 0,
+    placement_ids: csvIDs($('edl_placements').value),
+  };
+  const cpm = parseFloat($('edl_cpm').value);
+  if (!isNaN(cpm)) body.cpm = cpm;
+  if ($('edl_start').value) body.delivery_start = $('edl_start').value;
+  if ($('edl_end').value) body.delivery_end = $('edl_end').value;
+  try {
+    await fetchJSON('/v1/api/direct-line-items/' + encodeURIComponent($('edlID').value), {method: 'PATCH', body: JSON.stringify(body)});
+    $('editDirect').classList.add('hidden');
+    toast('Line item updated', 'success');
+    loadDirect();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 
 // ---- Quality controls ----

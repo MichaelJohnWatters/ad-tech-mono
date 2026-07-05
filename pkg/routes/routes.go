@@ -55,6 +55,11 @@ const (
 	// tenant-scoped; a create must reference a publisher the caller owns.
 	APIDeals = apiPrefix + "/api/deals"
 
+	// APIDirectLineItems is publisher direct-sold line-item management (GET
+	// list, POST create; PATCH on the /{id} subtree). JWT-gated on deals:*;
+	// tenant-scoped; served by the publisher-adserver arbitration ladder.
+	APIDirectLineItems = apiPrefix + "/api/direct-line-items"
+
 	// APIModeration is the staff creative-review queue (GET pending, POST
 	// approve/reject). JWT-gated on moderation:* — platform-wide (not tenant
 	// scoped): staff review every account's creatives.
