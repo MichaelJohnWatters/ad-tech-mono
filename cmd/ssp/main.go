@@ -35,6 +35,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
@@ -373,6 +374,15 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			MaxDuration: 60,
 			Feed:        2, // podcast
 		}
+	case channel == "native" || p.Format == "native":
+		// Standard in-feed native request: title + main image + sponsored-by
+		// (required), plus body and CTA. The OpenRTB Native request object is
+		// itself JSON, carried as a string in Imp.Native.Request.
+		reqJSON, err := native.MarshalRequest(native.StandardRequest(native.Spec{WantBody: true, WantCTA: true}))
+		if err != nil {
+			reqLog.Error("native request marshal failed", "error", err)
+		}
+		bidReq.Imp[0].Native = &openrtb.Native{Request: reqJSON, Ver: native.Ver}
 	case p.Format == "display" || p.Format == "banner" || p.Format == "":
 		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
 	}
