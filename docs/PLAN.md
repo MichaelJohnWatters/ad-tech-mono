@@ -15120,7 +15120,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 54. **Dev tools (Phase 5):** Publisher Simulator - add user profile switching, consent toggle, geo switching
 55. **Dev tools (Phase 5):** Audience debug in overlay (show user's segments, access-filtered per DSP)
 
-### ⚠️ Phase 6: Fraud and Quality  — real-time done; steps 58, 61 outstanding (see ledger)
+### ⚠️ Phase 6: Fraud and Quality  — real-time done; step 61 shipped 2026-07-05, step 58 outstanding (see ledger)
 56. Real-time fraud checks (`pkg/fraud/realtime.go`) - bot detection, IP blocklist, rate limiting
 57. Fraud scoring (`pkg/fraud/scoring.go`)
 58. Batch fraud detection (`cmd/fraud/` CronJob)
@@ -15226,7 +15226,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 | 45 | Identity graph wired into serving | ⚠️ in-memory, tests only | `pkg/identity/*.go`; add `identity_edges` table + warm cache in DSP/exchange | e2e asserts cross-device resolve affects targeting |
 | 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ❌ empty (`.gitkeep`) | reuse RLS tenant-tx from `pkg/audience/store/postgres`; `opt_out_registry` exists | `privacy_test.go` deletion-propagation flips |
 | 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven | F-series batch-sweep assertion |
-| 61 | `sellers.json` from DB | ⚠️ serves 4 hardcoded pubs | `cmd/gateway/main.go:203`; source from `publishers` warm cache | adding a publisher changes output, no code change |
+| 61 | `sellers.json` from DB | ✅ SHIPPED (2026-07-05) | `cmd/gateway/sellers.go` — `pgSellerStore` reads active `publishers` (seller_id = UUID); adding a publisher changes the output with no code change. DB-down → valid file with empty seller list, not stale hardcodes | ✅ done (handler unit tests: from-DB + empty-on-error) |
 | 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
 | 76 | `cmd/webhooks` dispatcher | ✅ SHIPPED (2026-07-05) | `pkg/webhooks.Dispatcher` (store-backed, HMAC-signed envelope, retry+backoff, delivery log) + `cmd/webhooks` consuming `budget.depleted`/`balance.depleted`/`campaign.state_changed` from NATS → `webhooks`/`webhook_deliveries` tables; k8s pod + Tilt (port 8091). Remaining: more event types, delivery-log view API, DLQ on give-up | ✅ done (unit: httptest receiver verifies signed delivery + retry) |
 | 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
@@ -15271,7 +15271,7 @@ reservation-expiry); an `exchange_rates` seed + non-USD campaign
 
 1. `harness.ChaosKill*` helpers (72) — unblocks ~13 skipped e2e cases at once.
 2. ~~SMTP + Mailpit (77)~~ ✅ done 2026-07-05 (scheduled reports now actually deliver).
-3. `sellers.json` from DB (61) — small, removes a hardcode.
+3. ~~`sellers.json` from DB (61)~~ ✅ done 2026-07-05 (served live from the publishers table).
 4. ~~`cmd/webhooks` (76)~~ ✅ done 2026-07-05 (dispatcher delivers signed events with retries).
 5. `cmd/privacy-delete` / `-verify` (50) — compliance-critical, unblocks step 105.
 6. `cmd/fraud` + `cmd/optimise` CronJobs (58/63) — wrap existing libs.
