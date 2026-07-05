@@ -296,7 +296,7 @@ portals they unblock. Each becomes its own small design when picked up.
 | **Real auth/login + session** | all portals | ✅ SHIPPED (F4a) — login → bcrypt verify → JWT → cookie; logout. Remaining: refresh, agency act-as, password reset. |
 | **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
 | **Creative upload** | advertiser | ✅ SHIPPED — `GET/POST /v1/api/creatives` (tenant-scoped library list with review state + upload → pending_review → moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
-| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status, tenant-checked, cache-invalidating). Remaining: allowlists, PG volume. |
+| **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause + depth) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status **+ advertiser/placement allowlists, flight dates, PG guaranteed_volume**; placement allowlist ownership-checked; empty allowlist = match-all, which the exchange matcher already consumes; cache-invalidating). Remaining: `deal_config` (video break/skip), a multiselect placement picker in the portal. |
 | **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional cron schedule + delivery. Portal UI shipped (save/run/delete in both report consoles). Remaining: a runner that fires the schedule → email/export. |
 | **Moderation queue API** | staff | ✅ SHIPPED — `GET/POST /v1/api/moderation`, list pending creatives + approve/reject (reason required to reject), platform-wide. Remaining: appeal flow, bulk actions. |
 | **Fraud rules CRUD** | staff | ✅ SHIPPED — `GET/POST/DELETE /v1/api/fraud/blocklists`, manages `fraud_blocklists` (ip/ua/domain/app_bundle), invalidates the tracker warm cache. Remaining: rule expiry, ads.txt overrides. |
@@ -319,7 +319,7 @@ APIs + portal forms don't yet expose:
   (segments/domains/categories/keywords/OS/freq-caps/bid-modifiers); creative weights/rotation.
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + advertiser
   portal forms.
-- **Deal depth:** advertiser/placement allowlists, flight dates, PG `guaranteed_volume`, `deal_config`.
+- **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
 - **Placement:** `floor_config` (time/device/geo floors). **Publisher:** revshare / payment-terms
   editing (staff). **Direct-sold** `publisher_line_items` CRUD (+ its orphan invalidate subject).
 - **Loose ends:** `adtech.cache.invalidate.ads-txt` has no publisher (adstxt cron candidate); IO
