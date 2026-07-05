@@ -339,6 +339,15 @@ local_resource('adstxt-crawl',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres', 'nats'])
 
+local_resource('report-runner',
+    # Scheduled-report runner (normally a periodic CronJob). Runs every saved
+    # report whose interval schedule (@hourly/@daily/@weekly/@monthly) is due
+    # and emails the result. No Mailpit locally → the in-memory sender logs each
+    # delivery. 127.0.0.1 forces IPv4 (see adstxt-crawl).
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable REPORT_RUNNER_REPORTING_URL=http://127.0.0.1:8086 go run ./cmd/report-runner',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres', 'reporting'])
+
 # ============================================================
 # Simulation
 # ============================================================
