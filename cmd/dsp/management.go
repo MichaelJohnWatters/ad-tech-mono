@@ -231,6 +231,42 @@ func (b *bidModifiersInput) validateAndJSON() (string, error) {
 	return string(j), nil
 }
 
+// freqCapInput is the advertiser-configured per-campaign frequency cap. It is
+// stored in targeting_rules.frequency_caps as the line_item-dimension entry and
+// enforced by the ad server (per-user impression counter). Limit <= 0 clears
+// the cap (falls back to the platform default).
+type freqCapInput struct {
+	Limit  int    `json:"limit"`
+	Window string `json:"window,omitempty"` // hour | day | week; default day
+}
+
+// validateAndJSON validates the cap and marshals it to the frequency_caps JSONB
+// array shape. A nil/zero cap yields "[]" (no per-campaign cap).
+func (f *freqCapInput) validateAndJSON() (string, error) {
+	if f == nil || f.Limit <= 0 {
+		return "[]", nil
+	}
+	if f.Limit > 100000 {
+		return "", fmt.Errorf("frequency cap limit %d too large", f.Limit)
+	}
+	win := f.Window
+	if win == "" {
+		win = "day"
+	}
+	switch win {
+	case "hour", "day", "week":
+	default:
+		return "", fmt.Errorf("frequency cap window must be hour, day or week")
+	}
+	b, err := json.Marshal([]map[string]any{
+		{"dimension": "line_item", "window": win, "limit": f.Limit},
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 type createCampaignRequest struct {
 	Name          string   `json:"name"`
 	BaseBid       float64  `json:"base_bid"`
@@ -259,6 +295,9 @@ type createCampaignRequest struct {
 	// BidModifiers adjust the bid by percentage per dimension (device/geo);
 	// applied by the DSP before the floor check. nil = no modifiers.
 	BidModifiers *bidModifiersInput `json:"bid_modifiers,omitempty"`
+	// FreqCap is the advertiser's per-user impression cap for this campaign,
+	// enforced by the ad server. nil = platform-default cap.
+	FreqCap *freqCapInput `json:"frequency_cap,omitempty"`
 	// BidStrategy selects the billing model: cpm (default) bills on
 	// impression; cpc/cpa/vcpm/cpcv reserve on impression and settle on the
 	// trigger event (click/conversion/viewable/complete). Empty → cpm.
@@ -327,6 +366,10 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 		}
 	}
 	if _, err := req.BidModifiers.validateAndJSON(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := req.FreqCap.validateAndJSON(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -478,14 +521,15 @@ VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'b
 	// Targeting — geo/device/domain/category include+exclude. The DSP
 	// engine treats an empty array as "no constraint on that dimension".
 	modifiersJSON, _ := req.BidModifiers.validateAndJSON() // already validated in handleCreate
+	freqCapsJSON, _ := req.FreqCap.validateAndJSON()       // already validated in handleCreate
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO targeting_rules (id, line_item_id, account_id,
     include_geo, exclude_geo, include_device, exclude_device,
     include_domains, exclude_domains, include_categories, exclude_categories,
     include_os, include_keywords, exclude_keywords, include_inventory_type,
     include_segments, exclude_segments,
-    bid_modifiers, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, now(), now())`,
+    bid_modifiers, frequency_caps, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, now(), now())`,
 		targetingID, lineItemID, accountID,
 		pq.StringArray(req.IncludeGeo), pq.StringArray(req.ExcludeGeo),
 		pq.StringArray(req.IncludeDevice), pq.StringArray(req.ExcludeDevice),
@@ -494,7 +538,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		pq.StringArray(req.IncludeOS), pq.StringArray(req.IncludeKeywords),
 		pq.StringArray(req.ExcludeKeywords), pq.StringArray(req.IncludeInventoryType),
 		pq.StringArray(req.IncludeSegments), pq.StringArray(req.ExcludeSegments),
-		modifiersJSON); err != nil {
+		modifiersJSON, freqCapsJSON); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
 	// Creative — auto-generated HTML banner
@@ -538,6 +582,8 @@ type patchCampaignRequest struct {
 	ExcludeSegments      *[]string `json:"exclude_segments,omitempty"`
 	// BidModifiers replaces the whole bid_modifiers JSONB when supplied.
 	BidModifiers *bidModifiersInput `json:"bid_modifiers,omitempty"`
+	// FreqCap replaces the frequency_caps JSONB when supplied (limit <= 0 clears).
+	FreqCap *freqCapInput `json:"frequency_cap,omitempty"`
 }
 
 // hasTargeting reports whether the patch touches any targeting column.
@@ -549,7 +595,7 @@ func (p patchCampaignRequest) hasTargeting() bool {
 		p.IncludeOS != nil || p.IncludeKeywords != nil ||
 		p.ExcludeKeywords != nil || p.IncludeInventoryType != nil ||
 		p.IncludeSegments != nil || p.ExcludeSegments != nil ||
-		p.BidModifiers != nil
+		p.BidModifiers != nil || p.FreqCap != nil
 }
 
 // validDate reports whether s is a YYYY-MM-DD date (or empty).
@@ -595,6 +641,10 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 	if _, err := req.BidModifiers.validateAndJSON(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := req.FreqCap.validateAndJSON(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -718,7 +768,7 @@ func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req pat
 	add("include_inventory_type", req.IncludeInventoryType)
 	add("include_segments", req.IncludeSegments)
 	add("exclude_segments", req.ExcludeSegments)
-	// bid_modifiers is JSONB, not a TEXT[] — handle it separately from add().
+	// bid_modifiers / frequency_caps are JSONB, not TEXT[] — handle separately.
 	if req.BidModifiers != nil {
 		j, err := req.BidModifiers.validateAndJSON()
 		if err != nil {
@@ -726,6 +776,14 @@ func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req pat
 		}
 		args = append(args, j)
 		sets = append(sets, fmt.Sprintf("bid_modifiers = $%d::jsonb", len(args)))
+	}
+	if req.FreqCap != nil {
+		j, err := req.FreqCap.validateAndJSON()
+		if err != nil {
+			return fmt.Errorf("frequency_cap: %w", err)
+		}
+		args = append(args, j)
+		sets = append(sets, fmt.Sprintf("frequency_caps = $%d::jsonb", len(args)))
 	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE targeting_rules SET %s WHERE line_item_id = $%d", strings.Join(sets, ", "), len(args))

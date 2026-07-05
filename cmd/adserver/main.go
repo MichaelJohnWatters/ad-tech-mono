@@ -69,9 +69,15 @@ func main() {
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	// Redis freq cap
+	// Redis freq cap + per-campaign cap warm cache. The counter lives in
+	// Redis; the limit/window comes from the campaign's advertiser-configured
+	// cap when present, else the platform-default live-config knobs.
 	l2 := connectRedis(cfg, log)
-	freqCap := NewFreqCap(l2, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, log)
+	freqCap := NewFreqCap(l2, log)
+	freqCapCache := startFreqCapCache(cfg, clk, log)
+	if freqCapCache != nil {
+		lc.OnShutdown("freq-cap-cache", func(_ context.Context) error { freqCapCache.Stop(); return nil })
+	}
 
 	// Object store for large creative bodies
 	objStore := connectObjects(cfg, log)
@@ -122,7 +128,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, trackerURL, adserverPub, knobs.URLTTL.Value))
+	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value))
 
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -161,7 +167,7 @@ func main() {
 	})
 
 	if cfg.GetBool("debug.endpoints_enabled", true) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(metaCache))
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(metaCache, freqCapCache))
 	}
 
 	handler := tracing.HTTPMiddleware(constants.ServiceAdServer)(metrics.Wrap(middleware.CORS(mux)))
@@ -197,6 +203,46 @@ func startCreativeMetaCache(cfg *config.Config, clk clock.Clock, log *slog.Logge
 	})
 	if err := c.Start(context.Background()); err != nil {
 		log.Error("creative meta cache initial load failed", "error", err)
+	}
+	return c
+}
+
+// startFreqCapCache warm-caches per-campaign frequency caps (advertiser-
+// configured limit/window from targeting_rules.frequency_caps). Invalidated by
+// the campaigns subject — a campaign PATCH that edits the cap re-publishes it.
+// Nil-tolerant: if Postgres is unreachable the serve path falls back to the
+// platform-default cap for every campaign.
+func startFreqCapCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[models.FreqCapRule] {
+	pollInterval := firstNonZeroDuration(
+		cfg.GetDuration("cache.warm.freq_caps.poll_interval", 0),
+		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+	)
+	dbURL := cfg.Get("database.url", "")
+	loader := &warm.RetryingLoader[models.FreqCapRule]{
+		Log:   log,
+		KeyFn: func(r models.FreqCapRule) string { return r.CampaignID },
+		Construct: func() (warm.Loader[models.FreqCapRule], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.FreqCapLoader{Store: store}, nil
+		},
+	}
+	c := warm.New(warm.Config[models.FreqCapRule]{
+		Name:              "freq_caps",
+		Loader:            loader,
+		Clock:             clk,
+		Bus:               connectNATS(cfg, log),
+		InvalidateSubject: events.SubjectCacheInvalidateCampaigns,
+		PollInterval:      pollInterval,
+		Log:               log,
+	})
+	if err := c.Start(context.Background()); err != nil {
+		log.Error("freq cap cache initial load failed", "error", err)
 	}
 	return c
 }
@@ -276,7 +322,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, freqCapCache *warm.Cache[models.FreqCapRule], defaultLimitFn func() int, defaultWindowFn func() time.Duration, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -292,7 +338,15 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		ctx := logger.WithTraceID(r.Context(), req.TraceID)
 		reqLog := logger.WithContext(log, ctx)
 
-		if !freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID) {
+		// Resolve the cap: the campaign's advertiser-configured limit/window
+		// when present in the warm cache, else the platform-default knobs.
+		capLimit, capWindow := defaultLimitFn(), defaultWindowFn()
+		if freqCapCache != nil {
+			if rule, ok := freqCapCache.ByID(req.CampaignID); ok && rule.Limit > 0 {
+				capLimit, capWindow = rule.Limit, rule.Window
+			}
+		}
+		if !freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID, capLimit, capWindow) {
 			reqLog.Info("ad blocked by freq cap",
 				"user", req.UserID,
 				"campaign", req.CampaignID,
