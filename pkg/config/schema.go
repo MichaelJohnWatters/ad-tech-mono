@@ -147,6 +147,11 @@ func defaultSchema() []SchemaEntry {
 		{Key: "cache.warm.poll_interval", Type: "duration", Tier: TierStatic, Default: "30s", Description: "Fallback refresh interval for warm caches with no per-cache override. Most caches set their own.", Service: "platform", Since: "v1.1"},
 		{Key: "cache.warm.freq_caps.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "Ad-server per-campaign frequency-cap warm-cache refresh. Campaign PATCH invalidates via the campaigns subject; this bounds staleness otherwise.", Service: "adserver", Since: "v1.3"},
 
+		// Scheduled-report runner (cmd/report-runner).
+		{Key: "report_runner.reporting_url", Type: "string", Tier: TierStatic, Default: "http://localhost:8086", Description: "Reporting service base URL the report runner posts queries to.", Service: "report-runner", Since: "v1.3"},
+		{Key: "report_runner.email_from", Type: "string", Tier: TierStatic, Default: "reports@adtech.local", Description: "From address on delivered scheduled-report emails.", Service: "report-runner", Since: "v1.3"},
+		{Key: "report_runner.smtp_host", Type: "string", Tier: TierStatic, Default: "", Description: "SMTP host:port for scheduled-report delivery (Mailpit/SES). Empty → in-memory sender that only logs deliveries.", Service: "report-runner", Since: "v1.3"},
+
 		// Money loop (prepay balance gating + drawdown).
 		{Key: "cache.warm.advertiser_balances.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", Service: "dsp", Since: "v1.2"},
 		{Key: "dsp.balance_gate_enabled", Type: "bool", Tier: TierLive, Default: "true", Description: "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", Service: "dsp", Since: "v1.2"},
