@@ -59,6 +59,16 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Revshare ============ -->
+    <section id="section-revshare" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Publisher revenue share") }}
+      <p class="mb-3 text-xs text-gray-400">The platform fee % per publisher — the publisher keeps the remainder. Edits take effect for new spend within a second.</p>
+      {{ template "table-start" (dict "headers" (slice "Publisher" "Domain" "Model" "Platform fee %" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Audit log ============ -->
     <section id="section-audit" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Audit log") }}
@@ -134,12 +144,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['moderation', 'fraud', 'audit', 'tools'];
+const SECTIONS = ['moderation', 'fraud', 'revshare', 'audit', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {moderation: 'Moderation', fraud: 'Fraud rules', audit: 'Audit log', tools: 'Tools'}[name];
+  $('crumbSection').textContent = {moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', tools: 'Tools'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -150,7 +160,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({moderation: loadModeration, fraud: loadFraud, audit: loadAudit}[name])?.();
+    ({moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -249,6 +259,36 @@ async function unblock(id) {
     toast('Unblocked — re-add above to undo', 'success');
     loadFraud();
   } catch (err) { toast('Unblock failed: ' + err.message, 'error'); }
+}
+
+// ---- Revshare ----
+async function loadRevshare() {
+  const tbody = tbodyOf('revshare');
+  try {
+    const rows = await fetchJSON('/v1/api/revshare') || [];
+    tbody.innerHTML = rows.length ? rows.map(p => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(p.name)}</td>
+        <td class="px-3 py-2 text-gray-500 text-xs">${esc(p.domain)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.revshare_model)}</td>
+        <td class="px-3 py-2"><input id="rs_${esc(p.publisher_id)}" type="number" min="0" max="100" step="0.5" value="${p.fee_pct}" class="w-20 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-sm font-mono"></td>
+        <td class="px-3 py-2 text-right">
+          <button onclick="saveRevshare('${esc(p.publisher_id)}','${esc(p.revshare_model)}')" class="text-xs px-2 py-1 rounded bg-brand/15 text-brand hover:bg-brand/25">Save</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No publishers yet.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function saveRevshare(id, model) {
+  const fee = parseFloat($('rs_' + id).value);
+  if (isNaN(fee) || fee < 0 || fee > 100) { toast('Fee must be 0–100', 'info'); return; }
+  try {
+    await fetchJSON('/v1/api/revshare?id=' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({revshare_model: model, fee_pct: fee})});
+    toast('Revshare updated — new spend uses it within a second', 'success');
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 
 // ---- Audit log ----
