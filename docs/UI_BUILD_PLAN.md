@@ -322,8 +322,10 @@ APIs + portal forms don't yet expose:
   separate row the campaign PATCH doesn't touch yet). Touch: `createCampaignRequest`/
   `patchCampaignRequest` in `cmd/dsp/management.go` + advertiser portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
-- **Placement:** `floor_config` (time/device/geo floors). **Publisher:** revshare / payment-terms
-  editing (staff). **Direct-sold** `publisher_line_items` CRUD (+ its orphan invalidate subject).
+- **Placement:** ✅ `floor_config` device/geo floors shipped (`pkg/floors` resolver + SSP bid-path
+  + API + portal; gates bidding — verified). Remaining: time-based/dayparting floors.
+  **Publisher:** revshare / payment-terms editing (staff). **Direct-sold** `publisher_line_items`
+  CRUD (+ its orphan invalidate subject).
 - **Loose ends:** `adtech.cache.invalidate.ads-txt` has no publisher (adstxt cron candidate); IO
   management (campaign API auto-creates one IO/campaign today); `dsps` table stays operator-only.
 
