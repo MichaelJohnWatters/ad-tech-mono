@@ -63,6 +63,7 @@ func resetAndReseedHandler(dbURL string, redisAddr string, bus events.EventBus, 
 		"advertiser_balances",
 		"topups",
 		"api_keys",
+		"agency_managed_accounts",
 		"team_members",
 		"accounts",
 	}

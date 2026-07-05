@@ -42,6 +42,13 @@ func (h *Harness) CreateAdvertiser(t *testing.T, externalKey string) Account {
 	return h.createAccount(t, externalKey, "advertiser")
 }
 
+// CreateAgency creates an agency-type account (acts on behalf of managed
+// advertiser accounts via the act-as flow).
+func (h *Harness) CreateAgency(t *testing.T, externalKey string) Account {
+	t.Helper()
+	return h.createAccount(t, externalKey, "agency")
+}
+
 func (h *Harness) createAccount(t *testing.T, externalKey, accountType string) Account {
 	t.Helper()
 	id := idgen.Derive("account", externalKey)

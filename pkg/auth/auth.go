@@ -202,6 +202,34 @@ var defaultPermissions = map[string][]string{
 		"reports:read",
 	},
 
+	// Agency roles — a media-buying agency acting on behalf of managed
+	// advertiser accounts. Same buy-side surface as an advertiser owner; the
+	// act-as target (a managed account) selects which tenant the request scopes
+	// to. "agency:read" gates the managed-account list + switcher.
+	"agency:owner": {
+		"campaigns:create", "campaigns:read", "campaigns:update", "campaigns:delete",
+		"campaigns:submit", "campaigns:pause", "campaigns:resume",
+		"creatives:upload", "creatives:read", "creatives:update", "creatives:delete",
+		"audiences:create", "audiences:read", "audiences:update", "audiences:upload",
+		"billing:view",
+		"reports:read", "reports:export", "reports:save",
+		"team:read", "team:invite", "team:update", "team:remove",
+		"settings:read", "settings:update",
+		"agency:read",
+	},
+	"agency:manager": {
+		"campaigns:create", "campaigns:read", "campaigns:update",
+		"campaigns:submit", "campaigns:pause", "campaigns:resume",
+		"creatives:upload", "creatives:read", "creatives:update",
+		"reports:read", "reports:export",
+		"agency:read",
+	},
+	"agency:analyst": {
+		"campaigns:read", "creatives:read",
+		"reports:read", "reports:export",
+		"agency:read",
+	},
+
 	// Platform roles
 	"admin:owner": {"*"}, // full access
 	"staff:owner": {

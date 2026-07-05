@@ -326,6 +326,10 @@ func main() {
 	mux.Handle(routes.APIDirectLineItems, authMiddleware(http.HandlerFunc(directLineItemsHandler(pgDirectLineItemStore{db: gwDB}, secretsBus, log))))
 	mux.Handle(routes.APIDirectLineItems+"/", authMiddleware(http.HandlerFunc(directLineItemByIDHandler(pgDirectLineItemStore{db: gwDB}, secretsBus, log))))
 
+	// Agency managed-accounts — staff assign advertiser accounts to an agency;
+	// an agency session lists its own (drives the act-as switcher).
+	mux.Handle(routes.APIAgencyAccounts, authMiddleware(http.HandlerFunc(agencyAccountsHandler(pgAgencyAccountStore{db: gwDB}, log))))
+
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
 	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, secretsBus, log))))
 
