@@ -53,7 +53,17 @@ type Config[T any] struct {
 	// (e.g. populate a separate ContractStore from a contracts warm cache).
 	// Errors are logged; they do not prevent the snapshot from being installed.
 	OnRefresh func(ctx context.Context, rows []T)
+	// ResubscribeInterval is how often to retry the NATS invalidate
+	// subscription after an initial failure (e.g. JetStream briefly
+	// unavailable at boot). 0 → defaultResubscribeInterval. The poll loop
+	// keeps the cache fresh meanwhile; re-subscribing just restores sub-second
+	// invalidation instead of staying poll-only until the pod restarts.
+	ResubscribeInterval time.Duration
 }
+
+// defaultResubscribeInterval is the fallback retry cadence for a failed
+// invalidate subscription. ~JetStream-recovery timescale after a cluster blip.
+const defaultResubscribeInterval = 10 * time.Second
 
 // Cache is a snapshot-backed in-memory cache of T keyed by string ID.
 // The zero value is not usable — construct via New and call Start.
@@ -65,9 +75,9 @@ type Cache[T any] struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 
-	mu       sync.Mutex
-	lastLoad time.Time
-	lastErr  error
+	mu        sync.Mutex
+	lastLoad  time.Time
+	lastErr   error
 	loadCount uint64
 }
 
@@ -116,8 +126,12 @@ func (c *Cache[T]) Start(ctx context.Context) error {
 		group := c.cfg.Name + "-cache-" + podID
 		err := c.cfg.Bus.Subscribe(ctx, c.cfg.InvalidateSubject, group, c.onInvalidate)
 		if err != nil {
-			c.cfg.Log.Warn("warm cache nats subscribe failed (continuing with poll only)",
+			// Poll-only for now, but self-heal: a transient failure at boot
+			// (JetStream unavailable during a cluster restart) shouldn't leave
+			// the cache stuck on the poll interval until the pod is bounced.
+			c.cfg.Log.Warn("warm cache nats subscribe failed (poll-only until re-subscribe succeeds)",
 				"cache", c.cfg.Name, "subject", c.cfg.InvalidateSubject, "error", err)
+			go c.resubscribeLoop(ctx, group)
 		}
 	}
 
@@ -202,6 +216,35 @@ func (c *Cache[T]) loop(ctx context.Context) {
 			if err := c.refreshNow(ctx); err != nil {
 				c.cfg.Log.Warn("warm cache triggered refresh failed", "cache", c.cfg.Name, "error", err)
 			}
+		}
+	}
+}
+
+// resubscribeLoop retries the invalidate subscription after an initial failure
+// until it succeeds or ctx is canceled. Fire-and-forget: it exits on the same
+// ctx the poll loop uses, so Stop() (via cancel) unwinds it. On success it
+// triggers one refresh so any invalidates missed while poll-only are caught up.
+func (c *Cache[T]) resubscribeLoop(ctx context.Context, group string) {
+	interval := c.cfg.ResubscribeInterval
+	if interval <= 0 {
+		interval = defaultResubscribeInterval
+	}
+	ticker := c.cfg.Clock.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := c.cfg.Bus.Subscribe(ctx, c.cfg.InvalidateSubject, group, c.onInvalidate); err != nil {
+				c.cfg.Log.Debug("warm cache nats re-subscribe retry failed",
+					"cache", c.cfg.Name, "error", err)
+				continue
+			}
+			c.cfg.Log.Info("warm cache nats re-subscribe succeeded",
+				"cache", c.cfg.Name, "subject", c.cfg.InvalidateSubject)
+			c.Trigger() // catch up on anything missed while poll-only
+			return
 		}
 	}
 }

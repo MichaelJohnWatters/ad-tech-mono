@@ -159,6 +159,58 @@ func TestCache_NATSInvalidateTriggersRefresh(t *testing.T) {
 	t.Fatal("cache did not refresh after NATS invalidate")
 }
 
+// flakyBus fails the first N Subscribe calls (simulating JetStream briefly
+// unavailable at boot), then delegates to the wrapped bus.
+type flakyBus struct {
+	events.EventBus
+	failsLeft atomic.Int32
+}
+
+func (b *flakyBus) Subscribe(ctx context.Context, subject, group string, h events.Handler) error {
+	if b.failsLeft.Load() > 0 {
+		b.failsLeft.Add(-1)
+		return errors.New("jetstream temporarily unavailable")
+	}
+	return b.EventBus.Subscribe(ctx, subject, group, h)
+}
+
+// TestCache_ResubscribesAfterInitialFailure: when the boot subscribe fails, the
+// cache must retry in the background and, on success, catch up via a refresh —
+// rather than staying poll-only until the pod restarts. PollInterval is an hour
+// so the ONLY path to the new value is the re-subscribe's catch-up Trigger.
+func TestCache_ResubscribesAfterInitialFailure(t *testing.T) {
+	loader := &fakeLoader{}
+	loader.set([]widget{{ID: "a", Name: "v1"}})
+	bus := &flakyBus{EventBus: events.NewMemoryBus()}
+	bus.failsLeft.Store(1) // fail the boot subscribe; the retry succeeds
+
+	c := New(Config[widget]{
+		Name:                "widgets",
+		Loader:              loader,
+		Clock:               clock.Real{},
+		Bus:                 bus,
+		InvalidateSubject:   "test.invalidate.widgets",
+		PollInterval:        time.Hour,
+		ResubscribeInterval: 10 * time.Millisecond,
+		Log:                 newTestLogger(),
+	})
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+
+	// New value set after Start; only the re-subscribe catch-up can surface it.
+	loader.set([]widget{{ID: "a", Name: "v2"}})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v, _ := c.ByID("a"); v.Name == "v2" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("cache did not re-subscribe + refresh after the initial subscribe failure")
+}
+
 func TestCache_AllReturnsSnapshot(t *testing.T) {
 	loader := &fakeLoader{}
 	loader.set([]widget{{ID: "a"}, {ID: "b"}, {ID: "c"}})
