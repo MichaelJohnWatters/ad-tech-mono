@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,14 @@ func TestAgencyActAsViaAPI(t *testing.T) {
 	}
 	if n := listCampaigns(""); n != 0 {
 		t.Errorf("no-act-as campaign count = %d, want 0 (agency's own account is empty)", n)
+	}
+
+	// The portal switcher acts-as via an act_as_account COOKIE (not a header) —
+	// verify the proxy honours that path too. Setting the cookie on the jar
+	// makes a header-less GET scope to the managed account.
+	gwURL, _ := neturl.Parse(h.URLs.Gateway)
+	ag.Jar.SetCookies(gwURL, []*http.Cookie{{Name: "act_as_account", Value: managed.ID}})
+	if n := listCampaigns(""); n != 1 {
+		t.Errorf("cookie-based act-as campaign count = %d, want 1", n)
 	}
 }
