@@ -167,6 +167,22 @@
       {{ template "form-field" (dict "label" "Flight start" "name" "nc_start" "type" "date") }}
       {{ template "form-field" (dict "label" "Flight end" "name" "nc_end" "type" "date") }}
     </div>
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Targeting (optional — blank = reach everyone)</summary>
+      <div class="mt-3 grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Geo include (country codes)" "name" "nc_geo_inc" "placeholder" "USA, GBR") }}
+        {{ template "form-field" (dict "label" "Geo exclude" "name" "nc_geo_exc" "placeholder" "e.g. RUS") }}
+      </div>
+      {{ template "form-field" (dict "label" "Device include (mobile, desktop, tablet, ctv)" "name" "nc_dev_inc" "placeholder" "blank = all devices") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Domain include" "name" "nc_dom_inc" "placeholder" "news.example.com") }}
+        {{ template "form-field" (dict "label" "Domain exclude" "name" "nc_dom_exc" "placeholder" "badsite.com") }}
+      </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Category include (IAB)" "name" "nc_cat_inc" "placeholder" "IAB1, IAB12") }}
+        {{ template "form-field" (dict "label" "Category exclude" "name" "nc_cat_exc" "placeholder" "IAB7") }}
+      </div>
+    </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Create campaign" "type" "submit") }}
@@ -378,6 +394,15 @@ async function createCampaign(ev) {
   if (total > 0) body.total_budget = total;
   if ($('nc_start').value) body.start_date = $('nc_start').value;
   if ($('nc_end').value) body.end_date = $('nc_end').value;
+  // Targeting — comma-separated lists; only send non-empty ones.
+  const csv = (id) => $(id).value.split(',').map(s => s.trim()).filter(Boolean);
+  const targeting = {
+    include_geo: csv('nc_geo_inc'), exclude_geo: csv('nc_geo_exc'),
+    include_device: csv('nc_dev_inc'),
+    include_domains: csv('nc_dom_inc'), exclude_domains: csv('nc_dom_exc'),
+    include_categories: csv('nc_cat_inc'), exclude_categories: csv('nc_cat_exc'),
+  };
+  for (const [k, v] of Object.entries(targeting)) if (v.length) body[k] = v;
   try {
     await fetchJSON('/v1/api/campaigns', {method: 'POST', body: JSON.stringify(body)});
     $('newCampaign').classList.add('hidden');

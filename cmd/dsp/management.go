@@ -188,7 +188,15 @@ type createCampaignRequest struct {
 	BaseBid       float64  `json:"base_bid"`
 	DailyBudget   float64  `json:"daily_budget"`
 	IncludeGeo    []string `json:"include_geo,omitempty"`
+	ExcludeGeo    []string `json:"exclude_geo,omitempty"`
 	IncludeDevice []string `json:"include_device,omitempty"`
+	ExcludeDevice []string `json:"exclude_device,omitempty"`
+	// Domain / category targeting — the DSP targeting engine evaluates these
+	// against the bid request. Empty list = no constraint on that dimension.
+	IncludeDomains    []string `json:"include_domains,omitempty"`
+	ExcludeDomains    []string `json:"exclude_domains,omitempty"`
+	IncludeCategories []string `json:"include_categories,omitempty"`
+	ExcludeCategories []string `json:"exclude_categories,omitempty"`
 	// BidStrategy selects the billing model: cpm (default) bills on
 	// impression; cpc/cpa/vcpm/cpcv reserve on impression and settle on the
 	// trigger event (click/conversion/viewable/complete). Empty → cpm.
@@ -390,11 +398,19 @@ VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'b
 		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
-	// Targeting (geo + device)
+	// Targeting — geo/device/domain/category include+exclude. The DSP
+	// engine treats an empty array as "no constraint on that dimension".
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO targeting_rules (id, line_item_id, account_id, include_geo, include_device, bid_modifiers, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '{}', now(), now())`,
-		targetingID, lineItemID, accountID, pq.StringArray(req.IncludeGeo), pq.StringArray(req.IncludeDevice)); err != nil {
+INSERT INTO targeting_rules (id, line_item_id, account_id,
+    include_geo, exclude_geo, include_device, exclude_device,
+    include_domains, exclude_domains, include_categories, exclude_categories,
+    bid_modifiers, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '{}', now(), now())`,
+		targetingID, lineItemID, accountID,
+		pq.StringArray(req.IncludeGeo), pq.StringArray(req.ExcludeGeo),
+		pq.StringArray(req.IncludeDevice), pq.StringArray(req.ExcludeDevice),
+		pq.StringArray(req.IncludeDomains), pq.StringArray(req.ExcludeDomains),
+		pq.StringArray(req.IncludeCategories), pq.StringArray(req.ExcludeCategories)); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
 	// Creative — auto-generated HTML banner
