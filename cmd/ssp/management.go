@@ -191,6 +191,64 @@ func (f *floorConfigInput) validateAndJSON() (string, error) {
 	return string(b), nil
 }
 
+// videoConfigInput is the structured per-placement video-slot config stored in
+// placements.video_config and applied by the SSP (buildVideoImp) when building
+// a video bid request. Pointer fields distinguish "unset" (use the default)
+// from an explicit value; snake_case keys match buildVideoImp's lookups.
+type videoConfigInput struct {
+	Skippable   *bool    `json:"skippable,omitempty"`
+	SkipAfter   *int     `json:"skip_after,omitempty"`
+	MinDuration *int     `json:"min_duration,omitempty"`
+	MaxDuration *int     `json:"max_duration,omitempty"`
+	Plcmt       *int     `json:"plcmt,omitempty"`
+	Linearity   *int     `json:"linearity,omitempty"`
+	W           *int     `json:"w,omitempty"`
+	H           *int     `json:"h,omitempty"`
+	Mimes       []string `json:"mimes,omitempty"`
+	Protocols   []int    `json:"protocols,omitempty"`
+}
+
+// validateAndJSON rejects out-of-range video settings and marshals to the JSONB
+// the column stores. A nil receiver yields "{}".
+func (v *videoConfigInput) validateAndJSON() (string, error) {
+	if v == nil {
+		return "{}", nil
+	}
+	pos := func(name string, p *int) error {
+		if p != nil && *p < 0 {
+			return fmt.Errorf("%s must be >= 0", name)
+		}
+		return nil
+	}
+	for _, e := range []error{
+		pos("skip_after", v.SkipAfter), pos("min_duration", v.MinDuration),
+		pos("max_duration", v.MaxDuration), pos("w", v.W), pos("h", v.H),
+	} {
+		if e != nil {
+			return "", e
+		}
+	}
+	if v.MinDuration != nil && v.MaxDuration != nil && *v.MinDuration > *v.MaxDuration {
+		return "", fmt.Errorf("min_duration must be <= max_duration")
+	}
+	if v.Plcmt != nil && (*v.Plcmt < 0 || *v.Plcmt > 4) {
+		return "", fmt.Errorf("plcmt must be 0-4 (OpenRTB 2.6)")
+	}
+	if v.Linearity != nil && (*v.Linearity < 0 || *v.Linearity > 2) {
+		return "", fmt.Errorf("linearity must be 0-2")
+	}
+	for _, p := range v.Protocols {
+		if p < 1 || p > 14 {
+			return "", fmt.Errorf("protocols must be OpenRTB VAST protocol codes (1-14)")
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 type createPlacementRequest struct {
 	PublisherID    string            `json:"publisher_id"`
 	Name           string            `json:"name"`
@@ -200,6 +258,7 @@ type createPlacementRequest struct {
 	FloorPrice     float64           `json:"floor_price"`
 	PageURLPattern string            `json:"page_url_pattern,omitempty"`
 	FloorConfig    *floorConfigInput `json:"floor_config,omitempty"`
+	VideoConfig    *videoConfigInput `json:"video_config,omitempty"`
 }
 
 func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, log *slog.Logger) {
@@ -228,6 +287,10 @@ func handlePlacementCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 		return
 	}
 	if _, err := req.FloorConfig.validateAndJSON(); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := req.VideoConfig.validateAndJSON(); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 		return
 	}
@@ -291,11 +354,12 @@ func writeNewPlacement(ctx context.Context, db *sql.DB, accountID string, req cr
 		page = "/" // sensible default; SSP doesn't enforce a particular shape
 	}
 	floorJSON, _ := req.FloorConfig.validateAndJSON() // already validated in handler
+	videoJSON, _ := req.VideoConfig.validateAndJSON() // already validated in handler
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO placements (publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, floor_config, status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'USD', $8, $9::jsonb, 'active', now(), now())
+INSERT INTO placements (publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, floor_config, video_config, status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'USD', $8, $9::jsonb, $10::jsonb, 'active', now(), now())
 RETURNING id::text`,
-		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.FloorPrice, page, floorJSON,
+		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.FloorPrice, page, floorJSON, videoJSON,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("placement insert: %w", err)
@@ -308,6 +372,7 @@ type patchPlacementRequest struct {
 	FloorPrice  *float64          `json:"floor_price,omitempty"`
 	Status      *string           `json:"status,omitempty"`
 	FloorConfig *floorConfigInput `json:"floor_config,omitempty"`
+	VideoConfig *videoConfigInput `json:"video_config,omitempty"`
 }
 
 func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, id string, log *slog.Logger) {
@@ -316,7 +381,7 @@ func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bu
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Name == nil && req.FloorPrice == nil && req.Status == nil && req.FloorConfig == nil {
+	if req.Name == nil && req.FloorPrice == nil && req.Status == nil && req.FloorConfig == nil && req.VideoConfig == nil {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
 	}
@@ -333,6 +398,10 @@ func handlePlacementPatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bu
 		return
 	}
 	if _, err := req.FloorConfig.validateAndJSON(); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := req.VideoConfig.validateAndJSON(); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 		return
 	}
@@ -396,6 +465,11 @@ func updatePlacement(ctx context.Context, db *sql.DB, accountID, id string, req 
 		floorJSON, _ := req.FloorConfig.validateAndJSON()
 		args = append(args, floorJSON)
 		sets = append(sets, fmt.Sprintf("floor_config = $%d::jsonb", len(args)))
+	}
+	if req.VideoConfig != nil {
+		videoJSON, _ := req.VideoConfig.validateAndJSON()
+		args = append(args, videoJSON)
+		sets = append(sets, fmt.Sprintf("video_config = $%d::jsonb", len(args)))
 	}
 	args = append(args, id)
 	q := fmt.Sprintf("UPDATE placements SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))

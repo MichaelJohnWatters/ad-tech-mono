@@ -358,26 +358,10 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	}
 	switch {
 	case channel == "video":
-		// Standard pre-roll request: HTTP-progressive MP4, VAST 4.x
-		// protocols, 5–30s duration window covers our seeded creatives.
-		// 640x360 dims signal a small-screen instream slot; the seeded
-		// video creatives produce the same dimensions so the DSP's
-		// format filter accepts them. Plcmt=1 (instream with audio)
-		// is the most common video placement type.
-		bidReq.Imp[0].Video = &openrtb.Video{
-			Mimes:       []string{"video/mp4", "video/webm"},
-			Protocols:   []int{2, 3, 5, 6, 7}, // VAST 2-4.2
-			W:           640,
-			H:           360,
-			MinDuration: 5,
-			MaxDuration: 30,
-			Linearity:   1, // linear (pre/mid/post-roll)
-			Plcmt:       1, // instream with audio
-			Skip:        1,
-			SkipAfter:   5,
-			SkipMin:     5,
-			API:         []int{7}, // OMID 1
-		}
+		// Standard pre-roll request by default (HTTP-progressive MP4, VAST 4.x,
+		// 5–30s, 640x360, skippable), overridden by the placement's video_config
+		// (skippability, duration window, mimes, protocols, placement type).
+		bidReq.Imp[0].Video = buildVideoImp(p.VideoConfig)
 	case channel == "audio":
 		bidReq.Imp[0].Audio = &openrtb.Audio{
 			Mimes:       []string{"audio/mpeg", "audio/mp4"},
