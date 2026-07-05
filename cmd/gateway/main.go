@@ -20,7 +20,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -241,17 +240,9 @@ func main() {
 	mux.HandleFunc("/dev/console", consoleHandler)
 	mux.HandleFunc("/dev/config-manager", consoleHandler)
 
-	// sellers.json (IAB standard - lists all publishers we represent)
-	mux.HandleFunc("/sellers.json", func(w http.ResponseWriter, r *http.Request) {
-		sellers := fraud.GenerateSellersJSON([]fraud.SellerEntry{
-			{SellerID: "pub-daily-news", Name: "Daily News", Domain: "daily-news.com", SellerType: "PUBLISHER"},
-			{SellerID: "pub-tech-review", Name: "Tech Review", Domain: "tech-review.io", SellerType: "PUBLISHER"},
-			{SellerID: "pub-sports-daily", Name: "Sports Daily", Domain: "sports-daily.com", SellerType: "PUBLISHER"},
-			{SellerID: "pub-shoppers-hub", Name: "Shoppers Hub", Domain: "shoppers-hub.com", SellerType: "PUBLISHER"},
-		})
-		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(sellers)
-	})
+	// sellers.json (IAB standard - lists all active publishers we represent),
+	// sourced live from the publishers table.
+	mux.HandleFunc(routes.SellersJSON, sellersJSONHandler(pgSellerStore{db: gwDB}, log))
 
 	// OpenAPI spec and Swagger UI
 	mux.HandleFunc("/docs/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
