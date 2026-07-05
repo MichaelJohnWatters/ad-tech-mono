@@ -14,18 +14,16 @@ import (
 // next impression is allowed. The first INCR also sets the TTL so each
 // counter expires after the cap window.
 //
-// limitFn and windowFn are called on every check so live edits to
-// adserver.freq_cap_per_user_per_campaign / adserver.freq_cap_window apply
-// to the next request rather than waiting for a pod restart.
+// The limit + window are passed per call so the serve handler can supply the
+// campaign's advertiser-configured cap (from the freq-cap warm cache) and fall
+// back to the platform-default live-config values otherwise.
 type FreqCap struct {
-	l2       cache.L2Cache
-	limitFn  func() int
-	windowFn func() time.Duration
-	log      *slog.Logger
+	l2  cache.L2Cache
+	log *slog.Logger
 }
 
-func NewFreqCap(l2 cache.L2Cache, limitFn func() int, windowFn func() time.Duration, log *slog.Logger) *FreqCap {
-	return &FreqCap{l2: l2, limitFn: limitFn, windowFn: windowFn, log: log}
+func NewFreqCap(l2 cache.L2Cache, log *slog.Logger) *FreqCap {
+	return &FreqCap{l2: l2, log: log}
 }
 
 func freqCapKey(userID, campaignID string) string {
@@ -34,9 +32,8 @@ func freqCapKey(userID, campaignID string) string {
 
 // AllowAndRecord returns true if the impression is under the cap. Increments the
 // counter and sets the window TTL on the first increment of a window. Empty
-// userID (no consent) bypasses the cap entirely.
-func (f *FreqCap) AllowAndRecord(ctx context.Context, userID, campaignID string) bool {
-	limit := int64(f.limitFn())
+// userID (no consent) or a non-positive limit bypasses the cap entirely.
+func (f *FreqCap) AllowAndRecord(ctx context.Context, userID, campaignID string, limit int, window time.Duration) bool {
 	if userID == "" || limit <= 0 {
 		return true
 	}
@@ -47,9 +44,9 @@ func (f *FreqCap) AllowAndRecord(ctx context.Context, userID, campaignID string)
 		return true // fail-open: never block ads on cache failure
 	}
 	if count == 1 {
-		if err := f.l2.Expire(ctx, key, f.windowFn()); err != nil {
+		if err := f.l2.Expire(ctx, key, window); err != nil {
 			f.log.Warn("freqcap expire failed", "key", key, "error", err)
 		}
 	}
-	return count <= limit
+	return count <= int64(limit)
 }

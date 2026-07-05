@@ -66,6 +66,16 @@ type Campaign struct {
 	Modifiers            targeting.Modifiers
 }
 
+// FreqCapRule is a campaign's advertiser-configured frequency cap, read from
+// the line_item-dimension entry of targeting_rules.frequency_caps. Loaded into
+// the ad server's warm cache (keyed by CampaignID) so a serve can enforce the
+// advertiser's own limit/window instead of only the platform default.
+type FreqCapRule struct {
+	CampaignID string
+	Limit      int           // max impressions per user per window (0 = no cap)
+	Window     time.Duration // rolling window for the counter TTL
+}
+
 // Account represents an advertiser, publisher, agency, staff, or admin account.
 type Account struct {
 	ID        string

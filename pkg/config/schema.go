@@ -145,6 +145,7 @@ func defaultSchema() []SchemaEntry {
 		// cache.warm.creatives.*, etc.) live in the owning service's
 		// cmd/<svc>/config.go and override this default at boot.
 		{Key: "cache.warm.poll_interval", Type: "duration", Tier: TierStatic, Default: "30s", Description: "Fallback refresh interval for warm caches with no per-cache override. Most caches set their own.", Service: "platform", Since: "v1.1"},
+		{Key: "cache.warm.freq_caps.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "Ad-server per-campaign frequency-cap warm-cache refresh. Campaign PATCH invalidates via the campaigns subject; this bounds staleness otherwise.", Service: "adserver", Since: "v1.3"},
 
 		// Money loop (prepay balance gating + drawdown).
 		{Key: "cache.warm.advertiser_balances.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", Service: "dsp", Since: "v1.2"},
