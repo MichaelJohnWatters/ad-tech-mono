@@ -245,7 +245,7 @@ F4 is the gate for real portals.
 - **Prompts:** floor-price editing UX (inline)? ad-tag formats (JS/Prebid/VAST)? payout statement
   shape?
 
-### Agency portal  ✅ (switcher shipped; portfolio roll-up pending)
+### Agency portal  ✅ (switcher + portfolio roll-up shipped)
 - **Persona / gate:** `agency:*` + `ManagedAccounts[]`.
 - **Job-to-be-done:** "Switch between the advertiser/publisher accounts I manage; portfolio view."
 - **Screens:** Account switcher (act-as) · Portfolio dashboard (roll-up across managed accounts) ·
@@ -255,7 +255,8 @@ F4 is the gate for real portals.
   tenant, staff `/v1/api/agency-accounts` assign/list/unassign — verified live). ✅ **Portal
   SHIPPED**: agencies reuse the advertiser portal (portalHome → advertiser) with an "Acting as"
   switcher (top bar, `.IsAgency` only) that sets an `act_as_account` cookie the proxy honours on
-  every proxied call — all screens scope to the chosen client. Remaining: portfolio roll-up
+  every proxied call — all screens scope to the chosen client. ✅ Portfolio roll-up shipped (agency-only
+  #portfolio section: per-managed-account spend/impressions/clicks + totals via per-account act-as report queries). Remaining: none core
   (cross-account dashboard).
 - **APIs:** reuses advertiser/publisher APIs with the switched `AccountID` via the X-Act-As-Account
   header (API clients) or the act_as_account cookie (portal switcher).
