@@ -162,6 +162,7 @@ WHERE li.status IN ('live', 'paused')`
 			},
 		}
 		c.Modifiers = parseModifiers(modifiersJSON)
+		c.Location = models.ResolveLocation(c.Timezone) // pre-resolve off the bid hot path
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
