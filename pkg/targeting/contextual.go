@@ -3,6 +3,8 @@ package targeting
 import (
 	"regexp"
 	"strings"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/taxonomy"
 )
 
 // URLClassification maps URL patterns to IAB categories.
@@ -27,29 +29,22 @@ func NewClassifier() *Classifier {
 // Classify returns IAB categories for a page based on all available signals.
 // Priority: publisher-declared > URL pattern > keywords.
 func (c *Classifier) Classify(domain, pageURL string, declaredCategories, keywords []string) []string {
-	// Publisher-declared categories take priority
-	if len(declaredCategories) > 0 {
-		return declaredCategories
+	var cats []string
+	switch {
+	case len(declaredCategories) > 0:
+		// Publisher-declared categories take priority.
+		cats = declaredCategories
+	default:
+		// URL pattern, then domain-level, then keyword fallback.
+		if cats = c.classifyURL(pageURL); len(cats) == 0 {
+			if cats = c.classifyURL(domain); len(cats) == 0 && len(keywords) > 0 {
+				cats = classifyKeywords(keywords)
+			}
+		}
 	}
-
-	// Try URL pattern matching
-	cats := c.classifyURL(pageURL)
-	if len(cats) > 0 {
-		return cats
-	}
-
-	// Fall back to domain-level classification
-	cats = c.classifyURL(domain)
-	if len(cats) > 0 {
-		return cats
-	}
-
-	// Fall back to keyword matching
-	if len(keywords) > 0 {
-		return classifyKeywords(keywords)
-	}
-
-	return nil
+	// Normalise so any tier-2 code always carries its tier-1 parent (e.g.
+	// IAB17-1 → IAB17), which broader-category targeting relies on.
+	return taxonomy.WithParents(cats)
 }
 
 func (c *Classifier) classifyURL(url string) []string {
@@ -153,7 +148,7 @@ func defaultURLRules() []URLClassification {
 		{`/entertainment|/music|/movie|/celebrity`, []string{"IAB1"}},
 		{`/news|/politics|/world|/breaking`, []string{"IAB12"}},
 		{`/education|/learn|/university|/school`, []string{"IAB5"}},
-		{`/property|/real.estate|/housing|/mortgage`, []string{"IAB10"}},
+		{`/property|/real.estate|/housing|/mortgage`, []string{"IAB21"}},
 		{`/gaming|/game|/esport|/playstation|/xbox`, []string{"IAB9"}},
 		{`/shopping|/deal|/sale|/discount|/coupon`, []string{"IAB22"}},
 	}
