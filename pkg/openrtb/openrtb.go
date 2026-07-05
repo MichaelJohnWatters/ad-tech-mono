@@ -8,20 +8,20 @@ package openrtb
 
 // BidRequest is the OpenRTB 2.6 bid request sent by the Exchange to DSPs.
 type BidRequest struct {
-	ID     string  `json:"id"`
-	Imp    []Imp   `json:"imp"`
-	Site   *Site   `json:"site,omitempty"`
-	App    *App    `json:"app,omitempty"`
-	Device *Device `json:"device,omitempty"`
-	User   *User   `json:"user,omitempty"`
-	Regs   *Regs   `json:"regs,omitempty"`
-	TMax   int     `json:"tmax,omitempty"` // max response time in ms
-	Cur    []string `json:"cur,omitempty"` // allowed currencies
+	ID     string   `json:"id"`
+	Imp    []Imp    `json:"imp"`
+	Site   *Site    `json:"site,omitempty"`
+	App    *App     `json:"app,omitempty"`
+	Device *Device  `json:"device,omitempty"`
+	User   *User    `json:"user,omitempty"`
+	Regs   *Regs    `json:"regs,omitempty"`
+	TMax   int      `json:"tmax,omitempty"` // max response time in ms
+	Cur    []string `json:"cur,omitempty"`  // allowed currencies
 }
 
 // Imp represents an impression opportunity.
 type Imp struct {
-	ID          string  `json:"id"`
+	ID string `json:"id"`
 	// TagID is the OpenRTB "identifier for specific ad placement or ad tag"
 	// — we use it to carry the placement UUID through to the exchange so
 	// deal eligibility can match on placement_id. (ID stays the
@@ -51,62 +51,62 @@ type Banner struct {
 // reads them yet. Optional fields stay omitempty so existing minimal
 // bid requests serialise identically.
 type Video struct {
-	Mimes       []string `json:"mimes,omitempty"`
-	Protocols   []int    `json:"protocols,omitempty"`     // VAST versions supported (2=VAST 2.0, 3=VAST 3.0, 5=VAST 4.0, 6=VAST 4.1, 7=VAST 4.2)
-	W           int      `json:"w,omitempty"`
-	H           int      `json:"h,omitempty"`
-	MinDuration int      `json:"minduration,omitempty"`
-	MaxDuration int      `json:"maxduration,omitempty"`
-	Linearity   int      `json:"linearity,omitempty"`     // 1=linear (pre-/mid-/post-roll), 2=non-linear (overlay)
-	Placement   int      `json:"placement,omitempty"`     // 1=instream, 2=in-banner, 3=in-article, 4=in-feed, 5=interstitial. Deprecated by Plcmt in 2.6.
-	Plcmt       int      `json:"plcmt,omitempty"`         // 2.6: 1=instream w/ audio, 2=accompanying content, 3=interstitial, 4=no content / standalone
-	Pos         int      `json:"pos,omitempty"`           // 0=unknown, 1=above the fold, 3=below the fold, 7=fullscreen
-	StartDelay  int      `json:"startdelay,omitempty"`    // 0=pre-roll, >0=mid-roll at seconds, -1=generic mid, -2=generic post
-	Skip        int      `json:"skip,omitempty"`
-	SkipMin     int      `json:"skipmin,omitempty"`       // minimum duration before skip is allowed
-	SkipAfter   int      `json:"skipafter,omitempty"`     // seconds before user can skip
-	Sequence    int      `json:"sequence,omitempty"`      // position in a pod (1=first, 2=second…). Deprecated by SlotInPod in 2.6.
-	BAttr       []int    `json:"battr,omitempty"`         // blocked creative attributes (e.g. 13=user-initiated mid-roll, 17=adobe flash)
-	MaxExtended int      `json:"maxextended,omitempty"`   // max extension allowed past maxduration (seconds)
-	MinBitRate  int      `json:"minbitrate,omitempty"`    // kbps
-	MaxBitRate  int      `json:"maxbitrate,omitempty"`    // kbps
-	BoxingAllowed int    `json:"boxingallowed,omitempty"` // 1=letterboxing allowed when aspect doesn't match (default 1)
-	PlaybackMethod []int `json:"playbackmethod,omitempty"` // 1=autoplay sound on, 2=autoplay sound off, 3=click sound on, 4=mouseover sound on, 5=enter viewport sound on, 6=enter viewport sound off
-	PlaybackEnd    int   `json:"playbackend,omitempty"`    // 1=video completes, 2=user leaves viewport, 3=user closes/skips
-	Delivery       []int `json:"delivery,omitempty"`       // 1=streaming, 2=progressive, 3=download
-	API            []int `json:"api,omitempty"`            // 1=VPAID 1.0, 2=VPAID 2.0, 3=MRAID 1, 4=ORMMA, 5=MRAID 2, 6=MRAID 3, 7=OMID 1
+	Mimes          []string    `json:"mimes,omitempty"`
+	Protocols      []int       `json:"protocols,omitempty"` // VAST versions supported (2=VAST 2.0, 3=VAST 3.0, 5=VAST 4.0, 6=VAST 4.1, 7=VAST 4.2)
+	W              int         `json:"w,omitempty"`
+	H              int         `json:"h,omitempty"`
+	MinDuration    int         `json:"minduration,omitempty"`
+	MaxDuration    int         `json:"maxduration,omitempty"`
+	Linearity      int         `json:"linearity,omitempty"`  // 1=linear (pre-/mid-/post-roll), 2=non-linear (overlay)
+	Placement      int         `json:"placement,omitempty"`  // 1=instream, 2=in-banner, 3=in-article, 4=in-feed, 5=interstitial. Deprecated by Plcmt in 2.6.
+	Plcmt          int         `json:"plcmt,omitempty"`      // 2.6: 1=instream w/ audio, 2=accompanying content, 3=interstitial, 4=no content / standalone
+	Pos            int         `json:"pos,omitempty"`        // 0=unknown, 1=above the fold, 3=below the fold, 7=fullscreen
+	StartDelay     int         `json:"startdelay,omitempty"` // 0=pre-roll, >0=mid-roll at seconds, -1=generic mid, -2=generic post
+	Skip           int         `json:"skip,omitempty"`
+	SkipMin        int         `json:"skipmin,omitempty"`        // minimum duration before skip is allowed
+	SkipAfter      int         `json:"skipafter,omitempty"`      // seconds before user can skip
+	Sequence       int         `json:"sequence,omitempty"`       // position in a pod (1=first, 2=second…). Deprecated by SlotInPod in 2.6.
+	BAttr          []int       `json:"battr,omitempty"`          // blocked creative attributes (e.g. 13=user-initiated mid-roll, 17=adobe flash)
+	MaxExtended    int         `json:"maxextended,omitempty"`    // max extension allowed past maxduration (seconds)
+	MinBitRate     int         `json:"minbitrate,omitempty"`     // kbps
+	MaxBitRate     int         `json:"maxbitrate,omitempty"`     // kbps
+	BoxingAllowed  int         `json:"boxingallowed,omitempty"`  // 1=letterboxing allowed when aspect doesn't match (default 1)
+	PlaybackMethod []int       `json:"playbackmethod,omitempty"` // 1=autoplay sound on, 2=autoplay sound off, 3=click sound on, 4=mouseover sound on, 5=enter viewport sound on, 6=enter viewport sound off
+	PlaybackEnd    int         `json:"playbackend,omitempty"`    // 1=video completes, 2=user leaves viewport, 3=user closes/skips
+	Delivery       []int       `json:"delivery,omitempty"`       // 1=streaming, 2=progressive, 3=download
+	API            []int       `json:"api,omitempty"`            // 1=VPAID 1.0, 2=VPAID 2.0, 3=MRAID 1, 4=ORMMA, 5=MRAID 2, 6=MRAID 3, 7=OMID 1
 	CompanionAd    []Companion `json:"companionad,omitempty"`
 	CompanionType  []int       `json:"companiontype,omitempty"` // 1=static resource, 2=HTML resource, 3=iframe resource
 	// Ad pod fields (OpenRTB 2.6) — set when this imp is one slot in a
 	// pre-/mid-/post-roll pod rather than a standalone spot.
-	PodID         string  `json:"podid,omitempty"`          // identifier shared across all imps in the same pod
-	PodSeq        int     `json:"podseq,omitempty"`         // -1=last pod, 0=any pod, 1=first pod, 2=any mid pod
-	SlotInPod     int     `json:"slotinpod,omitempty"`      // -1=last slot, 0=any slot, 1=first slot, 2=first or any mid slot, 3=any last slot
-	RqdDurs       []int   `json:"rqddurs,omitempty"`        // required durations for slots in this pod
-	MinCPMPerSec  float64 `json:"mincpmpersec,omitempty"`   // floor price per second of ad duration in the pod
+	PodID        string  `json:"podid,omitempty"`        // identifier shared across all imps in the same pod
+	PodSeq       int     `json:"podseq,omitempty"`       // -1=last pod, 0=any pod, 1=first pod, 2=any mid pod
+	SlotInPod    int     `json:"slotinpod,omitempty"`    // -1=last slot, 0=any slot, 1=first slot, 2=first or any mid slot, 3=any last slot
+	RqdDurs      []int   `json:"rqddurs,omitempty"`      // required durations for slots in this pod
+	MinCPMPerSec float64 `json:"mincpmpersec,omitempty"` // floor price per second of ad duration in the pod
 }
 
 // Audio represents an audio ad opportunity. DAAST / podcast dynamic
 // insertion / streaming radio all build on this.
 type Audio struct {
-	Mimes       []string `json:"mimes,omitempty"`
-	Protocols   []int    `json:"protocols,omitempty"`      // 1=DAAST 1.0, 2=DAAST 1.0 wrapper, 9=VAST 3.0 (audio extension)
-	MinDuration int      `json:"minduration,omitempty"`
-	MaxDuration int      `json:"maxduration,omitempty"`
-	StartDelay  int      `json:"startdelay,omitempty"`
-	Sequence    int      `json:"sequence,omitempty"`       // pod position (legacy; use SlotInPod in 2.6 pods)
-	BAttr       []int    `json:"battr,omitempty"`
-	MaxExtended int      `json:"maxextended,omitempty"`
-	MinBitRate  int      `json:"minbitrate,omitempty"`
-	MaxBitRate  int      `json:"maxbitrate,omitempty"`
-	Delivery    []int    `json:"delivery,omitempty"`
-	API         []int    `json:"api,omitempty"`
-	CompanionAd []Companion `json:"companionad,omitempty"`
-	CompanionType []int    `json:"companiontype,omitempty"`
-	MaxSeq      int      `json:"maxseq,omitempty"`         // max number of ads in pod
-	Feed        int      `json:"feed,omitempty"`           // 1=music, 2=podcast, 3=radio
-	Stitched    int      `json:"stitched,omitempty"`       // 1=SSAI-stitched, 0=client-side insertion
-	NVol        int      `json:"nvol,omitempty"`           // volume normalization: 0=none, 1=ad volume avg normalized to content, 2=ad volume peak normalized, 3=loudness normalized (LUFS), 4=custom
+	Mimes         []string    `json:"mimes,omitempty"`
+	Protocols     []int       `json:"protocols,omitempty"` // 1=DAAST 1.0, 2=DAAST 1.0 wrapper, 9=VAST 3.0 (audio extension)
+	MinDuration   int         `json:"minduration,omitempty"`
+	MaxDuration   int         `json:"maxduration,omitempty"`
+	StartDelay    int         `json:"startdelay,omitempty"`
+	Sequence      int         `json:"sequence,omitempty"` // pod position (legacy; use SlotInPod in 2.6 pods)
+	BAttr         []int       `json:"battr,omitempty"`
+	MaxExtended   int         `json:"maxextended,omitempty"`
+	MinBitRate    int         `json:"minbitrate,omitempty"`
+	MaxBitRate    int         `json:"maxbitrate,omitempty"`
+	Delivery      []int       `json:"delivery,omitempty"`
+	API           []int       `json:"api,omitempty"`
+	CompanionAd   []Companion `json:"companionad,omitempty"`
+	CompanionType []int       `json:"companiontype,omitempty"`
+	MaxSeq        int         `json:"maxseq,omitempty"`   // max number of ads in pod
+	Feed          int         `json:"feed,omitempty"`     // 1=music, 2=podcast, 3=radio
+	Stitched      int         `json:"stitched,omitempty"` // 1=SSAI-stitched, 0=client-side insertion
+	NVol          int         `json:"nvol,omitempty"`     // volume normalization: 0=none, 1=ad volume avg normalized to content, 2=ad volume peak normalized, 3=loudness normalized (LUFS), 4=custom
 	// Ad pod fields (parallel to Video; see Video.PodID etc).
 	PodID        string  `json:"podid,omitempty"`
 	PodSeq       int     `json:"podseq,omitempty"`
@@ -119,19 +119,19 @@ type Audio struct {
 // audio ad. Same shape as a standard Banner plus a couple of companion-
 // specific fields. Used by Video.CompanionAd / Audio.CompanionAd.
 type Companion struct {
-	ID     string   `json:"id,omitempty"`
-	W      int      `json:"w,omitempty"`
-	H      int      `json:"h,omitempty"`
-	WMin   int      `json:"wmin,omitempty"`     // minimum width (for flexible inventory)
-	HMin   int      `json:"hmin,omitempty"`
-	WMax   int      `json:"wmax,omitempty"`
-	HMax   int      `json:"hmax,omitempty"`
-	BType  []int    `json:"btype,omitempty"`    // blocked creative types
-	BAttr  []int    `json:"battr,omitempty"`
-	Pos    int      `json:"pos,omitempty"`
-	Mimes  []string `json:"mimes,omitempty"`
-	API    []int    `json:"api,omitempty"`
-	Vcm    int      `json:"vcm,omitempty"`      // 1=companion concurrent with video, 0=after
+	ID    string   `json:"id,omitempty"`
+	W     int      `json:"w,omitempty"`
+	H     int      `json:"h,omitempty"`
+	WMin  int      `json:"wmin,omitempty"` // minimum width (for flexible inventory)
+	HMin  int      `json:"hmin,omitempty"`
+	WMax  int      `json:"wmax,omitempty"`
+	HMax  int      `json:"hmax,omitempty"`
+	BType []int    `json:"btype,omitempty"` // blocked creative types
+	BAttr []int    `json:"battr,omitempty"`
+	Pos   int      `json:"pos,omitempty"`
+	Mimes []string `json:"mimes,omitempty"`
+	API   []int    `json:"api,omitempty"`
+	Vcm   int      `json:"vcm,omitempty"` // 1=companion concurrent with video, 0=after
 }
 
 // Native represents a native ad opportunity.
@@ -148,21 +148,22 @@ type ImpExt struct {
 
 // Site represents a web publisher.
 type Site struct {
-	Domain    string    `json:"domain,omitempty"`
-	Name      string    `json:"name,omitempty"`
-	Page      string    `json:"page,omitempty"`
-	Cat       []string  `json:"cat,omitempty"`
+	Domain    string     `json:"domain,omitempty"`
+	Name      string     `json:"name,omitempty"`
+	Page      string     `json:"page,omitempty"`
+	Cat       []string   `json:"cat,omitempty"`
+	Keywords  string     `json:"keywords,omitempty"` // comma-separated page keywords
 	Publisher *Publisher `json:"publisher,omitempty"`
-	Content   *Content  `json:"content,omitempty"`
+	Content   *Content   `json:"content,omitempty"`
 }
 
 // App represents a mobile app publisher.
 type App struct {
-	Bundle    string    `json:"bundle,omitempty"`
-	Name      string    `json:"name,omitempty"`
-	StoreURL  string    `json:"storeurl,omitempty"`
-	Cat       []string  `json:"cat,omitempty"`
-	Ver       string    `json:"ver,omitempty"`
+	Bundle    string     `json:"bundle,omitempty"`
+	Name      string     `json:"name,omitempty"`
+	StoreURL  string     `json:"storeurl,omitempty"`
+	Cat       []string   `json:"cat,omitempty"`
+	Ver       string     `json:"ver,omitempty"`
 	Publisher *Publisher `json:"publisher,omitempty"`
 }
 
@@ -220,7 +221,7 @@ type UserExt struct {
 
 // Regs describes regulatory signals.
 type Regs struct {
-	COPPA int     `json:"coppa,omitempty"`
+	COPPA int      `json:"coppa,omitempty"`
 	Ext   *RegsExt `json:"ext,omitempty"`
 }
 
@@ -247,22 +248,22 @@ type SeatBid struct {
 
 // BidObj is a single bid within a seat bid.
 type BidObj struct {
-	ID      string  `json:"id"`
-	ImpID   string  `json:"impid"`
-	Price   float64 `json:"price"`
-	AdID    string  `json:"adid,omitempty"`
-	NURL    string  `json:"nurl,omitempty"` // win notice URL
-	LURL    string  `json:"lurl,omitempty"` // loss notice URL
-	BURL    string  `json:"burl,omitempty"` // billing notice URL (fires when SSP records billable event — for video/audio this is when the player counts the impression, not just receives the bid)
-	AdM     string  `json:"adm,omitempty"`  // ad markup (display HTML for banners; VAST XML for video; DAAST XML for audio)
+	ID      string   `json:"id"`
+	ImpID   string   `json:"impid"`
+	Price   float64  `json:"price"`
+	AdID    string   `json:"adid,omitempty"`
+	NURL    string   `json:"nurl,omitempty"` // win notice URL
+	LURL    string   `json:"lurl,omitempty"` // loss notice URL
+	BURL    string   `json:"burl,omitempty"` // billing notice URL (fires when SSP records billable event — for video/audio this is when the player counts the impression, not just receives the bid)
+	AdM     string   `json:"adm,omitempty"`  // ad markup (display HTML for banners; VAST XML for video; DAAST XML for audio)
 	ADomain []string `json:"adomain,omitempty"`
-	CID     string  `json:"cid,omitempty"`  // campaign ID (line item)
-	CrID    string  `json:"crid,omitempty"` // creative ID
+	CID     string   `json:"cid,omitempty"`  // campaign ID (line item)
+	CrID    string   `json:"crid,omitempty"` // creative ID
 	Cat     []string `json:"cat,omitempty"`
-	DealID  string  `json:"dealid,omitempty"`
-	W       int     `json:"w,omitempty"`
-	H       int     `json:"h,omitempty"`
-	Dur     int     `json:"dur,omitempty"` // video/audio duration (seconds)
+	DealID  string   `json:"dealid,omitempty"`
+	W       int      `json:"w,omitempty"`
+	H       int      `json:"h,omitempty"`
+	Dur     int      `json:"dur,omitempty"` // video/audio duration (seconds)
 	// API / Protocol echo back what the bid's creative supports so the
 	// player can reject mismatches without having to fetch the VAST/
 	// DAAST. Values match the request's API/Protocols enums.

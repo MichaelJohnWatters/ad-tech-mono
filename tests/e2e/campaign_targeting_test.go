@@ -7,7 +7,6 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -36,21 +35,9 @@ func TestCampaignTargetingViaAPI(t *testing.T) {
 	}`)
 	campaignID := created["id"].(string)
 
-	// Fund the advertiser (prepay gate) — pull its account id from the list.
-	req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/campaigns", nil)
-	resp, _ := adv.Do(req)
-	var list []map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&list)
-	resp.Body.Close()
-	var advAccountID string
-	for _, c := range list {
-		if c["ID"] == campaignID {
-			advAccountID = c["AccountID"].(string)
-		}
-	}
-	if advAccountID == "" {
-		t.Fatalf("campaign %s not found in list", campaignID)
-	}
+	// Fund the advertiser (prepay gate) — create returns the owning account_id
+	// so we avoid a list read that races the warm-cache invalidate.
+	advAccountID := created["account_id"].(string)
 	h.GrantBalance(t, advAccountID, 10_000, uniq+"-grant")
 	h.RefreshAllCaches(t)
 

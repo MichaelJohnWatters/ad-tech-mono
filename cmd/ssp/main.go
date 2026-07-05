@@ -351,6 +351,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			Domain:    p.PublisherDomain,
 			Page:      p.PageURLPattern,
 			Cat:       p.Categories,
+			Keywords:  r.URL.Query().Get("keywords"), // comma-separated page keywords
 			Publisher: &openrtb.Publisher{ID: p.PublisherID},
 		},
 		TMax: 100,
@@ -399,6 +400,12 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			bidReq.Device = &openrtb.Device{}
 		}
 		bidReq.Device.DeviceType = deviceTypeInt(device)
+	}
+	if os := r.URL.Query().Get("os"); os != "" {
+		if bidReq.Device == nil {
+			bidReq.Device = &openrtb.Device{}
+		}
+		bidReq.Device.OS = os
 	}
 	if userID != "" {
 		user := &openrtb.User{ID: userID}

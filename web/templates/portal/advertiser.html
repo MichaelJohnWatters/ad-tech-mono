@@ -182,6 +182,12 @@
         {{ template "form-field" (dict "label" "Category include (IAB)" "name" "nc_cat_inc" "placeholder" "IAB1, IAB12") }}
         {{ template "form-field" (dict "label" "Category exclude" "name" "nc_cat_exc" "placeholder" "IAB7") }}
       </div>
+      {{ template "form-field" (dict "label" "OS include (iOS, Android, Windows)" "name" "nc_os_inc" "placeholder" "blank = all OS") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Keyword include (page keywords)" "name" "nc_kw_inc" "placeholder" "sports, finance") }}
+        {{ template "form-field" (dict "label" "Keyword exclude" "name" "nc_kw_exc" "placeholder" "gambling") }}
+      </div>
+      {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "nc_inv_inc" "placeholder" "blank = site + app") }}
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
@@ -252,6 +258,12 @@
         {{ template "form-field" (dict "label" "Category include" "name" "ec_cat_inc") }}
         {{ template "form-field" (dict "label" "Category exclude" "name" "ec_cat_exc") }}
       </div>
+      {{ template "form-field" (dict "label" "OS include" "name" "ec_os_inc") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Keyword include" "name" "ec_kw_inc") }}
+        {{ template "form-field" (dict "label" "Keyword exclude" "name" "ec_kw_exc") }}
+      </div>
+      {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
@@ -417,6 +429,9 @@ async function createCampaign(ev) {
     include_device: csv('nc_dev_inc'),
     include_domains: csv('nc_dom_inc'), exclude_domains: csv('nc_dom_exc'),
     include_categories: csv('nc_cat_inc'), exclude_categories: csv('nc_cat_exc'),
+    include_os: csv('nc_os_inc'),
+    include_keywords: csv('nc_kw_inc'), exclude_keywords: csv('nc_kw_exc'),
+    include_inventory_type: csv('nc_inv_inc'),
   };
   for (const [k, v] of Object.entries(targeting)) if (v.length) body[k] = v;
   try {
@@ -454,6 +469,9 @@ function openEdit(id) {
   $('ec_dev_inc').value = join(inc.Device);
   $('ec_dom_inc').value = join(inc.Domains); $('ec_dom_exc').value = join(exc.Domains);
   $('ec_cat_inc').value = join(inc.Categories); $('ec_cat_exc').value = join(exc.Categories);
+  $('ec_os_inc').value = join(inc.OS);
+  $('ec_kw_inc').value = join(inc.Keywords); $('ec_kw_exc').value = join(exc.Keywords);
+  $('ec_inv_inc').value = join(inc.InventoryType);
   $('editCampaign').classList.remove('hidden');
 }
 
@@ -470,6 +488,9 @@ async function saveCampaign(ev) {
     include_device: csv('ec_dev_inc'),
     include_domains: csv('ec_dom_inc'), exclude_domains: csv('ec_dom_exc'),
     include_categories: csv('ec_cat_inc'), exclude_categories: csv('ec_cat_exc'),
+    include_os: csv('ec_os_inc'),
+    include_keywords: csv('ec_kw_inc'), exclude_keywords: csv('ec_kw_exc'),
+    include_inventory_type: csv('ec_inv_inc'),
   };
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});

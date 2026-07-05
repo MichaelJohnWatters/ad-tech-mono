@@ -51,18 +51,7 @@ func TestDaypartFloorsViaAPI(t *testing.T) {
 	// A campaign bidding 3.00 — above the 0.50 base, below the 10.00 daypart floor.
 	adv := h.Signup(t, "Daypart Adv", uniq+"-adv@api.test", "pw-e2e-1", "advertiser")
 	created := h.APIJSON(t, adv, http.MethodPost, "/v1/api/campaigns", `{"name":"Daypart","base_bid":3.0,"daily_budget":500}`)
-	campaignID := created["id"].(string)
-	req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/campaigns", nil)
-	resp, _ := adv.Do(req)
-	var list []map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&list)
-	resp.Body.Close()
-	var advAccountID string
-	for _, c := range list {
-		if c["ID"] == campaignID {
-			advAccountID = c["AccountID"].(string)
-		}
-	}
+	advAccountID := created["account_id"].(string)
 	h.GrantBalance(t, advAccountID, 10_000, uniq+"-grant")
 	h.RefreshAllCaches(t)
 
@@ -76,8 +65,8 @@ func TestDaypartFloorsViaAPI(t *testing.T) {
 	}
 
 	// Read-back: the list returns floor_config.dayparts so the portal can edit it.
-	req, _ = http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/placements", nil)
-	resp, _ = pub.Do(req)
+	req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/placements", nil)
+	resp, _ := pub.Do(req)
 	var pls []map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&pls)
 	resp.Body.Close()

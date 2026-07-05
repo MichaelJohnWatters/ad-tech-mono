@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
+	neturl "net/url"
 	"testing"
 	"time"
 )
@@ -24,6 +24,17 @@ type AuctionResult struct {
 	BidResponse json.RawMessage `json:"bid_response"`
 }
 
+// AuctionParams carries the optional bid-signal query params the SSP stamps
+// into the OpenRTB request. Empty fields are omitted.
+type AuctionParams struct {
+	Placement string // friendly external key, not the UUID
+	Geo       string // ISO country (Device.geo.country)
+	Device    string // device type keyword
+	UserID    string // User.id (drives segment lookup)
+	OS        string // Device.os — for OS targeting
+	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
+}
+
 // RunAuction drives an auction through SSP → Exchange → DSPs as if a real
 // publisher page requested an ad. Returns the parsed response so subtests
 // can assert on winning DSP, clearing price, deal_id.
@@ -31,22 +42,30 @@ type AuctionResult struct {
 // placementExternalID is the friendly YAML/test key (e.g. "pl-news-mpu"),
 // not the UUID — the SSP service does the derivation server-side.
 func (h *Harness) RunAuction(t *testing.T, placementExternalID, geo, device, userID string) AuctionResult {
+	return h.RunAuctionWith(t, AuctionParams{Placement: placementExternalID, Geo: geo, Device: device, UserID: userID})
+}
+
+// RunAuctionWith is RunAuction with the full optional bid-signal set (OS,
+// keywords). Existing callers use RunAuction; targeting tests use this.
+func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	t.Helper()
 
-	q := []string{}
+	vals := neturl.Values{}
 	add := func(k, v string) {
 		if v != "" {
-			q = append(q, k+"="+v)
+			vals.Set(k, v)
 		}
 	}
-	add("placement_id", placementExternalID)
-	add("geo", geo)
-	add("device", device)
-	add("user_id", userID)
+	add("placement_id", p.Placement)
+	add("geo", p.Geo)
+	add("device", p.Device)
+	add("user_id", p.UserID)
+	add("os", p.OS)
+	add("keywords", p.Keywords)
 
 	url := h.URLs.SSP + "/v1/ssp/request"
-	if len(q) > 0 {
-		url += "?" + strings.Join(q, "&")
+	if len(vals) > 0 {
+		url += "?" + vals.Encode()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -76,12 +95,12 @@ func (h *Harness) RunAuction(t *testing.T, placementExternalID, geo, device, use
 // whether NoBid was set. Helper because the JSON shape is verbose to assert
 // inline in every test step.
 type BidResponseWinner struct {
-	NoBid         bool
-	Seat          string
-	Price         float64
-	CampaignID    string
-	CreativeID    string
-	DealID        string
+	NoBid      bool
+	Seat       string
+	Price      float64
+	CampaignID string
+	CreativeID string
+	DealID     string
 }
 
 // ExtractWinner parses a BidResponse from an AuctionResult and pulls the
@@ -95,11 +114,11 @@ func (h *Harness) ExtractWinner(t *testing.T, r AuctionResult) BidResponseWinner
 		SeatBid []struct {
 			Seat string `json:"seat"`
 			Bid  []struct {
-				ID    string  `json:"id"`
-				Price float64 `json:"price"`
-				CID   string  `json:"cid"`
-				CrID  string  `json:"crid"`
-				DealID string `json:"dealid,omitempty"`
+				ID     string  `json:"id"`
+				Price  float64 `json:"price"`
+				CID    string  `json:"cid"`
+				CrID   string  `json:"crid"`
+				DealID string  `json:"dealid,omitempty"`
 			} `json:"bid"`
 		} `json:"seatbid"`
 	}

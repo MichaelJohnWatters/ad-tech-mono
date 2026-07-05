@@ -21,12 +21,12 @@ import (
 // directly from the read replica.
 //
 // Filter precedence (first non-empty wins):
-//   1. DSPID — preferred. Joins accounts.dsp_id; loads only campaigns from
-//      advertisers the dsps row owns. Set by services aware of migration 022.
-//   2. AccountIDs — legacy fallback. Direct allowlist of account UUIDs from
-//      the YAML profile, used when DSPID is empty (boot before dsps row
-//      exists, or fallback when the dsps lookup failed).
-//   3. Neither — load all live campaigns (admin / cross-DSP analytics use).
+//  1. DSPID — preferred. Joins accounts.dsp_id; loads only campaigns from
+//     advertisers the dsps row owns. Set by services aware of migration 022.
+//  2. AccountIDs — legacy fallback. Direct allowlist of account UUIDs from
+//     the YAML profile, used when DSPID is empty (boot before dsps row
+//     exists, or fallback when the dsps lookup failed).
+//  3. Neither — load all live campaigns (admin / cross-DSP analytics use).
 type CampaignLoader struct {
 	Store      *Store
 	DSPID      string
@@ -64,6 +64,10 @@ SELECT
     COALESCE(tr.exclude_domains, '{}'),
     COALESCE(tr.include_categories, '{}'),
     COALESCE(tr.exclude_categories, '{}'),
+    COALESCE(tr.include_os, '{}'),
+    COALESCE(tr.include_keywords, '{}'),
+    COALESCE(tr.exclude_keywords, '{}'),
+    COALESCE(tr.include_inventory_type, '{}'),
     COALESCE(tr.bid_modifiers::text, '{}'),
     COALESCE(cr.id::text, '') AS creative_id,
     -- Brand domain: prefer the explicit advertiser_domain column (set
@@ -119,6 +123,7 @@ WHERE li.status IN ('live', 'paused')`
 	for rows.Next() {
 		var c models.Campaign
 		var incGeo, excGeo, incDev, excDev, incSeg, excSeg, incDom, excDom, incCat, excCat pq.StringArray
+		var incOS, incKw, excKw, incInv pq.StringArray
 		var modifiersJSON string
 		var viewTarget sql.NullInt32
 		var creativesJSON string
@@ -129,6 +134,7 @@ WHERE li.status IN ('live', 'paused')`
 			&incGeo, &excGeo, &incDev, &excDev,
 			&incSeg, &excSeg, &incDom, &excDom,
 			&incCat, &excCat,
+			&incOS, &incKw, &excKw, &incInv,
 			&modifiersJSON,
 			&c.CreativeID, &c.CreativeDomain,
 			&viewTarget,
@@ -145,10 +151,12 @@ WHERE li.status IN ('live', 'paused')`
 			Include: targeting.TargetingSet{
 				Geo: incGeo, Device: incDev, Segments: incSeg,
 				Domains: incDom, Categories: incCat,
+				OS: incOS, Keywords: incKw, InventoryType: incInv,
 			},
 			Exclude: targeting.TargetingSet{
 				Geo: excGeo, Device: excDev, Segments: excSeg,
 				Domains: excDom, Categories: excCat,
+				Keywords: excKw,
 			},
 		}
 		c.Modifiers = parseModifiers(modifiersJSON)
@@ -212,4 +220,3 @@ func parseModifiers(raw string) targeting.Modifiers {
 	}
 	return targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry}
 }
-
