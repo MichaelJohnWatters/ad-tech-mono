@@ -15229,7 +15229,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 | 61 | `sellers.json` from DB | ⚠️ serves 4 hardcoded pubs | `cmd/gateway/main.go:203`; source from `publishers` warm cache | adding a publisher changes output, no code change |
 | 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
 | 76 | `cmd/webhooks` dispatcher | ❌ empty (`.gitkeep`+CLAUDE) | `pkg/events` subjects + reserved `webhook_subs` invalidate | subscribed endpoint receives a signed event |
-| 77 | `pkg/email` real SMTP + Mailpit | ❌ `Send()` only logs | `pkg/email/email.go:78`; add `net/smtp` + Mailpit to the stack | test reads a message out of Mailpit |
+| 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
 | 70–72 | `pkg/simulator` / `tests/k6` / `pkg/chaos` | ⚠️ 1 file each (thin) | build `harness.ChaosKill*` first (see harness debt) | chaos/perf e2e cases flip |
 
 **Sub-items still open on things marked ✅** (not blockers): analytics `/debug`
@@ -15270,7 +15270,7 @@ reservation-expiry); an `exchange_rates` seed + non-USD campaign
 ### Suggested pickup order
 
 1. `harness.ChaosKill*` helpers (72) — unblocks ~13 skipped e2e cases at once.
-2. SMTP + Mailpit (77) — small, removes a P2 stub.
+2. ~~SMTP + Mailpit (77)~~ ✅ done 2026-07-05 (scheduled reports now actually deliver).
 3. `sellers.json` from DB (61) — small, removes a hardcode.
 4. `cmd/webhooks` (76) — clear seam, customer-visible.
 5. `cmd/privacy-delete` / `-verify` (50) — compliance-critical, unblocks step 105.

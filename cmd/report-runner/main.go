@@ -40,10 +40,16 @@ func main() {
 
 	// SMTP (Mailpit/SES) when configured, else an in-memory sender that just
 	// logs each delivery — keeps the runner runnable locally without Mailpit.
+	// With a username set we authenticate (SES/Sendgrid); Mailpit needs none.
 	var sender email.Sender
 	if host := cfg.Get("report_runner.smtp_host", ""); host != "" {
-		sender = email.NewSMTP(host, from, log)
-		log.Info("report-runner email via SMTP", "host", host)
+		if user := cfg.Get("report_runner.smtp_username", ""); user != "" {
+			sender = email.NewSMTPAuth(host, from, user, cfg.Get("report_runner.smtp_password", ""), log)
+			log.Info("report-runner email via authenticated SMTP", "host", host, "username", user)
+		} else {
+			sender = email.NewSMTP(host, from, log)
+			log.Info("report-runner email via SMTP", "host", host)
+		}
 	} else {
 		sender = email.NewMemory(log)
 		log.Info("report-runner email via memory sender (no smtp_host set) — deliveries are logged only")

@@ -151,6 +151,8 @@ func defaultSchema() []SchemaEntry {
 		{Key: "report_runner.reporting_url", Type: "string", Tier: TierStatic, Default: "http://localhost:8086", Description: "Reporting service base URL the report runner posts queries to.", Service: "report-runner", Since: "v1.3"},
 		{Key: "report_runner.email_from", Type: "string", Tier: TierStatic, Default: "reports@adtech.local", Description: "From address on delivered scheduled-report emails.", Service: "report-runner", Since: "v1.3"},
 		{Key: "report_runner.smtp_host", Type: "string", Tier: TierStatic, Default: "", Description: "SMTP host:port for scheduled-report delivery (Mailpit/SES). Empty → in-memory sender that only logs deliveries.", Service: "report-runner", Since: "v1.3"},
+		{Key: "report_runner.smtp_username", Type: "string", Tier: TierStatic, Default: "", Description: "SMTP username for authenticated delivery (SES/Sendgrid). Empty → unauthenticated (Mailpit).", Service: "report-runner", Since: "v1.4"},
+		{Key: "report_runner.smtp_password", Type: "string", Tier: TierSecret, Default: "", Description: "SMTP password for authenticated delivery (SES/Sendgrid). Secret; paired with report_runner.smtp_username.", Service: "report-runner", Since: "v1.4"},
 
 		// Money loop (prepay balance gating + drawdown).
 		{Key: "cache.warm.advertiser_balances.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", Service: "dsp", Since: "v1.2"},
