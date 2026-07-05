@@ -322,8 +322,10 @@ APIs + portal forms don't yet expose:
   os/keywords/segments into the OpenRTB request; gates bidding — verified live).
   ✅ bid modifiers device/geo/time-of-day + campaign `timezone` shipped (create + PATCH API +
   portal; DSP applies before the floor check, time windows in the campaign tz — verified live).
-  Remaining: non-display formats (needs creative-format handling), frequency caps
-  (per-campaign, needs ad-server enforcement), creative weights/rotation (needs multi-creative upload).
+  ✅ per-campaign frequency caps shipped (create + PATCH `frequency_cap {limit, window}` → ad-server
+  warm cache over targeting_rules.frequency_caps; serve enforces advertiser cap, falls back to the
+  platform default — verified live). Remaining: non-display formats (needs creative-format
+  handling), creative weights/rotation (needs multi-creative upload).
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
