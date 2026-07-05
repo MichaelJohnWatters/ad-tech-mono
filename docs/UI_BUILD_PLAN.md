@@ -343,8 +343,9 @@ APIs + portal forms don't yet expose:
 - **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
   (`pkg/floors` resolver + SSP bid-path + API + portal dayparts textarea/timezone; gates bidding
   — both verified live). Remaining: (none — floor depth complete).
-  **Publisher:** ✅ revshare fee editing shipped (staff console `/v1/api/revshare` + billing-rates
-  invalidate); remaining: payment-terms, tiered/guaranteed revshare config. ✅ **Direct-sold**
+  **Publisher:** ✅ revshare editing shipped — flat fee + tiered/guaranteed/deal-type config +
+  payment_terms (staff console `/v1/api/revshare`, validated + audited + billing-rates invalidate;
+  writes the full revshare_config the ContractLoader decodes — verified live). ✅ **Direct-sold**
   `publisher_line_items` CRUD shipped (gateway `/v1/api/direct-line-items` + publisher portal
   "Direct sold" section; publishes the publisher-line-items invalidate — verified live).
 - **Loose ends:** ✅ `adtech.cache.invalidate.ads-txt` now published by the adstxt crawler on a
