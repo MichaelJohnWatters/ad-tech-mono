@@ -195,15 +195,47 @@ func TestBillingReservationExpiry(t *testing.T) {
 }
 
 func TestBillingTieredRevenueShareTierFlip(t *testing.T) {
-	t.Skip("requires seeding tiered contracts via publishers.revshare_config + producing enough impressions to cross a tier; can build once we add a 'bulk auctions' harness helper")
+	t.Skip("contract-write helper now exists (harness.SetPublisherContract for tiers); still pending: the tier is chosen off Contract.MonthImpressions, which the settle path must populate from the publisher's running impression count — verify that wiring + use FireNAuctions to cross a tier, then flip.")
 }
 
+// TestBillingGuaranteedMinimumSubsidy — a publisher on a guaranteed-minimum
+// contract earns at least GuaranteedMinCPM per impression even when the fee
+// split would leave less. With clearing ~3.50 and a 20% fee the raw publisher
+// share is 2.80, below the 5.00 floor, so the platform subsidises up to 5.00 —
+// making the booked publisher-revenue delta exactly the floor, independent of
+// the exact clearing price (which is why this assertion is stable).
 func TestBillingGuaranteedMinimumSubsidy(t *testing.T) {
-	t.Skip("guaranteed minimum needs a contract with GuaranteedMinCPM > clearing — seedable but pending a contract-write helper")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "billing-gmin")
+
+	const floor = 5.00
+	h.SetPublisherContract(t, w.Publisher, "guaranteed_minimum",
+		`{"fee_pct":20,"guaranteed_min_cpm":5.0}`)
+	h.RefreshAllCaches(t)
+
+	before := summaryFloat(t, h.BillingSummary(t), "TotalPublisherRevenue")
+
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "gmin-user-1")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid on the guaranteed-minimum publisher")
+	}
+	// Sanity: the raw split must be below the floor for the subsidy to engage.
+	if win.Price*0.8 >= floor {
+		t.Fatalf("clearing %.2f × 0.8 = %.2f is not below the %.2f floor; test needs a lower bid",
+			win.Price, win.Price*0.8, floor)
+	}
+
+	// CPM books publisher revenue on the impression; the guaranteed minimum
+	// clamps it up to the floor.
+	h.FireImpression(t, auc.TraceID, win.CampaignID, win.CreativeID,
+		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price)
+
+	waitForDelta(t, h, "TotalPublisherRevenue", before, floor)
 }
 
 func TestBillingDealTypeFeeModifier(t *testing.T) {
-	t.Skip("deal_type fee modifier in revshare_config — needs the same contract-write helper")
+	t.Skip("contract-write helper now exists (harness.SetPublisherContract for deal_type_modifiers); still pending a fixture that lands a deal-won impression AND confirms deal_type propagates from the impression event into the billing SpendEvent — flip once that path is verified on a live stack.")
 }
 
 func TestBillingCurrencyConversion(t *testing.T) {
