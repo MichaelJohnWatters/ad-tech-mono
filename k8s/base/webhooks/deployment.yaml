@@ -1,0 +1,63 @@
+# Webhooks dispatcher — consumes account-scoped business events from NATS and
+# delivers HMAC-signed HTTP POSTs to customer-registered endpoints. Background
+# consumer (no external ingress); exposes only /healthz, /readyz, /metrics.
+# Image is built via Tilt's docker_build('adtech-webhooks', build/Dockerfile.dev)
+# which packages the host-built ./bin/webhooks binary for live_update.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhooks
+  namespace: adtech
+  labels:
+    app: webhooks
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhooks
+  template:
+    metadata:
+      labels:
+        app: webhooks
+    spec:
+      # See tracker/deployment.yaml — service-link env injection collides with
+      # pkg/config's env-var fallback, so disable it platform-wide.
+      enableServiceLinks: false
+      containers:
+        - name: webhooks
+          image: adtech-webhooks
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8091
+              name: http
+          env:
+            - name: POD_NAME
+              value: "webhooks-0"
+            # WEBHOOKS_NATS_URL resolves cfg.Get("webhooks.nats_url", ...).
+            - name: WEBHOOKS_NATS_URL
+              value: "nats://nats:4222"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8091
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8091
+            periodSeconds: 2
+            failureThreshold: 3

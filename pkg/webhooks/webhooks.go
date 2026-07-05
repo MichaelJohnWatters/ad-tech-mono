@@ -1,11 +1,11 @@
-// Package webhooks provides webhook registration and delivery.
-// Consumes events from NATS and delivers HTTP POST to registered URLs.
+// Package webhooks delivers account-scoped platform events to customer-
+// registered HTTP endpoints. The Dispatcher is the testable core: given an
+// Event (type + account + raw payload), it looks up the account's active
+// subscriptions for that event type, POSTs an HMAC-signed JSON envelope to
+// each, retries transient failures with backoff, and records every attempt.
 //
-// Usage:
-//
-//	dispatcher := webhooks.NewDispatcher(logger)
-//	dispatcher.Register(webhooks.Webhook{URL: "https://example.com/hook", Events: []string{"impression"}})
-//	dispatcher.Dispatch(ctx, "impression", payload)
+// The cmd/webhooks binary wires this to NATS (business-event subjects) and
+// Postgres (the `webhooks` + `webhook_deliveries` tables).
 package webhooks
 
 import (
@@ -16,180 +16,228 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 )
 
-// Webhook is a registered webhook endpoint.
-type Webhook struct {
-	ID        string
-	AccountID string
-	URL       string
-	Secret    string   // HMAC signing secret
-	Events    []string // event types to subscribe to
-	Status    string   // active, paused, failed
-	CreatedAt time.Time
+// Header names on every delivery. Receivers recompute the signature over the
+// raw request body using their subscription secret and compare in constant time.
+const (
+	HeaderSignature = "X-Adtech-Signature" // "sha256=<hex>"
+	HeaderEvent     = "X-Adtech-Event"     // event type, e.g. "budget.depleted"
+	HeaderTimestamp = "X-Adtech-Timestamp" // RFC3339 send time
+	HeaderDelivery  = "X-Adtech-Delivery"  // webhook subscription id (for receiver logs)
+)
+
+// Subscription is one registered endpoint for an account.
+type Subscription struct {
+	ID     string
+	URL    string
+	Secret string // HMAC-SHA256 signing secret
 }
 
-// Delivery tracks a webhook delivery attempt.
+// Delivery is the record of one POST attempt, persisted for the deliveries log.
 type Delivery struct {
-	WebhookID  string
-	EventType  string
-	URL        string
-	StatusCode int
-	Success    bool
-	Error      string
-	Timestamp  time.Time
-	RetryCount int
+	WebhookID      string
+	EventType      string
+	Payload        []byte
+	ResponseStatus int
+	ResponseBody   string
+	Attempt        int
+	Success        bool
 }
 
-// Dispatcher manages webhook registrations and delivers events.
+// Store is the persistence seam: which webhooks fire for an event, and where
+// delivery outcomes are written.
+type Store interface {
+	// ActiveForEvent returns active subscriptions for accountID whose event
+	// list contains eventType.
+	ActiveForEvent(ctx context.Context, accountID, eventType string) ([]Subscription, error)
+	// RecordDelivery persists one attempt outcome (best-effort; a failure to
+	// record must not abort delivery).
+	RecordDelivery(ctx context.Context, d Delivery) error
+}
+
+// Event is an account-scoped platform event to fan out to webhooks. Data is the
+// already-marshalled JSON of the originating event (e.g. a BudgetDepletedEvent).
+type Event struct {
+	Type      string
+	AccountID string
+	Data      json.RawMessage
+}
+
+// envelope is the JSON body actually POSTed. Wrapping the raw event data gives
+// receivers a stable, self-describing shape regardless of the inner event.
+type envelope struct {
+	Event     string          `json:"event"`
+	AccountID string          `json:"account_id"`
+	Timestamp string          `json:"timestamp"`
+	Data      json.RawMessage `json:"data"`
+}
+
+// Dispatcher fans an Event out to an account's subscriptions.
 type Dispatcher struct {
-	mu        sync.RWMutex
-	webhooks  map[string]*Webhook
-	deliveries []Delivery
-	client    *http.Client
-	log       *slog.Logger
+	Store Store
+	HTTP  *http.Client
+	// MaxAttempts caps tries per subscription (default 3). Backoff returns the
+	// pause before the retry after attempt n (default: 1s, 2s, 4s…). Now
+	// defaults to time.Now.
+	MaxAttempts int
+	Backoff     func(attempt int) time.Duration
+	Now         func() time.Time
+	Log         *slog.Logger
+
+	// sleep is overridable in tests to avoid real backoff waits.
+	sleep func(context.Context, time.Duration)
 }
 
-// NewDispatcher creates a webhook dispatcher.
-func NewDispatcher(log *slog.Logger) *Dispatcher {
-	return &Dispatcher{
-		webhooks: make(map[string]*Webhook),
-		client:   &http.Client{Timeout: 10 * time.Second},
-		log:      log,
+func (d *Dispatcher) maxAttempts() int {
+	if d.MaxAttempts > 0 {
+		return d.MaxAttempts
+	}
+	return 3
+}
+
+func (d *Dispatcher) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
+}
+
+func (d *Dispatcher) backoff(attempt int) time.Duration {
+	if d.Backoff != nil {
+		return d.Backoff(attempt)
+	}
+	return time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s, ...
+}
+
+func (d *Dispatcher) httpClient() *http.Client {
+	if d.HTTP != nil {
+		return d.HTTP
+	}
+	return &http.Client{Timeout: 10 * time.Second}
+}
+
+func (d *Dispatcher) doSleep(ctx context.Context, dur time.Duration) {
+	if d.sleep != nil {
+		d.sleep(ctx, dur)
+		return
+	}
+	t := time.NewTimer(dur)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }
 
-// Register adds a webhook.
-func (d *Dispatcher) Register(wh Webhook) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if wh.ID == "" {
-		wh.ID = fmt.Sprintf("wh-%d", len(d.webhooks)+1)
+// Dispatch delivers ev to every active subscription for its account. It returns
+// an error only on a lookup failure; per-subscription delivery failures are
+// recorded and logged, not returned (one bad endpoint must not block others).
+func (d *Dispatcher) Dispatch(ctx context.Context, ev Event) error {
+	if ev.AccountID == "" || ev.Type == "" {
+		return fmt.Errorf("webhooks: event missing type or account_id")
 	}
-	if wh.CreatedAt.IsZero() {
-		wh.CreatedAt = time.Now()
+	subs, err := d.Store.ActiveForEvent(ctx, ev.AccountID, ev.Type)
+	if err != nil {
+		return fmt.Errorf("webhooks: lookup subscriptions: %w", err)
 	}
-	wh.Status = "active"
-	d.webhooks[wh.ID] = &wh
-}
-
-// Remove deletes a webhook.
-func (d *Dispatcher) Remove(id string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.webhooks, id)
-}
-
-// List returns all webhooks for an account.
-func (d *Dispatcher) List(accountID string) []Webhook {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	var result []Webhook
-	for _, wh := range d.webhooks {
-		if accountID == "" || wh.AccountID == accountID {
-			result = append(result, *wh)
-		}
+	if len(subs) == 0 {
+		return nil
 	}
-	return result
-}
 
-// Dispatch sends an event to all matching webhooks.
-func (d *Dispatcher) Dispatch(ctx context.Context, eventType string, payload interface{}) {
-	d.mu.RLock()
-	var targets []*Webhook
-	for _, wh := range d.webhooks {
-		if wh.Status != "active" {
-			continue
-		}
-		for _, et := range wh.Events {
-			if et == eventType || et == "*" {
-				targets = append(targets, wh)
-				break
-			}
-		}
-	}
-	d.mu.RUnlock()
-
-	for _, wh := range targets {
-		go d.deliver(ctx, wh, eventType, payload)
-	}
-}
-
-func (d *Dispatcher) deliver(ctx context.Context, wh *Webhook, eventType string, payload interface{}) {
-	body, err := json.Marshal(map[string]interface{}{
-		"event":     eventType,
-		"timestamp": time.Now().UTC(),
-		"data":      payload,
+	body, err := json.Marshal(envelope{
+		Event:     ev.Type,
+		AccountID: ev.AccountID,
+		Timestamp: d.now().UTC().Format(time.RFC3339),
+		Data:      ev.Data,
 	})
 	if err != nil {
-		d.recordDelivery(wh.ID, eventType, wh.URL, 0, false, err.Error())
-		return
+		return fmt.Errorf("webhooks: marshal envelope: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", wh.URL, bytes.NewReader(body))
+	for _, sub := range subs {
+		d.deliver(ctx, sub, ev.Type, body)
+	}
+	return nil
+}
+
+// deliver POSTs body to one subscription, retrying transient failures up to
+// MaxAttempts. Every attempt is recorded. A 2xx is success; anything else (or a
+// transport error) is retried until the cap.
+func (d *Dispatcher) deliver(ctx context.Context, sub Subscription, eventType string, body []byte) {
+	sig := Sign(sub.Secret, body)
+	max := d.maxAttempts()
+
+	for attempt := 1; attempt <= max; attempt++ {
+		status, respBody, err := d.post(ctx, sub, eventType, body, sig)
+		success := err == nil && status >= 200 && status < 300
+
+		rec := Delivery{
+			WebhookID:      sub.ID,
+			EventType:      eventType,
+			Payload:        body,
+			ResponseStatus: status,
+			ResponseBody:   truncate(respBody, 2048),
+			Attempt:        attempt,
+			Success:        success,
+		}
+		if rerr := d.Store.RecordDelivery(ctx, rec); rerr != nil && d.Log != nil {
+			d.Log.Warn("webhook delivery not recorded", "webhook_id", sub.ID, "error", rerr)
+		}
+
+		if success {
+			if d.Log != nil {
+				d.Log.Info("webhook delivered", "webhook_id", sub.ID, "event", eventType, "attempt", attempt, "status", status)
+			}
+			return
+		}
+		if d.Log != nil {
+			d.Log.Warn("webhook delivery failed", "webhook_id", sub.ID, "event", eventType, "attempt", attempt, "status", status, "error", err)
+		}
+		if attempt < max {
+			d.doSleep(ctx, d.backoff(attempt))
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (d *Dispatcher) post(ctx context.Context, sub Subscription, eventType string, body []byte, sig string) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.URL, bytes.NewReader(body))
 	if err != nil {
-		d.recordDelivery(wh.ID, eventType, wh.URL, 0, false, err.Error())
-		return
+		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Webhook-Event", eventType)
+	req.Header.Set(HeaderSignature, sig)
+	req.Header.Set(HeaderEvent, eventType)
+	req.Header.Set(HeaderTimestamp, d.now().UTC().Format(time.RFC3339))
+	req.Header.Set(HeaderDelivery, sub.ID)
 
-	// Sign with HMAC if secret is set
-	if wh.Secret != "" {
-		sig := signPayload(body, wh.Secret)
-		req.Header.Set("X-Webhook-Signature", sig)
-	}
-
-	resp, err := d.client.Do(req)
+	resp, err := d.httpClient().Do(req)
 	if err != nil {
-		d.recordDelivery(wh.ID, eventType, wh.URL, 0, false, err.Error())
-		d.log.Warn("webhook delivery failed", "webhook", wh.ID, "url", wh.URL, "error", err)
-		return
+		return 0, "", err
 	}
-	resp.Body.Close()
-
-	success := resp.StatusCode >= 200 && resp.StatusCode < 300
-	d.recordDelivery(wh.ID, eventType, wh.URL, resp.StatusCode, success, "")
-
-	if !success {
-		d.log.Warn("webhook delivery rejected", "webhook", wh.ID, "status", resp.StatusCode)
-	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode, string(respBody), nil
 }
 
-func (d *Dispatcher) recordDelivery(webhookID, eventType, url string, status int, success bool, errMsg string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.deliveries = append(d.deliveries, Delivery{
-		WebhookID:  webhookID,
-		EventType:  eventType,
-		URL:        url,
-		StatusCode: status,
-		Success:    success,
-		Error:      errMsg,
-		Timestamp:  time.Now(),
-	})
-}
-
-// DeliveryHistory returns recent deliveries.
-func (d *Dispatcher) DeliveryHistory(webhookID string, limit int) []Delivery {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	var result []Delivery
-	for i := len(d.deliveries) - 1; i >= 0 && len(result) < limit; i-- {
-		del := d.deliveries[i]
-		if webhookID == "" || del.WebhookID == webhookID {
-			result = append(result, del)
-		}
-	}
-	return result
-}
-
-func signPayload(payload []byte, secret string) string {
+// Sign returns the "sha256=<hex>" HMAC of body under secret — the value placed
+// in X-Adtech-Signature. Receivers recompute and compare.
+func Sign(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
+	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

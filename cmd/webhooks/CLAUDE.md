@@ -1,36 +1,60 @@
 # Webhooks Dispatcher Service
 
-Consumes webhook events from NATS and delivers HTTP POST requests to registered webhook URLs.
+Consumes account-scoped business events from NATS and delivers HMAC-signed HTTP
+POSTs to customer-registered webhook URLs (the `webhooks` table). SHIPPED
+2026-07-05. Runs as a k8s pod (port 8091) — a background consumer with no
+external ingress, exposing only `/healthz`, `/readyz`, `/metrics`.
 
-## Responsibilities
+## How it works
 
-- Consume from `adtech.webhooks.*` NATS subjects
-- Look up registered webhooks for the event type and account
-- Deliver HTTP POST with JSON payload to registered URLs
-- HMAC-sign every payload for receiver verification
-- Retry with exponential backoff on failure (3 attempts)
-- Record delivery history (success/failure) in Postgres
+- `pkg/webhooks.Dispatcher` is the testable core: given an `Event` (type +
+  account_id + raw JSON), it looks up the account's active subscriptions for
+  that event type, wraps the raw event in a self-describing envelope, and
+  delivers to each endpoint with retries.
+- `cmd/webhooks/main.go` maps NATS subjects → customer-facing event names
+  (`eventRoutes`), extracts `account_id` from each event, and dispatches.
 
-## Key Packages Used
+## Event catalog (subject → event name)
 
-- `pkg/events/` - NATS consumption
-- `pkg/store/postgres/` - webhook registrations, delivery history
+Every mapped event payload carries an `account_id`. The event name is the string
+a customer puts in a subscription's `events` list (`POST /v1/api/webhooks`).
 
-## gRPC Services Exposed
+| NATS subject | Event name | Fires when |
+|---|---|---|
+| `adtech.budget.depleted` | `budget.depleted` | a campaign exhausts its budget |
+| `adtech.balance.depleted` | `balance.depleted` | an advertiser's prepay balance hits zero |
+| `adtech.campaign.state_changed` | `campaign.state_changed` | a campaign is paused/resumed/etc. |
 
-- `WebhookService` - see `pkg/proto/`
+Add a new event = one entry in `eventRoutes` + a row here. The source payload
+must carry `account_id`.
 
-## Webhook Events
+## Delivery contract (what receivers get)
 
-See `docs/PLAN.md` -> "NATS Subjects" -> "Webhook Subjects" for full list.
+- `POST` with JSON body `{event, account_id, timestamp, data}` where `data` is
+  the raw originating event.
+- Headers: `X-Adtech-Signature: sha256=<hmac>` (over the raw body, keyed by the
+  subscription secret), `X-Adtech-Event`, `X-Adtech-Timestamp`, `X-Adtech-Delivery`.
+- Success = HTTP 2xx. Otherwise retried up to `webhooks.max_attempts` (default 3)
+  with exponential backoff (`webhooks.backoff_base`). Every attempt is written to
+  `webhook_deliveries`.
+- At-least-once: keep `max_attempts × http_timeout + backoff` under the NATS
+  AckWait (30s) to avoid NATS-level redelivery on top of our own retries.
+  Receivers should dedup on `X-Adtech-Delivery` + signature.
+
+## Key packages / tables
+
+- `pkg/webhooks/` - Dispatcher + PostgresStore (the `webhooks` +
+  `webhook_deliveries` tables; migration 014). Subscription CRUD lives in the
+  gateway (`cmd/gateway/webhooks.go`, `POST/GET/DELETE /v1/api/webhooks`).
+- `pkg/events/` - NATS consumption (group `constants.NATSGroupWebhooks`).
 
 ## Dependencies
 
-- NATS JetStream (consumes webhook events)
-- Postgres (webhook registrations, delivery history)
+- NATS JetStream (event source; readiness fails without it)
+- Postgres (subscription source + delivery log)
 
 ## Diagram Updates
 
 If you change this service, check if diagrams need updating:
-- **New webhook event type?** Update `docs/PLAN.md` -> Webhook Subjects table + NATS Event Flow diagram
+- **New webhook event type?** Update the event catalog table above + NATS Event Flow diagram
 - **New dependency?** Update `docs/diagrams/architecture.d2`

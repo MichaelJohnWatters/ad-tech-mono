@@ -882,7 +882,7 @@ The reserve/settle dispatch logic exists in `pkg/billing.Engine.ProcessEvent` �
 **Downstream consumers of the analytics store** (scaffolded, not wired):
 
 - `cmd/rollup` — minute/hour/day/month aggregates for fast dashboard queries. Job stub.
-- `cmd/webhooks` — subscribes to event subjects, POSTs to advertiser/publisher-registered URLs. Empty directory.
+- `cmd/webhooks` — ✅ SHIPPED: subscribes to `budget.depleted`/`balance.depleted`/`campaign.state_changed`, POSTs HMAC-signed envelopes to account-registered URLs with retries + a `webhook_deliveries` log.
 - `cmd/pipeline` enrichment — derived fields (fraud score, IAB classification) before events land in analytics. Stub.
 - Billing persistence — `Ledger.Record` should `INSERT INTO ledger_entries` in addition to the in-memory append. Not done.
 
@@ -15138,7 +15138,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 68. Set up Python training environment (`python/`)
 69. **Dev tools (Phase 7):** Campaign recommendations in dashboard UI
 
-### ⚠️ Phase 8: Testing, Ops, and Infrastructure  — steps 76, 77 outstanding; 70–72 thin (see ledger)
+### ⚠️ Phase 8: Testing, Ops, and Infrastructure  — steps 76, 77 shipped 2026-07-05; 70–72 thin (see ledger)
 70. Programmable simulator (`pkg/simulator/`) - Go library + HTTP API + CLI
 71. k6 performance test scripts (`tests/k6/`)
 72. Chaos testing framework (`pkg/chaos/`) + chaos profiles
@@ -15228,7 +15228,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 | 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven | F-series batch-sweep assertion |
 | 61 | `sellers.json` from DB | ⚠️ serves 4 hardcoded pubs | `cmd/gateway/main.go:203`; source from `publishers` warm cache | adding a publisher changes output, no code change |
 | 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
-| 76 | `cmd/webhooks` dispatcher | ❌ empty (`.gitkeep`+CLAUDE) | `pkg/events` subjects + reserved `webhook_subs` invalidate | subscribed endpoint receives a signed event |
+| 76 | `cmd/webhooks` dispatcher | ✅ SHIPPED (2026-07-05) | `pkg/webhooks.Dispatcher` (store-backed, HMAC-signed envelope, retry+backoff, delivery log) + `cmd/webhooks` consuming `budget.depleted`/`balance.depleted`/`campaign.state_changed` from NATS → `webhooks`/`webhook_deliveries` tables; k8s pod + Tilt (port 8091). Remaining: more event types, delivery-log view API, DLQ on give-up | ✅ done (unit: httptest receiver verifies signed delivery + retry) |
 | 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
 | 70–72 | `pkg/simulator` / `tests/k6` / `pkg/chaos` | ⚠️ 1 file each (thin) | build `harness.ChaosKill*` first (see harness debt) | chaos/perf e2e cases flip |
 
@@ -15272,7 +15272,7 @@ reservation-expiry); an `exchange_rates` seed + non-USD campaign
 1. `harness.ChaosKill*` helpers (72) — unblocks ~13 skipped e2e cases at once.
 2. ~~SMTP + Mailpit (77)~~ ✅ done 2026-07-05 (scheduled reports now actually deliver).
 3. `sellers.json` from DB (61) — small, removes a hardcode.
-4. `cmd/webhooks` (76) — clear seam, customer-visible.
+4. ~~`cmd/webhooks` (76)~~ ✅ done 2026-07-05 (dispatcher delivers signed events with retries).
 5. `cmd/privacy-delete` / `-verify` (50) — compliance-critical, unblocks step 105.
 6. `cmd/fraud` + `cmd/optimise` CronJobs (58/63) — wrap existing libs.
 7. Identity-graph wiring (45) — lowest urgency, nothing depends on it.
