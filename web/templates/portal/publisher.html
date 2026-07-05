@@ -316,7 +316,10 @@
       {{ template "form-field" (dict "label" "Flight end" "name" "ed_end" "type" "date") }}
     </div>
     {{ template "form-field" (dict "label" "Advertiser allowlist (UUIDs, comma-separated)" "name" "ed_advertisers" "placeholder" "blank = any advertiser") }}
-    {{ template "form-field" (dict "label" "Placement allowlist (UUIDs, comma-separated)" "name" "ed_placements" "placeholder" "blank = all placements") }}
+    <div class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Placement allowlist (none checked = all placements)</span>
+      <div id="ed_placements_pick" class="space-y-1 max-h-40 overflow-auto rounded-md border border-gray-200 dark:border-gray-700 p-2 text-sm"></div>
+    </div>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editDeal').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -345,7 +348,10 @@
       {{ template "form-field" (dict "label" "Flight end" "name" "nd_end" "type" "date") }}
     </div>
     {{ template "form-field" (dict "label" "Advertiser allowlist (account UUIDs, comma-separated — blank = any)" "name" "nd_advertisers" "placeholder" "leave blank to allow all advertisers") }}
-    {{ template "form-field" (dict "label" "Placement allowlist (your placement UUIDs, comma-separated — blank = all your placements)" "name" "nd_placements" "placeholder" "leave blank for all placements") }}
+    <div class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Placement allowlist (none checked = all your placements)</span>
+      <div id="nd_placements_pick" class="space-y-1 max-h-40 overflow-auto rounded-md border border-gray-200 dark:border-gray-700 p-2 text-sm"></div>
+    </div>
     <div id="nd_pg_wrap" class="hidden">
       {{ template "form-field" (dict "label" "Guaranteed volume (impressions — PG only)" "name" "nd_volume" "type" "number" "placeholder" "e.g. 1000000") }}
     </div>
@@ -783,7 +789,7 @@ async function toggleDeal(id) {
   } catch (err) { toast('Update failed: ' + err.message, 'error'); }
 }
 
-function openEditDeal(id) {
+async function openEditDeal(id) {
   const d = dealsCache.find(x => x.id === id);
   if (!d) return;
   $('edID').value = id;
@@ -793,7 +799,8 @@ function openEditDeal(id) {
   $('ed_start').value = d.start_date || '';
   $('ed_end').value = d.end_date || '';
   $('ed_advertisers').value = (d.advertiser_ids || []).join(', ');
-  $('ed_placements').value = (d.placement_ids || []).join(', ');
+  await ensurePlacements();
+  renderPlacementPicker('ed_placements_pick', d.publisher_id, d.placement_ids);
   $('editDeal').classList.remove('hidden');
 }
 
@@ -803,7 +810,7 @@ async function saveDeal(ev) {
     name: $('ed_name').value.trim(),
     price: parseFloat($('ed_price').value),
     advertiser_ids: csvIDs($('ed_advertisers').value),
-    placement_ids: csvIDs($('ed_placements').value),
+    placement_ids: checkedPlacements('ed_placements_pick'),
   };
   if ($('ed_start').value) body.start_date = $('ed_start').value;
   if ($('ed_end').value) body.end_date = $('ed_end').value;
@@ -883,10 +890,30 @@ async function deleteSaved(id) {
 // Comma-separated UUID list → array (trimmed, empties dropped).
 const csvIDs = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
 
+// Placement allowlist picker: a checkbox list of the account's placements
+// (filtered to one publisher), replacing hand-typed UUIDs. None checked = all.
+async function ensurePlacements() { if (!placementsCache.length) await loadPlacements(); }
+function renderPlacementPicker(containerId, publisherID, selectedIDs) {
+  const sel = new Set(selectedIDs || []);
+  const mine = placementsCache.filter(p => !publisherID || p.PublisherID === publisherID);
+  const el = $(containerId);
+  el.innerHTML = mine.length ? mine.map(p => `
+    <label class="flex items-center gap-2">
+      <input type="checkbox" class="pl_pick" value="${esc(p.ID)}" ${sel.has(p.ID) ? 'checked' : ''}>
+      <span class="flex-1 truncate">${esc(p.Name)} <span class="text-xs text-gray-400">${p.Width}×${p.Height} ${esc(p.Format)}</span></span>
+    </label>`).join('')
+    : '<p class="text-xs text-gray-400">No placements on this site yet.</p>';
+}
+const checkedPlacements = (containerId) => [...$(containerId).querySelectorAll('.pl_pick:checked')].map(x => x.value);
+
 async function openNewDeal() {
   if (!publishers.length) await loadPublishers();
   if (!publishers.length) { toast('No publisher (site) on this account yet.', 'error'); return; }
+  await ensurePlacements();
   $('nd_publisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  // Placement picker follows the selected site.
+  const syncPicker = () => renderPlacementPicker('nd_placements_pick', $('nd_publisher').value, []);
+  $('nd_publisher').onchange = syncPicker; syncPicker();
   // Guaranteed volume only applies to PG deals — show it only for that type.
   const syncPG = () => $('nd_pg_wrap').classList.toggle('hidden', $('nd_type').value !== 'pg');
   $('nd_type').onchange = syncPG; syncPG();
@@ -901,7 +928,7 @@ async function createDeal(ev) {
     deal_type: $('nd_type').value,
     price: parseFloat($('nd_price').value) || 0,
     advertiser_ids: csvIDs($('nd_advertisers').value),
-    placement_ids: csvIDs($('nd_placements').value),
+    placement_ids: checkedPlacements('nd_placements_pick'),
   };
   if ($('nd_start').value) body.start_date = $('nd_start').value;
   if ($('nd_end').value) body.end_date = $('nd_end').value;
