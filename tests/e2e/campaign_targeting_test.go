@@ -62,4 +62,17 @@ func TestCampaignTargetingViaAPI(t *testing.T) {
 	if w := h.ExtractWinner(t, h.RunAuction(t, placementID, "USA", "mobile", "targ-usa")); w.NoBid {
 		t.Errorf("USA auction no-bid, want a winning bid (geo not excluded)")
 	}
+
+	// EDIT TARGETING via PATCH: move the exclusion from GBR to USA. Now USA
+	// should no-bid and GBR should win — proving the campaign PATCH reaches
+	// targeting_rules and re-gates the auction.
+	h.APIJSON(t, adv, http.MethodPatch, "/v1/api/campaigns/"+campaignID,
+		`{"exclude_geo":["USA"]}`)
+	h.RefreshAllCaches(t)
+	if w := h.ExtractWinner(t, h.RunAuction(t, placementID, "USA", "mobile", "targ-usa-2")); !w.NoBid {
+		t.Errorf("after PATCH exclude USA: USA auction won (%+v), want no-bid", w)
+	}
+	if w := h.ExtractWinner(t, h.RunAuction(t, placementID, "GBR", "mobile", "targ-gbr-2")); w.NoBid {
+		t.Errorf("after PATCH: GBR auction no-bid, want a win (GBR no longer excluded)")
+	}
 }
