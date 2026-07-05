@@ -60,6 +60,11 @@ const (
 	// tenant-scoped; served by the publisher-adserver arbitration ladder.
 	APIDirectLineItems = apiPrefix + "/api/direct-line-items"
 
+	// APIAgencyAccounts manages agency → managed-advertiser assignments. GET
+	// lists (an agency sees its own, staff see all / by ?agency_id); POST
+	// assigns and DELETE unassigns (staff only). Drives agency act-as.
+	APIAgencyAccounts = apiPrefix + "/api/agency-accounts"
+
 	// APIModeration is the staff creative-review queue (GET pending, POST
 	// approve/reject). JWT-gated on moderation:* — platform-wide (not tenant
 	// scoped): staff review every account's creatives.

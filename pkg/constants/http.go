@@ -27,9 +27,14 @@ const (
 	// account) from a platform operator (unscoped). See middleware.CallerScope.
 	HeaderAccountType = "X-Account-Type"
 	HeaderUserID      = "X-User-ID"
-	HeaderTraceID       = "X-Trace-ID"
-	HeaderWebhookEvent  = "X-Webhook-Event"
-	HeaderWebhookSig    = "X-Webhook-Signature"
+	// HeaderActAs names a managed account an agency session wants to act on
+	// behalf of. The gateway validates it against the agency's managed
+	// accounts and, if allowed, forwards that account as the effective
+	// X-Account-ID (type advertiser) so downstream services scope to it.
+	HeaderActAs        = "X-Act-As-Account"
+	HeaderTraceID      = "X-Trace-ID"
+	HeaderWebhookEvent = "X-Webhook-Event"
+	HeaderWebhookSig   = "X-Webhook-Signature"
 
 	// CORS
 	HeaderCORSOrigin  = "Access-Control-Allow-Origin"

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
@@ -53,10 +54,30 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 		// operator (unscoped) — see middleware.CallerScope.
 		claims := ClaimsFromContext(r.Context())
 		if claims != nil {
-			upstreamReq.Header.Set(constants.HeaderAccountID, claims.AccountID)
-			upstreamReq.Header.Set(constants.HeaderAccountType, string(claims.AccountType))
+			acctID := claims.AccountID
+			acctType := string(claims.AccountType)
+			// Agency act-as: an agency session may target one of its managed
+			// advertiser accounts via X-Act-As-Account. Validate against the
+			// agency's managed set, then forward that account as the effective
+			// advertiser tenant so downstream scoping applies to it. A target
+			// outside the managed set is rejected (never silently ignored).
+			if claims.AccountType == auth.AccountAgency {
+				if target := strings.TrimSpace(r.Header.Get(constants.HeaderActAs)); target != "" {
+					if !auth.CanAccessAccount(claims, target) {
+						http.Error(w, "forbidden: not one of your managed accounts", http.StatusForbidden)
+						return
+					}
+					acctID = target
+					acctType = string(auth.AccountAdvertiser)
+				}
+			}
+			upstreamReq.Header.Set(constants.HeaderAccountID, acctID)
+			upstreamReq.Header.Set(constants.HeaderAccountType, acctType)
 			upstreamReq.Header.Set(constants.HeaderUserID, claims.UserID)
 		}
+		// Never let an inbound act-as header leak past the gateway — the
+		// gateway is the only place authorised to resolve it.
+		upstreamReq.Header.Del(constants.HeaderActAs)
 
 		// Propagate the W3C trace context (traceparent) to the upstream so the
 		// downstream service continues THIS trace instead of forking a new one.
