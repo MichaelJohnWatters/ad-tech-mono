@@ -321,8 +321,9 @@ APIs + portal forms don't yet expose:
   segments/keywords/OS/inventory-type/freq-caps/bid-modifiers, creative weights/rotation.
   Touch: `createCampaignRequest`/`patchCampaignRequest` in `cmd/dsp/management.go` + portal forms.
 - **Deal depth:** ✅ allowlists + flight dates + PG `guaranteed_volume` shipped (API + portal). Remaining: `deal_config` (video break positions/skip), portal placement multiselect (UUIDs are typed by hand today).
-- **Placement:** ✅ `floor_config` device/geo floors shipped (`pkg/floors` resolver + SSP bid-path
-  + API + portal; gates bidding — verified). Remaining: time-based/dayparting floors.
+- **Placement:** ✅ `floor_config` device/geo floors + ✅ time-based/dayparting floors shipped
+  (`pkg/floors` resolver + SSP bid-path + API + portal dayparts textarea/timezone; gates bidding
+  — both verified live). Remaining: (none — floor depth complete).
   **Publisher:** ✅ revshare fee editing shipped (staff console `/v1/api/revshare` + billing-rates
   invalidate); remaining: payment-terms, tiered/guaranteed revshare config. **Direct-sold** `publisher_line_items`
   CRUD (+ its orphan invalidate subject).
