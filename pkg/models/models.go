@@ -191,6 +191,7 @@ type Placement struct {
 	PageURLPattern string
 	Status         string         // active, inactive
 	FloorConfig    map[string]any // JSONB: time-based, device-based, geo-based floors
+	VideoConfig    map[string]any // JSONB: skip/duration/mimes/protocols/plcmt for video slots
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

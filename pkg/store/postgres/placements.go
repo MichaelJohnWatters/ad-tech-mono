@@ -42,6 +42,7 @@ SELECT
     COALESCE(pl.page_url_pattern, ''),
     pl.status,
     COALESCE(pl.floor_config::text, '{}'),
+    COALESCE(pl.video_config::text, '{}'),
     pl.created_at,
     pl.updated_at,
     pub.name,
@@ -59,17 +60,18 @@ WHERE pl.status = 'active'`
 	var out []PlacementRow
 	for rows.Next() {
 		var r PlacementRow
-		var floorJSON string
+		var floorJSON, videoJSON string
 		if err := rows.Scan(
 			&r.ID, &r.PublisherID, &r.AccountID, &r.Name, &r.Format,
 			&r.Width, &r.Height, &r.FloorPrice, &r.FloorCurrency,
-			&r.PageURLPattern, &r.Status, &floorJSON,
+			&r.PageURLPattern, &r.Status, &floorJSON, &videoJSON,
 			&r.CreatedAt, &r.UpdatedAt,
 			&r.PublisherName, &r.PublisherDomain,
 		); err != nil {
 			return nil, fmt.Errorf("scan placement: %w", err)
 		}
 		r.FloorConfig = parseFloorConfig(floorJSON)
+		r.VideoConfig = parseFloorConfig(videoJSON) // same permissive JSONB→map parse
 		r.Categories = extractCategories(r.FloorConfig)
 		out = append(out, r)
 	}
