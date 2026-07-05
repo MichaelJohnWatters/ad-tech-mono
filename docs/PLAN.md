@@ -15262,12 +15262,14 @@ re-runs now idempotent (replace-by-window on all three backends); tracker reads
 
 `harness.ChaosKill{NATS,Redis,Postgres,Minio}` ✅ SHIPPED 2026-07-05
 (`tests/e2e/harness/chaos.go`; the 4 chaos tests now assert graceful
-degradation). Still-open harness gaps: `pkg/billing` tiered-RS /
-guaranteed-minimum / deal-type / multi-currency need a contract-write helper
-seeding `publishers.revshare_config` (4 billing tests); a bulk-auction helper +
-low-TTL config knob (tiered-RS, reservation-expiry); an `exchange_rates` seed +
-non-USD campaign (multi-currency); a Jaeger client wrapper + single-step
-migration mode (observability / migration).
+degradation). Contract-write helper `harness.SetPublisherContract` ✅ SHIPPED
+2026-07-06 (writes `publishers.revshare_config` + invalidates billing-rates);
+`TestBillingGuaranteedMinimumSubsidy` flipped. Still-open harness gaps: deal-type
+modifier needs deal_type to propagate impression→SpendEvent; tiered-RS needs the
+settle path to populate `Contract.MonthImpressions` + a `FireNAuctions` tier
+cross; reservation-expiry needs a cron helper + low-TTL knob; multi-currency
+needs an `exchange_rates` seed + non-USD campaign; observability/migration need a
+Jaeger client wrapper + single-step migration mode.
 
 ### Suggested pickup order
 
