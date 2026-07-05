@@ -131,15 +131,30 @@ func placementByIDHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) htt
 	}
 }
 
-// floorConfigInput is the structured device/geo floor-override map stored in
-// placements.floor_config and resolved per-request by pkg/floors. Keys are
-// device names / country codes; values are CPM floors (>= 0).
+// floorConfigInput is the structured device/geo/time floor-override map stored
+// in placements.floor_config and resolved per-request by pkg/floors. Device
+// keys are device names, geo keys are country codes; values are CPM floors
+// (>= 0). Dayparts raise the floor during matching time windows (evaluated in
+// Timezone, an IANA name; UTC if empty).
 type floorConfigInput struct {
-	Device map[string]float64 `json:"device,omitempty"`
-	Geo    map[string]float64 `json:"geo,omitempty"`
+	Device   map[string]float64 `json:"device,omitempty"`
+	Geo      map[string]float64 `json:"geo,omitempty"`
+	Timezone string             `json:"timezone,omitempty"`
+	Dayparts []daypartInput     `json:"dayparts,omitempty"`
 }
 
-// validate rejects negative floors; marshals to the JSONB the column stores.
+// daypartInput is one time-window floor override. Days are weekdays with
+// Sunday=0 … Saturday=6 (empty = every day). The hour window is
+// [StartHour, EndHour); EndHour <= StartHour wraps past midnight.
+type daypartInput struct {
+	Days      []int   `json:"days,omitempty"`
+	StartHour int     `json:"start_hour"`
+	EndHour   int     `json:"end_hour"`
+	Floor     float64 `json:"floor"`
+}
+
+// validate rejects negative floors, out-of-range days/hours, and unknown
+// timezones; marshals to the JSONB the column stores.
 func (f *floorConfigInput) validateAndJSON() (string, error) {
 	if f == nil {
 		return "{}", nil
@@ -148,6 +163,24 @@ func (f *floorConfigInput) validateAndJSON() (string, error) {
 		for k, v := range m {
 			if v < 0 {
 				return "", fmt.Errorf("floor override %q must be >= 0", k)
+			}
+		}
+	}
+	if f.Timezone != "" {
+		if _, err := time.LoadLocation(f.Timezone); err != nil {
+			return "", fmt.Errorf("invalid timezone %q", f.Timezone)
+		}
+	}
+	for i, dp := range f.Dayparts {
+		if dp.Floor < 0 {
+			return "", fmt.Errorf("daypart %d floor must be >= 0", i)
+		}
+		if dp.StartHour < 0 || dp.StartHour > 23 || dp.EndHour < 0 || dp.EndHour > 24 {
+			return "", fmt.Errorf("daypart %d hours must be 0-23 (start) / 0-24 (end)", i)
+		}
+		for _, d := range dp.Days {
+			if d < 0 || d > 6 {
+				return "", fmt.Errorf("daypart %d day %d must be 0-6 (Sun-Sat)", i, d)
 			}
 		}
 	}

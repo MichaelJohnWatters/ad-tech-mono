@@ -336,10 +336,10 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	ctx := logger.WithTraceID(r.Context(), traceID)
 	reqLog := logger.WithContext(log, ctx)
 
-	// Effective floor: the placement's base floor raised by any device/geo
-	// override in floor_config that matches this request (publisher-favouring
-	// max). Empty config → base floor unchanged.
-	effectiveFloor := floors.Effective(p.FloorPrice, p.FloorConfig, device, geo)
+	// Effective floor: the placement's base floor raised by any device/geo/
+	// daypart override in floor_config that matches this request (publisher-
+	// favouring max). Empty config → base floor unchanged.
+	effectiveFloor := floors.Effective(p.FloorPrice, p.FloorConfig, device, geo, time.Now())
 	bidReq := openrtb.BidRequest{
 		ID: traceID,
 		Imp: []openrtb.Imp{{

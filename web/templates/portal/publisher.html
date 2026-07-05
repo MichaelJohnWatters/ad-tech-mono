@@ -209,6 +209,12 @@
       <div class="mt-3">
         {{ template "form-field" (dict "label" "Device floors (device:CPM, comma-separated)" "name" "np_floor_device" "placeholder" "mobile:1.50, desktop:2.00") }}
         {{ template "form-field" (dict "label" "Geo floors (country:CPM)" "name" "np_floor_geo" "placeholder" "USA:2.50, GBR:1.80") }}
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Daypart floors (one per line: <code>DAYS HOURS FLOOR</code>)</span>
+          <textarea id="np_floor_dayparts" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="1-5 9-18 3.00&#10;0,6 22-4 4.00"></textarea>
+        </label>
+        <p class="text-xs text-gray-400 mb-2">Days: <code>*</code> = every day, else Sun=0…Sat=6 (ranges/lists ok). Hours: <code>start-end</code>, 24h, end exclusive; end ≤ start wraps midnight.</p>
+        {{ template "form-field" (dict "label" "Daypart timezone (IANA, blank = UTC)" "name" "np_floor_tz" "placeholder" "America/New_York") }}
         <p class="text-xs text-gray-400">The effective floor per request is the highest of the base and any matching override.</p>
       </div>
     </details>
@@ -228,6 +234,12 @@
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "ep_floor" "type" "number") }}
     {{ template "form-field" (dict "label" "Device floors (device:CPM)" "name" "ep_floor_device" "placeholder" "mobile:1.50") }}
     {{ template "form-field" (dict "label" "Geo floors (country:CPM)" "name" "ep_floor_geo" "placeholder" "USA:2.50") }}
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Daypart floors (one per line: <code>DAYS HOURS FLOOR</code>)</span>
+      <textarea id="ep_floor_dayparts" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="1-5 9-18 3.00"></textarea>
+    </label>
+    <p class="text-xs text-gray-400 mb-2">Days: <code>*</code>=every day, else Sun=0…Sat=6. Hours: <code>start-end</code>, end exclusive; end ≤ start wraps midnight.</p>
+    {{ template "form-field" (dict "label" "Daypart timezone (IANA, blank = UTC)" "name" "ep_floor_tz" "placeholder" "America/New_York") }}
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editPlacement').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -465,12 +477,59 @@ function parseFloorMap(v) {
 // {mobile:1.5} → "mobile:1.5" for prefilling the edit inputs.
 const floorMapToStr = (m) => Object.entries(m || {}).map(([k, v]) => `${k}:${v}`).join(', ');
 
-// Assemble the floor_config object from device/geo inputs; undefined if empty.
-function floorConfigBody(deviceId, geoId) {
+// Parse a dayparts textarea: one window per line "DAYS HOURS FLOOR".
+//   DAYS: "*" = every day, or comma/range list like "1-5" or "0,6" (Sun=0).
+//   HOURS: "start-end" (24h, end exclusive; end<=start wraps midnight).
+//   FLOOR: CPM number. Malformed lines are skipped.
+function parseDayparts(str) {
+  const out = [];
+  (str || '').split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 3) return;
+    const floor = parseFloat(parts[2]);
+    const hm = parts[1].split('-');
+    if (isNaN(floor) || hm.length !== 2) return;
+    const start = parseInt(hm[0], 10), end = parseInt(hm[1], 10);
+    if (isNaN(start) || isNaN(end)) return;
+    const days = [];
+    if (parts[0] !== '*') {
+      parts[0].split(',').forEach(tok => {
+        if (tok.includes('-')) {
+          const [a, b] = tok.split('-').map(x => parseInt(x, 10));
+          for (let d = a; d <= b; d++) if (!isNaN(d)) days.push(d);
+        } else {
+          const d = parseInt(tok, 10);
+          if (!isNaN(d)) days.push(d);
+        }
+      });
+    }
+    const dp = {start_hour: start, end_hour: end, floor};
+    if (days.length) dp.days = days;
+    out.push(dp);
+  });
+  return out;
+}
+
+// Inverse of parseDayparts: render config dayparts back into the textarea.
+const daypartsToStr = (arr) => (arr || []).map(dp =>
+  `${(dp.days && dp.days.length) ? dp.days.join(',') : '*'} ${dp.start_hour}-${dp.end_hour} ${dp.floor}`
+).join('\n');
+
+// Assemble the floor_config object from device/geo/daypart/tz inputs; undefined
+// if empty. daypartsId/tzId are optional (older forms may omit them).
+function floorConfigBody(deviceId, geoId, daypartsId, tzId) {
   const device = parseFloorMap($(deviceId).value), geo = parseFloorMap($(geoId).value);
   const cfg = {};
   if (Object.keys(device).length) cfg.device = device;
   if (Object.keys(geo).length) cfg.geo = geo;
+  if (daypartsId) {
+    const dp = parseDayparts($(daypartsId).value);
+    if (dp.length) cfg.dayparts = dp;
+  }
+  if (tzId) {
+    const tz = $(tzId).value.trim();
+    if (tz) cfg.timezone = tz;
+  }
   return Object.keys(cfg).length ? cfg : undefined;
 }
 
@@ -484,7 +543,7 @@ async function createPlacement(ev) {
     height: parseInt($('np_height').value, 10) || 0,
     floor_price: parseFloat($('np_floor').value) || 0,
   };
-  const fc = floorConfigBody('np_floor_device', 'np_floor_geo');
+  const fc = floorConfigBody('np_floor_device', 'np_floor_geo', 'np_floor_dayparts', 'np_floor_tz');
   if (fc) body.floor_config = fc;
   try {
     await fetchJSON('/v1/api/placements', {method: 'POST', body: JSON.stringify(body)});
@@ -516,6 +575,8 @@ function openEditPlacement(id) {
   const fc = p.FloorConfig || {};
   $('ep_floor_device').value = floorMapToStr(fc.device);
   $('ep_floor_geo').value = floorMapToStr(fc.geo);
+  $('ep_floor_dayparts').value = daypartsToStr(fc.dayparts);
+  $('ep_floor_tz').value = fc.timezone || '';
   $('editPlacement').classList.remove('hidden');
 }
 
@@ -523,7 +584,7 @@ async function savePlacement(ev) {
   ev.preventDefault();
   const body = {name: $('ep_name').value.trim(), floor_price: parseFloat($('ep_floor').value)};
   // Always send floor_config on edit so clearing the inputs clears overrides.
-  body.floor_config = floorConfigBody('ep_floor_device', 'ep_floor_geo') || {};
+  body.floor_config = floorConfigBody('ep_floor_device', 'ep_floor_geo', 'ep_floor_dayparts', 'ep_floor_tz') || {};
   try {
     await fetchJSON('/v1/api/placements/' + encodeURIComponent($('epID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editPlacement').classList.add('hidden');
