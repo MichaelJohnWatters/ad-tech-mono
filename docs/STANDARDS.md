@@ -80,7 +80,7 @@ only, no runtime) · ⬜ not implemented
 | Standard | Steward | Who it's for | Prominence | Our status | Where / notes |
 |---|---|---|---|---|---|
 | MRC Viewability (50%/1s; video 2s) | Media Rating Council | Everyone measuring viewability | 🔴 | ✅ | `cmd/tracker/main.go` server-authoritative `IsIABViewable` |
-| IAB Content Taxonomy 3.0 | IAB Tech Lab | Contextual classification | 🔴 | 🟨 | Only ~14 hand-picked codes in `pkg/constants`; not full taxonomy |
+| IAB Content Taxonomy 1.0 | IAB Tech Lab | Contextual classification | 🔴 | ✅ | Complete tier-1 set (IAB1–26) + validation/lookup/parent-resolution in `pkg/taxonomy`; classifier expands tier-2→tier-1. (Platform runs on 1.0 `IABxx` / `cattax=1`; 3.0 numeric ids would be a data migration — deferred) |
 | IAB standard ad units (300×250 …) | IAB | Creative sizing | 🔴 | 🟨 | W/H supported; no validated preset list |
 | MRAID 3.0 | IAB Tech Lab | In-app rich media | 🔴 | 🟨 | Signal codes only; no runtime |
 | SafeFrame 2.0 | IAB Tech Lab | Creative sandboxing | 🟡 | ⬜ | — |
@@ -112,8 +112,12 @@ they land and flip the status cells above.
       `Evaluate` honours it distinctly (reason `gpc`), no longer a US-Privacy hack.
 
 ### Phase 3 — Deepen the half-built
-- [ ] **Full IAB Content Taxonomy 3.0** — replace the 14 hand-picked codes with
-      the complete list (pure data).
+- [x] **IAB Content Taxonomy** — `pkg/taxonomy` holds the complete tier-1 set
+      (IAB1–26, spec-accurate) with validation, name lookup, and tier-2→tier-1
+      resolution; `pkg/constants` expanded + the `IAB10`(Home&Garden)/`IAB21`(Real
+      Estate) mix-up fixed; classifier expands subcategories to their parent.
+      *(Stayed on Taxonomy 1.0 / `cattax=1` — what the platform's data uses;
+      migrating to 3.0 numeric ids is a separate data migration, deferred.)*
 - [ ] **OpenRTB Native 1.2** execution — asset rendering + native event tracking.
 - [ ] **OMID / SIMID** interactive-video runtime (skip VPAID — deprecated).
 
@@ -127,6 +131,9 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 3 (part 1): IAB Content Taxonomy completed — new `pkg/taxonomy`
+  (full tier-1 set + validation/lookup/parent-resolution), constants fixed/expanded,
+  classifier wired. Native 1.2 + OMID/SIMID still open.
 - **2026-07-06** — Phase 2 shipped: first-class GPC (`Regs.ext.gpc`), GPP US-National
   opt-out decode (`pkg/privacy/gpp.go`), and `Evaluate` refactored to a `privacy.Signals`
   struct. GPP/GPC rows + roadmap updated.

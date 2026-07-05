@@ -41,6 +41,26 @@ func TestClassifier_DeclaredPriority(t *testing.T) {
 	}
 }
 
+func TestClassifier_TierTwoImpliesParent(t *testing.T) {
+	c := NewClassifier()
+
+	// A publisher declaring only a tier-2 subcategory must come back with its
+	// tier-1 parent attached so broad category targeting still matches.
+	cats := c.Classify("", "https://x.com/p", []string{"IAB17-1"}, nil)
+	var hasParent, hasChild bool
+	for _, cat := range cats {
+		switch cat {
+		case "IAB17":
+			hasParent = true
+		case "IAB17-1":
+			hasChild = true
+		}
+	}
+	if !hasChild || !hasParent {
+		t.Errorf("expected both IAB17-1 and parent IAB17, got %v", cats)
+	}
+}
+
 func TestClassifier_KeywordFallback(t *testing.T) {
 	c := NewClassifier()
 
@@ -86,7 +106,7 @@ func TestStem(t *testing.T) {
 	tests := map[string]string{
 		"charging": "charg",
 		"running":  "runn",
-		"players":  "play",  // "ers" strips first
+		"players":  "play", // "ers" strips first
 		"played":   "play",
 		"quickly":  "quick",
 		"cat":      "cat", // too short to stem
