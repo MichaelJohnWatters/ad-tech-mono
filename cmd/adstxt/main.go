@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -45,12 +47,16 @@ func main() {
 	log.Info("ads.txt crawl starting", "domains", len(domains))
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	var valid, missing, errored int
+	var valid, missing, errored, changed int
 	for _, domain := range domains {
 		rec := fraud.FetchAdsTxt(ctx, client, domain)
-		if err := upsert(ctx, db, rec); err != nil {
+		didChange, err := upsert(ctx, db, rec)
+		if err != nil {
 			log.Error("upsert ads_txt_cache", "domain", domain, "error", err)
 			continue
+		}
+		if didChange {
+			changed++
 		}
 		switch rec.Status {
 		case "valid":
@@ -60,9 +66,26 @@ func main() {
 		default:
 			errored++
 		}
-		log.Debug("crawled", "domain", domain, "status", rec.Status, "entries", len(rec.Entries))
+		log.Debug("crawled", "domain", domain, "status", rec.Status, "entries", len(rec.Entries), "changed", didChange)
 	}
-	log.Info("ads.txt crawl complete", "valid", valid, "missing", missing, "error", errored)
+	log.Info("ads.txt crawl complete", "valid", valid, "missing", missing, "error", errored, "changed", changed)
+
+	// If any domain's ads.txt actually moved, invalidate the exchange's warm
+	// cache so it re-reads immediately instead of waiting for the 300s poll.
+	// Best-effort: a NATS outage just means the poll picks it up later.
+	if changed > 0 {
+		bus, err := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), "adstxt", log)
+		if err != nil {
+			log.Warn("nats connect for ads.txt invalidate failed; exchange picks up on next poll", "error", err)
+			return
+		}
+		defer bus.Close()
+		if err := bus.Publish(ctx, events.SubjectCacheInvalidateAdsTxt, []byte(`{"source":"adstxt"}`)); err != nil {
+			log.Warn("publish ads.txt invalidate failed", "error", err)
+			return
+		}
+		log.Info("published ads.txt cache invalidate", "changed_domains", changed)
+	}
 }
 
 func publisherDomains(ctx context.Context, db *sql.DB) ([]string, error) {
@@ -82,26 +105,35 @@ func publisherDomains(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
-func upsert(ctx context.Context, db *sql.DB, rec fraud.AdsTxtRecord) error {
+// upsert writes the crawl result and reports whether the parsed ads.txt content
+// actually changed (a brand-new domain counts as a change). Detection: on an
+// insert or a content change, last_changed is set to now() — the same value as
+// last_fetched in this statement — so (last_changed = last_fetched) is true iff
+// the row changed this run.
+func upsert(ctx context.Context, db *sql.DB, rec fraud.AdsTxtRecord) (bool, error) {
 	entries := rec.Entries
 	if entries == nil {
 		entries = []fraud.AdsTxtEntry{}
 	}
 	b, err := json.Marshal(entries)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// last_changed advances only when the parsed content actually changed,
 	// so ops can see "this publisher's ads.txt moved" vs "we just re-crawled".
 	const q = `
-INSERT INTO ads_txt_cache (domain, entries, last_fetched, status)
-VALUES ($1, $2, now(), $3)
+INSERT INTO ads_txt_cache (domain, entries, last_fetched, status, last_changed)
+VALUES ($1, $2, now(), $3, now())
 ON CONFLICT (domain) DO UPDATE SET
     entries      = EXCLUDED.entries,
     last_fetched = now(),
     status       = EXCLUDED.status,
     last_changed = CASE WHEN ads_txt_cache.entries IS DISTINCT FROM EXCLUDED.entries
-                        THEN now() ELSE ads_txt_cache.last_changed END`
-	_, err = db.ExecContext(ctx, q, rec.Domain, b, rec.Status)
-	return err
+                        THEN now() ELSE ads_txt_cache.last_changed END
+RETURNING (last_changed = last_fetched)`
+	var changed bool
+	if err := db.QueryRowContext(ctx, q, rec.Domain, b, rec.Status).Scan(&changed); err != nil {
+		return false, err
+	}
+	return changed, nil
 }
