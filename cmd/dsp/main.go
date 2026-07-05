@@ -654,19 +654,21 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				optLevel = rec.Level
 			}
 		}
-		var gdpr, coppa int
-		var tcfConsent, usPrivacy string
+		sig := privacy.Signals{Level: optLevel}
 		if bidReq.Regs != nil {
-			coppa = bidReq.Regs.COPPA
+			sig.COPPA = bidReq.Regs.COPPA
 			if bidReq.Regs.Ext != nil {
-				gdpr = bidReq.Regs.Ext.GDPR
-				usPrivacy = bidReq.Regs.Ext.USPrivacy
+				sig.GDPR = bidReq.Regs.Ext.GDPR
+				sig.USPrivacy = bidReq.Regs.Ext.USPrivacy
+				sig.GPP = bidReq.Regs.Ext.GPP
+				sig.GPPSID = bidReq.Regs.Ext.GPPSID
+				sig.GPC = bidReq.Regs.Ext.GPC == 1
 			}
 		}
 		if bidReq.User != nil && bidReq.User.Ext != nil {
-			tcfConsent = bidReq.User.Ext.Consent
+			sig.TCFConsent = bidReq.User.Ext.Consent
 		}
-		consent := privacy.Evaluate(optLevel, gdpr, tcfConsent, usPrivacy, coppa)
+		consent := privacy.Evaluate(sig)
 		if !consent.Bid {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})

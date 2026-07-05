@@ -63,8 +63,8 @@ only, no runtime) · ⬜ not implemented
 | IAB TCF v2.2 (GDPR) | IAB Europe | EU traffic | 🔴 | ✅ | `pkg/privacy/consent.go`, evaluated at bid time |
 | US Privacy String (CCPA) | IAB Tech Lab | US traffic (legacy) | 🟠 | ✅ | `pkg/privacy/consent.go` `usPrivacyOptOut()` |
 | GDPR / CCPA / COPPA enforcement | regulatory | Compliance | 🔴 | ✅ | 3-tier opt-out registry; contextual-downgrade on missing consent. SSP now populates `Regs`/`User.ext.consent` from the ad tag (`applyPrivacySignals`) so DSP `Evaluate` runs on real inputs (previously empty) |
-| **GPP (Global Privacy Platform)** | IAB Tech Lab | Consolidated consent envelope | 🔴 | 🟨 | Passthrough only: `gpp`/`gpp_sid` carried SSP→exchange→DSP (`RegsExt`, `cmd/ssp` `applyPrivacySignals`). Full *parsing* in `Evaluate` still Phase 2 |
-| Global Privacy Control (GPC) | W3C / browsers | Browser opt-out | 🟡 | 🟨 | `Sec-GPC: 1` mapped to a US-Privacy opt-out at the SSP (`applyPrivacySignals`) |
+| **GPP (Global Privacy Platform)** | IAB Tech Lab | Consolidated consent envelope | 🔴 | ✅ | `pkg/privacy/gpp.go` decodes the US National section (id 7) sale/share/targeted-ad opt-out → contextual via `Evaluate`. Other US state sections recognised, decode deferred (safe — downgrade only) |
+| Global Privacy Control (GPC) | W3C / browsers | Browser opt-out | 🟡 | ✅ | First-class: SSP sets `Regs.ext.gpc` from `Sec-GPC`/`?gpc=1`; `Evaluate` honours it with reason `gpc` |
 
 ## 5. Identity
 
@@ -103,11 +103,13 @@ they land and flip the status cells above.
       signals (query params + `Sec-GPC`) onto the outbound request via
       `applyPrivacySignals`; DSP enforcement previously saw empty inputs.
 
-### Phase 2 — Modernise privacy *(regulatory pressure rising)*
-- [~] **GPP** — `gpp`/`gpp_sid` now carried end-to-end (passthrough); still need
-      full string *parsing* in `pkg/privacy/consent.go` alongside TCF/USP.
-- [~] **GPC** — `Sec-GPC` mapped to a US-Privacy opt-out at the SSP; a first-class
-      GPC signal in `Evaluate` (rather than the USP mapping) is the remaining work.
+### Phase 2 — Modernise privacy *(regulatory pressure rising)* — ✅ SHIPPED
+- [x] **GPP** — `pkg/privacy/gpp.go` decodes the US National section (id 7) opt-out
+      bits; `Evaluate` downgrades to contextual (reason `gpp_opt_out`). `Evaluate` now
+      takes a `privacy.Signals` struct. Follow-up: decode other US state sections
+      (8–12) + validate bit offsets against official IAB test vectors before strict use.
+- [x] **GPC** — first-class `Regs.ext.gpc` set by the SSP from `Sec-GPC`/`?gpc=1`;
+      `Evaluate` honours it distinctly (reason `gpc`), no longer a US-Privacy hack.
 
 ### Phase 3 — Deepen the half-built
 - [ ] **Full IAB Content Taxonomy 3.0** — replace the 14 hand-picked codes with
@@ -125,6 +127,9 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 2 shipped: first-class GPC (`Regs.ext.gpc`), GPP US-National
+  opt-out decode (`pkg/privacy/gpp.go`), and `Evaluate` refactored to a `privacy.Signals`
+  struct. GPP/GPC rows + roadmap updated.
 - **2026-07-05** — Phase 1 shipped: schain (origin at SSP + validation at exchange),
   app-ads.txt crawler + cache (migration 035), and the SSP privacy-signal plumbing fix
   (incl. GPP passthrough + GPC→USP mapping). Rows/roadmap updated above.

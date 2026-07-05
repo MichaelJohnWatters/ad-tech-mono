@@ -41,6 +41,31 @@ type Decision struct {
 	Reason string
 }
 
+// Signals is the full set of privacy inputs for a single bid request: the
+// platform's own opt-out registry level plus every inbound regulatory signal
+// carried on the OpenRTB request. It's a struct rather than a positional
+// parameter list because the signal set keeps growing (GPC, GPP, …) and named
+// fields keep call sites unambiguous.
+type Signals struct {
+	// Level is the platform opt-out registry level for the user (LevelNone
+	// when unknown / no row).
+	Level OptOutLevel
+	// GDPR is regs.ext.gdpr (1 = GDPR applies); TCFConsent is the TCF string.
+	GDPR       int
+	TCFConsent string
+	// USPrivacy is the legacy IAB US Privacy ("CCPA") string, e.g. "1YNN".
+	USPrivacy string
+	// COPPA is regs.coppa (1 = child-directed).
+	COPPA int
+	// GPC is the Global Privacy Control browser signal (regs.ext.gpc == 1) —
+	// a first-class "do not sell/share" request.
+	GPC bool
+	// GPP / GPPSID are the IAB Global Privacy Platform consent string and its
+	// section-id list (regs.ext.gpp / gpp_sid).
+	GPP    string
+	GPPSID string
+}
+
 // Evaluate combines the platform opt-out registry level with the inbound
 // OpenRTB regulatory signals into a single verdict. Precedence:
 //
@@ -48,28 +73,36 @@ type Decision struct {
 //     Level 2/3 → no bid; Level 1 → contextual only.
 //  2. COPPA (child-directed) → contextual only.
 //  3. GDPR applies but no TCF consent string present → contextual only.
-//  4. US Privacy "opt-out of sale" set → contextual only.
-//  5. Otherwise → full personalisation.
+//  4. GPC "do not sell/share" browser signal → contextual only.
+//  5. US Privacy "opt-out of sale" set → contextual only.
+//  6. GPP US section signals a sale/share/targeted-ad opt-out → contextual only.
+//  7. Otherwise → full personalisation.
 //
 // We deliberately downgrade-to-contextual rather than no-bid for the
-// regulatory signals (2–4): serving a non-personalised ad is lawful and
+// regulatory signals (2–6): serving a non-personalised ad is lawful and
 // keeps inventory monetised, whereas a blanket no-bid would silently drop
 // all EU / child / CCPA-opt-out traffic.
-func Evaluate(level OptOutLevel, gdpr int, tcfConsent, usPrivacy string, coppa int) Decision {
+func Evaluate(s Signals) Decision {
 	switch {
-	case level >= LevelNoTracking:
+	case s.Level >= LevelNoTracking:
 		return Decision{Bid: false, Personalise: false, Reason: "opt_out_no_tracking"}
-	case level == LevelNoPersonalisation:
+	case s.Level == LevelNoPersonalisation:
 		return Decision{Bid: true, Personalise: false, Reason: "opt_out_no_personalisation"}
 	}
-	if coppa == 1 {
+	if s.COPPA == 1 {
 		return Decision{Bid: true, Personalise: false, Reason: "coppa"}
 	}
-	if gdpr == 1 && tcfConsent == "" {
+	if s.GDPR == 1 && s.TCFConsent == "" {
 		return Decision{Bid: true, Personalise: false, Reason: "gdpr_no_consent"}
 	}
-	if usPrivacyOptOut(usPrivacy) {
+	if s.GPC {
+		return Decision{Bid: true, Personalise: false, Reason: "gpc"}
+	}
+	if usPrivacyOptOut(s.USPrivacy) {
 		return Decision{Bid: true, Personalise: false, Reason: "us_privacy_opt_out"}
+	}
+	if GPPOptOut(s.GPP, s.GPPSID) {
+		return Decision{Bid: true, Personalise: false, Reason: "gpp_opt_out"}
 	}
 	return Decision{Bid: true, Personalise: true, Reason: "consented"}
 }
