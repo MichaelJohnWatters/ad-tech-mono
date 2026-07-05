@@ -10,10 +10,26 @@ import (
 	"net/http"
 	"strings"
 
+	"time"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/lib/pq"
 )
+
+func derefStrings(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
 
 // errDealPublisherNotOwned is returned when a create references a publisher the
 // caller's account doesn't own → the handler maps it to 403.
@@ -25,22 +41,77 @@ type dealInput struct {
 	DealType      string  `json:"deal_type"`
 	Price         float64 `json:"price"`
 	PriceCurrency string  `json:"price_currency"`
+	// AdvertiserIDs / PlacementIDs are the deal's allowlists — empty means
+	// "any" (the exchange matcher treats an empty list as match-all; see
+	// pkg/deals). AdvertiserIDs are the external advertiser accounts the
+	// publisher grants access to; PlacementIDs must be the publisher's own.
+	AdvertiserIDs []string `json:"advertiser_ids,omitempty"`
+	PlacementIDs  []string `json:"placement_ids,omitempty"`
+	// GuaranteedVolume is the committed impression count for PG deals.
+	GuaranteedVolume int64 `json:"guaranteed_volume,omitempty"`
+	// Flight window (YYYY-MM-DD). Empty = always active.
+	StartDate string `json:"start_date,omitempty"`
+	EndDate   string `json:"end_date,omitempty"`
 }
 
 type dealView struct {
-	ID          string  `json:"id"`
-	PublisherID string  `json:"publisher_id"`
-	Name        string  `json:"name"`
-	DealType    string  `json:"deal_type"`
-	Price       float64 `json:"price"`
-	Status      string  `json:"status"`
+	ID               string   `json:"id"`
+	PublisherID      string   `json:"publisher_id"`
+	Name             string   `json:"name"`
+	DealType         string   `json:"deal_type"`
+	Price            float64  `json:"price"`
+	Status           string   `json:"status"`
+	AdvertiserIDs    []string `json:"advertiser_ids"`
+	PlacementIDs     []string `json:"placement_ids"`
+	GuaranteedVolume int64    `json:"guaranteed_volume"`
+	StartDate        string   `json:"start_date,omitempty"`
+	EndDate          string   `json:"end_date,omitempty"`
 }
 
 // dealPatchInput is a partial update — nil fields are left unchanged.
 type dealPatchInput struct {
-	Name   *string  `json:"name,omitempty"`
-	Price  *float64 `json:"price,omitempty"`
-	Status *string  `json:"status,omitempty"` // active | paused
+	Name             *string   `json:"name,omitempty"`
+	Price            *float64  `json:"price,omitempty"`
+	Status           *string   `json:"status,omitempty"` // active | paused
+	AdvertiserIDs    *[]string `json:"advertiser_ids,omitempty"`
+	PlacementIDs     *[]string `json:"placement_ids,omitempty"`
+	GuaranteedVolume *int64    `json:"guaranteed_volume,omitempty"`
+	StartDate        *string   `json:"start_date,omitempty"`
+	EndDate          *string   `json:"end_date,omitempty"`
+}
+
+// errDealPlacementNotOwned → 403: a placement allowlist referenced a
+// placement the caller's account doesn't own.
+var errDealPlacementNotOwned = errors.New("placement not owned by account")
+
+// validateDealAllowlists checks UUID format for both allowlists and the
+// date window. Placement ownership is enforced in the store (needs the DB).
+func validateDealAllowlists(advIDs, plIDs []string, start, end string) error {
+	for _, id := range advIDs {
+		if !uuidRe.MatchString(id) {
+			return fmt.Errorf("advertiser_ids must be UUIDs, got %q", id)
+		}
+	}
+	for _, id := range plIDs {
+		if !uuidRe.MatchString(id) {
+			return fmt.Errorf("placement_ids must be UUIDs, got %q", id)
+		}
+	}
+	if !dealValidDate(start) || !dealValidDate(end) {
+		return errors.New("start_date and end_date must be YYYY-MM-DD when set")
+	}
+	if start != "" && end != "" && end < start {
+		return errors.New("end_date must be on or after start_date")
+	}
+	return nil
+}
+
+func dealValidDate(s string) bool {
+	if s == "" {
+		return true
+	}
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
 }
 
 type dealStore interface {
@@ -109,9 +180,21 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 				http.Error(w, `{"error":"price must be >= 0"}`, http.StatusBadRequest)
 				return
 			}
+			if in.GuaranteedVolume < 0 {
+				http.Error(w, `{"error":"guaranteed_volume must be >= 0"}`, http.StatusBadRequest)
+				return
+			}
+			if err := validateDealAllowlists(in.AdvertiserIDs, in.PlacementIDs, in.StartDate, in.EndDate); err != nil {
+				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+				return
+			}
 			id, err := store.CreateDeal(r.Context(), claims.AccountID, in)
 			if errors.Is(err, errDealPublisherNotOwned) {
 				http.Error(w, `{"error":"forbidden: publisher not in your account"}`, http.StatusForbidden)
+				return
+			}
+			if errors.Is(err, errDealPlacementNotOwned) {
+				http.Error(w, `{"error":"forbidden: a placement in the allowlist is not in your account"}`, http.StatusForbidden)
 				return
 			}
 			if err != nil {
@@ -163,7 +246,9 @@ func dealByIDHandler(store dealStore, bus events.EventBus, log *slog.Logger) htt
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 			return
 		}
-		if in.Name == nil && in.Price == nil && in.Status == nil {
+		if in.Name == nil && in.Price == nil && in.Status == nil &&
+			in.AdvertiserIDs == nil && in.PlacementIDs == nil && in.GuaranteedVolume == nil &&
+			in.StartDate == nil && in.EndDate == nil {
 			http.Error(w, `{"error":"no fields to update"}`, http.StatusBadRequest)
 			return
 		}
@@ -175,7 +260,20 @@ func dealByIDHandler(store dealStore, bus events.EventBus, log *slog.Logger) htt
 			http.Error(w, `{"error":"price must be >= 0"}`, http.StatusBadRequest)
 			return
 		}
+		if in.GuaranteedVolume != nil && *in.GuaranteedVolume < 0 {
+			http.Error(w, `{"error":"guaranteed_volume must be >= 0"}`, http.StatusBadRequest)
+			return
+		}
+		advIDs, plIDs, start, end := derefStrings(in.AdvertiserIDs), derefStrings(in.PlacementIDs), derefStr(in.StartDate), derefStr(in.EndDate)
+		if err := validateDealAllowlists(advIDs, plIDs, start, end); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
 		err := store.UpdateDeal(r.Context(), claims.AccountID, id, in)
+		if errors.Is(err, errDealPlacementNotOwned) {
+			http.Error(w, `{"error":"forbidden: a placement in the allowlist is not in your account"}`, http.StatusForbidden)
+			return
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, `{"error":"deal not found"}`, http.StatusNotFound)
 			return
@@ -199,7 +297,9 @@ func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealVie
 		return nil, sql.ErrConnDone
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id::text, publisher_id::text, name, deal_type, COALESCE(price,0), status
+		`SELECT id::text, publisher_id::text, name, deal_type, COALESCE(price,0), status,
+		        COALESCE(advertiser_ids::text[], '{}'), COALESCE(placement_ids::text[], '{}'),
+		        COALESCE(guaranteed_volume, 0), start_date::text, end_date::text
 		 FROM deals WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
@@ -208,35 +308,94 @@ func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealVie
 	out := []dealView{}
 	for rows.Next() {
 		var d dealView
-		if err := rows.Scan(&d.ID, &d.PublisherID, &d.Name, &d.DealType, &d.Price, &d.Status); err != nil {
+		var advIDs, plIDs pq.StringArray
+		var start, end sql.NullString
+		if err := rows.Scan(&d.ID, &d.PublisherID, &d.Name, &d.DealType, &d.Price, &d.Status,
+			&advIDs, &plIDs, &d.GuaranteedVolume, &start, &end); err != nil {
 			return nil, err
 		}
+		d.AdvertiserIDs, d.PlacementIDs = []string(advIDs), []string(plIDs)
+		d.StartDate, d.EndDate = start.String, end.String
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// verifyPlacementsOwned returns errDealPlacementNotOwned unless every id in
+// plIDs is a placement under accountID. Empty list = nothing to check.
+func verifyPlacementsOwned(ctx context.Context, tx *sql.Tx, accountID string, plIDs []string) error {
+	if len(plIDs) == 0 {
+		return nil
+	}
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM placements WHERE id = ANY($1::uuid[]) AND account_id = $2::uuid`,
+		pq.Array(plIDs), accountID).Scan(&n); err != nil {
+		return err
+	}
+	if n != len(plIDs) {
+		return errDealPlacementNotOwned
+	}
+	return nil
+}
+
+// dateArg turns a YYYY-MM-DD string into a query arg (nil for empty → NULL).
+func dateArg(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (s pgDealStore) UpdateDeal(ctx context.Context, accountID, id string, in dealPatchInput) error {
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	// COALESCE keeps unspecified fields; the account_id predicate is the
-	// tenant check (unknown id and foreign id both come back as no rows).
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return fmt.Errorf("set tenant: %w", err)
+	}
+	// A supplied placement allowlist must reference the caller's placements.
+	if in.PlacementIDs != nil {
+		if err := verifyPlacementsOwned(ctx, tx, accountID, *in.PlacementIDs); err != nil {
+			return err
+		}
+	}
+	// COALESCE keeps unspecified fields (nil arg → SQL NULL → keep existing);
+	// a supplied array/date REPLACES (an empty array clears the allowlist =
+	// match-all). The account_id predicate is the tenant check.
+	var advArg, plArg any
+	if in.AdvertiserIDs != nil {
+		advArg = pq.Array(*in.AdvertiserIDs)
+	}
+	if in.PlacementIDs != nil {
+		plArg = pq.Array(*in.PlacementIDs)
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE deals SET
 		   name = COALESCE($3, name),
 		   price = COALESCE($4, price),
 		   status = COALESCE($5, status),
+		   advertiser_ids = COALESCE($6::uuid[], advertiser_ids),
+		   placement_ids = COALESCE($7::uuid[], placement_ids),
+		   guaranteed_volume = COALESCE($8, guaranteed_volume),
+		   start_date = COALESCE($9::date, start_date),
+		   end_date = COALESCE($10::date, end_date),
 		   updated_at = now()
 		 WHERE id = $1::uuid AND account_id = $2::uuid`,
-		id, accountID, in.Name, in.Price, in.Status)
+		id, accountID, in.Name, in.Price, in.Status,
+		advArg, plArg, in.GuaranteedVolume, dateArg(derefStr(in.StartDate)), dateArg(derefStr(in.EndDate)))
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s pgDealStore) CreateDeal(ctx context.Context, accountID string, in dealInput) (string, error) {
@@ -261,15 +420,27 @@ func (s pgDealStore) CreateDeal(ctx context.Context, accountID string, in dealIn
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
 		return "", fmt.Errorf("set tenant: %w", err)
 	}
+	if err := verifyPlacementsOwned(ctx, tx, accountID, in.PlacementIDs); err != nil {
+		return "", err
+	}
 	cur := in.PriceCurrency
 	if cur == "" {
 		cur = "USD"
 	}
+	var volArg any
+	if in.GuaranteedVolume > 0 {
+		volArg = in.GuaranteedVolume
+	}
 	var id string
 	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO deals (publisher_id, account_id, name, deal_type, price, price_currency, status, created_at, updated_at)
-		 VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'active', now(), now()) RETURNING id::text`,
-		in.PublisherID, accountID, in.Name, in.DealType, in.Price, cur).Scan(&id); err != nil {
+		`INSERT INTO deals (publisher_id, account_id, name, deal_type, price, price_currency,
+		                    advertiser_ids, placement_ids, guaranteed_volume, start_date, end_date,
+		                    status, created_at, updated_at)
+		 VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::uuid[], $8::uuid[], $9, $10::date, $11::date,
+		         'active', now(), now()) RETURNING id::text`,
+		in.PublisherID, accountID, in.Name, in.DealType, in.Price, cur,
+		pq.Array(in.AdvertiserIDs), pq.Array(in.PlacementIDs), volArg,
+		dateArg(in.StartDate), dateArg(in.EndDate)).Scan(&id); err != nil {
 		return "", err
 	}
 	return id, tx.Commit()

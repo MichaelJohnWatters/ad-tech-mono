@@ -232,6 +232,12 @@
     <div id="edName" class="mb-3 text-sm font-medium"></div>
     {{ template "form-field" (dict "label" "Name" "name" "ed_name") }}
     {{ template "form-field" (dict "label" "Price (USD CPM)" "name" "ed_price" "type" "number") }}
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Flight start" "name" "ed_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Flight end" "name" "ed_end" "type" "date") }}
+    </div>
+    {{ template "form-field" (dict "label" "Advertiser allowlist (UUIDs, comma-separated)" "name" "ed_advertisers" "placeholder" "blank = any advertiser") }}
+    {{ template "form-field" (dict "label" "Placement allowlist (UUIDs, comma-separated)" "name" "ed_placements" "placeholder" "blank = all placements") }}
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editDeal').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -254,6 +260,15 @@
         </select>
       </label>
       {{ template "form-field" (dict "label" "Price (USD CPM)" "name" "nd_price" "type" "number" "value" "5.00") }}
+    </div>
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Flight start" "name" "nd_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Flight end" "name" "nd_end" "type" "date") }}
+    </div>
+    {{ template "form-field" (dict "label" "Advertiser allowlist (account UUIDs, comma-separated — blank = any)" "name" "nd_advertisers" "placeholder" "leave blank to allow all advertisers") }}
+    {{ template "form-field" (dict "label" "Placement allowlist (your placement UUIDs, comma-separated — blank = all your placements)" "name" "nd_placements" "placeholder" "leave blank for all placements") }}
+    <div id="nd_pg_wrap" class="hidden">
+      {{ template "form-field" (dict "label" "Guaranteed volume (impressions — PG only)" "name" "nd_volume" "type" "number" "placeholder" "e.g. 1000000") }}
     </div>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newDeal').classList.add('hidden')") }}
@@ -519,12 +534,23 @@ function openEditDeal(id) {
   $('edName').textContent = d.name;
   $('ed_name').value = d.name;
   $('ed_price').value = d.price;
+  $('ed_start').value = d.start_date || '';
+  $('ed_end').value = d.end_date || '';
+  $('ed_advertisers').value = (d.advertiser_ids || []).join(', ');
+  $('ed_placements').value = (d.placement_ids || []).join(', ');
   $('editDeal').classList.remove('hidden');
 }
 
 async function saveDeal(ev) {
   ev.preventDefault();
-  const body = {name: $('ed_name').value.trim(), price: parseFloat($('ed_price').value)};
+  const body = {
+    name: $('ed_name').value.trim(),
+    price: parseFloat($('ed_price').value),
+    advertiser_ids: csvIDs($('ed_advertisers').value),
+    placement_ids: csvIDs($('ed_placements').value),
+  };
+  if ($('ed_start').value) body.start_date = $('ed_start').value;
+  if ($('ed_end').value) body.end_date = $('ed_end').value;
   try {
     await fetchJSON('/v1/api/deals/' + encodeURIComponent($('edID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editDeal').classList.add('hidden');
@@ -598,10 +624,16 @@ async function deleteSaved(id) {
   } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
+// Comma-separated UUID list → array (trimmed, empties dropped).
+const csvIDs = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+
 async function openNewDeal() {
   if (!publishers.length) await loadPublishers();
   if (!publishers.length) { toast('No publisher (site) on this account yet.', 'error'); return; }
   $('nd_publisher').innerHTML = publishers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.domain)})</option>`).join('');
+  // Guaranteed volume only applies to PG deals — show it only for that type.
+  const syncPG = () => $('nd_pg_wrap').classList.toggle('hidden', $('nd_type').value !== 'pg');
+  $('nd_type').onchange = syncPG; syncPG();
   $('newDeal').classList.remove('hidden');
 }
 
@@ -612,7 +644,15 @@ async function createDeal(ev) {
     name: $('nd_name').value.trim(),
     deal_type: $('nd_type').value,
     price: parseFloat($('nd_price').value) || 0,
+    advertiser_ids: csvIDs($('nd_advertisers').value),
+    placement_ids: csvIDs($('nd_placements').value),
   };
+  if ($('nd_start').value) body.start_date = $('nd_start').value;
+  if ($('nd_end').value) body.end_date = $('nd_end').value;
+  if ($('nd_type').value === 'pg') {
+    const vol = parseInt($('nd_volume').value, 10);
+    if (vol > 0) body.guaranteed_volume = vol;
+  }
   try {
     await fetchJSON('/v1/api/deals', {method: 'POST', body: JSON.stringify(body)});
     $('newDeal').classList.add('hidden');
