@@ -54,6 +54,7 @@ SELECT
     li.bid_strategy,
     li.pacing_mode,
     li.status,
+    COALESCE(li.timezone, 'UTC'),
     COALESCE(tr.include_geo, '{}'),
     COALESCE(tr.exclude_geo, '{}'),
     COALESCE(tr.include_device, '{}'),
@@ -130,7 +131,7 @@ WHERE li.status IN ('live', 'paused')`
 		if err := rows.Scan(
 			&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
 			&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
-			&c.BidModel, &c.PacingMode, &c.Status,
+			&c.BidModel, &c.PacingMode, &c.Status, &c.Timezone,
 			&incGeo, &excGeo, &incDev, &excDev,
 			&incSeg, &excSeg, &incDom, &excDom,
 			&incCat, &excCat,
@@ -214,9 +215,20 @@ func parseModifiers(raw string) targeting.Modifiers {
 	var m struct {
 		Device     map[string]float64 `json:"device"`
 		GeoCountry map[string]float64 `json:"geo_country"`
+		TimeOfDay  []struct {
+			StartHour int     `json:"start_hour"`
+			EndHour   int     `json:"end_hour"`
+			Modifier  float64 `json:"modifier"`
+		} `json:"time_of_day"`
 	}
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return targeting.Modifiers{}
 	}
-	return targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry}
+	mods := targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry}
+	for _, tm := range m.TimeOfDay {
+		mods.TimeOfDay = append(mods.TimeOfDay, targeting.TimeModifier{
+			StartHour: tm.StartHour, EndHour: tm.EndHour, Modifier: tm.Modifier,
+		})
+	}
+	return mods
 }
