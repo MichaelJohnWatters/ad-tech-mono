@@ -192,6 +192,11 @@
         {{ template "form-field" (dict "label" "Segment include (audience IDs)" "name" "nc_seg_inc" "placeholder" "auto_intenders") }}
         {{ template "form-field" (dict "label" "Segment exclude" "name" "nc_seg_exc" "placeholder" "existing_customers") }}
       </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "nc_mod_dev" "placeholder" "mobile:20, desktop:-10") }}
+        {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "nc_mod_geo" "placeholder" "USA:15") }}
+      </div>
+      <p class="text-xs text-gray-400">Modifiers adjust the bid up/down by percent and stack; applied before the floor check.</p>
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
@@ -271,6 +276,10 @@
       <div class="grid grid-cols-2 gap-x-4">
         {{ template "form-field" (dict "label" "Segment include" "name" "ec_seg_inc") }}
         {{ template "form-field" (dict "label" "Segment exclude" "name" "ec_seg_exc") }}
+      </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "ec_mod_dev") }}
+        {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "ec_mod_geo") }}
       </div>
     </details>
     <div class="flex justify-end gap-2">
@@ -417,6 +426,28 @@ async function loadCampaigns() {
     </tr>`).join('');
 }
 
+// parseModMap turns "mobile:20, desktop:-10" into {mobile:20, desktop:-10}.
+function parseModMap(str) {
+  const out = {};
+  (str || '').split(',').forEach(pair => {
+    const [k, v] = pair.split(':').map(s => s.trim());
+    const n = parseFloat(v);
+    if (k && !isNaN(n)) out[k] = n;
+  });
+  return out;
+}
+const modMapToStr = (m) => Object.entries(m || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+
+// bidModifiersBody assembles {device, geo_country} from the two inputs;
+// undefined if both are empty.
+function bidModifiersBody(devId, geoId) {
+  const device = parseModMap($(devId).value), geo = parseModMap($(geoId).value);
+  const cfg = {};
+  if (Object.keys(device).length) cfg.device = device;
+  if (Object.keys(geo).length) cfg.geo_country = geo;
+  return Object.keys(cfg).length ? cfg : undefined;
+}
+
 async function createCampaign(ev) {
   ev.preventDefault();
   const body = {
@@ -426,6 +457,8 @@ async function createCampaign(ev) {
     bid_strategy: $('nc_bid_strategy').value,
     pacing_mode: $('nc_pacing').value,
   };
+  const mods = bidModifiersBody('nc_mod_dev', 'nc_mod_geo');
+  if (mods) body.bid_modifiers = mods;
   const total = parseFloat($('nc_total_budget').value);
   if (total > 0) body.total_budget = total;
   if ($('nc_start').value) body.start_date = $('nc_start').value;
@@ -482,6 +515,8 @@ function openEdit(id) {
   $('ec_kw_inc').value = join(inc.Keywords); $('ec_kw_exc').value = join(exc.Keywords);
   $('ec_inv_inc').value = join(inc.InventoryType);
   $('ec_seg_inc').value = join(inc.Segments); $('ec_seg_exc').value = join(exc.Segments);
+  const mods = c.Modifiers || {};
+  $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
   $('editCampaign').classList.remove('hidden');
 }
 
@@ -502,6 +537,8 @@ async function saveCampaign(ev) {
     include_keywords: csv('ec_kw_inc'), exclude_keywords: csv('ec_kw_exc'),
     include_inventory_type: csv('ec_inv_inc'),
     include_segments: csv('ec_seg_inc'), exclude_segments: csv('ec_seg_exc'),
+    // Always send bid_modifiers (empty object replaces) so clearing clears it.
+    bid_modifiers: bidModifiersBody('ec_mod_dev', 'ec_mod_geo') || {},
   };
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});

@@ -183,6 +183,36 @@ func campaignByIDHandler(db *sql.DB, bus events.EventBus, accountIDs []string, l
 var validBidStrategies = map[string]bool{"cpm": true, "cpc": true, "cpa": true, "vcpm": true, "cpcv": true}
 var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded": true}
 
+// bidModifiersInput is the structured bid-modifier map stored in
+// targeting_rules.bid_modifiers (JSONB) and read back by the CampaignLoader's
+// parseModifiers. Keys are device names / country codes; values are percentage
+// adjustments (+20 = bid 20% higher). The engine clamps each to safe bounds.
+type bidModifiersInput struct {
+	Device     map[string]float64 `json:"device,omitempty"`
+	GeoCountry map[string]float64 `json:"geo_country,omitempty"`
+}
+
+// validateAndJSON rejects wildly out-of-range percentages (the engine clamps
+// too, but a clear 400 beats a silently-clamped surprise) and marshals to the
+// JSONB the column stores. A nil receiver yields "{}".
+func (b *bidModifiersInput) validateAndJSON() (string, error) {
+	if b == nil {
+		return "{}", nil
+	}
+	for _, m := range []map[string]float64{b.Device, b.GeoCountry} {
+		for k, v := range m {
+			if v < -100 || v > 1000 {
+				return "", fmt.Errorf("bid modifier %q = %v out of range (-100..1000)", k, v)
+			}
+		}
+	}
+	j, err := json.Marshal(b)
+	if err != nil {
+		return "", err
+	}
+	return string(j), nil
+}
+
 type createCampaignRequest struct {
 	Name          string   `json:"name"`
 	BaseBid       float64  `json:"base_bid"`
@@ -208,6 +238,9 @@ type createCampaignRequest struct {
 	// (SSP-stamped) unioned with the DSP's private segments.
 	IncludeSegments []string `json:"include_segments,omitempty"`
 	ExcludeSegments []string `json:"exclude_segments,omitempty"`
+	// BidModifiers adjust the bid by percentage per dimension (device/geo);
+	// applied by the DSP before the floor check. nil = no modifiers.
+	BidModifiers *bidModifiersInput `json:"bid_modifiers,omitempty"`
 	// BidStrategy selects the billing model: cpm (default) bills on
 	// impression; cpc/cpa/vcpm/cpcv reserve on impression and settle on the
 	// trigger event (click/conversion/viewable/complete). Empty → cpm.
@@ -272,6 +305,10 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 			http.Error(w, "viewability_target_pct must be 0-100", http.StatusBadRequest)
 			return
 		}
+	}
+	if _, err := req.BidModifiers.validateAndJSON(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -413,6 +450,7 @@ VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'b
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
 	// engine treats an empty array as "no constraint on that dimension".
+	modifiersJSON, _ := req.BidModifiers.validateAndJSON() // already validated in handleCreate
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO targeting_rules (id, line_item_id, account_id,
     include_geo, exclude_geo, include_device, exclude_device,
@@ -420,7 +458,7 @@ INSERT INTO targeting_rules (id, line_item_id, account_id,
     include_os, include_keywords, exclude_keywords, include_inventory_type,
     include_segments, exclude_segments,
     bid_modifiers, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, '{}', now(), now())`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, now(), now())`,
 		targetingID, lineItemID, accountID,
 		pq.StringArray(req.IncludeGeo), pq.StringArray(req.ExcludeGeo),
 		pq.StringArray(req.IncludeDevice), pq.StringArray(req.ExcludeDevice),
@@ -428,7 +466,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		pq.StringArray(req.IncludeCategories), pq.StringArray(req.ExcludeCategories),
 		pq.StringArray(req.IncludeOS), pq.StringArray(req.IncludeKeywords),
 		pq.StringArray(req.ExcludeKeywords), pq.StringArray(req.IncludeInventoryType),
-		pq.StringArray(req.IncludeSegments), pq.StringArray(req.ExcludeSegments)); err != nil {
+		pq.StringArray(req.IncludeSegments), pq.StringArray(req.ExcludeSegments),
+		modifiersJSON); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
 	// Creative — auto-generated HTML banner
@@ -469,6 +508,8 @@ type patchCampaignRequest struct {
 	IncludeInventoryType *[]string `json:"include_inventory_type,omitempty"`
 	IncludeSegments      *[]string `json:"include_segments,omitempty"`
 	ExcludeSegments      *[]string `json:"exclude_segments,omitempty"`
+	// BidModifiers replaces the whole bid_modifiers JSONB when supplied.
+	BidModifiers *bidModifiersInput `json:"bid_modifiers,omitempty"`
 }
 
 // hasTargeting reports whether the patch touches any targeting column.
@@ -479,7 +520,8 @@ func (p patchCampaignRequest) hasTargeting() bool {
 		p.IncludeCategories != nil || p.ExcludeCategories != nil ||
 		p.IncludeOS != nil || p.IncludeKeywords != nil ||
 		p.ExcludeKeywords != nil || p.IncludeInventoryType != nil ||
-		p.IncludeSegments != nil || p.ExcludeSegments != nil
+		p.IncludeSegments != nil || p.ExcludeSegments != nil ||
+		p.BidModifiers != nil
 }
 
 // validDate reports whether s is a YYYY-MM-DD date (or empty).
@@ -516,6 +558,10 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 	if req.PacingMode != nil && !validPacingModes[*req.PacingMode] {
 		http.Error(w, "pacing_mode must be even, asap or front_loaded", http.StatusBadRequest)
+		return
+	}
+	if _, err := req.BidModifiers.validateAndJSON(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -634,6 +680,15 @@ func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req pat
 	add("include_inventory_type", req.IncludeInventoryType)
 	add("include_segments", req.IncludeSegments)
 	add("exclude_segments", req.ExcludeSegments)
+	// bid_modifiers is JSONB, not a TEXT[] — handle it separately from add().
+	if req.BidModifiers != nil {
+		j, err := req.BidModifiers.validateAndJSON()
+		if err != nil {
+			return fmt.Errorf("bid_modifiers: %w", err)
+		}
+		args = append(args, j)
+		sets = append(sets, fmt.Sprintf("bid_modifiers = $%d::jsonb", len(args)))
+	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE targeting_rules SET %s WHERE line_item_id = $%d", strings.Join(sets, ", "), len(args))
 	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
