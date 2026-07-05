@@ -435,6 +435,24 @@ type patchCampaignRequest struct {
 	Status      *string  `json:"status,omitempty"`
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
+	// Targeting edits — nil leaves the column unchanged; a supplied list
+	// (even empty) replaces it. Lands in targeting_rules, same tx.
+	IncludeGeo        *[]string `json:"include_geo,omitempty"`
+	ExcludeGeo        *[]string `json:"exclude_geo,omitempty"`
+	IncludeDevice     *[]string `json:"include_device,omitempty"`
+	ExcludeDevice     *[]string `json:"exclude_device,omitempty"`
+	IncludeDomains    *[]string `json:"include_domains,omitempty"`
+	ExcludeDomains    *[]string `json:"exclude_domains,omitempty"`
+	IncludeCategories *[]string `json:"include_categories,omitempty"`
+	ExcludeCategories *[]string `json:"exclude_categories,omitempty"`
+}
+
+// hasTargeting reports whether the patch touches any targeting column.
+func (p patchCampaignRequest) hasTargeting() bool {
+	return p.IncludeGeo != nil || p.ExcludeGeo != nil ||
+		p.IncludeDevice != nil || p.ExcludeDevice != nil ||
+		p.IncludeDomains != nil || p.ExcludeDomains != nil ||
+		p.IncludeCategories != nil || p.ExcludeCategories != nil
 }
 
 // validDate reports whether s is a YYYY-MM-DD date (or empty).
@@ -452,7 +470,8 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil && req.BidStrategy == nil && req.PacingMode == nil {
+	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
+		req.BidStrategy == nil && req.PacingMode == nil && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
 	}
@@ -552,7 +571,42 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if n == 0 {
 		return errors.New("campaign not found or RLS blocked update")
 	}
+	// Targeting edits land in the same tx on targeting_rules (keyed by
+	// line_item_id) so a campaign + targeting patch is atomic.
+	if req.hasTargeting() {
+		if err := updateTargeting(ctx, tx, lineItemID, req); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+// updateTargeting applies the supplied targeting arrays to the line item's
+// targeting_rules row (only the columns present in the patch). Runs inside
+// updateLineItem's tenant tx.
+func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req patchCampaignRequest) error {
+	sets := []string{"updated_at = now()"}
+	args := []any{}
+	add := func(col string, v *[]string) {
+		if v != nil {
+			args = append(args, pq.StringArray(*v))
+			sets = append(sets, fmt.Sprintf("%s = $%d", col, len(args)))
+		}
+	}
+	add("include_geo", req.IncludeGeo)
+	add("exclude_geo", req.ExcludeGeo)
+	add("include_device", req.IncludeDevice)
+	add("exclude_device", req.ExcludeDevice)
+	add("include_domains", req.IncludeDomains)
+	add("exclude_domains", req.ExcludeDomains)
+	add("include_categories", req.IncludeCategories)
+	add("exclude_categories", req.ExcludeCategories)
+	args = append(args, lineItemID)
+	q := fmt.Sprintf("UPDATE targeting_rules SET %s WHERE line_item_id = $%d", strings.Join(sets, ", "), len(args))
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("targeting update: %w", err)
+	}
+	return nil
 }
 
 func handleDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.EventBus, id string, log *slog.Logger) {

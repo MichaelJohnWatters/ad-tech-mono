@@ -237,6 +237,22 @@
         <option value="even">Even</option><option value="asap">ASAP</option><option value="front_loaded">Front-loaded</option>
       </select>
     </label>
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Targeting</summary>
+      <div class="mt-3 grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Geo include" "name" "ec_geo_inc") }}
+        {{ template "form-field" (dict "label" "Geo exclude" "name" "ec_geo_exc") }}
+      </div>
+      {{ template "form-field" (dict "label" "Device include" "name" "ec_dev_inc") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Domain include" "name" "ec_dom_inc") }}
+        {{ template "form-field" (dict "label" "Domain exclude" "name" "ec_dom_exc") }}
+      </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Category include" "name" "ec_cat_inc") }}
+        {{ template "form-field" (dict "label" "Category exclude" "name" "ec_cat_exc") }}
+      </div>
+    </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Save" "type" "submit") }}
@@ -431,16 +447,29 @@ function openEdit(id) {
   $('ec_base_bid').value = c.BaseBid;
   $('ec_bid_strategy').value = c.BidModel || 'cpm';
   $('ec_pacing').value = c.PacingMode || 'even';
+  // Prefill targeting from the campaign's current rules (Include/Exclude sets).
+  const inc = (c.Targeting && c.Targeting.Include) || {}, exc = (c.Targeting && c.Targeting.Exclude) || {};
+  const join = (a) => (a || []).join(', ');
+  $('ec_geo_inc').value = join(inc.Geo); $('ec_geo_exc').value = join(exc.Geo);
+  $('ec_dev_inc').value = join(inc.Device);
+  $('ec_dom_inc').value = join(inc.Domains); $('ec_dom_exc').value = join(exc.Domains);
+  $('ec_cat_inc').value = join(inc.Categories); $('ec_cat_exc').value = join(exc.Categories);
   $('editCampaign').classList.remove('hidden');
 }
 
 async function saveCampaign(ev) {
   ev.preventDefault();
+  const csv = (id) => $(id).value.split(',').map(s => s.trim()).filter(Boolean);
   const body = {
     daily_budget: parseFloat($('ec_daily_budget').value),
     base_bid: parseFloat($('ec_base_bid').value),
     bid_strategy: $('ec_bid_strategy').value,
     pacing_mode: $('ec_pacing').value,
+    // Targeting is always sent (arrays replace) so clearing a field clears it.
+    include_geo: csv('ec_geo_inc'), exclude_geo: csv('ec_geo_exc'),
+    include_device: csv('ec_dev_inc'),
+    include_domains: csv('ec_dom_inc'), exclude_domains: csv('ec_dom_exc'),
+    include_categories: csv('ec_cat_inc'), exclude_categories: csv('ec_cat_exc'),
   };
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
