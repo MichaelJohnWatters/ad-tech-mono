@@ -4,38 +4,101 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
 // revshareView is one publisher's revenue-share contract as the staff editor
 // sees it. fee_pct is the platform's cut (%); the publisher keeps the rest.
+// Tiers/guaranteed/deal-type configs feed the billing engine's Contract; which
+// one applies depends on revshare_model.
 type revshareView struct {
-	PublisherID   string  `json:"publisher_id"`
-	Name          string  `json:"name"`
-	Domain        string  `json:"domain"`
-	RevshareModel string  `json:"revshare_model"`
-	FeePct        float64 `json:"fee_pct"`
+	PublisherID       string             `json:"publisher_id"`
+	Name              string             `json:"name"`
+	Domain            string             `json:"domain"`
+	RevshareModel     string             `json:"revshare_model"`
+	FeePct            float64            `json:"fee_pct"`
+	Tiers             []billing.Tier     `json:"tiers,omitempty"`
+	GuaranteedMinCPM  float64            `json:"guaranteed_min_cpm,omitempty"`
+	DealTypeModifiers map[string]float64 `json:"deal_type_modifiers,omitempty"`
+	PaymentTerms      string             `json:"payment_terms"`
 }
 
 type revsharePatch struct {
-	RevshareModel string  `json:"revshare_model"`
-	FeePct        float64 `json:"fee_pct"`
+	RevshareModel     string             `json:"revshare_model"`
+	FeePct            float64            `json:"fee_pct"`
+	Tiers             []billing.Tier     `json:"tiers,omitempty"`
+	GuaranteedMinCPM  float64            `json:"guaranteed_min_cpm,omitempty"`
+	DealTypeModifiers map[string]float64 `json:"deal_type_modifiers,omitempty"`
+	PaymentTerms      string             `json:"payment_terms,omitempty"`
 }
 
 var validRevshareModels = map[string]bool{
 	"fixed": true, "tiered": true, "guaranteed_minimum": true, "deal_type": true, "hybrid": true,
 }
 
+var validPaymentTerms = map[string]bool{
+	"prepay": true, "net_15": true, "net_30": true, "net_60": true, "net_90": true,
+}
+
+// validateRevsharePatch enforces the money-touching bounds: fees in 0–100,
+// contiguous ascending tiers starting at 0, non-negative guaranteed minimum,
+// sane deal-type adjustments, and a known payment term.
+func validateRevsharePatch(in *revsharePatch) error {
+	if in.FeePct < 0 || in.FeePct > 100 {
+		return errBadField("fee_pct must be 0-100")
+	}
+	if in.GuaranteedMinCPM < 0 {
+		return errBadField("guaranteed_min_cpm must be >= 0")
+	}
+	for dt, m := range in.DealTypeModifiers {
+		if m < -100 || m > 100 {
+			return errBadField("deal_type_modifiers[" + dt + "] must be -100..100")
+		}
+	}
+	if in.PaymentTerms != "" && !validPaymentTerms[in.PaymentTerms] {
+		return errBadField("payment_terms must be prepay, net_15, net_30, net_60 or net_90")
+	}
+	if len(in.Tiers) > 0 {
+		sort.Slice(in.Tiers, func(i, j int) bool { return in.Tiers[i].MinImpressions < in.Tiers[j].MinImpressions })
+		if in.Tiers[0].MinImpressions != 0 {
+			return errBadField("tiers must start at min_impressions 0")
+		}
+		for i, t := range in.Tiers {
+			if t.FeePct < 0 || t.FeePct > 100 {
+				return errBadField("tier fee_pct must be 0-100")
+			}
+			last := i == len(in.Tiers)-1
+			if !last {
+				if t.MaxImpressions <= t.MinImpressions {
+					return errBadField("tier max_impressions must exceed its min_impressions")
+				}
+				if t.MaxImpressions != in.Tiers[i+1].MinImpressions {
+					return errBadField("tiers must be contiguous (each max = the next min)")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+type badFieldErr struct{ msg string }
+
+func (e badFieldErr) Error() string { return e.msg }
+func errBadField(m string) error    { return badFieldErr{m} }
+
 type revshareStore interface {
 	ListRevshare(ctx context.Context) ([]revshareView, error)
-	// UpdateRevshare sets a publisher's model + fee; sql.ErrNoRows if unknown.
-	UpdateRevshare(ctx context.Context, publisherID string, in revsharePatch) error
+	// UpdateRevshare sets a publisher's model + full config + payment terms and
+	// writes an audit entry; sql.ErrNoRows if the publisher is unknown.
+	UpdateRevshare(ctx context.Context, publisherID, actor string, in revsharePatch) error
 }
 
 // revshareHandler is the staff revenue-share editor: GET lists every
@@ -89,11 +152,11 @@ func revshareHandler(store revshareStore, bus events.EventBus, log *slog.Logger)
 				http.Error(w, `{"error":"revshare_model must be fixed, tiered, guaranteed_minimum, deal_type or hybrid"}`, http.StatusBadRequest)
 				return
 			}
-			if in.FeePct < 0 || in.FeePct > 100 {
-				http.Error(w, `{"error":"fee_pct must be 0-100"}`, http.StatusBadRequest)
+			if err := validateRevsharePatch(&in); err != nil {
+				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.UpdateRevshare(r.Context(), id, in)
+			err := store.UpdateRevshare(r.Context(), id, claims.UserID, in)
 			if err == sql.ErrNoRows {
 				http.Error(w, `{"error":"publisher not found"}`, http.StatusNotFound)
 				return
@@ -107,7 +170,8 @@ func revshareHandler(store revshareStore, bus events.EventBus, log *slog.Logger)
 				_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateBillingRates,
 					[]byte(`{"source":"gateway-revshare","id":"`+id+`"}`))
 			}
-			log.Info("revshare updated", "publisher_id", id, "model", in.RevshareModel, "fee_pct", in.FeePct, "actor", claims.UserID)
+			log.Info("revshare updated", "publisher_id", id, "model", in.RevshareModel,
+				"fee_pct", in.FeePct, "tiers", len(in.Tiers), "payment_terms", in.PaymentTerms, "actor", claims.UserID)
 			_ = json.NewEncoder(w).Encode(map[string]any{"publisher_id": id, "revshare_model": in.RevshareModel, "fee_pct": in.FeePct})
 
 		default:
@@ -124,7 +188,7 @@ func (s pgRevshareStore) ListRevshare(ctx context.Context) ([]revshareView, erro
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id::text, name, domain, revshare_model,
-		        COALESCE((revshare_config->>'fee_pct')::float8, 20)
+		        COALESCE(revshare_config::text, '{}'), COALESCE(payment_terms, 'net_30')
 		 FROM publishers WHERE status != 'archived' ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -133,32 +197,60 @@ func (s pgRevshareStore) ListRevshare(ctx context.Context) ([]revshareView, erro
 	out := []revshareView{}
 	for rows.Next() {
 		var v revshareView
-		if err := rows.Scan(&v.PublisherID, &v.Name, &v.Domain, &v.RevshareModel, &v.FeePct); err != nil {
+		var cfgJSON string
+		if err := rows.Scan(&v.PublisherID, &v.Name, &v.Domain, &v.RevshareModel, &cfgJSON, &v.PaymentTerms); err != nil {
 			return nil, err
 		}
+		var cfg struct {
+			FeePct            float64            `json:"fee_pct"`
+			Tiers             []billing.Tier     `json:"tiers"`
+			GuaranteedMinCPM  float64            `json:"guaranteed_min_cpm"`
+			DealTypeModifiers map[string]float64 `json:"deal_type_modifiers"`
+		}
+		_ = json.Unmarshal([]byte(cfgJSON), &cfg)
+		if cfg.FeePct == 0 {
+			cfg.FeePct = 20 // mirror the ContractLoader default
+		}
+		v.FeePct, v.Tiers, v.GuaranteedMinCPM, v.DealTypeModifiers = cfg.FeePct, cfg.Tiers, cfg.GuaranteedMinCPM, cfg.DealTypeModifiers
 		out = append(out, v)
 	}
 	return out, rows.Err()
 }
 
-func (s pgRevshareStore) UpdateRevshare(ctx context.Context, publisherID string, in revsharePatch) error {
+func (s pgRevshareStore) UpdateRevshare(ctx context.Context, publisherID, actor string, in revsharePatch) error {
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	// jsonb_set-free: rebuild the fee_pct object. Preserving other config keys
-	// isn't needed today (fixed model only carries fee_pct); revisit if tiered
-	// config editing lands.
-	cfg := fmt.Sprintf(`{"fee_pct": %g}`, in.FeePct)
+	// Store the full config in the exact shape the billing ContractLoader reads.
+	cfg, err := json.Marshal(map[string]any{
+		"fee_pct":             in.FeePct,
+		"tiers":               in.Tiers,
+		"guaranteed_min_cpm":  in.GuaranteedMinCPM,
+		"deal_type_modifiers": in.DealTypeModifiers,
+	})
+	if err != nil {
+		return err
+	}
+	// payment_terms only changes when supplied (empty = leave as-is).
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE publishers SET revshare_model = $2, revshare_config = $3::jsonb, updated_at = now()
+		`UPDATE publishers SET revshare_model = $2, revshare_config = $3::jsonb,
+		        payment_terms = COALESCE(NULLIF($4, ''), payment_terms), updated_at = now()
 		 WHERE id = $1::uuid`,
-		publisherID, in.RevshareModel, cfg)
+		publisherID, in.RevshareModel, string(cfg), in.PaymentTerms)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
+	// Money-touching change → audit trail (best-effort; the update already
+	// committed, so a failed audit write is logged by the caller, not fatal).
+	_ = audit.Log(ctx, s.db, audit.Entry{
+		ActorID:      actor,
+		Action:       "revshare:update",
+		ResourceType: "publisher",
+		ResourceID:   publisherID,
+		Changes:      in,
+	})
 	return nil
 }
-

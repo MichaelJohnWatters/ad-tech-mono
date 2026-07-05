@@ -63,8 +63,8 @@
     <section id="section-revshare" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Publisher revenue share") }}
       <p class="mb-3 text-xs text-gray-400">The platform fee % per publisher — the publisher keeps the remainder. Edits take effect for new spend within a second.</p>
-      {{ template "table-start" (dict "headers" (slice "Publisher" "Domain" "Model" "Platform fee %" "")) }}
-        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Publisher" "Domain" "Model" "Platform fee %" "Terms" "")) }}
+        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -121,6 +121,44 @@
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('rejectModal').classList.add('hidden')") }}
       {{ template "button" (dict "label" "Reject creative" "variant" "danger" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
+<!-- Edit revenue terms modal (full config: model, fee, tiers, guaranteed, deal-type, payment terms) -->
+{{ template "modal-start" (dict "id" "revTermsModal" "title" "Edit revenue terms") }}
+  <form onsubmit="saveRevTerms(event)">
+    <input type="hidden" id="rt_id">
+    <div id="rt_name" class="mb-3 text-sm font-medium"></div>
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Model</span>
+        <select id="rt_model" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="fixed">Fixed</option><option value="tiered">Tiered</option>
+          <option value="guaranteed_minimum">Guaranteed minimum</option>
+          <option value="deal_type">Deal type</option><option value="hybrid">Hybrid</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Base fee % (fixed/hybrid)" "name" "rt_fee" "type" "number") }}
+    </div>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Tiers (one per line: <code>MIN-MAX FEE%</code>, MAX 0 = unlimited)</span>
+      <textarea id="rt_tiers" rows="3" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="0-1000000 25&#10;1000000-0 18"></textarea>
+    </label>
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Guaranteed min CPM (USD)" "name" "rt_gmin" "type" "number") }}
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Payment terms</span>
+        <select id="rt_terms" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="prepay">Prepay</option><option value="net_15">Net 15</option>
+          <option value="net_30">Net 30</option><option value="net_60">Net 60</option><option value="net_90">Net 90</option>
+        </select>
+      </label>
+    </div>
+    {{ template "form-field" (dict "label" "Deal-type fee adjustments (type:±%, comma-separated)" "name" "rt_dealmods" "placeholder" "pmp:5, pg:-3") }}
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('revTermsModal').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save terms" "type" "submit") }}
     </div>
   </form>
 {{ template "modal-end" . }}
@@ -262,32 +300,101 @@ async function unblock(id) {
 }
 
 // ---- Revshare ----
+let revshareCache = [];
 async function loadRevshare() {
   const tbody = tbodyOf('revshare');
   try {
-    const rows = await fetchJSON('/v1/api/revshare') || [];
-    tbody.innerHTML = rows.length ? rows.map(p => `
+    revshareCache = await fetchJSON('/v1/api/revshare') || [];
+    tbody.innerHTML = revshareCache.length ? revshareCache.map(p => `
       <tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 font-medium">${esc(p.name)}</td>
         <td class="px-3 py-2 text-gray-500 text-xs">${esc(p.domain)}</td>
         <td class="px-3 py-2 font-mono text-xs">${esc(p.revshare_model)}</td>
         <td class="px-3 py-2"><input id="rs_${esc(p.publisher_id)}" type="number" min="0" max="100" step="0.5" value="${p.fee_pct}" class="w-20 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-sm font-mono"></td>
-        <td class="px-3 py-2 text-right">
-          <button onclick="saveRevshare('${esc(p.publisher_id)}','${esc(p.revshare_model)}')" class="text-xs px-2 py-1 rounded bg-brand/15 text-brand hover:bg-brand/25">Save</button>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(p.payment_terms || 'net_30')}</td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="saveRevshare('${esc(p.publisher_id)}','${esc(p.revshare_model)}')" class="text-xs px-2 py-1 rounded bg-brand/15 text-brand hover:bg-brand/25">Save fee</button>
+          <button onclick="openRevTerms('${esc(p.publisher_id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit terms</button>
         </td>
       </tr>`).join('')
-      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No publishers yet.</td></tr>';
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No publishers yet.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 
+// Quick inline fixed-fee save (preserves the publisher's current model).
 async function saveRevshare(id, model) {
   const fee = parseFloat($('rs_' + id).value);
   if (isNaN(fee) || fee < 0 || fee > 100) { toast('Fee must be 0–100', 'info'); return; }
+  const p = revshareCache.find(x => x.publisher_id === id) || {};
   try {
-    await fetchJSON('/v1/api/revshare?id=' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({revshare_model: model, fee_pct: fee})});
+    // Preserve the fuller config on a quick fee edit.
+    await fetchJSON('/v1/api/revshare?id=' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({
+      revshare_model: model, fee_pct: fee, tiers: p.tiers || [],
+      guaranteed_min_cpm: p.guaranteed_min_cpm || 0, deal_type_modifiers: p.deal_type_modifiers || {},
+    })});
     toast('Revshare updated — new spend uses it within a second', 'success');
+    loadRevshare();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// Tiers <-> textarea "MIN-MAX FEE%" per line (MAX 0 = unlimited).
+const tiersToStr = (arr) => (arr || []).map(t => `${t.min_impressions}-${t.max_impressions} ${t.fee_pct}`).join('\n');
+function parseTiers(str) {
+  const out = [];
+  (str || '').split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 2) return;
+    const mm = parts[0].split('-');
+    if (mm.length !== 2) return;
+    const min = parseInt(mm[0], 10), max = parseInt(mm[1], 10), fee = parseFloat(parts[1]);
+    if (isNaN(min) || isNaN(max) || isNaN(fee)) return;
+    out.push({min_impressions: min, max_impressions: max, fee_pct: fee});
+  });
+  return out;
+}
+const dealModsToStr = (m) => Object.entries(m || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+function parseDealMods(str) {
+  const out = {};
+  (str || '').split(',').forEach(pair => {
+    const [k, v] = pair.split(':').map(s => s.trim());
+    const n = parseFloat(v);
+    if (k && !isNaN(n)) out[k] = n;
+  });
+  return out;
+}
+
+function openRevTerms(id) {
+  const p = revshareCache.find(x => x.publisher_id === id);
+  if (!p) return;
+  $('rt_id').value = id;
+  $('rt_name').textContent = p.name + ' · ' + p.domain;
+  $('rt_model').value = p.revshare_model || 'fixed';
+  $('rt_fee').value = p.fee_pct;
+  $('rt_tiers').value = tiersToStr(p.tiers);
+  $('rt_gmin').value = p.guaranteed_min_cpm || 0;
+  $('rt_terms').value = p.payment_terms || 'net_30';
+  $('rt_dealmods').value = dealModsToStr(p.deal_type_modifiers);
+  $('revTermsModal').classList.remove('hidden');
+}
+
+async function saveRevTerms(ev) {
+  ev.preventDefault();
+  const id = $('rt_id').value;
+  const body = {
+    revshare_model: $('rt_model').value,
+    fee_pct: parseFloat($('rt_fee').value) || 0,
+    tiers: parseTiers($('rt_tiers').value),
+    guaranteed_min_cpm: parseFloat($('rt_gmin').value) || 0,
+    deal_type_modifiers: parseDealMods($('rt_dealmods').value),
+    payment_terms: $('rt_terms').value,
+  };
+  try {
+    await fetchJSON('/v1/api/revshare?id=' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify(body)});
+    $('revTermsModal').classList.add('hidden');
+    toast('Revenue terms updated — new spend uses them within a second', 'success');
+    loadRevshare();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 

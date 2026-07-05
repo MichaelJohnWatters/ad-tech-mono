@@ -34,30 +34,30 @@ const (
 
 // SpendEvent is an incoming event that triggers billing.
 type SpendEvent struct {
-	TraceID        string
-	CampaignID     string
-	CreativeID     string
-	PlacementID    string
-	PublisherID    string
-	AdvertiserID   string
-	ClearingPrice  float64
-	Currency       string
-	BidModel       BidModel
-	DealType       string // open, pmp, pg, preferred
-	EventType      string // impression, click, conversion, viewable, complete
-	Timestamp      time.Time
+	TraceID       string
+	CampaignID    string
+	CreativeID    string
+	PlacementID   string
+	PublisherID   string
+	AdvertiserID  string
+	ClearingPrice float64
+	Currency      string
+	BidModel      BidModel
+	DealType      string // open, pmp, pg, preferred
+	EventType     string // impression, click, conversion, viewable, complete
+	Timestamp     time.Time
 }
 
 // SpendResult is the output of processing a spend event.
 type SpendResult struct {
-	TraceID           string
-	AdvertiserSpend   float64
-	PublisherRevenue  float64
-	PlatformMargin    float64
-	FeePercent        float64
-	Subsidy           float64 // > 0 if guaranteed minimum applied
-	Action            string  // "billed", "reserved", "settled", "released"
-	ReservationID     string  // for reserve/settle models
+	TraceID          string
+	AdvertiserSpend  float64
+	PublisherRevenue float64
+	PlatformMargin   float64
+	FeePercent       float64
+	Subsidy          float64 // > 0 if guaranteed minimum applied
+	Action           string  // "billed", "reserved", "settled", "released"
+	ReservationID    string  // for reserve/settle models
 }
 
 // BalanceSink applies realized advertiser spend to the prepay balance
@@ -420,9 +420,9 @@ func NewContractStore() *ContractStore {
 	return &ContractStore{
 		contracts: make(map[string]*Contract),
 		fallback: &Contract{
-			Model:      ModelFixed,
-			FeePct:     20,
-			Currency:   "USD",
+			Model:    ModelFixed,
+			FeePct:   20,
+			Currency: "USD",
 		},
 	}
 }
@@ -457,20 +457,21 @@ const (
 
 // Contract defines a publisher's revenue share terms.
 type Contract struct {
-	Model              RevenueModel
-	FeePct             float64 // for fixed model
-	Tiers              []Tier  // for tiered model
-	GuaranteedMinCPM   float64 // for guaranteed model
-	DealTypeModifiers  map[string]float64 // deal_type -> fee adjustment
-	Currency           string
-	MonthImpressions   int64 // current month's impression count (for tiered)
+	Model             RevenueModel
+	FeePct            float64            // for fixed model
+	Tiers             []Tier             // for tiered model
+	GuaranteedMinCPM  float64            // for guaranteed model
+	DealTypeModifiers map[string]float64 // deal_type -> fee adjustment
+	Currency          string
+	MonthImpressions  int64 // current month's impression count (for tiered)
 }
 
-// Tier defines a volume-based fee tier.
+// Tier defines a volume-based fee tier. JSON tags match the revshare_config
+// stored by the staff editor and decoded by the ContractLoader.
 type Tier struct {
-	MinImpressions int64
-	MaxImpressions int64 // 0 = unlimited
-	FeePct         float64
+	MinImpressions int64   `json:"min_impressions"`
+	MaxImpressions int64   `json:"max_impressions"` // 0 = unlimited
+	FeePct         float64 `json:"fee_pct"`
 }
 
 // RevenueCalc holds the result of a revenue calculation.
