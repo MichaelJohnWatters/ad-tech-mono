@@ -367,6 +367,23 @@ local_resource('report-runner',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres', 'reporting', 'mailpit'])
 
+local_resource('privacy-delete',
+    # Level-3 (full deletion) runner (normally a periodic CronJob). Purges every
+    # user with a pending level-3 opt_out_registry row across identity_graph +
+    # audience_segment_members, marks it completed, announces the completion on
+    # NATS. 127.0.0.1 forces IPv4 (see adstxt-crawl).
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable PRIVACY_DELETE_NATS_URL=nats://127.0.0.1:4222 go run ./cmd/privacy-delete',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres', 'nats'])
+
+local_resource('privacy-verify',
+    # Deletion auditor (normally a periodic CronJob, run after privacy-delete).
+    # Re-checks completed deletions for residual rows; stamps verified_at when
+    # clean, exits non-zero (ops alert) when data survived.
+    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable go run ./cmd/privacy-verify',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres'])
+
 # ============================================================
 # Simulation
 # ============================================================

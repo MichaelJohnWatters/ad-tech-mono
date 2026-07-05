@@ -15107,7 +15107,7 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 43. **Dev tools (Phase 4):** Trace Explorer - add budget impact panel ("was $100, cost $3, now $97")
 44. **Dev tools (Phase 4):** Publisher Simulator - billing debug in overlay (cost per impression, billing model)
 
-### ⚠️ Phase 5: Identity, Privacy, and Audience  — serving-path done; steps 45, 50 outstanding (see ledger)
+### ⚠️ Phase 5: Identity, Privacy, and Audience  — serving-path done; step 50 shipped 2026-07-05, step 45 outstanding (see ledger)
 45. `pkg/identity/` - platform ID, identity graph, cross-device linking
 46. Unified audience store (`pkg/audience/store/`) - Redis + Postgres, access-controlled
 47. Audience management - segments, lookalike audiences, composite segments, retargeting builders
@@ -15224,7 +15224,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 | Step | Item | State | Where / seam | Done when |
 |---|---|---|---|---|
 | 45 | Identity graph wired into serving | ⚠️ in-memory, tests only | `pkg/identity/*.go`; add `identity_edges` table + warm cache in DSP/exchange | e2e asserts cross-device resolve affects targeting |
-| 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ❌ empty (`.gitkeep`) | reuse RLS tenant-tx from `pkg/audience/store/postgres`; `opt_out_registry` exists | `privacy_test.go` deletion-propagation flips |
+| 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ✅ SHIPPED (2026-07-05) | `pkg/privacydelete` (Deleter purges identity_graph + audience_segment_members for pending level-3 users, marks completed, announces `deletion_completed`; Verifier residual-checks + stamps verified_at) + both one-shot binaries + Tilt resources | ✅ `TestPrivacyDeletionPropagation` flipped |
 | 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven | F-series batch-sweep assertion |
 | 61 | `sellers.json` from DB | ✅ SHIPPED (2026-07-05) | `cmd/gateway/sellers.go` — `pgSellerStore` reads active `publishers` (seller_id = UUID); adding a publisher changes the output with no code change. DB-down → valid file with empty seller list, not stale hardcodes | ✅ done (handler unit tests: from-DB + empty-on-error) |
 | 63 | `cmd/optimise` pipeline CronJob | ⚠️ lib real, no binary | `pkg/optimise/bandit.go` wired in adserver; recompute curves offline | `routing_shading_test.go` offline-recompute assertion |
@@ -15275,7 +15275,7 @@ migration mode (observability / migration).
 2. ~~SMTP + Mailpit (77)~~ ✅ done 2026-07-05 (scheduled reports now actually deliver).
 3. ~~`sellers.json` from DB (61)~~ ✅ done 2026-07-05 (served live from the publishers table).
 4. ~~`cmd/webhooks` (76)~~ ✅ done 2026-07-05 (dispatcher delivers signed events with retries).
-5. `cmd/privacy-delete` / `-verify` (50) — compliance-critical, unblocks step 105.
+5. ~~`cmd/privacy-delete` / `-verify` (50)~~ ✅ done 2026-07-05 (level-3 deletion pipeline + verifier; e2e flipped).
 6. `cmd/fraud` + `cmd/optimise` CronJobs (58/63) — wrap existing libs.
 7. Identity-graph wiring (45) — lowest urgency, nothing depends on it.
 

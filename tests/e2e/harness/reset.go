@@ -42,6 +42,10 @@ func (h *Harness) Reset(t *testing.T) {
 		"publishers",
 		"audience_segment_members",
 		"audience_segments",
+		// Global (no account FK, so not reached by CASCADE from accounts) —
+		// list explicitly so privacy tests get clean opt-out / identity state.
+		"opt_out_registry",
+		"identity_graph",
 		"budget_reservations",
 		"ledger_entries",
 		"invoices",
