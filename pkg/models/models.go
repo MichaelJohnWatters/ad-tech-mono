@@ -34,16 +34,16 @@ type CampaignCreative struct {
 }
 
 type Campaign struct {
-	ID             string // line_items.id (UUID text)
-	AccountID      string // owning advertiser account UUID
-	AdvertiserID   string // = AccountID for advertiser-owned IOs, distinct for agency
-	IOId           string // insertion_orders.id
-	Name           string
+	ID           string // line_items.id (UUID text)
+	AccountID    string // owning advertiser account UUID
+	AdvertiserID string // = AccountID for advertiser-owned IOs, distinct for agency
+	IOId         string // insertion_orders.id
+	Name         string
 	// CreativeID is the primary (highest-weight) creative's UUID. Kept
 	// for backwards compat with callers that don't care about size
 	// variants. New code should use Creatives + selectCreativeForSize
 	// in the DSP bidder.
-	CreativeID     string
+	CreativeID string
 	// Creatives is the full set of size variants for this line item.
 	// At least one entry; ordered by weight DESC.
 	Creatives      []CampaignCreative
@@ -55,12 +55,15 @@ type Campaign struct {
 	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
 	PacingMode     string // even, asap, front_loaded
 	Status         string // live, paused, ended, ...
+	// Timezone is the IANA name (line_items.timezone) used to evaluate
+	// time-of-day bid modifiers. Empty → UTC.
+	Timezone string
 	// ViewabilityTargetPct is the contractual viewability guarantee for
 	// this line item (0-100). nil = no guarantee. Used downstream for
 	// makegood reconciliation; not consulted on the hot bid path.
 	ViewabilityTargetPct *int
-	Targeting      targeting.Rules
-	Modifiers      targeting.Modifiers
+	Targeting            targeting.Rules
+	Modifiers            targeting.Modifiers
 }
 
 // Account represents an advertiser, publisher, agency, staff, or admin account.
@@ -77,20 +80,20 @@ type Account struct {
 
 // InsertionOrder is a budget container above line items.
 type InsertionOrder struct {
-	ID               string
-	AccountID        string
-	Name             string
-	Budget           float64
-	DailyBudget      float64
-	Currency         string
-	StartDate        time.Time
-	EndDate          time.Time
-	Status           string // draft, active, paused, ended, archived
-	Objective        string // brand_awareness, performance, retargeting
-	BudgetRollover   bool
-	RolloverCapPct   int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID             string
+	AccountID      string
+	Name           string
+	Budget         float64
+	DailyBudget    float64
+	Currency       string
+	StartDate      time.Time
+	EndDate        time.Time
+	Status         string // draft, active, paused, ended, archived
+	Objective      string // brand_awareness, performance, retargeting
+	BudgetRollover bool
+	RolloverCapPct int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // LineItem is a campaign - the entity that has targeting, bids, and creatives.
@@ -115,8 +118,8 @@ type LineItem struct {
 	// ViewabilityTargetPct is the contractual viewability guarantee
 	// (0-100). nil = no guarantee.
 	ViewabilityTargetPct *int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // Creative represents an ad creative (image, HTML, video, audio, native).
@@ -130,7 +133,7 @@ type Creative struct {
 	AssetURL        string // Minio/S3 URL
 	HTMLContent     string
 	LandingURL      string
-	DurationSeconds int // video/audio only
+	DurationSeconds int    // video/audio only
 	ReviewStatus    string // uploaded, transcoding, auto_scanning, pending_review, approved, rejected
 	RejectionReason string
 	ReviewedBy      string
@@ -148,59 +151,59 @@ type LineItemCreative struct {
 
 // Publisher represents a publisher account with revenue share config.
 type Publisher struct {
-	ID              string
-	AccountID       string
-	Name            string
-	Domain          string
-	Currency        string
-	Status          string // pending, active, suspended, closed
-	RevShareModel   string // fixed, tiered, guaranteed_minimum, deal_type, hybrid
-	RevShareConfig  map[string]any // JSONB
-	PaymentTerms    string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID             string
+	AccountID      string
+	Name           string
+	Domain         string
+	Currency       string
+	Status         string         // pending, active, suspended, closed
+	RevShareModel  string         // fixed, tiered, guaranteed_minimum, deal_type, hybrid
+	RevShareConfig map[string]any // JSONB
+	PaymentTerms   string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Placement represents an ad slot on a publisher's site or app.
 type Placement struct {
-	ID            string
-	PublisherID   string
-	AccountID     string
-	Name          string
-	Format        string // display, native, video, audio, dooh
-	Width         int
-	Height        int
-	FloorPrice    float64
-	FloorCurrency string
+	ID             string
+	PublisherID    string
+	AccountID      string
+	Name           string
+	Format         string // display, native, video, audio, dooh
+	Width          int
+	Height         int
+	FloorPrice     float64
+	FloorCurrency  string
 	PageURLPattern string
-	Status        string // active, inactive
-	FloorConfig   map[string]any // JSONB: time-based, device-based, geo-based floors
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	Status         string         // active, inactive
+	FloorConfig    map[string]any // JSONB: time-based, device-based, geo-based floors
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Deal represents a PMP, PG, or preferred deal between publisher and advertiser(s).
 type Deal struct {
-	ID              string
-	PublisherID     string
-	AccountID       string
-	Name            string
-	DealType        string // open, pmp, pg, preferred
-	Price           float64
-	PriceCurrency   string
-	AdvertiserIDs   []string
-	PlacementIDs    []string
+	ID               string
+	PublisherID      string
+	AccountID        string
+	Name             string
+	DealType         string // open, pmp, pg, preferred
+	Price            float64
+	PriceCurrency    string
+	AdvertiserIDs    []string
+	PlacementIDs     []string
 	GuaranteedVolume int64 // for PG deals
-	StartDate       *time.Time
-	EndDate         *time.Time
-	Status          string // draft, active, paused, ended
-	DealConfig      map[string]any // JSONB
+	StartDate        *time.Time
+	EndDate          *time.Time
+	Status           string         // draft, active, paused, ended
+	DealConfig       map[string]any // JSONB
 	// ViewabilityTargetPct is the publisher-side guarantee on this deal
 	// (0-100). nil = no guarantee. PMP/Preferred deals frequently carry
 	// this; open auctions don't.
 	ViewabilityTargetPct *int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // AudienceSegment represents a named audience segment.
@@ -241,8 +244,8 @@ type BidRequest struct {
 	Keywords   []string
 
 	// App context
-	AppBundle  string
-	AppName    string
+	AppBundle string
+	AppName   string
 
 	// Device
 	DeviceType     string // mobile, desktop, tablet, ctv
@@ -263,11 +266,11 @@ type BidRequest struct {
 	Segments        []string
 
 	// Regulatory
-	COPPA          bool
-	GDPR           bool
-	USPrivacy      string
-	ConsentString  string
-	DataResidency  string
+	COPPA         bool
+	GDPR          bool
+	USPrivacy     string
+	ConsentString string
+	DataResidency string
 
 	// Video/audio specific
 	MinDuration int
@@ -286,19 +289,19 @@ type BidRequest struct {
 
 // BidResponse represents the DSP's response to a bid request.
 type BidResponse struct {
-	BidID         string
-	CampaignID    string // line item ID
-	CreativeID    string
-	Price         float64
-	Currency      string
-	BidModel      string // cpm, cpc, cpa, vcpm, cpcv
-	AdvertiserID  string
-	Category      string // IAB category
-	DealID        string
-	Duration      int // seconds (video/audio)
-	LandingURL    string
-	NoBid         bool
-	NoBidReason   string
+	BidID        string
+	CampaignID   string // line item ID
+	CreativeID   string
+	Price        float64
+	Currency     string
+	BidModel     string // cpm, cpc, cpa, vcpm, cpcv
+	AdvertiserID string
+	Category     string // IAB category
+	DealID       string
+	Duration     int // seconds (video/audio)
+	LandingURL   string
+	NoBid        bool
+	NoBidReason  string
 }
 
 // ServeRequest is what the exchange/SSP sends to the ad server after an auction win.
@@ -340,27 +343,27 @@ type ServeResponse struct {
 
 // DSPProfile is a YAML-based DSP configuration with campaign definitions.
 type DSPProfile struct {
-	Name       string             `yaml:"name" json:"name"`
-	Competitor bool               `yaml:"competitor" json:"competitor"`
-	NoisePct   float64            `yaml:"noise_pct" json:"noise_pct"`
-	NoBidRate  float64            `yaml:"no_bid_rate" json:"no_bid_rate"`
-	Campaigns  []CampaignConfig   `yaml:"campaigns" json:"campaigns"`
+	Name       string           `yaml:"name" json:"name"`
+	Competitor bool             `yaml:"competitor" json:"competitor"`
+	NoisePct   float64          `yaml:"noise_pct" json:"noise_pct"`
+	NoBidRate  float64          `yaml:"no_bid_rate" json:"no_bid_rate"`
+	Campaigns  []CampaignConfig `yaml:"campaigns" json:"campaigns"`
 }
 
 // CampaignConfig is a campaign definition in a DSP profile YAML.
 type CampaignConfig struct {
-	ID             string          `yaml:"id" json:"id"`
-	AccountID      string          `yaml:"account_id" json:"account_id"`
-	AdvertiserID   string          `yaml:"advertiser_id" json:"advertiser_id"`
-	IOId           string          `yaml:"io_id" json:"io_id"`
-	Name           string          `yaml:"name" json:"name"`
-	CreativeID     string          `yaml:"creative_id" json:"creative_id"`
-	CreativeDomain string          `yaml:"creative_domain" json:"creative_domain"`
-	BaseBid        float64         `yaml:"base_bid" json:"base_bid"`
-	Currency       string          `yaml:"currency" json:"currency"`
-	DailyBudget    float64         `yaml:"daily_budget" json:"daily_budget"`
-	TotalBudget    float64         `yaml:"total_budget" json:"total_budget"`
-	BidModel       string          `yaml:"bid_model" json:"bid_model"`
-	PacingMode     string          `yaml:"pacing_mode" json:"pacing_mode"`
-	Status         string          `yaml:"status" json:"status"`
+	ID             string  `yaml:"id" json:"id"`
+	AccountID      string  `yaml:"account_id" json:"account_id"`
+	AdvertiserID   string  `yaml:"advertiser_id" json:"advertiser_id"`
+	IOId           string  `yaml:"io_id" json:"io_id"`
+	Name           string  `yaml:"name" json:"name"`
+	CreativeID     string  `yaml:"creative_id" json:"creative_id"`
+	CreativeDomain string  `yaml:"creative_domain" json:"creative_domain"`
+	BaseBid        float64 `yaml:"base_bid" json:"base_bid"`
+	Currency       string  `yaml:"currency" json:"currency"`
+	DailyBudget    float64 `yaml:"daily_budget" json:"daily_budget"`
+	TotalBudget    float64 `yaml:"total_budget" json:"total_budget"`
+	BidModel       string  `yaml:"bid_model" json:"bid_model"`
+	PacingMode     string  `yaml:"pacing_mode" json:"pacing_mode"`
+	Status         string  `yaml:"status" json:"status"`
 }

@@ -188,8 +188,18 @@ var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded
 // parseModifiers. Keys are device names / country codes; values are percentage
 // adjustments (+20 = bid 20% higher). The engine clamps each to safe bounds.
 type bidModifiersInput struct {
-	Device     map[string]float64 `json:"device,omitempty"`
-	GeoCountry map[string]float64 `json:"geo_country,omitempty"`
+	Device     map[string]float64  `json:"device,omitempty"`
+	GeoCountry map[string]float64  `json:"geo_country,omitempty"`
+	TimeOfDay  []timeModifierInput `json:"time_of_day,omitempty"`
+}
+
+// timeModifierInput is one time-window bid adjustment. The hour window is
+// [StartHour, EndHour); EndHour <= StartHour wraps past midnight. Evaluated in
+// the campaign's timezone (line_items.timezone).
+type timeModifierInput struct {
+	StartHour int     `json:"start_hour"`
+	EndHour   int     `json:"end_hour"`
+	Modifier  float64 `json:"modifier"`
 }
 
 // validateAndJSON rejects wildly out-of-range percentages (the engine clamps
@@ -204,6 +214,14 @@ func (b *bidModifiersInput) validateAndJSON() (string, error) {
 			if v < -100 || v > 1000 {
 				return "", fmt.Errorf("bid modifier %q = %v out of range (-100..1000)", k, v)
 			}
+		}
+	}
+	for i, tm := range b.TimeOfDay {
+		if tm.Modifier < -100 || tm.Modifier > 1000 {
+			return "", fmt.Errorf("time_of_day[%d] modifier %v out of range (-100..1000)", i, tm.Modifier)
+		}
+		if tm.StartHour < 0 || tm.StartHour > 23 || tm.EndHour < 0 || tm.EndHour > 24 {
+			return "", fmt.Errorf("time_of_day[%d] hours must be 0-23 (start) / 0-24 (end)", i)
 		}
 	}
 	j, err := json.Marshal(b)
@@ -252,6 +270,8 @@ type createCampaignRequest struct {
 	// Flight window (IO start/end). Empty → today .. +90d. Format YYYY-MM-DD.
 	StartDate string `json:"start_date,omitempty"`
 	EndDate   string `json:"end_date,omitempty"`
+	// Timezone (IANA) for time-of-day bid modifiers. Empty → UTC.
+	Timezone string `json:"timezone,omitempty"`
 	// ViewabilityTargetPct is the contractual viewability guarantee
 	// (0-100). Optional — nil = no guarantee, no makegood reconciliation.
 	// Settlement mechanics for vCPM are a separate platform-level decision
@@ -308,6 +328,13 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if _, err := req.BidModifiers.validateAndJSON(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Timezone == "" {
+		req.Timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(req.Timezone); err != nil {
+		http.Error(w, "invalid timezone: "+req.Timezone, http.StatusBadRequest)
 		return
 	}
 
@@ -444,8 +471,8 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'bandit', 'UTC', $9, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, viewTarget); err != nil {
+VALUES ($1, $2, $3, $4, 'live', 'display', $5, $6, 'USD', $7, $8, 'moderate', 'bandit', $9, $10, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.Timezone, viewTarget); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
@@ -492,6 +519,7 @@ type patchCampaignRequest struct {
 	Status      *string  `json:"status,omitempty"`
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
+	Timezone    *string  `json:"timezone,omitempty"`
 	// Targeting edits — nil leaves the column unchanged; a supplied list
 	// (even empty) replaces it. Lands in targeting_rules, same tx.
 	IncludeGeo           *[]string `json:"include_geo,omitempty"`
@@ -540,9 +568,15 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
-		req.BidStrategy == nil && req.PacingMode == nil && !req.hasTargeting() {
+		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
+	}
+	if req.Timezone != nil {
+		if _, err := time.LoadLocation(*req.Timezone); err != nil {
+			http.Error(w, "invalid timezone: "+*req.Timezone, http.StatusBadRequest)
+			return
+		}
 	}
 	if req.Status != nil {
 		switch *req.Status {
@@ -633,6 +667,10 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if req.PacingMode != nil {
 		args = append(args, *req.PacingMode)
 		sets = append(sets, fmt.Sprintf("pacing_mode = $%d", len(args)))
+	}
+	if req.Timezone != nil {
+		args = append(args, *req.Timezone)
+		sets = append(sets, fmt.Sprintf("timezone = $%d", len(args)))
 	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE line_items SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))

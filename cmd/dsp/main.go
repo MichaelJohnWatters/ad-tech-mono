@@ -862,7 +862,18 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				balanceDepletedPublished.Delete(c.AccountID)
 			}
 
-			modCtx := targeting.ModifierContext{Device: tReq.Device, GeoCountry: tReq.Geo}
+			// Time-of-day modifiers evaluate the hour in the campaign's
+			// timezone (line_items.timezone; UTC if empty/unparseable).
+			now := clk.Now()
+			if c.Timezone != "" {
+				if loc, err := time.LoadLocation(c.Timezone); err == nil {
+					now = now.In(loc)
+				}
+			}
+			modCtx := targeting.ModifierContext{
+				Device: tReq.Device, GeoCountry: tReq.Geo,
+				HourOfDay: now.Hour(),
+			}
 			adjustedBid, _ := targeting.ApplyModifiers(c.BaseBid, c.Modifiers, modCtx)
 
 			if isCompetitor {

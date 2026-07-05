@@ -196,7 +196,12 @@
         {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "nc_mod_dev" "placeholder" "mobile:20, desktop:-10") }}
         {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "nc_mod_geo" "placeholder" "USA:15") }}
       </div>
-      <p class="text-xs text-gray-400">Modifiers adjust the bid up/down by percent and stack; applied before the floor check.</p>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Time-of-day bid modifiers (one per line: <code>START-END ±%</code>)</span>
+        <textarea id="nc_mod_tod" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="9-18 20&#10;22-4 -15"></textarea>
+      </label>
+      {{ template "form-field" (dict "label" "Campaign timezone (IANA — for time-of-day modifiers)" "name" "nc_timezone" "placeholder" "UTC") }}
+      <p class="text-xs text-gray-400">Modifiers adjust the bid up/down by percent and stack; applied before the floor check. Hours 24h, end exclusive; end ≤ start wraps midnight.</p>
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newCampaign').classList.add('hidden')") }}
@@ -281,6 +286,11 @@
         {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "ec_mod_dev") }}
         {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "ec_mod_geo") }}
       </div>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Time-of-day bid modifiers (<code>START-END ±%</code> per line)</span>
+        <textarea id="ec_mod_tod" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="9-18 20"></textarea>
+      </label>
+      {{ template "form-field" (dict "label" "Campaign timezone (IANA)" "name" "ec_timezone") }}
     </details>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
@@ -438,13 +448,36 @@ function parseModMap(str) {
 }
 const modMapToStr = (m) => Object.entries(m || {}).map(([k, v]) => `${k}:${v}`).join(', ');
 
-// bidModifiersBody assembles {device, geo_country} from the two inputs;
-// undefined if both are empty.
-function bidModifiersBody(devId, geoId) {
+// parseTimeMods turns a textarea (one "START-END ±%" per line) into
+// [{start_hour, end_hour, modifier}]. Malformed lines are skipped.
+function parseTimeMods(str) {
+  const out = [];
+  (str || '').split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 2) return;
+    const hm = parts[0].split('-');
+    if (hm.length !== 2) return;
+    const start = parseInt(hm[0], 10), end = parseInt(hm[1], 10), mod = parseFloat(parts[1]);
+    if (isNaN(start) || isNaN(end) || isNaN(mod)) return;
+    out.push({start_hour: start, end_hour: end, modifier: mod});
+  });
+  return out;
+}
+// Reads the GET shape (targeting.TimeModifier → {StartHour, EndHour, Modifier},
+// Go field names, no json tags).
+const timeModsToStr = (arr) => (arr || []).map(t => `${t.StartHour}-${t.EndHour} ${t.Modifier}`).join('\n');
+
+// bidModifiersBody assembles {device, geo_country, time_of_day} from the
+// inputs; undefined if all are empty. todId is optional.
+function bidModifiersBody(devId, geoId, todId) {
   const device = parseModMap($(devId).value), geo = parseModMap($(geoId).value);
   const cfg = {};
   if (Object.keys(device).length) cfg.device = device;
   if (Object.keys(geo).length) cfg.geo_country = geo;
+  if (todId) {
+    const tod = parseTimeMods($(todId).value);
+    if (tod.length) cfg.time_of_day = tod;
+  }
   return Object.keys(cfg).length ? cfg : undefined;
 }
 
@@ -457,8 +490,10 @@ async function createCampaign(ev) {
     bid_strategy: $('nc_bid_strategy').value,
     pacing_mode: $('nc_pacing').value,
   };
-  const mods = bidModifiersBody('nc_mod_dev', 'nc_mod_geo');
+  const mods = bidModifiersBody('nc_mod_dev', 'nc_mod_geo', 'nc_mod_tod');
   if (mods) body.bid_modifiers = mods;
+  const tz = $('nc_timezone').value.trim();
+  if (tz) body.timezone = tz;
   const total = parseFloat($('nc_total_budget').value);
   if (total > 0) body.total_budget = total;
   if ($('nc_start').value) body.start_date = $('nc_start').value;
@@ -517,6 +552,8 @@ function openEdit(id) {
   $('ec_seg_inc').value = join(inc.Segments); $('ec_seg_exc').value = join(exc.Segments);
   const mods = c.Modifiers || {};
   $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
+  $('ec_mod_tod').value = timeModsToStr(mods.TimeOfDay);
+  $('ec_timezone').value = c.Timezone || '';
   $('editCampaign').classList.remove('hidden');
 }
 
@@ -538,8 +575,10 @@ async function saveCampaign(ev) {
     include_inventory_type: csv('ec_inv_inc'),
     include_segments: csv('ec_seg_inc'), exclude_segments: csv('ec_seg_exc'),
     // Always send bid_modifiers (empty object replaces) so clearing clears it.
-    bid_modifiers: bidModifiersBody('ec_mod_dev', 'ec_mod_geo') || {},
+    bid_modifiers: bidModifiersBody('ec_mod_dev', 'ec_mod_geo', 'ec_mod_tod') || {},
   };
+  const ecTz = $('ec_timezone').value.trim();
+  if (ecTz) body.timezone = ecTz;
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editCampaign').classList.add('hidden');
