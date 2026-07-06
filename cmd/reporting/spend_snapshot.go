@@ -85,16 +85,16 @@ func hydrateCommittedSpend(store *lazyCommittedSpendStore, engine *billing.Engin
 	day := clk.Now().UTC().Format("2006-01-02")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	m, err := store.Load(ctx, day)
+	settled, reserved, err := store.Load(ctx, day)
 	if err != nil {
 		log.Warn("committed-spend hydrate skipped; pacing starts cold this boot", "error", err)
 		return
 	}
-	if len(m) == 0 {
+	if len(settled) == 0 && len(reserved) == 0 {
 		return
 	}
-	engine.HydrateSettled(day, m)
-	log.Info("committed-spend hydrated from postgres", "campaigns", len(m), "day", day)
+	engine.HydratePacing(day, settled, reserved)
+	log.Info("committed-spend hydrated from postgres", "settled_campaigns", len(settled), "reserved_campaigns", len(reserved), "day", day)
 }
 
 // persistCommittedSpend writes the engine's settled-spend so the next boot can
@@ -105,10 +105,10 @@ func persistCommittedSpend(store *lazyCommittedSpendStore, engine *billing.Engin
 	if store == nil {
 		return
 	}
-	day, cents := engine.SettledToday()
+	day, settled, reserved := engine.PacingState()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := store.Save(ctx, day, cents); err != nil {
+	if err := store.Save(ctx, day, settled, reserved); err != nil {
 		log.Error("committed-spend persist failed", "error", err)
 	}
 }
@@ -158,21 +158,21 @@ func (s *lazyCommittedSpendStore) dropOnErr(err error) error {
 	return err
 }
 
-func (s *lazyCommittedSpendStore) Save(ctx context.Context, day string, cents map[string]int64) error {
+func (s *lazyCommittedSpendStore) Save(ctx context.Context, day string, settled, reserved map[string]int64) error {
 	st, err := s.connect()
 	if err != nil {
 		return err
 	}
-	return s.dropOnErr(st.Save(ctx, day, cents))
+	return s.dropOnErr(st.Save(ctx, day, settled, reserved))
 }
 
-func (s *lazyCommittedSpendStore) Load(ctx context.Context, day string) (map[string]int64, error) {
+func (s *lazyCommittedSpendStore) Load(ctx context.Context, day string) (map[string]int64, map[string]int64, error) {
 	st, err := s.connect()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	m, err := st.Load(ctx, day)
-	return m, s.dropOnErr(err)
+	settled, reserved, err := st.Load(ctx, day)
+	return settled, reserved, s.dropOnErr(err)
 }
 
 func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clock.Clock, log *slog.Logger) {

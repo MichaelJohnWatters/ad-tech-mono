@@ -142,40 +142,64 @@ func (p *pacingAccumulator) sweepExpired() int {
 	return released
 }
 
-// settledSnapshot returns the durable (settled-today) portion per campaign,
-// excluding transient open reserves, plus the UTC day it belongs to. This is
-// what gets persisted so a restart can re-hydrate — holds are deliberately
-// excluded because they rebuild from live reserves within the hold TTL.
-func (p *pacingAccumulator) settledSnapshot() (string, map[string]int64) {
+// hydratedHoldKey is the trace-id slot used for the single synthetic hold that
+// restores a campaign's aggregate open reserves on boot. Distinct from any real
+// trace so a real reserve/settle never collides with it.
+const hydratedHoldKey = "__hydrated__"
+
+// pacingState returns the UTC day plus the persistable portions per campaign:
+// settled cents (realized) and the aggregate open-reserved cents (sum of holds).
+// Both are persisted so a restart can re-hydrate — settled resumes the day's
+// realized spend, reserved restores in-flight holds so committed doesn't drop
+// (which would reconcile DSP counters down and risk overspend).
+func (p *pacingAccumulator) pacingState() (string, map[string]int64, map[string]int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
-	out := make(map[string]int64, len(p.campaigns))
+	settled := make(map[string]int64)
+	reserved := make(map[string]int64)
 	for id, cp := range p.campaigns {
 		if cp.settledCents > 0 {
-			out[id] = cp.settledCents
+			settled[id] = cp.settledCents
+		}
+		var r int64
+		for _, h := range cp.holds {
+			r += h.cents
+		}
+		if r > 0 {
+			reserved[id] = r
 		}
 	}
-	return p.day, out
+	return p.day, settled, reserved
 }
 
-// hydrateSettled seeds settled totals loaded from durable storage on boot, so a
-// restart doesn't reset the day's committed spend to zero (which would reconcile
-// DSP counters down and risk overspend). Only applies when day matches the
-// current UTC day — a stale (previous-day) load is ignored. Intended to run
-// before event consumption starts, so it sets rather than merges.
-func (p *pacingAccumulator) hydrateSettled(day string, m map[string]int64) {
+// hydrate seeds settled totals and restores open reserves from durable storage
+// on boot, so a restart resumes the day's committed spend instead of resetting
+// to zero. Reserved is restored as ONE synthetic per-campaign hold, freshly
+// dated so the sweep gives it a full TTL. Only applies when day matches the
+// current UTC day (a stale previous-day load is ignored). Runs before event
+// consumption, so it sets rather than merges.
+//
+// Caveat: a pre-restart reserve whose settle arrives after boot adds to settled
+// while the synthetic hold still counts it — a bounded, conservative over-count
+// (under-delivery, never overspend) that the sweep clears within one hold TTL.
+func (p *pacingAccumulator) hydrate(day string, settled, reserved map[string]int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
 	if day != p.day {
 		return
 	}
-	for id, cents := range m {
-		if cents <= 0 {
-			continue
+	now := p.clk.Now()
+	for id, cents := range settled {
+		if cents > 0 {
+			p.campaignLocked(id).settledCents = cents
 		}
-		p.campaignLocked(id).settledCents = cents
+	}
+	for id, cents := range reserved {
+		if cents > 0 {
+			p.campaignLocked(id).holds[hydratedHoldKey] = pacingHold{cents: cents, created: now}
+		}
 	}
 }
 

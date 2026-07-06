@@ -143,9 +143,10 @@ func TestPacing_DayRollover(t *testing.T) {
 	}
 }
 
-// SettledToday exposes only the durable settled portion (not transient holds),
-// and HydrateSettled restores it on a fresh engine — the restart-safety path.
-func TestPacing_SettledPersistRoundTrip(t *testing.T) {
+// PacingState exposes settled and open-reserved separately, and HydratePacing
+// restores BOTH on a fresh engine — the restart-safety path. committed survives
+// a restart (settled resumed, reserves restored as a synthetic hold).
+func TestPacing_PersistRoundTrip(t *testing.T) {
 	clk := clock.NewFake(time.Now())
 	e := newPacingEngine(t, clk)
 	ctx := context.Background()
@@ -156,20 +157,27 @@ func TestPacing_SettledPersistRoundTrip(t *testing.T) {
 	e.ProcessEvent(ctx, SpendEvent{TraceID: "t2", CampaignID: "camp-a", AdvertiserID: "adv",
 		ClearingPrice: 1.00, Currency: "USD", BidModel: BidCPC, EventType: "impression"})
 
-	// committed = 400 settled + 100 hold = 500; but persisted settled is 400 only.
+	// committed = 400 settled + 100 reserved = 500.
 	if got := e.SnapshotCommitted()["camp-a"]; got != 500 {
 		t.Fatalf("committed = %d, want 500", got)
 	}
-	day, settled := e.SettledToday()
-	if settled["camp-a"] != 400 {
-		t.Fatalf("settledToday = %d, want 400 (excludes the 100 hold)", settled["camp-a"])
+	day, settled, reserved := e.PacingState()
+	if settled["camp-a"] != 400 || reserved["camp-a"] != 100 {
+		t.Fatalf("pacingState settled=%d reserved=%d, want 400/100", settled["camp-a"], reserved["camp-a"])
 	}
 
-	// Simulate a restart: fresh engine, hydrate from the persisted settled map.
+	// Simulate a restart: fresh engine, hydrate settled + reserved.
 	e2 := newPacingEngine(t, clk)
-	e2.HydrateSettled(day, settled)
+	e2.HydratePacing(day, settled, reserved)
+	if got := e2.SnapshotCommitted()["camp-a"]; got != 500 {
+		t.Fatalf("after hydrate committed = %d, want 500 (settled AND reserves restored)", got)
+	}
+	// The restored reserve is a real hold: it sweeps after the TTL.
+	e2.SetPacingHoldTTL(1 * time.Minute)
+	clk.Advance(2 * time.Minute)
+	e2.SweepExpiredHolds()
 	if got := e2.SnapshotCommitted()["camp-a"]; got != 400 {
-		t.Fatalf("after hydrate committed = %d, want 400 (settled restored, holds rebuild from live events)", got)
+		t.Fatalf("after sweep committed = %d, want 400 (restored reserve released)", got)
 	}
 }
 
@@ -178,7 +186,7 @@ func TestPacing_SettledPersistRoundTrip(t *testing.T) {
 func TestPacing_HydrateIgnoresStaleDay(t *testing.T) {
 	clk := clock.NewFake(time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC))
 	e := newPacingEngine(t, clk)
-	e.HydrateSettled("2026-07-05", map[string]int64{"camp-a": 999})
+	e.HydratePacing("2026-07-05", map[string]int64{"camp-a": 999}, map[string]int64{"camp-a": 50})
 	if got := e.SnapshotCommitted()["camp-a"]; got != 0 {
 		t.Fatalf("stale-day hydrate leaked %d, want 0", got)
 	}

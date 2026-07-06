@@ -15,14 +15,15 @@ type CommittedSpendStore struct {
 	Store *Store
 }
 
-// Save upserts today's settled cents for each campaign under the given UTC day.
-// Whole map in one transaction so a mid-write crash leaves a consistent row set.
-// An empty map is a no-op (nothing billed yet).
-func (s *CommittedSpendStore) Save(ctx context.Context, day string, cents map[string]int64) error {
+// Save upserts today's settled + open-reserved cents for each campaign under the
+// given UTC day. Whole set in one transaction so a mid-write crash leaves a
+// consistent row set. Campaigns present in either map are written (union), so a
+// campaign with only reserves (no settled yet) is still persisted.
+func (s *CommittedSpendStore) Save(ctx context.Context, day string, settled, reserved map[string]int64) error {
 	if s.Store == nil {
 		return sql.ErrConnDone
 	}
-	if len(cents) == 0 {
+	if len(settled) == 0 && len(reserved) == 0 {
 		return nil
 	}
 	tx, err := s.Store.primary.BeginTx(ctx, nil)
@@ -31,17 +32,24 @@ func (s *CommittedSpendStore) Save(ctx context.Context, day string, cents map[st
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO campaign_committed_spend (day, campaign_id, settled_cents, updated_at)
-VALUES ($1, $2, $3, now())
+INSERT INTO campaign_committed_spend (day, campaign_id, settled_cents, reserved_cents, updated_at)
+VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (day, campaign_id) DO UPDATE SET
-    settled_cents = EXCLUDED.settled_cents, updated_at = now()`)
+    settled_cents = EXCLUDED.settled_cents, reserved_cents = EXCLUDED.reserved_cents, updated_at = now()`)
 	if err != nil {
 		return fmt.Errorf("prepare committed-spend save: %w", err)
 	}
 	defer stmt.Close()
-	for campaignID, c := range cents {
-		if _, err := stmt.ExecContext(ctx, day, campaignID, c); err != nil {
-			return fmt.Errorf("upsert committed-spend %s: %w", campaignID, err)
+	seen := make(map[string]struct{}, len(settled)+len(reserved))
+	for id := range settled {
+		seen[id] = struct{}{}
+	}
+	for id := range reserved {
+		seen[id] = struct{}{}
+	}
+	for id := range seen {
+		if _, err := stmt.ExecContext(ctx, day, id, settled[id], reserved[id]); err != nil {
+			return fmt.Errorf("upsert committed-spend %s: %w", id, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -50,26 +58,32 @@ ON CONFLICT (day, campaign_id) DO UPDATE SET
 	return nil
 }
 
-// Load returns the persisted settled cents per campaign for the given UTC day.
-// Empty map when there's no row (fresh day / first boot).
-func (s *CommittedSpendStore) Load(ctx context.Context, day string) (map[string]int64, error) {
-	out := make(map[string]int64)
+// Load returns the persisted settled + open-reserved cents per campaign for the
+// given UTC day. Empty maps when there's no row (fresh day / first boot).
+func (s *CommittedSpendStore) Load(ctx context.Context, day string) (settled, reserved map[string]int64, err error) {
+	settled = make(map[string]int64)
+	reserved = make(map[string]int64)
 	if s.Store == nil {
-		return out, sql.ErrConnDone
+		return settled, reserved, sql.ErrConnDone
 	}
 	rows, err := s.Store.read.QueryContext(ctx,
-		`SELECT campaign_id, settled_cents FROM campaign_committed_spend WHERE day = $1`, day)
+		`SELECT campaign_id, settled_cents, reserved_cents FROM campaign_committed_spend WHERE day = $1`, day)
 	if err != nil {
-		return out, fmt.Errorf("load committed-spend: %w", err)
+		return settled, reserved, fmt.Errorf("load committed-spend: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		var cents int64
-		if err := rows.Scan(&id, &cents); err != nil {
-			return out, fmt.Errorf("scan committed-spend: %w", err)
+		var s, r int64
+		if err := rows.Scan(&id, &s, &r); err != nil {
+			return settled, reserved, fmt.Errorf("scan committed-spend: %w", err)
 		}
-		out[id] = cents
+		if s > 0 {
+			settled[id] = s
+		}
+		if r > 0 {
+			reserved[id] = r
+		}
 	}
-	return out, rows.Err()
+	return settled, reserved, rows.Err()
 }
