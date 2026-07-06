@@ -51,7 +51,7 @@ func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolve
 		_ = db.Close()
 		return nil, func() {}
 	}
-	p := newPreloadIdentityResolver(postgres.NewFromDB(db), cfg.GetDuration("dsp.identity_preload_interval", time.Minute), log)
+	p := newPreloadIdentityResolver(postgres.NewFromDB(db), cfg.GetDuration("dsp.identity_preload_interval", 5*time.Minute), log)
 	p.Start()
 	log.Info("dsp identity resolution enabled (in-memory preload)")
 	return p, func() { p.Stop(); _ = db.Close() }
@@ -74,7 +74,7 @@ type preloadIdentityResolver struct {
 
 func newPreloadIdentityResolver(loader graphLoader, interval time.Duration, log *slog.Logger) *preloadIdentityResolver {
 	if interval <= 0 {
-		interval = time.Minute
+		interval = 5 * time.Minute
 	}
 	return &preloadIdentityResolver{loader: loader, interval: interval, log: log, stop: make(chan struct{})}
 }
