@@ -146,6 +146,11 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity resolution moved fully off the DB hot path: DSP now serves
+  resolution from an in-memory snapshot of the whole graph, refreshed on an interval in
+  the background (`dsp.identity_preload_interval`) — bid-path reads are lock-free map
+  lookups, no Postgres per bid (warm-cache pattern, `preloadIdentityResolver`). Also
+  fixed `cache.MemoryL2` to be mutex-guarded (it stands in for concurrency-safe Redis).
 - **2026-07-06** — identity graph made functional (was inert): write path
   (`pkg/store/postgres` LinkIdentity/ResolveIdentity + gateway `/v1/api/identity-links`)
   and DSP read path (opt-in `dsp.identity_resolution_enabled` expands UID2/user →

@@ -7,6 +7,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -49,8 +50,11 @@ type L2Cache interface {
 	Close() error
 }
 
-// MemoryL2 is an in-memory L2Cache for testing (no Redis needed).
+// MemoryL2 is an in-memory L2Cache for testing (no Redis needed). It stands in
+// for Redis, which is concurrency-safe, so it guards its maps with a mutex —
+// callers (e.g. the DSP's async cache-populate goroutines) use it concurrently.
 type MemoryL2 struct {
+	mu      sync.Mutex
 	data    map[string]string
 	expires map[string]time.Time
 }
@@ -64,6 +68,8 @@ func NewMemoryL2() *MemoryL2 {
 }
 
 func (m *MemoryL2) Get(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if exp, ok := m.expires[key]; ok && !exp.IsZero() && time.Now().After(exp) {
 		delete(m.data, key)
 		delete(m.expires, key)
@@ -74,6 +80,8 @@ func (m *MemoryL2) Get(_ context.Context, key string) (string, bool, error) {
 }
 
 func (m *MemoryL2) Set(_ context.Context, key, value string, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.data[key] = value
 	if ttl > 0 {
 		m.expires[key] = time.Now().Add(ttl)
@@ -82,12 +90,16 @@ func (m *MemoryL2) Set(_ context.Context, key, value string, ttl time.Duration) 
 }
 
 func (m *MemoryL2) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.data, key)
 	delete(m.expires, key)
 	return nil
 }
 
 func (m *MemoryL2) SetNX(_ context.Context, key, value string, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.data[key]; exists {
 		return false, nil
 	}
@@ -98,11 +110,13 @@ func (m *MemoryL2) SetNX(_ context.Context, key, value string, ttl time.Duration
 	return true, nil
 }
 
-func (m *MemoryL2) Incr(_ context.Context, key string) (int64, error) {
-	return m.IncrBy(nil, key, 1)
+func (m *MemoryL2) Incr(ctx context.Context, key string) (int64, error) {
+	return m.IncrBy(ctx, key, 1)
 }
 
 func (m *MemoryL2) IncrBy(_ context.Context, key string, n int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var current int64
 	if v, ok := m.data[key]; ok {
 		fmt.Sscanf(v, "%d", &current)
@@ -112,11 +126,13 @@ func (m *MemoryL2) IncrBy(_ context.Context, key string, n int64) (int64, error)
 	return current, nil
 }
 
-func (m *MemoryL2) DecrBy(_ context.Context, key string, n int64) (int64, error) {
-	return m.IncrBy(nil, key, -n)
+func (m *MemoryL2) DecrBy(ctx context.Context, key string, n int64) (int64, error) {
+	return m.IncrBy(ctx, key, -n)
 }
 
 func (m *MemoryL2) Expire(_ context.Context, key string, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.data[key]; ok {
 		m.expires[key] = time.Now().Add(ttl)
 	}
