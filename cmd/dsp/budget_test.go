@@ -48,7 +48,7 @@ func TestBudgetTracker_ReconcileOverwrites(t *testing.T) {
 	}
 
 	// Billing snapshot says only $2.00 actually committed — reconcile down.
-	b.Reconcile("camp-1", 200)
+	b.Reconcile("", "camp-1", 200)
 	if got := b.Spend("camp-1"); got != 2.00 {
 		t.Fatalf("post-reconcile Spend = %f, want 2.00", got)
 	}
@@ -63,9 +63,35 @@ func TestBudgetTracker_ReconcileOverwrites(t *testing.T) {
 
 func TestBudgetTracker_ReconcileClampsNegative(t *testing.T) {
 	b := NewBudgetTracker(cache.NewMemoryL2(), func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
-	b.Reconcile("camp-1", -100)
+	b.Reconcile("", "camp-1", -100)
 	if got := b.Spend("camp-1"); got != 0 {
 		t.Fatalf("Spend = %f, want 0", got)
+	}
+}
+
+// Budget keys are stamped with the UTC day so the DSP budget resets at UTC
+// midnight, matching the billing accumulator. Spend on a new day sees a fresh
+// counter, and a reconcile for one day doesn't leak into another.
+func TestBudgetTracker_UTCDayIsolation(t *testing.T) {
+	b := NewBudgetTracker(cache.NewMemoryL2(), func() time.Duration { return 48 * time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	day1 := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	b.nowFn = func() time.Time { return day1 }
+
+	b.Record("camp-1", 4.00)
+	if got := b.Spend("camp-1"); got != 4.00 {
+		t.Fatalf("day1 spend = %f, want 4.00", got)
+	}
+
+	// Reconcile explicitly targets day1's key regardless of "now".
+	b.Reconcile("2026-07-06", "camp-1", 250)
+	if got := b.Spend("camp-1"); got != 2.50 {
+		t.Fatalf("after reconcile day1 spend = %f, want 2.50", got)
+	}
+
+	// Advance to the next UTC day: the counter is fresh (budget reset at midnight).
+	b.nowFn = func() time.Time { return day1.Add(24 * time.Hour) }
+	if got := b.Spend("camp-1"); got != 0 {
+		t.Fatalf("day2 spend = %f, want 0 (rolled at UTC midnight)", got)
 	}
 }
 

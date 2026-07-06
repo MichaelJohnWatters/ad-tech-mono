@@ -12,31 +12,40 @@ import (
 // BudgetTracker is the Redis-backed daily spend ledger.
 //
 // Spend is stored as fixed-point cents (price × 100) in an INT64 counter
-// so DECRBY/INCRBY remain atomic across pods. Each key gets a TTL equal to
-// the budget reset interval so daily budgets roll over without a separate
-// job.
+// so DECRBY/INCRBY remain atomic across pods.
 //
-// ttlFn is called on every first-of-day write so a UI edit to
-// dsp.budget_reset_interval takes effect on the next campaign's first
-// spend of the day, not on next pod restart.
+// The key is stamped with the UTC calendar day (dsp:budget:{yyyy-mm-dd}:{cid}:
+// spent) so the budget resets at UTC midnight — matching the billing engine's
+// committed accumulator (pkg/billing pacing), which also rolls on the UTC day.
+// This keeps the reconcile source (committed, UTC-day) and the counter it
+// overwrites on the SAME day boundary; a plain rolling TTL would have let the
+// two disagree at midnight. ttlFn (dsp.budget_reset_interval, ~24h) is now just
+// the cleanup TTL that expires yesterday's key; the reset itself is the day
+// rollover in the key name.
 type BudgetTracker struct {
 	l2    cache.L2Cache
 	ttlFn func() time.Duration
+	nowFn func() time.Time
 	log   *slog.Logger
 }
 
 // NewBudgetTracker wires the tracker to an L2 cache (Redis in prod, in-memory in tests).
 func NewBudgetTracker(l2 cache.L2Cache, ttlFn func() time.Duration, log *slog.Logger) *BudgetTracker {
-	return &BudgetTracker{l2: l2, ttlFn: ttlFn, log: log}
+	return &BudgetTracker{l2: l2, ttlFn: ttlFn, nowFn: time.Now, log: log}
 }
 
-func budgetKey(campaignID string) string {
-	return "dsp:budget:" + campaignID + ":spent"
+// dateFmt is the UTC day stamp shared with pkg/billing's accumulator (dayKey).
+const dateFmt = "2006-01-02"
+
+func budgetKey(day, campaignID string) string {
+	return "dsp:budget:" + day + ":" + campaignID + ":spent"
 }
+
+func (b *BudgetTracker) today() string { return b.nowFn().UTC().Format(dateFmt) }
 
 // Spend returns today's spend for a campaign in major units (dollars).
 func (b *BudgetTracker) Spend(campaignID string) float64 {
-	v, ok, err := b.l2.Get(context.Background(), budgetKey(campaignID))
+	v, ok, err := b.l2.Get(context.Background(), budgetKey(b.today(), campaignID))
 	if err != nil {
 		b.log.Warn("budget read failed", "campaign", campaignID, "error", err)
 		return 0
@@ -53,7 +62,7 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 // atomically increment.
 func (b *BudgetTracker) Record(campaignID string, amount float64) {
 	ctx := context.Background()
-	key := budgetKey(campaignID)
+	key := budgetKey(b.today(), campaignID)
 	cents := int64(amount * 100)
 
 	// Set the TTL on the first write of the day; INCRBY preserves it after.
@@ -79,11 +88,18 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 //
 // Refreshes the daily TTL so the reconciled value expires with the budget
 // window like a Record-written counter would.
-func (b *BudgetTracker) Reconcile(campaignID string, cents int64) {
+//
+// day is the snapshot's UTC day (the day the committed value is FOR), so the
+// Set lands on the same key Spend reads for that day. An empty day falls back
+// to the tracker's today (defensive — publishers always stamp it).
+func (b *BudgetTracker) Reconcile(day, campaignID string, cents int64) {
 	if cents < 0 {
 		cents = 0
 	}
-	if err := b.l2.Set(context.Background(), budgetKey(campaignID), strconv.FormatInt(cents, 10), b.ttlFn()); err != nil {
+	if day == "" {
+		day = b.today()
+	}
+	if err := b.l2.Set(context.Background(), budgetKey(day, campaignID), strconv.FormatInt(cents, 10), b.ttlFn()); err != nil {
 		b.log.Warn("budget reconcile failed", "campaign", campaignID, "error", err)
 	}
 }
