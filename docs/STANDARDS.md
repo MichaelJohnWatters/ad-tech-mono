@@ -145,6 +145,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — API spec: `docs/openapi.yaml` refreshed for the standards work —
+  `BidRequest` now documents source.ext.schain, source.ext.adcert(+ts), regs.ext
+  (gdpr/us_privacy/gpp/gpp_sid/gpc), user.eids (UID2), and imp.video/native/tagid; new
+  paths for `/sellers.json`, `/v1/adcert/key`, `/v1/pubad/native`, `/v1/pubad/video/vast`.
 - **2026-07-06** — adcert key distribution: exchange publishes its Ed25519 public key at
   `/v1/adcert/key`; DSP fetches + periodically refreshes it (`dsp.adcert_key_url`,
   atomic-pointer cache, static fallback), so rotations propagate without reconfiguring

@@ -469,6 +469,93 @@ paths:
         "200":
           description: All loaded creatives
 
+  /sellers.json:
+    get:
+      tags: [Transparency]
+      summary: IAB sellers.json — the publishers this platform represents
+      description: >
+        IAB Tech Lab sellers.json. Served by the gateway from the publishers
+        table; pairs with each publisher's ads.txt and the SupplyChain object on
+        bid requests to form the transparency triad.
+      responses:
+        "200":
+          description: sellers.json document
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contact_email: { type: string }
+                  version: { type: string }
+                  sellers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seller_id: { type: string }
+                        name: { type: string }
+                        domain: { type: string }
+                        seller_type: { type: string, enum: [PUBLISHER, INTERMEDIARY, BOTH] }
+
+  /v1/adcert/key:
+    get:
+      tags: [Transparency]
+      summary: The exchange's ads.cert Ed25519 public key
+      description: >
+        Published so DSPs can fetch (and pick up rotations of) the key used to
+        verify signed bid requests, instead of hardcoding it. 404 when request
+        signing isn't configured.
+      responses:
+        "200":
+          description: Public verification key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alg: { type: string, example: Ed25519 }
+                  key: { type: string, description: base64 raw-url public key }
+        "404":
+          description: ads.cert signing not configured
+
+  /v1/pubad/native:
+    get:
+      tags: [Ad Serving]
+      summary: Render an OpenRTB Native 1.2 winner to an HTML card
+      description: >
+        Runs a native auction via the SSP (channel=native), parses the winning
+        native markup, and returns a browser-viewable HTML fragment with signed
+        impression/click trackers.
+      parameters:
+        - name: placement_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: HTML native ad fragment
+          content:
+            text/html:
+              schema: { type: string }
+
+  /v1/pubad/video/vast:
+    get:
+      tags: [Ad Serving]
+      summary: VAST 4.2 document for a video winner
+      description: >
+        Runs a video auction via the SSP (channel=video) and returns a VAST 4.2
+        document with signed trackers. Embeds OMID <AdVerifications> when
+        publisher_adserver.omid_verification_url is configured.
+      parameters:
+        - name: placement_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: VAST 4.2 XML
+          content:
+            text/xml:
+              schema: { type: string }
+
   /healthz:
     get:
       tags: [Dev Tools]
@@ -543,6 +630,11 @@ components:
 
     BidRequest:
       type: object
+      description: >
+        OpenRTB 2.6 bid request. Beyond the core objects this carries the
+        platform's transparency + privacy + identity signals: source.ext.schain
+        (SupplyChain), source.ext.adcert (ads.cert signature), regs.ext
+        (GDPR/US-Privacy/GPP/GPC), and user.eids (UID2 and other extended IDs).
       properties:
         id:
           type: string
@@ -553,26 +645,58 @@ components:
             properties:
               id:
                 type: string
+              tagid:
+                type: string
+                description: Placement UUID carried through for deal + reporting matching.
               banner:
                 type: object
                 properties:
-                  w:
-                    type: integer
-                  h:
-                    type: integer
+                  w: { type: integer }
+                  h: { type: integer }
+              video:
+                type: object
+                description: Present for video impressions (VAST). Includes protocols, api (7=OMID), duration window, skip, ad-pod fields.
+                properties:
+                  mimes: { type: array, items: { type: string } }
+                  protocols: { type: array, items: { type: integer } }
+                  api:
+                    type: array
+                    items: { type: integer }
+                    description: Supported frameworks — 7 = OMID (Open Measurement).
+                  minduration: { type: integer }
+                  maxduration: { type: integer }
+              native:
+                type: object
+                description: Present for native impressions (OpenRTB Native 1.2).
+                properties:
+                  request:
+                    type: string
+                    description: The native request object, JSON-encoded as a string.
+                  ver: { type: string }
               bidfloor:
                 type: number
         site:
           type: object
           properties:
-            domain:
-              type: string
-            page:
-              type: string
+            domain: { type: string }
+            page: { type: string }
             cat:
               type: array
-              items:
-                type: string
+              items: { type: string }
+              description: IAB Content Taxonomy 1.0 category codes (IABxx).
+            publisher:
+              type: object
+              properties:
+                id: { type: string }
+        app:
+          type: object
+          description: Present for in-app inventory (mutually exclusive with site).
+          properties:
+            bundle: { type: string }
+            publisher:
+              type: object
+              properties:
+                id: { type: string }
         device:
           type: object
           properties:
@@ -583,6 +707,87 @@ components:
               properties:
                 country:
                   type: string
+        user:
+          type: object
+          properties:
+            id: { type: string }
+            eids:
+              type: array
+              description: Extended identifiers (cookieless IDs). UID2 uses source "uidapi.com".
+              items:
+                type: object
+                properties:
+                  source: { type: string }
+                  uids:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        atype:
+                          type: integer
+                          description: 1=device/cookie, 2=person-session, 3=person-persistent (UID2).
+            ext:
+              type: object
+              properties:
+                consent:
+                  type: string
+                  description: IAB TCF consent string.
+                segments:
+                  type: array
+                  items: { type: string }
+        regs:
+          type: object
+          description: Regulatory signals gating personalisation (see /pkg/privacy).
+          properties:
+            coppa: { type: integer }
+            ext:
+              type: object
+              properties:
+                gdpr: { type: integer }
+                us_privacy:
+                  type: string
+                  description: IAB US Privacy ("CCPA") string, e.g. "1YNN".
+                gpp:
+                  type: string
+                  description: IAB Global Privacy Platform consent string.
+                gpp_sid:
+                  type: string
+                  description: GPP section ids present in the gpp string.
+                gpc:
+                  type: integer
+                  description: Global Privacy Control signal (1 = do-not-sell/share).
+        source:
+          type: object
+          description: Supply-chain + authenticity provenance.
+          properties:
+            fd: { type: integer }
+            tid: { type: string }
+            ext:
+              type: object
+              properties:
+                schain:
+                  type: object
+                  description: IAB SupplyChain object (ver "1.0").
+                  properties:
+                    complete: { type: integer }
+                    ver: { type: string }
+                    nodes:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          asi: { type: string, description: advertising-system domain }
+                          sid: { type: string, description: seller id within that system }
+                          hp: { type: integer }
+                          rid: { type: string }
+                adcert:
+                  type: string
+                  description: ads.cert Ed25519 signature (base64) over the request's canonical fields + timestamp.
+                adcert_ts:
+                  type: integer
+                  format: int64
+                  description: Unix-seconds signing time, part of the signed payload (replay protection).
         tmax:
           type: integer
           description: Max response time (ms)
