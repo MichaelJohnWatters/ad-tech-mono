@@ -102,6 +102,7 @@ type Engine struct {
 	contracts    *ContractStore
 	balances     BalanceSink      // optional; see SetBalanceSink
 	reservations ReservationStore // optional; see SetReservationStore
+	pacing       *pacingAccumulator
 	clk          clock.Clock
 	log          *slog.Logger
 }
@@ -138,7 +139,29 @@ func (e *Engine) drawdown(ctx context.Context, event SpendEvent, action string) 
 // callers can plug either MemoryLedger (dev/tests) or
 // pkg/billing/tigerbeetle.Ledger (prod) without behaviour change.
 func NewEngine(ledger Ledger, contracts *ContractStore, clk clock.Clock, log *slog.Logger) *Engine {
-	return &Engine{ledger: ledger, contracts: contracts, clk: clk, log: log}
+	return &Engine{ledger: ledger, contracts: contracts, pacing: newPacingAccumulator(clk), clk: clk, log: log}
+}
+
+// SnapshotCommitted returns today's committed spend (settled + open reserves),
+// in cents, per campaign id. This is the authoritative pacing figure the
+// reporting service publishes to DSPs so their budget gate reflects billed
+// reality (phantom wins that never impressed are absent; reserves that never
+// settle are swept) rather than the raw win prices the DSP counts locally.
+// Campaign ids are the line-item UUIDs the DSP budget counter is keyed by.
+func (e *Engine) SnapshotCommitted() map[string]int64 { return e.pacing.snapshot() }
+
+// SweepExpiredHolds releases open reserves older than the pacing hold TTL
+// (impressions whose billable settle never arrived) and returns the count
+// released. Callers should invoke this on the same cadence as snapshotting.
+func (e *Engine) SweepExpiredHolds() int { return e.pacing.sweepExpired() }
+
+// SetPacingHoldTTL overrides how long an open reserve counts toward committed
+// spend before being swept. A non-positive duration is ignored (keeps the
+// default). Live-tunable via the reporting service's config.
+func (e *Engine) SetPacingHoldTTL(d time.Duration) {
+	if d > 0 {
+		e.pacing.holdTTL = d
+	}
 }
 
 // ProcessEvent handles any spend event according to its bid model.
@@ -210,6 +233,7 @@ func (e *Engine) billImmediate(ctx context.Context, event SpendEvent) (*SpendRes
 	})
 
 	e.drawdown(ctx, event, "billed")
+	e.pacing.recordBilled(event.CampaignID, event.ClearingPrice)
 
 	e.log.Debug("billed",
 		"trace_id", event.TraceID,
@@ -257,6 +281,8 @@ func (e *Engine) reserve(ctx context.Context, event SpendEvent) (*SpendResult, e
 		}
 	}
 
+	e.pacing.recordReserve(event.CampaignID, event.TraceID, event.ClearingPrice)
+
 	e.log.Debug("reserved",
 		"trace_id", event.TraceID,
 		"model", event.BidModel,
@@ -295,6 +321,7 @@ func (e *Engine) settle(ctx context.Context, event SpendEvent) (*SpendResult, er
 	})
 
 	e.drawdown(ctx, event, "settled")
+	e.pacing.recordSettle(event.CampaignID, event.TraceID, event.ClearingPrice)
 
 	e.log.Debug("settled",
 		"trace_id", event.TraceID,
