@@ -55,6 +55,49 @@ ON CONFLICT (user_id, linked_id, source) DO UPDATE SET
 	return n, nil
 }
 
+// LoadIdentityGraph loads the whole graph as a bidirectional adjacency map
+// (id -> its distinct linked ids), for callers that preload it into memory and
+// resolve without touching Postgres on the hot path. Unexpired edges only.
+func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, error) {
+	const q = `SELECT user_id, linked_id FROM identity_graph
+		WHERE expires_at IS NULL OR expires_at > now()`
+	rows, err := s.read.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("load identity graph: %w", err)
+	}
+	defer rows.Close()
+	sets := make(map[string]map[string]struct{})
+	add := func(a, b string) {
+		if a == "" || b == "" || a == b {
+			return
+		}
+		if sets[a] == nil {
+			sets[a] = make(map[string]struct{})
+		}
+		sets[a][b] = struct{}{}
+	}
+	for rows.Next() {
+		var u, l string
+		if err := rows.Scan(&u, &l); err != nil {
+			return nil, fmt.Errorf("scan identity edge: %w", err)
+		}
+		add(u, l)
+		add(l, u) // bidirectional
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	adj := make(map[string][]string, len(sets))
+	for id, set := range sets {
+		out := make([]string, 0, len(set))
+		for v := range set {
+			out = append(out, v)
+		}
+		adj[id] = out
+	}
+	return adj, nil
+}
+
 // ResolveIdentity returns the distinct identifiers linked to id (in either
 // direction), excluding id itself. Unexpired edges only. Used on the DSP bid
 // path to expand a UID2 / user id to its linked ids for segment lookup.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 )
 
 // fakeAud implements audstore.Lookup for the DSP private-segment path.
@@ -30,6 +31,16 @@ type fakeResolver struct {
 
 func (f *fakeResolver) ResolveIdentity(_ context.Context, id string) ([]string, error) {
 	return f.linked[id], f.err
+}
+
+// fakeLoader stands in for postgres.Store.LoadIdentityGraph.
+type fakeLoader struct {
+	adj map[string][]string
+	err error
+}
+
+func (f *fakeLoader) LoadIdentityGraph(_ context.Context) (map[string][]string, error) {
+	return f.adj, f.err
 }
 
 func sortedEq(got, want []string) bool {
@@ -92,6 +103,46 @@ func TestDSPPrivateSegments(t *testing.T) {
 		}
 		if got := dspPrivateSegments(context.Background(), aud, res, "", 10, quietMgmtLog()); got != nil {
 			t.Errorf("empty key: got %v, want nil", got)
+		}
+	})
+}
+
+func TestPreloadIdentityResolver(t *testing.T) {
+	ctx := context.Background()
+	ld := &fakeLoader{adj: map[string][]string{"u": {"a", "b"}}}
+	p := newPreloadIdentityResolver(ld, time.Hour, quietMgmtLog())
+
+	t.Run("nil before first load", func(t *testing.T) {
+		if got, _ := p.ResolveIdentity(ctx, "u"); got != nil {
+			t.Errorf("got %v, want nil before any load", got)
+		}
+	})
+
+	p.refresh() // synchronous — no goroutine/ticker in the test
+
+	t.Run("serves the snapshot after load", func(t *testing.T) {
+		if got, _ := p.ResolveIdentity(ctx, "u"); !sortedEq(got, []string{"a", "b"}) {
+			t.Errorf("got %v, want [a b]", got)
+		}
+		if got, _ := p.ResolveIdentity(ctx, "unknown"); got != nil {
+			t.Errorf("unknown id: got %v, want nil", got)
+		}
+	})
+
+	t.Run("failed refresh keeps last-good snapshot", func(t *testing.T) {
+		ld.adj = map[string][]string{"u": {"c"}}
+		ld.err = errors.New("db down")
+		p.refresh()
+		if got, _ := p.ResolveIdentity(ctx, "u"); !sortedEq(got, []string{"a", "b"}) {
+			t.Errorf("got %v, want stale [a b] preserved on error", got)
+		}
+	})
+
+	t.Run("successful refresh swaps the snapshot", func(t *testing.T) {
+		ld.err = nil // adj is now {"u":["c"]}
+		p.refresh()
+		if got, _ := p.ResolveIdentity(ctx, "u"); !sortedEq(got, []string{"c"}) {
+			t.Errorf("got %v, want refreshed [c]", got)
 		}
 	})
 }
