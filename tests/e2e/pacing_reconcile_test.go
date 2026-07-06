@@ -33,6 +33,9 @@ func cents(price float64) int64 { return int64(math.Round(price * 100)) }
 func TestPacingCommittedReflectsBilledNotWins(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "pacing-committed")
+	// Clear the in-memory committed accumulator (it's long-lived and hydrated on
+	// boot from campaign_committed_spend, so a prior run's spend would leak in).
+	h.ResetBillingLedger(t)
 	h.SetCampaignBidStrategy(t, w.Campaign, "cpm")
 	h.RefreshAllCaches(t)
 

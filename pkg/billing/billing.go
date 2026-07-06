@@ -170,6 +170,10 @@ func (e *Engine) HydratePacing(day string, settled, reserved map[string]int64) {
 	e.pacing.hydrate(day, settled, reserved)
 }
 
+// ResetPacing clears the committed accumulator (settled + open reserves). For
+// test isolation via the reporting debug billing-reset endpoint.
+func (e *Engine) ResetPacing() { e.pacing.reset() }
+
 // SetPacingHoldTTL overrides how long an open reserve counts toward committed
 // spend before being swept. A non-positive duration is ignored (keeps the
 // default). Live-tunable via the reporting service's config.

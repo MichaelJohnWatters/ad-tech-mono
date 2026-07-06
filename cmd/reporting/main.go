@@ -357,12 +357,15 @@ func main() {
 		// (the type assertion fails and we return reset=false).
 		mux.HandleFunc(routes.DebugBillingReset, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			// Reset the pacing accumulator too (backend-agnostic in-memory state,
+			// hydrated on boot) so committed-spend tests start empty.
+			billingEngine.ResetPacing()
 			if mem, ok := ledger.(*billing.MemoryLedger); ok {
 				mem.Reset()
-				json.NewEncoder(w).Encode(map[string]any{"reset": true, "backend": "memory"})
+				json.NewEncoder(w).Encode(map[string]any{"reset": true, "backend": "memory", "pacing_reset": true})
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"reset": false, "backend": "tigerbeetle"})
+			json.NewEncoder(w).Encode(map[string]any{"reset": false, "backend": "tigerbeetle", "pacing_reset": true})
 		})
 	}
 
