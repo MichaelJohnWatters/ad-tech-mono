@@ -104,33 +104,39 @@ func TestAudioTrackerEventReachesReporting(t *testing.T) {
 // TestCampaignStateChangeReachesReporting — pause a campaign through the
 // DSP management API; reporting must record the live → paused transition
 // via adtech.campaign.state_changed. Then resume and assert the second
-// transition lands as well. Asserts deltas because the in-memory analytics
-// store accumulates across the whole reporting pod lifetime — earlier
-// test runs leave records for the same deterministic campaign ID.
+// transition lands as well. Asserts deltas because the analytics store
+// accumulates across the whole reporting pod lifetime — earlier test runs
+// leave records for the same deterministic campaign ID.
+//
+// Assertions count the SPECIFIC transition rather than inspecting the last
+// record: the two flips happen <1s apart, and the ClickHouse read orders by a
+// second-precision timestamp that can't disambiguate them — so "the last row"
+// is ambiguous, but "a live→paused row appeared" is not.
 func TestCampaignStateChangeReachesReporting(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "evt-state")
 
+	count := func(old, new string) int {
+		n := 0
+		for _, r := range h.CampaignStateChangesByCampaign(t, w.Campaign.ID) {
+			if r.OldState == old && r.NewState == new {
+				n++
+			}
+		}
+		return n
+	}
 	startCount := len(h.CampaignStateChangesByCampaign(t, w.Campaign.ID))
+	pausedBefore := count("live", "paused")
+	resumedBefore := count("paused", "live")
 
 	h.PatchCampaignStatus(t, w.Campaign, "paused")
 	harness.WaitFor(t, 15*time.Second, "live → paused recorded", func() bool {
-		records := h.CampaignStateChangesByCampaign(t, w.Campaign.ID)
-		if len(records) <= startCount {
-			return false
-		}
-		last := records[len(records)-1]
-		return last.OldState == "live" && last.NewState == "paused"
+		return count("live", "paused") > pausedBefore
 	})
 
 	h.PatchCampaignStatus(t, w.Campaign, "live")
 	harness.WaitFor(t, 15*time.Second, "paused → live recorded", func() bool {
-		records := h.CampaignStateChangesByCampaign(t, w.Campaign.ID)
-		if len(records) <= startCount+1 {
-			return false
-		}
-		last := records[len(records)-1]
-		return last.OldState == "paused" && last.NewState == "live"
+		return count("paused", "live") > resumedBefore
 	})
 
 	// No-op patch (status already "live") must not generate a third event.
