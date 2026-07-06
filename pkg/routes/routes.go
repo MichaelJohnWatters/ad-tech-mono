@@ -412,6 +412,7 @@ const (
 	PortPipeline          = "8087"
 	PortPublisherAdServer = "8088"
 	PortWebhooks          = "8091"
+	PortIdentityConsumer  = "8092"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

@@ -1,0 +1,60 @@
+# Identity-consumer — consumes per-request identity observations from NATS and
+# builds identity_graph edges (deterministic + probabilistic). Background
+# consumer (no external ingress); exposes only /healthz, /readyz, /metrics.
+# Keep replicas: 1 so the probabilistic fingerprint state is a single coherent
+# view (queue-group load-balancing would split it across replicas).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-consumer
+  namespace: adtech
+  labels:
+    app: identity-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: identity-consumer
+  template:
+    metadata:
+      labels:
+        app: identity-consumer
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: identity-consumer
+          image: adtech-identity-consumer
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8092
+              name: http
+          env:
+            - name: POD_NAME
+              value: "identity-consumer-0"
+            - name: IDENTITY_CONSUMER_NATS_URL
+              value: "nats://nats:4222"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8092
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8092
+            periodSeconds: 2
+            failureThreshold: 3

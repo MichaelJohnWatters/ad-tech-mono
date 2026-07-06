@@ -16,6 +16,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `pipeline/` | Data pipeline. Ingests publisher files, validates, normalises, enriches. | Object storage, Postgres, DuckDB |
 | `billing/` | Billing service. Consumes AuctionWinEvents, accrues spend, generates invoices. | NATS, Postgres |
 | `webhooks/` | Webhook dispatcher. Consumes NATS events, delivers HTTP POST to registered URLs. | NATS, Postgres |
+| `identity-consumer/` | Builds the identity graph. Consumes `adtech.identity.observed` from the SSP, batches/dedupes, writes edges (deterministic + probabilistic). Run 1 replica (in-memory fingerprint buckets). | NATS, Postgres |
 
 ## Jobs (short-lived, K8s CronJobs or one-off)
 

@@ -132,6 +132,20 @@ if dev_mode == 'fast':
     k8s_resource('webhooks', resource_deps=['webhooks-build', 'nats', 'postgres'],
         port_forwards=['8091:8091'], labels=['services'])
 
+    # ---- Identity-consumer (background NATS consumer, no ingress) ----
+    local_resource('identity-consumer-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/identity-consumer ./cmd/identity-consumer',
+        deps=['cmd/identity-consumer', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-identity-consumer', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'identity-consumer'},
+        only=['bin/identity-consumer', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/identity-consumer', '/app')])
+    k8s_yaml(['k8s/base/identity-consumer/deployment.yaml', 'k8s/base/identity-consumer/service.yaml'])
+    k8s_resource('identity-consumer', resource_deps=['identity-consumer-build', 'nats', 'postgres'],
+        port_forwards=['8092:8092'], labels=['services'])
+
     # ---- Adserver ----
     local_resource('adserver-build',
         cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/adserver ./cmd/adserver',

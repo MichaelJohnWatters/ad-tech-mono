@@ -66,14 +66,15 @@ detail, and the change log at the bottom has commit-level notes.
 
 ### What's next (prioritized, with honest caveats)
 
-1. **Identity auto-build — deepen it.** Deterministic *and* probabilistic
-   auto-build shipped: the SSP observes co-occurring ids (deterministic, conf 1.0)
-   and same-IP+UA sightings (probabilistic, conf <1.0, shared-IP-capped) and writes
-   edges (`cmd/ssp/identity.go`). Still open: (a) move the writer to an
-   **event-driven consumer** (SSP publishes an observation event; a dedicated
-   service batches + writes) so observation scales independently and other services
-   can emit; (b) observe on the exchange/tracker too, not just the SSP; (c) fuzzy UA
-   matching (currently exact IP+UA — conservative by design).
+1. **Identity auto-build — deepen it.** Deterministic + probabilistic auto-build,
+   now **event-driven**: the SSP publishes per-request identity signals
+   (`adtech.identity.observed`), and `cmd/identity-consumer` (using
+   `pkg/identityobserve`) batches/dedupes and writes edges — write is off every
+   serving pod and the probabilistic fingerprint state is one global view (run a
+   single replica). Still open: (a) observe on the exchange/tracker too, not just
+   the SSP (they'd just publish to the same subject); (b) fuzzy UA matching
+   (currently exact IP+UA — conservative by design); (c) move the consumer's
+   fingerprint buckets to Redis if it ever needs HA / multiple replicas.
 2. **GPP US state sections 8–12** (US-CA/VA/CO/UT/CT opt-out decode). *Caveat:*
    each has a distinct bit-layout and we have no official IAB test vectors, so
    correctness can't be verified — deferred deliberately (decode is downgrade-only
@@ -215,6 +216,12 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity auto-build made event-driven: the observer moved to
+  `pkg/identityobserve`; the SSP now just publishes `adtech.identity.observed`
+  (per-request signals + IP+UA fingerprint), and a new `cmd/identity-consumer`
+  service subscribes and does the batching/dedup/write + probabilistic bucketing.
+  Decouples the write from the serving pods and makes the probabilistic fingerprint
+  state a single global view. (Run one replica; buckets are in-memory.)
 - **2026-07-06** — identity auto-build gains probabilistic matching: the SSP links
   different users seen from the same IP+user-agent at a configurable confidence
   (`ssp.identity_probabilistic_*`), conservatively — exact IP+UA, and fingerprints

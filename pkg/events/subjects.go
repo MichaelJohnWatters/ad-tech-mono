@@ -76,6 +76,11 @@ const (
 	SubjectPrivacyDeletion  = "adtech.privacy.deletion_requested"
 	SubjectPrivacyCompleted = "adtech.privacy.deletion_completed"
 
+	// Identity (SSP → identity-consumer): per-request observed identifiers, from
+	// which the consumer builds identity-graph edges (deterministic +
+	// probabilistic). Best-effort — dropped observations are re-seen later.
+	SubjectIdentityObserved = "adtech.identity.observed"
+
 	// Cache invalidation (Any → ALL services, Core NATS pub/sub not JetStream)
 	SubjectCacheInvalidateCampaigns    = "adtech.cache.invalidate.campaigns"
 	SubjectCacheInvalidatePlacements   = "adtech.cache.invalidate.placements"
