@@ -68,3 +68,22 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 		b.log.Warn("budget incr failed", "campaign", campaignID, "error", err)
 	}
 }
+
+// Reconcile overwrites a campaign's spend counter to an authoritative value in
+// cents, sourced from the billing engine's committed-spend snapshot. The local
+// Record path (win notice) is a fast, conservative over-count — it counts every
+// win, including phantom wins that never impress and the full clearing price on
+// CPC/CPA where only the settle bills. This Set corrects the counter to what
+// actually bills, so between snapshots pacing stays overspend-safe (local
+// over-count) and on each snapshot it snaps to billed reality.
+//
+// Refreshes the daily TTL so the reconciled value expires with the budget
+// window like a Record-written counter would.
+func (b *BudgetTracker) Reconcile(campaignID string, cents int64) {
+	if cents < 0 {
+		cents = 0
+	}
+	if err := b.l2.Set(context.Background(), budgetKey(campaignID), strconv.FormatInt(cents, 10), b.ttlFn()); err != nil {
+		b.log.Warn("budget reconcile failed", "campaign", campaignID, "error", err)
+	}
+}

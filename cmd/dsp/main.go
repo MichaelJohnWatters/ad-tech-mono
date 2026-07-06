@@ -166,6 +166,13 @@ func main() {
 		lc.OnShutdown("campaign-cache", func(_ context.Context) error { campaignCache.Stop(); return nil })
 	}
 
+	// Reconcile pacing budget counters to the billing engine's committed-spend
+	// snapshots (broadcast by reporting). Keeps the local win-notice decrement
+	// as the intra-snapshot guard while correcting phantom-win / CPC over-count.
+	if err := startPacingReconcile(context.Background(), bus, campaignCache, budget, cfg, log); err != nil {
+		log.Error("pacing spend reconcile subscribe failed", "error", err)
+	}
+
 	// Path B: DSP-private audience segments. Looked up per bid request and
 	// unioned with SSP-stamped segments before targeting evaluation. Nil
 	// store = no enrichment, DSP keeps bidding on whatever the SSP sent.
