@@ -296,6 +296,7 @@ const (
 	ServiceFraud             = "fraud"
 	ServicePrivacy           = "privacy"
 	ServicePublisherAdServer = "publisher-adserver"
+	ServiceIdentityConsumer  = "identity-consumer"
 )
 
 // ============================================================
@@ -329,6 +330,11 @@ const (
 	// NATSGroupWebhooks — webhooks dispatcher's consumers of account-scoped
 	// business events (budget/balance depleted, campaign state changed).
 	NATSGroupWebhooks = "webhooks"
+	// NATSGroupIdentityConsumer — identity-consumer's consumer of observed
+	// identity signals. Keep a single replica so the probabilistic fingerprint
+	// buckets stay a coherent global view (queue-group load-balancing would
+	// split them across replicas).
+	NATSGroupIdentityConsumer = "identity-consumer"
 )
 
 // ============================================================
