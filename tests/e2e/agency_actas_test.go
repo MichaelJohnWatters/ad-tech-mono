@@ -111,9 +111,11 @@ func TestAgencyActAsViaAPI(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&list)
 		return len(list)
 	}
-	if n := listCampaigns(managed.ID); n != 1 {
-		t.Errorf("act-as A campaign count = %d, want 1", n)
-	}
+	// Read-after-write: the campaign list can lag the create briefly (warm
+	// cache / eventual read), so poll rather than assert once.
+	harness.WaitFor(t, 10*time.Second, "act-as A sees its 1 campaign", func() bool {
+		return listCampaigns(managed.ID) == 1
+	})
 	if n := listCampaigns(""); n != 0 {
 		t.Errorf("no-act-as campaign count = %d, want 0 (agency's own account is empty)", n)
 	}
