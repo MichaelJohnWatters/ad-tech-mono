@@ -71,10 +71,11 @@ detail, and the change log at the bottom has commit-level notes.
    (`adtech.identity.observed`), and `cmd/identity-consumer` (using
    `pkg/identityobserve`) batches/dedupes and writes edges — write is off every
    serving pod and the probabilistic fingerprint state is one global view (run a
-   single replica). Still open: (a) observe on the exchange/tracker too, not just
-   the SSP (they'd just publish to the same subject); (b) fuzzy UA matching
-   (currently exact IP+UA — conservative by design); (c) move the consumer's
-   fingerprint buckets to Redis if it ever needs HA / multiple replicas.
+   single replica). The **exchange** now also observes (inbound Prebid demand our
+   SSP never saw, `exchange.identity_observe_enabled`) via the shared
+   `identityobserve.Publisher`. Still open: (a) observe on the tracker too;
+   (b) fuzzy UA matching (currently exact IP+UA — conservative by design);
+   (c) move the consumer's fingerprint buckets to Redis for HA / multiple replicas.
 2. **GPP US state sections 8–12** (US-CA/VA/CO/UT/CT opt-out decode). *Caveat:*
    each has a distinct bit-layout and we have no official IAB test vectors, so
    correctness can't be verified — deferred deliberately (decode is downgrade-only

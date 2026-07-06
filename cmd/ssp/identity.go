@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
@@ -14,21 +12,20 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
-// identityPublisher extracts the identity signals on a request and publishes an
-// ObservedEvent to NATS, where the identity-consumer builds graph edges. The
-// SSP does no writing itself — it's cheap and best-effort here so the write
-// (and the global probabilistic state) live in one consumer, off every serving
-// pod. A nil publisher is a no-op.
+// identityPublisher observes the identity signals on an ad-tag request and
+// publishes them (via the shared identityobserve.Publisher) to the
+// identity-consumer, which builds graph edges. The SSP does no writing itself,
+// so the write + global probabilistic state live in one consumer. Nil is a no-op.
 type identityPublisher struct {
-	bus events.EventBus
-	log *slog.Logger
+	pub *identityobserve.Publisher
 }
 
 func newIdentityPublisher(bus events.EventBus, log *slog.Logger) *identityPublisher {
-	if bus == nil {
+	p := identityobserve.NewPublisher(bus, log)
+	if p == nil {
 		return nil
 	}
-	return &identityPublisher{bus: bus, log: log}
+	return &identityPublisher{pub: p}
 }
 
 // Observe publishes the identifiers (and IP+UA fingerprint) seen on this
@@ -37,26 +34,7 @@ func (p *identityPublisher) Observe(r *http.Request, userID, uid2 string) {
 	if p == nil {
 		return
 	}
-	ids := gatherSignals(r, userID, uid2)
-	fp := requestFingerprint(r)
-	// Nothing to link from: <2 ids and no fingerprint.
-	if len(ids) < 2 && (len(ids) == 0 || fp == "") {
-		return
-	}
-	payload, err := identityobserve.Marshal(identityobserve.ObservedEvent{
-		TraceID:     tracing.TraceIDFromContext(r.Context()),
-		IDs:         ids,
-		Fingerprint: fp,
-	})
-	if err != nil {
-		return
-	}
-	// Short, independent context so a finished request doesn't cancel the publish.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := p.bus.Publish(ctx, events.SubjectIdentityObserved, payload); err != nil {
-		p.log.Debug("identity observation publish failed (best-effort)", "error", err)
-	}
+	p.pub.Publish(tracing.TraceIDFromContext(r.Context()), gatherSignals(r, userID, uid2), requestFingerprint(r))
 }
 
 // gatherSignals collects the distinct identifiers present on a request, in a

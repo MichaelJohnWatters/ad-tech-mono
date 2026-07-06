@@ -25,6 +25,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -103,6 +104,14 @@ func main() {
 		natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects})
 		pub = events.NewPublisher(natsBus, log)
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
+	}
+
+	// Identity auto-build: publish observed identifiers from inbound Prebid
+	// requests (external demand our SSP never saw) to the identity-consumer.
+	var idPub *identityobserve.Publisher
+	if cfg.GetBool("exchange.identity_observe_enabled", false) && natsBus != nil {
+		idPub = identityobserve.NewPublisher(natsBus, log)
+		log.Info("exchange identity observation enabled (prebid inbound)")
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceExchange)
@@ -242,7 +251,7 @@ func main() {
 	// Prebid Server-compatible bidder endpoint. See pkg/prebid + docs/PLAN.md
 	// → "Prebid Server Integration". Reuses the same auction path with the
 	// inbound floor policy + opaque deal-id logging applied first.
-	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, auction, log))
+	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, auction, idPub, log))
 	mux.HandleFunc(routes.PrebidSetUID, prebidSetUIDHandler(log))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceExchange)(metrics.Wrap(middleware.CORS(mux)))
