@@ -162,6 +162,7 @@ func main() {
 	// every demo path runs through it.
 	publicBase := cfg.Get("publisher_adserver.public_url", "http://localhost:8080")
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
+	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
@@ -181,17 +182,17 @@ func main() {
 }
 
 type serveDeps struct {
-	log              *slog.Logger
-	clk              clock.Clock
-	lineItemCache    *warm.Cache[publisheradserver.PublisherLineItem]
-	placementCache   *warm.Cache[postgres.PlacementRow]
-	pacer            *pacing.Tracker
-	sspURL           string
-	adserverURL      string
-	trackerURL       string
-	prebidClient     *prebidclient.Client
-	prebidServersFn  func() string  // CSV; re-read per request for live-tunable demand-source list
-	pub              *events.Publisher // nil-tolerant; emits DirectWin + PrebidOutboundWin events
+	log             *slog.Logger
+	clk             clock.Clock
+	lineItemCache   *warm.Cache[publisheradserver.PublisherLineItem]
+	placementCache  *warm.Cache[postgres.PlacementRow]
+	pacer           *pacing.Tracker
+	sspURL          string
+	adserverURL     string
+	trackerURL      string
+	prebidClient    *prebidclient.Client
+	prebidServersFn func() string     // CSV; re-read per request for live-tunable demand-source list
+	pub             *events.Publisher // nil-tolerant; emits DirectWin + PrebidOutboundWin events
 }
 
 // uuidPattern matches Postgres's canonical lowercase 8-4-4-4-12 hex UUID.
@@ -392,9 +393,9 @@ func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqL
 // SSP response shape, decoded once so we can both compare it against
 // outbound Prebid bids and pass it through if it wins.
 type sspProgrammaticResult struct {
-	Raw           []byte // the raw JSON, ready to write to ResponseWriter on win
-	NoBid         bool   `json:"nobid"`
-	HTML          string `json:"html"`
+	Raw           []byte  // the raw JSON, ready to write to ResponseWriter on win
+	NoBid         bool    `json:"nobid"`
+	HTML          string  `json:"html"`
 	ClearingPrice float64 `json:"clearing_price"`
 }
 

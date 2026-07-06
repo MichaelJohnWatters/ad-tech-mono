@@ -40,21 +40,24 @@ type sspVideoWinner struct {
 	DurationSeconds  int     `json:"duration_seconds"`
 	MediaURL         string  `json:"media_url"`
 	DealID           string  `json:"deal_id"`
+	// AdM carries native ad markup (OpenRTB Native response JSON) when
+	// channel=native; empty for video/audio. Consumed by native.go.
+	AdM string `json:"adm"`
 }
 
 // vastHandler serves a VAST 4.2 document built from a real auction
 // winner. Flow:
 //
-//   1. Browser/IMA fetches /v1/pubad/video/vast?placement_id=...
-//   2. We call SSP /v1/ssp/serve with channel=video — SSP runs the
-//      auction (exchange → DSP fan-out), picks the winner, and returns
-//      the bid metadata (creative ID, media URL, duration, advertiser
-//      domain, etc.) as JSON.
-//   3. We construct the signed tracker URLs locally using the winner's
-//      identifiers in a MacroContext — same HMAC + exp signing display
-//      creatives use, so the existing tracker pipeline covers video
-//      unchanged.
-//   4. pkg/vast assembles the LinearSpec into VAST XML and we ship it.
+//  1. Browser/IMA fetches /v1/pubad/video/vast?placement_id=...
+//  2. We call SSP /v1/ssp/serve with channel=video — SSP runs the
+//     auction (exchange → DSP fan-out), picks the winner, and returns
+//     the bid metadata (creative ID, media URL, duration, advertiser
+//     domain, etc.) as JSON.
+//  3. We construct the signed tracker URLs locally using the winner's
+//     identifiers in a MacroContext — same HMAC + exp signing display
+//     creatives use, so the existing tracker pipeline covers video
+//     unchanged.
+//  4. pkg/vast assembles the LinearSpec into VAST XML and we ship it.
 //
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken

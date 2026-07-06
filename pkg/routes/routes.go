@@ -256,6 +256,11 @@ const (
 	// auctions, independent winners, the shape long-form publishers
 	// expect for instream video.
 	PublisherAdServeVMAP = "/v1/pubad/video/vmap"
+	// PublisherAdServeNative renders an OpenRTB Native 1.2 winner into an HTML
+	// fragment with signed impression/click trackers. Same auction shape as
+	// PublisherAdServe under the hood (SSP channel=native), but the native
+	// response markup is assembled here rather than fetched as creative HTML.
+	PublisherAdServeNative = "/v1/pubad/native"
 )
 
 // ============================================================

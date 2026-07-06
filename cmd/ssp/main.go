@@ -622,6 +622,9 @@ type serveAdResponse struct {
 	Currency         string `json:"currency,omitempty"`
 	DurationSeconds  int    `json:"duration_seconds,omitempty"`
 	MediaURL         string `json:"media_url,omitempty"`
+	// AdM carries the winner's ad markup for native bids: the OpenRTB Native
+	// response JSON the publisher-adserver renders into HTML + trackers.
+	AdM string `json:"adm,omitempty"`
 }
 
 // serveAdHandler is the realistic publisher-visitor endpoint. The SSP runs
@@ -680,6 +683,33 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 				Height:           winner.H,
 				DurationSeconds:  winner.Dur,
 				MediaURL:         winner.MediaURL,
+				DealID:           winner.DealID,
+			})
+			return
+		}
+
+		// Native short-circuit: like video/audio, the SSP stays format-agnostic
+		// and hands the winner's native markup (BidObj.AdM) to the publisher-
+		// adserver, which parses it and renders HTML + signs the trackers.
+		if r.URL.Query().Get("channel") == "native" {
+			advDomain := ""
+			if len(winner.ADomain) > 0 {
+				advDomain = winner.ADomain[0]
+			}
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(serveAdResponse{
+				TraceID:          ac.TraceID,
+				Channel:          "native",
+				AdM:              winner.AdM,
+				CreativeID:       winner.CrID,
+				CampaignID:       winner.CID,
+				PlacementID:      ac.Placement.ID,
+				PublisherID:      ac.Placement.PublisherID,
+				AdvertiserID:     ac.BidResp.SeatBid[0].Seat,
+				AdvertiserDomain: advDomain,
+				BidModel:         winner.BidModel,
+				ClearingPrice:    winner.Price,
+				Currency:         ac.BidResp.Cur,
 				DealID:           winner.DealID,
 			})
 			return
