@@ -64,13 +64,13 @@ func TestSeedDefaults_CompetitorDSPGetsYAMLNoise(t *testing.T) {
 	_ = harness.WaitReady(t, 60*time.Second)
 	h := harness.New(t)
 
-	c1Noise := resolveConfig(t, h, "dsp.noise_pct", "dsp-competitor1")
+	c1Noise := resolveConfig(t, h, "dsp.noise_pct", "dsp-competitor1-0")
 	if c1Noise.Value != "30" {
 		t.Errorf("dsp-competitor1 noise_pct = %q, want 30 (YAML default); source=%q pod=%q",
 			c1Noise.Value, c1Noise.Source, c1Noise.PodID)
 	}
 
-	c1NoBid := resolveConfig(t, h, "dsp.no_bid_rate", "dsp-competitor1")
+	c1NoBid := resolveConfig(t, h, "dsp.no_bid_rate", "dsp-competitor1-0")
 	if c1NoBid.Value != "0.2" {
 		t.Errorf("dsp-competitor1 no_bid_rate = %q, want 0.2 (YAML default); source=%q",
 			c1NoBid.Value, c1NoBid.Source)
@@ -85,12 +85,12 @@ func TestSeedDefaults_Comp2HigherNoiseLanded(t *testing.T) {
 	_ = harness.WaitReady(t, 60*time.Second)
 	h := harness.New(t)
 
-	c2Noise := resolveConfig(t, h, "dsp.noise_pct", "dsp-competitor2")
+	c2Noise := resolveConfig(t, h, "dsp.noise_pct", "dsp-competitor2-0")
 	if c2Noise.Value != "40" {
 		t.Errorf("dsp-competitor2 noise_pct = %q, want 40 (YAML default)", c2Noise.Value)
 	}
 
-	c2NoBid := resolveConfig(t, h, "dsp.no_bid_rate", "dsp-competitor2")
+	c2NoBid := resolveConfig(t, h, "dsp.no_bid_rate", "dsp-competitor2-0")
 	if c2NoBid.Value != "0.15" {
 		t.Errorf("dsp-competitor2 no_bid_rate = %q, want 0.15 (YAML default)", c2NoBid.Value)
 	}

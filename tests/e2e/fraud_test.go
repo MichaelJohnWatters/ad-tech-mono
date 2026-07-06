@@ -22,33 +22,25 @@ import (
 func TestFraudDedupSameImpressionDropped(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "fraud-dedup")
-
-	// Snapshot TotalSpend before — the reporting service's billing ledger
-	// is in-memory and accumulates across the whole test suite (harness.Reset
-	// truncates Postgres + flushes Redis but doesn't touch the in-process
-	// ledger). We measure delta instead of absolute so test ordering doesn't
-	// matter.
-	spendBefore := totalSpend(t, h)
+	// Fresh committed accumulator so this campaign starts at 0 (the in-memory
+	// billing state is long-lived + hydrated on boot).
+	h.ResetBillingLedger(t)
 
 	traceID := "fraud-dedup-trace-001"
 	for i := 0; i < 5; i++ {
 		// Fire the same impression 5 times. All 5 return 200 (the pixel
 		// always responds), but only the first should reach the analytics
-		// store via tracker dedup (SetNX on trace_id).
+		// store + bill, via tracker dedup (Redis SetNX on trace_id).
 		h.FireImpression(t, traceID,
 			w.Campaign.ID, w.Campaign.CreativeID,
 			w.Placement.ID, w.Publisher.ID, w.AdvAcc.ID,
 			"USD", 1.50)
 	}
 
-	// Give the async NATS publish time to flow through.
-	time.Sleep(1 * time.Second)
-
-	delta := totalSpend(t, h) - spendBefore
-	// One impression at 1.50, allow a tiny tolerance for float rounding.
-	if delta > 1.51 || delta < 1.49 {
-		t.Errorf("TotalSpend delta = %.4f, want ~1.50 (5 fires with same trace_id should dedup to 1)", delta)
-	}
+	// committed spend is PER-CAMPAIGN, so this is isolated from other tests'
+	// spend (unlike the global billing TotalSpend, which flaked here from async
+	// spillover). 5 fires dedup to 1 → one $1.50 CPM impression → 150 cents.
+	h.WaitCommittedCents(t, w.Campaign.ID, 150)
 }
 
 // TestTrackerRejectedEventDedup — the dedup test already asserts the

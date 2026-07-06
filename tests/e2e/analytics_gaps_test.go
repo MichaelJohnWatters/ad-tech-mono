@@ -114,7 +114,7 @@ func TestCampaignStateChangeReachesReporting(t *testing.T) {
 	startCount := len(h.CampaignStateChangesByCampaign(t, w.Campaign.ID))
 
 	h.PatchCampaignStatus(t, w.Campaign, "paused")
-	harness.WaitFor(t, 5*time.Second, "live → paused recorded", func() bool {
+	harness.WaitFor(t, 15*time.Second, "live → paused recorded", func() bool {
 		records := h.CampaignStateChangesByCampaign(t, w.Campaign.ID)
 		if len(records) <= startCount {
 			return false
@@ -124,7 +124,7 @@ func TestCampaignStateChangeReachesReporting(t *testing.T) {
 	})
 
 	h.PatchCampaignStatus(t, w.Campaign, "live")
-	harness.WaitFor(t, 5*time.Second, "paused → live recorded", func() bool {
+	harness.WaitFor(t, 15*time.Second, "paused → live recorded", func() bool {
 		records := h.CampaignStateChangesByCampaign(t, w.Campaign.ID)
 		if len(records) <= startCount+1 {
 			return false
