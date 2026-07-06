@@ -146,6 +146,9 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity preload capacity tuning: id strings are interned in the
+  in-memory snapshot (each unique id one allocation, ~halves footprint), and the default
+  reload interval is 5m (cuts full-rebuild churn). Comfortable to a few million ids.
 - **2026-07-06** — identity resolution moved fully off the DB hot path: DSP now serves
   resolution from an in-memory snapshot of the whole graph, refreshed on an interval in
   the background (`dsp.identity_preload_interval`) — bid-path reads are lock-free map

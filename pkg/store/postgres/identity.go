@@ -58,6 +58,11 @@ ON CONFLICT (user_id, linked_id, source) DO UPDATE SET
 // LoadIdentityGraph loads the whole graph as a bidirectional adjacency map
 // (id -> its distinct linked ids), for callers that preload it into memory and
 // resolve without touching Postgres on the hot path. Unexpired edges only.
+//
+// Id strings are interned so each unique identifier's bytes are stored once and
+// shared across the map key and every slice entry it appears in — an id in the
+// adjacency N times costs one copy, not N. Roughly halves the retained
+// footprint versus one allocation per occurrence.
 func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, error) {
 	const q = `SELECT user_id, linked_id FROM identity_graph
 		WHERE expires_at IS NULL OR expires_at > now()`
@@ -66,36 +71,71 @@ func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, err
 		return nil, fmt.Errorf("load identity graph: %w", err)
 	}
 	defer rows.Close()
-	sets := make(map[string]map[string]struct{})
-	add := func(a, b string) {
-		if a == "" || b == "" || a == b {
-			return
-		}
-		if sets[a] == nil {
-			sets[a] = make(map[string]struct{})
-		}
-		sets[a][b] = struct{}{}
-	}
+	b := newAdjacencyBuilder()
 	for rows.Next() {
 		var u, l string
 		if err := rows.Scan(&u, &l); err != nil {
 			return nil, fmt.Errorf("scan identity edge: %w", err)
 		}
-		add(u, l)
-		add(l, u) // bidirectional
+		b.add(u, l)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	adj := make(map[string][]string, len(sets))
-	for id, set := range sets {
+	return b.build(), nil
+}
+
+// adjacencyBuilder streams (user_id, linked_id) edges into a bidirectional
+// adjacency map, interning id strings so each unique id's bytes are stored once
+// and shared everywhere it appears. Kept as a type so it's unit-testable
+// without a database.
+type adjacencyBuilder struct {
+	intern map[string]string
+	sets   map[string]map[string]struct{}
+}
+
+func newAdjacencyBuilder() *adjacencyBuilder {
+	return &adjacencyBuilder{
+		intern: make(map[string]string),
+		sets:   make(map[string]map[string]struct{}),
+	}
+}
+
+func (b *adjacencyBuilder) canon(v string) string {
+	if c, ok := b.intern[v]; ok {
+		return c
+	}
+	b.intern[v] = v
+	return v
+}
+
+// add records the edge in both directions, skipping self/empty links.
+func (b *adjacencyBuilder) add(u, l string) {
+	u, l = b.canon(u), b.canon(l) // share bytes across every occurrence
+	b.link(u, l)
+	b.link(l, u)
+}
+
+func (b *adjacencyBuilder) link(a, c string) {
+	if a == "" || c == "" || a == c {
+		return
+	}
+	if b.sets[a] == nil {
+		b.sets[a] = make(map[string]struct{})
+	}
+	b.sets[a][c] = struct{}{}
+}
+
+func (b *adjacencyBuilder) build() map[string][]string {
+	adj := make(map[string][]string, len(b.sets))
+	for id, set := range b.sets {
 		out := make([]string, 0, len(set))
 		for v := range set {
 			out = append(out, v)
 		}
 		adj[id] = out
 	}
-	return adj, nil
+	return adj
 }
 
 // ResolveIdentity returns the distinct identifiers linked to id (in either
