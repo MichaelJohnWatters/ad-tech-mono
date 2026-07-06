@@ -142,6 +142,43 @@ func (p *pacingAccumulator) sweepExpired() int {
 	return released
 }
 
+// settledSnapshot returns the durable (settled-today) portion per campaign,
+// excluding transient open reserves, plus the UTC day it belongs to. This is
+// what gets persisted so a restart can re-hydrate — holds are deliberately
+// excluded because they rebuild from live reserves within the hold TTL.
+func (p *pacingAccumulator) settledSnapshot() (string, map[string]int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rollLocked()
+	out := make(map[string]int64, len(p.campaigns))
+	for id, cp := range p.campaigns {
+		if cp.settledCents > 0 {
+			out[id] = cp.settledCents
+		}
+	}
+	return p.day, out
+}
+
+// hydrateSettled seeds settled totals loaded from durable storage on boot, so a
+// restart doesn't reset the day's committed spend to zero (which would reconcile
+// DSP counters down and risk overspend). Only applies when day matches the
+// current UTC day — a stale (previous-day) load is ignored. Intended to run
+// before event consumption starts, so it sets rather than merges.
+func (p *pacingAccumulator) hydrateSettled(day string, m map[string]int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rollLocked()
+	if day != p.day {
+		return
+	}
+	for id, cents := range m {
+		if cents <= 0 {
+			continue
+		}
+		p.campaignLocked(id).settledCents = cents
+	}
+}
+
 // snapshot returns committed cents (settled + open holds) per campaign for
 // today, skipping campaigns at zero. Safe to call concurrently with the
 // record* methods.
