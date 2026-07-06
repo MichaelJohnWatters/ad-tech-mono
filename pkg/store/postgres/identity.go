@@ -55,16 +55,25 @@ ON CONFLICT (user_id, linked_id, source) DO UPDATE SET
 	return n, nil
 }
 
+// IdentityLink is one neighbour in the preloaded adjacency: a linked id and the
+// confidence of that link. Callers can gate traversal on confidence.
+type IdentityLink struct {
+	ID         string
+	Confidence float64
+}
+
 // LoadIdentityGraph loads the whole graph as a bidirectional adjacency map
-// (id -> its distinct linked ids), for callers that preload it into memory and
-// resolve without touching Postgres on the hot path. Unexpired edges only.
+// (id -> its linked ids + confidences), for callers that preload it into memory
+// and resolve without touching Postgres on the hot path. Unexpired edges only.
 //
 // Id strings are interned so each unique identifier's bytes are stored once and
 // shared across the map key and every slice entry it appears in — an id in the
 // adjacency N times costs one copy, not N. Roughly halves the retained
 // footprint versus one allocation per occurrence.
-func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, error) {
-	const q = `SELECT user_id, linked_id FROM identity_graph
+func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]IdentityLink, error) {
+	// confidence::float8 so lib/pq scans the NUMERIC column straight into a
+	// float64 rather than a string.
+	const q = `SELECT user_id, linked_id, confidence::float8 FROM identity_graph
 		WHERE expires_at IS NULL OR expires_at > now()`
 	rows, err := s.read.QueryContext(ctx, q)
 	if err != nil {
@@ -74,10 +83,11 @@ func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, err
 	b := newAdjacencyBuilder()
 	for rows.Next() {
 		var u, l string
-		if err := rows.Scan(&u, &l); err != nil {
+		var conf float64
+		if err := rows.Scan(&u, &l, &conf); err != nil {
 			return nil, fmt.Errorf("scan identity edge: %w", err)
 		}
-		b.add(u, l)
+		b.add(u, l, conf)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -85,19 +95,19 @@ func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]string, err
 	return b.build(), nil
 }
 
-// adjacencyBuilder streams (user_id, linked_id) edges into a bidirectional
-// adjacency map, interning id strings so each unique id's bytes are stored once
-// and shared everywhere it appears. Kept as a type so it's unit-testable
-// without a database.
+// adjacencyBuilder streams (user_id, linked_id, confidence) edges into a
+// bidirectional adjacency map, interning id strings so each unique id's bytes
+// are stored once and shared everywhere it appears. Kept as a type so it's
+// unit-testable without a database.
 type adjacencyBuilder struct {
 	intern map[string]string
-	sets   map[string]map[string]struct{}
+	sets   map[string]map[string]float64 // a -> (neighbour -> max confidence)
 }
 
 func newAdjacencyBuilder() *adjacencyBuilder {
 	return &adjacencyBuilder{
 		intern: make(map[string]string),
-		sets:   make(map[string]map[string]struct{}),
+		sets:   make(map[string]map[string]float64),
 	}
 }
 
@@ -110,28 +120,32 @@ func (b *adjacencyBuilder) canon(v string) string {
 }
 
 // add records the edge in both directions, skipping self/empty links.
-func (b *adjacencyBuilder) add(u, l string) {
+func (b *adjacencyBuilder) add(u, l string, conf float64) {
 	u, l = b.canon(u), b.canon(l) // share bytes across every occurrence
-	b.link(u, l)
-	b.link(l, u)
+	b.link(u, l, conf)
+	b.link(l, u, conf)
 }
 
-func (b *adjacencyBuilder) link(a, c string) {
+func (b *adjacencyBuilder) link(a, c string, conf float64) {
 	if a == "" || c == "" || a == c {
 		return
 	}
 	if b.sets[a] == nil {
-		b.sets[a] = make(map[string]struct{})
+		b.sets[a] = make(map[string]float64)
 	}
-	b.sets[a][c] = struct{}{}
+	// Keep the strongest confidence when the same pair appears via multiple
+	// edges (e.g. a deterministic and a probabilistic source).
+	if cur, ok := b.sets[a][c]; !ok || conf > cur {
+		b.sets[a][c] = conf
+	}
 }
 
-func (b *adjacencyBuilder) build() map[string][]string {
-	adj := make(map[string][]string, len(b.sets))
+func (b *adjacencyBuilder) build() map[string][]IdentityLink {
+	adj := make(map[string][]IdentityLink, len(b.sets))
 	for id, set := range b.sets {
-		out := make([]string, 0, len(set))
-		for v := range set {
-			out = append(out, v)
+		out := make([]IdentityLink, 0, len(set))
+		for nid, conf := range set {
+			out = append(out, IdentityLink{ID: nid, Confidence: conf})
 		}
 		adj[id] = out
 	}

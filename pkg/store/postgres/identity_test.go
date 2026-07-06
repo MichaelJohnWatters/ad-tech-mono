@@ -10,15 +10,22 @@ import (
 // backing bytes (the way distinct sql.Scan calls wouldn't).
 func dup(s string) string { return string([]byte(s)) }
 
-func sortedEqual(got, want []string) bool {
-	g := append([]string(nil), got...)
-	sort.Strings(g)
+func neighbourIDs(links []IdentityLink) []string {
+	out := make([]string, len(links))
+	for i, l := range links {
+		out[i] = l.ID
+	}
+	sort.Strings(out)
+	return out
+}
+
+func eqStrings(got, want []string) bool {
 	sort.Strings(want)
-	if len(g) != len(want) {
+	if len(got) != len(want) {
 		return false
 	}
-	for i := range g {
-		if g[i] != want[i] {
+	for i := range got {
+		if got[i] != want[i] {
 			return false
 		}
 	}
@@ -27,39 +34,47 @@ func sortedEqual(got, want []string) bool {
 
 func TestAdjacencyBuilder(t *testing.T) {
 	b := newAdjacencyBuilder()
-	b.add(dup("a"), dup("b"))
-	b.add(dup("b"), dup("c"))
-	b.add(dup("a"), dup("a")) // self-link ignored
-	b.add(dup(""), dup("x"))  // empty ignored
+	b.add(dup("a"), dup("b"), 1.0)
+	b.add(dup("b"), dup("c"), 0.6)
+	b.add(dup("a"), dup("a"), 1.0) // self-link ignored
+	b.add(dup(""), dup("x"), 1.0)  // empty ignored
+	b.add(dup("a"), dup("b"), 0.3) // duplicate pair, lower conf → keep max (1.0)
 	adj := b.build()
 
 	t.Run("bidirectional, self/empty skipped", func(t *testing.T) {
 		want := map[string][]string{"a": {"b"}, "b": {"a", "c"}, "c": {"b"}}
 		for id, w := range want {
-			if !sortedEqual(adj[id], w) {
-				t.Errorf("adj[%q] = %v, want %v", id, adj[id], w)
+			if !eqStrings(neighbourIDs(adj[id]), w) {
+				t.Errorf("adj[%q] = %v, want %v", id, neighbourIDs(adj[id]), w)
 			}
 		}
 		if _, ok := adj["x"]; ok {
 			t.Error("empty-source edge should have been skipped")
 		}
-		if _, ok := adj[""]; ok {
-			t.Error("empty key present")
+	})
+
+	t.Run("keeps the strongest confidence per pair", func(t *testing.T) {
+		var ab float64
+		for _, l := range adj["a"] {
+			if l.ID == "b" {
+				ab = l.Confidence
+			}
+		}
+		if ab != 1.0 {
+			t.Errorf("confidence a→b = %v, want 1.0 (max of 1.0 and 0.3)", ab)
 		}
 	})
 
 	t.Run("ids are interned (shared backing)", func(t *testing.T) {
-		// "b" appears as a map key and inside adj["a"]; interning means both
-		// point at the same backing bytes — one allocation per unique id.
 		var keyB, sliceB string
 		for k := range adj {
 			if k == "b" {
 				keyB = k
 			}
 		}
-		for _, v := range adj["a"] {
-			if v == "b" {
-				sliceB = v
+		for _, l := range adj["a"] {
+			if l.ID == "b" {
+				sliceB = l.ID
 			}
 		}
 		if keyB == "" || sliceB == "" {

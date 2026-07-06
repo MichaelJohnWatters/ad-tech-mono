@@ -6,7 +6,13 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
+
+func lk(id string, conf float64) postgres.IdentityLink {
+	return postgres.IdentityLink{ID: id, Confidence: conf}
+}
 
 // fakeAud implements audstore.Lookup for the DSP private-segment path.
 type fakeAud struct {
@@ -35,11 +41,11 @@ func (f *fakeResolver) ResolveIdentity(_ context.Context, id string) ([]string, 
 
 // fakeLoader stands in for postgres.Store.LoadIdentityGraph.
 type fakeLoader struct {
-	adj map[string][]string
+	adj map[string][]postgres.IdentityLink
 	err error
 }
 
-func (f *fakeLoader) LoadIdentityGraph(_ context.Context) (map[string][]string, error) {
+func (f *fakeLoader) LoadIdentityGraph(_ context.Context) (map[string][]postgres.IdentityLink, error) {
 	return f.adj, f.err
 }
 
@@ -109,8 +115,8 @@ func TestDSPPrivateSegments(t *testing.T) {
 
 func TestPreloadIdentityResolver(t *testing.T) {
 	ctx := context.Background()
-	ld := &fakeLoader{adj: map[string][]string{"u": {"a", "b"}}}
-	p := newPreloadIdentityResolver(ld, time.Hour, quietMgmtLog())
+	ld := &fakeLoader{adj: map[string][]postgres.IdentityLink{"u": {lk("a", 1), lk("b", 1)}}}
+	p := newPreloadIdentityResolver(ld, time.Hour, 1, 0, quietMgmtLog())
 
 	t.Run("nil before first load", func(t *testing.T) {
 		if got, _ := p.ResolveIdentity(ctx, "u"); got != nil {
@@ -130,7 +136,7 @@ func TestPreloadIdentityResolver(t *testing.T) {
 	})
 
 	t.Run("failed refresh keeps last-good snapshot", func(t *testing.T) {
-		ld.adj = map[string][]string{"u": {"c"}}
+		ld.adj = map[string][]postgres.IdentityLink{"u": {lk("c", 1)}}
 		ld.err = errors.New("db down")
 		p.refresh()
 		if got, _ := p.ResolveIdentity(ctx, "u"); !sortedEq(got, []string{"a", "b"}) {
@@ -139,10 +145,53 @@ func TestPreloadIdentityResolver(t *testing.T) {
 	})
 
 	t.Run("successful refresh swaps the snapshot", func(t *testing.T) {
-		ld.err = nil // adj is now {"u":["c"]}
+		ld.err = nil // adj is now {"u":[c]}
 		p.refresh()
 		if got, _ := p.ResolveIdentity(ctx, "u"); !sortedEq(got, []string{"c"}) {
 			t.Errorf("got %v, want refreshed [c]", got)
+		}
+	})
+}
+
+func TestPreloadIdentityResolver_Transitive(t *testing.T) {
+	ctx := context.Background()
+	// Bidirectional chain: u↔a (1.0), a↔b (1.0), b↔c (0.5).
+	ld := &fakeLoader{adj: map[string][]postgres.IdentityLink{
+		"u": {lk("a", 1.0)},
+		"a": {lk("u", 1.0), lk("b", 1.0)},
+		"b": {lk("a", 1.0), lk("c", 0.5)},
+		"c": {lk("b", 0.5)},
+	}}
+
+	load := func(maxDepth int, minConf float64) *preloadIdentityResolver {
+		p := newPreloadIdentityResolver(ld, time.Hour, maxDepth, minConf, quietMgmtLog())
+		p.refresh()
+		return p
+	}
+
+	t.Run("depth 1 = direct links only", func(t *testing.T) {
+		got, _ := load(1, 0).ResolveIdentity(ctx, "u")
+		if !sortedEq(got, []string{"a"}) {
+			t.Errorf("got %v, want [a]", got)
+		}
+	})
+	t.Run("depth 2 = linked-of-linked", func(t *testing.T) {
+		got, _ := load(2, 0).ResolveIdentity(ctx, "u")
+		if !sortedEq(got, []string{"a", "b"}) {
+			t.Errorf("got %v, want [a b]", got)
+		}
+	})
+	t.Run("depth 3 = full transitive closure", func(t *testing.T) {
+		got, _ := load(3, 0).ResolveIdentity(ctx, "u")
+		if !sortedEq(got, []string{"a", "b", "c"}) {
+			t.Errorf("got %v, want [a b c]", got)
+		}
+	})
+	t.Run("confidence gate stops at the weak edge", func(t *testing.T) {
+		// depth 3 but min-confidence 0.6 excludes the b↔c edge (0.5).
+		got, _ := load(3, 0.6).ResolveIdentity(ctx, "u")
+		if !sortedEq(got, []string{"a", "b"}) {
+			t.Errorf("got %v, want [a b] (c behind a 0.5 edge)", got)
 		}
 	})
 }
