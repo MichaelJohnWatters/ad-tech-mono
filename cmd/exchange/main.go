@@ -129,7 +129,7 @@ func main() {
 	}
 	adsTxtGate := adsTxtGateFn(cfg, adsTxtCache, log)
 	schainGate := schainGateFn(cfg, log)
-	signReq := adCertSignerFn(cfg, log)
+	signReq := adCertSignerFn(cfg, log, clk.Now)
 
 	// Readiness: deal cache must have run at least once (an empty result
 	// is still "ready" — empty is a valid state for fresh seed). Exchange

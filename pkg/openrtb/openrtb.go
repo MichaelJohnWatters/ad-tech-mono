@@ -40,6 +40,10 @@ type SourceExt struct {
 	// canonical stable fields — see pkg/adcert. Lets the DSP verify the request
 	// authentically came from this exchange.
 	AdCert string `json:"adcert,omitempty"`
+	// AdCertTS is the Unix-seconds timestamp the request was signed at. It's
+	// part of the signed canonical, so it can't be altered without breaking the
+	// signature; the DSP uses it to reject stale/replayed requests.
+	AdCertTS int64 `json:"adcert_ts,omitempty"`
 }
 
 // SupplyChain is the IAB SupplyChain object (spec version "1.0"). Complete=1
