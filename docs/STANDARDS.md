@@ -59,7 +59,9 @@ detail, and the change log at the bottom has commit-level notes.
   (`/v1/api/identity-links`), and the DSP **resolves** a user to linked ids for
   segment lookup off an **in-memory preload** (refreshed every
   `dsp.identity_preload_interval`, default 5m; interned ids) so the bid path never
-  hits Postgres — QPS-safe, sized for a few million ids.
+  hits Postgres — QPS-safe, sized for a few million ids. Resolution is
+  **transitive** (bounded BFS, `dsp.identity_max_depth`) and **confidence-gated**
+  (`dsp.identity_min_confidence`), so uid2→email→device all resolve together.
 - **Docs.** `docs/openapi.yaml` refreshed (BidRequest fields + new endpoints).
 
 ### What's next (prioritized, with honest caveats)
@@ -81,8 +83,7 @@ detail, and the change log at the bottom has commit-level notes.
    treat the token as an opaque stable id.
 4. **Identity graph scaling levers** (only if it grows past a few million):
    delta refresh (load only changed edges), integer-id adjacency, or a dedicated
-   identity store. Also: confidence-threshold gating, and transitive (multi-hop)
-   resolution (`ResolveIdentity` is single-hop today).
+   identity store. *(Transitive multi-hop resolution + confidence gating: done.)*
 5. **Client-side OM SDK runtime + SIMID interactive creative.** Out of scope for
    a Go repo — needs a JS measurement/interactive runtime we don't have.
 6. **ads.cert multi-key rotation** — carry a key id in the signed request so the
@@ -213,6 +214,11 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity resolution is now transitive + confidence-gated: the
+  preload adjacency carries per-edge confidence (`postgres.IdentityLink`), and the DSP
+  resolver walks it breadth-first to `dsp.identity_max_depth` hops (default 3) over
+  edges ≥ `dsp.identity_min_confidence` — so uid2→email→device resolve together and
+  weak/probabilistic links can be excluded. Was single-hop.
 - **2026-07-06** — identity graph now auto-builds: the SSP observes co-occurring
   identifiers (user_id/uid2/hashed_email/ifa) on inbound requests and writes
   deterministic edges (`identity.LinkObserved`, confidence 1.0) via an async

@@ -19,9 +19,10 @@ type identityResolver interface {
 }
 
 // graphLoader is the read dependency of the preload resolver — the whole graph
-// as a bidirectional adjacency map. Satisfied by *postgres.Store.
+// as a bidirectional adjacency map (id -> linked ids + confidences). Satisfied
+// by *postgres.Store.
 type graphLoader interface {
-	LoadIdentityGraph(ctx context.Context) (map[string][]string, error)
+	LoadIdentityGraph(ctx context.Context) (map[string][]postgres.IdentityLink, error)
 }
 
 // openIdentityResolver builds the DSP's identity resolver when
@@ -51,32 +52,41 @@ func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolve
 		_ = db.Close()
 		return nil, func() {}
 	}
-	p := newPreloadIdentityResolver(postgres.NewFromDB(db), cfg.GetDuration("dsp.identity_preload_interval", 5*time.Minute), log)
+	p := newPreloadIdentityResolver(postgres.NewFromDB(db),
+		cfg.GetDuration("dsp.identity_preload_interval", 5*time.Minute),
+		cfg.GetInt("dsp.identity_max_depth", 3),
+		cfg.GetFloat("dsp.identity_min_confidence", 0),
+		log)
 	p.Start()
-	log.Info("dsp identity resolution enabled (in-memory preload)")
+	log.Info("dsp identity resolution enabled (in-memory preload)", "max_depth", p.maxDepth, "min_confidence", p.minConf)
 	return p, func() { p.Stop(); _ = db.Close() }
 }
 
 // preloadIdentityResolver holds the whole identity graph as an in-memory
 // adjacency snapshot, refreshed on an interval in the background. Bid-path
-// resolution is a pure lock-free map read (atomic.Pointer snapshot) — no
-// Postgres, no network — which is the right shape for a QPS-critical path.
+// resolution is a lock-free breadth-first walk of the snapshot (atomic.Pointer)
+// — no Postgres, no network — which is the right shape for a QPS-critical path.
 // Tradeoff: the graph must fit in memory and reads are stale up to one refresh
 // interval. At internet scale you'd shard or use a dedicated identity service;
 // for this platform the whole graph fits comfortably.
 type preloadIdentityResolver struct {
 	loader   graphLoader
 	interval time.Duration
+	maxDepth int     // BFS hop limit (1 = direct links only; >1 = transitive)
+	minConf  float64 // only traverse edges with confidence >= this
 	log      *slog.Logger
-	snap     atomic.Pointer[map[string][]string]
+	snap     atomic.Pointer[map[string][]postgres.IdentityLink]
 	stop     chan struct{}
 }
 
-func newPreloadIdentityResolver(loader graphLoader, interval time.Duration, log *slog.Logger) *preloadIdentityResolver {
+func newPreloadIdentityResolver(loader graphLoader, interval time.Duration, maxDepth int, minConf float64, log *slog.Logger) *preloadIdentityResolver {
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
-	return &preloadIdentityResolver{loader: loader, interval: interval, log: log, stop: make(chan struct{})}
+	if maxDepth < 1 {
+		maxDepth = 1
+	}
+	return &preloadIdentityResolver{loader: loader, interval: interval, maxDepth: maxDepth, minConf: minConf, log: log, stop: make(chan struct{})}
 }
 
 // Start does an initial synchronous load (so the resolver is warm before it
@@ -113,15 +123,39 @@ func (p *preloadIdentityResolver) refresh() {
 	p.log.Debug("identity graph preloaded", "ids", len(adj))
 }
 
-// ResolveIdentity is a lock-free in-memory read of the current snapshot.
+// ResolveIdentity returns every identifier reachable from id within maxDepth
+// hops, following only edges whose confidence is >= minConf, excluding id
+// itself. A bounded breadth-first walk of the in-memory snapshot (lock-free):
+// with maxDepth=1 it's direct links only; higher folds in the transitive
+// closure (linked-of-linked), so e.g. uid2 → email → device all resolve
+// together. The depth cap bounds the work per bid.
 func (p *preloadIdentityResolver) ResolveIdentity(_ context.Context, id string) ([]string, error) {
 	if id == "" {
 		return nil, nil
 	}
-	if m := p.snap.Load(); m != nil {
-		return (*m)[id], nil
+	mp := p.snap.Load()
+	if mp == nil {
+		return nil, nil
 	}
-	return nil, nil
+	adj := *mp
+	visited := map[string]bool{id: true}
+	frontier := []string{id}
+	var out []string
+	for depth := 0; depth < p.maxDepth && len(frontier) > 0; depth++ {
+		var next []string
+		for _, cur := range frontier {
+			for _, lk := range adj[cur] {
+				if lk.Confidence < p.minConf || visited[lk.ID] {
+					continue
+				}
+				visited[lk.ID] = true
+				out = append(out, lk.ID)
+				next = append(next, lk.ID)
+			}
+		}
+		frontier = next
+	}
+	return out, nil
 }
 
 // dspPrivateSegments returns the DSP-private segment ids for a user. When a
