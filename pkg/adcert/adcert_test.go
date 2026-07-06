@@ -3,6 +3,7 @@ package adcert
 import (
 	"crypto/ed25519"
 	"testing"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
@@ -45,6 +46,7 @@ func TestVerifyFailsOnTamper(t *testing.T) {
 		func(r *openrtb.BidRequest) { r.Imp[0].TagID = "pl-other" },                // placement swapped
 		func(r *openrtb.BidRequest) { r.Source.Ext.SChain.Nodes[0].SID = "pub-2" }, // seller swapped
 		func(r *openrtb.BidRequest) { r.ID = "trace-2" },                           // request id swapped
+		func(r *openrtb.BidRequest) { r.Source.Ext.AdCertTS = 999 },                // timestamp forged
 	}
 	for i, tamper := range tampers {
 		r := sampleReq()
@@ -52,6 +54,37 @@ func TestVerifyFailsOnTamper(t *testing.T) {
 		if Verify(pub, r, sig) {
 			t.Errorf("tamper %d: signature verified against a modified request", i)
 		}
+	}
+}
+
+func TestFresh(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	withTS := func(ts int64) *openrtb.BidRequest {
+		r := sampleReq()
+		r.Source.Ext.AdCertTS = ts
+		return r
+	}
+
+	tests := []struct {
+		name   string
+		req    *openrtb.BidRequest
+		maxAge time.Duration
+		want   bool
+	}{
+		{"fresh (just signed)", withTS(now.Unix()), 5 * time.Minute, true},
+		{"within window", withTS(now.Add(-2 * time.Minute).Unix()), 5 * time.Minute, true},
+		{"too old", withTS(now.Add(-10 * time.Minute).Unix()), 5 * time.Minute, false},
+		{"future skew within window", withTS(now.Add(1 * time.Minute).Unix()), 5 * time.Minute, true},
+		{"far future rejected", withTS(now.Add(30 * time.Minute).Unix()), 5 * time.Minute, false},
+		{"no timestamp is stale", sampleReq(), 5 * time.Minute, false},
+		{"maxAge 0 disables check", withTS(0), 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Fresh(tt.req, now, tt.maxAge); got != tt.want {
+				t.Errorf("Fresh = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

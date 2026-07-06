@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adcert"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -20,7 +21,7 @@ import (
 //
 // Verification is also skipped (allow) when no key is configured, so the
 // feature stays inert until the exchange is actually signing.
-func adCertVerifierFn(cfg *config.Config, log *slog.Logger) func(*openrtb.BidRequest) (bool, string) {
+func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time) func(*openrtb.BidRequest) (bool, string) {
 	pub, err := adcert.ParsePublicKey(cfg.Get("dsp.adcert_verify_key", ""))
 	if err != nil {
 		log.Error("adcert: invalid verify key, verification disabled", "error", err)
@@ -35,13 +36,22 @@ func adCertVerifierFn(cfg *config.Config, log *slog.Logger) func(*openrtb.BidReq
 		if req.Source != nil && req.Source.Ext != nil {
 			sig = req.Source.Ext.AdCert
 		}
-		if adcert.Verify(pub, req, sig) {
+		// Both must hold: a valid signature AND a fresh timestamp (replay
+		// protection). maxAge <= 0 disables the freshness check.
+		maxAge := cfg.GetDuration("dsp.adcert_max_age", 5*time.Minute)
+		sigOK := adcert.Verify(pub, req, sig)
+		fresh := adcert.Fresh(req, now(), maxAge)
+		if sigOK && fresh {
 			return true, ""
 		}
-		if mode == "strict" {
-			return false, "adcert_invalid"
+		reason := "adcert_invalid"
+		if sigOK && !fresh {
+			reason = "adcert_stale"
 		}
-		log.Warn("adcert verification failed (warn mode, bidding anyway)", "trace_id", req.ID)
+		if mode == "strict" {
+			return false, reason
+		}
+		log.Warn("adcert check failed (warn mode, bidding anyway)", "reason", reason, "trace_id", req.ID)
 		return true, ""
 	}
 }

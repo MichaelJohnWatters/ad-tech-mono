@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
@@ -55,6 +56,13 @@ func Canonical(req *openrtb.BidRequest) string {
 		sid = sc.Nodes[0].SID
 	}
 
+	// Signing timestamp (Unix seconds). Part of the signed payload so it can't
+	// be altered to extend a captured request's lifetime.
+	var ts int64
+	if req.Source != nil && req.Source.Ext != nil {
+		ts = req.Source.Ext.AdCertTS
+	}
+
 	var b strings.Builder
 	b.WriteString("id=")
 	b.WriteString(req.ID)
@@ -70,7 +78,27 @@ func Canonical(req *openrtb.BidRequest) string {
 	b.WriteString(asi)
 	b.WriteString("&sid=")
 	b.WriteString(sid)
+	b.WriteString("&ts=")
+	b.WriteString(strconv.FormatInt(ts, 10))
 	return b.String()
+}
+
+// Fresh reports whether a signed request's timestamp is within maxAge of now
+// (in either direction, to tolerate small clock skew). A maxAge <= 0 disables
+// the freshness check (returns true). Requests with no timestamp are stale.
+func Fresh(req *openrtb.BidRequest, now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return true
+	}
+	if req.Source == nil || req.Source.Ext == nil || req.Source.Ext.AdCertTS == 0 {
+		return false
+	}
+	signed := time.Unix(req.Source.Ext.AdCertTS, 0)
+	delta := now.Sub(signed)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= maxAge
 }
 
 // Sign returns the base64 (raw-url) Ed25519 signature over Canonical(req).
