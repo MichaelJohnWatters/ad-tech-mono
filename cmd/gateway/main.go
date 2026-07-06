@@ -26,6 +26,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
 )
@@ -293,6 +294,14 @@ func main() {
 		audStore = audiencepg.New(gwDB)
 	}
 	mux.Handle(routes.APIAudiences, secretsAuth(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
+
+	// Identity-graph ingestion (link UID2 / hashed-email / device ids). gwDB may
+	// be nil if Postgres was unreachable at boot; the handler 503s.
+	var idStore identityLinkStore
+	if gwDB != nil {
+		idStore = postgres.NewFromDB(gwDB)
+	}
+	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
 
 	// Privacy opt-out intake — operator-API-key auth like the others. Records
 	// the opt-out + fans out so the DSP stops bidding for the user.

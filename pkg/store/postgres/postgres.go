@@ -58,6 +58,13 @@ type Store struct {
 	read    *sql.DB
 }
 
+// NewFromDB wraps an already-open *sql.DB as a Store, using it for both the
+// primary and read handles. For callers (e.g. the gateway) that already hold a
+// single pooled connection and just need the Store's query methods.
+func NewFromDB(db *sql.DB) *Store {
+	return &Store{primary: db, read: db}
+}
+
 // New creates a Store with primary (read-write) and read (read-only) connections.
 func New(cfg Config) (*Store, error) {
 	primary, err := openDB(cfg.PrimaryURL, cfg)

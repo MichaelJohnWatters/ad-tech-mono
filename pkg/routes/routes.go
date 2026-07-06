@@ -42,6 +42,9 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIIdentityLinks ingests identity-graph edges (link a UID2 token / hashed
+	// email / device id to other identifiers). Operator-API-key auth.
+	APIIdentityLinks = apiPrefix + "/api/identity-links"
 
 	// APIPrivacyOptOut is the user opt-out intake (level 1/2/3). POST only.
 	// Records opt_out_registry + publishes OptOutEvent + cache-invalidate.
