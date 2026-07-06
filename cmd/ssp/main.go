@@ -169,7 +169,10 @@ func main() {
 	if cfg.GetBool("ssp.identity_observe_enabled", false) && mgmtDB != nil {
 		idObserver = newIdentityObserver(postgres.NewFromDB(mgmtDB),
 			cfg.GetDuration("ssp.identity_flush_interval", 10*time.Second),
-			cfg.GetInt("ssp.identity_seen_cap", 100_000), log)
+			cfg.GetInt("ssp.identity_seen_cap", 100_000),
+			cfg.GetBool("ssp.identity_probabilistic_enabled", false),
+			cfg.GetFloat("ssp.identity_probabilistic_confidence", 0.5),
+			cfg.GetInt("ssp.identity_fingerprint_max_users", 5), log)
 		idObserver.Start()
 		lc.OnShutdown("ssp-identity-observer", func(_ context.Context) error { idObserver.Stop(); return nil })
 		log.Info("ssp identity observation enabled")
