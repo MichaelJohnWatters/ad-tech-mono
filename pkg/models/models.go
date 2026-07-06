@@ -26,11 +26,29 @@ import (
 // Loaded from line_item_creatives ⋈ creatives at warm-cache time.
 type CampaignCreative struct {
 	ID       string // creatives.id (UUID)
-	Format   string // "display" / "video" / "audio"
+	Format   string // "display" / "native" / "video" / "audio"
 	Width    int
 	Height   int
 	Duration int    // seconds; video / audio creatives only
 	MediaURL string // video / audio media file URL (creatives.asset_url)
+	// Native is the asset set for native creatives (creatives.native_assets);
+	// nil for non-native formats.
+	Native *NativeAssets
+}
+
+// NativeAssets is a native creative's content — the values used to fill an
+// OpenRTB Native response. Shape mirrors pkg/native.AssetSet; persisted as the
+// creatives.native_assets JSONB blob.
+type NativeAssets struct {
+	Title      string `json:"title"`
+	MainImage  string `json:"main_image"`
+	MainImageW int    `json:"main_image_w"`
+	MainImageH int    `json:"main_image_h"`
+	Icon       string `json:"icon"`
+	Sponsored  string `json:"sponsored"`
+	Body       string `json:"body"`
+	CTA        string `json:"cta"`
+	LandingURL string `json:"landing_url"`
 }
 
 type Campaign struct {

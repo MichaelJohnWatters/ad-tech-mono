@@ -127,3 +127,38 @@ func TestSelectCreativeForRequest_VideoMatching(t *testing.T) {
 		}
 	})
 }
+
+func TestSelectCreativeForRequest_NativeMatching(t *testing.T) {
+	c := &models.Campaign{
+		Creatives: []models.CampaignCreative{
+			{ID: "mpu", Format: "display", Width: 300, Height: 250},
+			{ID: "nat", Format: "native", Native: &models.NativeAssets{Title: "Buy", MainImage: "https://i", LandingURL: "https://l"}},
+		},
+	}
+
+	t.Run("native request matches native creative", func(t *testing.T) {
+		m := selectCreativeForRequest(c, "native", 0, 0, 0, 0)
+		if m == nil || m.ID != "nat" {
+			t.Errorf("got %+v, want nat", m)
+		}
+	})
+
+	t.Run("display request ignores native creative", func(t *testing.T) {
+		m := selectCreativeForRequest(c, "display", 300, 250, 0, 0)
+		if m == nil || m.ID != "mpu" {
+			t.Errorf("got %+v, want mpu", m)
+		}
+	})
+
+	t.Run("native creative without assets is skipped", func(t *testing.T) {
+		// Defensive: a native row with no asset set (or no title) must not be
+		// returned — the DSP would build an empty native response.
+		bad := &models.Campaign{Creatives: []models.CampaignCreative{
+			{ID: "no-assets", Format: "native", Native: nil},
+			{ID: "no-title", Format: "native", Native: &models.NativeAssets{MainImage: "https://i"}},
+		}}
+		if m := selectCreativeForRequest(bad, "native", 0, 0, 0, 0); m != nil {
+			t.Errorf("got %+v, expected nil for native creative without a title", m)
+		}
+	})
+}

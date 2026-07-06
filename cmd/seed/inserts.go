@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/lib/pq"
 )
 
@@ -79,6 +80,7 @@ func materialiseCreatives(c CampaignConfig) []CreativeYAML {
 			out = append(out, CreativeYAML{
 				ID: id, Width: w, Height: h, Domain: domain,
 				Format: cv.Format, MediaURL: cv.MediaURL, Duration: cv.Duration,
+				Native: cv.Native,
 			})
 		}
 		return out
@@ -126,7 +128,7 @@ func (in *inserter) SeedAll(ctx context.Context, profiles []DSPProfile) error {
 	// the account row to exist before SET LOCAL can be checked against it.
 	// Also build accountToDSP so accounts are stamped with the DSP that
 	// manages them (their YAML's owning profile).
-	accounts := map[string]string{}    // externalID → display name
+	accounts := map[string]string{}     // externalID → display name
 	accountToDSP := map[string]string{} // externalID → dsp UUID
 	ios := map[string]ioInsertPayload{}
 
@@ -256,15 +258,16 @@ INSERT INTO line_items (
   id, account_id, insertion_order_id, name, status, format, bid_strategy,
   base_bid, bid_currency, daily_budget, pacing_mode, shading_mode,
   creative_rotation, timezone, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, 'display', $6, $7, $8, $9, $10, 'moderate', 'bandit', 'UTC', now(), now())
+) VALUES ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, $10, 'moderate', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name, status = EXCLUDED.status, base_bid = EXCLUDED.base_bid,
   daily_budget = EXCLUDED.daily_budget, pacing_mode = EXCLUDED.pacing_mode,
+  format = EXCLUDED.format,
   updated_at = now()`
 		_, err := tx.ExecContext(ctx, liQ,
 			lineItemID, accountID, ioID, c.Name, defaultStr(c.Status, "live"),
 			defaultStr(c.BidModel, "cpm"), c.BaseBid, defaultStr(c.Currency, "USD"),
-			c.DailyBudget, defaultStr(c.PacingMode, "even"),
+			c.DailyBudget, defaultStr(c.PacingMode, "even"), defaultStr(c.Format, "display"),
 		)
 		if err != nil {
 			return fmt.Errorf("line_items insert: %w", err)
@@ -332,12 +335,37 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 			// existing inline-HTML / Minio-asset split.
 			var html, assetURL string
 			var durationPtr any
-			if format == "video" || format == "audio" {
+			var nativeJSON any // JSONB or NULL
+			switch format {
+			case "video", "audio":
 				assetURL = cv.MediaURL
 				if cv.Duration > 0 {
 					durationPtr = cv.Duration
 				}
-			} else {
+			case "native":
+				// Serialise the asset set (with the resolved landing URL) into
+				// the native_assets JSONB. html_content / asset_url stay empty so
+				// the DSP knows this is a native creative.
+				n := cv.Native
+				if n == nil {
+					n = &NativeYAML{}
+				}
+				b, err := json.Marshal(models.NativeAssets{
+					Title:      n.Title,
+					MainImage:  n.MainImage,
+					MainImageW: n.MainImageW,
+					MainImageH: n.MainImageH,
+					Icon:       n.Icon,
+					Sponsored:  n.Sponsored,
+					Body:       n.Body,
+					CTA:        n.CTA,
+					LandingURL: landing,
+				})
+				if err != nil {
+					return fmt.Errorf("native_assets marshal (%s): %w", cv.ID, err)
+				}
+				nativeJSON = string(b)
+			default:
 				html = themedCreativeHTML(cv.ID, domain)
 				if useAssetForSize(cv.Width, cv.Height) && in.creativeAssetBase != "" {
 					key := creativeAssetByTheme(domain, cv.Width, cv.Height)
@@ -347,8 +375,8 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 			}
 			const crQ = `
 INSERT INTO creatives (
-  id, account_id, name, format, width, height, landing_url, advertiser_domain, html_content, asset_url, duration_seconds, review_status, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'approved', now(), now())
+  id, account_id, name, format, width, height, landing_url, advertiser_domain, html_content, asset_url, duration_seconds, native_assets, review_status, created_at, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'approved', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   format = EXCLUDED.format,
@@ -359,8 +387,9 @@ ON CONFLICT (id) DO UPDATE SET
   html_content = EXCLUDED.html_content,
   asset_url = EXCLUDED.asset_url,
   duration_seconds = EXCLUDED.duration_seconds,
+  native_assets = EXCLUDED.native_assets,
   updated_at = now()`
-			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, domain, html, assetURL, durationPtr); err != nil {
+			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, domain, html, assetURL, durationPtr, nativeJSON); err != nil {
 				return fmt.Errorf("creatives insert (%s): %w", cv.ID, err)
 			}
 
@@ -467,4 +496,3 @@ func modifiersAsMap(m *ModifiersYAML) map[string]any {
 	}
 	return out
 }
-
