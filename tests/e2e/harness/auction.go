@@ -31,6 +31,7 @@ type AuctionParams struct {
 	Geo       string // ISO country (Device.geo.country)
 	Device    string // device type keyword
 	UserID    string // User.id (drives segment lookup)
+	UID2      string // Unified ID 2.0 token → User.eids (cookieless identity)
 	OS        string // Device.os — for OS targeting
 	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
 	Segments  string // User.ext.segments (comma-separated) — for segment targeting
@@ -70,6 +71,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("geo", p.Geo)
 	add("device", p.Device)
 	add("user_id", p.UserID)
+	add("uid2", p.UID2)
 	add("os", p.OS)
 	add("keywords", p.Keywords)
 	add("segments", p.Segments)

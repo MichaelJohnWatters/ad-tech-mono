@@ -404,13 +404,22 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		}
 		bidReq.Device.OS = os
 	}
-	if userID != "" {
+	// UID2 (Unified ID 2.0): a cookieless person-based identifier carried in
+	// User.EIDs. Accepted from ?uid2= so a cookieless publisher page can still
+	// make the user addressable. The segment lookup falls back to the UID2
+	// token when there's no first-party user_id.
+	uid2 := r.URL.Query().Get("uid2")
+	if userID != "" || uid2 != "" {
 		user := &openrtb.User{ID: userID}
+		if uid2 != "" {
+			user.EIDs = []openrtb.EID{openrtb.UID2EID(uid2)}
+		}
+		lookupKey := openrtb.UserKey(user) // user_id, else the UID2 token
 		var segs []string
-		if audienceStore != nil {
-			looked, err := audienceStore.SegmentsForUser(ctx, userID)
+		if audienceStore != nil && lookupKey != "" {
+			looked, err := audienceStore.SegmentsForUser(ctx, lookupKey)
 			if err != nil {
-				reqLog.Warn("segment lookup failed", "user_id", userID, "error", err)
+				reqLog.Warn("segment lookup failed", "user_key", lookupKey, "error", err)
 			} else {
 				segs = looked
 			}

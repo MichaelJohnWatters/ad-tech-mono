@@ -71,7 +71,7 @@ only, no runtime) · ⬜ not implemented
 | Standard | Steward | Who it's for | Prominence | Our status | Where / notes |
 |---|---|---|---|---|---|
 | Custom identity graph | (in-house) | Cross-device linking | — | 🟨 | `pkg/identity/` — hashed email / device / IP+UA; not a standard ID |
-| UID2 (Unified ID 2.0) | TTD / IAB Tech Lab op | Post-cookie addressability | 🔴 | ⬜ | Leading open cookieless ID |
+| UID2 (Unified ID 2.0) | TTD / IAB Tech Lab op | Post-cookie addressability | 🔴 | 🟨 | Carried + used for addressability: `User.EIDs` (`pkg/openrtb/eid.go`, source `uidapi.com`), SSP populates from `?uid2`, DSP uses `UserKey` (UID2 when cookieless) for opt-out + segment lookup. Not done: token encryption/decryption via a UID2 operator, key rotation, identity-graph ingestion |
 | Audience Taxonomy 1.1 / Data Transparency | IAB Tech Lab | Segment labelling | 🟡 | ⬜ | — |
 | RampID / SharedID / ID5 / EUID | various | Publisher/resolution IDs | 🟠 | ⬜ | Mostly proprietary; deprioritise |
 
@@ -125,7 +125,11 @@ they land and flip the status cells above.
 - [ ] **OMID / SIMID** interactive-video runtime (skip VPAID — deprecated).
 
 ### Phase 4 — Cookieless identity & advanced trust
-- [ ] **UID2** integration in `pkg/identity`.
+- [~] **UID2** — request-side addressability done: `User.EIDs` type + UID2 helpers
+      (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP resolves `UserKey`
+      (UID2 when cookieless) for opt-out + segment lookup. *Remaining: token
+      decryption via a UID2 operator + key rotation, and identity-graph ingestion
+      (link UID2 ↔ platform ids — needs a pipeline consumer).*
 - [ ] **ads.cert 2.0** signed bid requests *(low priority — thin adoption)*.
 
 ### Deprioritised
@@ -134,6 +138,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 4 (part 1): UID2 request-side addressability — `User.EIDs` +
+  UID2 helpers (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP `UserKey`
+  resolution (UID2 when cookieless) for opt-out + segment lookup. Token
+  decryption/operator + identity-graph ingestion remain.
 - **2026-07-06** — Phase 3 (part 3): Native 1.2 publisher-side rendering — publisher-
   adserver `nativeHandler` (`/v1/pubad/native`) turns the native response markup into an
   HTML card with signed impression/click trackers; SSP native winner short-circuit.
