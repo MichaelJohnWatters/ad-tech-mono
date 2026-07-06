@@ -83,6 +83,16 @@ func (p *pacingAccumulator) campaignLocked(campaignID string) *campaignPacing {
 	return cp
 }
 
+// reset clears all accumulated pacing state. Used by the reporting debug
+// billing-reset endpoint so e2e billing tests start from an empty committed
+// view (the accumulator is otherwise long-lived + hydrated on boot).
+func (p *pacingAccumulator) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.campaigns = make(map[string]*campaignPacing)
+	p.day = ""
+}
+
 // recordBilled adds an immediately-billed (CPM) spend to today's settled total.
 func (p *pacingAccumulator) recordBilled(campaignID string, amount float64) {
 	if campaignID == "" || amount <= 0 {

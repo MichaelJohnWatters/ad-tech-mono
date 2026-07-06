@@ -47,6 +47,8 @@ func (h *Harness) Reset(t *testing.T) {
 		"opt_out_registry",
 		"identity_graph",
 		"budget_reservations",
+		"reservation_context",
+		"campaign_committed_spend",
 		"ledger_entries",
 		"invoices",
 		"payouts",
