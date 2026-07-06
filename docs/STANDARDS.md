@@ -73,9 +73,11 @@ detail, and the change log at the bottom has commit-level notes.
    serving pod and the probabilistic fingerprint state is one global view (run a
    single replica). The **exchange** now also observes (inbound Prebid demand our
    SSP never saw, `exchange.identity_observe_enabled`) via the shared
-   `identityobserve.Publisher`. Still open: (a) observe on the tracker too;
-   (b) fuzzy UA matching (currently exact IP+UA — conservative by design);
-   (c) move the consumer's fingerprint buckets to Redis for HA / multiple replicas.
+   `identityobserve.Publisher`. Fuzzy UA matching (`identity_consumer.fuzzy_ua`)
+   and Redis-backed fingerprint buckets (`identity_consumer.redis_url`, enables
+   multi-replica) are done. Only remaining: observe on the **tracker** — but its
+   URLs carry no user identity today, so it would need user ids plumbed into the
+   signed tracker URLs (privacy-sensitive), which is why it's parked, not minor.
 2. **GPP US state sections 8–12** (US-CA/VA/CO/UT/CT opt-out decode). *Caveat:*
    each has a distinct bit-layout and we have no official IAB test vectors, so
    correctness can't be verified — deferred deliberately (decode is downgrade-only
@@ -217,6 +219,12 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — probabilistic matching refinements + full-flow diagram: fuzzy UA
+  (strip version numbers so Chrome/120 vs /121 don't split a device;
+  `identity_consumer.fuzzy_ua`), Redis-backed fingerprint buckets (pluggable
+  `identityobserve.FPStore`; `identity_consumer.redis_url` → multi-replica-safe).
+  Added `docs/diagrams/end-to-end-flow.md` — the current full ad-lifecycle + identity
+  flow (the older `request-flow.txt` predates the standards/identity work).
 - **2026-07-06** — identity auto-build made event-driven: the observer moved to
   `pkg/identityobserve`; the SSP now just publishes `adtech.identity.observed`
   (per-request signals + IP+UA fingerprint), and a new `cmd/identity-consumer`
