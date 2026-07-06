@@ -213,7 +213,10 @@ func main() {
 		lc.OnShutdown(name, func(_ context.Context) error { fn(); return nil })
 	})
 	adCertVerify := adCertVerifierFn(cfg, log, clk.Now, adCertKeyFn)
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify))
+	identityResolver, identityStop := openIdentityResolver(cfg, log)
+	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
+	identityMaxLinked := cfg.GetInt("dsp.identity_max_linked", 10)
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
@@ -627,7 +630,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	return client
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string)) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -757,11 +760,11 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// failing entirely.
 		if consent.Personalise && audienceStore != nil && userKey != "" {
 			lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
-			private, err := audienceStore.DSPSegmentsForUser(lookupCtx, userKey)
+			// Expands userKey via the identity graph when resolution is enabled,
+			// so segments on a linked id (UID2/device/cross-publisher) also match.
+			private := dspPrivateSegments(lookupCtx, audienceStore, identityResolver, userKey, identityMaxLinked, log)
 			cancel()
-			if err != nil {
-				log.Debug("dsp private segment lookup degraded (bid proceeds without)", "user_key", userKey, "error", err)
-			} else if len(private) > 0 {
+			if len(private) > 0 {
 				tReq.Segments = append(tReq.Segments, private...)
 			}
 		}
