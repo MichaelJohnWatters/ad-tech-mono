@@ -180,8 +180,13 @@ func (p *pacingAccumulator) hydrateSettled(day string, m map[string]int64) {
 }
 
 // snapshot returns committed cents (settled + open holds) per campaign for
-// today, skipping campaigns at zero. Safe to call concurrently with the
-// record* methods.
+// today, for every campaign TOUCHED today — including those now at zero. A
+// campaign whose only activity was reserves that all expired drops to zero, and
+// it must still appear so the DSP reconciles its counter DOWN (otherwise the
+// counter stays stuck at the last non-zero value until the daily key expires).
+// Campaigns never touched today are absent from the map (not iterated), so the
+// DSP leaves their local in-flight win counters alone. Safe to call
+// concurrently with the record* methods.
 func (p *pacingAccumulator) snapshot() map[string]int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -192,9 +197,7 @@ func (p *pacingAccumulator) snapshot() map[string]int64 {
 		for _, h := range cp.holds {
 			committed += h.cents
 		}
-		if committed > 0 {
-			out[id] = committed
-		}
+		out[id] = committed
 	}
 	return out
 }
