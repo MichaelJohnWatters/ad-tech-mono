@@ -338,6 +338,13 @@ const (
 	// tests can run in isolation without inheriting state from prior tests
 	// in the same reporting pod lifetime. No-op on TigerBeetle backend.
 	DebugBillingReset = "/debug/billing/reset"
+	// DebugSpendSnapshot returns the billing engine's current per-campaign
+	// committed spend (settled + open reserves, in cents); POST additionally
+	// forces an immediate publish of the spend snapshot so e2e tests can drive
+	// DSP pacing reconciliation deterministically without waiting for the
+	// periodic ticker. Also handy for ops ("what does billing think campaign X
+	// has committed today?").
+	DebugSpendSnapshot = "/debug/spend/snapshot"
 	// DebugBillingRates dumps the in-memory ContractStore (per-publisher
 	// revenue-share contracts loaded from publishers.revshare_config).
 	// Read by the pub sim's Billing Rates panel so operators can see why

@@ -10578,6 +10578,7 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.auction.complete` | Exchange | Reporting | AuctionCompleteEvent (includes all bids, winner, timing) |
 | `adtech.budget.depleted` | DSP | Exchange (stop bidding for this campaign) | BudgetDepletedEvent |
 | `adtech.balance.depleted` | DSP (bid gate), Reporting (billing sink) | Webhooks, Reporting | BalanceDepletedEvent (advertiser prepay balance hit zero — account-wide no-bid until topup) |
+| `adtech.billing.campaign_spend_snapshot` | Reporting (billing engine, periodic) | DSP (all pods, fan-out) | CampaignSpendSnapshotEvent (per-campaign committed spend = settled + open reserves, in cents; DSPs reconcile pacing counters to it) |
 | `adtech.cache.invalidate.advertiser-balances` | Gateway (topup credit), Reporting (spend drawdown, throttled per account) | DSP balance warm cache | invalidate ping (cache reloads wholesale) |
 | `adtech.campaign.state_changed` | DSP | Reporting, Webhooks | CampaignStateEvent (lifecycle transitions) |
 | `adtech.creative.review_completed` | Ad Server | Gateway (notifications), Webhooks | CreativeReviewEvent |
@@ -10972,6 +10973,34 @@ Budget is the most sensitive cached value - overspend is real money lost. The ap
 4. A background goroutine periodically flushes Redis balance back to Postgres (e.g. every 10s)
 5. If Redis goes down, DSP falls back to Postgres directly (slower but correct, no overspend)
 6. When budget hits zero in Redis, DSP publishes `adtech.budget.depleted` via NATS
+
+#### Pacing reconciliation (win-notice counter vs billed spend)
+
+The Redis counter above is decremented on the **win notice** (nurl), which is fast and
+overspend-safe but over-counts against actual billing in two ways: (a) a win that never
+renders an impression still decrements pacing but never bills; (b) for CPC/CPA the full
+clearing price is counted on the win, though spend only bills on the click/conversion. Left
+alone this makes campaigns pace conservatively and under-deliver.
+
+To close the gap without duplicating the billing state machine, the **billing engine is the
+single source of truth** and the DSP mirrors it:
+
+- `pkg/billing` maintains a per-campaign *committed* accumulator (`settled-today + open
+  reserves`), fed from `billImmediate`/`reserve`/`settle` so it is backend-agnostic (works
+  even for the TigerBeetle ledger, which doesn't persist `campaign_id`). Open reserves whose
+  billable settle never arrives are swept after `reporting.pacing_hold_ttl` and released.
+- `cmd/reporting` broadcasts the accumulator every `reporting.spend_snapshot_interval` on
+  `adtech.billing.campaign_spend_snapshot`.
+- Every DSP pod consumes it (fan-out) and `BudgetTracker.Reconcile` overwrites the Redis
+  counter to the authoritative committed value. The local win-notice increment remains as the
+  intra-snapshot overspend guard.
+
+Net: between snapshots pacing is conservative (never overspends); on each snapshot it snaps
+to billed reality (phantom wins released, CPC/CPA corrected). Reserve/settle/release lives in
+`pkg/billing` where the rates are known — the DSP never re-computes spend. Bounded exposure: a
+real win in the ~1s before a snapshot that hasn't yet impressed→reserved is dropped from the
+committed figure until it does, so `spend_snapshot_interval` trades NATS traffic against how
+tightly pacing tracks billing.
 
 ### Cache Invalidation
 
