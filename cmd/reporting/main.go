@@ -82,6 +82,14 @@ func main() {
 	// settle + drawdown break under TB.
 	startReservationStore(cfg, log, billingEngine)
 
+	// Restart-safety for DSP pacing: hydrate today's committed spend from
+	// Postgres BEFORE event consumption starts, so a reporting restart resumes
+	// the day's total instead of resetting it (which would reconcile every DSP
+	// budget counter down and risk overspend). The same store persists each
+	// snapshot tick (wired into the publisher below).
+	committedSpendStore := newCommittedSpendStore(cfg, log)
+	hydrateCommittedSpend(committedSpendStore, billingEngine, clk, log)
+
 	// Publisher contracts come from Postgres via a warm cache. Each refresh
 	// re-populates the in-memory ContractStore the billing engine reads from,
 	// so editing a publisher's revshare_config takes effect within one poll
@@ -135,7 +143,7 @@ func main() {
 		}
 		// Broadcast per-campaign committed spend so DSPs reconcile pacing to
 		// billed reality. Needs NATS, so it lives inside this branch.
-		startSpendSnapshotPublisher(billingEngine, natsBus, cfg, clk, log, lc)
+		startSpendSnapshotPublisher(billingEngine, natsBus, committedSpendStore, cfg, clk, log, lc)
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceReporting)

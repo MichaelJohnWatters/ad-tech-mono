@@ -140,6 +140,47 @@ func TestPacing_DayRollover(t *testing.T) {
 	}
 }
 
+// SettledToday exposes only the durable settled portion (not transient holds),
+// and HydrateSettled restores it on a fresh engine — the restart-safety path.
+func TestPacing_SettledPersistRoundTrip(t *testing.T) {
+	clk := clock.NewFake(time.Now())
+	e := newPacingEngine(t, clk)
+	ctx := context.Background()
+
+	// CPM immediate → settled; CPC impression → open reserve (hold).
+	e.ProcessEvent(ctx, SpendEvent{TraceID: "t1", CampaignID: "camp-a", AdvertiserID: "adv",
+		ClearingPrice: 4.00, Currency: "USD", BidModel: BidCPM, EventType: "impression"})
+	e.ProcessEvent(ctx, SpendEvent{TraceID: "t2", CampaignID: "camp-a", AdvertiserID: "adv",
+		ClearingPrice: 1.00, Currency: "USD", BidModel: BidCPC, EventType: "impression"})
+
+	// committed = 400 settled + 100 hold = 500; but persisted settled is 400 only.
+	if got := e.SnapshotCommitted()["camp-a"]; got != 500 {
+		t.Fatalf("committed = %d, want 500", got)
+	}
+	day, settled := e.SettledToday()
+	if settled["camp-a"] != 400 {
+		t.Fatalf("settledToday = %d, want 400 (excludes the 100 hold)", settled["camp-a"])
+	}
+
+	// Simulate a restart: fresh engine, hydrate from the persisted settled map.
+	e2 := newPacingEngine(t, clk)
+	e2.HydrateSettled(day, settled)
+	if got := e2.SnapshotCommitted()["camp-a"]; got != 400 {
+		t.Fatalf("after hydrate committed = %d, want 400 (settled restored, holds rebuild from live events)", got)
+	}
+}
+
+// A hydrate carrying a stale (previous-day) day tag is ignored — a restart on a
+// new day must start today at zero, not inherit yesterday's total.
+func TestPacing_HydrateIgnoresStaleDay(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC))
+	e := newPacingEngine(t, clk)
+	e.HydrateSettled("2026-07-05", map[string]int64{"camp-a": 999})
+	if got := e.SnapshotCommitted()["camp-a"]; got != 0 {
+		t.Fatalf("stale-day hydrate leaked %d, want 0", got)
+	}
+}
+
 // Only campaigns with real billing activity appear in a snapshot — a campaign
 // the engine never saw an event for is absent, so a DSP won't reconcile it to
 // zero and wipe its local in-flight win counter.

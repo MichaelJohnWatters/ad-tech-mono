@@ -11002,6 +11002,16 @@ real win in the ~1s before a snapshot that hasn't yet impressed→reserved is dr
 committed figure until it does, so `spend_snapshot_interval` trades NATS traffic against how
 tightly pacing tracks billing.
 
+**Restart-safety + single-replica.** The committed accumulator is in-process, so reporting
+persists the settled portion to `campaign_committed_spend` (mig 037) each snapshot tick and
+re-hydrates it on boot (before event consumption) — otherwise a reporting restart would reset
+committed to zero and reconcile every DSP counter down (overspend). Open reserves are not
+persisted (transient; they rebuild from live events within the hold TTL). The snapshot
+publisher is **single-replica by design** (reporting consumes on a shared queue group, so each
+replica holds only a partial view); the base manifest pins `replicas: 1` (also required by
+DuckDB's single-writer). Scaling reporting would require electing one publisher or deriving
+committed from the shared analytics store.
+
 ### Cache Invalidation
 
 Invalidation uses NATS pub/sub (not JetStream - fire-and-forget is fine here, worst case is serving stale data for one more request cycle):

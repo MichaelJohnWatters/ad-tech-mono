@@ -155,6 +155,19 @@ func (e *Engine) SnapshotCommitted() map[string]int64 { return e.pacing.snapshot
 // released. Callers should invoke this on the same cadence as snapshotting.
 func (e *Engine) SweepExpiredHolds() int { return e.pacing.sweepExpired() }
 
+// SettledToday returns the durable settled-spend portion of committed (per
+// campaign, in cents) plus the UTC day it belongs to. Reporting persists this
+// each snapshot tick so a restart can HydrateSettled it back — without it, a
+// restart resets committed to zero and reconciles DSP pacing counters down.
+func (e *Engine) SettledToday() (string, map[string]int64) { return e.pacing.settledSnapshot() }
+
+// HydrateSettled seeds the settled totals loaded from durable storage on boot.
+// Only takes effect if day matches the current UTC day. Call before event
+// consumption starts.
+func (e *Engine) HydrateSettled(day string, cents map[string]int64) {
+	e.pacing.hydrateSettled(day, cents)
+}
+
 // SetPacingHoldTTL overrides how long an open reserve counts toward committed
 // spend before being swept. A non-positive duration is ignored (keeps the
 // default). Live-tunable via the reporting service's config.
