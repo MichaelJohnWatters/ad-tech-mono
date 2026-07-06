@@ -76,6 +76,13 @@ func (p *Publisher) BalanceDepleted(ctx context.Context, event BalanceDepletedEv
 	return p.PublishJSON(ctx, SubjectBalanceDepleted, event)
 }
 
+func (p *Publisher) CampaignSpendSnapshot(ctx context.Context, event CampaignSpendSnapshotEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.PublishJSON(ctx, SubjectCampaignSpendSnapshot, event)
+}
+
 func (p *Publisher) CampaignStateChanged(ctx context.Context, event CampaignStateEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion

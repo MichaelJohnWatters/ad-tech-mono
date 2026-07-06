@@ -41,6 +41,7 @@ func TestAllEventPayloadsHaveSchemaVersion(t *testing.T) {
 		{"events.ServeNoFillEvent", reflect.TypeOf(events.ServeNoFillEvent{})},
 		{"events.DirectWinEvent", reflect.TypeOf(events.DirectWinEvent{})},
 		{"events.PrebidOutboundWinEvent", reflect.TypeOf(events.PrebidOutboundWinEvent{})},
+		{"events.CampaignSpendSnapshotEvent", reflect.TypeOf(events.CampaignSpendSnapshotEvent{})},
 
 		// Analytics mirror types — pkg/store/analytics/analytics.go
 		// (analytics.Event is a discriminated-union container, not a

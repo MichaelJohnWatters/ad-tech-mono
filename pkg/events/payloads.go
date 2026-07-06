@@ -32,6 +32,21 @@ type AuctionWinEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// CampaignSpendSnapshotEvent is the periodic per-campaign committed-spend
+// broadcast from Reporting (billing engine) to every DSP pod. Committed maps a
+// campaign id (the line-item UUID) to committed spend in CENTS for the given
+// UTC Day, where committed = settled-today + open-reserves. A DSP reconciles
+// each of its own campaigns' pacing counters to this value; campaigns absent
+// from the map had no billing activity today and are left untouched (so a DSP
+// never wipes a local in-flight win counter it hasn't billed yet).
+type CampaignSpendSnapshotEvent struct {
+	SchemaVersion int              `json:"schema_version"`
+	Day           string           `json:"day"` // UTC yyyy-mm-dd the totals belong to
+	Currency      string           `json:"currency"`
+	Committed     map[string]int64 `json:"committed"` // campaign_id → committed cents
+	Timestamp     time.Time        `json:"timestamp"`
+}
+
 // DSPCallEvent records the outcome of one DSP fan-out call in an auction —
 // bid received?, price, latency, timeout. The exchange emits one per DSP per
 // auction (fire-and-forget) so routing behaviour is analysable historically in
