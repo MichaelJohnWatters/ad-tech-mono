@@ -52,22 +52,25 @@ detail, and the change log at the bottom has commit-level notes.
 - **Classification.** Complete IAB Content Taxonomy 1.0 (`pkg/taxonomy`, all 26
   tier-1) + validation/lookup/parent-resolution; fixed a real IAB10/IAB21 bug.
 - **Identity / UID2.** UID2 carried in `User.EIDs` and used as a stable user key;
-  **the identity graph is now functional** — write path (`/v1/api/identity-links`
-  + `pkg/store/postgres` Link/Resolve) and DSP read path that resolves a user to
-  linked ids for segment lookup. Resolution runs off an **in-memory preload**
-  (refreshed every `dsp.identity_preload_interval`, default 5m; interned ids), so
-  the bid path never hits Postgres — QPS-safe, sized for a few million ids.
+  **the identity graph is now functional end-to-end** — it **auto-builds** from the
+  request stream (the SSP observes co-occurring identifiers — user_id, uid2,
+  hashed_email, ifa — and writes deterministic edges off the hot path, batched +
+  deduped; `ssp.identity_observe_enabled`), also takes explicit uploads
+  (`/v1/api/identity-links`), and the DSP **resolves** a user to linked ids for
+  segment lookup off an **in-memory preload** (refreshed every
+  `dsp.identity_preload_interval`, default 5m; interned ids) so the bid path never
+  hits Postgres — QPS-safe, sized for a few million ids.
 - **Docs.** `docs/openapi.yaml` refreshed (BidRequest fields + new endpoints).
 
 ### What's next (prioritized, with honest caveats)
 
-1. **Auto-build the identity graph from the request stream.** Today links are
-   ingested explicitly via `/v1/api/identity-links`. A consumer that observes
-   deterministic co-occurrences (`hashed_email` seen with a `publisher_user_id` /
-   `device_id`) on inbound requests and writes edges would make the graph
-   self-populating. The deterministic matcher already exists in-memory
-   (`pkg/identity.Graph`, indexes by `type:value`) but isn't wired to a pipeline.
-   *This is the highest-value next build.*
+1. **Identity auto-build — deepen it.** *Deterministic* auto-build shipped: the
+   SSP observes co-occurring ids and writes edges (`cmd/ssp/identity.go`). Still
+   open: (a) **probabilistic** matching (same IP + similar UA → likely same
+   person, confidence <1.0); (b) move the writer to an **event-driven consumer**
+   (SSP publishes an observation event; a dedicated service batches + writes) so
+   observation scales independently of the SSP and other services can also emit;
+   (c) observe on the exchange/tracker too, not just the SSP.
 2. **GPP US state sections 8–12** (US-CA/VA/CO/UT/CT opt-out decode). *Caveat:*
    each has a distinct bit-layout and we have no official IAB test vectors, so
    correctness can't be verified — deferred deliberately (decode is downgrade-only
@@ -210,6 +213,11 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity graph now auto-builds: the SSP observes co-occurring
+  identifiers (user_id/uid2/hashed_email/ifa) on inbound requests and writes
+  deterministic edges (`identity.LinkObserved`, confidence 1.0) via an async
+  batched observer (`cmd/ssp/identity.go`, off the hot path, deduped, drop-if-full;
+  `ssp.identity_observe_enabled`). Graph is no longer explicit-upload-only.
 - **2026-07-06** — identity preload capacity tuning: id strings are interned in the
   in-memory snapshot (each unique id one allocation, ~halves footprint), and the default
   reload interval is 5m (cuts full-rebuild churn). Comfortable to a few million ids.

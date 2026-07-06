@@ -36,6 +36,10 @@ const (
 	LinkCrossPublisher = "cross_publisher"
 	LinkCrossDevice    = "cross_device"
 	LinkCRMMatch       = "crm_match"
+	// LinkObserved marks an edge derived automatically from two identifiers
+	// co-occurring on the same inbound request (deterministic — they belong to
+	// the same request/user), as opposed to an explicit upload.
+	LinkObserved = "co_observed"
 )
 
 // Signal is a piece of identifying information linked to a platform ID.
