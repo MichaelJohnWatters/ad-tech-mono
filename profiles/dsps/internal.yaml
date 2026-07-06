@@ -27,6 +27,38 @@ campaigns:
       - { id: cr-shoes-001-mobile, width: 320, height: 50 }
       - { id: cr-shoes-001-halfpage, width: 300, height: 600 }
 
+  - id: li-native-001
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-001
+    name: "Acme Shoes - Native In-Feed"
+    creative_domain: acme-shoes.com
+    base_bid: 3.50
+    currency: USD
+    daily_budget: 500
+    total_budget: 10000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    format: native
+    targeting:
+      include:
+        geo: [GBR, USA]
+    # Native in-feed creative: the DSP fills an OpenRTB Native response from
+    # these assets when the SSP sends a native request (channel=native).
+    creatives:
+      - id: cr-shoes-native-001
+        format: native
+        native:
+          title: "Acme Running Shoes — 20% Off"
+          main_image: "https://cdn.acme-shoes.com/native/runner-1200x627.jpg"
+          main_image_w: 1200
+          main_image_h: 627
+          icon: "https://cdn.acme-shoes.com/native/icon-128.png"
+          sponsored: "Acme"
+          body: "Lightweight, all-day comfort. Free returns on every pair."
+          cta: "Shop now"
+
   - id: li-002
     account_id: adv-acme
     advertiser_id: adv-acme

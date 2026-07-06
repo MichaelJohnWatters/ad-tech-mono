@@ -36,6 +36,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pacing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
@@ -762,6 +763,8 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				reqFormat = "audio"
 				reqMinDur = bidReq.Imp[0].Audio.MinDuration
 				reqMaxDur = bidReq.Imp[0].Audio.MaxDuration
+			case bidReq.Imp[0].Native != nil:
+				reqFormat = "native"
 			case bidReq.Imp[0].Banner != nil:
 				reqW = bidReq.Imp[0].Banner.W
 				reqH = bidReq.Imp[0].Banner.H
@@ -919,6 +922,29 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 					Dur:      match.Duration,
 					MediaURL: match.MediaURL,
 				}
+				// Native creatives carry their markup in AdM: an OpenRTB Native
+				// response built from the creative's asset set. Impression/click
+				// trackers are injected downstream (like banner HTML / VAST),
+				// so none are added here.
+				if reqFormat == "native" && match.Native != nil {
+					na := match.Native
+					resp := native.BuildResponse(native.AssetSet{
+						Title:      na.Title,
+						MainImage:  na.MainImage,
+						MainImageW: na.MainImageW,
+						MainImageH: na.MainImageH,
+						Icon:       na.Icon,
+						Sponsored:  na.Sponsored,
+						Body:       na.Body,
+						CTA:        na.CTA,
+						LandingURL: na.LandingURL,
+					}, nil, nil)
+					if adm, err := native.MarshalResponse(resp); err == nil {
+						bestBid.AdM = adm
+					} else {
+						reqLog.Error("native response marshal failed", "campaign", c.ID, "error", err)
+					}
+				}
 			}
 		}
 
@@ -992,6 +1018,13 @@ func selectCreativeForRequest(c *models.Campaign, format string, reqW, reqH, min
 				continue
 			}
 			if cv.MediaURL == "" {
+				continue
+			}
+			return cv
+		case "native":
+			// A native creative needs its asset set with at least a title
+			// (the one always-required element besides the image).
+			if cv.Native == nil || cv.Native.Title == "" {
 				continue
 			}
 			return cv

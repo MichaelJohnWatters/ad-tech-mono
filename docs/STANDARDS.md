@@ -28,7 +28,7 @@ only, no runtime) · ⬜ not implemented
 | Standard | Steward | Who it's for | Prominence | Our status | Where / notes |
 |---|---|---|---|---|---|
 | OpenRTB 2.6 | IAB Tech Lab | SSP/DSP/exchange | 🔴 | ✅ | `pkg/openrtb/openrtb.go` — full BidRequest/SeatBid/Imp/Video/Audio/Native/Regs |
-| OpenRTB Native 1.2 | IAB Tech Lab | Native placements | 🔴 | 🟨 | `pkg/native` markup package (request+response types, build/parse/validate, event trackers); SSP emits valid native requests (`channel=native`). Pending: DSP native creative match + response, creative native-asset storage, publisher-side rendering |
+| OpenRTB Native 1.2 | IAB Tech Lab | Native placements | 🔴 | ✅ | End-to-end through the auction: `pkg/native` markup, SSP emits native requests, creatives store `native_assets` (mig 036), DSP matches native creatives + returns native response in AdM, seed has a native creative. Remaining: publisher-side rendering of the native markup (browser assembly) |
 | Prebid Server / JS | Prebid.org | Publishers, header bidding | 🔴 | ✅ | `cmd/exchange/prebid.go`, bidder code `adtechmono`, `/setuid` |
 | Deals / PMP / PG (OpenRTB deal object) | IAB Tech Lab | Direct deals | 🔴 | ✅ | `pkg/deals/` matcher (PG/Preferred/PMP/Open priority) |
 | OpenRTB 3.0 / AdCOM | IAB Tech Lab | Next-gen exchanges | 🟡 | ⬜ | Deprioritised — 2.x dominates |
@@ -118,9 +118,10 @@ they land and flip the status cells above.
       Estate) mix-up fixed; classifier expands subcategories to their parent.
       *(Stayed on Taxonomy 1.0 / `cattax=1` — what the platform's data uses;
       migrating to 3.0 numeric ids is a separate data migration, deferred.)*
-- [~] **OpenRTB Native 1.2** execution — `pkg/native` markup foundation + SSP native
-      request path done; DSP native creative matching/response, creative native-asset
-      storage (migration + model), and publisher-side rendering are the next slices.
+- [x] **OpenRTB Native 1.2** execution — native wins through the auction end-to-end:
+      `pkg/native` markup, SSP native request, `creatives.native_assets` (mig 036) +
+      model/loader, DSP native creative match + native response in AdM, seeded native
+      creative. *Remaining: publisher-side rendering of the native markup in the browser.*
 - [ ] **OMID / SIMID** interactive-video runtime (skip VPAID — deprecated).
 
 ### Phase 4 — Cookieless identity & advanced trust
@@ -133,6 +134,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 3 (part 2): OpenRTB Native 1.2 wired end-to-end through the
+  auction — `creatives.native_assets` (mig 036) + model/loader, DSP native creative
+  matching + native response markup, seeded native creative. Publisher-side rendering
+  of the native markup is the remaining piece.
 - **2026-07-06** — Phase 3 (part 1): IAB Content Taxonomy completed — new `pkg/taxonomy`
   (full tier-1 set + validation/lookup/parent-resolution), constants fixed/expanded,
   classifier wired. Native 1.2 + OMID/SIMID still open.

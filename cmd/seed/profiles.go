@@ -23,32 +23,35 @@ type DSPProfile struct {
 }
 
 type CampaignConfig struct {
-	ID             string         `yaml:"id"`
-	AccountID      string         `yaml:"account_id"`
-	AdvertiserID   string         `yaml:"advertiser_id"`
-	IOId           string         `yaml:"io_id"`
-	Name           string         `yaml:"name"`
+	ID           string `yaml:"id"`
+	AccountID    string `yaml:"account_id"`
+	AdvertiserID string `yaml:"advertiser_id"`
+	IOId         string `yaml:"io_id"`
+	Name         string `yaml:"name"`
 	// CreativeID + CreativeDomain are the legacy "one 300x250 creative
 	// per line item" fields. Still honoured when Creatives is empty so
 	// existing YAMLs don't need rewriting. When both legacy + Creatives
 	// are set, the Creatives array wins.
-	CreativeID     string         `yaml:"creative_id"`
-	CreativeDomain string         `yaml:"creative_domain"`
+	CreativeID     string `yaml:"creative_id"`
+	CreativeDomain string `yaml:"creative_domain"`
 	// Creatives is the new multi-size form. Each entry becomes one row
 	// in the creatives table linked to this line item via
 	// line_item_creatives. The DSP picks one whose w×h matches the bid
 	// request's banner.w/banner.h at bid time, so a single line item
 	// can compete on 300x250, 728x90, 970x250 etc. simultaneously.
-	Creatives      []CreativeYAML `yaml:"creatives,omitempty"`
-	BaseBid        float64        `yaml:"base_bid"`
-	Currency       string         `yaml:"currency"`
-	DailyBudget    float64        `yaml:"daily_budget"`
-	TotalBudget    float64        `yaml:"total_budget"`
-	BidModel       string         `yaml:"bid_model"`
-	PacingMode     string         `yaml:"pacing_mode"`
-	Status         string         `yaml:"status"`
-	Targeting      *TargetingYAML `yaml:"targeting,omitempty"`
-	Modifiers      *ModifiersYAML `yaml:"modifiers,omitempty"`
+	Creatives   []CreativeYAML `yaml:"creatives,omitempty"`
+	BaseBid     float64        `yaml:"base_bid"`
+	Currency    string         `yaml:"currency"`
+	DailyBudget float64        `yaml:"daily_budget"`
+	TotalBudget float64        `yaml:"total_budget"`
+	BidModel    string         `yaml:"bid_model"`
+	PacingMode  string         `yaml:"pacing_mode"`
+	Status      string         `yaml:"status"`
+	// Format is the line item's primary format (line_items.format). Defaults
+	// to "display"; set to "native"/"video"/"audio" for those line items.
+	Format    string         `yaml:"format,omitempty"`
+	Targeting *TargetingYAML `yaml:"targeting,omitempty"`
+	Modifiers *ModifiersYAML `yaml:"modifiers,omitempty"`
 }
 
 // CreativeYAML is one creative variant under a line item.
@@ -70,9 +73,25 @@ type CreativeYAML struct {
 	Width    int    `yaml:"width"`
 	Height   int    `yaml:"height"`
 	Domain   string `yaml:"domain,omitempty"`
-	Format   string `yaml:"format,omitempty"`    // "display" (default), "video", "audio"
+	Format   string `yaml:"format,omitempty"`    // "display" (default), "native", "video", "audio"
 	MediaURL string `yaml:"media_url,omitempty"` // video/audio creatives only — URL the player fetches
 	Duration int    `yaml:"duration,omitempty"`  // seconds; video/audio only
+	// Native holds the asset set for native creatives (format: native),
+	// persisted to creatives.native_assets.
+	Native *NativeYAML `yaml:"native,omitempty"`
+}
+
+// NativeYAML is the native creative's asset content. Mirrors
+// models.NativeAssets / pkg/native.AssetSet.
+type NativeYAML struct {
+	Title      string `yaml:"title,omitempty"`
+	MainImage  string `yaml:"main_image,omitempty"`
+	MainImageW int    `yaml:"main_image_w,omitempty"`
+	MainImageH int    `yaml:"main_image_h,omitempty"`
+	Icon       string `yaml:"icon,omitempty"`
+	Sponsored  string `yaml:"sponsored,omitempty"`
+	Body       string `yaml:"body,omitempty"`
+	CTA        string `yaml:"cta,omitempty"`
 }
 
 type TargetingYAML struct {
