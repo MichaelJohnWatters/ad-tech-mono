@@ -88,6 +88,66 @@ func TestBuildLinearAd_Video_Roundtrips(t *testing.T) {
 // builder omits the dimension attributes when they're zero (otherwise
 // every audio MediaFile would carry width="0" height="0" which trips
 // strict players).
+func TestBuildLinearAd_OMIDVerifications(t *testing.T) {
+	spec := LinearSpec{
+		AdID:       "ad-omid",
+		AdSystem:   "ad-tech-mono",
+		AdTitle:    "Verified Pre-Roll",
+		Advertiser: "acme.com",
+		Duration:   15 * time.Second,
+		MediaFiles: []MediaFile{{Delivery: "progressive", Type: "video/mp4", URI: "https://cdn/x.mp4"}},
+		Verifications: []OMIDVerification{{
+			Vendor:         "measure.example-omid",
+			ScriptURL:      "https://measure.example/omweb-v1.js",
+			Parameters:     `{"k":"v"}`,
+			NotExecutedURL: "https://measure.example/notexec?tid=x",
+		}},
+	}
+	out, err := BuildLinearAd(spec)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"<AdVerifications>",
+		`vendor="measure.example-omid"`,
+		`apiFramework="omid"`,
+		"omweb-v1.js",
+		`event="verificationNotExecuted"`,
+		"<VerificationParameters>",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("VAST missing %q\n%s", want, s)
+		}
+	}
+
+	// Must still round-trip through the parser.
+	var doc VAST
+	if err := xml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	av := doc.Ads[0].InLine.AdVerifications
+	if av == nil || len(av.Verifications) != 1 {
+		t.Fatalf("expected 1 verification, got %+v", av)
+	}
+	if av.Verifications[0].JavaScriptResource.APIFramework != "omid" {
+		t.Errorf("apiFramework = %q, want omid", av.Verifications[0].JavaScriptResource.APIFramework)
+	}
+}
+
+func TestBuildLinearAd_NoVerifications_OmitsElement(t *testing.T) {
+	spec := LinearSpec{
+		AdID:       "ad-plain",
+		AdTitle:    "Plain",
+		Duration:   10 * time.Second,
+		MediaFiles: []MediaFile{{Delivery: "progressive", Type: "video/mp4", URI: "https://cdn/x.mp4"}},
+	}
+	out, _ := BuildLinearAd(spec)
+	if strings.Contains(string(out), "AdVerifications") {
+		t.Errorf("expected no AdVerifications element when none set:\n%s", out)
+	}
+}
+
 func TestBuildLinearAd_AudioOnly_OmitsDimensions(t *testing.T) {
 	spec := LinearSpec{
 		AdID:       "audio-1",

@@ -79,7 +79,36 @@ type InLine struct {
 	Description string       `xml:"Description,omitempty"`
 	Advertiser  string       `xml:"Advertiser,omitempty"`
 	Pricing     *Pricing     `xml:"Pricing,omitempty"`
-	Creatives   Creatives    `xml:"Creatives"`
+	// AdVerifications carries Open Measurement (OMID) verification resources.
+	// VAST 4.1+ places it as a top-level InLine child (before Creatives per the
+	// XSD); omitted when empty for backward compatibility.
+	AdVerifications *AdVerifications `xml:"AdVerifications,omitempty"`
+	Creatives       Creatives        `xml:"Creatives"`
+}
+
+// AdVerifications lists the measurement verifications (Open Measurement / OMID)
+// the player should load and run alongside the ad. See OMID / VAST 4.x §3.16.
+type AdVerifications struct {
+	Verifications []Verification `xml:"Verification"`
+}
+
+// Verification is one measurement vendor's resource + parameters. For OMID the
+// JavaScriptResource carries the OM SDK verification script; the player loads it
+// in the ad session so the vendor can measure viewability/verification.
+type Verification struct {
+	Vendor                 string              `xml:"vendor,attr"`
+	JavaScriptResource     *JavaScriptResource `xml:"JavaScriptResource,omitempty"`
+	TrackingEvents         *TrackingEvents     `xml:"TrackingEvents,omitempty"`
+	VerificationParameters string              `xml:"VerificationParameters,omitempty"`
+}
+
+// JavaScriptResource is a verification script the player executes. APIFramework
+// is "omid" for Open Measurement. BrowserOptional flags whether the script can
+// run outside a browser environment (e.g. CTV).
+type JavaScriptResource struct {
+	APIFramework    string `xml:"apiFramework,attr"`
+	BrowserOptional string `xml:"browserOptional,attr,omitempty"`
+	URI             string `xml:",cdata"`
 }
 
 // Wrapper redirects the player to another VAST document. Reserved for
@@ -223,8 +252,8 @@ type ClickURL struct {
 // pick the best fit for the current viewport / bandwidth / supported
 // codecs.
 type MediaFiles struct {
-	MediaFiles    []MediaFile    `xml:"MediaFile"`
-	Mezzanine     *Mezzanine     `xml:"Mezzanine,omitempty"`
+	MediaFiles          []MediaFile          `xml:"MediaFile"`
+	Mezzanine           *Mezzanine           `xml:"Mezzanine,omitempty"`
 	InteractiveCreative *InteractiveCreative `xml:"InteractiveCreativeFile,omitempty"`
 }
 
@@ -232,17 +261,17 @@ type MediaFiles struct {
 // For audio creatives, Width / Height are left at 0 — the marshaller
 // omits them via the omitempty tag.
 type MediaFile struct {
-	Delivery     string `xml:"delivery,attr"`     // "progressive" or "streaming"
-	Type         string `xml:"type,attr"`         // MIME type, e.g. "video/mp4" / "audio/mpeg"
-	Bitrate      int    `xml:"bitrate,attr,omitempty"`
-	MinBitrate   int    `xml:"minBitrate,attr,omitempty"`
-	MaxBitrate   int    `xml:"maxBitrate,attr,omitempty"`
-	Width        int    `xml:"width,attr,omitempty"`
-	Height       int    `xml:"height,attr,omitempty"`
-	Codec        string `xml:"codec,attr,omitempty"`
-	Scalable     string `xml:"scalable,attr,omitempty"`
-	MaintainAR   string `xml:"maintainAspectRatio,attr,omitempty"`
-	URI          string `xml:",cdata"`
+	Delivery   string `xml:"delivery,attr"` // "progressive" or "streaming"
+	Type       string `xml:"type,attr"`     // MIME type, e.g. "video/mp4" / "audio/mpeg"
+	Bitrate    int    `xml:"bitrate,attr,omitempty"`
+	MinBitrate int    `xml:"minBitrate,attr,omitempty"`
+	MaxBitrate int    `xml:"maxBitrate,attr,omitempty"`
+	Width      int    `xml:"width,attr,omitempty"`
+	Height     int    `xml:"height,attr,omitempty"`
+	Codec      string `xml:"codec,attr,omitempty"`
+	Scalable   string `xml:"scalable,attr,omitempty"`
+	MaintainAR string `xml:"maintainAspectRatio,attr,omitempty"`
+	URI        string `xml:",cdata"`
 }
 
 // Mezzanine is the high-quality master file used by SSAI servers as
