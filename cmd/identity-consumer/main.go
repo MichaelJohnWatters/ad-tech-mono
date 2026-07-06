@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"time"
 
+	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
@@ -63,12 +64,31 @@ func main() {
 		hlth.AddReadinessCheck("postgres", func(ctx context.Context) error { return db.PingContext(ctx) })
 	}
 
+	// Optional Redis-backed fingerprint buckets, so probabilistic matching stays
+	// coherent if scaled beyond one replica. Falls back to in-memory (single
+	// replica) when unset or unreachable.
+	var fpStore identityobserve.FPStore
+	if addr := cfg.Get("identity_consumer.redis_url", ""); addr != "" {
+		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		rc, rerr := cacheredis.New(rctx, cacheredis.Config{Addr: addr})
+		rcancel()
+		if rerr != nil {
+			log.Warn("identity fingerprint redis unavailable, using in-memory buckets (single replica)", "error", rerr)
+		} else {
+			fpStore = newRedisFPStore(rc, cfg.GetDuration("identity_consumer.fingerprint_ttl", time.Hour), log)
+			lc.OnShutdown("fp-redis", func(_ context.Context) error { return rc.Close() })
+			log.Info("identity fingerprint buckets: redis-backed")
+		}
+	}
+
 	observer := identityobserve.New(postgres.NewFromDB(db), identityobserve.Config{
 		Flush:       cfg.GetDuration("identity_consumer.flush_interval", 10*time.Second),
 		SeenCap:     cfg.GetInt("identity_consumer.seen_cap", 100_000),
 		ProbEnabled: cfg.GetBool("identity_consumer.probabilistic_enabled", false),
 		ProbConf:    cfg.GetFloat("identity_consumer.probabilistic_confidence", 0.5),
 		FPMaxUsers:  cfg.GetInt("identity_consumer.fingerprint_max_users", 5),
+		FuzzyUA:     cfg.GetBool("identity_consumer.fuzzy_ua", false),
+		FPStore:     fpStore,
 	}, log)
 	observer.Start()
 	lc.OnShutdown("identity-observer", func(_ context.Context) error { observer.Stop(); return nil })

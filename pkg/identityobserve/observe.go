@@ -21,6 +21,8 @@ type Config struct {
 	ProbEnabled bool          // enable probabilistic IP+UA matching
 	ProbConf    float64       // confidence for probabilistic edges (default 0.5)
 	FPMaxUsers  int           // shared-IP cap: skip fingerprints with more ids (default 5)
+	FuzzyUA     bool          // normalise UA (strip versions) before fingerprinting
+	FPStore     FPStore       // fingerprint buckets; nil → in-memory (single replica)
 }
 
 // Observer batches observed identity signals into graph edges and writes them.
@@ -42,6 +44,8 @@ type Observer struct {
 	probEnabled bool
 	probConf    float64
 	fpMaxUsers  int
+	fuzzyUA     bool
+	fpStore     FPStore
 	stop        chan struct{}
 	done        chan struct{}
 }
@@ -66,6 +70,9 @@ func New(writer Writer, cfg Config, log *slog.Logger) *Observer {
 	if cfg.FPMaxUsers <= 0 {
 		cfg.FPMaxUsers = 5
 	}
+	if cfg.FPStore == nil {
+		cfg.FPStore = newMemFPStore(cfg.SeenCap)
+	}
 	return &Observer{
 		writer:      writer,
 		log:         log,
@@ -76,6 +83,8 @@ func New(writer Writer, cfg Config, log *slog.Logger) *Observer {
 		probEnabled: cfg.ProbEnabled,
 		probConf:    cfg.ProbConf,
 		fpMaxUsers:  cfg.FPMaxUsers,
+		fuzzyUA:     cfg.FuzzyUA,
+		fpStore:     cfg.FPStore,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
@@ -139,7 +148,6 @@ func edgeKey(e postgres.IdentityEdge) string {
 func (o *Observer) run() {
 	defer close(o.done)
 	seen := make(map[string]struct{}, o.seenCap)
-	fpBuckets := make(map[string][]string)
 	var batch []postgres.IdentityEdge
 	t := time.NewTicker(o.flush)
 	defer t.Stop()
@@ -157,16 +165,10 @@ func (o *Observer) run() {
 	}
 
 	probabilistic := func(id, fp string) {
-		bucket := fpBuckets[fp]
-		for _, existing := range bucket {
-			if existing == id {
-				return
-			}
+		if o.fuzzyUA {
+			fp = normalizeFingerprint(fp)
 		}
-		if len(bucket) >= o.fpMaxUsers {
-			return // shared IP → don't link
-		}
-		for _, other := range bucket {
+		for _, other := range o.fpStore.Observe(fp, id, o.fpMaxUsers) {
 			take(postgres.IdentityEdge{
 				UserID:     id,
 				LinkedID:   other,
@@ -175,11 +177,6 @@ func (o *Observer) run() {
 				Confidence: o.probConf,
 			})
 		}
-		if len(fpBuckets) >= o.seenCap {
-			fpBuckets = make(map[string][]string)
-			bucket = nil
-		}
-		fpBuckets[fp] = append(bucket, id)
 	}
 
 	apply := func(obs observation) {
