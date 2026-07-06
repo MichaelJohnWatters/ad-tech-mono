@@ -209,7 +209,8 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished))
+	adCertVerify := adCertVerifierFn(cfg, log)
+	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
@@ -623,7 +624,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	return client
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string)) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -643,6 +644,16 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 
 		ctx := logger.WithTraceID(r.Context(), bidReq.ID)
 		reqLog := logger.WithContext(log, ctx)
+
+		// ads.cert: verify the request was authentically signed by the exchange.
+		// Strict mode no-bids an unsigned/tampered request; warn logs and bids;
+		// off (default) skips. Reads enforcement live.
+		if allow, reason := adCertVerify(&bidReq); !allow {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			reqLog.Info("no bid", "reason", reason)
+			return
+		}
 
 		// Consent / opt-out gate. Combine the platform opt-out registry
 		// (warm cache, keyed by user id) with the inbound OpenRTB

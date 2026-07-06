@@ -129,6 +129,7 @@ func main() {
 	}
 	adsTxtGate := adsTxtGateFn(cfg, adsTxtCache, log)
 	schainGate := schainGateFn(cfg, log)
+	signReq := adCertSignerFn(cfg, log)
 
 	// Readiness: deal cache must have run at least once (an empty result
 	// is still "ready" — empty is a valid state for fresh seed). Exchange
@@ -232,7 +233,7 @@ func main() {
 		}
 		return sampleTrace(traceID, ratio)
 	}
-	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, dealCache, router, auctionM, emitDSPCallFn)
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -318,7 +319,7 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), schainGate func(*openrtb.BidRequest, string) (bool, string), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallFn func(traceID string) bool) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), schainGate func(*openrtb.BidRequest, string) (bool, string), signReq func(*openrtb.BidRequest), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallFn func(traceID string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -373,6 +374,11 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			am.auctionsTotal.WithLabelValues("rejected_schain", channel).Inc()
 			return
 		}
+
+		// ads.cert: sign the request (after any schain append) so DSPs can
+		// verify it authentically came from this exchange. No-op when signing
+		// is unconfigured.
+		signReq(&bidReq)
 
 		// Application-level span — the HTTP middleware already opened a
 		// server span around the request, but we want the auction phases

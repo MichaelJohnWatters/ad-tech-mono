@@ -41,7 +41,7 @@ only, no runtime) · ⬜ not implemented
 | sellers.json | IAB Tech Lab | SSP/exchange | 🔴 | ✅ | `cmd/gateway/sellers.go`, backed by publishers table |
 | **SupplyChain Object (schain)** | IAB Tech Lab | Every RTB hop | 🔴 | ✅ | SSP originates `Source.Ext.schain` (`cmd/ssp` `originSChain`); exchange validates behind `exchange.schain_enforcement` (`cmd/exchange/schain.go`); types + `ValidateSChain` in `pkg/openrtb/schain.go` |
 | app-ads.txt | IAB Tech Lab | App publishers | 🔴 | ✅ | crawler `cmd/appadstxt/` + `pkg/fraud/appads.go` (`FetchAppAdsTxt`), cache `app_ads_txt_cache` (migration 035). Enforcement/warm-cache = follow-up |
-| ads.cert 2.0 (signed bids) | IAB Tech Lab | Exchange/DSP anti-spoof | 🟡 | ⬜ | Low real-world adoption |
+| ads.cert 2.0 (signed bids) | IAB Tech Lab | Exchange/DSP anti-spoof | 🟡 | 🟨 | `pkg/adcert` Ed25519 sign/verify over canonical request fields; exchange signs (`Source.Ext.adcert`), DSP verifies behind `dsp.adcert_enforcement` (off/warn/strict). Follow-ups: replay protection (timestamp/nonce) + published-key distribution |
 
 ## 3. Video / Audio / CTV
 
@@ -130,7 +130,10 @@ they land and flip the status cells above.
       (UID2 when cookieless) for opt-out + segment lookup. *Remaining: token
       decryption via a UID2 operator + key rotation, and identity-graph ingestion
       (link UID2 ↔ platform ids — needs a pipeline consumer).*
-- [ ] **ads.cert 2.0** signed bid requests *(low priority — thin adoption)*.
+- [~] **ads.cert 2.0** signed bid requests — `pkg/adcert` (Ed25519 sign/verify over
+      canonical request fields); exchange signs into `Source.Ext.adcert`, DSP verifies
+      behind `dsp.adcert_enforcement`. *Remaining: replay protection (timestamp/nonce)
+      + published-key distribution (ads.cert files) instead of a configured key.*
 
 ### Deprioritised
 OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (org dissolved).
@@ -138,6 +141,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 4 (part 2): ads.cert-style signed bid requests — `pkg/adcert`
+  (Ed25519 sign/verify over canonical request fields), exchange signs into
+  `Source.Ext.adcert`, DSP verifies behind `dsp.adcert_enforcement` (off/warn/strict).
+  Replay protection + published-key distribution remain.
 - **2026-07-06** — Phase 4 (part 1): UID2 request-side addressability — `User.EIDs` +
   UID2 helpers (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP `UserKey`
   resolution (UID2 when cookieless) for opt-out + segment lookup. Token
