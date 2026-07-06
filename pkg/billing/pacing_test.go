@@ -87,8 +87,11 @@ func TestPacing_ReserveExpiryReleases(t *testing.T) {
 	if released := e.SweepExpiredHolds(); released != 1 {
 		t.Fatalf("released = %d, want 1", released)
 	}
-	if got := e.SnapshotCommitted()["camp-a"]; got != 0 {
-		t.Fatalf("after expiry committed = %d, want 0", got)
+	snap := e.SnapshotCommitted()
+	// camp-a must be PRESENT at 0 (touched today) — not omitted — so the DSP
+	// reconciles its counter DOWN instead of leaving it stuck at 300.
+	if v, ok := snap["camp-a"]; !ok || v != 0 {
+		t.Fatalf("after expiry snapshot[camp-a] = (%d, present=%v), want (0, true)", v, ok)
 	}
 }
 
