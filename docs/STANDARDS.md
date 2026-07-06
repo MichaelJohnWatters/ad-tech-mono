@@ -1,6 +1,6 @@
 # Adtech Standards — Coverage & Roadmap
 
-**Status:** living document · **Last audited:** 2026-07-05
+**Status:** living document · **Last audited:** 2026-07-05 · **Last built:** 2026-07-06
 
 This is the single source of truth for **which industry adtech standards this
 platform implements, how well, and what we plan to build next.** Update the
@@ -20,6 +20,70 @@ by **industry prominence × how close we already are × spec clarity.**
 🟡 medium/growing · 🟢 niche
 **Our status legend:** ✅ solid (production-grade) · 🟨 partial (schema/signal
 only, no runtime) · ⬜ not implemented
+
+---
+
+## Where we are (2026-07-06 build-out)
+
+A build-out pushed most of the roadmap from "planned" to "shipped." Every
+headline standard is now implemented end-to-end (request → auction → serve →
+measure), and the transparency/trust stack is complete. Summary of what landed
+and what's genuinely left; the tables and roadmap below have the per-standard
+detail, and the change log at the bottom has commit-level notes.
+
+### Shipped
+
+- **Transparency & trust triad + signing.** ads.txt, app-ads.txt (crawler +
+  `app_ads_txt_cache`), sellers.json, **SupplyChain (schain)** (SSP originates →
+  exchange validates), and **ads.cert** — Ed25519 signed bid requests
+  (`pkg/adcert`) with a signed timestamp for replay protection, the exchange
+  publishing its key at `/v1/adcert/key`, and DSPs fetching + refreshing it.
+- **Privacy.** The SSP now actually populates `Regs`/consent on the wire (it
+  didn't before — enforcement ran on empty inputs). First-class **GPC**
+  (`Regs.ext.gpc`), **GPP** US-National opt-out decode (`pkg/privacy/gpp.go`),
+  and `Evaluate` refactored to a `privacy.Signals` struct. TCF/USP/GDPR/CCPA/COPPA
+  already existed.
+- **Native (OpenRTB Native 1.2).** Full lifecycle: `pkg/native` markup, SSP
+  request, `creatives.native_assets` (mig 036) + DSP native match/response, and
+  publisher-adserver HTML rendering with signed trackers (`/v1/pubad/native`).
+- **Video / OMID.** Server-side Open Measurement — `<AdVerifications>` (OM SDK
+  script + not-executed beacon) emitted in VAST behind
+  `publisher_adserver.omid_verification_url`; SSP signals `api:[7]`.
+- **Classification.** Complete IAB Content Taxonomy 1.0 (`pkg/taxonomy`, all 26
+  tier-1) + validation/lookup/parent-resolution; fixed a real IAB10/IAB21 bug.
+- **Identity / UID2.** UID2 carried in `User.EIDs` and used as a stable user key;
+  **the identity graph is now functional** — write path (`/v1/api/identity-links`
+  + `pkg/store/postgres` Link/Resolve) and DSP read path that resolves a user to
+  linked ids for segment lookup. Resolution runs off an **in-memory preload**
+  (refreshed every `dsp.identity_preload_interval`, default 5m; interned ids), so
+  the bid path never hits Postgres — QPS-safe, sized for a few million ids.
+- **Docs.** `docs/openapi.yaml` refreshed (BidRequest fields + new endpoints).
+
+### What's next (prioritized, with honest caveats)
+
+1. **Auto-build the identity graph from the request stream.** Today links are
+   ingested explicitly via `/v1/api/identity-links`. A consumer that observes
+   deterministic co-occurrences (`hashed_email` seen with a `publisher_user_id` /
+   `device_id`) on inbound requests and writes edges would make the graph
+   self-populating. The deterministic matcher already exists in-memory
+   (`pkg/identity.Graph`, indexes by `type:value`) but isn't wired to a pipeline.
+   *This is the highest-value next build.*
+2. **GPP US state sections 8–12** (US-CA/VA/CO/UT/CT opt-out decode). *Caveat:*
+   each has a distinct bit-layout and we have no official IAB test vectors, so
+   correctness can't be verified — deferred deliberately (decode is downgrade-only
+   / safe, but shipping guessed offsets is a quality risk). Same caveat already
+   noted on US-National.
+3. **UID2 operator integration** — real UID2 token *decryption* + key rotation
+   via a UID2 operator. Needs the external operator service/keys; we currently
+   treat the token as an opaque stable id.
+4. **Identity graph scaling levers** (only if it grows past a few million):
+   delta refresh (load only changed edges), integer-id adjacency, or a dedicated
+   identity store. Also: confidence-threshold gating, and transitive (multi-hop)
+   resolution (`ResolveIdentity` is single-hop today).
+5. **Client-side OM SDK runtime + SIMID interactive creative.** Out of scope for
+   a Go repo — needs a JS measurement/interactive runtime we don't have.
+6. **ads.cert multi-key rotation** — carry a key id in the signed request so the
+   exchange can publish old+new keys during a rotation window (single-key today).
 
 ---
 
