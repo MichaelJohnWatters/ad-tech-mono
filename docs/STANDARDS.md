@@ -71,7 +71,7 @@ only, no runtime) · ⬜ not implemented
 | Standard | Steward | Who it's for | Prominence | Our status | Where / notes |
 |---|---|---|---|---|---|
 | Custom identity graph | (in-house) | Cross-device linking | — | 🟨 | `pkg/identity/` — hashed email / device / IP+UA; not a standard ID |
-| UID2 (Unified ID 2.0) | TTD / IAB Tech Lab op | Post-cookie addressability | 🔴 | 🟨 | Carried + used for addressability: `User.EIDs` (`pkg/openrtb/eid.go`, source `uidapi.com`), SSP populates from `?uid2`, DSP uses `UserKey` (UID2 when cookieless) for opt-out + segment lookup. Not done: token encryption/decryption via a UID2 operator, key rotation, identity-graph ingestion |
+| UID2 (Unified ID 2.0) | TTD / IAB Tech Lab op | Post-cookie addressability | 🔴 | 🟨 | Carried + resolved: `User.EIDs` (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP uses `UserKey`. **Identity graph now writable + resolvable** — ingest via `/v1/api/identity-links`, DSP expands UID2→linked ids for segment lookup (`dsp.identity_resolution_enabled`). Not done: token decryption via a UID2 operator + key rotation |
 | Audience Taxonomy 1.1 / Data Transparency | IAB Tech Lab | Segment labelling | 🟡 | ⬜ | — |
 | RampID / SharedID / ID5 / EUID | various | Publisher/resolution IDs | 🟠 | ⬜ | Mostly proprietary; deprioritise |
 
@@ -128,11 +128,12 @@ they land and flip the status cells above.
       the OM SDK session JS runtime + SIMID interactive creative — no OM SDK in this repo.*
 
 ### Phase 4 — Cookieless identity & advanced trust
-- [~] **UID2** — request-side addressability done: `User.EIDs` type + UID2 helpers
-      (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP resolves `UserKey`
-      (UID2 when cookieless) for opt-out + segment lookup. *Remaining: token
-      decryption via a UID2 operator + key rotation, and identity-graph ingestion
-      (link UID2 ↔ platform ids — needs a pipeline consumer).*
+- [~] **UID2** — request-side addressability + identity resolution done: `User.EIDs`
+      + UID2 helpers (`pkg/openrtb/eid.go`), SSP populates from `?uid2`, DSP `UserKey`
+      for opt-out/segments, **and the identity graph is now functional** — ingest UID2↔id
+      edges via `/v1/api/identity-links` (`pkg/store/postgres` Link/Resolve), DSP expands
+      a user to linked ids for the private-segment lookup (`dsp.identity_resolution_enabled`).
+      *Remaining: token decryption via a UID2 operator + key rotation.*
 - [x] **ads.cert 2.0** signed bid requests — `pkg/adcert` (Ed25519 sign/verify over
       canonical fields + signed timestamp for replay protection); exchange signs into
       `Source.Ext.adcert` and publishes its key at `/v1/adcert/key`; DSP verifies,
@@ -145,6 +146,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — identity graph made functional (was inert): write path
+  (`pkg/store/postgres` LinkIdentity/ResolveIdentity + gateway `/v1/api/identity-links`)
+  and DSP read path (opt-in `dsp.identity_resolution_enabled` expands UID2/user →
+  linked ids, unions private segments). Makes UID2 resolvable across devices/publishers.
 - **2026-07-06** — API spec: `docs/openapi.yaml` refreshed for the standards work —
   `BidRequest` now documents source.ext.schain, source.ext.adcert(+ts), regs.ext
   (gdpr/us_privacy/gpp/gpp_sid/gpc), user.eids (UID2), and imp.video/native/tagid; new
