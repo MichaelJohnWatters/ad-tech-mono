@@ -133,6 +133,9 @@ func main() {
 		} else {
 			log.Info("consuming events from NATS JetStream")
 		}
+		// Broadcast per-campaign committed spend so DSPs reconcile pacing to
+		// billed reality. Needs NATS, so it lives inside this branch.
+		startSpendSnapshotPublisher(billingEngine, natsBus, cfg, clk, log, lc)
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceReporting)
