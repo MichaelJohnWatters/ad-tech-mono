@@ -209,7 +209,10 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	adCertVerify := adCertVerifierFn(cfg, log, clk.Now)
+	adCertKeyFn := adCertKeySource(cfg, log, func(name string, fn func()) {
+		lc.OnShutdown(name, func(_ context.Context) error { fn(); return nil })
+	})
+	adCertVerify := adCertVerifierFn(cfg, log, clk.Now, adCertKeyFn)
 	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))

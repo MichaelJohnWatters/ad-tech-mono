@@ -148,6 +148,29 @@ func TestKeyParsingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPublicKeyB64(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+
+	// The published key must equal the private key's public half and parse back.
+	got := PublicKeyB64(priv)
+	if got != EncodeKey(pub) {
+		t.Errorf("PublicKeyB64 = %q, want %q", got, EncodeKey(pub))
+	}
+	parsed, err := ParsePublicKey(got)
+	if err != nil {
+		t.Fatalf("parse published key: %v", err)
+	}
+	// And it must verify a signature made with the private key.
+	req := sampleReq()
+	if !Verify(parsed, req, Sign(priv, req)) {
+		t.Error("published key failed to verify a genuine signature")
+	}
+
+	if PublicKeyB64(nil) != "" {
+		t.Error("nil key should publish as empty")
+	}
+}
+
 func TestCanonicalStable(t *testing.T) {
 	// Canonical must be deterministic for the same request.
 	a := Canonical(sampleReq())
