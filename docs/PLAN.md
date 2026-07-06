@@ -10587,7 +10587,7 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.privacy.opt_out` | Gateway | DSP, Ad Server, Tracker, Reporting, Identity service | OptOutEvent (level 1 or 2, immediate) |
 | `adtech.privacy.deletion_requested` | Gateway | Deletion job runner (`cmd/privacy-delete/`) | DeletionEvent (level 3, queues async deletion) |
 | `adtech.privacy.deletion_completed` | Deletion job | Gateway (dashboard), Audit | DeletionCompletedEvent (systems purged, verification status) |
-| `adtech.identity.observed` | SSP (per request, opt-in) | Identity-consumer (`cmd/identity-consumer/`) | ObservedEvent{ids:[{value,source}], fingerprint} — the consumer builds identity_graph edges (deterministic co-occurrence + probabilistic IP+UA). Best-effort. |
+| `adtech.identity.observed` | SSP (ad-tag requests) + Exchange (inbound Prebid), opt-in | Identity-consumer (`cmd/identity-consumer/`) | ObservedEvent{ids:[{value,source}], fingerprint} — the consumer builds identity_graph edges (deterministic co-occurrence + probabilistic IP+UA). Best-effort. Any service that sees identity signals can publish via `pkg/identityobserve.Publisher`. |
 | `adtech.events.video` | Tracker / SSAI beacon server | Reporting (analytics + billing) | VideoEvent (start, quartiles, complete, skip) |
 | `adtech.events.audio` | Tracker / SSAI beacon server | Reporting (analytics + billing) | AudioEvent (start, quartiles, complete) |
 | `adtech.events.dooh` | Screen proof-of-play | Reporting (analytics + billing) | DOOHEvent{screen_id, plays, estimated_audience} |

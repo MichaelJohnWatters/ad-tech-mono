@@ -9,6 +9,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/prebid"
@@ -29,7 +30,7 @@ import (
 // ResponseRecorder that buffers the auction's output before we copy it to
 // the real ResponseWriter. This keeps both endpoints in lockstep without
 // duplicating auction logic.
-func prebidAuctionHandler(cfg *config.Config, auction http.HandlerFunc, log *slog.Logger) http.HandlerFunc {
+func prebidAuctionHandler(cfg *config.Config, auction http.HandlerFunc, idPub *identityobserve.Publisher, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !cfg.GetBool("prebid.enabled", true) {
 			http.Error(w, "prebid endpoint disabled", http.StatusServiceUnavailable)
@@ -55,6 +56,11 @@ func prebidAuctionHandler(cfg *config.Config, auction http.HandlerFunc, log *slo
 		minFloor := cfg.GetFloat("prebid.min_bid_floor", 0)
 		reqLog := logger.WithContext(log, r.Context())
 		raised := prebid.ApplyFloorPolicy(&bidReq, minFloor, reqLog)
+
+		// Identity auto-build: external Prebid demand carries user/device
+		// identifiers our own SSP never saw — feed them to the identity graph.
+		// No-op when observation is disabled (nil publisher).
+		idPub.PublishRequest(tracing.TraceIDFromContext(r.Context()), &bidReq)
 
 		reqLog.Info("prebid inbound auction",
 			"bidder_code", prebid.BidderCode,
