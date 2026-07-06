@@ -49,7 +49,7 @@ only, no runtime) · ⬜ not implemented
 |---|---|---|---|---|---|
 | VAST 4.2 | IAB Tech Lab | Video ad serving | 🔴 | ✅ | `pkg/vast/vast.go`, `cmd/publisher-adserver/vast.go`, full tracking events |
 | VMAP 1.0 | IAB Tech Lab | Ad break scheduling | 🔴 | ✅ | `cmd/publisher-adserver/vmap.go` — pre/mid/post-roll, independent auctions |
-| OMID / Open Measurement | IAB Tech Lab | Viewability/verification | 🔴 | 🟨 | API code `7=OMID` recognised; no runtime |
+| OMID / Open Measurement | IAB Tech Lab | Viewability/verification | 🔴 | 🟨 | Server-side done: SSP signals `api:[7]` OMID, publisher-adserver emits `<AdVerifications>` (OM SDK script + signed verificationNotExecuted beacon) in VAST via `pkg/vast`, gated by `publisher_adserver.omid_verification_url`. Client-side OM SDK runtime (session JS) is out of scope (no OM SDK in-repo) |
 | SIMID 1.1 | IAB Tech Lab | Interactive video (VPAID successor) | 🟡 | 🟨 | Struct in `pkg/vast`; no runtime |
 | VPAID 2.0 | IAB Tech Lab | Interactive video (legacy) | 🟠 | 🟨 | Signal codes only. **Deprecated — skip, go to SIMID+OMID** |
 | VAST audio / DAAST | IAB Tech Lab | Podcast/streaming audio | 🟡 | 🟨 | Audio object + DAAST protocol codes; no dedicated pipeline |
@@ -122,7 +122,10 @@ they land and flip the status cells above.
       request + winner short-circuit, `creatives.native_assets` (mig 036) + DSP native
       match/response, and publisher-adserver `nativeHandler` renders the markup to an
       HTML card with signed impression/click trackers (`/v1/pubad/native`).
-- [ ] **OMID / SIMID** interactive-video runtime (skip VPAID — deprecated).
+- [~] **OMID / SIMID** — server-side OMID done: SSP signals `api:[7]`, publisher-adserver
+      emits `<AdVerifications>` (OM SDK verification script + signed not-executed beacon)
+      in VAST behind `publisher_adserver.omid_verification_url`. *Remaining is client-side:
+      the OM SDK session JS runtime + SIMID interactive creative — no OM SDK in this repo.*
 
 ### Phase 4 — Cookieless identity & advanced trust
 - [~] **UID2** — request-side addressability done: `User.EIDs` type + UID2 helpers
@@ -141,6 +144,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — Phase 3 (part 4): OMID server-side — `pkg/vast` `<AdVerifications>`
+  (OM SDK JavaScriptResource + verificationNotExecuted beacon), publisher-adserver emits
+  it behind `publisher_adserver.omid_verification_url`; SSP already signals `api:[7]`.
+  Client-side OM SDK runtime remains out of scope (no OM SDK in-repo).
 - **2026-07-06** — Phase 4 (part 2): ads.cert-style signed bid requests — `pkg/adcert`
   (Ed25519 sign/verify over canonical request fields), exchange signs into
   `Source.Ext.adcert`, DSP verifies behind `dsp.adcert_enforcement` (off/warn/strict).

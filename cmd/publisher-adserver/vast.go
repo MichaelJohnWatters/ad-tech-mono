@@ -62,7 +62,7 @@ type sspVideoWinner struct {
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken
 // player. The failure reason gets logged but the response stays valid.
-func vastHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
+func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -116,6 +116,16 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
 		}
 
 		spec := buildVASTSpec(winner, macroCtx)
+		// Open Measurement: embed the configured OMID verification script as
+		// <AdVerifications> so measurement vendors can verify/measure the ad.
+		// Off unless publisher_adserver.omid_verification_url is set.
+		if vendor, scriptURL := omidFn(); scriptURL != "" {
+			spec.Verifications = []vast.OMIDVerification{{
+				Vendor:         vendor,
+				ScriptURL:      scriptURL,
+				NotExecutedURL: adserving.BuildVideoEventURL(macroCtx, "omid-not-executed"),
+			}}
+		}
 		xmlBytes, err := vast.BuildLinearAd(spec)
 		if err != nil {
 			reqLog.Error("vast build failed", "error", err)

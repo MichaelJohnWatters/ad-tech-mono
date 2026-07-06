@@ -15,6 +15,10 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/vast"
 )
 
+// noOMID is the OMID config accessor used by tests that don't exercise
+// AdVerifications — returns no verification script, so none is emitted.
+func noOMID() (string, string) { return "", "" }
+
 // jsonEncode is an alias so the test helper above doesn't need the full
 // encoding/json import surface inline. Keeps the helper readable.
 func jsonEncode(w http.ResponseWriter, v interface{}) error {
@@ -70,7 +74,7 @@ func TestVASTHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
 
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo-video-mpu", nil)
 	rec := httptest.NewRecorder()
@@ -175,6 +179,49 @@ func TestVASTHandler(t *testing.T) {
 	}
 }
 
+func TestVASTHandler_OMIDVerifications(t *testing.T) {
+	ssp := stubSSP(t, sspVideoWinner{
+		TraceID: "trace-omid", Channel: "video", CreativeID: "cr-1", CampaignID: "li-1",
+		PlacementID: "pl-1", PublisherID: "pub-1", AdvertiserID: "adv-1",
+		AdvertiserDomain: "acme.com", BidModel: "cpm", Currency: "USD", ClearingPrice: 5.0,
+		Width: 640, Height: 360, DurationSeconds: 15, MediaURL: "https://cdn/x.mp4",
+	})
+	defer ssp.Close()
+
+	// OMID configured → served VAST must carry AdVerifications with the vendor
+	// + OM SDK script and a signed verificationNotExecuted beacon.
+	omid := func() (string, string) { return "measure.example", "https://measure.example/omweb-v1.js" }
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, omid)
+
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var doc vast.VAST
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, rec.Body.String())
+	}
+	av := doc.Ads[0].InLine.AdVerifications
+	if av == nil || len(av.Verifications) != 1 {
+		t.Fatalf("expected 1 verification, got %+v", av)
+	}
+	v := av.Verifications[0]
+	if v.Vendor != "measure.example" {
+		t.Errorf("vendor = %q", v.Vendor)
+	}
+	if v.JavaScriptResource == nil || v.JavaScriptResource.APIFramework != "omid" {
+		t.Errorf("expected omid JavaScriptResource, got %+v", v.JavaScriptResource)
+	}
+	// The not-executed beacon is a signed video tracker URL.
+	if v.TrackingEvents == nil || len(v.TrackingEvents.Tracking) == 0 {
+		t.Fatal("expected a verificationNotExecuted tracking beacon")
+	}
+	if !urlIsHMACValid(t, v.TrackingEvents.Tracking[0].URI) {
+		t.Errorf("not-executed beacon did not validate: %s", v.TrackingEvents.Tracking[0].URI)
+	}
+}
+
 // urlIsHMACValid parses a tracker URL and replays the signature check
 // the tracker handler would run on inbound requests. Returns true iff
 // the sig param matches what the path + params should produce under
@@ -199,7 +246,7 @@ func urlIsHMACValid(t *testing.T, raw string) bool {
 // fallback). Asserts the demo player never sees a 500 even if the
 // auction backend is down.
 func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
-	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1")
+	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1", noOMID)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -218,7 +265,7 @@ func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
 func TestVASTHandler_FallsBackOnNoBid(t *testing.T) {
 	ssp := stubSSP(t, sspVideoWinner{NoBid: true})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -247,7 +294,7 @@ func TestVASTHandler_FreshTraceIDPerRequest(t *testing.T) {
 		MediaURL: "https://cdn/x.mp4",
 	})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
 
 	get := func() string {
 		req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=p", nil)

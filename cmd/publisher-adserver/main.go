@@ -155,7 +155,11 @@ func main() {
 		prebidServersFn: prebidServersFn,
 		pub:             pub,
 	}))
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL))
+	omidFn := func() (string, string) {
+		return cfg.Get("publisher_adserver.omid_vendor", "ad-tech-mono-omid"),
+			cfg.Get("publisher_adserver.omid_verification_url", "")
+	}
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn))
 	// publisher_adserver.public_url is the browser-reachable origin
 	// the VMAP schedule will tell the player to call back into for
 	// each break's VAST. Defaults to the gateway's local origin since

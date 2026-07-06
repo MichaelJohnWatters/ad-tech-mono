@@ -31,6 +31,19 @@ type LinearSpec struct {
 	// value uniquely identify the creative across the supply chain.
 	// Defaults to ("ad-tech-mono", AdID) when zero.
 	UniversalAdID UniversalAdID
+	// Verifications are Open Measurement (OMID) verification resources to emit
+	// as <AdVerifications>. Empty → no AdVerifications element.
+	Verifications []OMIDVerification
+}
+
+// OMIDVerification is one Open Measurement verification resource: the vendor
+// key, the OM SDK verification script URL, optional parameters passed to that
+// script, and an optional beacon fired when the player couldn't execute it.
+type OMIDVerification struct {
+	Vendor         string
+	ScriptURL      string
+	Parameters     string
+	NotExecutedURL string
 }
 
 // LinearTrackers groups the per-event tracking URL lists. Each list can
@@ -170,11 +183,12 @@ func specToAd(spec LinearSpec) Ad {
 		ID:       spec.AdID,
 		Sequence: spec.Sequence,
 		InLine: &InLine{
-			AdSystem:    AdSystem{Name: adSys, Version: "1.0"},
-			AdTitle:     spec.AdTitle,
-			Advertiser:  spec.Advertiser,
-			Pricing:     spec.Pricing,
-			Impressions: imps,
+			AdSystem:        AdSystem{Name: adSys, Version: "1.0"},
+			AdTitle:         spec.AdTitle,
+			Advertiser:      spec.Advertiser,
+			Pricing:         spec.Pricing,
+			Impressions:     imps,
+			AdVerifications: buildAdVerifications(spec.Verifications),
 			Creatives: Creatives{
 				Creatives: []Creative{{
 					ID:            spec.AdID,
@@ -185,6 +199,40 @@ func specToAd(spec LinearSpec) Ad {
 			},
 		},
 	}
+}
+
+// buildAdVerifications turns the OMID verification specs into the VAST
+// <AdVerifications> element. Returns nil (element omitted) when there are none.
+// A NotExecutedURL becomes a verificationNotExecuted tracking beacon.
+func buildAdVerifications(vs []OMIDVerification) *AdVerifications {
+	if len(vs) == 0 {
+		return nil
+	}
+	out := make([]Verification, 0, len(vs))
+	for _, v := range vs {
+		if v.ScriptURL == "" {
+			continue
+		}
+		ver := Verification{
+			Vendor: v.Vendor,
+			JavaScriptResource: &JavaScriptResource{
+				APIFramework:    "omid",
+				BrowserOptional: "true",
+				URI:             v.ScriptURL,
+			},
+			VerificationParameters: v.Parameters,
+		}
+		if v.NotExecutedURL != "" {
+			ver.TrackingEvents = &TrackingEvents{Tracking: []Tracking{
+				{Event: "verificationNotExecuted", URI: v.NotExecutedURL},
+			}}
+		}
+		out = append(out, ver)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return &AdVerifications{Verifications: out}
 }
 
 func buildTrackingEvents(t LinearTrackers) *TrackingEvents {
