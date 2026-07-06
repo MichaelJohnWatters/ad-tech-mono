@@ -21,11 +21,28 @@ import (
 	"time"
 )
 
+// Signal / edge vocabulary. The identity_graph.source and link_type columns
+// are free-text, so these constants keep the writers (ingestion endpoint) and
+// readers (resolution) using the same values.
+const (
+	// Signal sources (identity_graph.source): where a linked id came from.
+	SourceUID2            = "uid2"         // Unified ID 2.0 token
+	SourceHashedEmail     = "hashed_email" // deterministic email hash
+	SourcePublisherUserID = "publisher_user_id"
+	SourceDeviceID        = "device_id"
+	SourceProbabilistic   = "probabilistic" // IP + UA heuristic
+
+	// Link types (identity_graph.link_type): the relationship the edge asserts.
+	LinkCrossPublisher = "cross_publisher"
+	LinkCrossDevice    = "cross_device"
+	LinkCRMMatch       = "crm_match"
+)
+
 // Signal is a piece of identifying information linked to a platform ID.
 type Signal struct {
-	Type       string // hashed_email, publisher_user_id, device_id, ip_ua
+	Type       string // hashed_email, publisher_user_id, device_id, ip_ua, uid2
 	Value      string
-	Source     string // publisher_id or advertiser_id
+	Source     string  // publisher_id or advertiser_id
 	Confidence float64 // 0.0-1.0 (deterministic=1.0, probabilistic<1.0)
 	Timestamp  time.Time
 }
@@ -52,9 +69,9 @@ type UserProfile struct {
 // In production, edges are stored in Postgres with Redis for fast lookups.
 type Graph struct {
 	mu       sync.RWMutex
-	signals  map[string][]Signal            // platform_id -> signals
-	index    map[string]map[string]bool     // signal_key -> set of platform_ids
-	profiles map[string]*UserProfile        // platform_id -> profile
+	signals  map[string][]Signal        // platform_id -> signals
+	index    map[string]map[string]bool // signal_key -> set of platform_ids
+	profiles map[string]*UserProfile    // platform_id -> profile
 }
 
 // NewGraph creates an empty identity graph.
@@ -198,9 +215,9 @@ func (g *Graph) Stats() GraphStats {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return GraphStats{
-		TotalProfiles:  len(g.profiles),
-		TotalSignals:   len(g.index),
-		TotalEdges:     countEdges(g.index),
+		TotalProfiles: len(g.profiles),
+		TotalSignals:  len(g.index),
+		TotalEdges:    countEdges(g.index),
 	}
 }
 
