@@ -36,6 +36,10 @@ type Source struct {
 // for backwards compatibility, so we serialise it there).
 type SourceExt struct {
 	SChain *SupplyChain `json:"schain,omitempty"`
+	// AdCert is an ads.cert-style Ed25519 signature (base64) over the request's
+	// canonical stable fields — see pkg/adcert. Lets the DSP verify the request
+	// authentically came from this exchange.
+	AdCert string `json:"adcert,omitempty"`
 }
 
 // SupplyChain is the IAB SupplyChain object (spec version "1.0"). Complete=1
