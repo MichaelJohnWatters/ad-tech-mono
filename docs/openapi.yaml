@@ -131,6 +131,55 @@ paths:
         "401":
           description: Unauthorized
 
+  /v1/api/identity-links:
+    post:
+      tags: [Identity]
+      summary: Ingest identity-graph edges (UID2 ↔ other ids)
+      description: >
+        Links a UID2 token (or any identifier) to other identifiers in the
+        platform identity graph so a cookieless user resolves to a person across
+        devices/publishers. Operator-API-key auth. Accepts a UID2-centric shape
+        ({uid2, links:[…]}) and/or explicit edges ({edges:[…]}).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                uid2: { type: string }
+                links:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      source: { type: string }
+                      link_type: { type: string }
+                      confidence: { type: number }
+                edges:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      user_id: { type: string }
+                      linked_id: { type: string }
+                      source: { type: string }
+                      link_type: { type: string }
+                      confidence: { type: number }
+      responses:
+        "200":
+          description: Edges written
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links_written: { type: integer }
+        "400":
+          description: No valid edges
+        "503":
+          description: Identity store unavailable
+
   # ============================================================
   # Public API - Reports (proxied to Reporting)
   # ============================================================
