@@ -23,34 +23,37 @@ import (
 // run as k8s pods (DEV_MODE=container), 127.0.0.1 from inside the pod
 // refers to the pod's own loopback — the fake server is unreachable.
 //
-// This helper detects the runtime via the ADTECH_HOST_IP env var:
+// Services run as k8s pods (pods-migration), so a fake bound to the host's
+// loopback is unreachable from inside a pod. This helper binds to all
+// interfaces and returns a URL the pod can route back to the host:
 //
-//   - ADTECH_HOST_IP set → bind the listener to 0.0.0.0 (any
-//     interface), return a URL using that IP. Pods reach the host
-//     via this IP. Colima's host-from-VM IP is 192.168.5.2 by default;
-//     other setups can override.
+//   - default host address is `host.docker.internal` — OrbStack (and Docker
+//     Desktop) resolve it from inside pods cluster-wide, and it's
+//     network-independent (unlike a LAN IP that changes per network).
 //
-//   - ADTECH_HOST_IP unset → behaves exactly like httptest.NewServer
-//     (binds 127.0.0.1, returns 127.0.0.1:NNNN). Host-process mode.
+//   - ADTECH_HOST_IP overrides it (e.g. a specific LAN IP for a setup where
+//     host.docker.internal isn't provided).
+//
+//   - ADTECH_HOST_IP=127.0.0.1 (or localhost) restores pure host-process mode
+//     (plain httptest.NewServer) for anyone running services as host processes.
 //
 // Tests use it as a drop-in replacement:
 //
 //   ts := harness.HostReachableServer(handler)
 //   defer ts.Close()
 //   ssp.SetConfigForPod(t, "exchange.dsp_endpoints", ts.URL)
-//
-// Pod-mode deployments also need a hostAliases entry mapping
-// host.docker.internal → ADTECH_HOST_IP so test URLs that reference
-// the well-known hostname keep working. See k8s/base/*/deployment.yaml.
 func HostReachableServer(handler http.Handler) *httptest.Server {
 	hostIP := os.Getenv("ADTECH_HOST_IP")
 	if hostIP == "" {
-		// Host-process mode — exactly like httptest.NewServer.
+		hostIP = "host.docker.internal"
+	}
+	if hostIP == "127.0.0.1" || hostIP == "localhost" {
+		// Explicit host-process mode — exactly like httptest.NewServer.
 		return httptest.NewServer(handler)
 	}
 
 	// Pod mode — bind to all interfaces so the kernel routes inbound
-	// pod-originated connections; substitute the public host IP into
+	// pod-originated connections; substitute the public host address into
 	// the returned URL.
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
