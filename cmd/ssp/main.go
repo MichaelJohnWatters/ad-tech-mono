@@ -163,10 +163,22 @@ func main() {
 		}
 	}
 
+	// Identity auto-build: observe co-occurring ids on inbound requests and
+	// write edges to the graph (off the hot path). Opt-in and needs a DB.
+	var idObserver *identityObserver
+	if cfg.GetBool("ssp.identity_observe_enabled", false) && mgmtDB != nil {
+		idObserver = newIdentityObserver(postgres.NewFromDB(mgmtDB),
+			cfg.GetDuration("ssp.identity_flush_interval", 10*time.Second),
+			cfg.GetInt("ssp.identity_seen_cap", 100_000), log)
+		idObserver.Start()
+		lc.OnShutdown("ssp-identity-observer", func(_ context.Context) error { idObserver.Stop(); return nil })
+		log.Info("ssp identity observation enabled")
+	}
+
 	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, debugEnabledFn))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idObserver, debugEnabledFn))
 	adServerURL := cfg.Get("ssp.adserver_url", routes.DefaultAdServerURL)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, debugEnabledFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idObserver, debugEnabledFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -303,7 +315,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, debugEnabledFn func() bool) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idObserver *identityObserver, debugEnabledFn func() bool) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -449,6 +461,10 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// no consent, so downstream enforcement saw empty values.
 	applyPrivacySignals(r, &bidReq)
 
+	// Auto-build the identity graph: link any identifiers that co-occurred on
+	// this request. No-op when observation is disabled (nil observer).
+	idObserver.Observe(r, userID, uid2)
+
 	reqLog.Info("bid request generated",
 		"placement", p.ID,
 		"publisher", p.PublisherID,
@@ -576,9 +592,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, debugEnabledFn func() bool) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idObserver *identityObserver, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idObserver, debugEnabledFn)
 		if !ok {
 			return
 		}
@@ -644,9 +660,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, debugEnabledFn func() bool) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idObserver *identityObserver, debugEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idObserver, debugEnabledFn)
 		if !ok {
 			return
 		}
