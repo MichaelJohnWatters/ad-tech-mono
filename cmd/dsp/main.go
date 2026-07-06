@@ -649,9 +649,14 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// regulatory signals. A no-bid verdict short-circuits before any
 		// targeting work; a no-personalise verdict strips behavioural
 		// targeting below so only contextual signals are used.
+		// Stable user key: the first-party User.ID, or the UID2 token from
+		// User.EIDs when the request is cookieless. Used for opt-out, private
+		// segment lookup, and (downstream) frequency capping so a UID2-only
+		// user is still addressable.
+		userKey := openrtb.UserKey(bidReq.User)
 		optLevel := privacy.LevelNone
-		if optOut != nil && bidReq.User != nil && bidReq.User.ID != "" {
-			if rec, ok := optOut.ByID(bidReq.User.ID); ok {
+		if optOut != nil && userKey != "" {
+			if rec, ok := optOut.ByID(userKey); ok {
 				optLevel = rec.Level
 			}
 		}
@@ -736,12 +741,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// (5xx + no-bid). With our own 25ms cap, slow lookups degrade
 		// gracefully: bid proceeds without private segments instead of
 		// failing entirely.
-		if consent.Personalise && audienceStore != nil && bidReq.User != nil && bidReq.User.ID != "" {
+		if consent.Personalise && audienceStore != nil && userKey != "" {
 			lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
-			private, err := audienceStore.DSPSegmentsForUser(lookupCtx, bidReq.User.ID)
+			private, err := audienceStore.DSPSegmentsForUser(lookupCtx, userKey)
 			cancel()
 			if err != nil {
-				log.Debug("dsp private segment lookup degraded (bid proceeds without)", "user_id", bidReq.User.ID, "error", err)
+				log.Debug("dsp private segment lookup degraded (bid proceeds without)", "user_key", userKey, "error", err)
 			} else if len(private) > 0 {
 				tReq.Segments = append(tReq.Segments, private...)
 			}

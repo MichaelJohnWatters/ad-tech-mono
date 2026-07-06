@@ -248,8 +248,11 @@ type Geo struct {
 
 // User describes the user.
 type User struct {
-	ID  string   `json:"id,omitempty"`
-	Ext *UserExt `json:"ext,omitempty"`
+	ID string `json:"id,omitempty"`
+	// EIDs are extended identifiers (OpenRTB 2.6) — cookieless IDs like UID2
+	// keyed by their source. See eid.go for the UID2 helpers.
+	EIDs []EID    `json:"eids,omitempty"`
+	Ext  *UserExt `json:"ext,omitempty"`
 }
 
 // UserExt holds extension fields for the user.
