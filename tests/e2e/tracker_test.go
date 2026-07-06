@@ -18,8 +18,10 @@ import (
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// TestTrackerClickRedirects — the click endpoint must 302 to the redir URL.
-// We disable follow-redirect on the client so we can inspect the 302 itself.
+// TestTrackerClickRedirects — the click endpoint must 302 to the redir URL,
+// with the trace id appended (?adtech_tid=) so the landing page can attribute
+// the click (cmd/tracker appendTraceQuery). We disable follow-redirect on the
+// client so we can inspect the 302 itself.
 func TestTrackerClickRedirects(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "tracker-click")
@@ -32,8 +34,15 @@ func TestTrackerClickRedirects(t *testing.T) {
 		t.Errorf("click status = %d, want 302", resp.StatusCode)
 	}
 	loc, _ := resp.Location()
-	if loc == nil || loc.String() != landing {
-		t.Errorf("Location header = %v, want %q", loc, landing)
+	if loc == nil {
+		t.Fatal("no Location header on click 302")
+	}
+	// Base URL preserved; trace id appended for attribution.
+	if base := loc.Scheme + "://" + loc.Host + loc.Path; base != landing {
+		t.Errorf("Location base = %q, want %q", base, landing)
+	}
+	if loc.Query().Get("adtech_tid") == "" {
+		t.Errorf("Location missing adtech_tid attribution param: %s", loc)
 	}
 }
 

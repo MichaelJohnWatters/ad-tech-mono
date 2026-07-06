@@ -34,6 +34,7 @@ func (h *Harness) RefreshAllCaches(t *testing.T) {
 		h.URLs.Exchange,
 		h.URLs.Reporting,
 		h.URLs.PublisherAdServer,
+		h.URLs.Tracker, // fraud blocklist warm cache (IP/UA blocklists)
 	}
 	for _, base := range urls {
 		h.refreshOne(t, base)
