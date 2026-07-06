@@ -68,6 +68,15 @@ const (
 	// advertiser learns funds ran out.
 	SubjectBalanceDepleted = "adtech.balance.depleted"
 
+	// SubjectCampaignSpendSnapshot carries the authoritative per-campaign
+	// COMMITTED spend (settled-today + open reserves) computed by the billing
+	// engine, published periodically by Reporting and consumed by every DSP
+	// pod to reconcile its pacing budget counter to billed reality. This is
+	// what closes the gap between the DSP's local win-notice decrement (which
+	// over-counts: phantom wins that never impressed, raw win prices) and what
+	// actually bills. Broadcast to all DSP pods (fan-out, not queue-grouped).
+	SubjectCampaignSpendSnapshot = "adtech.billing.campaign_spend_snapshot"
+
 	// Campaign lifecycle (DSP → Reporting, Webhooks)
 	SubjectCampaignStateChanged = "adtech.campaign.state_changed"
 
