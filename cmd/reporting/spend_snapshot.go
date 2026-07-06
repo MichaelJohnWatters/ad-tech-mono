@@ -32,9 +32,6 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, cf
 		return
 	}
 	interval := cfg.GetDuration("reporting.spend_snapshot_interval", 30*time.Second)
-	if ttl := cfg.GetDuration("reporting.pacing_hold_ttl", 0); ttl > 0 {
-		engine.SetPacingHoldTTL(ttl)
-	}
 	pub := events.NewPublisher(bus, log)
 
 	stop := make(chan struct{})
@@ -51,6 +48,11 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, cf
 			case <-stop:
 				return
 			case <-ticker.C:
+				// Re-apply the hold TTL each tick so the TierLive config is
+				// genuinely live (was boot-only). Cheap; sweeps use it below.
+				if ttl := cfg.GetDuration("reporting.pacing_hold_ttl", 15*time.Minute); ttl > 0 {
+					engine.SetPacingHoldTTL(ttl)
+				}
 				publishSpendSnapshot(engine, pub, clk, log)
 			}
 		}
