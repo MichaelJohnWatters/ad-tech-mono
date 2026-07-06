@@ -221,6 +221,16 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]int{"count": dbg.BudgetDepletionsByCampaign(campaignID)})
 		})
 
+		// Committed-spend view + force-publish (backend-agnostic — reads the
+		// billing engine's accumulator, not the analytics store, so no memGuard).
+		// Guard the typed-nil interface pitfall: only hand over a bus when NATS
+		// actually connected, else POST force-publish reports it couldn't send.
+		var snapBus events.EventBus
+		if natsBus != nil {
+			snapBus = natsBus
+		}
+		mux.HandleFunc(routes.DebugSpendSnapshot, spendSnapshotDebugHandler(billingEngine, snapBus, clk, log))
+
 		mux.HandleFunc(routes.DebugCampaignStateChanges, func(w http.ResponseWriter, r *http.Request) {
 			if !memGuard(w) {
 				return

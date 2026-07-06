@@ -7,10 +7,30 @@ The demand-side platform. Advertisers' campaigns live here. Evaluates bid reques
 - Manage campaigns (CRUD via gRPC from Gateway)
 - Evaluate incoming bid requests against active campaigns and targeting rules
 - Calculate bid price based on campaign strategy (CPM, CPC, CPA)
-- Budget management: reservation on win, settle on click/conversion, release on expiry
 - Budget pacing: spread spend evenly across campaign flight
 - Publish `BudgetDepletedEvent` when a campaign runs out of budget
-- Consume `AuctionWinEvent` from NATS: decrement budget in Redis
+
+### Budget accounting (two meters, reconciled)
+
+The DSP does **not** run its own reserve/settle/release state machine. Spend
+accounting is single-sourced in the billing engine (`cmd/reporting` / `pkg/billing`),
+and the DSP mirrors it:
+
+1. **Local win-notice counter** — `winHandler` (`/v1/openrtb/win` nurl) does
+   `BudgetTracker.Record`, incrementing `dsp:budget:{campaign}:spent` in Redis on every
+   win. Fast and immediate, but a deliberate **over-count**: it counts phantom wins that
+   never impress and the full clearing price on CPC/CPA where only the settle bills. This
+   is the intra-snapshot overspend guard.
+2. **Reconcile to billed reality** — the billing engine computes per-campaign *committed*
+   spend (settled + open reserves), and reporting broadcasts it every
+   `reporting.spend_snapshot_interval` on `adtech.billing.campaign_spend_snapshot`. The DSP
+   consumes it (`pacing_reconcile.go`, fan-out per pod) and `BudgetTracker.Reconcile`
+   overwrites the counter to the authoritative value — releasing phantom wins and
+   correcting the CPC/CPA over-count. Gated by `dsp.spend_reconcile_enabled`.
+
+Net effect: between snapshots pacing is conservative (won't overspend); on each snapshot it
+snaps to what actually bills. Reserve/settle/release semantics live in `pkg/billing`, where
+the CPC/CPA/viewability rates are known — not duplicated here.
 
 ## Key Packages Used
 
@@ -37,7 +57,7 @@ See `docs/PLAN.md` -> "Budget Handling", "How Billing Models Interact with Aucti
 
 - Postgres (campaigns, targeting rules, budgets)
 - Redis (budget counters, campaign config L2 cache)
-- NATS (consumes AuctionWinEvents, publishes BudgetDepletedEvent)
+- NATS (consumes `adtech.billing.campaign_spend_snapshot` for pacing reconcile + cache-invalidate subjects; publishes BudgetDepletedEvent / BalanceDepletedEvent). Win notices arrive over HTTP (the OpenRTB nurl), not NATS.
 - Exchange calls this service via OpenRTB HTTP
 
 ## Diagram Updates

@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 )
@@ -75,4 +78,26 @@ func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clo
 		return
 	}
 	log.Debug("published spend snapshot", "campaigns", len(committed))
+}
+
+// spendSnapshotDebugHandler exposes the billing engine's committed-spend view.
+// GET returns the current per-campaign committed cents; POST forces an
+// immediate publish (used by e2e to drive DSP reconciliation without waiting
+// for the ticker) and returns the same map. bus may be nil (NATS down) — GET
+// still works; POST reports that it couldn't publish.
+func spendSnapshotDebugHandler(engine *billing.Engine, bus events.EventBus, clk clock.Clock, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		published := false
+		if r.Method == http.MethodPost {
+			if bus != nil {
+				publishSpendSnapshot(engine, events.NewPublisher(bus, log), clk, log)
+				published = true
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"committed": engine.SnapshotCommitted(),
+			"published": published,
+		})
+	}
 }
