@@ -158,6 +158,16 @@ func EncodeKey(key []byte) string {
 	return base64.RawURLEncoding.EncodeToString(key)
 }
 
+// PublicKeyB64 returns the base64 (raw-url) public half of an Ed25519 private
+// key — used by the exchange to publish its verification key. Empty for a nil
+// key.
+func PublicKeyB64(priv ed25519.PrivateKey) string {
+	if len(priv) != ed25519.PrivateKeySize {
+		return ""
+	}
+	return EncodeKey(priv.Public().(ed25519.PublicKey))
+}
+
 // decodeB64 accepts either raw-url (no padding) or standard base64.
 func decodeB64(s string) ([]byte, error) {
 	if raw, err := base64.RawURLEncoding.DecodeString(s); err == nil {

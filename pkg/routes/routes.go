@@ -261,6 +261,9 @@ const (
 	// PublisherAdServe under the hood (SSP channel=native), but the native
 	// response markup is assembled here rather than fetched as creative HTML.
 	PublisherAdServeNative = "/v1/pubad/native"
+	// AdCertKey serves the exchange's ads.cert Ed25519 public key so DSPs can
+	// fetch it (and pick up rotations) instead of hardcoding it in config.
+	AdCertKey = "/v1/adcert/key"
 )
 
 // ============================================================

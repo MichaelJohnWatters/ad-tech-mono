@@ -41,7 +41,7 @@ only, no runtime) · ⬜ not implemented
 | sellers.json | IAB Tech Lab | SSP/exchange | 🔴 | ✅ | `cmd/gateway/sellers.go`, backed by publishers table |
 | **SupplyChain Object (schain)** | IAB Tech Lab | Every RTB hop | 🔴 | ✅ | SSP originates `Source.Ext.schain` (`cmd/ssp` `originSChain`); exchange validates behind `exchange.schain_enforcement` (`cmd/exchange/schain.go`); types + `ValidateSChain` in `pkg/openrtb/schain.go` |
 | app-ads.txt | IAB Tech Lab | App publishers | 🔴 | ✅ | crawler `cmd/appadstxt/` + `pkg/fraud/appads.go` (`FetchAppAdsTxt`), cache `app_ads_txt_cache` (migration 035). Enforcement/warm-cache = follow-up |
-| ads.cert 2.0 (signed bids) | IAB Tech Lab | Exchange/DSP anti-spoof | 🟡 | 🟨 | `pkg/adcert` Ed25519 sign/verify over canonical request fields **including a signed timestamp**; exchange signs (`Source.Ext.adcert`), DSP verifies + enforces freshness (`dsp.adcert_max_age`) behind `dsp.adcert_enforcement`. Follow-up: published-key distribution (ads.cert files) instead of a configured key |
+| ads.cert 2.0 (signed bids) | IAB Tech Lab | Exchange/DSP anti-spoof | 🟡 | ✅ | `pkg/adcert` Ed25519 sign/verify over canonical fields + signed timestamp (replay protection); exchange signs (`Source.Ext.adcert`) **and publishes its key at `/v1/adcert/key`**; DSP verifies + enforces freshness and **fetches/refreshes the key** (`dsp.adcert_key_url`), falling back to a static key |
 
 ## 3. Video / Audio / CTV
 
@@ -133,11 +133,11 @@ they land and flip the status cells above.
       (UID2 when cookieless) for opt-out + segment lookup. *Remaining: token
       decryption via a UID2 operator + key rotation, and identity-graph ingestion
       (link UID2 ↔ platform ids — needs a pipeline consumer).*
-- [~] **ads.cert 2.0** signed bid requests — `pkg/adcert` (Ed25519 sign/verify over
-      canonical request fields incl. a signed timestamp); exchange signs into
-      `Source.Ext.adcert`, DSP verifies + enforces freshness (`dsp.adcert_max_age`,
-      replay protection) behind `dsp.adcert_enforcement`. *Remaining: published-key
-      distribution (ads.cert files) instead of a configured key.*
+- [x] **ads.cert 2.0** signed bid requests — `pkg/adcert` (Ed25519 sign/verify over
+      canonical fields + signed timestamp for replay protection); exchange signs into
+      `Source.Ext.adcert` and publishes its key at `/v1/adcert/key`; DSP verifies,
+      enforces freshness (`dsp.adcert_max_age`), and fetches/refreshes the key
+      (`dsp.adcert_key_url`). *Optional future: multi-key rotation with key IDs.*
 
 ### Deprioritised
 OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (org dissolved).
@@ -145,6 +145,10 @@ OpenRTB 3.0 (2.x dominates) · VPAID (dying) · RampID (proprietary) · GARM (or
 ---
 
 ## Change log
+- **2026-07-06** — adcert key distribution: exchange publishes its Ed25519 public key at
+  `/v1/adcert/key`; DSP fetches + periodically refreshes it (`dsp.adcert_key_url`,
+  atomic-pointer cache, static fallback), so rotations propagate without reconfiguring
+  every DSP. ads.cert now ✅.
 - **2026-07-06** — adcert hardening: replay protection — a signed timestamp
   (`Source.Ext.adcert_ts`) is now part of the canonical; DSP rejects stale/future
   requests beyond `dsp.adcert_max_age` (default 5m) in addition to signature checks.
