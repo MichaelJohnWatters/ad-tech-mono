@@ -6,15 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
+	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
@@ -46,6 +49,10 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, pe
 	}
 	interval := cfg.GetDuration("reporting.spend_snapshot_interval", 30*time.Second)
 	pub := events.NewPublisher(bus, log)
+	guard := newPublisherGuard(cfg, interval, log)
+	if guard.rdb != nil {
+		lc.OnShutdown("pacing-publisher-guard", func(_ context.Context) error { return guard.rdb.Close() })
+	}
 
 	stop := make(chan struct{})
 	lc.OnShutdown("spend-snapshot-publisher", func(_ context.Context) error {
@@ -66,6 +73,7 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, pe
 				if ttl := cfg.GetDuration("reporting.pacing_hold_ttl", 15*time.Minute); ttl > 0 {
 					engine.SetPacingHoldTTL(ttl)
 				}
+				guard.check()
 				publishSpendSnapshot(engine, pub, clk, log)
 				persistCommittedSpend(persistStore, engine, log)
 			}
@@ -173,6 +181,60 @@ func (s *lazyCommittedSpendStore) Load(ctx context.Context, day string) (map[str
 	}
 	settled, reserved, err := st.Load(ctx, day)
 	return settled, reserved, s.dropOnErr(err)
+}
+
+// publisherGuard makes the single-replica requirement fail LOUDLY instead of
+// silently corrupting pacing. The snapshot publisher must run on exactly one
+// replica (see startSpendSnapshotPublisher); if reporting is ever scaled without
+// electing a single publisher, each replica holds a partial view and their
+// snapshots clobber each other. Each tick a publisher claims a shared Redis
+// owner key with its pod id; if it finds the key already held by a DIFFERENT
+// pod, it logs an ERROR every tick so the misconfiguration is impossible to
+// miss. Best-effort: no Redis → guard disabled (logged once).
+type publisherGuard struct {
+	rdb   *cacheredis.Client
+	podID string
+	ttl   time.Duration
+	log   *slog.Logger
+}
+
+const publisherOwnerKey = "reporting:pacing:publisher_owner"
+
+func newPublisherGuard(cfg *config.Config, interval time.Duration, log *slog.Logger) *publisherGuard {
+	podID := os.Getenv("POD_NAME")
+	if podID == "" {
+		podID = fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	g := &publisherGuard{podID: podID, ttl: 3 * interval, log: log}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rdb, err := cacheredis.New(ctx, cacheredis.Config{
+		Addr:     cfg.Get("redis.url", routes.DefaultRedisAddr),
+		Password: cfg.Get("redis.password", ""),
+		DB:       cfg.GetInt("redis.db", 0),
+	})
+	if err != nil {
+		log.Warn("pacing publisher guard disabled: redis unavailable — a multi-replica misconfig won't be detected", "error", err)
+		return g
+	}
+	g.rdb = rdb
+	return g
+}
+
+// check claims the owner key; if another pod already holds it, warn loudly.
+func (g *publisherGuard) check() {
+	if g.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if owner, ok, err := g.rdb.Get(ctx, publisherOwnerKey); err == nil && ok && owner != g.podID {
+		g.log.Error("MULTIPLE reporting replicas are publishing pacing snapshots — pacing WILL be wrong; pin replicas:1 or elect one publisher (see docs/PLAN.md 'Restart-safety + single-replica')",
+			"this_pod", g.podID, "other_pod", owner)
+	}
+	if err := g.rdb.Set(ctx, publisherOwnerKey, g.podID, g.ttl); err != nil {
+		g.log.Warn("pacing publisher guard: owner claim failed", "error", err)
+	}
 }
 
 func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clock.Clock, log *slog.Logger) {
