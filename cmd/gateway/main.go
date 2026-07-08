@@ -479,6 +479,7 @@ func main() {
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
 	mux.Handle(routes.ProxyPubAd, middleware.CORS(middleware.ReverseProxy(pubadURL, log)))
+	mux.Handle(routes.ProxySSAI, middleware.CORS(middleware.ReverseProxy(cfg.Get("gateway.ssai_url", routes.DefaultSSAIURL), log)))
 	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	// Jaeger query API (browser → gateway → jaeger; Jaeger v1.58 has no CORS
 	// on the query endpoint, so the pub sim reads spans through here).

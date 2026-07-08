@@ -143,6 +143,7 @@ const (
 	ProxySSP       = apiPrefix + "/ssp/"
 	ProxyDSP       = apiPrefix + "/dsp/"
 	ProxyPubAd     = apiPrefix + "/pubad/"
+	ProxySSAI      = apiPrefix + "/ssai/"
 	ProxyBilling   = apiPrefix + "/billing/"
 	ProxyConfig    = apiPrefix + "/config/"
 	// ProxyJaeger forwards browser fetches to the Jaeger query API. Used by
@@ -277,6 +278,28 @@ const (
 )
 
 // ============================================================
+// SSAI Stitcher (:8093) - server-side ad insertion
+// ============================================================
+
+const (
+	// SSAIManifest returns an HLS media playlist with ads stitched into the
+	// content stream. The player fetches this instead of the origin manifest;
+	// it runs a per-break auction (SSP channel=video), replaces the content-
+	// during-break segments with ad segments, and fires the impression beacon
+	// server-side. Query: content (origin key), placement_id, plus the usual
+	// geo/device/consent/identity signals.
+	SSAIManifest = "/v1/ssai/manifest.m3u8"
+	// SSAISegment is the per-ad-segment beacon+redirect endpoint referenced by
+	// the stitched manifest. When the player fetches an ad segment, this fires
+	// the segment's quartile beacon server-side (the SSAI beacon model) and
+	// 302-redirects to the real media. Query: session, ad, event, redir.
+	SSAISegment = "/v1/ssai/seg"
+	// SSAIContent serves a sample origin content manifest (with CUE-OUT/CUE-IN
+	// ad-break markers) so the stitcher has something to rewrite in the demo.
+	SSAIContent = "/v1/ssai/content.m3u8"
+)
+
+// ============================================================
 // Ad Server (:8085) - creative serving
 // ============================================================
 
@@ -386,6 +409,7 @@ const (
 	DefaultReportingURL         = "http://" + DefaultHost + ":" + PortReporting
 	DefaultPipelineURL          = "http://" + DefaultHost + ":" + PortPipeline
 	DefaultPublisherAdServerURL = "http://" + DefaultHost + ":" + PortPublisherAdServer
+	DefaultSSAIURL              = "http://" + DefaultHost + ":" + PortSSAI
 	DefaultNATSURL              = "nats://" + DefaultHost + ":" + PortNATSClient
 	DefaultDSPComp1URL          = "http://" + DefaultHost + ":" + PortDSPComp1
 	DefaultDSPComp2URL          = "http://" + DefaultHost + ":" + PortDSPComp2
@@ -427,6 +451,7 @@ const (
 	PortPublisherAdServer = "8088"
 	PortWebhooks          = "8091"
 	PortIdentityConsumer  = "8092"
+	PortSSAI              = "8093"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

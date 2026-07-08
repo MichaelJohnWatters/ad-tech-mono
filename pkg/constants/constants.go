@@ -297,6 +297,7 @@ const (
 	ServicePrivacy           = "privacy"
 	ServicePublisherAdServer = "publisher-adserver"
 	ServiceIdentityConsumer  = "identity-consumer"
+	ServiceSSAI              = "ssai"
 )
 
 // ============================================================
