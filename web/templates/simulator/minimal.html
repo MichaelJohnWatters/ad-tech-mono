@@ -366,7 +366,7 @@
                 <p>Sample content video with an ad break served via VAST or VMAP. Each break runs a real auction through SSP → Exchange → DSP. Pick a schedule above, press Play.</p>
                 <div id="video-player-wrap" style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
                     <video id="content-video" controls playsinline preload="metadata" style="width: 100%; height: 100%; display: block;"
-                        src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
+                        src="/v1/media/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_10MB.mp4"></video>
                     <div id="ad-container" style="position: absolute; inset: 0;"></div>
                 </div>
                 <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
@@ -1504,12 +1504,15 @@
         const JAEGER_API = window.location.protocol + '//' + window.location.host + '/v1/jaeger/api';
         let jaegerPollTimer = null;
         let jaegerPollIteration = 0;
+        let jaegerNoNewStreak = 0; // consecutive polls that added no new spans
         const JAEGER_POLL_INTERVAL = 3000;
-        const JAEGER_POLL_MAX = 100;  // 100 × 3s = 5 min
+        const JAEGER_POLL_MAX = 30;       // hard cap: 30 × 3s = 90s
+        const JAEGER_STABLE_STOP = 3;     // stop once 3 polls in a row add nothing (trace is complete)
 
         function startJaegerPoll(traceID) {
             stopJaegerPoll();
             jaegerPollIteration = 0;
+            jaegerNoNewStreak = 0;
             // Fire one immediate fetch so the JAEGER rows that have already
             // landed (the ad-server / tracker spans typically ingest within
             // 1-2s) appear right away. Then schedule the periodic poll for
@@ -1541,7 +1544,11 @@
                 jaegerPollTimer = null;
                 jaegerPollIteration += 1;
                 fetchJaegerTrace(traceID).finally(() => {
-                    if (jaegerPollIteration < JAEGER_POLL_MAX) {
+                    // Stop once the trace has stopped growing (complete) or the
+                    // hard cap is hit — no more 5-minute polling storms.
+                    if (jaegerNoNewStreak >= JAEGER_STABLE_STOP) {
+                        status.textContent = `· trace complete (${knownSpans.size} spans)`;
+                    } else if (jaegerPollIteration < JAEGER_POLL_MAX) {
                         scheduleNextPoll(traceID);
                     } else {
                         status.textContent = `· poll complete (${jaegerPollIteration} fetches)`;
@@ -1624,6 +1631,9 @@
                     traceLog(serviceTag(service), label, { detail: `${durMs}ms`, src: 'jaeger', meta, elapsedMs });
                     newCount += 1;
                 }
+                // Track stability: once the trace stops growing it's complete,
+                // so we can stop polling instead of hammering Jaeger for 5 min.
+                jaegerNoNewStreak = newCount > 0 ? 0 : jaegerNoNewStreak + 1;
                 if (newCount > 0) {
                     status.textContent = `· +${newCount} new span${newCount === 1 ? '' : 's'} this poll`;
                     setTimeout(() => {
