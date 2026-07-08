@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -134,5 +135,44 @@ func TestQuartileForSegment(t *testing.T) {
 	}
 	if got := quartileForSegment(18, 30, 6); got != "midpoint" && got != "thirdQuartile" {
 		t.Errorf("seg@18 = %q, want a mid/third quartile", got)
+	}
+}
+
+// TestOriginManifestFetched asserts the stitcher fetches a configured origin
+// manifest (not the built-in sample) and stitches ads into ITS breaks.
+func TestOriginManifestFetched(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		io.WriteString(w, "#EXTM3U\n#EXTINF:6.0,\nmyorigin_001.ts\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nmyorigin_002.ts\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nmyorigin_003.ts\n#EXT-X-ENDLIST\n")
+	}))
+	defer origin.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t", CreativeID: "cr", CampaignID: "li", MediaURL: "https://cdn/ad.mp4", DurationSeconds: 6})
+	}))
+	defer ssp.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub",
+		segDurFn: func() float64 { return 6 }, placementFn: func() string { return "pl" },
+		originFn: func() string { return origin.URL }, // <- real origin
+		client:   &http.Client{},
+	}
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+
+	if strings.Contains(out, "content_000.ts") {
+		t.Errorf("stitched the built-in sample, not the fetched origin:\n%s", out)
+	}
+	if !strings.Contains(out, "myorigin_001.ts") || !strings.Contains(out, "myorigin_003.ts") {
+		t.Errorf("origin content segments missing:\n%s", out)
+	}
+	if strings.Contains(out, "myorigin_002.ts") {
+		t.Errorf("origin break content not replaced by ad:\n%s", out)
+	}
+	if !strings.Contains(out, "/v1/ssai/seg?") {
+		t.Errorf("no ad stitched into the origin break:\n%s", out)
 	}
 }

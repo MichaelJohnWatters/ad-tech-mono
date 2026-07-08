@@ -329,6 +329,12 @@
                 <button class="btn btn-secondary" onclick="resetAudioDemo()">Reset</button>
             </span>
 
+            <!-- SSAI channel controls. -->
+            <span class="ssai-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="playSSAIStream()">Play SSAI Stream</button>
+                <button class="btn btn-secondary" onclick="resetSSAI()">Reset</button>
+            </span>
+
             <button class="btn btn-secondary" id="drainBtn" onclick="drainBudgets()" style="margin-left: 12px;">Drain budgets</button>
             <button class="btn btn-secondary" id="resetBtn" onclick="resetAndReseed()" style="margin-left: 12px;">Reset &amp; reseed</button>
     </div>
@@ -346,6 +352,7 @@
                 <button type="button" id="tab-video" class="channel-tab" onclick="switchChannel('video')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Video (VAST / VMAP)</button>
                 <button type="button" id="tab-native" class="channel-tab" onclick="switchChannel('native')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Native</button>
                 <button type="button" id="tab-audio" class="channel-tab" onclick="switchChannel('audio')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Audio (DAAST)</button>
+                <button type="button" id="tab-ssai" class="channel-tab" onclick="switchChannel('ssai')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">SSAI (CTV)</button>
             </div>
 
             <!-- Display pane: the original 300x250 ad slot. -->
@@ -406,6 +413,25 @@
                 <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
                     <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Audio VAST request URL + raw response</summary>
                     <pre id="audio-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- SSAI pane: server-side ad insertion. The stitcher rewrites the
+                 origin HLS manifest to splice the ad into the content stream;
+                 as the player walks the manifest and requests each ad segment,
+                 the SSAI server fires the impression/quartile beacons SERVER-SIDE
+                 (unlike client-side VAST). The player here plays the stitched ad
+                 inline, then the content, and fires each segment's server beacon
+                 by fetching the segment URL. -->
+            <div id="pane-ssai" class="channel-pane" style="display: none;">
+                <p>Server-side ad insertion (CTV). The stitcher rewrites the origin HLS manifest to splice the ad into the content stream. As the player fetches each ad segment, the <strong>server</strong> fires the impression/quartile beacons — not the player. Below: the content plays, the stitched ad plays inline (badge on), and each segment fetch triggers a server-side beacon (watch the trace timeline).</p>
+                <div style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
+                    <video id="ssai-video" controls playsinline preload="none" style="width: 100%; height: 100%; display: block;"></video>
+                    <div id="ssai-badge" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.7); color: #ffd166; font-size: 11px; padding: 3px 10px; border-radius: 3px; display: none;">● Stitched Ad · server-side beacons</div>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Stitched HLS manifest (content + spliced ad segments)</summary>
+                    <pre id="ssai-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(play to populate)</pre>
                 </details>
             </div>
 
@@ -3505,6 +3531,12 @@
         var AUDIO_PLACEMENTS = [
             { value: 'pl-sim-audio', label: 'Simulator Audio Podcast Spot ($1.50 floor)' }
         ];
+        // SSAI stitches an ad into a CTV video stream; it runs a video auction
+        // per break, so it uses the video placements.
+        var SSAI_PLACEMENTS = [
+            { value: 'pl-sim-video',          label: 'Simulator Video Pre-Roll (SSAI)' },
+            { value: 'pl-sport-live-preroll', label: 'Live Game Pre-Roll (Sport)' }
+        ];
 
         // Cache the display dropdown's HTML on first channel-switch so
         // we can swap back to it without re-querying /v1/ssp/placements
@@ -3514,7 +3546,7 @@
         function applyPlacementListForChannel(channel) {
             var sel = document.getElementById('placementSelect');
             if (!sel) return;
-            var lists = { video: VIDEO_PLACEMENTS, native: NATIVE_PLACEMENTS, audio: AUDIO_PLACEMENTS };
+            var lists = { video: VIDEO_PLACEMENTS, native: NATIVE_PLACEMENTS, audio: AUDIO_PLACEMENTS, ssai: SSAI_PLACEMENTS };
             var list = lists[channel];
             if (list) {
                 // Stash the real (SSP-loaded) display placement list once so we
@@ -3536,7 +3568,7 @@
         // Channels the simulator can drive. Each has a tab button, a content
         // pane, and a control-group class, all named by convention so
         // switchChannel can toggle them generically.
-        var SIM_CHANNELS = ['display', 'video', 'native', 'audio'];
+        var SIM_CHANNELS = ['display', 'video', 'native', 'audio', 'ssai'];
 
         function switchChannel(channel) {
             SIM_CHANNELS.forEach(function(ch) {
@@ -3953,6 +3985,87 @@
         // the string the SSP/pubad endpoints expect.
         function deviceName(dt) {
             return dt === 2 ? 'desktop' : dt === 5 ? 'tablet' : dt === 3 ? 'ctv' : 'mobile';
+        }
+
+        // ---- SSAI (server-side ad insertion) -----------------------------
+        //
+        // Fetches the stitched HLS manifest from the SSAI service, plays the
+        // spliced ad inline, then the content. The defining SSAI trait: the
+        // player does NOT fire the ad beacons — the SERVER does, when the player
+        // requests each ad segment. We reproduce that faithfully by fetching each
+        // stitched ad-segment URL (which reaches the SSAI seg handler → fires the
+        // beacon server-side) with redirect:'manual' so we don't re-download the
+        // media. The ad media + trace id are pulled from the manifest.
+        function playSSAIStream() {
+            var v = document.getElementById('ssai-video');
+            var badge = document.getElementById('ssai-badge');
+            var preview = document.getElementById('ssai-preview');
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-video';
+            var geo = document.getElementById('geoSelect').value;
+            var url = window.location.origin + '/v1/ssai/manifest.m3u8?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=ctv' + realismQuery() + '&t=' + Date.now();
+            preview.textContent = url + '\n\n(fetching manifest…)';
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('SSAI manifest request', placement, 'success');
+
+            fetch(url).then(function(r){ return r.text(); }).then(function(manifest){
+                preview.textContent = url + '\n\n' + manifest;
+                var segs = manifest.split('\n').filter(function(l){ return l.indexOf('/v1/ssai/seg?') >= 0; });
+                if (!segs.length) { logVideoEvent('SSAI: break unfilled (content only)', '', 'nobid'); ssaiPlayContent(v); return; }
+                // Trace id + ad media come from the stitched segment URLs.
+                var tm = segs[0].match(/tid%3D([0-9a-f]{32})/);
+                if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
+                var rm = segs[0].match(/[?&]redir=([^&]+)/);
+                var adMedia = rm ? decodeURIComponent(rm[1]) : null;
+                logVideoEvent('SSAI: ad stitched into stream', segs.length + ' ad segments', 'success');
+                ssaiPlayAd(v, badge, segs, adMedia);
+            }).catch(function(err){ preview.textContent = url + '\n\n(failed: ' + err + ')'; logVideoEvent('SSAI error', String(err), 'error'); });
+        }
+
+        function ssaiPlayAd(v, badge, segs, adMedia) {
+            if (!adMedia) { ssaiPlayContent(v); return; }
+            badge.style.display = '';
+            var segDur = 6, fired = {};
+            var onTime = function(){
+                if (!v.duration) return;
+                segs.forEach(function(seg, i){
+                    if (fired[i] || v.currentTime < i * segDur) return;
+                    fired[i] = true;
+                    // The GET reaches the SSAI seg handler, which fires the
+                    // quartile beacon SERVER-SIDE, then 302s. redirect:'manual'
+                    // means we don't follow to re-download the media.
+                    fetch(seg, { redirect: 'manual' }).catch(function(){});
+                    var ev = (seg.match(/[?&]event=([a-zA-Z]+)/) || [])[1] || 'segment';
+                    logVideoEvent('Segment fetched → server fires ' + ev, '', 'success');
+                });
+            };
+            var onEnded = function(){
+                v.removeEventListener('timeupdate', onTime);
+                v.removeEventListener('ended', onEnded);
+                badge.style.display = 'none';
+                logVideoEvent('SSAI ad complete → content resumes', '', 'success');
+                ssaiPlayContent(v);
+            };
+            v.addEventListener('timeupdate', onTime);
+            v.addEventListener('ended', onEnded);
+            v.src = adMedia; v.load();
+            v.play().catch(function(e){ logVideoEvent('SSAI autoplay blocked (click play)', String(e), ''); });
+        }
+
+        function ssaiPlayContent(v) {
+            v.src = '/v1/creatives/media/bbb-720-10mb.mp4'; v.load();
+            logVideoEvent('SSAI content playing', '', 'success');
+            v.play().catch(function(){});
+        }
+
+        function resetSSAI() {
+            var v = document.getElementById('ssai-video');
+            try { v.pause(); } catch (e) {}
+            v.removeAttribute('src'); v.load();
+            var b = document.getElementById('ssai-badge'); if (b) b.style.display = 'none';
+            var p = document.getElementById('ssai-preview'); if (p) p.textContent = '(play to populate)';
+            if (typeof stopJaegerPoll === 'function') stopJaegerPoll();
+            logVideoEvent('SSAI reset', '', '');
         }
     </script>
 
