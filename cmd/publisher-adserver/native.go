@@ -228,7 +228,7 @@ func stubNative(trackerURL, traceID, placementID string) (native.Response, adser
 	}
 	resp := native.BuildResponse(native.AssetSet{
 		Title:      "Acme Running Shoes — 20% Off",
-		MainImage:  "http://localhost:8080/v1/creatives/themes/acme-shoes-1200x627.svg",
+		MainImage:  "http://localhost:8080/v1/creatives/themes/retail-1200x627.svg",
 		Sponsored:  "Acme",
 		Body:       "Lightweight, all-day comfort. Free returns on every pair.",
 		CTA:        "Shop now",

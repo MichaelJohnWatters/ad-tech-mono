@@ -52,6 +52,7 @@ type Bid struct {
 	Width        int    // creative pixel width
 	Height       int    // creative pixel height
 	MediaURL     string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
+	AdM          string // ad markup — native response JSON (OpenRTB Native), passed through to the winning BidObj.AdM
 	AdvertiserID string
 	AdomainHost  string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
 	                   // advertiser landing domain into the winner response without re-querying the DSP
