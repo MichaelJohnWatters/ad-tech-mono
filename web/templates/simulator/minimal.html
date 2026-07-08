@@ -257,7 +257,7 @@
                  hashed-email / first-party id) so the auction exercises the
                  DSP's privacy + identity paths, not just geo/device. See
                  realismParams() and pkg/simulator/request. -->
-            <select id="consentSelect" title="Privacy / consent regime">
+            <select id="consentSelect" title="Privacy / consent regime" onchange="refreshRealism()">
                 <option value="us_clear">US · no opt-out</option>
                 <option value="gdpr_consented">EU · GDPR consented</option>
                 <option value="gdpr_no_consent">EU · GDPR no consent</option>
@@ -266,7 +266,7 @@
                 <option value="coppa">COPPA (child)</option>
                 <option value="gpp_opt_out">US · GPP opt-out</option>
             </select>
-            <select id="identitySelect" title="Identity type">
+            <select id="identitySelect" title="Identity type" onchange="refreshRealism()">
                 <option value="uid2">UID2</option>
                 <option value="hashed_email">Hashed email</option>
                 <option value="publisher_id">First-party ID</option>
@@ -3708,51 +3708,40 @@
 
         // ---- Request realism (consent + identity) ------------------------
         //
-        // realismParams() turns the Consent + Identity dropdowns into the same
-        // production-like query signals pkg/simulator/request emits, so every
-        // browser-driven request (display/video/native/audio + Prebid) carries
-        // real privacy + identity inputs and exercises the DSP's privacy engine
-        // and identity graph — not just geo/device.
-        var TCF_CONSENT = 'CPcqAAAPcqAAAAKAxAENCgCsAP_AAH_AAAAAJ1Nf_X__b3_j-_5_f_t0eY1P9_7__-0zjhfdt-8N3f_X_L8X_2M7vB36pq4KuR4Eu3LBIQdlHOHcTUmw6IkVqTPsbk2Mr7NKJ7PEinMbe2dYGH9_n93TuZKY7_____z_v-v_v____f_7-3_3__p9X---_e_V399zLv9____39nP___9v-_9_____4IQAJMNS-AizEscCSaNKoUQ_ZL1QG';
-        // GPP US-National (section 7) string encoding a "sale" opt-out. Matches
-        // pkg/simulator/request.gppUSNationalOptOut / pkg/privacy decoding.
-        var GPP_OPTOUT = 'DBABLA~BAAaAA';
-
-        function randHex(n) {
-            var s = '';
-            for (var i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
-            return s;
-        }
-
-        // realismParams returns a URLSearchParams with the consent + identity
-        // signals for the current dropdown selections.
-        function realismParams() {
-            var p = new URLSearchParams();
+        // The consent + identity ENCODING (TCF / GPP / US-privacy / UID2) is the
+        // single source of truth in Go (pkg/simulator/request). Rather than
+        // duplicate that fiddly, correctness-critical encoding here, we fetch it
+        // from /v1/sim/realism — the exact same code the CLI uses. We cache the
+        // encoded query and refresh it whenever the Consent / Identity dropdowns
+        // change, so realismQuery() stays synchronous and its call sites (the
+        // display/video/native/audio request builders) are unchanged.
+        var _realismQuery = '';
+        async function refreshRealism() {
             var consent = (document.getElementById('consentSelect') || {}).value || 'us_clear';
             var identity = (document.getElementById('identitySelect') || {}).value || 'uid2';
-            switch (consent) {
-                case 'gdpr_consented': p.set('gdpr', '1'); p.set('consent', TCF_CONSENT); break;
-                case 'gdpr_no_consent': p.set('gdpr', '1'); break;
-                case 'ccpa_opt_out': p.set('us_privacy', '1YYN'); break;
-                case 'gpc': p.set('gpc', '1'); break;
-                case 'coppa': p.set('coppa', '1'); break;
-                case 'gpp_opt_out': p.set('gpp', GPP_OPTOUT); p.set('gpp_sid', '7'); break;
-                default: p.set('us_privacy', '1YNN'); // us_clear
+            try {
+                var r = await fetch('/v1/sim/realism?consent=' + encodeURIComponent(consent) + '&identity=' + encodeURIComponent(identity));
+                var j = await r.json();
+                _realismQuery = j.query ? '&' + j.query : '';
+            } catch (e) {
+                _realismQuery = '';
+                console.warn('[sim] /v1/sim/realism fetch failed', e);
             }
-            switch (identity) {
-                case 'hashed_email': p.set('hashed_email', randHex(64)); break;
-                case 'publisher_id': p.set('user_id', 'pub-user-' + randHex(8)); break;
-                case 'uid2': p.set('uid2', 'sim-uid2-' + randHex(24)); break;
-                // anonymous: no identifier
-            }
-            return p;
         }
 
-        // realismQuery returns the realism params as a leading-"&" query string
-        // fragment (empty string when none), for string-built URLs.
+        // realismQuery returns the cached realism params as a leading-"&" query
+        // string fragment (empty when none), for string-built URLs.
         function realismQuery() {
-            var s = realismParams().toString();
-            return s ? '&' + s : '';
+            return _realismQuery;
+        }
+
+        // Seed the cache on load and refresh on dropdown change. This inline
+        // script may run after DOMContentLoaded already fired, so call directly
+        // when the document is ready.
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', refreshRealism);
+        } else {
+            refreshRealism();
         }
 
         // ---- Native channel ----------------------------------------------

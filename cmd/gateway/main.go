@@ -154,6 +154,11 @@ func main() {
 	mux.HandleFunc("/dev/publisher-simulator", renderSim)
 	mux.HandleFunc("/dev/publisher-simulator/", renderSim)
 	mux.HandleFunc("/dev/publisher-simulator/minimal", renderSim)
+
+	// Simulator request-construction, single-sourced from pkg/simulator/request
+	// so the web UI doesn't duplicate the consent/identity encoding in JS.
+	mux.Handle(routes.SimRealism, middleware.CORS(http.HandlerFunc(simRealismHandler)))
+	mux.Handle(routes.SimPersonas, middleware.CORS(http.HandlerFunc(simPersonasHandler)))
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})

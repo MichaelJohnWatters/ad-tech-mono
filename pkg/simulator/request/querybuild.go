@@ -69,20 +69,42 @@ func (p Persona) QueryParams(placementID string, ch Channel) url.Values {
 	if len(p.Segments) > 0 {
 		v.Set(ParamSegments, p.SegmentsCSV())
 	}
+	// Consent + identity encoding is the single-source-of-truth part, shared
+	// with the web UI via the /v1/sim/realism endpoint (see RealismParams).
+	mergeValues(v, RealismParams(p.Regime, p.Identity, p.Name))
+	return v
+}
 
-	// Identity signal for the persona's identity type.
-	rng := seededRand(p.Name)
-	switch p.Identity {
+// RealismParams encodes the privacy + identity signals for a consent regime and
+// identity type into query params. This is THE single source of truth for the
+// fiddly TCF / GPP / US-privacy / UID2 encoding — used by the CLI (via
+// Persona.QueryParams) and by the web UI (which fetches it from the
+// /v1/sim/realism endpoint instead of re-implementing it in JS). seed makes the
+// synthetic identity values deterministic per caller so the same selection maps
+// to the same synthetic user, matching the CLI's per-persona stability.
+func RealismParams(regime Regime, identity Identity, seed string) url.Values {
+	v := url.Values{}
+	rng := seededRand(seed)
+	applyIdentityParams(v, identity, rng)
+	applyRegimeParams(v, regime)
+	return v
+}
+
+func applyIdentityParams(v url.Values, identity Identity, rng *rand.Rand) {
+	switch identity {
 	case IdentityPublisherID:
 		v.Set(ParamUserID, "pub-user-"+strconv.FormatUint(uint64(rng.Uint32()), 16))
 	case IdentityUID2:
 		v.Set(ParamUID2, uid2Token(rng))
 	case IdentityHashedEmail:
 		v.Set(ParamHashedEmail, hashedEmail(rng))
+	case IdentityAnonymous:
+		// no identifier
 	}
+}
 
-	// Privacy/regulatory signals for the persona's regime.
-	switch p.Regime {
+func applyRegimeParams(v url.Values, regime Regime) {
+	switch regime {
 	case RegimeGDPRConsented:
 		v.Set(ParamGDPR, "1")
 		v.Set(ParamConsent, tcfConsentString)
@@ -100,5 +122,12 @@ func (p Persona) QueryParams(placementID string, ch Channel) url.Values {
 	case RegimeUSClear:
 		v.Set(ParamUSPrivacy, "1YNN")
 	}
-	return v
+}
+
+func mergeValues(dst, src url.Values) {
+	for k, vs := range src {
+		for _, val := range vs {
+			dst.Set(k, val)
+		}
+	}
 }
