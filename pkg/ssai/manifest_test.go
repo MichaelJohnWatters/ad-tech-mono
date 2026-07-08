@@ -48,6 +48,46 @@ func TestParseMedia(t *testing.T) {
 	}
 }
 
+// scteManifest signals its ad break with an SCTE-35 DATERANGE (PLANNED-DURATION)
+// and no explicit #EXT-X-CUE-IN — the broadcast-native form the post-pass closes.
+const scteManifest = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+content_001.ts
+#EXT-X-DATERANGE:ID="ad1",START-DATE="2026-01-01T00:00:12Z",PLANNED-DURATION=12,SCTE35-OUT=0xFC30
+#EXTINF:6.0,
+content_002.ts
+#EXTINF:6.0,
+content_003.ts
+#EXTINF:6.0,
+content_004.ts
+#EXT-X-ENDLIST
+`
+
+func TestParseSCTE35Daterange(t *testing.T) {
+	m, err := ParseMedia(scteManifest)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// DATERANGE-OUT sits on content_002 (index 1) with the planned 12s duration.
+	if m.Segments[1].CueOut != 12 {
+		t.Errorf("scte cue-out = %v, want 12", m.Segments[1].CueOut)
+	}
+	// 12s of content = content_002 + content_003 (indices 1,2); the break auto-
+	// closes with CUE-IN on content_004 (index 3).
+	if !m.Segments[3].CueIn {
+		t.Errorf("scte break did not auto-close on segment 3: %+v", m.Segments)
+	}
+	breaks := m.Breaks()
+	if len(breaks) != 1 {
+		t.Fatalf("want 1 scte break, got %d", len(breaks))
+	}
+	if b := breaks[0]; b.Start != 1 || b.End != 3 || b.Duration != 12 {
+		t.Errorf("scte break span = %+v, want {1 3 12}", b)
+	}
+}
+
 func TestBreaks(t *testing.T) {
 	m, _ := ParseMedia(sampleManifest)
 	breaks := m.Breaks()
