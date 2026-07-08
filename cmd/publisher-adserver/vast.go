@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,23 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 		placementID := r.URL.Query().Get("placement_id")
 		if placementID == "" {
 			placementID = "pl-sport-mpu" // demo default
+		}
+
+		// Ad pod (CTV): ?pod=N asks for a pod of up to N ads served back-to-back
+		// in one VAST, each from an independent auction with competitive
+		// separation (no repeated advertiser within the pod). This is the
+		// defining CTV/long-form break shape.
+		if podSize := parsePodSize(r.URL.Query().Get("pod")); podSize > 1 {
+			if xmlBytes, n := buildPodVAST(ctx, sspURL, trackerURL, placementID, r.URL.Query(), podSize, omidFn, reqLog); n > 0 {
+				reqLog.Info("video pod served", "requested", podSize, "filled", n)
+				w.Header().Set("Content-Type", "text/xml")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Write(xmlBytes)
+				return
+			}
+			reqLog.Info("video pod: no fills, serving demo VAST")
+			writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			return
 		}
 
 		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
@@ -179,6 +197,95 @@ func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string, 
 		return &winner, nil
 	}
 	return &winner, nil
+}
+
+// parsePodSize parses ?pod=N, clamped to [1,8]. Anything unparseable or ≤1
+// means "not a pod" (a single standalone ad).
+func parsePodSize(s string) int {
+	if s == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 1
+	}
+	if n > 8 {
+		return 8
+	}
+	return n
+}
+
+// macroCtxForWinner builds the MacroContext for one video winner's beacons.
+func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.MacroContext {
+	return adserving.MacroContext{
+		AuctionID:    firstNonEmpty(winner.TraceID, winner.CampaignID),
+		AuctionPrice: winner.ClearingPrice,
+		Currency:     defaultStr2(winner.Currency, "USD"),
+		CampaignID:   winner.CampaignID,
+		CreativeID:   winner.CreativeID,
+		PlacementID:  winner.PlacementID,
+		PublisherID:  winner.PublisherID,
+		AdvertiserID: winner.AdvertiserID,
+		BidModel:     defaultStr2(winner.BidModel, "cpm"),
+		DealID:       winner.DealID,
+		Width:        winner.Width,
+		Height:       winner.Height,
+		TrackerURL:   trackerURL,
+		LandingURL:   landingForDomain(winner.AdvertiserDomain),
+		URLTTL:       time.Hour,
+	}
+}
+
+// buildPodVAST runs up to podSize·3 independent auctions and assembles the
+// winners into a single sequenced-ad VAST pod. It applies competitive
+// separation — an advertiser already present in the pod is skipped — which is
+// why it may attempt more auctions than the pod size. Returns the rendered pod
+// XML and the number of ads actually filled (0 when nothing filled). Each ad
+// carries its own signed trackers, so quartile beacons fire per ad in the pod.
+func buildPodVAST(ctx context.Context, sspURL, trackerURL, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), reqLog *slog.Logger) ([]byte, int) {
+	var specs []vast.LinearSpec
+	seenAdv := map[string]bool{}
+	maxAttempts := podSize * 3
+	for attempt := 0; attempt < maxAttempts && len(specs) < podSize; attempt++ {
+		winner, err := fetchVideoWinner(ctx, sspURL, placementID, "", incoming)
+		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
+			continue
+		}
+		adv := strings.ToLower(winner.AdvertiserDomain)
+		if adv != "" && seenAdv[adv] {
+			continue // competitive separation: no repeated advertiser in a pod
+		}
+		seenAdv[adv] = true
+
+		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL))
+		spec.Sequence = len(specs) + 1
+		if vendor, scriptURL := omidFn(); scriptURL != "" {
+			spec.Verifications = []vast.OMIDVerification{{
+				Vendor:         vendor,
+				ScriptURL:      scriptURL,
+				NotExecutedURL: adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL), "omid-not-executed"),
+			}}
+		}
+		specs = append(specs, spec)
+	}
+	if len(specs) == 0 {
+		return nil, 0
+	}
+	xmlBytes, err := vast.BuildPod(specs)
+	if err != nil {
+		reqLog.Error("vast pod build failed", "error", err)
+		return nil, 0
+	}
+	return xmlBytes, len(specs)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // buildVASTSpec turns the SSP winner + a fully-populated MacroContext
