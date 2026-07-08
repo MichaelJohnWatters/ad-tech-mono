@@ -217,6 +217,20 @@ if dev_mode == 'fast':
     k8s_resource('publisher-adserver', resource_deps=['publisher-adserver-build', 'postgres', 'ssp', 'adserver'],
         port_forwards=['8088:8088'], labels=['services'])
 
+    # ---- SSAI Stitcher (server-side ad insertion) ----
+    local_resource('ssai-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/ssai ./cmd/ssai',
+        deps=['cmd/ssai', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-ssai', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'ssai'},
+        only=['bin/ssai'],
+        entrypoint='/app',
+        live_update=[sync('bin/ssai', '/app')])
+    k8s_yaml(['k8s/base/ssai/deployment.yaml', 'k8s/base/ssai/service.yaml'])
+    k8s_resource('ssai', resource_deps=['ssai-build', 'ssp'],
+        port_forwards=['8093:8093'], labels=['services'])
+
     # ---- Gateway (host-built binary + embedded web/ + seed binary) ----
     # The seed binary is baked into the gateway image so /dev/reset-and-reseed
     # can exec it without needing a Go toolchain inside the pod.
