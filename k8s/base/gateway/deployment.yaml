@@ -42,6 +42,7 @@ spec:
             - { name: GATEWAY_REPORTING_URL, value: "http://reporting:8086" }
             - { name: GATEWAY_ADSERVER_URL, value: "http://adserver:8085" }
             - { name: GATEWAY_PUBLISHER_ADSERVER_URL, value: "http://publisher-adserver:8088" }
+            - { name: GATEWAY_SSAI_URL, value: "http://ssai:8093" }
             - { name: GATEWAY_JAEGER_URL, value: "http://jaeger:16686" }
             - { name: GATEWAY_CREATIVES_STORE_URL, value: "http://minio:9000/adtech-creatives/" }
             - { name: DATABASE_URL, value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" }

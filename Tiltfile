@@ -224,7 +224,7 @@ if dev_mode == 'fast':
     docker_build_with_restart('adtech-ssai', '.',
         dockerfile='build/Dockerfile.dev',
         build_args={'SERVICE': 'ssai'},
-        only=['bin/ssai'],
+        only=['bin/ssai', 'web'],
         entrypoint='/app',
         live_update=[sync('bin/ssai', '/app')])
     k8s_yaml(['k8s/base/ssai/deployment.yaml', 'k8s/base/ssai/service.yaml'])
