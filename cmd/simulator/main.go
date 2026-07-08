@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -210,12 +211,13 @@ func runSimulation() {
 			persona := request.Pick(rng, p.Personas)
 			applyOverrides(&persona, geoOverride, deviceOverride)
 			channel := pickChannel(rng, p.Channels)
+			placement := simPlacement(p.FloorPrice)
 			bidReq := request.Build(request.Input{
 				TraceID: traceID, Channel: channel, Persona: persona,
-				Placement: simPlacement(p.FloorPrice), Rand: rng,
+				Placement: placement, Rand: rng,
 			})
 
-			won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+			winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 			sent++
 			if err != nil {
 				errors++
@@ -224,9 +226,9 @@ func runSimulation() {
 				}
 				continue
 			}
-			if won {
+			if winner != nil {
 				wins++
-				fireEvents(client, trackerURL, traceID, traceparent, channel, p, rng)
+				fireEvents(client, trackerURL, traceID, traceparent, channel, winner, placement, p, rng)
 			}
 
 			if sent%p.RPS == 0 {
@@ -256,9 +258,10 @@ func runSingle() {
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	traceID, traceparent := tracing.NewClientTraceparent()
+	placement := simPlacement(1.0)
 	bidReq := request.Build(request.Input{
 		TraceID: traceID, Channel: channel, Persona: persona,
-		Placement: simPlacement(1.0), Rand: rng,
+		Placement: placement, Rand: rng,
 	})
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -268,14 +271,14 @@ func runSingle() {
 		persona.Name, persona.Geo, persona.Device, persona.Identity, persona.Regime)
 	fmt.Printf("Channel:  %s\n\n", channel)
 
-	won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+	winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 	if err != nil {
 		fmt.Printf("Auction: FAILED (%v)\n", err)
 		return
 	}
-	if won {
+	if winner != nil {
 		fmt.Println("Auction: WON")
-		fireEvents(client, trackerURL, traceID, traceparent, channel, profiles["trickle"], rng)
+		fireEvents(client, trackerURL, traceID, traceparent, channel, winner, placement, profiles["trickle"], rng)
 		fmt.Println("Events:  fired")
 	} else {
 		fmt.Println("Auction: NO FILL")
@@ -379,56 +382,83 @@ func checkServices() {
 	fmt.Println("\nAll services reachable. Ready to simulate.")
 }
 
-func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (bool, error) {
+// sendAuction POSTs the bid request to the exchange and returns the winning bid
+// (nil on no-bid) so the caller can fire correctly-attributed, signed beacons
+// using the real winner's campaign/creative/price — not placeholder values.
+func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (*openrtb.BidObj, error) {
 	body, _ := json.Marshal(bidReq)
 	req, err := http.NewRequest("POST", exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", constants.ContentTypeJSON)
 	req.Header.Set("traceparent", traceparent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var bidResp openrtb.BidResponse
 	json.NewDecoder(resp.Body).Decode(&bidResp)
-	return !bidResp.NoBid && len(bidResp.SeatBid) > 0, nil
+	if bidResp.NoBid || len(bidResp.SeatBid) == 0 || len(bidResp.SeatBid[0].Bid) == 0 {
+		return nil, nil
+	}
+	return &bidResp.SeatBid[0].Bid[0], nil
 }
 
 // fireEvents fires the post-win beacon sequence appropriate to the channel:
 // an impression for every format, then video/audio quartile events for
 // instream, and a stochastic viewability + click for display/native.
-func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, p profile, rng *rand.Rand) {
-	firePixel(client, trackerURL, traceID, traceparent, "imp")
+//
+// Every beacon URL is built via pkg/adserving with the REAL winner's
+// campaign/creative/price and the same HMAC signing the platform's ad server
+// uses — so the tracker records correctly-attributed events that pass
+// tracker.signature_validation, identical to a real render. The only synthetic
+// part is the browser-shaped User-Agent (a headless client) and that quartiles
+// are fired in sequence rather than from real playback timing.
+func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, winner *openrtb.BidObj, pl request.Placement, p profile, rng *rand.Rand) {
+	mc := adserving.MacroContext{
+		AuctionID:    traceID, // the auction trace — ties beacons to the auction
+		AuctionPrice: winner.Price,
+		Currency:     "USD",
+		CampaignID:   winner.CID,
+		CreativeID:   winner.CrID,
+		PlacementID:  pl.TagID,
+		PublisherID:  pl.PublisherID,
+		BidModel:     firstNonEmpty(winner.BidModel, "cpm"),
+		TrackerURL:   trackerURL,
+		URLTTL:       time.Hour,
+	}
+
+	fireGet(client, adserving.BuildImpressionURL(mc), traceparent)
 
 	switch ch {
 	case request.Video:
 		for _, ev := range []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"} {
-			fireMediaEvent(client, trackerURL, traceID, traceparent, "video", ev)
+			fireGet(client, adserving.BuildVideoEventURL(mc, ev), traceparent)
 		}
 		if rng.Float64() < p.ClickRate {
-			fireClick(client, trackerURL, traceID, traceparent)
+			fireGet(client, adserving.BuildClickURL(mc), traceparent)
 		}
 	case request.Audio:
 		for _, ev := range []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"} {
-			fireMediaEvent(client, trackerURL, traceID, traceparent, "audio", ev)
+			fireGet(client, adserving.BuildAudioEventURL(mc, ev), traceparent)
 		}
 	default: // display, native
 		if rng.Intn(100) < p.ViewPct {
-			fireViewability(client, trackerURL, traceID, traceparent)
+			fireGet(client, adserving.BuildViewabilityURL(mc), traceparent)
 		}
 		if rng.Float64() < p.ClickRate {
-			fireClick(client, trackerURL, traceID, traceparent)
+			fireGet(client, adserving.BuildClickURL(mc), traceparent)
 		}
 	}
 }
 
-// fireGet sends a tracker pixel GET with the same traceparent used for the
+// fireGet sends a tracker beacon GET with the same traceparent used for the
 // auction (so the tracker span joins the auction trace) plus a browser-shaped
-// User-Agent + Referer so the tracker's fraud check doesn't drop it as a bot.
+// User-Agent + Referer so the tracker's fraud check doesn't drop the headless
+// client as a bot.
 func fireGet(client *http.Client, url, traceparent string) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -442,26 +472,13 @@ func fireGet(client *http.Client, url, traceparent string) {
 	}
 }
 
-func firePixel(client *http.Client, trackerURL, traceID, traceparent, eventType string) {
-	url := fmt.Sprintf("%s/v1/t/%s?tid=%s&cid=demo-campaign&pid=imp-1&sig=sim", trackerURL, eventType, traceID)
-	fireGet(client, url, traceparent)
-}
-
-func fireMediaEvent(client *http.Client, trackerURL, traceID, traceparent, kind, event string) {
-	url := fmt.Sprintf("%s/v1/t/%s?tid=%s&event=%s&sig=sim", trackerURL, kind, traceID, event)
-	fireGet(client, url, traceparent)
-}
-
-func fireViewability(client *http.Client, trackerURL, traceID, traceparent string) {
-	dur := 1000 + rand.Intn(3000)
-	pct := 50 + rand.Intn(50)
-	url := fmt.Sprintf("%s/v1/t/view?tid=%s&dur=%d&pct=%d", trackerURL, traceID, dur, pct)
-	fireGet(client, url, traceparent)
-}
-
-func fireClick(client *http.Client, trackerURL, traceID, traceparent string) {
-	url := fmt.Sprintf("%s/v1/t/click?tid=%s&cid=demo-campaign&sig=sim&redir=https://example.com", trackerURL, traceID)
-	fireGet(client, url, traceparent)
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func printResults(sent, wins, errors int, elapsed time.Duration) {
