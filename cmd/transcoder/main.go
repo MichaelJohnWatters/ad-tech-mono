@@ -72,10 +72,12 @@ func main() {
 	})
 
 	metrics := middleware.NewMetrics(constants.ServiceTranscoder)
+	tm := newTranscoderMetrics(metrics.Registry())
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
-	mux.HandleFunc(routes.TranscodeCondition, conditionHandler(cond))
+	mux.Handle(routes.Metrics, metrics.Handler())
+	mux.HandleFunc(routes.TranscodeCondition, conditionHandler(cond, tm))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceTranscoder)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 10 * time.Second, WriteTimeout: 5 * time.Minute}
@@ -92,8 +94,9 @@ type conditionRequest struct {
 
 // conditionHandler conditions an ad to a profile (cache-first) and returns the
 // segment list. Slow on a cold miss (ffmpeg), instant on a hit.
-func conditionHandler(cond *transcode.Conditioner) http.HandlerFunc {
+func conditionHandler(cond *transcode.Conditioner, tm *transcoderMetrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
 		ctx := r.Context()
 		reqLog := logger.WithContext(log, logger.WithTraceID(ctx, tracing.TraceIDFromContext(ctx)))
 		if r.Method != http.MethodPost {
@@ -122,19 +125,27 @@ func conditionHandler(cond *transcode.Conditioner) http.HandlerFunc {
 				return
 			}
 			if out == nil {
+				tm.record("cache_miss", started) // serving path slated + will warm
 				http.Error(w, "not conditioned yet", http.StatusNotFound)
 				return
 			}
+			tm.record("cached", started)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(out)
 			return
 		}
 		out, err := cond.Condition(ctx, req.CreativeID, req.MediaURL, p)
 		if err != nil {
+			tm.record("failed", started)
 			reqLog.Error("condition failed", "creative", req.CreativeID, "error", err)
 			http.Error(w, "condition failed", http.StatusBadGateway)
 			return
 		}
+		result := "conditioned"
+		if out.Cached {
+			result = "cached"
+		}
+		tm.record(result, started)
 		reqLog.Info("ad conditioned", "creative", req.CreativeID, "profile", p.Hash(),
 			"cached", out.Cached, "segments", len(out.Segments), "duration_s", out.Duration)
 		w.Header().Set("Content-Type", "application/json")
