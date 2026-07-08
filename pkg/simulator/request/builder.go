@@ -51,7 +51,12 @@ type Input struct {
 	Placement Placement // where the ad runs
 	Seller    Seller    // supply-chain origin (defaults to DefaultSeller)
 	TMax      int       // max response time ms (default 120)
-	Rand      *rand.Rand
+	// Pod, when >1 on a Video/Audio channel, marks the impression as one ad
+	// pod slot: it sets the OpenRTB pod fields (PodID, PodSeq, RqdDurs) so the
+	// request advertises a CTV/long-form ad pod of that many slots. Ignored for
+	// display/native.
+	Pod  int
+	Rand *rand.Rand
 }
 
 // Build assembles a production-like openrtb.BidRequest from an Input. Every
@@ -88,6 +93,23 @@ func Build(in Input) openrtb.BidRequest {
 		Source: buildSource(seller, in.TraceID),
 		TMax:   tmax,
 		Cur:    []string{"USD"},
+	}
+
+	// Ad pod: advertise a pod of Pod slots on the video/audio imp so CTV /
+	// long-form breaks are modelled (PodID shared across slots, RqdDurs one
+	// required duration per slot at the placement's max duration).
+	if in.Pod > 1 {
+		podID := "pod-" + in.TraceID
+		durs := make([]int, in.Pod)
+		for i := range durs {
+			durs[i] = pl.MaxDuration
+		}
+		if v := req.Imp[0].Video; v != nil {
+			v.PodID, v.PodSeq, v.RqdDurs = podID, 1, durs
+		}
+		if a := req.Imp[0].Audio; a != nil {
+			a.PodID, a.PodSeq, a.RqdDurs, a.MaxSeq = podID, 1, durs, in.Pod
+		}
 	}
 
 	inv := pl.Inventory

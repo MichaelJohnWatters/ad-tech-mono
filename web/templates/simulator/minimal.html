@@ -310,6 +310,7 @@
                     <select id="videoScheduleMode" style="font-size: 13px; padding: 4px 8px;">
                         <option value="vast">VAST (pre-roll)</option>
                         <option value="vmap">VMAP (pre + mid + post)</option>
+                        <option value="pod">Ad pod (CTV, 3 ads)</option>
                     </select>
                 </label>
                 <button class="btn btn-primary" onclick="playVideoDemo()">Play</button>
@@ -3592,9 +3593,12 @@
             var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
             var geo = document.getElementById('geoSelect').value;
             var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            // Ad-pod mode requests a CTV pod of 3 ads in one VAST (competitive
+            // separation applied server-side).
+            var podQuery = mode === 'pod' ? '&pod=3' : '';
             var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) +
                 '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
-                realismQuery() + '&t=' + Date.now();
+                podQuery + realismQuery() + '&t=' + Date.now();
             preview.textContent = adTagUrl + '\n\n(fetching…)';
 
             logVideoEvent('Video request', mode.toUpperCase() + ' · ' + placement, 'success');
