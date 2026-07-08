@@ -3465,11 +3465,9 @@
          Access policy refuses cross-origin fetches into loopback
          addresses (our localhost VAST endpoint) from non-secure
          contexts, regardless of any server-side CORS / PNA header. -->
-    <!-- Google IMA HTML5 SDK, vendored (web/static/vendor/ima3.js) so the video
-         player script loads from our own gateway, not imasdk.googleapis.com. NB:
-         IMA still emits internal telemetry to Google ad servers at runtime; the
-         ad itself plays entirely from our self-hosted VAST + Minio media. -->
-    <script src="/static/vendor/ima3.js"></script>
+    <!-- No Google IMA SDK. The Video tab uses a small self-hosted VAST player
+         (see playVideoDemo) that plays our own VAST + Minio media directly and
+         fires the tracking beacons itself — zero external player dependency. -->
     <script>
         // ----------------------------------------------------------------
         // Channel tab switch + video player wiring. Display sim lives
@@ -3563,26 +3561,9 @@
         // the shared controls bar above (placementSelect +
         // videoScheduleMode). Tracker beacons fire via the same
         // /v1/t/* endpoints display does.
-        var videoAdsLoader = null;
-        var videoAdsManager = null;
         var videoTraceID = null;
 
-        // Resolve player dimensions even if the video pane was just
-        // unhidden. clientWidth reads 0 in the layout tick after a
-        // display: change; fall back to the wrap div or a sensible
-        // default so IMA doesn't bail on a 0×0 slot.
-        function playerSize() {
-            var v = document.getElementById('content-video');
-            var wrap = document.getElementById('video-player-wrap');
-            var w = v.clientWidth || (wrap && wrap.clientWidth) || 640;
-            var h = v.clientHeight || (wrap && wrap.clientHeight) || 360;
-            // Aspect-ratio CSS is 16/9 on the wrap; if height didn't
-            // resolve, derive it.
-            if (!h && w) h = Math.round(w * 9 / 16);
-            return { w: w, h: h };
-        }
-
-        // Surface IMA AdEvents into the same debug panel + trace
+        // Surface video-player events into the same debug panel + trace
         // timeline display uses. Mirrors the existing traceLog()
         // shape so the two channels read consistently.
         function logVideoEvent(name, meta, cls) {
@@ -3601,125 +3582,146 @@
             }
         }
 
+        // Self-hosted VAST player — no Google IMA. Mirrors the Audio tab: fetch
+        // the VAST, parse the MediaFile + tracking URLs, play the ad in the
+        // <video> element, and fire the impression + quartile beacons ourselves
+        // as playback crosses each mark. Then play the content clip. For a pod
+        // (multiple <Ad> in one VAST) the ads play back-to-back. Zero external
+        // player dependency — the ad plays entirely from our VAST + Minio media.
+        var videoAdQueue = [];
+        var videoContentSrc = null;
+
         function playVideoDemo() {
             var contentVideo = document.getElementById('content-video');
-            var adContainer = document.getElementById('ad-container');
             var preview = document.getElementById('video-adtag-preview');
             var placement = document.getElementById('placementSelect').value || 'pl-sport-mpu';
             var mode = document.getElementById('videoScheduleMode').value;
             var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
             var geo = document.getElementById('geoSelect').value;
             var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
-            // Ad-pod mode requests a CTV pod of 3 ads in one VAST (competitive
-            // separation applied server-side).
             var podQuery = mode === 'pod' ? '&pod=3' : '';
             var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) +
                 '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
                 podQuery + realismQuery() + '&t=' + Date.now();
             preview.textContent = adTagUrl + '\n\n(fetching…)';
-
+            if (!videoContentSrc) videoContentSrc = contentVideo.getAttribute('src');
+            if (typeof traceReset === 'function') traceReset();
             logVideoEvent('Video request', mode.toUpperCase() + ' · ' + placement, 'success');
 
-            fetch(adTagUrl).then(function(r){ return r.text(); }).then(function(text){
-                preview.textContent = adTagUrl + '\n\n' + text.substring(0, 2000) + (text.length > 2000 ? '…' : '');
-                // Pull the auction trace_id out of the response so the
-                // trace timeline can stitch player events to the backend
-                // auction. VAST has <Ad id="<tid>">; VMAP has it on the
-                // first inline ad once IMA fetches the break.
-                var m = text.match(/<Ad id="([0-9a-f]{32})"/);
+            fetchVastDoc(adTagUrl, mode).then(function(res){
+                preview.textContent = adTagUrl + '\n\n' + res.text.substring(0, 2000) + (res.text.length > 2000 ? '…' : '');
+                var m = res.text.match(/<Ad id="([0-9a-f]{32})"/);
                 if (m) {
                     videoTraceID = m[1];
                     logVideoEvent('Auction trace', videoTraceID, 'success');
                     if (typeof startJaegerPoll === 'function') startJaegerPoll(videoTraceID);
                 }
-            }).catch(function(){ preview.textContent = adTagUrl + '\n\n(fetch failed)'; });
-
-            var adDisplay = new google.ima.AdDisplayContainer(adContainer, contentVideo);
-            adDisplay.initialize();
-            videoAdsLoader = new google.ima.AdsLoader(adDisplay);
-            videoAdsLoader.addEventListener(google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED, function(ev){
-                var settings = new google.ima.AdsRenderingSettings();
-                settings.restoreCustomPlaybackStateOnAdBreakComplete = true;
-                videoAdsManager = ev.getAdsManager(contentVideo, settings);
-
-                var E = google.ima.AdEvent.Type;
-                // Wire every player event into the shared debug + trace
-                // panels so the Video flow shows up alongside Display
-                // calls in the same operator surfaces.
-                [
-                    ['LOADED',          E.LOADED,         'success'],
-                    ['STARTED',         E.STARTED,        'success'],
-                    ['IMPRESSION',      E.IMPRESSION,     'success'],
-                    ['FIRST_QUARTILE',  E.FIRST_QUARTILE, ''],
-                    ['MIDPOINT',        E.MIDPOINT,       ''],
-                    ['THIRD_QUARTILE',  E.THIRD_QUARTILE, ''],
-                    ['COMPLETE',        E.COMPLETE,       'success'],
-                    ['CLICK',           E.CLICK,          ''],
-                    ['PAUSED',          E.PAUSED,         ''],
-                    ['RESUMED',         E.RESUMED,        ''],
-                    ['SKIPPED',         E.SKIPPED,        ''],
-                    ['ALL_ADS_COMPLETED',E.ALL_ADS_COMPLETED, 'success'],
-                ].forEach(function(spec) {
-                    videoAdsManager.addEventListener(spec[1], function(e){
-                        var ad = e.getAd && e.getAd();
-                        var meta = ad ? ('#' + ad.getAdId() + ' · ' + ad.getDuration() + 's · ' + ad.getAdvertiserName()) : '';
-                        logVideoEvent(spec[0], meta, spec[2]);
-                    });
-                });
-
-                videoAdsManager.addEventListener(E.CONTENT_PAUSE_REQUESTED, function(){
-                    contentVideo.pause();
-                    logVideoEvent('Content paused for ad', '', 'success');
-                });
-                videoAdsManager.addEventListener(E.CONTENT_RESUME_REQUESTED, function(){
-                    try { contentVideo.play(); } catch (e) {}
-                    logVideoEvent('Content resumed', '', 'success');
-                });
-                videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                    var e = err.getError();
-                    var detail = 'code=' + e.getErrorCode() +
-                                 ' type=' + e.getType() +
-                                 ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
-                                 ' msg=' + e.getMessage();
-                    logVideoEvent('AD_ERROR', detail, 'error');
-                    try { contentVideo.play(); } catch (e2) {}
-                });
-
-                try {
-                    var sz = playerSize();
-                    videoAdsManager.init(sz.w, sz.h, google.ima.ViewMode.NORMAL);
-                    videoAdsManager.start();
-                } catch (e) {
-                    logVideoEvent('IMA init failed', String(e), 'error');
-                    try { contentVideo.play(); } catch (e2) {}
-                }
-            }, false);
-            videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                var e = err.getError();
-                var detail = 'code=' + e.getErrorCode() +
-                             ' type=' + e.getType() +
-                             ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
-                             ' msg=' + e.getMessage();
-                logVideoEvent('AdsLoader error', detail, 'error');
-                try { contentVideo.play(); } catch (ex) {}
-            }, false);
-            contentVideo.addEventListener('ended', function(){ if (videoAdsLoader) videoAdsLoader.contentComplete(); });
-
-            var req = new google.ima.AdsRequest();
-            req.adTagUrl = adTagUrl;
-            var sz = playerSize();
-            req.linearAdSlotWidth = sz.w;
-            req.linearAdSlotHeight = sz.h;
-            videoAdsLoader.requestAds(req);
+                var ads = parseVastAds(res.doc);
+                if (!ads.length) { logVideoEvent('No ad returned', '', 'nobid'); playVideoContent(); return; }
+                logVideoEvent('Ad(s) parsed', ads.length + ' in pod', 'success');
+                videoAdQueue = ads;
+                playNextVideoAd();
+            }).catch(function(err){
+                preview.textContent = adTagUrl + '\n\n(failed: ' + err + ')';
+                logVideoEvent('Video error', String(err), 'error');
+            });
         }
+
+        // fetchVastDoc returns {text, doc}. For VMAP it first fetches the schedule
+        // then the pre-roll break's VAST (mid/post-roll timeline is out of scope
+        // for the simple player).
+        function fetchVastDoc(url, mode) {
+            var parse = function(text){ return { text: text, doc: new DOMParser().parseFromString(text, 'application/xml') }; };
+            if (mode !== 'vmap') return fetch(url).then(function(r){ return r.text(); }).then(parse);
+            return fetch(url).then(function(r){ return r.text(); }).then(function(vmapXml){
+                var vdoc = new DOMParser().parseFromString(vmapXml, 'application/xml');
+                var tag = vdoc.querySelector('AdTagURI');
+                if (!tag) throw new Error('no ad break in VMAP');
+                logVideoEvent('VMAP pre-roll break', '', 'success');
+                return fetch(tag.textContent.trim()).then(function(r){ return r.text(); }).then(parse);
+            });
+        }
+
+        function parseVastAds(doc) {
+            var out = [];
+            doc.querySelectorAll('Ad').forEach(function(ad){
+                var media = ad.querySelector('MediaFile');
+                if (!ad.querySelector('InLine') || !media) return;
+                var trackers = {};
+                ad.querySelectorAll('Tracking').forEach(function(t){
+                    var ev = t.getAttribute('event');
+                    (trackers[ev] = trackers[ev] || []).push(t.textContent.trim());
+                });
+                var click = ad.querySelector('ClickThrough');
+                out.push({
+                    mediaURL: media.textContent.trim(),
+                    title: (ad.querySelector('AdTitle') || {}).textContent || 'Video Ad',
+                    impressions: Array.prototype.map.call(ad.querySelectorAll('Impression'), function(i){ return i.textContent.trim(); }),
+                    trackers: trackers,
+                    clickThrough: click ? click.textContent.trim() : null,
+                    fired: {}
+                });
+            });
+            return out;
+        }
+
+        function playNextVideoAd() {
+            var contentVideo = document.getElementById('content-video');
+            if (!videoAdQueue.length) { playVideoContent(); return; }
+            var ad = videoAdQueue.shift();
+            logVideoEvent('Ad loaded', ad.title, 'success');
+
+            var onPlaying = function(){
+                contentVideo.removeEventListener('playing', onPlaying);
+                ad.impressions.forEach(function(u){ fireBeacon(u, 'impression'); });
+                (ad.trackers['start'] || []).forEach(function(u){ fireBeacon(u, 'start'); });
+                logVideoEvent('Ad impression + start', ad.title, 'success');
+            };
+            var onTime = function(){
+                if (!contentVideo.duration) return;
+                var f = contentVideo.currentTime / contentVideo.duration;
+                [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]].forEach(function(q){
+                    if (f >= q[1] && !ad.fired[q[0]]) {
+                        ad.fired[q[0]] = true;
+                        (ad.trackers[q[0]] || []).forEach(function(u){ fireBeacon(u, q[0]); });
+                        logVideoEvent('Ad ' + q[0], '', '');
+                    }
+                });
+            };
+            var onEnded = function(){
+                contentVideo.removeEventListener('timeupdate', onTime);
+                contentVideo.removeEventListener('ended', onEnded);
+                (ad.trackers['complete'] || []).forEach(function(u){ fireBeacon(u, 'complete'); });
+                logVideoEvent('Ad complete', ad.title, 'success');
+                playNextVideoAd(); // next pod ad, or content when the queue is empty
+            };
+            contentVideo.addEventListener('playing', onPlaying);
+            contentVideo.addEventListener('timeupdate', onTime);
+            contentVideo.addEventListener('ended', onEnded);
+
+            contentVideo.src = ad.mediaURL;
+            contentVideo.load();
+            contentVideo.play().catch(function(e){ logVideoEvent('Ad autoplay blocked (click the player)', String(e), ''); });
+        }
+
+        function playVideoContent() {
+            var contentVideo = document.getElementById('content-video');
+            if (!videoContentSrc) return;
+            contentVideo.src = videoContentSrc;
+            contentVideo.load();
+            logVideoEvent('Content playing', '', 'success');
+            contentVideo.play().catch(function(){});
+        }
+
         function resetVideoDemo() {
             var contentVideo = document.getElementById('content-video');
             try { contentVideo.pause(); } catch (e) {}
-            contentVideo.currentTime = 0;
-            if (videoAdsManager) { try { videoAdsManager.destroy(); } catch (e) {} videoAdsManager = null; }
+            videoAdQueue = [];
+            if (videoContentSrc) { contentVideo.src = videoContentSrc; contentVideo.load(); }
             videoTraceID = null;
             var preview = document.getElementById('video-adtag-preview');
             if (preview) preview.textContent = '(load to populate)';
+            if (typeof stopJaegerPoll === 'function') stopJaegerPoll();
             logVideoEvent('Reset', '', '');
         }
 
