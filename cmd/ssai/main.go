@@ -103,7 +103,8 @@ func main() {
 		placementFn: func() string {
 			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
 		},
-		client: &http.Client{Timeout: 4 * time.Second},
+		originFn: func() string { return cfg.Get("ssai.origin_url", "") },
+		client:   &http.Client{Timeout: 4 * time.Second},
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceSSAI)
@@ -127,7 +128,41 @@ type stitcherDeps struct {
 	publicURL   string
 	segDurFn    func() float64
 	placementFn func() string
+	originFn    func() string // configured origin manifest URL ("" = built-in sample)
 	client      *http.Client
+}
+
+// originManifest returns the content manifest to stitch: the request's ?origin=
+// URL if given, else the configured ssai.origin_url, else the built-in sample.
+// Fetching a real origin makes the stitcher a true proxy-and-stitch rather than
+// a hardcoded playlist. Falls back to the sample on any fetch error so the demo
+// never breaks.
+func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, reqLog *slog.Logger) string {
+	origin := r.URL.Query().Get("origin")
+	if origin == "" && d.originFn != nil {
+		origin = d.originFn()
+	}
+	if origin == "" {
+		return sampleContent
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
+	if err != nil {
+		reqLog.Warn("ssai origin request build failed, using sample", "origin", origin, "error", err)
+		return sampleContent
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		reqLog.Warn("ssai origin fetch failed, using sample", "origin", origin, "error", err)
+		return sampleContent
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		reqLog.Warn("ssai origin fetch non-200, using sample", "origin", origin, "status", resp.StatusCode)
+		return sampleContent
+	}
+	reqLog.Info("ssai stitching real origin", "origin", origin, "bytes", len(body))
+	return string(body)
 }
 
 // serveContentManifest returns the sample origin content manifest (with ad-break
@@ -165,7 +200,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	traceID := tracing.TraceIDFromContext(ctx)
 	reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
-	m, err := ssai.ParseMedia(sampleContent)
+	m, err := ssai.ParseMedia(d.originManifest(ctx, r, reqLog))
 	if err != nil {
 		http.Error(w, "content manifest parse failed", http.StatusInternalServerError)
 		return
