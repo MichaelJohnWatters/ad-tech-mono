@@ -203,3 +203,26 @@ publishers:
         floor_price: 1.00
         page_url: "http://localhost:8080/dev/publisher-simulator"
         categories: [IAB12]
+      # One placement per channel so the /dev/publisher-simulator UI can drive
+      # every ad type against a properly-typed placement (SSP builds the imp
+      # by channel, but a real placement carries the right format + floor).
+      - id: pl-sim-native
+        name: "Simulator Native In-Feed"
+        format: native
+        floor_price: 1.00
+        page_url: "http://localhost:8080/dev/publisher-simulator"
+        categories: [IAB12]
+      - id: pl-sim-video
+        name: "Simulator Video Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "http://localhost:8080/dev/publisher-simulator"
+        categories: [IAB12]
+      - id: pl-sim-audio
+        name: "Simulator Audio (Podcast)"
+        format: audio
+        floor_price: 1.50
+        page_url: "http://localhost:8080/dev/publisher-simulator"
+        categories: [IAB12]
