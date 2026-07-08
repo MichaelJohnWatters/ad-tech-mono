@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,6 +40,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/transcode"
 )
 
 var log = logger.New(constants.ServiceSSAI)
@@ -103,8 +105,9 @@ func main() {
 		placementFn: func() string {
 			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
 		},
-		originFn: func() string { return cfg.Get("ssai.origin_url", "") },
-		client:   &http.Client{Timeout: 4 * time.Second},
+		originFn:      func() string { return cfg.Get("ssai.origin_url", "") },
+		transcoderURL: cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
+		client:        &http.Client{Timeout: 4 * time.Second},
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceSSAI)
@@ -123,13 +126,82 @@ func main() {
 }
 
 type stitcherDeps struct {
-	sspURL      string
-	trackerURL  string
-	publicURL   string
-	segDurFn    func() float64
-	placementFn func() string
-	originFn    func() string // configured origin manifest URL ("" = built-in sample)
-	client      *http.Client
+	sspURL        string
+	trackerURL    string
+	publicURL     string
+	segDurFn      func() float64
+	placementFn   func() string
+	originFn      func() string // configured origin manifest URL ("" = built-in sample)
+	transcoderURL string        // runtime ad-conditioning service ("" = disabled)
+	client        *http.Client
+}
+
+// contentProfile is the encoding profile ads are conditioned to match. Single
+// profile for the MVP (P1–P4); P5 introduces a per-rung ladder.
+func (d *stitcherDeps) contentProfile() transcode.Profile { return transcode.DefaultProfile() }
+
+// conditionCached asks the transcoder for the winner's already-conditioned
+// segments (cache-only — never triggers a transcode, so serving doesn't block on
+// ffmpeg). Returns nil when the transcoder is disabled, unreachable, or the ad
+// isn't conditioned yet (the caller then slates + warms).
+func (d *stitcherDeps) conditionCached(ctx context.Context, winner *sspWinner, reqLog *slog.Logger) *transcode.Conditioned {
+	if d.transcoderURL == "" || winner.CreativeID == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{
+		"creative_id": winner.CreativeID,
+		"media_url":   winner.MediaURL,
+		"profile":     d.contentProfile(),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		d.transcoderURL+routes.TranscodeCondition+"?cache_only=1", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	tracing.InjectHTTP(ctx, req)
+	resp, err := d.client.Do(req)
+	if err != nil {
+		reqLog.Warn("transcoder cache lookup failed", "error", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil // 404 = not conditioned yet
+	}
+	var out transcode.Conditioned
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// warmCondition triggers a real (blocking, cached) conditioning of the winner in
+// the background, so the NEXT viewer of this ad gets seamless segments. Fire-
+// and-forget with a detached context so it survives this request.
+func (d *stitcherDeps) warmCondition(winner *sspWinner) {
+	if d.transcoderURL == "" || winner.CreativeID == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5*time.Minute)
+		defer cancel()
+		body, _ := json.Marshal(map[string]any{
+			"creative_id": winner.CreativeID,
+			"media_url":   winner.MediaURL,
+			"profile":     d.contentProfile(),
+		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.transcoderURL+routes.TranscodeCondition, bytes.NewReader(body))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		// Dedicated long-timeout client: a cold conditioning is minutes of
+		// ffmpeg, far past the 4s serving client, and we must not cancel it.
+		if resp, err := (&http.Client{Timeout: 6 * time.Minute}).Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
 }
 
 // originManifest returns the content manifest to stitch: the request's ?origin=
@@ -237,15 +309,34 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		// stream, so this is the SSAI impression moment.
 		d.fireBeacon(ctx, adserving.BuildImpressionURL(mc))
 
+		adIdx := i
+
+		// Real SSAI: condition the winning ad to the content profile so its
+		// segments are byte-compatible with the content stream. Cache-only so we
+		// never block on ffmpeg; on a hit we splice the real .ts.
+		if cond := d.conditionCached(ctx, winner, reqLog); cond != nil && len(cond.Segments) > 0 {
+			segs := make([]ssai.Segment, len(cond.Segments))
+			var start float64
+			for n, cs := range cond.Segments {
+				ev := quartileForSegment(start, cond.Duration, cs.Duration)
+				signedBeacon := adserving.BuildVideoEventURL(mc, ev)
+				// The segment endpoint fires the beacon server-side then 302s to
+				// the real conditioned .ts (cs.URI).
+				segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, adIdx, n, ev, signedBeacon, cs.URI)}
+				start += cs.Duration
+			}
+			return segs
+		}
+
+		// Miss: warm the conditioner for next time and slate THIS break with the
+		// whole-file fallback (plays, just not seamless until conditioned).
+		d.warmCondition(winner)
 		dur := float64(winner.DurationSeconds)
 		if dur <= 0 {
 			dur = span.Duration
 		}
-		adIdx := i
 		return ssai.SegmentAds(dur, segDur, func(n int, start float64) string {
 			ev := quartileForSegment(start, dur, segDur)
-			// Pre-sign the real quartile beacon now; the segment endpoint just
-			// fires it when the player fetches the segment.
 			signedBeacon := adserving.BuildVideoEventURL(mc, ev)
 			return d.segmentURL(session, adTrace, adIdx, n, ev, signedBeacon, winner.MediaURL)
 		})

@@ -22,6 +22,9 @@ spec:
             # Browser-reachable origin the stitched manifest tells the player to
             # fetch ad segments from — points at the gateway's /v1/ssai/ proxy.
             - { name: SSAI_PUBLIC_URL, value: "http://localhost:8080" }
+            # Runtime ad conditioning: the stitcher asks the transcoder (cache-
+            # only) for the winner's byte-compatible segments; slate + warm on miss.
+            - { name: SSAI_TRANSCODER_URL, value: "http://transcoder:8094" }
             - { name: NATS_URL, value: "nats://nats:4222" }
             - { name: LOKI_URL, value: "http://loki:3100" }
             - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
