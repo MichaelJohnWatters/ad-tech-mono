@@ -49,12 +49,15 @@ campaigns:
     creatives:
       - id: cr-shoes-native-001
         format: native
+        # Images point at seed-generated local theme SVGs (served via the
+        # gateway /v1/creatives proxy from Minio) rather than an external CDN,
+        # so the native ad renders in local dev. acme-shoes.com → "retail" theme.
         native:
           title: "Acme Running Shoes — 20% Off"
-          main_image: "https://cdn.acme-shoes.com/native/runner-1200x627.jpg"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-1200x627.svg"
           main_image_w: 1200
           main_image_h: 627
-          icon: "https://cdn.acme-shoes.com/native/icon-128.png"
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
           sponsored: "Acme"
           body: "Lightweight, all-day comfort. Free returns on every pair."
           cta: "Shop now"
