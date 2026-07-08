@@ -59,6 +59,30 @@ campaigns:
           body: "Lightweight, all-day comfort. Free returns on every pair."
           cta: "Shop now"
 
+  - id: li-audio-001
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-001
+    name: "Acme Shoes - Audio Podcast Spot"
+    creative_domain: acme-shoes.com
+    base_bid: 4.00
+    currency: USD
+    daily_budget: 500
+    total_budget: 10000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    format: audio
+    targeting:
+      include:
+        geo: [GBR, USA]
+    # Audio spot: the DSP bids when the SSP sends an audio request
+    # (channel=audio) and ships the media URL + duration; the
+    # publisher-adserver assembles the audio VAST (audio/mpeg MediaFile).
+    creatives:
+      - { id: cr-shoes-audio-30s, format: audio, duration: 30,
+          media_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" }
+
   - id: li-002
     account_id: adv-acme
     advertiser_id: adv-acme
