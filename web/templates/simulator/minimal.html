@@ -4009,7 +4009,7 @@
             var geo = document.getElementById('geoSelect').value;
             // Stitch real packaged content (segmented HLS in Minio) so hls.js can
             // play a seamless content+ad byte stream.
-            var origin = window.location.origin + '/v1/creatives/ssai/content/sample/index.m3u8';
+            var origin = window.location.origin + '/v1/creatives/ssai/content/sample/master.m3u8';
             var url = window.location.origin + '/v1/ssai/manifest.m3u8?placement_id=' + encodeURIComponent(placement) +
                 '&geo=' + encodeURIComponent(geo) + '&device=ctv&origin=' + encodeURIComponent(origin) + realismQuery() + '&t=' + Date.now();
             preview.textContent = url + '\n\n(fetching manifest…)';
@@ -4018,13 +4018,16 @@
 
             fetch(url).then(function(r){ return r.text(); }).then(function(manifest){
                 preview.textContent = url + '\n\n' + manifest;
-                var tm = manifest.match(/tid%3D([0-9a-f]{32})/) || manifest.match(/tid=([0-9a-f]{32})/);
-                if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
-                badge.style.display = manifest.indexOf('/v1/ssai/seg') >= 0 ? '' : 'none';
+                // ABR: the stitcher returns a master (variant URIs point back at
+                // the stitcher). Trace + badge come from a variant's media
+                // playlist; for a single media playlist they come from it directly.
+                var isMaster = manifest.indexOf('#EXT-X-STREAM-INF') >= 0;
+                ssaiTraceAndBadge(manifest, isMaster, badge);
 
                 if (ssaiHls) { ssaiHls.destroy(); ssaiHls = null; }
-                // Real HLS: the packaged content's segments are absolute Minio URLs.
-                var realStream = manifest.indexOf('/v1/creatives/ssai/content/') >= 0;
+                // Real HLS: a master (ABR) or a media playlist with absolute
+                // Minio content segments.
+                var realStream = isMaster || manifest.indexOf('/v1/creatives/ssai/content/') >= 0;
                 if (realStream && window.Hls && window.Hls.isSupported()) {
                     // hls.js walks the stitched manifest, fetching content + ad
                     // segments. Each ad-segment request hits /v1/ssai/seg which
@@ -4096,6 +4099,21 @@
             v.src = '/v1/creatives/media/bbb-720-10mb.mp4'; v.load();
             logVideoEvent('SSAI content playing', '', 'success');
             v.play().catch(function(){});
+        }
+
+        // ssaiTraceAndBadge extracts the auction trace + sets the "stitched" badge.
+        // A master has neither (they live in the variant media playlists), so we
+        // fetch the first variant (a stitcher URL) to read them.
+        function ssaiTraceAndBadge(manifest, isMaster, badge) {
+            var apply = function(text){
+                var tm = text.match(/tid%3D([0-9a-f]{32})/) || text.match(/tid=([0-9a-f]{32})/);
+                if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
+                if (badge) badge.style.display = text.indexOf('/v1/ssai/seg') >= 0 ? '' : 'none';
+            };
+            if (!isMaster) { apply(manifest); return; }
+            var variant = null, lines = manifest.split('\n');
+            for (var i = 0; i < lines.length; i++) { var l = lines[i].trim(); if (l && l.charAt(0) !== '#') { variant = l; break; } }
+            if (variant) fetch(variant).then(function(r){ return r.text(); }).then(apply).catch(function(){});
         }
 
         function resetSSAI() {

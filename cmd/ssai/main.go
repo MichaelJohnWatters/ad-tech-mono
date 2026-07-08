@@ -136,22 +136,18 @@ type stitcherDeps struct {
 	client        *http.Client
 }
 
-// contentProfile is the encoding profile ads are conditioned to match. Single
-// profile for the MVP (P1–P4); P5 introduces a per-rung ladder.
-func (d *stitcherDeps) contentProfile() transcode.Profile { return transcode.DefaultProfile() }
-
 // conditionCached asks the transcoder for the winner's already-conditioned
-// segments (cache-only — never triggers a transcode, so serving doesn't block on
-// ffmpeg). Returns nil when the transcoder is disabled, unreachable, or the ad
-// isn't conditioned yet (the caller then slates + warms).
-func (d *stitcherDeps) conditionCached(ctx context.Context, winner *sspWinner, reqLog *slog.Logger) *transcode.Conditioned {
+// segments for a profile (cache-only — never triggers a transcode, so serving
+// doesn't block on ffmpeg). Returns nil when the transcoder is disabled,
+// unreachable, or the ad isn't conditioned yet (the caller then slates + warms).
+func (d *stitcherDeps) conditionCached(ctx context.Context, winner *sspWinner, p transcode.Profile, reqLog *slog.Logger) *transcode.Conditioned {
 	if d.transcoderURL == "" || winner.CreativeID == "" {
 		return nil
 	}
 	body, _ := json.Marshal(map[string]any{
 		"creative_id": winner.CreativeID,
 		"media_url":   winner.MediaURL,
-		"profile":     d.contentProfile(),
+		"profile":     p,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		d.transcoderURL+routes.TranscodeCondition+"?cache_only=1", bytes.NewReader(body))
@@ -179,7 +175,7 @@ func (d *stitcherDeps) conditionCached(ctx context.Context, winner *sspWinner, r
 // warmCondition triggers a real (blocking, cached) conditioning of the winner in
 // the background, so the NEXT viewer of this ad gets seamless segments. Fire-
 // and-forget with a detached context so it survives this request.
-func (d *stitcherDeps) warmCondition(winner *sspWinner) {
+func (d *stitcherDeps) warmCondition(winner *sspWinner, p transcode.Profile) {
 	if d.transcoderURL == "" || winner.CreativeID == "" {
 		return
 	}
@@ -189,7 +185,7 @@ func (d *stitcherDeps) warmCondition(winner *sspWinner) {
 		body, _ := json.Marshal(map[string]any{
 			"creative_id": winner.CreativeID,
 			"media_url":   winner.MediaURL,
-			"profile":     d.contentProfile(),
+			"profile":     p,
 		})
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.transcoderURL+routes.TranscodeCondition, bytes.NewReader(body))
 		if err != nil {
@@ -260,6 +256,53 @@ func resolveContentURIs(m *ssai.Manifest, originURL string) {
 	}
 }
 
+// serveMaster rewrites each variant URI in an ABR master to a stitcher URL
+// (?origin=<variant abs>&rung=<height> + the viewer's params), so hls.js fetches
+// each rung through this stitcher and gets an ad conditioned to that rung.
+func (d *stitcherDeps) serveMaster(w http.ResponseWriter, r *http.Request, master, masterURL string, reqLog *slog.Logger) {
+	variants := ssai.ParseMaster(master)
+	baseU, _ := url.Parse(masterURL)
+	for i := range variants {
+		abs := variants[i].URI
+		if u, err := url.Parse(abs); err == nil && !u.IsAbs() && baseU != nil {
+			abs = baseU.ResolveReference(u).String()
+		}
+		variants[i].URI = d.variantStitchURL(r, abs, variants[i].Height)
+	}
+	reqLog.Info("ssai master rewritten", "rungs", len(variants))
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, ssai.BuildMaster(variants))
+}
+
+// variantStitchURL builds a browser-reachable stitcher URL that stitches one
+// variant playlist, carrying the viewer's params and the rung to condition to.
+func (d *stitcherDeps) variantStitchURL(r *http.Request, variantAbsURL string, height int) string {
+	q := url.Values{}
+	for k, v := range r.URL.Query() {
+		if k == "origin" || k == "rung" || k == "t" {
+			continue
+		}
+		q[k] = append([]string(nil), v...)
+	}
+	q.Set("origin", variantAbsURL)
+	q.Set("rung", strconv.Itoa(height))
+	return strings.TrimRight(d.publicURL, "/") + routes.SSAIManifest + "?" + q.Encode()
+}
+
+// profileForRung picks the ladder profile matching the request's ?rung= (so the
+// ad is conditioned to the same rung the player is watching); default otherwise.
+func (d *stitcherDeps) profileForRung(r *http.Request) transcode.Profile {
+	if rung := r.URL.Query().Get("rung"); rung != "" {
+		for _, p := range transcode.DefaultLadder() {
+			if strconv.Itoa(p.Height) == rung || p.RungName() == rung {
+				return p
+			}
+		}
+	}
+	return transcode.DefaultProfile()
+}
+
 // serveContentManifest returns the sample origin content manifest (with ad-break
 // markers) so the stitcher has something to rewrite in the demo.
 func serveContentManifest(w http.ResponseWriter, r *http.Request) {
@@ -296,6 +339,15 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
 	manifest, originURL := d.originManifest(ctx, r, reqLog)
+
+	// ABR: if the origin is a master playlist, rewrite each variant URI to point
+	// back at this stitcher (so every rung is stitched independently, with the
+	// ad conditioned to that rung's profile) and re-serve the master.
+	if ssai.IsMaster(manifest) {
+		d.serveMaster(w, r, manifest, originURL, reqLog)
+		return
+	}
+
 	m, err := ssai.ParseMedia(manifest)
 	if err != nil {
 		http.Error(w, "content manifest parse failed", http.StatusInternalServerError)
@@ -313,6 +365,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	segDur := d.segDurFn()
+	adProfile := d.profileForRung(r) // condition ads to the rung the player is watching
 	filled := 0
 	m.Stitch(func(i int, span ssai.BreakSpan) []ssai.Segment {
 		winner := d.runAuction(ctx, r, span.Duration, reqLog)
@@ -341,7 +394,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		// Real SSAI: condition the winning ad to the content profile so its
 		// segments are byte-compatible with the content stream. Cache-only so we
 		// never block on ffmpeg; on a hit we splice the real .ts.
-		if cond := d.conditionCached(ctx, winner, reqLog); cond != nil && len(cond.Segments) > 0 {
+		if cond := d.conditionCached(ctx, winner, adProfile, reqLog); cond != nil && len(cond.Segments) > 0 {
 			segs := make([]ssai.Segment, len(cond.Segments))
 			var start float64
 			for n, cs := range cond.Segments {
@@ -357,7 +410,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Miss: warm the conditioner for next time and slate THIS break with the
 		// whole-file fallback (plays, just not seamless until conditioned).
-		d.warmCondition(winner)
+		d.warmCondition(winner, adProfile)
 		dur := float64(winner.DurationSeconds)
 		if dur <= 0 {
 			dur = span.Duration
