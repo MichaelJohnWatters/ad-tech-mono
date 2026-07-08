@@ -48,6 +48,7 @@ type URLs struct {
 	AdServer          string
 	Reporting         string
 	PublisherAdServer string
+	SSAI              string
 	NATSURL           string
 	RedisAddr         string
 	MinioEndpt        string
@@ -77,6 +78,7 @@ func DefaultURLs() URLs {
 		AdServer:          routes.DefaultAdServerURL,
 		Reporting:         routes.DefaultReportingURL,
 		PublisherAdServer: routes.DefaultPublisherAdServerURL,
+		SSAI:              routes.DefaultSSAIURL,
 		NATSURL:           routes.DefaultNATSURL,
 		RedisAddr:         routes.DefaultRedisAddr,
 		MinioEndpt:        routes.DefaultMinioEndpoint,
