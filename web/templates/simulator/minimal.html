@@ -251,6 +251,27 @@
                 <option value="2">Desktop</option>
                 <option value="5">Tablet</option>
             </select>
+            <!-- Request realism: consent regime + identity type. These append
+                 the same production-like privacy/identity signals every real
+                 request carries (GDPR/TCF, US Privacy, GPP, GPC, COPPA; UID2 /
+                 hashed-email / first-party id) so the auction exercises the
+                 DSP's privacy + identity paths, not just geo/device. See
+                 realismParams() and pkg/simulator/request. -->
+            <select id="consentSelect" title="Privacy / consent regime">
+                <option value="us_clear">US · no opt-out</option>
+                <option value="gdpr_consented">EU · GDPR consented</option>
+                <option value="gdpr_no_consent">EU · GDPR no consent</option>
+                <option value="ccpa_opt_out">US · CCPA opt-out</option>
+                <option value="gpc">US · GPC on</option>
+                <option value="coppa">COPPA (child)</option>
+                <option value="gpp_opt_out">US · GPP opt-out</option>
+            </select>
+            <select id="identitySelect" title="Identity type">
+                <option value="uid2">UID2</option>
+                <option value="hashed_email">Hashed email</option>
+                <option value="publisher_id">First-party ID</option>
+                <option value="anonymous">Anonymous</option>
+            </select>
             <!-- Placement picker. Replaces the static size dropdown: every
                  option is a real seeded placement from the SSP. Selecting one
                  changes (a) which placement_id we POST in the ad request,
@@ -295,6 +316,18 @@
                 <button class="btn btn-secondary" onclick="resetVideoDemo()">Reset</button>
             </span>
 
+            <!-- Native channel controls. -->
+            <span class="native-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="loadNativeDemo()">Load Native</button>
+                <button class="btn btn-secondary" onclick="clearNativeDemo()">Clear</button>
+            </span>
+
+            <!-- Audio channel controls. -->
+            <span class="audio-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="playAudioDemo()">Load &amp; Play Audio</button>
+                <button class="btn btn-secondary" onclick="resetAudioDemo()">Reset</button>
+            </span>
+
             <button class="btn btn-secondary" id="drainBtn" onclick="drainBudgets()" style="margin-left: 12px;">Drain budgets</button>
             <button class="btn btn-secondary" id="resetBtn" onclick="resetAndReseed()" style="margin-left: 12px;">Reset &amp; reseed</button>
     </div>
@@ -310,6 +343,8 @@
             <div class="channel-tabs" style="display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border, #2a3441);">
                 <button type="button" id="tab-display" class="channel-tab active" onclick="switchChannel('display')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid #2d8cf0; color: var(--fg, #e6edf3); font-weight: 600; cursor: pointer; font-size: 13px;">Display</button>
                 <button type="button" id="tab-video" class="channel-tab" onclick="switchChannel('video')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Video (VAST / VMAP)</button>
+                <button type="button" id="tab-native" class="channel-tab" onclick="switchChannel('native')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Native</button>
+                <button type="button" id="tab-audio" class="channel-tab" onclick="switchChannel('audio')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Audio (DAAST)</button>
             </div>
 
             <!-- Display pane: the original 300x250 ad slot. -->
@@ -336,6 +371,37 @@
                 <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
                     <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">VAST / VMAP request URL + raw response</summary>
                     <pre id="video-adtag-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- Native pane: fetches an OpenRTB Native 1.2 winner from the
+                 publisher-adserver (/v1/pubad/native) and drops the returned
+                 HTML fragment (title/image/sponsored/CTA + signed trackers)
+                 into an in-feed card slot. -->
+            <div id="pane-native" class="channel-pane" style="display: none;">
+                <p>Native in-feed unit. The publisher ad server runs a real auction (SSP → Exchange → DSP), the DSP fills an OpenRTB Native response, and the ad server renders it into the card below with signed impression/click trackers.</p>
+                <div id="native-slot" style="max-width: 420px; border: 1px solid var(--border, #2a3441); border-radius: 8px; overflow: hidden; background: var(--bg-card, #1c2532); min-height: 120px;">
+                    <div style="padding: 24px; color: #999; font-size: 13px;">Click "Load Native" to fill this in-feed slot.</div>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Native request URL + raw response</summary>
+                    <pre id="native-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- Audio pane: fetches an audio VAST from /v1/pubad/audio, plays
+                 the MediaFile through a native <audio> element, and fires the
+                 impression + quartile beacons (routed through /v1/t/audio) as
+                 playback progresses. -->
+            <div id="pane-audio" class="channel-pane" style="display: none;">
+                <p>Audio spot (podcast / streaming radio). The player fetches an audio VAST from the publisher ad server, plays the ad's MediaFile, and fires impression + quartile beacons through <code>/v1/t/audio</code> so the tracker publishes typed AudioEvents.</p>
+                <div style="max-width: 520px; background: var(--bg-card, #1c2532); border: 1px solid var(--border, #2a3441); border-radius: 8px; padding: 16px;">
+                    <div id="audio-advertiser" style="font-size: 13px; color: var(--fg-muted, #8b949e); margin-bottom: 8px;">No audio ad loaded</div>
+                    <audio id="audio-player" controls preload="none" style="width: 100%;"></audio>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Audio VAST request URL + raw response</summary>
+                    <pre id="audio-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
                 </details>
             </div>
 
@@ -1871,7 +1937,7 @@
             // SSP accepts placement_id as either a UUID (UI-created) or an
             // external key (seed-derived). The picker holds UUIDs, so we
             // send those directly.
-            const sspURL = `${SSP_URL}/v1/ssp/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            const sspURL = `${SSP_URL}/v1/ssp/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}${realismQuery()}`;
             // Resize ad slot to match the selected placement's dimensions.
             const slot = document.getElementById('adSlot');
             slot.style.width = sel.Width + 'px';
@@ -2184,7 +2250,7 @@
                 },
             });
 
-            const url = `${PUBAD_URL}/v1/pubad/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            const url = `${PUBAD_URL}/v1/pubad/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}${realismQuery()}`;
             const auctionStart = performance.now();
             let serveResp;
             try {
@@ -3412,6 +3478,17 @@
             { value: 'pl-sport-mpu',       label: 'Live Page MPU (Sport, display floor)' },
             { value: 'pl-news-mpu',        label: 'Article MPU (News, display floor)' }
         ];
+        // Dedicated native + audio placements on the simulator publisher
+        // (profiles/publishers/standard.yaml). The SSP accepts these external
+        // keys directly (it derives the UUID), so they don't need to come from
+        // the /v1/ssp/placements list.
+        var NATIVE_PLACEMENTS = [
+            { value: 'pl-sim-native', label: 'Simulator Native In-Feed ($1 floor)' },
+            { value: 'pl-news-mpu',   label: 'Article MPU as native (News)' }
+        ];
+        var AUDIO_PLACEMENTS = [
+            { value: 'pl-sim-audio', label: 'Simulator Audio Podcast Spot ($1.50 floor)' }
+        ];
 
         // Cache the display dropdown's HTML on first channel-switch so
         // we can swap back to it without re-querying /v1/ssp/placements
@@ -3421,15 +3498,18 @@
         function applyPlacementListForChannel(channel) {
             var sel = document.getElementById('placementSelect');
             if (!sel) return;
-            if (channel === 'video') {
+            var lists = { video: VIDEO_PLACEMENTS, native: NATIVE_PLACEMENTS, audio: AUDIO_PLACEMENTS };
+            var list = lists[channel];
+            if (list) {
+                // Stash the real (SSP-loaded) display placement list once so we
+                // can restore it when switching back to display.
                 if (_displayPlacementsHTML === null) _displayPlacementsHTML = sel.innerHTML;
-                sel.innerHTML = VIDEO_PLACEMENTS.map(function(p){
+                sel.innerHTML = list.map(function(p){
                     return '<option value="' + p.value + '">' + p.label + '</option>';
                 }).join('');
-                // Preserve previous selection where possible so toggling
-                // back and forth doesn't surprise the user.
-                sel.value = VIDEO_PLACEMENTS[0].value;
+                sel.value = list[0].value;
             } else {
+                // Display: restore the SSP-loaded placement list.
                 if (_displayPlacementsHTML !== null) {
                     sel.innerHTML = _displayPlacementsHTML;
                     _displayPlacementsHTML = null;
@@ -3437,37 +3517,26 @@
             }
         }
 
-        function switchChannel(channel) {
-            var displayBtn = document.getElementById('tab-display');
-            var videoBtn = document.getElementById('tab-video');
-            var displayPane = document.getElementById('pane-display');
-            var videoPane = document.getElementById('pane-video');
-            var displayCtrls = document.querySelectorAll('.display-only-controls');
-            var videoCtrls = document.querySelectorAll('.video-only-controls');
+        // Channels the simulator can drive. Each has a tab button, a content
+        // pane, and a control-group class, all named by convention so
+        // switchChannel can toggle them generically.
+        var SIM_CHANNELS = ['display', 'video', 'native', 'audio'];
 
-            if (channel === 'video') {
-                videoBtn.style.borderBottomColor = '#2d8cf0';
-                videoBtn.style.color = 'var(--fg, #e6edf3)';
-                videoBtn.style.fontWeight = '600';
-                displayBtn.style.borderBottomColor = 'transparent';
-                displayBtn.style.color = 'var(--fg-muted, #8b949e)';
-                displayBtn.style.fontWeight = '400';
-                displayPane.style.display = 'none';
-                videoPane.style.display = '';
-                displayCtrls.forEach(function(el){ el.style.display = 'none'; });
-                videoCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
-            } else {
-                displayBtn.style.borderBottomColor = '#2d8cf0';
-                displayBtn.style.color = 'var(--fg, #e6edf3)';
-                displayBtn.style.fontWeight = '600';
-                videoBtn.style.borderBottomColor = 'transparent';
-                videoBtn.style.color = 'var(--fg-muted, #8b949e)';
-                videoBtn.style.fontWeight = '400';
-                displayPane.style.display = '';
-                videoPane.style.display = 'none';
-                displayCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
-                videoCtrls.forEach(function(el){ el.style.display = 'none'; });
-            }
+        function switchChannel(channel) {
+            SIM_CHANNELS.forEach(function(ch) {
+                var active = ch === channel;
+                var btn = document.getElementById('tab-' + ch);
+                var pane = document.getElementById('pane-' + ch);
+                if (btn) {
+                    btn.style.borderBottomColor = active ? '#2d8cf0' : 'transparent';
+                    btn.style.color = active ? 'var(--fg, #e6edf3)' : 'var(--fg-muted, #8b949e)';
+                    btn.style.fontWeight = active ? '600' : '400';
+                }
+                if (pane) pane.style.display = active ? '' : 'none';
+                document.querySelectorAll('.' + ch + '-only-controls').forEach(function(el) {
+                    el.style.display = active ? 'inline-flex' : 'none';
+                });
+            });
             applyPlacementListForChannel(channel);
         }
 
@@ -3521,7 +3590,11 @@
             var placement = document.getElementById('placementSelect').value || 'pl-sport-mpu';
             var mode = document.getElementById('videoScheduleMode').value;
             var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
-            var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) + '&t=' + Date.now();
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                realismQuery() + '&t=' + Date.now();
             preview.textContent = adTagUrl + '\n\n(fetching…)';
 
             logVideoEvent('Video request', mode.toUpperCase() + ' · ' + placement, 'success');
@@ -3627,6 +3700,174 @@
             var preview = document.getElementById('video-adtag-preview');
             if (preview) preview.textContent = '(load to populate)';
             logVideoEvent('Reset', '', '');
+        }
+
+        // ---- Request realism (consent + identity) ------------------------
+        //
+        // realismParams() turns the Consent + Identity dropdowns into the same
+        // production-like query signals pkg/simulator/request emits, so every
+        // browser-driven request (display/video/native/audio + Prebid) carries
+        // real privacy + identity inputs and exercises the DSP's privacy engine
+        // and identity graph — not just geo/device.
+        var TCF_CONSENT = 'CPcqAAAPcqAAAAKAxAENCgCsAP_AAH_AAAAAJ1Nf_X__b3_j-_5_f_t0eY1P9_7__-0zjhfdt-8N3f_X_L8X_2M7vB36pq4KuR4Eu3LBIQdlHOHcTUmw6IkVqTPsbk2Mr7NKJ7PEinMbe2dYGH9_n93TuZKY7_____z_v-v_v____f_7-3_3__p9X---_e_V399zLv9____39nP___9v-_9_____4IQAJMNS-AizEscCSaNKoUQ_ZL1QG';
+        // GPP US-National (section 7) string encoding a "sale" opt-out. Matches
+        // pkg/simulator/request.gppUSNationalOptOut / pkg/privacy decoding.
+        var GPP_OPTOUT = 'DBABLA~BAAaAA';
+
+        function randHex(n) {
+            var s = '';
+            for (var i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+            return s;
+        }
+
+        // realismParams returns a URLSearchParams with the consent + identity
+        // signals for the current dropdown selections.
+        function realismParams() {
+            var p = new URLSearchParams();
+            var consent = (document.getElementById('consentSelect') || {}).value || 'us_clear';
+            var identity = (document.getElementById('identitySelect') || {}).value || 'uid2';
+            switch (consent) {
+                case 'gdpr_consented': p.set('gdpr', '1'); p.set('consent', TCF_CONSENT); break;
+                case 'gdpr_no_consent': p.set('gdpr', '1'); break;
+                case 'ccpa_opt_out': p.set('us_privacy', '1YYN'); break;
+                case 'gpc': p.set('gpc', '1'); break;
+                case 'coppa': p.set('coppa', '1'); break;
+                case 'gpp_opt_out': p.set('gpp', GPP_OPTOUT); p.set('gpp_sid', '7'); break;
+                default: p.set('us_privacy', '1YNN'); // us_clear
+            }
+            switch (identity) {
+                case 'hashed_email': p.set('hashed_email', randHex(64)); break;
+                case 'publisher_id': p.set('user_id', 'pub-user-' + randHex(8)); break;
+                case 'uid2': p.set('uid2', 'sim-uid2-' + randHex(24)); break;
+                // anonymous: no identifier
+            }
+            return p;
+        }
+
+        // realismQuery returns the realism params as a leading-"&" query string
+        // fragment (empty string when none), for string-built URLs.
+        function realismQuery() {
+            var s = realismParams().toString();
+            return s ? '&' + s : '';
+        }
+
+        // ---- Native channel ----------------------------------------------
+        function loadNativeDemo() {
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-native';
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var slot = document.getElementById('native-slot');
+            var preview = document.getElementById('native-preview');
+            var url = PUBAD_URL + '/v1/pubad/native?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                realismQuery() + '&t=' + Date.now();
+            preview.textContent = url + '\n\n(fetching…)';
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('Native request', placement + ' · ' + geo + '/' + device, 'success');
+            fetch(url).then(function(r){ return r.text(); }).then(function(html){
+                slot.innerHTML = html;
+                preview.textContent = url + '\n\n' + html.substring(0, 2000) + (html.length > 2000 ? '…' : '');
+                logVideoEvent('Native rendered', '', 'success');
+            }).catch(function(err){
+                slot.innerHTML = '<div style="padding:24px;color:#e5534b;font-size:13px;">Native load failed: ' + err + '</div>';
+                preview.textContent = url + '\n\n(fetch failed: ' + err + ')';
+                logVideoEvent('Native error', String(err), 'error');
+            });
+        }
+        function clearNativeDemo() {
+            document.getElementById('native-slot').innerHTML =
+                '<div style="padding:24px;color:#999;font-size:13px;">Click "Load Native" to fill this in-feed slot.</div>';
+            document.getElementById('native-preview').textContent = '(load to populate)';
+        }
+
+        // ---- Audio channel -----------------------------------------------
+        // Fetches an audio VAST, plays the MediaFile through a native <audio>
+        // element, and fires the impression + quartile beacons from the VAST as
+        // playback crosses each quartile (the VAST beacons already route through
+        // /v1/t/audio, so the tracker publishes typed AudioEvents).
+        var audioBeacons = null;
+        function playAudioDemo() {
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-audio';
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var player = document.getElementById('audio-player');
+            var preview = document.getElementById('audio-preview');
+            var advLabel = document.getElementById('audio-advertiser');
+            var url = PUBAD_URL + '/v1/pubad/audio?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                realismQuery() + '&t=' + Date.now();
+            preview.textContent = url + '\n\n(fetching…)';
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('Audio request', placement + ' · ' + geo + '/' + device, 'success');
+            fetch(url).then(function(r){ return r.text(); }).then(function(xmlText){
+                preview.textContent = url + '\n\n' + xmlText.substring(0, 2000) + (xmlText.length > 2000 ? '…' : '');
+                var doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+                var media = doc.querySelector('MediaFile');
+                var mediaURL = media ? media.textContent.trim() : '';
+                var adTitle = (doc.querySelector('AdTitle') || {}).textContent || 'Audio Ad';
+                var tid = (doc.querySelector('Ad') || {}).getAttribute && doc.querySelector('Ad').getAttribute('id');
+                if (tid) { logVideoEvent('Auction trace', tid, 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tid); }
+                if (!mediaURL) { logVideoEvent('Audio: no MediaFile', '', 'error'); return; }
+                advLabel.textContent = 'Now playing: ' + adTitle;
+                // Collect quartile beacon URLs keyed by event name.
+                audioBeacons = { fired: {} };
+                doc.querySelectorAll('Tracking').forEach(function(t){
+                    audioBeacons[t.getAttribute('event')] = t.textContent.trim();
+                });
+                var impEl = doc.querySelector('Impression');
+                if (impEl) fireBeacon(impEl.textContent.trim(), 'impression');
+                if (audioBeacons['start']) fireBeacon(audioBeacons['start'], 'start');
+                player.src = mediaURL;
+                player.play().catch(function(e){ logVideoEvent('Audio autoplay blocked', String(e), ''); });
+            }).catch(function(err){
+                preview.textContent = url + '\n\n(fetch failed: ' + err + ')';
+                logVideoEvent('Audio error', String(err), 'error');
+            });
+        }
+        function fireBeacon(url, name) {
+            if (!url) return;
+            var img = new Image();
+            img.src = url;
+            logVideoEvent('Audio beacon: ' + name, '', name === 'impression' ? 'success' : '');
+        }
+        // Quartile firing driven by the <audio> element's timeupdate.
+        (function wireAudioQuartiles(){
+            document.addEventListener('DOMContentLoaded', function(){
+                var player = document.getElementById('audio-player');
+                if (!player) return;
+                player.addEventListener('timeupdate', function(){
+                    if (!audioBeacons || !player.duration) return;
+                    var frac = player.currentTime / player.duration;
+                    var marks = [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]];
+                    marks.forEach(function(m){
+                        if (frac >= m[1] && audioBeacons[m[0]] && !audioBeacons.fired[m[0]]) {
+                            audioBeacons.fired[m[0]] = true;
+                            fireBeacon(audioBeacons[m[0]], m[0]);
+                        }
+                    });
+                });
+                player.addEventListener('ended', function(){
+                    if (audioBeacons && audioBeacons['complete'] && !audioBeacons.fired['complete']) {
+                        audioBeacons.fired['complete'] = true;
+                        fireBeacon(audioBeacons['complete'], 'complete');
+                    }
+                });
+            });
+        })();
+        function resetAudioDemo() {
+            var player = document.getElementById('audio-player');
+            try { player.pause(); } catch (e) {}
+            player.removeAttribute('src'); player.load();
+            audioBeacons = null;
+            document.getElementById('audio-advertiser').textContent = 'No audio ad loaded';
+            document.getElementById('audio-preview').textContent = '(load to populate)';
+            logVideoEvent('Audio reset', '', '');
+        }
+
+        // deviceName maps the numeric OpenRTB device type from the dropdown to
+        // the string the SSP/pubad endpoints expect.
+        function deviceName(dt) {
+            return dt === 2 ? 'desktop' : dt === 5 ? 'tablet' : dt === 3 ? 'ctv' : 'mobile';
         }
     </script>
 
