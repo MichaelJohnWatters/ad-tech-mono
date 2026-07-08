@@ -6,8 +6,12 @@ real HLS segments into the content manifest, and play a seamless byte stream.
 This is the production-shaped model (Google DAI / AWS MediaTailor / Yospace),
 not the pre-baked demo (Route A).
 
-Status: **planned** (2026-07-08). Scope approved: full P1–P7. ffmpeg baked into
-the transcoder image.
+Status: **built** (2026-07-08). P1–P6 implemented end-to-end; P7 partially
+done (SCTE-35 DATERANGE recognition landed; CMAF/fMP4 + ID3 designed and
+deferred — see P7 below). ffmpeg baked into the transcoder image. NOTE: the
+ffmpeg transcode + hls.js playback path has not been exercised at runtime in
+this environment (ffmpeg not installed locally; cluster flaky) — code is
+unit-tested where pure, but the live splice/playback is unverified.
 
 ## Why B
 
@@ -122,6 +126,32 @@ On-the-fly transcode is **seconds**; a break can't stall. Mitigations, layered:
   (conditioning latency, cache-hit rate, transcode failures), slate accounting.
 - **P7 — Stretch** (XL): real SCTE-35 parsing (live), CMAF/fMP4 (HLS+DASH), DRM
   hooks, ID3 timed-metadata beacons.
+  - **SCTE-35 DATERANGE — DONE.** `ssai.ParseMedia` now recognises broadcast-
+    native ad signalling: an `#EXT-X-DATERANGE` carrying `SCTE35-OUT` (or
+    `CUE="OUT"`) opens a break of `PLANNED-DURATION` seconds and maps to our
+    existing CUE-OUT model, so the stitcher treats SCTE-35 content identically to
+    CUE-OUT/CUE-IN content. A matching `SCTE35-IN` DATERANGE closes it; with no
+    explicit close (pure SCTE-35), `closeScteBreaks` auto-closes at the segment
+    where cumulative content duration first reaches the planned length. Tested
+    in `pkg/ssai/manifest_test.go:TestParseSCTE35Daterange`. (Full binary SCTE-35
+    splice_info_section decoding from a live transport stream is still future;
+    the manifest-level DATERANGE form is what HLS packagers emit and is enough
+    to drive insertion.)
+  - **CMAF/fMP4 — designed, deferred.** `Profile.Container` already accepts
+    `cmaf`/`fmp4` and `FFmpegArgs` emits fMP4 segments; the remaining work is the
+    init segment: ffmpeg writes `init.mp4` + `#EXT-X-MAP:URI="init.mp4"`, so
+    `runner.readHLSOutput` must capture the init object, the conditioner must
+    upload it under the cond prefix, and `ssai.ParseMedia`/`Render` must preserve
+    `#EXT-X-MAP`. The seamless-splice constraint is stricter for fMP4 (the ad's
+    init must be codec-compatible with content's), which is exactly the Profile
+    match we already enforce. DASH is a second manifest flavour over the same
+    conditioned segments.
+  - **ID3 timed-metadata beacons — designed, deferred.** An alternative to
+    segment-driven server beacons: embed beacon triggers as ID3 `PRIV`/`TXXX`
+    frames in the ad segments (`ffmpeg -metadata` / a muxing pass), and the
+    player fires them on the `hls.js` `FRAG_PARSING_METADATA` (or CTV native ID3)
+    event. Useful where the player must attribute quartiles client-side; our
+    server-authoritative segment beacons already cover the common case.
 
 ## Risks
 

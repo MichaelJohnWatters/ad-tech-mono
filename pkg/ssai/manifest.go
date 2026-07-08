@@ -55,6 +55,13 @@ func ParseMedia(text string) (*Manifest, error) {
 	var haveInf bool         // saw an #EXTINF for the pending segment
 	sawFirstSegment := false // header ends at the first #EXTINF
 
+	// SCTE-35 DATERANGE breaks carry the break length in PLANNED-DURATION rather
+	// than an explicit #EXT-X-CUE-IN, so we auto-close them in a post-pass: the
+	// segments each DATERANGE-OUT opens are recorded here and closed once their
+	// cumulative content duration reaches the planned length.
+	var scteAuto []int   // segment indices that opened a DATERANGE SCTE35-OUT break
+	pendingScte := false // the next segment starts a DATERANGE break
+
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" {
@@ -68,6 +75,15 @@ func ParseMedia(text string) (*Manifest, error) {
 			haveInf = true
 		case strings.HasPrefix(line, "#EXT-X-CUE-OUT"):
 			pending.CueOut = parseCueOutDuration(line)
+		case strings.HasPrefix(line, "#EXT-X-DATERANGE") && isScteOut(line):
+			// Broadcast/SCTE-35 signalling: a DATERANGE with SCTE35-OUT opens an
+			// ad break of PLANNED-DURATION seconds. Map it to our CUE-OUT model so
+			// the stitcher treats it like any other break. A matching SCTE35-IN
+			// DATERANGE (isScteIn) closes it early; otherwise the post-pass does.
+			pending.CueOut = parseDaterangeDuration(line)
+			pendingScte = true
+		case strings.HasPrefix(line, "#EXT-X-DATERANGE") && isScteIn(line):
+			pending.CueIn = true
 		case line == "#EXT-X-CUE-IN":
 			pending.CueIn = true
 		case line == "#EXT-X-DISCONTINUITY":
@@ -88,6 +104,10 @@ func ParseMedia(text string) (*Manifest, error) {
 			}
 			pending.URI = line
 			m.Segments = append(m.Segments, pending)
+			if pendingScte {
+				scteAuto = append(scteAuto, len(m.Segments)-1)
+				pendingScte = false
+			}
 			pending = Segment{}
 			haveInf = false
 		}
@@ -95,6 +115,7 @@ func ParseMedia(text string) (*Manifest, error) {
 	if len(m.Segments) == 0 {
 		return nil, fmt.Errorf("ssai: no media segments found")
 	}
+	m.closeScteBreaks(scteAuto)
 	return m, nil
 }
 
@@ -228,6 +249,74 @@ func parseCueOutDuration(line string) float64 {
 		return 30
 	}
 	return f
+}
+
+// closeScteBreaks sets #EXT-X-CUE-IN on the first content segment past each
+// DATERANGE SCTE35-OUT whose break already carries an explicit close, or —
+// for pure SCTE-35 signalling with no SCTE35-IN — the segment where cumulative
+// content duration first reaches PLANNED-DURATION. Without this a DATERANGE-only
+// break would swallow all remaining segments.
+func (m *Manifest) closeScteBreaks(starts []int) {
+	for _, start := range starts {
+		if start >= len(m.Segments) {
+			continue
+		}
+		if hasCueInFrom(m.Segments, start+1) {
+			continue // an explicit SCTE35-IN / CUE-IN already closes this break
+		}
+		planned := m.Segments[start].CueOut
+		var acc float64
+		for j := start; j < len(m.Segments); j++ {
+			acc += m.Segments[j].Duration
+			if acc >= planned {
+				if j+1 < len(m.Segments) {
+					m.Segments[j+1].CueIn = true
+				}
+				break
+			}
+		}
+	}
+}
+
+// hasCueInFrom reports whether any segment at or after idx already carries a
+// CUE-IN before the next CUE-OUT (i.e. this break is explicitly closed).
+func hasCueInFrom(segs []Segment, idx int) bool {
+	for j := idx; j < len(segs); j++ {
+		if segs[j].CueOut > 0 {
+			return false
+		}
+		if segs[j].CueIn {
+			return true
+		}
+	}
+	return false
+}
+
+func isScteOut(line string) bool {
+	return strings.Contains(line, "SCTE35-OUT") || strings.Contains(strings.ToUpper(line), "CUE=\"OUT")
+}
+
+func isScteIn(line string) bool {
+	return strings.Contains(line, "SCTE35-IN") || strings.Contains(strings.ToUpper(line), "CUE=\"IN")
+}
+
+// parseDaterangeDuration reads PLANNED-DURATION / DURATION (seconds) from an
+// #EXT-X-DATERANGE line, defaulting to 30s when absent.
+func parseDaterangeDuration(line string) float64 {
+	for _, key := range []string{"PLANNED-DURATION=", "DURATION="} {
+		i := strings.Index(line, key)
+		if i < 0 {
+			continue
+		}
+		rest := line[i+len(key):]
+		if c := strings.IndexByte(rest, ','); c >= 0 {
+			rest = rest[:c]
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(rest), 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return 30
 }
 
 func trimFloat(f float64) string {
