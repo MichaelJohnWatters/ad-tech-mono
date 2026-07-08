@@ -1,10 +1,19 @@
-// cmd/simulator generates fake ad traffic for testing.
+// cmd/simulator generates production-like ad traffic for testing.
+//
+// Unlike a thin banner-only load generator, every request is built from a
+// Persona (pkg/simulator/request): a coherent user with geo, device, identity
+// type, audience segments, and a privacy regime, combined with a channel
+// (display/video/audio/native). The resulting OpenRTB request populates every
+// field the exchange, DSP, targeting, privacy, identity, fraud, and deals code
+// actually reads — so simulated traffic drives the same paths as production.
 //
 // Usage:
 //
 //	simulator run --profile steady --duration 5m
-//	simulator run --profile trickle --requests 10
-//	simulator single --geo UK --device mobile
+//	simulator run --profile burst --channel video
+//	simulator run --profile trickle --persona eu-consented-mobile
+//	simulator single --persona us-ccpa-optout --channel native
+//	simulator personas
 //	simulator profiles
 //	simulator check
 package main
@@ -19,10 +28,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/simulator/request"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
@@ -41,6 +52,8 @@ func main() {
 		runSingle()
 	case "profiles":
 		listProfiles()
+	case "personas":
+		listPersonas()
 	case "check":
 		checkServices()
 	default:
@@ -54,8 +67,9 @@ func printUsage() {
 
 Usage:
   simulator run       Run a simulation profile
-  simulator single    Fire a single bid request
-  simulator profiles  List available profiles
+  simulator single    Fire a single production-like bid request
+  simulator profiles  List available load profiles
+  simulator personas  List available personas (user + consent + identity)
   simulator check     Check if services are reachable
 
 Run flags:
@@ -65,46 +79,69 @@ Run flags:
   --rps <n>           Override requests per second
   --exchange-url <u>  Exchange URL (default: http://localhost:8081)
   --tracker-url <u>   Tracker URL (default: http://localhost:8083)
-  --geo <list>        Comma-separated geos (default: profile setting)
-  --device <list>     Comma-separated devices (default: profile setting)
+  --persona <name>    Force a single persona (see 'simulator personas')
+  --channel <ch>      Force a channel: display, video, audio, native
+  --geo <geo>         Override geo on every request (ISO alpha-3)
+  --device <type>     Override device: mobile, desktop, tablet, ctv
 
 Single flags:
-  --geo <geo>         Country code (default: GBR)
-  --device <type>     Device type: mobile, desktop, tablet (default: mobile)
-  --format <fmt>      Ad format: display, native (default: display)`)
+  --persona <name>    Persona (default: us-personalised-mobile)
+  --channel <ch>      Channel: display, video, audio, native (default: display)
+  --geo <geo>         Override persona geo
+  --device <type>     Override persona device`)
 }
 
+// channelWeight is one entry in a profile's channel mix.
+type channelWeight struct {
+	Ch request.Channel
+	W  int
+}
+
+// profile is a load shape: a request rate, a pool of personas to sample from,
+// and a channel mix. Personas carry geo/device/identity/consent so a profile's
+// realism comes from its pool, not from flat geo/device lists.
 type profile struct {
-	Name           string
-	RPS            int
-	Geos           []string
-	Devices        []string
-	Formats        []string
-	FloorPrice     float64
-	ClickRate      float64
-	ViewabilityPct int
+	Name       string
+	RPS        int
+	Personas   []request.Persona
+	Channels   []channelWeight
+	FloorPrice float64
+	ClickRate  float64
+	ViewPct    int
+}
+
+func personaPool(names ...string) []request.Persona {
+	out := make([]request.Persona, 0, len(names))
+	for _, n := range names {
+		if p, ok := request.PersonaByName(n); ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 var profiles = map[string]profile{
+	// trickle: a gentle, mostly-US display stream for smoke tests.
 	"trickle": {
 		Name: "trickle", RPS: 1,
-		Geos: []string{"GBR"}, Devices: []string{"mobile"},
-		Formats: []string{"display"}, FloorPrice: 0.50,
-		ClickRate: 0.05, ViewabilityPct: 80,
+		Personas:   personaPool("us-personalised-mobile", "uk-consented-desktop"),
+		Channels:   []channelWeight{{request.Display, 1}},
+		FloorPrice: 0.50, ClickRate: 0.05, ViewPct: 80,
 	},
+	// steady: a broad, realistic open-exchange blend across regions, consent
+	// regimes, and display/native/video.
 	"steady": {
 		Name: "steady", RPS: 10,
-		Geos: []string{"GBR", "USA", "DEU", "FRA", "JPN"},
-		Devices: []string{"mobile", "desktop", "tablet"},
-		Formats: []string{"display", "native"}, FloorPrice: 1.00,
-		ClickRate: 0.02, ViewabilityPct: 70,
+		Personas:   request.Personas, // full registry, weighted
+		Channels:   []channelWeight{{request.Display, 60}, {request.Native, 25}, {request.Video, 15}},
+		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70,
 	},
+	// burst: high volume across every channel including audio + CTV personas.
 	"burst": {
 		Name: "burst", RPS: 100,
-		Geos: []string{"GBR", "USA", "DEU", "FRA", "JPN", "AUS", "CAN", "BRA", "IND"},
-		Devices: []string{"mobile", "desktop", "tablet", "ctv"},
-		Formats: []string{"display", "native"}, FloorPrice: 0.50,
-		ClickRate: 0.01, ViewabilityPct: 60,
+		Personas:   request.Personas,
+		Channels:   []channelWeight{{request.Display, 45}, {request.Video, 25}, {request.Audio, 15}, {request.Native, 15}},
+		FloorPrice: 0.50, ClickRate: 0.01, ViewPct: 60,
 	},
 }
 
@@ -125,30 +162,37 @@ func runSimulation() {
 	if rps := getFlag("--rps", ""); rps != "" {
 		p.RPS = parseInt(rps)
 	}
-	if geo := getFlag("--geo", ""); geo != "" {
-		p.Geos = strings.Split(geo, ",")
+	// --persona narrows the pool to one persona; --channel forces one channel.
+	forcedPersona := getFlag("--persona", "")
+	if forcedPersona != "" {
+		pool := personaPool(forcedPersona)
+		if len(pool) == 0 {
+			fmt.Printf("Unknown persona: %s\n", forcedPersona)
+			listPersonas()
+			os.Exit(1)
+		}
+		p.Personas = pool
 	}
-	if device := getFlag("--device", ""); device != "" {
-		p.Devices = strings.Split(device, ",")
+	forcedChannel := getFlag("--channel", "")
+	if forcedChannel != "" {
+		p.Channels = []channelWeight{{request.Channel(forcedChannel), 1}}
 	}
+	geoOverride := getFlag("--geo", "")
+	deviceOverride := getFlag("--device", "")
 
 	log.Info("simulation starting",
-		"profile", p.Name,
-		"rps", p.RPS,
-		"duration", duration,
-		"max_requests", maxRequests,
-		"exchange", exchangeURL,
-		"tracker", trackerURL,
+		"profile", p.Name, "rps", p.RPS, "duration", duration,
+		"max_requests", maxRequests, "personas", len(p.Personas),
+		"exchange", exchangeURL, "tracker", trackerURL,
 	)
 
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	client := &http.Client{Timeout: 5 * time.Second}
 	ticker := time.NewTicker(time.Second / time.Duration(p.RPS))
 	defer ticker.Stop()
 
 	deadline := time.After(duration)
-	sent := 0
-	wins := 0
-	errors := 0
+	sent, wins, errors := 0, 0, 0
 	start := time.Now()
 
 	for {
@@ -163,41 +207,32 @@ func runSimulation() {
 			}
 
 			traceID, traceparent := tracing.NewClientTraceparent()
-			bidReq := generateBidRequest(traceID, p)
+			persona := request.Pick(rng, p.Personas)
+			applyOverrides(&persona, geoOverride, deviceOverride)
+			channel := pickChannel(rng, p.Channels)
+			bidReq := request.Build(request.Input{
+				TraceID: traceID, Channel: channel, Persona: persona,
+				Placement: simPlacement(p.FloorPrice), Rand: rng,
+			})
 
-			// Send auction request
 			won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 			sent++
 			if err != nil {
 				errors++
-				if sent <= 3 { // only log first few errors
+				if sent <= 3 {
 					log.Error("auction failed", "error", err, "trace_id", traceID)
 				}
 				continue
 			}
-
 			if won {
 				wins++
-				// Fire impression pixel
-				firePixel(client, trackerURL, traceID, traceparent, "imp")
-
-				// Simulate viewability (after delay in real life, instant here)
-				if rand.Intn(100) < p.ViewabilityPct {
-					fireViewability(client, trackerURL, traceID, traceparent)
-				}
-
-				// Simulate click
-				if rand.Float64() < p.ClickRate {
-					fireClick(client, trackerURL, traceID, traceparent)
-				}
+				fireEvents(client, trackerURL, traceID, traceparent, channel, p, rng)
 			}
 
-			if sent%p.RPS == 0 { // log every second
+			if sent%p.RPS == 0 {
 				log.Info("progress",
-					"sent", sent,
-					"wins", wins,
-					"errors", errors,
-					"win_rate", fmt.Sprintf("%.1f%%", float64(wins)/float64(sent)*100),
+					"sent", sent, "wins", wins, "errors", errors,
+					"win_rate", fmt.Sprintf("%.1f%%", pct(wins, sent)),
 					"elapsed", time.Since(start).Round(time.Second),
 				)
 			}
@@ -206,51 +241,111 @@ func runSimulation() {
 }
 
 func runSingle() {
-	geo := getFlag("--geo", "GBR")
-	device := getFlag("--device", "mobile")
+	personaName := getFlag("--persona", "us-personalised-mobile")
+	channel := request.Channel(getFlag("--channel", "display"))
 	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
 	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
 
-	traceID, traceparent := tracing.NewClientTraceparent()
-	bidReq := openrtb.BidRequest{
-		ID:  traceID,
-		Imp: []openrtb.Imp{{ID: "imp-1", Banner: &openrtb.Banner{W: 300, H: 250}, BidFloor: 1.0}},
-		Site: &openrtb.Site{Domain: "test-publisher.com", Page: "https://test-publisher.com/test"},
-		Device: &openrtb.Device{DeviceType: deviceTypeInt(device), Geo: &openrtb.Geo{Country: geo}},
-		User: &openrtb.User{ID: "sim-user-001"},
-		TMax: 100,
+	persona, ok := request.PersonaByName(personaName)
+	if !ok {
+		fmt.Printf("Unknown persona: %s\n", personaName)
+		listPersonas()
+		os.Exit(1)
 	}
+	applyOverrides(&persona, getFlag("--geo", ""), getFlag("--device", ""))
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	traceID, traceparent := tracing.NewClientTraceparent()
+	bidReq := request.Build(request.Input{
+		TraceID: traceID, Channel: channel, Persona: persona,
+		Placement: simPlacement(1.0), Rand: rng,
+	})
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	fmt.Printf("Trace ID: %s\n", traceID)
-	fmt.Printf("Geo: %s | Device: %s | Floor: $1.00\n\n", geo, device)
+	fmt.Printf("Persona:  %s (%s, %s, id=%s, consent=%s)\n",
+		persona.Name, persona.Geo, persona.Device, persona.Identity, persona.Regime)
+	fmt.Printf("Channel:  %s\n\n", channel)
 
 	won, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 	if err != nil {
 		fmt.Printf("Auction: FAILED (%v)\n", err)
 		return
 	}
-
 	if won {
 		fmt.Println("Auction: WON")
-		firePixel(client, trackerURL, traceID, traceparent, "imp")
-		fmt.Println("Impression: fired")
-		fireViewability(client, trackerURL, traceID, traceparent)
-		fmt.Println("Viewability: fired")
+		fireEvents(client, trackerURL, traceID, traceparent, channel, profiles["trickle"], rng)
+		fmt.Println("Events:  fired")
 	} else {
 		fmt.Println("Auction: NO FILL")
 	}
-
 	fmt.Printf("\nDone. Trace ID: %s\n", traceID)
+}
+
+// simPlacement returns the simulator publisher's placement with the real seeded
+// UUIDs (idgen-derived), so Site.Publisher.ID + Imp.TagID match production and
+// deal eligibility can actually resolve.
+func simPlacement(floor float64) request.Placement {
+	return request.Placement{
+		Domain:      "publisher-simulator.local",
+		Name:        "Publisher Simulator",
+		Page:        "http://localhost:8080/dev/publisher-simulator",
+		PublisherID: idgen.Derive("publisher", "pub-simulator"),
+		TagID:       idgen.Derive("placement", "pl-sim-mpu"),
+		Categories:  []string{"IAB12"},
+		Keywords:    "news,sports,finance,tech",
+		BidFloor:    floor,
+	}
+}
+
+func applyOverrides(p *request.Persona, geo, device string) {
+	if geo != "" {
+		p.Geo = geo
+	}
+	if device != "" {
+		p.Device = device
+	}
+}
+
+func pickChannel(rng *rand.Rand, mix []channelWeight) request.Channel {
+	total := 0
+	for _, c := range mix {
+		total += c.W
+	}
+	if total == 0 {
+		return request.Display
+	}
+	n := rng.Intn(total)
+	for _, c := range mix {
+		n -= c.W
+		if n < 0 {
+			return c.Ch
+		}
+	}
+	return mix[len(mix)-1].Ch
 }
 
 func listProfiles() {
 	fmt.Println("Available profiles:")
 	fmt.Println()
-	for name, p := range profiles {
-		fmt.Printf("  %-10s  %3d rps  geos: %-30s  devices: %s\n",
-			name, p.RPS, strings.Join(p.Geos, ","), strings.Join(p.Devices, ","))
+	for _, name := range []string{"trickle", "steady", "burst"} {
+		p := profiles[name]
+		chans := make([]string, len(p.Channels))
+		for i, c := range p.Channels {
+			chans[i] = fmt.Sprintf("%s:%d", c.Ch, c.W)
+		}
+		fmt.Printf("  %-10s  %3d rps  personas: %-3d  channels: %s\n",
+			name, p.RPS, len(p.Personas), strings.Join(chans, " "))
+	}
+}
+
+func listPersonas() {
+	fmt.Println("Available personas:")
+	fmt.Println()
+	fmt.Printf("  %-26s %-5s %-8s %-14s %s\n", "NAME", "GEO", "DEVICE", "IDENTITY", "CONSENT REGIME")
+	for _, p := range request.Personas {
+		fmt.Printf("  %-26s %-5s %-8s %-14s %s\n", p.Name, p.Geo, p.Device, p.Identity, p.Regime)
 	}
 }
 
@@ -278,38 +373,10 @@ func checkServices() {
 	}
 
 	if !allOK {
-		fmt.Println("\nSome services are not reachable. Start them first:")
-		fmt.Println("  go run ./cmd/dsp &")
-		fmt.Println("  go run ./cmd/tracker &")
-		fmt.Println("  go run ./cmd/exchange &")
+		fmt.Println("\nSome services are not reachable. Start them first (tilt up).")
 		os.Exit(1)
 	}
 	fmt.Println("\nAll services reachable. Ready to simulate.")
-}
-
-func generateBidRequest(traceID string, p profile) openrtb.BidRequest {
-	geo := p.Geos[rand.Intn(len(p.Geos))]
-	device := p.Devices[rand.Intn(len(p.Devices))]
-	userID := fmt.Sprintf("sim-user-%d", rand.Intn(1000))
-
-	return openrtb.BidRequest{
-		ID:  traceID,
-		Imp: []openrtb.Imp{{ID: "imp-1", Banner: &openrtb.Banner{W: 300, H: 250}, BidFloor: p.FloorPrice}},
-		Site: &openrtb.Site{
-			Domain: "sim-publisher.com",
-			Page:   fmt.Sprintf("https://sim-publisher.com/page/%d", rand.Intn(100)),
-			Cat:    []string{"IAB17"},
-		},
-		Device: &openrtb.Device{
-			DeviceType: deviceTypeInt(device),
-			Geo:        &openrtb.Geo{Country: geo},
-		},
-		User: &openrtb.User{
-			ID:  userID,
-			Ext: &openrtb.UserExt{Segments: []string{"sim_segment"}},
-		},
-		TMax: 100,
-	}
 }
 
 func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (bool, error) {
@@ -331,15 +398,37 @@ func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequ
 	return !bidResp.NoBid && len(bidResp.SeatBid) > 0, nil
 }
 
-// fireGet sends a tracker pixel GET with the same `traceparent` we used for
-// the auction, so HTTPMiddleware adopts that W3C trace ID instead of minting
-// a fresh one. The query-string `tid` stays in lockstep so the explicit
-// trace_id the tracker logs matches the OTel span's trace_id.
-//
-// Sets a browser-shaped User-Agent + Referer so the tracker's fraud check
-// doesn't flag us as a bot (default Go UA "Go-http-client/1.1" hits both
-// "bot_user_agent" and "no_referer" scores → request gets dropped silently
-// before reaching the NATS publish). Same fix as `tests/e2e/harness/tracker.go`.
+// fireEvents fires the post-win beacon sequence appropriate to the channel:
+// an impression for every format, then video/audio quartile events for
+// instream, and a stochastic viewability + click for display/native.
+func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, p profile, rng *rand.Rand) {
+	firePixel(client, trackerURL, traceID, traceparent, "imp")
+
+	switch ch {
+	case request.Video:
+		for _, ev := range []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"} {
+			fireMediaEvent(client, trackerURL, traceID, traceparent, "video", ev)
+		}
+		if rng.Float64() < p.ClickRate {
+			fireClick(client, trackerURL, traceID, traceparent)
+		}
+	case request.Audio:
+		for _, ev := range []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"} {
+			fireMediaEvent(client, trackerURL, traceID, traceparent, "audio", ev)
+		}
+	default: // display, native
+		if rng.Intn(100) < p.ViewPct {
+			fireViewability(client, trackerURL, traceID, traceparent)
+		}
+		if rng.Float64() < p.ClickRate {
+			fireClick(client, trackerURL, traceID, traceparent)
+		}
+	}
+}
+
+// fireGet sends a tracker pixel GET with the same traceparent used for the
+// auction (so the tracker span joins the auction trace) plus a browser-shaped
+// User-Agent + Referer so the tracker's fraud check doesn't drop it as a bot.
 func fireGet(client *http.Client, url, traceparent string) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -358,6 +447,11 @@ func firePixel(client *http.Client, trackerURL, traceID, traceparent, eventType 
 	fireGet(client, url, traceparent)
 }
 
+func fireMediaEvent(client *http.Client, trackerURL, traceID, traceparent, kind, event string) {
+	url := fmt.Sprintf("%s/v1/t/%s?tid=%s&event=%s&sig=sim", trackerURL, kind, traceID, event)
+	fireGet(client, url, traceparent)
+}
+
 func fireViewability(client *http.Client, trackerURL, traceID, traceparent string) {
 	dur := 1000 + rand.Intn(3000)
 	pct := 50 + rand.Intn(50)
@@ -371,34 +465,24 @@ func fireClick(client *http.Client, trackerURL, traceID, traceparent string) {
 }
 
 func printResults(sent, wins, errors int, elapsed time.Duration) {
-	winRate := 0.0
-	if sent > 0 {
-		winRate = float64(wins) / float64(sent) * 100
-	}
 	fmt.Println()
 	fmt.Println("=== Simulation Results ===")
 	fmt.Printf("  Duration:   %s\n", elapsed.Round(time.Second))
 	fmt.Printf("  Requests:   %d\n", sent)
-	fmt.Printf("  Wins:       %d (%.1f%%)\n", wins, winRate)
+	fmt.Printf("  Wins:       %d (%.1f%%)\n", wins, pct(wins, sent))
 	fmt.Printf("  No-fill:    %d\n", sent-wins-errors)
 	fmt.Printf("  Errors:     %d\n", errors)
-	fmt.Printf("  Avg RPS:    %.1f\n", float64(sent)/elapsed.Seconds())
+	if elapsed.Seconds() > 0 {
+		fmt.Printf("  Avg RPS:    %.1f\n", float64(sent)/elapsed.Seconds())
+	}
 	fmt.Println()
 }
 
-func deviceTypeInt(s string) int {
-	switch s {
-	case "mobile":
-		return 1
-	case "desktop":
-		return 2
-	case "ctv":
-		return 3
-	case "tablet":
-		return 5
-	default:
-		return 2
+func pct(n, d int) float64 {
+	if d == 0 {
+		return 0
 	}
+	return float64(n) / float64(d) * 100
 }
 
 func getFlag(name, defaultVal string) string {
