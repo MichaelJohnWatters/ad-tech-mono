@@ -209,32 +209,55 @@ func (d *stitcherDeps) warmCondition(winner *sspWinner) {
 // Fetching a real origin makes the stitcher a true proxy-and-stitch rather than
 // a hardcoded playlist. Falls back to the sample on any fetch error so the demo
 // never breaks.
-func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, reqLog *slog.Logger) string {
+// Returns the manifest text and the origin URL it came from ("" for the built-in
+// sample), so the caller can resolve relative content-segment URIs to absolute.
+func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, reqLog *slog.Logger) (string, string) {
 	origin := r.URL.Query().Get("origin")
 	if origin == "" && d.originFn != nil {
 		origin = d.originFn()
 	}
 	if origin == "" {
-		return sampleContent
+		return sampleContent, ""
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
 	if err != nil {
 		reqLog.Warn("ssai origin request build failed, using sample", "origin", origin, "error", err)
-		return sampleContent
+		return sampleContent, ""
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
 		reqLog.Warn("ssai origin fetch failed, using sample", "origin", origin, "error", err)
-		return sampleContent
+		return sampleContent, ""
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		reqLog.Warn("ssai origin fetch non-200, using sample", "origin", origin, "status", resp.StatusCode)
-		return sampleContent
+		return sampleContent, ""
 	}
 	reqLog.Info("ssai stitching real origin", "origin", origin, "bytes", len(body))
-	return string(body)
+	return string(body), origin
+}
+
+// resolveContentURIs rewrites relative content-segment URIs to absolute URLs
+// against the origin manifest's location. The stitched manifest is re-served
+// from the SSAI host, not the content host, so relative URIs (seg_0.ts) would
+// otherwise resolve against the wrong base and 404 in the player.
+func resolveContentURIs(m *ssai.Manifest, originURL string) {
+	if originURL == "" {
+		return
+	}
+	base, err := url.Parse(originURL)
+	if err != nil {
+		return
+	}
+	for i := range m.Segments {
+		u, err := url.Parse(m.Segments[i].URI)
+		if err != nil || u.IsAbs() {
+			continue
+		}
+		m.Segments[i].URI = base.ResolveReference(u).String()
+	}
 }
 
 // serveContentManifest returns the sample origin content manifest (with ad-break
@@ -272,11 +295,15 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	traceID := tracing.TraceIDFromContext(ctx)
 	reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
-	m, err := ssai.ParseMedia(d.originManifest(ctx, r, reqLog))
+	manifest, originURL := d.originManifest(ctx, r, reqLog)
+	m, err := ssai.ParseMedia(manifest)
 	if err != nil {
 		http.Error(w, "content manifest parse failed", http.StatusInternalServerError)
 		return
 	}
+	// Make content-segment URIs absolute so the player fetches them from the
+	// content host, not the SSAI host that re-serves the stitched manifest.
+	resolveContentURIs(m, originURL)
 
 	// Session id lets the segment beacons correlate back to this stitch. Derive
 	// from the trace so all beacons share the auction trace where possible.
