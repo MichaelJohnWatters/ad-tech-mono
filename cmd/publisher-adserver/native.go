@@ -47,7 +47,7 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc
 			placementID = "pl-news-mpu" // demo default
 		}
 
-		winner, err := fetchNativeWinner(ctx, sspURL, placementID, traceID)
+		winner, err := fetchNativeWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		var resp native.Response
 		var macroCtx adserving.MacroContext
 		if err != nil || winner == nil || winner.NoBid || winner.AdM == "" {
@@ -87,13 +87,8 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc
 
 // fetchNativeWinner calls SSP /v1/ssp/serve?channel=native. Returns nil on
 // no-bid; error only on transport/decode failure.
-func fetchNativeWinner(ctx context.Context, sspURL, placementID, traceID string) (*sspVideoWinner, error) {
-	q := url.Values{
-		"placement_id": []string{placementID},
-		"channel":      []string{"native"},
-		"geo":          []string{"USA"},
-		"device":       []string{"mobile"},
-	}
+func fetchNativeWinner(ctx context.Context, sspURL, placementID, traceID string, incoming url.Values) (*sspVideoWinner, error) {
+	q := forwardSSPQuery(incoming, "native", placementID, "mobile")
 	target := sspURL + routes.SSPServe + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {

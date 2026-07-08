@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -465,6 +466,32 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.Write(sspRes.res.Raw)
 	return true
+}
+
+// forwardSSPQuery clones the visitor's incoming query params (geo, device, os,
+// identity, consent + regulatory signals, segments) and forces the channel +
+// placement so the SSP builds a production-like request for this format. Dev
+// fallbacks fill geo/device only when the caller supplied none, matching the
+// display path. This is what stops the video/native/VMAP paths from collapsing
+// every visitor to a hardcoded USA/mobile request — the whole point of "no thin
+// requests": a EU-no-consent CTV viewer must reach the DSP as one, not as a
+// US desktop.
+func forwardSSPQuery(incoming url.Values, channel, placementID, defaultDevice string) url.Values {
+	q := url.Values{}
+	for k, v := range incoming {
+		q[k] = append([]string(nil), v...)
+	}
+	q.Set("channel", channel)
+	if placementID != "" {
+		q.Set("placement_id", placementID)
+	}
+	if q.Get("geo") == "" {
+		q.Set("geo", "USA") // dev fallback, same as the display path
+	}
+	if q.Get("device") == "" && defaultDevice != "" {
+		q.Set("device", defaultDevice)
+	}
+	return q
 }
 
 // callSSP is the existing SSP-call path lifted out so serveProgrammatic

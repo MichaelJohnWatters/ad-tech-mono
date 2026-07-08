@@ -76,7 +76,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 			placementID = "pl-sport-mpu" // demo default
 		}
 
-		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID)
+		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
 			if err != nil {
 				reqLog.Warn("video auction failed, serving demo VAST", "error", err)
@@ -151,13 +151,8 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 // auction and parses the winner JSON. Returns nil on no-bid; returns an
 // error only on transport / decode failure (a no-bid is a valid outcome,
 // not an error).
-func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string) (*sspVideoWinner, error) {
-	q := url.Values{
-		"placement_id": []string{placementID},
-		"channel":      []string{"video"},
-		"geo":          []string{"USA"},
-		"device":       []string{"desktop"},
-	}
+func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string, incoming url.Values) (*sspVideoWinner, error) {
+	q := forwardSSPQuery(incoming, "video", placementID, "desktop")
 	target := sspURL + routes.SSPServe + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
