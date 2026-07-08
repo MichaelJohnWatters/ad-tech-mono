@@ -73,21 +73,32 @@ Usage:
   simulator personas  List available personas (user + consent + identity)
   simulator check     Check if services are reachable
 
+By default the simulator mirrors the web /dev/publisher-simulator: each channel
+goes through the same first-party endpoint the web tab uses (SSP serve for
+display, publisher-adserver for video/native/audio) and fires the server's
+signed beacons. --direct is a raw load mode that POSTs OpenRTB to the exchange.
+
 Run flags:
   --profile <name>    Profile: trickle, steady, burst (default: trickle)
   --duration <dur>    Duration: 30s, 5m, 1h (default: 1m)
   --requests <n>      Stop after N requests (0 = use duration)
   --rps <n>           Override requests per second
-  --exchange-url <u>  Exchange URL (default: http://localhost:8081)
-  --tracker-url <u>   Tracker URL (default: http://localhost:8083)
+  --ssp-url <u>       SSP URL (default: http://localhost:8084)
+  --pubad-url <u>     Publisher ad server URL (default: http://localhost:8088)
+  --exchange-url <u>  Exchange URL for --direct mode (default: http://localhost:8081)
+  --tracker-url <u>   Tracker URL for --direct mode (default: http://localhost:8083)
   --persona <name>    Force a single persona (see 'simulator personas')
   --channel <ch>      Force a channel: display, video, audio, native
+  --pod <n>           Request a CTV ad pod of n ads (video channel)
+  --direct            Raw load mode: POST OpenRTB to the exchange directly
   --geo <geo>         Override geo on every request (ISO alpha-3)
   --device <type>     Override device: mobile, desktop, tablet, ctv
 
 Single flags:
   --persona <name>    Persona (default: us-personalised-mobile)
   --channel <ch>      Channel: display, video, audio, native (default: display)
+  --pod <n>           Request a CTV ad pod of n ads (video channel)
+  --direct            Raw load mode: POST OpenRTB to the exchange directly
   --geo <geo>         Override persona geo
   --device <type>     Override persona device`)
 }
@@ -152,6 +163,16 @@ func runSimulation() {
 	maxRequests := parseInt(getFlag("--requests", "0"))
 	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
 	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
+	eps := endpoints{
+		SSP:   getFlag("--ssp-url", routes.DefaultSSPURL),
+		PubAd: getFlag("--pubad-url", routes.DefaultPublisherAdServerURL),
+	}
+	// Default: mirror the web simulator — go through the SSP / publisher-adserver
+	// per channel and fire the server-returned signed beacons. --direct is the
+	// raw load mode: build OpenRTB and POST straight to the exchange (external-
+	// SSP style), self-firing beacons.
+	directMode := hasFlag("--direct")
+	podSize := parseInt(getFlag("--pod", "1"))
 
 	p, ok := profiles[profileName]
 	if !ok {
@@ -211,24 +232,18 @@ func runSimulation() {
 			persona := request.Pick(rng, p.Personas)
 			applyOverrides(&persona, geoOverride, deviceOverride)
 			channel := pickChannel(rng, p.Channels)
-			placement := simPlacement(p.FloorPrice)
-			bidReq := request.Build(request.Input{
-				TraceID: traceID, Channel: channel, Persona: persona,
-				Placement: placement, Rand: rng,
-			})
 
-			winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+			served, err := runOne(client, eps, exchangeURL, trackerURL, persona, channel, podSize, p, rng, traceID, traceparent, directMode)
 			sent++
 			if err != nil {
 				errors++
 				if sent <= 3 {
-					log.Error("auction failed", "error", err, "trace_id", traceID)
+					log.Error("request failed", "error", err, "trace_id", traceID)
 				}
 				continue
 			}
-			if winner != nil {
+			if served {
 				wins++
-				fireEvents(client, trackerURL, traceID, traceparent, channel, winner, placement, p, rng)
 			}
 
 			if sent%p.RPS == 0 {
@@ -247,6 +262,12 @@ func runSingle() {
 	channel := request.Channel(getFlag("--channel", "display"))
 	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
 	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
+	eps := endpoints{
+		SSP:   getFlag("--ssp-url", routes.DefaultSSPURL),
+		PubAd: getFlag("--pubad-url", routes.DefaultPublisherAdServerURL),
+	}
+	directMode := hasFlag("--direct")
+	podSize := parseInt(getFlag("--pod", "1"))
 
 	persona, ok := request.PersonaByName(personaName)
 	if !ok {
@@ -258,32 +279,57 @@ func runSingle() {
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	traceID, traceparent := tracing.NewClientTraceparent()
-	placement := simPlacement(1.0)
-	bidReq := request.Build(request.Input{
-		TraceID: traceID, Channel: channel, Persona: persona,
-		Placement: placement, Rand: rng,
-	})
-
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	mode := "web-mirror (SSP/pubad)"
+	if directMode {
+		mode = "direct (exchange)"
+	}
 	fmt.Printf("Trace ID: %s\n", traceID)
 	fmt.Printf("Persona:  %s (%s, %s, id=%s, consent=%s)\n",
 		persona.Name, persona.Geo, persona.Device, persona.Identity, persona.Regime)
-	fmt.Printf("Channel:  %s\n\n", channel)
+	fmt.Printf("Channel:  %s | Mode: %s\n\n", channel, mode)
 
-	winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+	served, err := runOne(client, eps, exchangeURL, trackerURL, persona, channel, podSize, profiles["trickle"], rng, traceID, traceparent, directMode)
 	if err != nil {
-		fmt.Printf("Auction: FAILED (%v)\n", err)
+		fmt.Printf("Request: FAILED (%v)\n", err)
 		return
 	}
-	if winner != nil {
-		fmt.Println("Auction: WON")
-		fireEvents(client, trackerURL, traceID, traceparent, channel, winner, placement, profiles["trickle"], rng)
-		fmt.Println("Events:  fired")
+	if served {
+		fmt.Println("Ad:      SERVED (beacons fired)")
 	} else {
-		fmt.Println("Auction: NO FILL")
+		fmt.Println("Ad:      NO FILL")
 	}
 	fmt.Printf("\nDone. Trace ID: %s\n", traceID)
+}
+
+// runOne executes a single request. Default mirrors the web simulator (through
+// the SSP / publisher-adserver, firing the server's signed beacons); --direct
+// posts OpenRTB straight to the exchange and self-fires beacons (raw load mode).
+func runOne(client *http.Client, eps endpoints, exchangeURL, trackerURL string, persona request.Persona, ch request.Channel, pod int, p profile, rng *rand.Rand, traceID, traceparent string, direct bool) (bool, error) {
+	if !direct {
+		return serveMirror(client, eps, persona, ch, pod, p, rng, traceparent)
+	}
+	placement := simPlacement(p.FloorPrice)
+	bidReq := request.Build(request.Input{TraceID: traceID, Channel: ch, Persona: persona, Placement: placement, Rand: rng})
+	winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+	if err != nil {
+		return false, err
+	}
+	if winner == nil {
+		return false, nil
+	}
+	fireEvents(client, trackerURL, traceID, traceparent, ch, winner, placement, p, rng)
+	return true, nil
+}
+
+func hasFlag(name string) bool {
+	for _, a := range os.Args {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
 
 // simPlacement returns the simulator publisher's placement with the real seeded
