@@ -67,38 +67,49 @@ func main() {
 	}
 	defer os.Remove(src)
 
-	// 2. Segment it to HLS.
-	profile := transcode.DefaultProfile()
-	res, err := runner.Package(ctx, src, profile)
-	if err != nil {
-		log.Error("ffmpeg package failed", "error", err)
-		os.Exit(1)
-	}
-	log.Info("content segmented", "segments", len(res.Segments), "duration_s", res.TotalDuration())
-
-	// 3. Insert a mid-roll ad break (real content carries SCTE-35 markers; we
-	//    stamp CUE-OUT/CUE-IN so the stitcher has an avail to fill).
-	playlist, err := insertBreak(res.Playlist, breakAt, breakSegs, profile.SegDurSec)
-	if err != nil {
-		log.Error("insert break failed", "error", err)
-		os.Exit(1)
-	}
-
-	// 4. Upload the playlist + segments (relative seg URIs resolve against the
-	//    playlist's URL, so no rewriting needed).
+	// 2-4. Package every ABR rung: segment → stamp the mid-roll break → upload,
+	//      collecting variants for the master. Real content carries SCTE-35; we
+	//      stamp CUE-OUT/CUE-IN so the stitcher has an avail to fill.
 	base := fmt.Sprintf("%s/%s", prefix, contentID)
-	if err := put(ctx, store, bucket, base+"/index.m3u8", []byte(playlist), "application/vnd.apple.mpegurl"); err != nil {
-		log.Error("upload playlist failed", "error", err)
-		os.Exit(1)
-	}
-	for _, s := range res.Segments {
-		if err := put(ctx, store, bucket, base+"/"+s.Name, s.Data, "video/mp2t"); err != nil {
-			log.Error("upload segment failed", "seg", s.Name, "error", err)
+	var variants []ssai.Variant
+	for _, profile := range transcode.DefaultLadder() {
+		res, err := runner.Package(ctx, src, profile)
+		if err != nil {
+			log.Error("ffmpeg package failed", "rung", profile.RungName(), "error", err)
 			os.Exit(1)
 		}
+		playlist, err := insertBreak(res.Playlist, breakAt, breakSegs, profile.SegDurSec)
+		if err != nil {
+			log.Error("insert break failed", "rung", profile.RungName(), "error", err)
+			os.Exit(1)
+		}
+		rung := profile.RungName()
+		rbase := base + "/" + rung
+		if err := put(ctx, store, bucket, rbase+"/index.m3u8", []byte(playlist), "application/vnd.apple.mpegurl"); err != nil {
+			log.Error("upload variant playlist failed", "rung", rung, "error", err)
+			os.Exit(1)
+		}
+		for _, s := range res.Segments {
+			if err := put(ctx, store, bucket, rbase+"/"+s.Name, s.Data, "video/mp2t"); err != nil {
+				log.Error("upload segment failed", "rung", rung, "seg", s.Name, "error", err)
+				os.Exit(1)
+			}
+		}
+		variants = append(variants, ssai.Variant{
+			URI: rung + "/index.m3u8", Bandwidth: profile.BandwidthBps(),
+			Width: profile.Width, Height: profile.Height, Codecs: profile.Codecs(),
+		})
+		log.Info("rung packaged", "rung", rung, "segments", len(res.Segments), "duration_s", res.TotalDuration())
 	}
-	log.Info("content packaged", "bucket", bucket, "playlist", base+"/index.m3u8",
-		"segments", len(res.Segments), "break_at", breakAt, "break_segments", breakSegs)
+
+	// Master playlist referencing the rungs (relative variant URIs).
+	master := ssai.BuildMaster(variants)
+	if err := put(ctx, store, bucket, base+"/master.m3u8", []byte(master), "application/vnd.apple.mpegurl"); err != nil {
+		log.Error("upload master failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("content packaged", "bucket", bucket, "master", base+"/master.m3u8",
+		"rungs", len(variants), "break_at", breakAt, "break_segments", breakSegs)
 }
 
 // insertBreak stamps a #EXT-X-CUE-OUT on the segment at breakAt and a
