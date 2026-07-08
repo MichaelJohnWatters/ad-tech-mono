@@ -24,6 +24,7 @@ type LinearSpec struct {
 	Duration   time.Duration // creative play time
 	MediaFiles []MediaFile   // one or more encoded variants
 	Trackers   LinearTrackers
+	ErrorURLs  []string // VAST <Error> URIs, pinged on playback failure
 	Click      ClickSpec
 	Sequence   int      // pod position (0 = standalone)
 	Pricing    *Pricing // optional; omitted from the XML when nil
@@ -167,6 +168,10 @@ func specToAd(spec LinearSpec) Ad {
 	for _, u := range spec.Trackers.Impression {
 		imps = append(imps, Impression{URI: u})
 	}
+	errs := make([]Error, 0, len(spec.ErrorURLs))
+	for _, u := range spec.ErrorURLs {
+		errs = append(errs, Error{URI: u})
+	}
 	linear := &Linear{
 		Duration: Duration(spec.Duration),
 		MediaFiles: MediaFiles{
@@ -188,6 +193,7 @@ func specToAd(spec LinearSpec) Ad {
 			Advertiser:      spec.Advertiser,
 			Pricing:         spec.Pricing,
 			Impressions:     imps,
+			Errors:          errs,
 			AdVerifications: buildAdVerifications(spec.Verifications),
 			Creatives: Creatives{
 				Creatives: []Creative{{

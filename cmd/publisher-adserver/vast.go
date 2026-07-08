@@ -349,6 +349,7 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 			Skip:          []string{beacon("skip")},
 			Fullscreen:    []string{beacon("fullscreen")},
 		},
+		ErrorURLs: []string{beacon("error")},
 		Click: vast.ClickSpec{
 			ClickThrough:  clickURL,
 			ClickTracking: []string{clickURL + "&ev=click-tracking"},

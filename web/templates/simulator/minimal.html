@@ -3659,49 +3659,117 @@
                     impressions: Array.prototype.map.call(ad.querySelectorAll('Impression'), function(i){ return i.textContent.trim(); }),
                     trackers: trackers,
                     clickThrough: click ? click.textContent.trim() : null,
+                    clickTracking: Array.prototype.map.call(ad.querySelectorAll('ClickTracking'), function(c){ return c.textContent.trim(); }),
+                    errors: Array.prototype.map.call(ad.querySelectorAll('Error'), function(e){ return e.textContent.trim(); }),
                     fired: {}
                 });
             });
             return out;
         }
 
+        // fireVideoTracker fires the VAST tracker URL(s) for a given event (a no-op
+        // when the VAST doesn't carry that event), so the player emits the full
+        // standard VAST set — quartiles AND mute/pause/resume/skip/fullscreen/
+        // click/error — exactly what a real IMA/VAST integration reports.
+        function fireVideoTracker(ad, event) {
+            var urls = ad.trackers[event] || [];
+            urls.forEach(function(u){ fireBeacon(u, event); });
+            if (urls.length) logVideoEvent('Ad ' + event, '', event === 'skip' ? 'nobid' : '');
+            return urls.length > 0;
+        }
+
         function playNextVideoAd() {
-            var contentVideo = document.getElementById('content-video');
-            if (!videoAdQueue.length) { playVideoContent(); return; }
+            var v = document.getElementById('content-video');
+            if (!videoAdQueue.length) { clearAdOverlay(); playVideoContent(); return; }
             var ad = videoAdQueue.shift();
+            var started = false, done = false;
             logVideoEvent('Ad loaded', ad.title, 'success');
 
+            function finish() {
+                if (done) return; done = true;
+                v.removeEventListener('playing', onPlaying);
+                v.removeEventListener('timeupdate', onTime);
+                v.removeEventListener('pause', onPause);
+                v.removeEventListener('play', onPlay);
+                v.removeEventListener('volumechange', onVol);
+                v.removeEventListener('ended', onEnded);
+                v.removeEventListener('error', onError);
+                document.removeEventListener('fullscreenchange', onFs);
+                clearAdOverlay();
+                playNextVideoAd(); // next pod ad, or content when the queue empties
+            }
+
             var onPlaying = function(){
-                contentVideo.removeEventListener('playing', onPlaying);
+                if (started) return; started = true;
                 ad.impressions.forEach(function(u){ fireBeacon(u, 'impression'); });
-                (ad.trackers['start'] || []).forEach(function(u){ fireBeacon(u, 'start'); });
+                fireVideoTracker(ad, 'start');
                 logVideoEvent('Ad impression + start', ad.title, 'success');
+                showAdOverlay(ad, finish);
             };
             var onTime = function(){
-                if (!contentVideo.duration) return;
-                var f = contentVideo.currentTime / contentVideo.duration;
+                if (!v.duration) return;
+                var f = v.currentTime / v.duration;
                 [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]].forEach(function(q){
-                    if (f >= q[1] && !ad.fired[q[0]]) {
-                        ad.fired[q[0]] = true;
-                        (ad.trackers[q[0]] || []).forEach(function(u){ fireBeacon(u, q[0]); });
-                        logVideoEvent('Ad ' + q[0], '', '');
-                    }
+                    if (f >= q[1] && !ad.fired[q[0]]) { ad.fired[q[0]] = true; fireVideoTracker(ad, q[0]); }
                 });
             };
-            var onEnded = function(){
-                contentVideo.removeEventListener('timeupdate', onTime);
-                contentVideo.removeEventListener('ended', onEnded);
-                (ad.trackers['complete'] || []).forEach(function(u){ fireBeacon(u, 'complete'); });
-                logVideoEvent('Ad complete', ad.title, 'success');
-                playNextVideoAd(); // next pod ad, or content when the queue is empty
-            };
-            contentVideo.addEventListener('playing', onPlaying);
-            contentVideo.addEventListener('timeupdate', onTime);
-            contentVideo.addEventListener('ended', onEnded);
+            // Interaction events, straight off the native <video> — no player SDK.
+            var onPause = function(){ if (started && !done && !v.ended) fireVideoTracker(ad, 'pause'); };
+            var onPlay = function(){ if (started && !done) fireVideoTracker(ad, 'resume'); };
+            var onVol = function(){ if (!started) return; fireVideoTracker(ad, (v.muted || v.volume === 0) ? 'mute' : 'unmute'); };
+            var onFs = function(){ if (started) fireVideoTracker(ad, document.fullscreenElement ? 'fullscreen' : 'exitFullscreen'); };
+            var onError = function(){ ad.errors.forEach(function(u){ fireBeacon(u, 'error'); }); logVideoEvent('Ad playback error', ad.title, 'error'); finish(); };
+            var onEnded = function(){ fireVideoTracker(ad, 'complete'); logVideoEvent('Ad complete', ad.title, 'success'); finish(); };
 
-            contentVideo.src = ad.mediaURL;
-            contentVideo.load();
-            contentVideo.play().catch(function(e){ logVideoEvent('Ad autoplay blocked (click the player)', String(e), ''); });
+            v.addEventListener('playing', onPlaying);
+            v.addEventListener('timeupdate', onTime);
+            v.addEventListener('pause', onPause);
+            v.addEventListener('play', onPlay);
+            v.addEventListener('volumechange', onVol);
+            v.addEventListener('ended', onEnded);
+            v.addEventListener('error', onError);
+            document.addEventListener('fullscreenchange', onFs);
+
+            // expose skip/click for the overlay via the ad object
+            ad._fire = fireVideoTracker;
+            ad._finish = finish;
+
+            v.src = ad.mediaURL;
+            v.load();
+            v.play().catch(function(e){ logVideoEvent('Ad autoplay blocked (click the player)', String(e), ''); });
+        }
+
+        // showAdOverlay draws the standard video-ad affordances over the player:
+        // an "Ad" label, a Skip button (fires the VAST skip tracker), and a
+        // Learn More button (fires ClickTracking + opens the ClickThrough).
+        function showAdOverlay(ad, finish) {
+            var c = document.getElementById('ad-container');
+            if (!c) return;
+            c.style.pointerEvents = 'none';
+            c.innerHTML =
+                '<div style="position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;padding:2px 8px;border-radius:3px;">Ad · ' + (ad.title || '') + '</div>';
+            var btnCss = 'position:absolute;bottom:12px;pointer-events:auto;background:rgba(0,0,0,.75);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;';
+            if (ad.clickThrough) {
+                var lm = document.createElement('button');
+                lm.textContent = 'Learn More →';
+                lm.style.cssText = btnCss + 'left:12px;';
+                lm.onclick = function(){
+                    (ad.clickTracking || []).forEach(function(u){ fireBeacon(u, 'clickTracking'); });
+                    logVideoEvent('Ad click', ad.title, 'success');
+                    window.open(ad.clickThrough, '_blank');
+                };
+                c.appendChild(lm);
+            }
+            var sk = document.createElement('button');
+            sk.textContent = 'Skip Ad ⏭';
+            sk.style.cssText = btnCss + 'right:12px;';
+            sk.onclick = function(){ ad._fire(ad, 'skip'); finish(); };
+            c.appendChild(sk);
+        }
+
+        function clearAdOverlay() {
+            var c = document.getElementById('ad-container');
+            if (c) { c.innerHTML = ''; c.style.pointerEvents = 'none'; }
         }
 
         function playVideoContent() {

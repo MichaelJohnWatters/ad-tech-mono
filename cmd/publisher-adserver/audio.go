@@ -173,6 +173,7 @@ func buildAudioVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext)
 			Resume:        []string{beacon("resume")},
 			Skip:          []string{beacon("skip")},
 		},
+		ErrorURLs: []string{beacon("error")},
 		Click: vast.ClickSpec{
 			ClickThrough:  clickURL,
 			ClickTracking: []string{clickURL + "&ev=click-tracking"},
