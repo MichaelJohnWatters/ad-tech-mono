@@ -300,6 +300,20 @@ const (
 )
 
 // ============================================================
+// Simulator support (served by the gateway)
+// ============================================================
+
+const (
+	// SimRealism returns the consent + identity query-param encoding for a
+	// (consent regime, identity type) selection, built by pkg/simulator/request.
+	// The web publisher-simulator fetches this instead of re-implementing the
+	// TCF / GPP / UID2 encoding in JS — one source of truth shared with the CLI.
+	SimRealism = "/v1/sim/realism"
+	// SimPersonas returns the simulator persona registry as JSON.
+	SimPersonas = "/v1/sim/personas"
+)
+
+// ============================================================
 // Ad Server (:8085) - creative serving
 // ============================================================
 
