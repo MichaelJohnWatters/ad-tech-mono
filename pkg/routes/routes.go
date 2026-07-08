@@ -314,6 +314,18 @@ const (
 )
 
 // ============================================================
+// Transcoder (:8094) - runtime ad conditioning for SSAI
+// ============================================================
+
+const (
+	// TranscodeCondition conditions an ad (transcode + segment to a content
+	// profile) into HLS and caches it in the object store. The SSAI stitcher
+	// calls this per ad break so the winning ad's segments are byte-compatible
+	// with the content stream. Internal (ssai → transcoder); no gateway proxy.
+	TranscodeCondition = "/v1/transcode/condition"
+)
+
+// ============================================================
 // Ad Server (:8085) - creative serving
 // ============================================================
 
@@ -424,6 +436,7 @@ const (
 	DefaultPipelineURL          = "http://" + DefaultHost + ":" + PortPipeline
 	DefaultPublisherAdServerURL = "http://" + DefaultHost + ":" + PortPublisherAdServer
 	DefaultSSAIURL              = "http://" + DefaultHost + ":" + PortSSAI
+	DefaultTranscoderURL        = "http://" + DefaultHost + ":" + PortTranscoder
 	DefaultNATSURL              = "nats://" + DefaultHost + ":" + PortNATSClient
 	DefaultDSPComp1URL          = "http://" + DefaultHost + ":" + PortDSPComp1
 	DefaultDSPComp2URL          = "http://" + DefaultHost + ":" + PortDSPComp2
@@ -466,6 +479,7 @@ const (
 	PortWebhooks          = "8091"
 	PortIdentityConsumer  = "8092"
 	PortSSAI              = "8093"
+	PortTranscoder        = "8094"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

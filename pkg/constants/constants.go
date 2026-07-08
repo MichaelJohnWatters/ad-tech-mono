@@ -298,6 +298,7 @@ const (
 	ServicePublisherAdServer = "publisher-adserver"
 	ServiceIdentityConsumer  = "identity-consumer"
 	ServiceSSAI              = "ssai"
+	ServiceTranscoder        = "transcoder"
 )
 
 // ============================================================

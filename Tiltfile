@@ -231,6 +231,20 @@ if dev_mode == 'fast':
     k8s_resource('ssai', resource_deps=['ssai-build', 'ssp'],
         port_forwards=['8093:8093'], labels=['services'])
 
+    # ---- Transcoder (ffmpeg ad conditioning for SSAI) ----
+    # Uses Dockerfile.transcode (alpine + ffmpeg) rather than the shared dev
+    # image, so ffmpeg doesn't bloat every service.
+    local_resource('transcoder-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/transcoder ./cmd/transcoder',
+        deps=['cmd/transcoder', 'pkg/'], labels=['build'])
+    docker_build('adtech-transcoder', '.',
+        dockerfile='build/Dockerfile.transcode',
+        build_args={'SERVICE': 'transcoder'},
+        only=['bin/transcoder'])
+    k8s_yaml(['k8s/base/transcoder/deployment.yaml', 'k8s/base/transcoder/service.yaml'])
+    k8s_resource('transcoder', resource_deps=['transcoder-build', 'minio'],
+        port_forwards=['8094:8094'], labels=['services'])
+
     # ---- Gateway (host-built binary + embedded web/ + seed binary) ----
     # The seed binary is baked into the gateway image so /dev/reset-and-reseed
     # can exec it without needing a Go toolchain inside the pod.

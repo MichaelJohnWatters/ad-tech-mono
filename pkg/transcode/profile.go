@@ -26,17 +26,21 @@ const (
 // ABR rung; an ad is conditioned once per distinct Profile it is asked for. Two
 // media that share a Profile can be spliced into one seamless stream.
 type Profile struct {
-	Container    string // ContainerTS | ContainerCMAF
-	VCodec       string // "h264" | "hevc"
-	Width        int
-	Height       int
-	FPS          int
-	VBitrateKbps int
-	ACodec       string // "aac"
-	ASampleRate  int    // e.g. 48000
-	ABitrateKbps int
-	SegDurSec    int // target HLS segment duration, e.g. 6
+	Container    string `json:"container"`     // ContainerTS | ContainerCMAF
+	VCodec       string `json:"vcodec"`        // "h264" | "hevc"
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	FPS          int    `json:"fps"`
+	VBitrateKbps int    `json:"vbitrate_kbps"`
+	ACodec       string `json:"acodec"` // "aac"
+	ASampleRate  int    `json:"asample_rate"`
+	ABitrateKbps int    `json:"abitrate_kbps"`
+	SegDurSec    int    `json:"seg_dur_sec"` // target HLS segment duration, e.g. 6
 }
+
+// Zero reports whether the profile is unset (all fields empty) — callers treat
+// a zero profile as "use the default".
+func (p Profile) Zero() bool { return p == Profile{} }
 
 // DefaultProfile is a safe single-rung 360p H.264 profile used for the MVP
 // (P1–P4) before ABR (P5) introduces a rung ladder.
