@@ -264,6 +264,13 @@ const (
 	// PublisherAdServe under the hood (SSP channel=native), but the native
 	// response markup is assembled here rather than fetched as creative HTML.
 	PublisherAdServeNative = "/v1/pubad/native"
+	// PublisherAdServeAudio returns a VAST 4.2 document carrying an AUDIO
+	// MediaFile (audio/mpeg, no width/height) for the audio flow — podcast /
+	// streaming-radio players fetch this the way video players fetch VAST.
+	// Same auction shape as the video path (SSP channel=audio); the only
+	// differences are the audio MediaFile and quartile beacons routed through
+	// /v1/t/audio instead of /v1/t/video.
+	PublisherAdServeAudio = "/v1/pubad/audio"
 	// AdCertKey serves the exchange's ads.cert Ed25519 public key so DSPs can
 	// fetch it (and pick up rotations) instead of hardcoding it in config.
 	AdCertKey = "/v1/adcert/key"
