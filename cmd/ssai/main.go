@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
@@ -147,8 +148,11 @@ type sspWinner struct {
 	PublisherID      string  `json:"publisher_id"`
 	AdvertiserID     string  `json:"advertiser_id"`
 	AdvertiserDomain string  `json:"advertiser_domain"`
+	BidModel         string  `json:"bid_model"`
 	ClearingPrice    float64 `json:"clearing_price"`
 	Currency         string  `json:"currency"`
+	Width            int     `json:"width"`
+	Height           int     `json:"height"`
 	DurationSeconds  int     `json:"duration_seconds"`
 	MediaURL         string  `json:"media_url"`
 }
@@ -187,9 +191,16 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		if adTrace == "" {
 			adTrace = session
 		}
+		// Build the same MacroContext the publisher-adserver uses, so every
+		// beacon SSAI fires is the identical HMAC-signed URL the platform's
+		// tracker expects (passes tracker.signature_validation, unlike a
+		// hand-rolled sig). This is the whole point: SSAI fires the real
+		// beacons, just server-side instead of from the player.
+		mc := macroCtxFor(winner, adTrace, d.trackerURL)
+
 		// Impression fires server-side now: the ad is guaranteed to be in the
 		// stream, so this is the SSAI impression moment.
-		d.fireBeacon(ctx, d.impressionURL(adTrace, winner))
+		d.fireBeacon(ctx, adserving.BuildImpressionURL(mc))
 
 		dur := float64(winner.DurationSeconds)
 		if dur <= 0 {
@@ -198,7 +209,10 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		adIdx := i
 		return ssai.SegmentAds(dur, segDur, func(n int, start float64) string {
 			ev := quartileForSegment(start, dur, segDur)
-			return d.segmentURL(session, adTrace, adIdx, n, ev, winner.MediaURL)
+			// Pre-sign the real quartile beacon now; the segment endpoint just
+			// fires it when the player fetches the segment.
+			signedBeacon := adserving.BuildVideoEventURL(mc, ev)
+			return d.segmentURL(session, adTrace, adIdx, n, ev, signedBeacon, winner.MediaURL)
 		})
 	})
 
@@ -262,11 +276,11 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, breakDur
 func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	redir := q.Get("redir")
-	event := q.Get("event")
-	tid := q.Get("ad")
-	if event != "" && tid != "" {
-		d.fireBeacon(r.Context(), fmt.Sprintf("%s/v1/t/video?tid=%s&event=%s&sig=ssai",
-			d.trackerURL, url.QueryEscape(tid), url.QueryEscape(event)))
+	// beacon is the pre-signed, HMAC-valid tracker URL built at stitch time.
+	// Firing it here (not reconstructing it) is what keeps SSAI's beacons
+	// identical to the ones the player would fire in the client-side flow.
+	if beacon := q.Get("beacon"); beacon != "" {
+		d.fireBeacon(r.Context(), beacon)
 	}
 	if redir == "" {
 		http.Error(w, "missing redir", http.StatusBadRequest)
@@ -275,17 +289,11 @@ func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redir, http.StatusFound)
 }
 
-func (d *stitcherDeps) impressionURL(tid string, wn *sspWinner) string {
-	return fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=%s&pubid=%s&price=%s&cur=%s&sig=ssai",
-		d.trackerURL, url.QueryEscape(tid), url.QueryEscape(wn.CampaignID), url.QueryEscape(wn.CreativeID),
-		url.QueryEscape(wn.PlacementID), url.QueryEscape(wn.PublisherID),
-		strconv.FormatFloat(wn.ClearingPrice, 'f', 4, 64), url.QueryEscape(defaultStr(wn.Currency, "USD")))
-}
-
 // segmentURL builds the manifest URI for one ad segment: a call back into this
 // service's segment beacon endpoint (via the browser-reachable public URL),
-// carrying the quartile event to fire and the real media to redirect to.
-func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, event, mediaURL string) string {
+// carrying the pre-signed quartile beacon to fire and the real media to redirect
+// to. event is kept as a plain param for readability/debugging of the manifest.
+func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, event, signedBeacon, mediaURL string) string {
 	q := url.Values{}
 	q.Set("session", session)
 	q.Set("ad", adTrace)
@@ -294,6 +302,7 @@ func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, event, 
 	if event != "" {
 		q.Set("event", event)
 	}
+	q.Set("beacon", signedBeacon)
 	q.Set("redir", mediaURL)
 	return d.publicURL + routes.SSAISegment + "?" + q.Encode()
 }
@@ -337,9 +346,32 @@ func quartileForSegment(start, total, segDur float64) string {
 	}
 }
 
-func defaultStr(s, fallback string) string {
-	if strings.TrimSpace(s) == "" {
-		return fallback
+// macroCtxFor builds the beacon-signing context for a winner — the same shape
+// the publisher-adserver uses, so BuildImpressionURL / BuildVideoEventURL emit
+// the identical HMAC-signed tracker URLs the platform expects.
+func macroCtxFor(wn *sspWinner, adTrace, trackerURL string) adserving.MacroContext {
+	cur := wn.Currency
+	if strings.TrimSpace(cur) == "" {
+		cur = "USD"
 	}
-	return s
+	bm := wn.BidModel
+	if strings.TrimSpace(bm) == "" {
+		bm = "cpm"
+	}
+	return adserving.MacroContext{
+		AuctionID:    adTrace,
+		AuctionPrice: wn.ClearingPrice,
+		Currency:     cur,
+		CampaignID:   wn.CampaignID,
+		CreativeID:   wn.CreativeID,
+		PlacementID:  wn.PlacementID,
+		PublisherID:  wn.PublisherID,
+		AdvertiserID: wn.AdvertiserID,
+		BidModel:     bm,
+		DealID:       "",
+		Width:        wn.Width,
+		Height:       wn.Height,
+		TrackerURL:   trackerURL,
+		URLTTL:       time.Hour,
+	}
 }

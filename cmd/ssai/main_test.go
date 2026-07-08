@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
 )
 
@@ -85,7 +87,8 @@ func TestManifestHandlerStitches(t *testing.T) {
 }
 
 // TestSegmentHandlerFiresBeaconAndRedirects asserts the per-segment endpoint
-// fires the quartile beacon server-side and 302s to the media.
+// fires the pre-signed quartile beacon verbatim (an HMAC-signed tracker URL —
+// NOT a hand-rolled one) and 302s to the media.
 func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	var got string
 	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,8 +97,15 @@ func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	}))
 	defer tracker.Close()
 
+	// Build the real signed beacon the stitcher would embed, so this test
+	// proves the handler fires a validatable URL (passes signature_validation),
+	// not a fake one.
+	mc := macroCtxFor(&sspWinner{CampaignID: "li-x", CreativeID: "cr-x", PlacementID: "pl-x", PublisherID: "pub-x"}, "trace-x", tracker.URL)
+	signed := adserving.BuildVideoEventURL(mc, "midpoint")
+
 	d := &stitcherDeps{trackerURL: tracker.URL, client: &http.Client{}}
-	req := httptest.NewRequest("GET", "/v1/ssai/seg?ad=trace-x&event=midpoint&redir=https://cdn.example/ad.mp4", nil)
+	u := "/v1/ssai/seg?ad=trace-x&event=midpoint&redir=https%3A%2F%2Fcdn.example%2Fad.mp4&beacon=" + url.QueryEscape(signed)
+	req := httptest.NewRequest("GET", u, nil)
 	rec := httptest.NewRecorder()
 	d.segmentHandler(rec, req)
 
@@ -107,6 +117,10 @@ func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	}
 	if !strings.Contains(got, "/v1/t/video") || !strings.Contains(got, "event=midpoint") {
 		t.Errorf("beacon not fired through /v1/t/video with the event: %q", got)
+	}
+	// The fired beacon must carry a real HMAC sig, not sig=ssai.
+	if !strings.Contains(got, "sig=") || strings.Contains(got, "sig=ssai") {
+		t.Errorf("beacon must be HMAC-signed, not a hand-rolled sig: %q", got)
 	}
 }
 
