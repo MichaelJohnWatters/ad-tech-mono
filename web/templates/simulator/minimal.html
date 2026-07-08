@@ -3494,6 +3494,10 @@
     <!-- No Google IMA SDK. The Video tab uses a small self-hosted VAST player
          (see playVideoDemo) that plays our own VAST + Minio media directly and
          fires the tracking beacons itself — zero external player dependency. -->
+    <!-- hls.js (Apache-2.0), vendored + self-hosted, for the SSAI tab to play the
+         real stitched HLS stream (Chrome; Safari plays HLS natively). No phone
+         home, unlike IMA. -->
+    <script src="/static/vendor/hls.min.js"></script>
     <script>
         // ----------------------------------------------------------------
         // Channel tab switch + video player wiring. Display sim lives
@@ -3996,30 +4000,66 @@
         // stitched ad-segment URL (which reaches the SSAI seg handler → fires the
         // beacon server-side) with redirect:'manual' so we don't re-download the
         // media. The ad media + trace id are pulled from the manifest.
+        var ssaiHls = null;
         function playSSAIStream() {
             var v = document.getElementById('ssai-video');
             var badge = document.getElementById('ssai-badge');
             var preview = document.getElementById('ssai-preview');
             var placement = document.getElementById('placementSelect').value || 'pl-sim-video';
             var geo = document.getElementById('geoSelect').value;
+            // Stitch real packaged content (segmented HLS in Minio) so hls.js can
+            // play a seamless content+ad byte stream.
+            var origin = window.location.origin + '/v1/creatives/ssai/content/sample/index.m3u8';
             var url = window.location.origin + '/v1/ssai/manifest.m3u8?placement_id=' + encodeURIComponent(placement) +
-                '&geo=' + encodeURIComponent(geo) + '&device=ctv' + realismQuery() + '&t=' + Date.now();
+                '&geo=' + encodeURIComponent(geo) + '&device=ctv&origin=' + encodeURIComponent(origin) + realismQuery() + '&t=' + Date.now();
             preview.textContent = url + '\n\n(fetching manifest…)';
             if (typeof traceReset === 'function') traceReset();
             logVideoEvent('SSAI manifest request', placement, 'success');
 
             fetch(url).then(function(r){ return r.text(); }).then(function(manifest){
                 preview.textContent = url + '\n\n' + manifest;
-                var segs = manifest.split('\n').filter(function(l){ return l.indexOf('/v1/ssai/seg?') >= 0; });
-                if (!segs.length) { logVideoEvent('SSAI: break unfilled (content only)', '', 'nobid'); ssaiPlayContent(v); return; }
-                // Trace id + ad media come from the stitched segment URLs.
-                var tm = segs[0].match(/tid%3D([0-9a-f]{32})/);
+                var tm = manifest.match(/tid%3D([0-9a-f]{32})/) || manifest.match(/tid=([0-9a-f]{32})/);
                 if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
-                var rm = segs[0].match(/[?&]redir=([^&]+)/);
-                var adMedia = rm ? decodeURIComponent(rm[1]) : null;
-                logVideoEvent('SSAI: ad stitched into stream', segs.length + ' ad segments', 'success');
-                ssaiPlayAd(v, badge, segs, adMedia);
+                badge.style.display = manifest.indexOf('/v1/ssai/seg') >= 0 ? '' : 'none';
+
+                if (ssaiHls) { ssaiHls.destroy(); ssaiHls = null; }
+                // Real HLS: the packaged content's segments are absolute Minio URLs.
+                var realStream = manifest.indexOf('/v1/creatives/ssai/content/') >= 0;
+                if (realStream && window.Hls && window.Hls.isSupported()) {
+                    // hls.js walks the stitched manifest, fetching content + ad
+                    // segments. Each ad-segment request hits /v1/ssai/seg which
+                    // fires the beacon SERVER-SIDE and 302s to the conditioned .ts
+                    // — real SSAI, no client-side beacon code.
+                    ssaiHls = new Hls();
+                    ssaiHls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); logVideoEvent('SSAI stream playing (hls.js · server-side beacons)', '', 'success'); });
+                    ssaiHls.on(Hls.Events.ERROR, function(e, data){
+                        if (!data.fatal) return;
+                        logVideoEvent('SSAI hls error — using demo player', data.details, 'error');
+                        try { ssaiHls.destroy(); } catch (x) {} ssaiHls = null;
+                        ssaiFallback(manifest, v, badge);
+                    });
+                    ssaiHls.loadSource(url);
+                    ssaiHls.attachMedia(v);
+                } else if (realStream && v.canPlayType('application/vnd.apple.mpegurl')) {
+                    v.src = url; v.play().catch(function(){}); // Safari native HLS
+                    logVideoEvent('SSAI stream playing (native HLS)', '', 'success');
+                } else {
+                    // Packaged content not available yet (run the content-packager
+                    // Job) → the demonstration player.
+                    logVideoEvent('Packaged content not available — demo player', '', 'nobid');
+                    ssaiFallback(manifest, v, badge);
+                }
             }).catch(function(err){ preview.textContent = url + '\n\n(failed: ' + err + ')'; logVideoEvent('SSAI error', String(err), 'error'); });
+        }
+
+        // ssaiFallback is the demonstration player (plays the ad media + fires the
+        // beacons via segment fetches) used when real packaged content isn't
+        // available or hls.js fails.
+        function ssaiFallback(manifest, v, badge) {
+            var segs = manifest.split('\n').filter(function(l){ return l.indexOf('/v1/ssai/seg?') >= 0; });
+            if (!segs.length) { ssaiPlayContent(v); return; }
+            var rm = segs[0].match(/[?&]redir=([^&]+)/);
+            ssaiPlayAd(v, badge, segs, rm ? decodeURIComponent(rm[1]) : null);
         }
 
         function ssaiPlayAd(v, badge, segs, adMedia) {
@@ -4060,6 +4100,7 @@
 
         function resetSSAI() {
             var v = document.getElementById('ssai-video');
+            if (ssaiHls) { try { ssaiHls.destroy(); } catch (e) {} ssaiHls = null; }
             try { v.pause(); } catch (e) {}
             v.removeAttribute('src'); v.load();
             var b = document.getElementById('ssai-badge'); if (b) b.style.display = 'none';
