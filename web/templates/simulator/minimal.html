@@ -3712,6 +3712,11 @@
                 [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]].forEach(function(q){
                     if (f >= q[1] && !ad.fired[q[0]]) { ad.fired[q[0]] = true; fireVideoTracker(ad, q[0]); }
                 });
+                // TODO(video-viewability): quartiles measure how much was WATCHED,
+                // not whether the ad was on-screen. IAB video viewability (≥50%
+                // pixels for ≥2s continuous) is a separate metric — measure it
+                // here with an IntersectionObserver on `v` and fire a viewable
+                // beacon. See docs/PLAN.md → "Video / CTV measurement".
             };
             // Interaction events, straight off the native <video> — no player SDK.
             var onPause = function(){ if (started && !done && !v.ended) fireVideoTracker(ad, 'pause'); };
