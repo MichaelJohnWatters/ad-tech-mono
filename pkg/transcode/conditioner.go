@@ -58,6 +58,19 @@ func (c *Conditioner) Condition(ctx context.Context, creativeID, mediaURL string
 	return v.(*Conditioned), nil
 }
 
+// Cached returns the conditioned ad only if it is already in the store — never
+// transcodes. Serving paths (the stitcher) use this so a manifest response never
+// blocks on ffmpeg; on a miss they slate and warm asynchronously. Returns
+// (nil, nil) when not yet conditioned.
+func (c *Conditioner) Cached(ctx context.Context, creativeID string, p Profile) (*Conditioned, error) {
+	ph := p.Hash()
+	base := fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.Prefix, "/"), creativeID, ph)
+	if ok, err := c.Store.Exists(ctx, c.Bucket, base+"/index.m3u8"); err != nil || !ok {
+		return nil, err
+	}
+	return c.fromCache(ctx, creativeID, ph, base)
+}
+
 func (c *Conditioner) conditionOnce(ctx context.Context, creativeID, mediaURL string, p Profile) (*Conditioned, error) {
 	ph := p.Hash()
 	base := fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.Prefix, "/"), creativeID, ph)
