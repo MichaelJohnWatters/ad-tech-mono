@@ -76,7 +76,10 @@ type InLine struct {
 	AdSystem    AdSystem     `xml:"AdSystem"`
 	AdTitle     string       `xml:"AdTitle"`
 	Impressions []Impression `xml:"Impression"`
-	Description string       `xml:"Description,omitempty"`
+	// Errors are VAST <Error> URIs the player pings on a playback failure (with
+	// the [ERRORCODE] macro). Placed after Impression per the VAST XSD.
+	Errors      []Error `xml:"Error,omitempty"`
+	Description string  `xml:"Description,omitempty"`
 	Advertiser  string       `xml:"Advertiser,omitempty"`
 	Pricing     *Pricing     `xml:"Pricing,omitempty"`
 	// AdVerifications carries Open Measurement (OMID) verification resources.
@@ -167,6 +170,11 @@ func (p *Price) UnmarshalText(text []byte) error {
 // when a wrapper layers its own beacon on top of a downstream VAST.
 type Impression struct {
 	ID  string `xml:"id,attr,omitempty"`
+	URI string `xml:",cdata"`
+}
+
+// Error is a VAST <Error> element: a URI (in CDATA) pinged on playback failure.
+type Error struct {
 	URI string `xml:",cdata"`
 }
 
