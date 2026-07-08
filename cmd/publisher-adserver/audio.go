@@ -201,7 +201,7 @@ func writeStubAudioVAST(w http.ResponseWriter, log *slog.Logger, trackerURL, tra
 		TraceID:          traceID,
 		AdvertiserDomain: "house",
 		DurationSeconds:  30,
-		MediaURL:         "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+		MediaURL:         "http://localhost:8080/v1/creatives/media/audio-1.mp3",
 		PlacementID:      placementID,
 	}, macroCtx)
 	xmlBytes, err := vast.BuildLinearAd(spec)

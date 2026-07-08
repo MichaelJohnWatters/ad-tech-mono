@@ -84,7 +84,7 @@ campaigns:
     # publisher-adserver assembles the audio VAST (audio/mpeg MediaFile).
     creatives:
       - { id: cr-shoes-audio-30s, format: audio, duration: 30,
-          media_url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" }
+          media_url: "http://localhost:8080/v1/creatives/media/audio-2.mp3" }
 
   - id: li-002
     account_id: adv-acme

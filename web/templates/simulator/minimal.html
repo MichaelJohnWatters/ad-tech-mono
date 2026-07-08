@@ -366,7 +366,7 @@
                 <p>Sample content video with an ad break served via VAST or VMAP. Each break runs a real auction through SSP → Exchange → DSP. Pick a schedule above, press Play.</p>
                 <div id="video-player-wrap" style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
                     <video id="content-video" controls playsinline preload="metadata" style="width: 100%; height: 100%; display: block;"
-                        src="/v1/media/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_10MB.mp4"></video>
+                        src="/v1/creatives/media/bbb-720-10mb.mp4"></video>
                     <div id="ad-container" style="position: absolute; inset: 0;"></div>
                 </div>
                 <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
@@ -3462,7 +3462,11 @@
          Access policy refuses cross-origin fetches into loopback
          addresses (our localhost VAST endpoint) from non-secure
          contexts, regardless of any server-side CORS / PNA header. -->
-    <script src="https://imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+    <!-- Google IMA HTML5 SDK, vendored (web/static/vendor/ima3.js) so the video
+         player script loads from our own gateway, not imasdk.googleapis.com. NB:
+         IMA still emits internal telemetry to Google ad servers at runtime; the
+         ad itself plays entirely from our self-hosted VAST + Minio media. -->
+    <script src="/static/vendor/ima3.js"></script>
     <script>
         // ----------------------------------------------------------------
         // Channel tab switch + video player wiring. Display sim lives
