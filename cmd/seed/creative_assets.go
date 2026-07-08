@@ -120,6 +120,17 @@ func uploadCreativeAssets(ctx context.Context, store objects.Store, bucket strin
 	if err := store.EnsureBucket(ctx, bucket); err != nil {
 		log.Warn("ensure bucket failed; asset uploads may fail", "bucket", bucket, "error", err)
 	}
+	// Make the creatives bucket anonymously readable so the gateway's
+	// /v1/creatives proxy (which forwards unsigned browser requests) can serve
+	// the SVGs. Without this every creative image 403s in the browser. Only the
+	// s3 store implements this; the fs fallback serves files directly.
+	if pub, ok := store.(interface {
+		SetPublicRead(context.Context, string) error
+	}); ok {
+		if err := pub.SetPublicRead(ctx, bucket); err != nil {
+			log.Warn("set creatives bucket public-read failed; images may 403 in browser", "bucket", bucket, "error", err)
+		}
+	}
 
 	type asset struct {
 		key  string
