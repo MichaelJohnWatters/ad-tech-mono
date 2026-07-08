@@ -365,7 +365,10 @@
             <div id="pane-video" class="channel-pane" style="display: none;">
                 <p>Sample content video with an ad break served via VAST or VMAP. Each break runs a real auction through SSP → Exchange → DSP. Pick a schedule above, press Play.</p>
                 <div id="video-player-wrap" style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
-                    <video id="content-video" controls playsinline preload="metadata" style="width: 100%; height: 100%; display: block;"
+                    <!-- preload="none": the content player fetches nothing until Play
+                         triggers the flow, so opening the Video tab makes no network
+                         request — the ad + content only load on Play. -->
+                    <video id="content-video" controls playsinline preload="none" style="width: 100%; height: 100%; display: block;"
                         src="/v1/creatives/media/bbb-720-10mb.mp4"></video>
                     <div id="ad-container" style="position: absolute; inset: 0;"></div>
                 </div>
