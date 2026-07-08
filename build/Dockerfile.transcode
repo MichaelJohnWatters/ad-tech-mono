@@ -1,0 +1,16 @@
+# Dockerfile.transcode — dev image for the ffmpeg-backed services
+# (cmd/transcoder, cmd/content-packager). Same pre-built-binary pattern as
+# Dockerfile.dev, but with ffmpeg installed. Kept separate so we don't bloat
+# every service image with ffmpeg (~a few hundred MB of codecs).
+#
+# Usage:
+#   docker build --build-arg SERVICE=transcoder -f build/Dockerfile.transcode -t adtech-transcoder .
+#
+# Prereq: ./bin/${SERVICE} built on the host (the Tiltfile's ${svc}-build does this).
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates ffmpeg
+ARG SERVICE
+COPY bin/${SERVICE} /app
+WORKDIR /
+ENTRYPOINT ["/app"]
