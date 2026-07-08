@@ -87,6 +87,9 @@ func main() {
 	if err := uploadCreativeAssets(ctx, objStore, bucket, log); err != nil {
 		log.Warn("creative asset upload run failed", "error", err)
 	}
+	// Pull the sample video/audio into our own object store so the platform
+	// serves its own media instead of proxying a live third party per request.
+	uploadSampleMedia(ctx, objStore, bucket, log)
 	assetBase := cfg.Get("seed.creatives_url_base", "http://localhost:8080"+routes.ProxyCreatives[:len(routes.ProxyCreatives)-1])
 	landingBase := cfg.Get("seed.landing_url_base", "http://localhost:8080/dev/landing")
 
