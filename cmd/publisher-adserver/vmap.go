@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -38,7 +39,18 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 			placement = "pl-sport-mpu"
 		}
 
-		vastBase := publicBase + routes.PublisherAdServeVAST + "?placement_id=" + placement
+		// Carry the visitor's geo/device/consent/identity signals onto every
+		// break's VAST tag so each per-break auction runs on the real request.
+		// We forward only params the caller actually sent — no USA/desktop
+		// defaults — because the VAST handler defaults at fetch time; baking
+		// defaults into the schedule would mislabel a real EU/mobile viewer.
+		// break=<pre|mid|post> is appended per-break below.
+		vastParams := url.Values{}
+		for k, v := range r.URL.Query() {
+			vastParams[k] = append([]string(nil), v...)
+		}
+		vastParams.Set("placement_id", placement)
+		vastBase := publicBase + routes.PublisherAdServeVAST + "?" + vastParams.Encode()
 
 		specs := []vmap.BreakSpec{
 			{

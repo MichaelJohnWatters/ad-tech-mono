@@ -17,8 +17,8 @@ func TestDeviceFromUserAgent(t *testing.T) {
 		"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)":      "mobile",
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64)":                   "desktop",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)":                "desktop",
-		"":      "desktop", // empty UA → safe default
-		"curl/8.4.0": "desktop", // CLI tools → desktop
+		"":                                 "desktop", // empty UA → safe default
+		"curl/8.4.0":                       "desktop", // CLI tools → desktop
 		"Mozilla/5.0 (compatible; Tablet)": "tablet",
 	}
 	for ua, want := range cases {
