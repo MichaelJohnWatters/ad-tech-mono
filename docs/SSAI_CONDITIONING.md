@@ -220,11 +220,28 @@ absent so the unit suite stays green everywhere:
   returned a 589 KB `video/mp2t` that ffprobe reports as h264 640×360 6.0s and
   ffmpeg decodes with zero errors. The conditioning + stitching pipeline is proven
   end-to-end on the deployed stack.
-- **Only truly remaining:** full-stream *browser* hls.js playback of content+ads
-  together — which needs a REAL content origin (the demo uses placeholder
-  `content_*.ts`). That rolls into R2 (package a real origin), after which the
-  whole stitched stream — not just the ad segments — plays. The risky part (the
-  ad byte-splice) is done.
+- **Full stitched stream — PROVEN (R2).** With real origins packaged (below), the
+  live stitcher returns the real ABR master and the real content+ad segments
+  concat with `-c copy` (byte-compatible) into a 14s h264 640×360 stream that
+  decodes cleanly end-to-end. (ffmpeg's HLS *walker* can't follow the query-string
+  beacon-redirect segment URLs — an ffmpeg quirk, not hls.js — so verification
+  fetches the segments and concats them directly.) R1 is done.
+
+### R2 — Audio origin + web sim toggle · **DONE (2026-07-09)**
+- `content-packager` audio mode (`packager.audio`): single audio-only rendition
+  → `{prefix}/{id}/audio/index.m3u8`, no master.
+- **In-cluster origin reads (the fix that made real playback work):** the ssai
+  pod can't reach the browser-facing gateway host, so an HTTP origin fetch
+  silently fell back to placeholder `content_*.ts`. ssai now reads `/v1/creatives`
+  origins straight from the object store (new s3 client + `ssai.creatives_bucket`;
+  k8s deployment gains `S3_*` env), mirroring the transcoder's mezzanine fetch.
+- Web SSAI tab: Video/Audio selector (audio → audio origin + `channel=audio` +
+  `device=mobile`).
+- Verified live: video ABR master stitches real content+ads (decodes); audio
+  origin stitches 58 content + 71 ad segments. **Operational note:** run the
+  content-packager once to produce `ssai/content/sample/master.m3u8` (video) and
+  `ssai/content/sample-audio/audio/index.m3u8` (audio) before the demo plays real
+  content.
 
 ### R2 — Audio origin + web sim toggle · effort M · user-facing
 The audio *stitcher* path is done but there's no audio *origin* to point it at,
