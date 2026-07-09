@@ -194,7 +194,67 @@ instead of serving stale). CMAF/fMP4 init-segment handling is DONE (see P7).
 
 Still open (designed, not built): DASH output, ID3 timed-metadata beacons, and an
 audio option in the web sim tab (the backend serves audio SSAI; the browser demo
-tab is still video-only).
+tab is still video-only). Roadmap below.
+
+## Roadmap for remaining work (planned 2026-07-09)
+
+Six phases, ordered by value + dependency. R1 comes first because it verifies
+everything already built; the rest are independent and can be reordered.
+
+### R1 — Runtime verification (the de-risker) · effort M · **do first**
+Everything from P1–P7 is unit-tested but the real ffmpeg transcode + hls.js
+playback has never run here. Nothing else is trustworthy until this does.
+- `pkg/transcode`: a `-tags=ffmpeg` golden test that generates a ~2s fixture with
+  `ffmpeg lavfi` (testsrc + sine — no binary asset committed), packages it across
+  the TS, CMAF, and audio profiles, and asserts: segments + `init.mp4` produced,
+  keyframe-at-segment-boundary, and that content+ad conditioned to the SAME
+  profile are splice-compatible (same codecs/timescale).
+- `tests/e2e` (or a `make ssai-smoke`): content-packager Job → transcoder
+  `condition` → ssai `manifest.m3u8` → assert the stitched manifest's segment
+  URLs resolve 200 and the ad `.ts`/`.m4s` decode. Runs only where ffmpeg + the
+  cluster are up (CI image / OrbStack), skips locally.
+- Exit criteria: one stitched stream plays end-to-end in hls.js; the golden test
+  is green in the ffmpeg CI image.
+
+### R2 — Audio origin + web sim toggle · effort M · user-facing
+The audio *stitcher* path is done but there's no audio *origin* to point it at,
+and the sim tab is video-only.
+- `cmd/content-packager`: audio mode (`packager.audio=true`) — `DefaultAudioProfile`,
+  single rendition, no ABR ladder/master; uploads `ssai/content/{id}/audio/index.m3u8`.
+- `cmd/seed/media.go`: seed a short audio source (mp3/m4a) into Minio.
+- `web/templates/simulator/minimal.html`: a Video/Audio selector on the SSAI tab;
+  `playSSAIStream` appends `&channel=audio` and plays audio-only HLS (hls.js on a
+  media element). Depends on R1 for anything audible.
+- Exit criteria: pick Audio in the sim, hear a stitched audio ad; beacons land on
+  `/v1/t/audio`.
+
+### R3 — ABR master alternate renditions (#EXT-X-MEDIA) · effort M
+Real demuxed origins reference a separate `#EXT-X-MEDIA:TYPE=AUDIO` group; today
+`ParseMaster`/`serveMaster` only handle `#EXT-X-STREAM-INF`, so those origins break.
+- `pkg/ssai/master.go`: parse + re-emit `#EXT-X-MEDIA` (AUDIO/SUBTITLES) lines,
+  preserving GROUP-ID/attrs.
+- `cmd/ssai/serveMaster`: rewrite the audio-group `URI=` to a stitcher URL too, so
+  the audio rendition is stitched alongside video. Tested at parse/build + serveMaster.
+
+### R4 — DASH output · effort L · depends on CMAF (done)
+A second manifest flavour over the same conditioned CMAF segments — extends reach
+to DASH players (Shaka, dash.js).
+- `pkg/dash`: build an MPD (SegmentTemplate/Timeline) from the ladder + conditioned
+  segments; multi-Period ad insertion (each avail = a new Period).
+- `cmd/ssai`: serve `.mpd`; per-period stitch. Golden MPD test + a Shaka smoke.
+
+### R5 — ID3 timed-metadata beacons · effort M · low value
+Alternative to segment-driven beacons for players that attribute client-side. Our
+server beacons already cover the common case, so this is optional.
+- `pkg/transcode`: optional muxing pass embedding ID3 `PRIV`/`TXXX` at quartile
+  offsets; player fires on `hls.js FRAG_PARSING_METADATA`.
+
+### R6 — OMID / server-side viewability · effort XL · separate epic
+CTV/SSAI viewability needs OM SDK verification resources threaded through VAST +
+the segment beacons. Large, client-SDK-heavy — track as its own workstream, not
+part of the stitcher.
+
+**Suggested sequence:** R1 → R2 → R3 → R4 → (R5, R6 as demand dictates).
 
 ## Risks
 
