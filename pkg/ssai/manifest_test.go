@@ -143,6 +143,22 @@ func TestStitchFMP4RestoresContentInit(t *testing.T) {
 	}
 }
 
+func TestRenderRecomputesTargetDuration(t *testing.T) {
+	// Origin says TARGETDURATION:6 but carries a 12s segment — Render must raise
+	// it to 12 so the playlist stays HLS-valid (target >= every segment).
+	m, err := ParseMedia("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\na.ts\n#EXTINF:12.0,\nb.ts\n#EXT-X-ENDLIST\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out := m.Render()
+	if !strings.Contains(out, "#EXT-X-TARGETDURATION:12") {
+		t.Errorf("target duration not recomputed to 12:\n%s", out)
+	}
+	if strings.Contains(out, "#EXT-X-TARGETDURATION:6") {
+		t.Errorf("stale target duration 6 kept:\n%s", out)
+	}
+}
+
 func TestBreaks(t *testing.T) {
 	m, _ := ParseMedia(sampleManifest)
 	breaks := m.Breaks()
