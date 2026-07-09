@@ -137,15 +137,16 @@ On-the-fly transcode is **seconds**; a break can't stall. Mitigations, layered:
     splice_info_section decoding from a live transport stream is still future;
     the manifest-level DATERANGE form is what HLS packagers emit and is enough
     to drive insertion.)
-  - **CMAF/fMP4 — designed, deferred.** `Profile.Container` already accepts
-    `cmaf`/`fmp4` and `FFmpegArgs` emits fMP4 segments; the remaining work is the
-    init segment: ffmpeg writes `init.mp4` + `#EXT-X-MAP:URI="init.mp4"`, so
-    `runner.readHLSOutput` must capture the init object, the conditioner must
-    upload it under the cond prefix, and `ssai.ParseMedia`/`Render` must preserve
-    `#EXT-X-MAP`. The seamless-splice constraint is stricter for fMP4 (the ad's
-    init must be codec-compatible with content's), which is exactly the Profile
-    match we already enforce. DASH is a second manifest flavour over the same
-    conditioned segments.
+  - **CMAF/fMP4 — DONE (init segment).** `Profile.Container=cmaf` emits fMP4
+    `.m4s` segments + a deterministic `init.mp4` (`-hls_fmp4_init_filename`).
+    `runner.readHLSOutput` captures the init into `Result.Init`; the conditioner
+    uploads it and exposes `Conditioned.InitURI`; `ssai.ParseMedia`/`Render`
+    round-trip `#EXT-X-MAP`. The stitcher declares the ad's init on its first ad
+    segment and `Stitch` restores the content init on the first segment after the
+    break (else the player would decode content against the ad's init). Tested:
+    `TestReadHLSOutputFMP4`, `TestStitchFMP4RestoresContentInit`. Still open: DASH
+    as a second manifest flavour over the same conditioned segments, and a golden
+    real-ffmpeg fMP4 splice test.
   - **ID3 timed-metadata beacons — designed, deferred.** An alternative to
     segment-driven server beacons: embed beacon triggers as ID3 `PRIV`/`TXXX`
     frames in the ad segments (`ffmpeg -metadata` / a muxing pass), and the
@@ -187,9 +188,13 @@ feature gaps (added):
   quartile/error beacons through `/v1/t/audio` (impression stays channel-agnostic
   on `/v1/t/imp`). Pods, slate, and metrics all apply to audio unchanged.
 
-Still open (designed, not built): CMAF init-segment handling, ID3 beacons,
-cache-bust on creative replacement, and an audio option in the web sim tab
-(the backend serves audio SSAI; the browser demo tab is still video-only).
+Cache-bust on creative replacement is DONE (the conditioned-ad cache key now
+folds in a content version from the media URL; a replaced asset URL re-conditions
+instead of serving stale). CMAF/fMP4 init-segment handling is DONE (see P7).
+
+Still open (designed, not built): DASH output, ID3 timed-metadata beacons, and an
+audio option in the web sim tab (the backend serves audio SSAI; the browser demo
+tab is still video-only).
 
 ## Risks
 

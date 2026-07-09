@@ -126,4 +126,7 @@ func TestFFmpegArgsHEVCandCMAF(t *testing.T) {
 	if sn := argVal(args, "-hls_segment_filename"); !strings.HasSuffix(sn, "seg_%d.m4s") {
 		t.Errorf("cmaf segment name = %q, want .m4s", sn)
 	}
+	if argVal(args, "-hls_fmp4_init_filename") != "init.mp4" {
+		t.Errorf("cmaf init filename = %q, want init.mp4", argVal(args, "-hls_fmp4_init_filename"))
+	}
 }

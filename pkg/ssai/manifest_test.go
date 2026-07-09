@@ -88,6 +88,61 @@ func TestParseSCTE35Daterange(t *testing.T) {
 	}
 }
 
+// fmp4Manifest is fMP4/CMAF content: it declares a content init via #EXT-X-MAP
+// and uses .m4s segments, with one mid-roll avail.
+const fmp4Manifest = `#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="content_init.mp4"
+#EXTINF:6.0,
+content_0.m4s
+#EXT-X-CUE-OUT:DURATION=6
+#EXTINF:6.0,
+content_1.m4s
+#EXT-X-CUE-IN
+#EXTINF:6.0,
+content_2.m4s
+#EXT-X-ENDLIST
+`
+
+func TestStitchFMP4RestoresContentInit(t *testing.T) {
+	m, err := ParseMedia(fmp4Manifest)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// The content init attaches to the first segment (not the header).
+	if m.Segments[0].Map != "content_init.mp4" {
+		t.Fatalf("content #EXT-X-MAP not parsed onto seg 0: %+v", m.Segments[0])
+	}
+
+	// Fill the break with one ad segment carrying its OWN init.
+	m.Stitch(func(i int, span BreakSpan) []Segment {
+		return []Segment{{Duration: 6, URI: "ad_0.m4s", Map: "ad_init.mp4"}}
+	})
+
+	out := m.Render()
+	reparsed, err := ParseMedia(out)
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	bySeg := map[string]Segment{}
+	for _, s := range reparsed.Segments {
+		bySeg[s.URI] = s
+	}
+	if got := bySeg["ad_0.m4s"].Map; got != "ad_init.mp4" {
+		t.Errorf("ad segment init = %q, want ad_init.mp4", got)
+	}
+	// The content segment after the ad must re-declare the content init, else the
+	// player decodes content against the ad's init.
+	if got := bySeg["content_2.m4s"].Map; got != "content_init.mp4" {
+		t.Errorf("post-break content init not restored: %q, want content_init.mp4", got)
+	}
+	// Three #EXT-X-MAP lines total: content head, ad, restored content.
+	if n := strings.Count(out, "#EXT-X-MAP:"); n != 3 {
+		t.Errorf("want 3 #EXT-X-MAP lines, got %d:\n%s", n, out)
+	}
+}
+
 func TestBreaks(t *testing.T) {
 	m, _ := ParseMedia(sampleManifest)
 	breaks := m.Breaks()

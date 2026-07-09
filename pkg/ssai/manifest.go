@@ -25,6 +25,7 @@ type Segment struct {
 	CueOut        float64 // >0 → emit #EXT-X-CUE-OUT:DURATION=<n> before this segment
 	CueIn         bool    // emit #EXT-X-CUE-IN before this segment
 	Ad            bool    // stitched ad segment (not original content)
+	Map           string  // fMP4 init URI → emit #EXT-X-MAP:URI="<map>" before this segment
 }
 
 // Manifest is a parsed HLS media playlist.
@@ -73,6 +74,10 @@ func ParseMedia(text string) (*Manifest, error) {
 			dur := parseInf(line)
 			pending.Duration = dur
 			haveInf = true
+		case strings.HasPrefix(line, "#EXT-X-MAP"):
+			// fMP4 init segment declaration; applies to the following media
+			// segment. (Not a header line even before the first #EXTINF.)
+			pending.Map = parseMapURI(line)
 		case strings.HasPrefix(line, "#EXT-X-CUE-OUT"):
 			pending.CueOut = parseCueOutDuration(line)
 		case strings.HasPrefix(line, "#EXT-X-DATERANGE") && isScteOut(line):
@@ -151,6 +156,10 @@ func (m *Manifest) Breaks() []BreakSpan {
 // content↔ad boundary. Breaks are processed back-to-front so earlier indices
 // stay valid as segments are spliced.
 func (m *Manifest) Stitch(fill func(i int, span BreakSpan) []Segment) {
+	// fMP4 content declares an init segment (#EXT-X-MAP). After an ad — which
+	// carries its OWN init — the first content segment back must re-declare the
+	// content init, or the player keeps decoding content against the ad's init.
+	contentMap := activeContentMap(m.Segments)
 	breaks := m.Breaks()
 	for i := len(breaks) - 1; i >= 0; i-- {
 		span := breaks[i]
@@ -172,6 +181,10 @@ func (m *Manifest) Stitch(fill func(i int, span BreakSpan) []Segment) {
 		if post < len(m.Segments) {
 			m.Segments[post].Discontinuity = true
 			m.Segments[post].CueIn = true
+			// Restore the content init after the ad (fMP4 only; no-op for TS).
+			if contentMap != "" && m.Segments[post].Map == "" {
+				m.Segments[post].Map = contentMap
+			}
 		}
 
 		// Splice: [ :Start ] + ads + [ End: ]. The replaced content segments
@@ -197,6 +210,9 @@ func (m *Manifest) Render() string {
 	for _, s := range m.Segments {
 		if s.Discontinuity {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		if s.Map != "" {
+			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", s.Map)
 		}
 		if s.CueOut > 0 {
 			fmt.Fprintf(&b, "#EXT-X-CUE-OUT:DURATION=%s\n", trimFloat(s.CueOut))
@@ -224,6 +240,31 @@ func (m *Manifest) AdDuration() float64 {
 		}
 	}
 	return total
+}
+
+// parseMapURI extracts the URI from an #EXT-X-MAP:URI="..." line.
+func parseMapURI(line string) string {
+	const key = `URI="`
+	i := strings.Index(line, key)
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+len(key):]
+	if j := strings.IndexByte(rest, '"'); j >= 0 {
+		return rest[:j]
+	}
+	return ""
+}
+
+// activeContentMap returns the first init URI declared in the playlist (the
+// content's #EXT-X-MAP), or "" for TS content that has none.
+func activeContentMap(segs []Segment) string {
+	for _, s := range segs {
+		if s.Map != "" {
+			return s.Map
+		}
+	}
+	return ""
 }
 
 func parseInf(line string) float64 {

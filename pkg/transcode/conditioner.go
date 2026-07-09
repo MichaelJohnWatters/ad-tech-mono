@@ -43,6 +43,7 @@ type Conditioned struct {
 	ProfileHash string        `json:"profile_hash"`
 	Cached      bool          `json:"cached"`
 	Duration    float64       `json:"duration"`
+	InitURI     string        `json:"init_uri,omitempty"` // fMP4 #EXT-X-MAP init URL (empty for TS)
 	Segments    []CondSegment `json:"segments"`
 }
 
@@ -120,6 +121,13 @@ func (c *Conditioner) conditionOnce(ctx context.Context, creativeID, mediaURL st
 		return nil, fmt.Errorf("upload playlist: %w", err)
 	}
 	out := &Conditioned{CreativeID: creativeID, ProfileHash: ph, Cached: false, Duration: res.TotalDuration()}
+	// fMP4/CMAF: upload the init segment and expose its URL for the #EXT-X-MAP.
+	if res.Init != nil {
+		if err := c.put(ctx, base+"/"+res.Init.Name, res.Init.Data, "video/mp4"); err != nil {
+			return nil, fmt.Errorf("upload init %s: %w", res.Init.Name, err)
+		}
+		out.InitURI = c.segURL(base, res.Init.Name)
+	}
 	for _, s := range res.Segments {
 		if err := c.put(ctx, base+"/"+s.Name, s.Data, "video/mp2t"); err != nil {
 			return nil, fmt.Errorf("upload segment %s: %w", s.Name, err)
@@ -149,6 +157,10 @@ func (c *Conditioner) fromCache(ctx context.Context, creativeID, ph, base string
 	for _, s := range m.Segments {
 		out.Duration += s.Duration
 		out.Segments = append(out.Segments, CondSegment{URI: c.segURL(base, s.URI), Duration: s.Duration})
+		// fMP4: rebuild the init URL from the cached playlist's #EXT-X-MAP.
+		if out.InitURI == "" && s.Map != "" {
+			out.InitURI = c.segURL(base, s.Map)
+		}
 	}
 	return out, nil
 }

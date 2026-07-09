@@ -143,8 +143,13 @@ func (p Profile) FFmpegArgs(input, outDir string) []string {
 		"-hls_segment_type", segType,
 		"-hls_flags", "independent_segments",
 		"-hls_segment_filename", filepath.Join(outDir, segName),
-		filepath.Join(outDir, "index.m3u8"),
 	)
+	if p.Container == ContainerCMAF {
+		// Deterministic init filename so the packager/conditioner can find the
+		// #EXT-X-MAP segment to upload.
+		args = append(args, "-hls_fmp4_init_filename", "init.mp4")
+	}
+	args = append(args, filepath.Join(outDir, "index.m3u8"))
 	return args
 }
 
