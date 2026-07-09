@@ -548,6 +548,10 @@ func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.Macr
 	}
 	if len(segs) > 0 {
 		segs[0].Discontinuity = true
+		// fMP4/CMAF: the ad carries its own init; declare it on the first ad
+		// segment (the player then decodes ad segments against the ad init, and
+		// Stitch restores the content init on the segment after the break).
+		segs[0].Map = cond.InitURI
 	}
 	return segs
 }

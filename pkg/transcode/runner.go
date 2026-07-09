@@ -21,9 +21,11 @@ type Segment struct {
 }
 
 // Result is the HLS output of a package/condition run: the media playlist text
-// plus the segments it references, in order.
+// plus the segments it references, in order. For fMP4/CMAF output Init holds the
+// #EXT-X-MAP init segment (nil for MPEG-TS).
 type Result struct {
 	Playlist string
+	Init     *Segment
 	Segments []Segment
 }
 
@@ -103,6 +105,15 @@ func readHLSOutput(dir string) (*Result, error) {
 		return nil, fmt.Errorf("parse produced playlist: %w", err)
 	}
 	res := &Result{Playlist: string(playlist)}
+	// fMP4/CMAF output carries an init segment via #EXT-X-MAP — read it once so
+	// the caller can upload it alongside the media segments.
+	if initURI := initSegmentURI(m); initURI != "" {
+		data, err := os.ReadFile(filepath.Join(dir, initURI))
+		if err != nil {
+			return nil, fmt.Errorf("read init segment %s: %w", initURI, err)
+		}
+		res.Init = &Segment{Name: initURI, Data: data}
+	}
 	for _, s := range m.Segments {
 		data, err := os.ReadFile(filepath.Join(dir, s.URI))
 		if err != nil {
@@ -114,6 +125,15 @@ func readHLSOutput(dir string) (*Result, error) {
 		return nil, fmt.Errorf("no segments produced")
 	}
 	return res, nil
+}
+
+func initSegmentURI(m *ssai.Manifest) string {
+	for _, s := range m.Segments {
+		if s.Map != "" {
+			return s.Map
+		}
+	}
+	return ""
 }
 
 func tail(b []byte, n int) []byte {

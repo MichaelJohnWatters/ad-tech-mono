@@ -34,6 +34,29 @@ func TestReadHLSOutput(t *testing.T) {
 	}
 }
 
+// TestReadHLSOutputFMP4 asserts fMP4/CMAF output: the #EXT-X-MAP init segment is
+// captured into Result.Init alongside the .m4s media segments.
+func TestReadHLSOutputFMP4(t *testing.T) {
+	dir := t.TempDir()
+	playlist := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:6\n" +
+		"#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6.0,\nseg_0.m4s\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-ENDLIST\n"
+	mustWrite(t, filepath.Join(dir, "index.m3u8"), playlist)
+	mustWrite(t, filepath.Join(dir, "init.mp4"), "INIT")
+	mustWrite(t, filepath.Join(dir, "seg_0.m4s"), "aa")
+	mustWrite(t, filepath.Join(dir, "seg_1.m4s"), "bb")
+
+	res, err := readHLSOutput(dir)
+	if err != nil {
+		t.Fatalf("readHLSOutput: %v", err)
+	}
+	if res.Init == nil || res.Init.Name != "init.mp4" || string(res.Init.Data) != "INIT" {
+		t.Fatalf("init segment not captured: %+v", res.Init)
+	}
+	if len(res.Segments) != 2 {
+		t.Errorf("want 2 media segments, got %d", len(res.Segments))
+	}
+}
+
 func TestReadHLSOutputNoSegments(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "index.m3u8"), "#EXTM3U\n#EXT-X-ENDLIST\n")
