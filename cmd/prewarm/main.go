@@ -54,25 +54,31 @@ func main() {
 		log.Error("query creatives", "error", err)
 		os.Exit(1)
 	}
-	ladder := transcode.DefaultLadder()
 	client := &http.Client{Timeout: 6 * time.Minute}
 
 	warmed, failed := 0, 0
 	for _, c := range creatives {
-		for _, p := range ladder {
+		// Audio creatives condition to a single audio-only profile; video
+		// creatives condition across the whole ABR ladder.
+		profiles := transcode.DefaultLadder()
+		if c.format == "audio" {
+			profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
+		}
+		for _, p := range profiles {
 			if err := condition(ctx, client, transcoderURL, c.id, c.mediaURL, p); err != nil {
-				log.Warn("prewarm condition failed", "creative", c.id, "rung", p.RungName(), "error", err)
+				log.Warn("prewarm condition failed", "creative", c.id, "format", c.format, "profile", p.Hash(), "error", err)
 				failed++
 				continue
 			}
 			warmed++
 		}
 	}
-	log.Info("prewarm complete", "creatives", len(creatives), "rungs", len(ladder), "warmed", warmed, "failed", failed)
+	log.Info("prewarm complete", "creatives", len(creatives), "warmed", warmed, "failed", failed)
 }
 
 type creative struct {
 	id       string
+	format   string
 	mediaURL string
 }
 
@@ -81,7 +87,7 @@ type creative struct {
 // cross-tenant read (or BYPASSRLS), else it sees only the connection's tenant.
 func activeMediaCreatives(ctx context.Context, db *sql.DB) ([]creative, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id::text, asset_url
+		SELECT id::text, format, asset_url
 		FROM creatives
 		WHERE format IN ('video','audio')
 		  AND asset_url IS NOT NULL AND asset_url <> ''`)
@@ -92,7 +98,7 @@ func activeMediaCreatives(ctx context.Context, db *sql.DB) ([]creative, error) {
 	var out []creative
 	for rows.Next() {
 		var c creative
-		if err := rows.Scan(&c.id, &c.mediaURL); err != nil {
+		if err := rows.Scan(&c.id, &c.format, &c.mediaURL); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
