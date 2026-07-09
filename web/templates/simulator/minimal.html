@@ -331,6 +331,10 @@
 
             <!-- SSAI channel controls. -->
             <span class="ssai-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <select id="ssaiChannel" title="SSAI media type" style="padding: 6px 8px; background: var(--bg-inset, #0d1117); color: var(--fg, #c9d1d9); border: 1px solid var(--border, #30363d); border-radius: 4px; font-size: 13px;">
+                    <option value="video">Video (CTV)</option>
+                    <option value="audio">Audio (podcast)</option>
+                </select>
                 <button class="btn btn-primary" onclick="playSSAIStream()">Play SSAI Stream</button>
                 <button class="btn btn-secondary" onclick="resetSSAI()">Reset</button>
             </span>
@@ -4007,11 +4011,22 @@
             var preview = document.getElementById('ssai-preview');
             var placement = document.getElementById('placementSelect').value || 'pl-sim-video';
             var geo = document.getElementById('geoSelect').value;
+            var channelSel = document.getElementById('ssaiChannel');
+            var channel = channelSel ? channelSel.value : 'video';
             // Stitch real packaged content (segmented HLS in Minio) so hls.js can
-            // play a seamless content+ad byte stream.
-            var origin = window.location.origin + '/v1/creatives/ssai/content/sample/master.m3u8';
+            // play a seamless content+ad byte stream. Audio is single-rendition
+            // (podcast/radio) → the media playlist directly; video is an ABR master.
+            var origin, device;
+            if (channel === 'audio') {
+                origin = window.location.origin + '/v1/creatives/ssai/content/sample-audio/audio/index.m3u8';
+                device = 'mobile';
+            } else {
+                origin = window.location.origin + '/v1/creatives/ssai/content/sample/master.m3u8';
+                device = 'ctv';
+            }
             var url = window.location.origin + '/v1/ssai/manifest.m3u8?placement_id=' + encodeURIComponent(placement) +
-                '&geo=' + encodeURIComponent(geo) + '&device=ctv&origin=' + encodeURIComponent(origin) + realismQuery() + '&t=' + Date.now();
+                '&geo=' + encodeURIComponent(geo) + '&device=' + device + '&channel=' + channel +
+                '&origin=' + encodeURIComponent(origin) + realismQuery() + '&t=' + Date.now();
             preview.textContent = url + '\n\n(fetching manifest…)';
             if (typeof traceReset === 'function') traceReset();
             logVideoEvent('SSAI manifest request', placement, 'success');

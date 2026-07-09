@@ -35,6 +35,7 @@ var schema = []config.SchemaEntry{
 	{Key: "packager.prefix", Type: "string", Tier: config.TierStatic, Default: "ssai/content", Description: "Object-key prefix for the packaged content HLS.", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.break_at_segment", Type: "int", Tier: config.TierStatic, Default: "2", Description: "Segment index where the mid-roll ad break opens (#EXT-X-CUE-OUT).", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.break_segments", Type: "int", Tier: config.TierStatic, Default: "5", Description: "Number of content segments the ad break spans (replaced by the stitched ad).", Service: "content-packager", Since: "v1.6"},
+	{Key: "packager.audio", Type: "bool", Tier: config.TierStatic, Default: "false", Description: "Package a single audio-only rendition ({prefix}/{content_id}/audio/index.m3u8, no master) instead of the video ABR ladder — for audio SSAI origins.", Service: "content-packager", Since: "v1.6"},
 }
 
 func main() {
@@ -52,6 +53,10 @@ func main() {
 	prefix := strings.TrimRight(cfg.Get("packager.prefix", "ssai/content"), "/")
 	breakAt := cfg.GetInt("packager.break_at_segment", 2)
 	breakSegs := cfg.GetInt("packager.break_segments", 5)
+	// Audio mode: package a single audio-only rendition (podcast / streaming
+	// radio) instead of the video ABR ladder, and skip the master playlist —
+	// audio is single-rendition, so the origin is the media playlist directly.
+	audioMode := cfg.GetBool("packager.audio", false)
 
 	runner := transcode.Runner{Timeout: 10 * time.Minute}
 	if !runner.Available() {
@@ -71,8 +76,12 @@ func main() {
 	//      collecting variants for the master. Real content carries SCTE-35; we
 	//      stamp CUE-OUT/CUE-IN so the stitcher has an avail to fill.
 	base := fmt.Sprintf("%s/%s", prefix, contentID)
+	profiles := transcode.DefaultLadder()
+	if audioMode {
+		profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
+	}
 	var variants []ssai.Variant
-	for _, profile := range transcode.DefaultLadder() {
+	for _, profile := range profiles {
 		res, err := runner.Package(ctx, src, profile)
 		if err != nil {
 			log.Error("ffmpeg package failed", "rung", profile.RungName(), "error", err)
@@ -84,6 +93,9 @@ func main() {
 			os.Exit(1)
 		}
 		rung := profile.RungName()
+		if audioMode {
+			rung = "audio"
+		}
 		rbase := base + "/" + rung
 		if err := put(ctx, store, bucket, rbase+"/index.m3u8", []byte(playlist), "application/vnd.apple.mpegurl"); err != nil {
 			log.Error("upload variant playlist failed", "rung", rung, "error", err)
@@ -100,6 +112,13 @@ func main() {
 			Width: profile.Width, Height: profile.Height, Codecs: profile.Codecs(),
 		})
 		log.Info("rung packaged", "rung", rung, "segments", len(res.Segments), "duration_s", res.TotalDuration())
+	}
+
+	// Audio is single-rendition: the origin is {base}/audio/index.m3u8, no master.
+	if audioMode {
+		log.Info("audio content packaged", "bucket", bucket, "origin", base+"/audio/index.m3u8",
+			"break_at", breakAt, "break_segments", breakSegs)
+		return
 	}
 
 	// Master playlist referencing the rungs (relative variant URIs).

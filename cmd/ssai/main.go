@@ -39,6 +39,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
+	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/transcode"
 )
@@ -123,6 +125,25 @@ func main() {
 
 	metrics := middleware.NewMetrics(constants.ServiceSSAI)
 
+	// Object store: the in-cluster stitcher can't reach the browser-facing gateway
+	// host, so it reads /v1/creatives origin manifests straight from the store
+	// (same pattern as the transcoder's mezzanine fetch). Optional — HTTP-fetched
+	// origins still work when the store is unset.
+	var store objects.Store
+	if ep := cfg.Get("s3.endpoint", ""); ep != "" {
+		s, err := objs3.New(objs3.Config{
+			Endpoint:  strings.TrimPrefix(strings.TrimPrefix(ep, "https://"), "http://"),
+			AccessKey: cfg.Get("s3.access_key", "minioadmin"),
+			SecretKey: cfg.Get("s3.secret_key", "minioadmin"),
+			UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		})
+		if err != nil {
+			log.Warn("object store init failed; origins will be HTTP-fetched only", "error", err)
+		} else {
+			store = s
+		}
+	}
+
 	deps := &stitcherDeps{
 		sspURL:     sspURL,
 		trackerURL: trackerURL,
@@ -132,6 +153,8 @@ func main() {
 		},
 		originFn:        func() string { return cfg.Get("ssai.origin_url", "") },
 		transcoderURL:   cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
+		store:           store,
+		bucket:          cfg.Get("ssai.creatives_bucket", "adtech-creatives"),
 		maxPodAdsFn:     func() int { return cfg.GetInt("ssai.max_pod_ads", 4) },
 		slateCreativeFn: func() string { return cfg.Get("ssai.slate_creative_id", "") },
 		slateMediaFn:    func() string { return cfg.Get("ssai.slate_media_url", "") },
@@ -165,6 +188,8 @@ type stitcherDeps struct {
 	slateCreativeFn func() string // slate creative id ("" = no slate, keep content)
 	slateMediaFn    func() string // slate media URL (to warm-condition the slate)
 	metrics         *stitcherMetrics
+	store           objects.Store // reads /v1/creatives origins from object storage (in-cluster)
+	bucket          string        // object-store bucket for origin reads
 	client          *http.Client
 }
 
@@ -261,6 +286,22 @@ func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, chan
 	if origin == "" {
 		return sample, ""
 	}
+	// A /v1/creatives origin is served by the gateway to browsers, but the
+	// in-cluster stitcher can't reach that host — read it straight from the object
+	// store instead (mirrors the transcoder's mezzanine fetch). The browser-facing
+	// origin URL is still returned so relative content-segment URIs resolve to
+	// gateway URLs the player CAN reach.
+	if key := creativesStoreKey(origin); key != "" && d.store != nil {
+		rc, err := d.store.Get(ctx, d.bucket, key)
+		if err == nil {
+			defer rc.Close()
+			if body, err := io.ReadAll(rc); err == nil {
+				reqLog.Info("ssai stitching real origin (from store)", "key", key, "channel", channel, "bytes", len(body))
+				return string(body), origin
+			}
+		}
+		reqLog.Warn("ssai origin store read failed, trying HTTP", "key", key, "error", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
 	if err != nil {
 		reqLog.Warn("ssai origin request build failed, using sample", "origin", origin, "error", err)
@@ -279,6 +320,16 @@ func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, chan
 	}
 	reqLog.Info("ssai stitching real origin", "origin", origin, "channel", channel, "bytes", len(body))
 	return string(body), origin
+}
+
+// creativesStoreKey extracts the object key from a /v1/creatives/<key> URL, or ""
+// if the URL isn't a creatives-proxy URL (then it's HTTP-fetched).
+func creativesStoreKey(u string) string {
+	const marker = "/v1/creatives/"
+	if i := strings.Index(u, marker); i >= 0 {
+		return u[i+len(marker):]
+	}
+	return ""
 }
 
 // resolveContentURIs rewrites relative content-segment URIs to absolute URLs
