@@ -152,6 +152,7 @@ func main() {
 			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
 		},
 		originFn:        func() string { return cfg.Get("ssai.origin_url", "") },
+		ladderFn:        func() []transcode.Profile { return transcode.ParseLadder(cfg.Get("transcode.ladder", "")) },
 		transcoderURL:   cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
 		store:           store,
 		bucket:          cfg.Get("ssai.creatives_bucket", "adtech-creatives"),
@@ -182,11 +183,12 @@ type stitcherDeps struct {
 	trackerURL      string
 	publicURL       string
 	placementFn     func() string
-	originFn        func() string // configured origin manifest URL ("" = built-in sample)
-	transcoderURL   string        // runtime ad-conditioning service ("" = disabled)
-	maxPodAdsFn     func() int    // max ads per avail (ad pod); nil/≤0 → 1
-	slateCreativeFn func() string // slate creative id ("" = no slate, keep content)
-	slateMediaFn    func() string // slate media URL (to warm-condition the slate)
+	originFn        func() string              // configured origin manifest URL ("" = built-in sample)
+	ladderFn        func() []transcode.Profile // config-driven ABR ladder (nil → DefaultLadder)
+	transcoderURL   string                     // runtime ad-conditioning service ("" = disabled)
+	maxPodAdsFn     func() int                 // max ads per avail (ad pod); nil/≤0 → 1
+	slateCreativeFn func() string              // slate creative id ("" = no slate, keep content)
+	slateMediaFn    func() string              // slate media URL (to warm-condition the slate)
 	metrics         *stitcherMetrics
 	store           objects.Store // reads /v1/creatives origins from object storage (in-cluster)
 	bucket          string        // object-store bucket for origin reads
@@ -422,7 +424,11 @@ func (d *stitcherDeps) variantStitchURL(r *http.Request, variantAbsURL string, h
 // ad is conditioned to the same rung the player is watching); default otherwise.
 func (d *stitcherDeps) profileForRung(r *http.Request) transcode.Profile {
 	if rung := r.URL.Query().Get("rung"); rung != "" {
-		for _, p := range transcode.DefaultLadder() {
+		ladder := transcode.DefaultLadder()
+		if d.ladderFn != nil {
+			ladder = d.ladderFn()
+		}
+		for _, p := range ladder {
 			if strconv.Itoa(p.Height) == rung || p.RungName() == rung {
 				return p
 			}
