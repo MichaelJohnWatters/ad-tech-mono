@@ -197,10 +197,18 @@ func (m *Manifest) Stitch(fill func(i int, span BreakSpan) []Segment) {
 	}
 }
 
-// Render serialises the manifest back to an HLS media playlist string.
+// Render serialises the manifest back to an HLS media playlist string. The
+// #EXT-X-TARGETDURATION header is recomputed from the actual (post-splice)
+// segments — the HLS spec requires it to be >= every segment's rounded EXTINF,
+// and a stitched ad can be longer than the origin's original value.
 func (m *Manifest) Render() string {
 	var b strings.Builder
+	target := m.targetDuration()
 	for _, h := range m.Header {
+		if strings.HasPrefix(h, "#EXT-X-TARGETDURATION") {
+			fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", target)
+			continue
+		}
 		b.WriteString(h)
 		b.WriteByte('\n')
 	}
@@ -228,6 +236,25 @@ func (m *Manifest) Render() string {
 		b.WriteString("#EXT-X-ENDLIST\n")
 	}
 	return b.String()
+}
+
+// targetDuration is ceil(max segment EXTINF), the HLS-required
+// #EXT-X-TARGETDURATION. Minimum 1 so an all-tiny-segment playlist stays valid.
+func (m *Manifest) targetDuration() int {
+	max := 0.0
+	for _, s := range m.Segments {
+		if s.Duration > max {
+			max = s.Duration
+		}
+	}
+	td := int(max)
+	if float64(td) < max {
+		td++ // ceil
+	}
+	if td < 1 {
+		td = 1
+	}
+	return td
 }
 
 // AdDuration returns the total duration of the ad segments in the manifest —
