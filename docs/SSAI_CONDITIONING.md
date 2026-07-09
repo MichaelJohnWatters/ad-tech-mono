@@ -213,10 +213,18 @@ absent so the unit suite stays green everywhere:
   real conditioner HTTP path (fs store, no cluster): the stitched manifest points
   each ad segment at a real conditioned `.ts` and the seg endpoint 302s to
   `ssai/cond/...`.
-- **Remaining for full R1 sign-off:** actual hls.js browser playback + the live
-  cluster (Minio/SSP/pods) — needs `tilt up` on OrbStack with the transcoder pod.
-  A `make ssai-smoke` against the running stack is the last step; the byte-splice
-  and server pipeline are otherwise proven.
+- **Live-stack smoke — PASSED (2026-07-09).** `make ssai-smoke`
+  (`scripts/ssai-smoke.sh`) against the full `tilt up` stack on OrbStack: the real
+  `ssai` pod ran a real auction, the real ffmpeg-backed `transcoder` pod
+  conditioned the winners, and following a stitched ad segment's beacon redirect
+  returned a 589 KB `video/mp2t` that ffprobe reports as h264 640×360 6.0s and
+  ffmpeg decodes with zero errors. The conditioning + stitching pipeline is proven
+  end-to-end on the deployed stack.
+- **Only truly remaining:** full-stream *browser* hls.js playback of content+ads
+  together — which needs a REAL content origin (the demo uses placeholder
+  `content_*.ts`). That rolls into R2 (package a real origin), after which the
+  whole stitched stream — not just the ad segments — plays. The risky part (the
+  ad byte-splice) is done.
 
 ### R2 — Audio origin + web sim toggle · effort M · user-facing
 The audio *stitcher* path is done but there's no audio *origin* to point it at,
