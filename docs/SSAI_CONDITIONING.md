@@ -255,13 +255,23 @@ and the sim tab is video-only.
 - Exit criteria: pick Audio in the sim, hear a stitched audio ad; beacons land on
   `/v1/t/audio`.
 
-### R3 — ABR master alternate renditions (#EXT-X-MEDIA) · effort M
-Real demuxed origins reference a separate `#EXT-X-MEDIA:TYPE=AUDIO` group; today
-`ParseMaster`/`serveMaster` only handle `#EXT-X-STREAM-INF`, so those origins break.
-- `pkg/ssai/master.go`: parse + re-emit `#EXT-X-MEDIA` (AUDIO/SUBTITLES) lines,
-  preserving GROUP-ID/attrs.
-- `cmd/ssai/serveMaster`: rewrite the audio-group `URI=` to a stitcher URL too, so
-  the audio rendition is stitched alongside video. Tested at parse/build + serveMaster.
+### R3 — ABR master alternate renditions (#EXT-X-MEDIA) · **DONE (2026-07-09)**
+Real demuxed origins reference a separate `#EXT-X-MEDIA:TYPE=AUDIO` group; before
+this, `ParseMaster`/`BuildMaster` dropped both the `#EXT-X-MEDIA` lines and the
+variants' `AUDIO=`/`SUBTITLES=` attributes, so demuxed origins lost their audio.
+- `pkg/ssai/master.go`: `Media` type + `ParseRenditions`; `Variant.Attrs` retains
+  the raw `#EXT-X-STREAM-INF` list so `AUDIO=`/`FRAME-RATE=`/… survive a rewrite;
+  `BuildMaster(variants, media)` re-emits renditions first (with only `URI`
+  swapped) then variants verbatim.
+- `cmd/ssai/serveMaster`: rewrites each rendition `URI` to a stitcher URL via
+  `renditionStitchURL` (AUDIO → `channel=audio`, no rung), so the audio group is
+  stitched alongside video. Tested: `TestDemuxedRenditionsPreservedAndRewritable`
+  (parse/rebuild) + `TestServeMasterRewritesRenditions` (handler).
+- **Caveat (documented, not yet solved):** perfect video/audio ad *sync* in a
+  demuxed stream (same ad, same timeline in both renditions) needs the ad split
+  into video-only + audio-only conditioned variants spliced at the identical
+  break — a deeper piece than the rendition plumbing here. The demo origins are
+  muxed, so this path isn't exercised live yet (needs a demuxed origin).
 
 ### R4 — DASH output · effort L · depends on CMAF (done)
 A second manifest flavour over the same conditioned CMAF segments — extends reach

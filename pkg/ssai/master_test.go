@@ -45,7 +45,7 @@ func TestBuildMasterRoundTrip(t *testing.T) {
 		{URI: "360p/index.m3u8", Bandwidth: 928000, Width: 640, Height: 360, Codecs: "avc1.4d401e,mp4a.40.2"},
 		{URI: "720p/index.m3u8", Bandwidth: 2928000, Width: 1280, Height: 720},
 	}
-	out := ParseMaster(BuildMaster(in))
+	out := ParseMaster(BuildMaster(in, nil))
 	if len(out) != 2 {
 		t.Fatalf("round-trip lost variants: %d", len(out))
 	}
@@ -54,5 +54,48 @@ func TestBuildMasterRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(out[0].Codecs, "avc1") || !strings.Contains(out[0].Codecs, "mp4a") {
 		t.Errorf("codecs with comma didn't survive round-trip: %q", out[0].Codecs)
+	}
+}
+
+// demuxedMaster references a separate audio group via AUDIO="aud" — the shape a
+// real (non-muxed) ABR master takes.
+const demuxedMaster = `#EXTM3U
+#EXT-X-VERSION:4
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",DEFAULT=YES,LANGUAGE="en",URI="audio/en/index.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=928000,RESOLUTION=640x360,CODECS="avc1.4d401e",AUDIO="aud"
+360p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2928000,RESOLUTION=1280x720,CODECS="avc1.640028",AUDIO="aud"
+720p/index.m3u8
+`
+
+func TestDemuxedRenditionsPreservedAndRewritable(t *testing.T) {
+	renditions := ParseRenditions(demuxedMaster)
+	if len(renditions) != 1 {
+		t.Fatalf("want 1 rendition, got %d", len(renditions))
+	}
+	m := renditions[0]
+	if m.Type != "AUDIO" || m.GroupID != "aud" || m.URI != "audio/en/index.m3u8" {
+		t.Fatalf("rendition parsed wrong: %+v", m)
+	}
+
+	// Rewrite the audio-group URI (as serveMaster does) and rebuild.
+	variants := ParseMaster(demuxedMaster)
+	m.URI = "https://stitch/audio.m3u8"
+	out := BuildMaster(variants, []Media{m})
+
+	// The rewritten audio rendition survives with its other attributes intact,
+	// and the variants keep their AUDIO="aud" reference (else the player loses
+	// audio).
+	if !strings.Contains(out, `URI="https://stitch/audio.m3u8"`) {
+		t.Errorf("rewritten audio URI missing:\n%s", out)
+	}
+	if !strings.Contains(out, `NAME="English"`) || !strings.Contains(out, `LANGUAGE="en"`) {
+		t.Errorf("rendition attributes dropped on rebuild:\n%s", out)
+	}
+	if strings.Count(out, `AUDIO="aud"`) != 2 {
+		t.Errorf("variants lost their AUDIO group reference:\n%s", out)
+	}
+	if !strings.Contains(out, "avc1.640028") {
+		t.Errorf("variant CODECS dropped on rebuild:\n%s", out)
 	}
 }

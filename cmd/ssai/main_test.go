@@ -512,6 +512,38 @@ func TestAudioStitch(t *testing.T) {
 	}
 }
 
+// TestServeMasterRewritesRenditions asserts a demuxed ABR master (separate audio
+// group) has BOTH its video variants and its #EXT-X-MEDIA audio rendition
+// rewritten to stitcher URLs — the audio via channel=audio so its ad is
+// conditioned to match — while the variants keep their AUDIO group reference.
+func TestServeMasterRewritesRenditions(t *testing.T) {
+	master := "#EXTM3U\n#EXT-X-VERSION:4\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES,URI=\"audio/en/index.m3u8\"\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=928000,RESOLUTION=640x360,CODECS=\"avc1.4d401e\",AUDIO=\"aud\"\n" +
+		"360p/index.m3u8\n"
+
+	d := &stitcherDeps{publicURL: "http://pub.local"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8?geo=USA", nil)
+	d.serveMaster(rec, req, master, "http://origin.local/hls/master.m3u8", log)
+	out := rec.Body.String()
+
+	// Audio rendition URI → a stitcher URL carrying channel=audio + absolute origin.
+	if !strings.Contains(out, "/v1/ssai/manifest.m3u8") || !strings.Contains(out, "channel=audio") {
+		t.Errorf("audio rendition not rewritten to an audio stitcher URL:\n%s", out)
+	}
+	if !strings.Contains(out, url.QueryEscape("http://origin.local/hls/audio/en/index.m3u8")) {
+		t.Errorf("audio rendition origin not made absolute:\n%s", out)
+	}
+	// Variant keeps its AUDIO group ref, and its URI is a stitcher URL with rung.
+	if !strings.Contains(out, `AUDIO="aud"`) {
+		t.Errorf("variant lost AUDIO group reference:\n%s", out)
+	}
+	if !strings.Contains(out, "rung=360") {
+		t.Errorf("video variant not rewritten with its rung:\n%s", out)
+	}
+}
+
 // TestSegmentHandlerFiresBeaconAndRedirects asserts the per-segment endpoint
 // fires the pre-signed quartile beacon verbatim (an HMAC-signed tracker URL —
 // NOT a hand-rolled one) and 302s to the media.
