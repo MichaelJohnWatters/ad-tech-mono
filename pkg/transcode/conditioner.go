@@ -3,9 +3,11 @@ package transcode
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/singleflight"
@@ -44,11 +46,34 @@ type Conditioned struct {
 	Segments    []CondSegment `json:"segments"`
 }
 
-// Condition returns the conditioned segments for (creativeID, profile), doing
-// the transcode only on a cache miss. Concurrent breaks for the same ad+profile
-// collapse to one transcode via single-flight.
+// cacheBase is the object-key prefix a conditioned ad lives under:
+// {prefix}/{creativeID}-{contentVersion}/{profileHash}. The contentVersion is a
+// short hash of the media URL, so replacing a creative's media (a new asset URL)
+// busts the cache instead of serving the stale conditioned ad under the reused
+// creative id. (Overwriting the SAME url in place is not detected — version the
+// asset URL to force a re-condition.)
+func (c *Conditioner) cacheBase(creativeID, mediaURL string, p Profile) string {
+	id := creativeID
+	if v := contentVersion(mediaURL); v != "" {
+		id = creativeID + "-" + v
+	}
+	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.Prefix, "/"), id, p.Hash())
+}
+
+func contentVersion(mediaURL string) string {
+	if mediaURL == "" {
+		return ""
+	}
+	h := fnv.New32a()
+	_, _ = io.WriteString(h, mediaURL)
+	return strconv.FormatUint(uint64(h.Sum32()), 36)
+}
+
+// Condition returns the conditioned segments for (creativeID, mediaURL, profile),
+// doing the transcode only on a cache miss. Concurrent breaks for the same
+// ad+media+profile collapse to one transcode via single-flight.
 func (c *Conditioner) Condition(ctx context.Context, creativeID, mediaURL string, p Profile) (*Conditioned, error) {
-	key := creativeID + "|" + p.Hash()
+	key := creativeID + "|" + mediaURL + "|" + p.Hash()
 	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
 		return c.conditionOnce(ctx, creativeID, mediaURL, p)
 	})
@@ -61,19 +86,19 @@ func (c *Conditioner) Condition(ctx context.Context, creativeID, mediaURL string
 // Cached returns the conditioned ad only if it is already in the store — never
 // transcodes. Serving paths (the stitcher) use this so a manifest response never
 // blocks on ffmpeg; on a miss they slate and warm asynchronously. Returns
-// (nil, nil) when not yet conditioned.
-func (c *Conditioner) Cached(ctx context.Context, creativeID string, p Profile) (*Conditioned, error) {
-	ph := p.Hash()
-	base := fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.Prefix, "/"), creativeID, ph)
+// (nil, nil) when not yet conditioned. mediaURL participates in the cache key so
+// a replaced creative isn't served stale.
+func (c *Conditioner) Cached(ctx context.Context, creativeID, mediaURL string, p Profile) (*Conditioned, error) {
+	base := c.cacheBase(creativeID, mediaURL, p)
 	if ok, err := c.Store.Exists(ctx, c.Bucket, base+"/index.m3u8"); err != nil || !ok {
 		return nil, err
 	}
-	return c.fromCache(ctx, creativeID, ph, base)
+	return c.fromCache(ctx, creativeID, p.Hash(), base)
 }
 
 func (c *Conditioner) conditionOnce(ctx context.Context, creativeID, mediaURL string, p Profile) (*Conditioned, error) {
 	ph := p.Hash()
-	base := fmt.Sprintf("%s/%s/%s", strings.TrimRight(c.Prefix, "/"), creativeID, ph)
+	base := c.cacheBase(creativeID, mediaURL, p)
 
 	// Cache hit: the conditioned playlist already exists — read it back.
 	if ok, err := c.Store.Exists(ctx, c.Bucket, base+"/index.m3u8"); err == nil && ok {

@@ -37,7 +37,8 @@ func TestConditionerCacheHit(t *testing.T) {
 
 	c := &Conditioner{Store: store, Bucket: bucket, Prefix: "ssai/cond", PublicBase: "http://host/v1/creatives"}
 	p := DefaultProfile()
-	base := "ssai/cond/cr-1/" + p.Hash()
+	mediaURL := "http://host/v1/creatives/media/ad.mp4"
+	base := c.cacheBase("cr-1", mediaURL, p)
 
 	// Pre-seed a conditioned playlist + segments (simulating a prior transcode).
 	playlist := "#EXTM3U\n#EXTINF:6.0,\nseg_0.ts\n#EXTINF:6.0,\nseg_1.ts\n#EXT-X-ENDLIST\n"
@@ -45,7 +46,7 @@ func TestConditionerCacheHit(t *testing.T) {
 	put(t, store, ctx, bucket, base+"/seg_0.ts", "aa")
 	put(t, store, ctx, bucket, base+"/seg_1.ts", "bb")
 
-	out, err := c.Condition(ctx, "cr-1", "http://host/v1/creatives/media/ad.mp4", p)
+	out, err := c.Condition(ctx, "cr-1", mediaURL, p)
 	if err != nil {
 		t.Fatalf("Condition: %v", err)
 	}
@@ -58,6 +59,21 @@ func TestConditionerCacheHit(t *testing.T) {
 	want := "http://host/v1/creatives/" + base + "/seg_0.ts"
 	if out.Segments[0].URI != want {
 		t.Errorf("segment URI = %q, want %q", out.Segments[0].URI, want)
+	}
+
+	// Cache-bust: the same creative id with a REPLACED media URL must not hit the
+	// stale cache (Cached returns nil), so it re-conditions instead of serving the
+	// old ad.
+	got, err := c.Cached(ctx, "cr-1", "http://host/v1/creatives/media/ad-v2.mp4", p)
+	if err != nil {
+		t.Fatalf("Cached (replaced media): %v", err)
+	}
+	if got != nil {
+		t.Error("replaced-media creative served the stale cache; want a miss (cache-bust)")
+	}
+	// The original media still hits.
+	if hit, _ := c.Cached(ctx, "cr-1", mediaURL, p); hit == nil {
+		t.Error("original media should still be a cache hit")
 	}
 }
 
