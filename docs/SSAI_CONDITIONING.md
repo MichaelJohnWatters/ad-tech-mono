@@ -273,12 +273,28 @@ variants' `AUDIO=`/`SUBTITLES=` attributes, so demuxed origins lost their audio.
   break — a deeper piece than the rendition plumbing here. The demo origins are
   muxed, so this path isn't exercised live yet (needs a demuxed origin).
 
-### R4 — DASH output · effort L · depends on CMAF (done)
-A second manifest flavour over the same conditioned CMAF segments — extends reach
-to DASH players (Shaka, dash.js).
-- `pkg/dash`: build an MPD (SegmentTemplate/Timeline) from the ladder + conditioned
-  segments; multi-Period ad insertion (each avail = a new Period).
-- `cmd/ssai`: serve `.mpd`; per-period stitch. Golden MPD test + a Shaka smoke.
+### R4 — DASH output · **DONE (2026-07-09), verified live**
+Full DASH SSAI over the same conditioned CMAF segments:
+- **D1 `pkg/dash`** — MPD model (Period/AdaptationSet/Representation/SegmentList/
+  Initialization) + XML round-trip + `AssembleVOD` (multi-period: new Period at
+  each content↔ad transition and init change; ad periods carry the conditioned
+  init + segments).
+- **D2 content-packager** — `packager.container=cmaf` packages fMP4 (.m4s +
+  init.mp4) content shared by HLS and DASH.
+- **D3 cmd/ssai** — `/v1/ssai/manifest.mpd` (and `?format=mpd`) reuses the whole
+  HLS stitch pipeline (parse CMAF-HLS → auction → condition → Stitch) then renders
+  DASH via `serveDASH`. Single-rung (resolves a master's top variant); ads
+  condition to CMAF; ad segments keep their `/v1/ssai/seg` beacon URLs (dash.js
+  follows the 302), so server-side beaconing is identical to HLS.
+- **D4 sim** — vendored dash.js (BSD-3, self-hosted); SSAI tab gets a
+  Video·HLS / Video·DASH / Audio selector; `playSSAIDash` plays the MPD.
+- **D5 live verification** — `make ssai-smoke` DASH section: on the tilt stack the
+  MPD has an `ad-0` Period (conditioned CMAF ad init + .m4s via beacon URLs,
+  quartiles split) then a content Period; both content and conditioned-ad CMAF
+  segments decode (init+m4s) in ffmpeg.
+- **Follow-up:** multi-rung ABR DASH (several Representations sharing the period
+  structure); browser *visual* playback isn't headless-verifiable (same caveat as
+  hls.js), but the MPD is valid + every segment decodes.
 
 ### R5 — ID3 timed-metadata beacons · effort M · low value
 Alternative to segment-driven beacons for players that attribute client-side. Our
