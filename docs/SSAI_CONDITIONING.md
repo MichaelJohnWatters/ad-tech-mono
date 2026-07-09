@@ -180,10 +180,16 @@ feature gaps (added):
 - **Audio SSAI**: `Profile.AudioOnly` + `DefaultAudioProfile()` drop the video
   pipeline (`-vn`, no scale/fps/keyframes) so audio ads condition to AAC-only
   HLS; `cmd/prewarm` selects the audio profile for `format='audio'` creatives.
+- **Audio stitcher path**: `cmd/ssai` is now channel-aware. `?channel=audio`
+  runs an audio auction (`channel=audio`, device=mobile), conditions to the
+  audio-only profile, stitches into an audio origin (built-in `sampleAudioContent`
+  or a real `?origin=`), skips the video-only ABR master branch, and routes
+  quartile/error beacons through `/v1/t/audio` (impression stays channel-agnostic
+  on `/v1/t/imp`). Pods, slate, and metrics all apply to audio unchanged.
 
-Still open (designed, not built): a proper audio *stitcher* serving path (the
-conditioning is done, but cmd/ssai is video-only), CMAF init-segment handling,
-ID3 beacons, and cache-bust on creative replacement.
+Still open (designed, not built): CMAF init-segment handling, ID3 beacons,
+cache-bust on creative replacement, and an audio option in the web sim tab
+(the backend serves audio SSAI; the browser demo tab is still video-only).
 
 ## Risks
 

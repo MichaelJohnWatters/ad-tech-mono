@@ -267,6 +267,122 @@ func TestSlateFillsUnfilledBreak(t *testing.T) {
 	}
 }
 
+// TestAudioStitch asserts the audio SSAI path: ?channel=audio runs an audio
+// auction, conditions to the audio-only profile, stitches into the built-in
+// audio origin, and routes quartile beacons through /v1/t/audio (not video).
+func TestAudioStitch(t *testing.T) {
+	var mu sync.Mutex
+	var audioEvents, videoEvents, impressions int
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		switch {
+		case strings.Contains(r.URL.Path, "/v1/t/audio"):
+			audioEvents++
+		case strings.Contains(r.URL.Path, "/v1/t/video"):
+			videoEvents++
+		case strings.Contains(r.URL.Path, "/v1/t/imp"):
+			impressions++
+		}
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer tracker.Close()
+
+	var mu2 sync.Mutex
+	var sspChannel string
+	var call int
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu2.Lock()
+		sspChannel = r.URL.Query().Get("channel")
+		call++
+		n := call
+		mu2.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{
+			TraceID: fmt.Sprintf("t-%d", n), CreativeID: fmt.Sprintf("cr-%d", n),
+			CampaignID: fmt.Sprintf("li-%d", n), PlacementID: "pl-audio",
+			PublisherID: "pub", ClearingPrice: 3, Currency: "USD", MediaURL: "https://cdn/spot.mp3",
+		})
+	}))
+	defer ssp.Close()
+
+	// Transcoder that asserts it was asked for an audio-only profile.
+	var gotAudioProfile bool
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(200)
+			return
+		}
+		var req struct {
+			Profile transcode.Profile `json:"profile"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Profile.AudioOnly {
+			mu2.Lock()
+			gotAudioProfile = true
+			mu2.Unlock()
+		}
+		var out transcode.Conditioned
+		out.Cached = true
+		for i, ds := range []float64{6, 6, 3} { // 15s audio ad
+			out.Segments = append(out.Segments, transcode.CondSegment{
+				URI: fmt.Sprintf("http://cdn.local/cond/aud_%d.ts", i), Duration: ds,
+			})
+			out.Duration += ds
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn:   func() string { return "pl-audio" },
+		transcoderURL: transcoder.URL,
+		maxPodAdsFn:   func() int { return 4 },
+		client:        &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8?channel=audio", nil))
+	out := rec.Body.String()
+
+	// The built-in audio origin's break content (audio_002) must be replaced.
+	if strings.Contains(out, "audio_002.ts") {
+		t.Errorf("audio break content not replaced:\n%s", out)
+	}
+	if !strings.Contains(out, "/v1/ssai/seg?") {
+		t.Errorf("no ad stitched into the audio avail:\n%s", out)
+	}
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Errorf("stitched audio manifest invalid: %v", err)
+	}
+
+	replaySegments(d, out)
+
+	mu2.Lock()
+	if sspChannel != "audio" {
+		t.Errorf("SSP called with channel=%q, want audio", sspChannel)
+	}
+	if !gotAudioProfile {
+		t.Error("transcoder was not asked for an audio-only profile")
+	}
+	mu2.Unlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if audioEvents == 0 {
+		t.Error("no quartile beacons routed through /v1/t/audio")
+	}
+	if videoEvents != 0 {
+		t.Errorf("audio stitch fired %d /v1/t/video beacons, want 0", videoEvents)
+	}
+	// 30s avail → two 15s ads → two impressions.
+	if impressions != 2 {
+		t.Errorf("want 2 audio impressions (2-ad pod), got %d", impressions)
+	}
+}
+
 // TestSegmentHandlerFiresBeaconAndRedirects asserts the per-segment endpoint
 // fires the pre-signed quartile beacon verbatim (an HMAC-signed tracker URL —
 // NOT a hand-rolled one) and 302s to the media.

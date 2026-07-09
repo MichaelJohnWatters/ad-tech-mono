@@ -77,6 +77,30 @@ content_007.ts
 #EXT-X-ENDLIST
 `
 
+// sampleAudioContent is the built-in audio origin (podcast / streaming-radio
+// style): AAC segments in an HLS media playlist with one mid-roll avail. Served
+// for ?channel=audio when no real origin is configured. Real deployments proxy
+// the publisher's audio origin instead.
+const sampleAudioContent = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:10.0,
+audio_000.ts
+#EXTINF:10.0,
+audio_001.ts
+#EXT-X-CUE-OUT:DURATION=30
+#EXTINF:10.0,
+audio_002.ts
+#EXT-X-CUE-IN
+#EXTINF:10.0,
+audio_003.ts
+#EXTINF:10.0,
+audio_004.ts
+#EXT-X-ENDLIST
+`
+
 func main() {
 	sc := config.Setup(constants.ServiceSSAI, ssaiSchema, log)
 	cfg := sc.Cfg
@@ -225,31 +249,35 @@ func (d *stitcherDeps) warmCondition(winner *sspWinner, p transcode.Profile) {
 // never breaks.
 // Returns the manifest text and the origin URL it came from ("" for the built-in
 // sample), so the caller can resolve relative content-segment URIs to absolute.
-func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, reqLog *slog.Logger) (string, string) {
+func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, channel string, reqLog *slog.Logger) (string, string) {
+	sample := sampleContent
+	if channel == constants.ChannelAudio {
+		sample = sampleAudioContent
+	}
 	origin := r.URL.Query().Get("origin")
 	if origin == "" && d.originFn != nil {
 		origin = d.originFn()
 	}
 	if origin == "" {
-		return sampleContent, ""
+		return sample, ""
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
 	if err != nil {
 		reqLog.Warn("ssai origin request build failed, using sample", "origin", origin, "error", err)
-		return sampleContent, ""
+		return sample, ""
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
 		reqLog.Warn("ssai origin fetch failed, using sample", "origin", origin, "error", err)
-		return sampleContent, ""
+		return sample, ""
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		reqLog.Warn("ssai origin fetch non-200, using sample", "origin", origin, "status", resp.StatusCode)
-		return sampleContent, ""
+		return sample, ""
 	}
-	reqLog.Info("ssai stitching real origin", "origin", origin, "bytes", len(body))
+	reqLog.Info("ssai stitching real origin", "origin", origin, "channel", channel, "bytes", len(body))
 	return string(body), origin
 }
 
@@ -322,11 +350,16 @@ func (d *stitcherDeps) profileForRung(r *http.Request) transcode.Profile {
 }
 
 // serveContentManifest returns the sample origin content manifest (with ad-break
-// markers) so the stitcher has something to rewrite in the demo.
+// markers) so the stitcher has something to rewrite in the demo. ?channel=audio
+// serves the audio sample.
 func serveContentManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.WriteString(w, sampleContent)
+	sample := sampleContent
+	if channelFor(r) == constants.ChannelAudio {
+		sample = sampleAudioContent
+	}
+	_, _ = io.WriteString(w, sample)
 }
 
 // sspWinner is the subset of the SSP channel=video response the stitcher needs.
@@ -356,12 +389,14 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	traceID := tracing.TraceIDFromContext(ctx)
 	reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
-	manifest, originURL := d.originManifest(ctx, r, reqLog)
+	channel := channelFor(r)
+	manifest, originURL := d.originManifest(ctx, r, channel, reqLog)
 
 	// ABR: if the origin is a master playlist, rewrite each variant URI to point
 	// back at this stitcher (so every rung is stitched independently, with the
-	// ad conditioned to that rung's profile) and re-serve the master.
-	if ssai.IsMaster(manifest) {
+	// ad conditioned to that rung's profile) and re-serve the master. Audio is
+	// single-rendition — no ladder — so this only applies to video.
+	if channel == constants.ChannelVideo && ssai.IsMaster(manifest) {
 		d.serveMaster(w, r, manifest, originURL, reqLog)
 		return
 	}
@@ -382,10 +417,15 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		session = fmt.Sprintf("ssai-%d", time.Now().UnixMilli())
 	}
 
-	adProfile := d.profileForRung(r) // condition ads to the rung the player is watching
+	// Condition ads to the audio-only profile for audio, else the video rung the
+	// player is watching.
+	adProfile := d.profileForRung(r)
+	if channel == constants.ChannelAudio {
+		adProfile = transcode.DefaultAudioProfile()
+	}
 	filled := 0
 	m.Stitch(func(i int, span ssai.BreakSpan) []ssai.Segment {
-		segs := d.fillBreak(ctx, r, i, span, session, adProfile, reqLog)
+		segs := d.fillBreak(ctx, r, channel, i, span, session, adProfile, reqLog)
 		if len(segs) > 0 {
 			filled++
 		}
@@ -393,7 +433,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	reqLog.Info("ssai manifest stitched",
-		"breaks", len(m.Breaks()), "filled", filled, "ad_seconds", m.AdDuration())
+		"channel", channel, "breaks", len(m.Breaks()), "filled", filled, "ad_seconds", m.AdDuration())
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
@@ -407,7 +447,7 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 // discontinuity at its boundary. If nothing fills, it splices a slate (when
 // configured) or keeps content; a winner that can't be conditioned fires a VAST
 // error beacon and is warmed for next time.
-func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, breakIdx int, span ssai.BreakSpan, session string, adProfile transcode.Profile, reqLog *slog.Logger) []ssai.Segment {
+func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, channel string, breakIdx int, span ssai.BreakSpan, session string, adProfile transcode.Profile, reqLog *slog.Logger) []ssai.Segment {
 	maxAds := d.maxPodAds()
 	var out []ssai.Segment
 	var filledDur float64
@@ -420,7 +460,7 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, breakIdx 
 		if remaining < 1.0 {
 			break // avail full
 		}
-		winner := d.runAuction(ctx, r, remaining, reqLog)
+		winner := d.runAuction(ctx, r, channel, remaining, reqLog)
 		if winner == nil || winner.NoBid || winner.MediaURL == "" {
 			break // no more demand for this avail
 		}
@@ -444,14 +484,14 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, breakIdx 
 			d.metrics.recordCond(false)
 			d.warmCondition(winner, adProfile) // ready for the next viewer
 			// VAST error: the winning ad couldn't be served this time.
-			d.fireBeacon(ctx, adserving.BuildVideoEventURL(mc, "error"))
+			d.fireBeacon(ctx, eventBeacon(mc, channel, "error"))
 			reqLog.Info("ssai pod ad not conditioned; error beacon + warming",
 				"break", breakIdx, "pod", ads, "creative", winner.CreativeID)
 			sawError = true
 			break // stop the pod; fall through to slate/content
 		}
 		d.metrics.recordCond(true)
-		out = append(out, d.adSegments(cond, mc, session, adTrace, breakIdx, false)...)
+		out = append(out, d.adSegments(cond, mc, channel, session, adTrace, breakIdx, false)...)
 		filledDur += cond.Duration
 		ads++
 	}
@@ -482,7 +522,7 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, breakIdx 
 // ad it attaches the impression to the first segment and the VAST quartiles each
 // segment crosses; a slate carries no beacons. The first segment gets a
 // discontinuity so the decoder resets at the content↔ad (and ad↔ad) boundary.
-func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.MacroContext, session, adTrace string, breakIdx int, isSlate bool) []ssai.Segment {
+func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.MacroContext, channel, session, adTrace string, breakIdx int, isSlate bool) []ssai.Segment {
 	var impression string
 	if !isSlate {
 		impression = adserving.BuildImpressionURL(mc)
@@ -500,7 +540,7 @@ func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.Macr
 				beacons = append(beacons, impression)
 			}
 			for _, ev := range evs {
-				beacons = append(beacons, adserving.BuildVideoEventURL(mc, ev))
+				beacons = append(beacons, eventBeacon(mc, channel, ev))
 			}
 		}
 		segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, breakIdx, n, evs, beacons, cs.URI)}
@@ -510,6 +550,24 @@ func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.Macr
 		segs[0].Discontinuity = true
 	}
 	return segs
+}
+
+// eventBeacon builds the signed quartile/error tracker URL for the channel:
+// /v1/t/audio for audio, /v1/t/video otherwise. The impression (/v1/t/imp) is
+// channel-agnostic and built directly.
+func eventBeacon(mc adserving.MacroContext, channel, event string) string {
+	if channel == constants.ChannelAudio {
+		return adserving.BuildAudioEventURL(mc, event)
+	}
+	return adserving.BuildVideoEventURL(mc, event)
+}
+
+// channelFor reads the request's ?channel= (audio|video), defaulting to video.
+func channelFor(r *http.Request) string {
+	if strings.ToLower(r.URL.Query().Get("channel")) == constants.ChannelAudio {
+		return constants.ChannelAudio
+	}
+	return constants.ChannelVideo
 }
 
 // slateSegments conditions and returns the configured slate clip for an unfilled
@@ -537,17 +595,18 @@ func (d *stitcherDeps) slateSegments(ctx context.Context, adProfile transcode.Pr
 		return nil
 	}
 	mc := macroCtxFor(winner, session, d.trackerURL)
-	return d.adSegments(cond, mc, session, "slate-"+session, breakIdx, true)
+	return d.adSegments(cond, mc, constants.ChannelVideo, session, "slate-"+session, breakIdx, true)
 }
 
-// runAuction calls the SSP channel=video, forwarding the viewer's signals so
-// the ad is targeted to the real request (not a hardcoded default).
-func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, breakDur float64, reqLog *slog.Logger) *sspWinner {
+// runAuction calls the SSP for the given channel (audio|video), forwarding the
+// viewer's signals so the ad is targeted to the real request (not a hardcoded
+// default).
+func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel string, breakDur float64, reqLog *slog.Logger) *sspWinner {
 	q := url.Values{}
 	for k, v := range r.URL.Query() {
 		q[k] = append([]string(nil), v...)
 	}
-	q.Set("channel", "video")
+	q.Set("channel", channel)
 	if q.Get("placement_id") == "" {
 		q.Set("placement_id", d.placementFn())
 	}
@@ -555,7 +614,12 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, breakDur
 		q.Set("geo", "USA")
 	}
 	if q.Get("device") == "" {
-		q.Set("device", "ctv") // SSAI is overwhelmingly CTV/OTT
+		// SSAI is overwhelmingly CTV/OTT for video; audio DAI is mobile/smart-speaker.
+		dev := "ctv"
+		if channel == constants.ChannelAudio {
+			dev = "mobile"
+		}
+		q.Set("device", dev)
 	}
 	// Advertise the remaining avail so demand can return an ad that fits the pod
 	// slot (a real SSP honours max ad duration; the built-in demo ignores it).
