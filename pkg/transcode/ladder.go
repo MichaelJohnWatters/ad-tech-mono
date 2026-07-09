@@ -32,8 +32,12 @@ func (p Profile) RungName() string { return strconv.Itoa(p.Height) + "p" }
 func (p Profile) BandwidthBps() int { return (p.VBitrateKbps + p.ABitrateKbps) * 1000 }
 
 // Codecs is the HLS CODECS attribute for the profile (RFC 6381). Main-profile
-// H.264 + AAC-LC for the default; HEVC callers get an hvc1 tag.
+// H.264 + AAC-LC for the default; HEVC callers get an hvc1 tag; audio-only
+// profiles advertise just AAC-LC.
 func (p Profile) Codecs() string {
+	if p.AudioOnly {
+		return "mp4a.40.2"
+	}
 	v := "avc1.4d401e" // H.264 Main@3.0
 	if p.VCodec == "hevc" {
 		v = "hvc1.1.6.L93.B0"

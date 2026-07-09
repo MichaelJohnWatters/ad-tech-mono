@@ -74,6 +74,44 @@ func TestFFmpegArgsTS(t *testing.T) {
 	}
 }
 
+func TestFFmpegArgsAudioOnly(t *testing.T) {
+	p := DefaultAudioProfile()
+	args := p.FFmpegArgs("/tmp/spot.mp3", "/out")
+
+	// No video pipeline: -vn present, no scale/fps/keyframe/video-codec.
+	if !contains(args, "-vn") {
+		t.Errorf("audio-only must drop video with -vn: %v", args)
+	}
+	for _, flag := range []string{"-c:v", "-vf", "-r", "-force_key_frames"} {
+		if argVal(args, flag) != "" {
+			t.Errorf("audio-only must not set %s, got %q", flag, argVal(args, flag))
+		}
+	}
+	// Audio track still segmented to AAC over HLS.
+	if argVal(args, "-c:a") != "aac" || argVal(args, "-b:a") != "128k" {
+		t.Errorf("audio args wrong: %v", args)
+	}
+	if argVal(args, "-hls_time") != "6" {
+		t.Errorf("hls_time = %q", argVal(args, "-hls_time"))
+	}
+	if p.Codecs() != "mp4a.40.2" {
+		t.Errorf("audio-only codecs = %q, want mp4a.40.2", p.Codecs())
+	}
+	// Must not collide with a video profile's cache key.
+	if p.Hash() == DefaultProfile().Hash() {
+		t.Error("audio profile hash collides with video profile")
+	}
+}
+
+func contains(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFFmpegArgsHEVCandCMAF(t *testing.T) {
 	p := DefaultProfile()
 	p.VCodec = "hevc"

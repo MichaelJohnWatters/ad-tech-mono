@@ -26,8 +26,9 @@ const (
 // ABR rung; an ad is conditioned once per distinct Profile it is asked for. Two
 // media that share a Profile can be spliced into one seamless stream.
 type Profile struct {
-	Container    string `json:"container"`     // ContainerTS | ContainerCMAF
-	VCodec       string `json:"vcodec"`        // "h264" | "hevc"
+	Container    string `json:"container"`  // ContainerTS | ContainerCMAF
+	AudioOnly    bool   `json:"audio_only"` // audio ad/content (podcast/streaming radio) — no video track
+	VCodec       string `json:"vcodec"`     // "h264" | "hevc"
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	FPS          int    `json:"fps"`
@@ -52,13 +53,24 @@ func DefaultProfile() Profile {
 	}
 }
 
+// DefaultAudioProfile is a single audio-only AAC profile for audio SSAI
+// (podcast / streaming radio). No video track — the ffmpeg pipeline drops video
+// entirely, and segments carry only AAC.
+func DefaultAudioProfile() Profile {
+	return Profile{
+		Container: ContainerTS, AudioOnly: true,
+		ACodec: "aac", ASampleRate: 44100, ABitrateKbps: 128, SegDurSec: 6,
+	}
+}
+
 // Hash is a short, deterministic cache key for the Profile. Conditioned ad
 // segments live under ssai/cond/{creative}/{Hash}/, so an ad is transcoded once
-// per profile and reused across breaks/viewers.
+// per profile and reused across breaks/viewers. AudioOnly is part of the key so
+// an audio profile never collides with a video profile sharing other fields.
 func (p Profile) Hash() string {
 	h := fnv.New64a()
-	fmt.Fprintf(h, "%s|%s|%dx%d|%d|%d|%s|%d|%d|%d",
-		p.Container, p.VCodec, p.Width, p.Height, p.FPS, p.VBitrateKbps,
+	fmt.Fprintf(h, "%s|%t|%s|%dx%d|%d|%d|%s|%d|%d|%d",
+		p.Container, p.AudioOnly, p.VCodec, p.Width, p.Height, p.FPS, p.VBitrateKbps,
 		p.ACodec, p.ASampleRate, p.ABitrateKbps, p.SegDurSec)
 	return strconv.FormatUint(h.Sum64(), 36)
 }
@@ -88,27 +100,33 @@ func (p Profile) FFmpegArgs(input, outDir string) []string {
 		segType = "fmp4"
 		segName = "seg_%d.m4s"
 	}
-	args := []string{
-		"-y", "-i", input,
-		"-c:v", vcodecLib(p.VCodec),
-		"-profile:v", "main",
-		"-pix_fmt", "yuv420p",
-	}
-	if p.VBitrateKbps > 0 {
+	args := []string{"-y", "-i", input}
+	if p.AudioOnly {
+		// Audio SSAI: drop video entirely; only the AAC track is segmented. No
+		// scale/fps/keyframe args (there are no video frames to align).
+		args = append(args, "-vn")
+	} else {
 		args = append(args,
-			"-b:v", kbps(p.VBitrateKbps),
-			"-maxrate", kbps(p.VBitrateKbps),
-			"-bufsize", kbps(2*p.VBitrateKbps),
+			"-c:v", vcodecLib(p.VCodec),
+			"-profile:v", "main",
+			"-pix_fmt", "yuv420p",
 		)
+		if p.VBitrateKbps > 0 {
+			args = append(args,
+				"-b:v", kbps(p.VBitrateKbps),
+				"-maxrate", kbps(p.VBitrateKbps),
+				"-bufsize", kbps(2*p.VBitrateKbps),
+			)
+		}
+		if p.Width > 0 && p.Height > 0 {
+			args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", p.Width, p.Height))
+		}
+		if p.FPS > 0 {
+			args = append(args, "-r", strconv.Itoa(p.FPS))
+		}
+		// Keyframe alignment to segment boundaries — the key to a clean splice.
+		args = append(args, "-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", seg))
 	}
-	if p.Width > 0 && p.Height > 0 {
-		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d", p.Width, p.Height))
-	}
-	if p.FPS > 0 {
-		args = append(args, "-r", strconv.Itoa(p.FPS))
-	}
-	// Keyframe alignment to segment boundaries — the key to a clean splice.
-	args = append(args, "-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", seg))
 	// Audio.
 	args = append(args, "-c:a", "aac")
 	if p.ASampleRate > 0 {

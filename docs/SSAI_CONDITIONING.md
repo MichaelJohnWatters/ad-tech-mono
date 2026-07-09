@@ -153,6 +153,38 @@ On-the-fly transcode is **seconds**; a break can't stall. Mitigations, layered:
     event. Useful where the player must attribute quartiles client-side; our
     server-authoritative segment beacons already cover the common case.
 
+## Post-review enhancements (2026-07-09)
+
+A review of P1–P7 turned up three data-accuracy defects (fixed) and a set of
+feature gaps (added):
+
+- **Quartile beacons** now fire on VAST time-mark *crossings* (a segment may
+  cross several), so all of start/firstQuartile/midpoint/thirdQuartile/complete
+  fire exactly once regardless of how the ad segments — the old one-event-per-
+  segment logic dropped thirdQuartile and double-fired start.
+- **Impressions** fire on first-ad-segment *fetch*, not at manifest generation,
+  so an abandoned mid/post-roll never books a phantom impression.
+- **Cold-miss** keeps content + warms the conditioner instead of splicing the
+  raw mezzanine as pseudo-segments (which stalled the player).
+- **Ad pods**: `fillBreak` runs back-to-back auctions per avail until the break
+  is full or `ssai.max_pod_ads` (default 4), each ad conditioned + beaconed
+  independently with a discontinuity at its boundary. `runAuction` advertises
+  the remaining slot via `max_duration`.
+- **Slate**: `ssai.slate_creative_id` splices a conditioned house clip (no
+  beacons) into an unfilled avail instead of dropping to content.
+- **VAST error beacon**: a winner that can't be conditioned in time fires an
+  `error` video event to the tracker before falling through to slate/content.
+- **Stitcher metrics** on `/metrics`: `ssai_breaks_total{filled|slate|unfilled|
+  error}`, `ssai_condition_cache_total{hit|miss}`, `ssai_ad_seconds_total`,
+  `ssai_pod_ads`.
+- **Audio SSAI**: `Profile.AudioOnly` + `DefaultAudioProfile()` drop the video
+  pipeline (`-vn`, no scale/fps/keyframes) so audio ads condition to AAC-only
+  HLS; `cmd/prewarm` selects the audio profile for `format='audio'` creatives.
+
+Still open (designed, not built): a proper audio *stitcher* serving path (the
+conditioning is done, but cmd/ssai is video-only), CMAF init-segment handling,
+ID3 beacons, and cache-bust on creative replacement.
+
 ## Risks
 
 - **ffmpeg CPU** — transcoding is heavy; transcoder needs generous limits + HPA;
