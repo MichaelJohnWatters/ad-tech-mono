@@ -101,7 +101,6 @@ func main() {
 		sspURL:     sspURL,
 		trackerURL: trackerURL,
 		publicURL:  publicURL,
-		segDurFn:   func() float64 { return cfg.GetFloat("ssai.segment_duration", 6) },
 		placementFn: func() string {
 			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
 		},
@@ -129,7 +128,6 @@ type stitcherDeps struct {
 	sspURL        string
 	trackerURL    string
 	publicURL     string
-	segDurFn      func() float64
 	placementFn   func() string
 	originFn      func() string // configured origin manifest URL ("" = built-in sample)
 	transcoderURL string        // runtime ad-conditioning service ("" = disabled)
@@ -364,16 +362,14 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		session = fmt.Sprintf("ssai-%d", time.Now().UnixMilli())
 	}
 
-	segDur := d.segDurFn()
 	adProfile := d.profileForRung(r) // condition ads to the rung the player is watching
 	filled := 0
 	m.Stitch(func(i int, span ssai.BreakSpan) []ssai.Segment {
 		winner := d.runAuction(ctx, r, span.Duration, reqLog)
 		if winner == nil || winner.NoBid || winner.MediaURL == "" {
 			reqLog.Info("ssai break unfilled, keeping content", "break", i)
-			return nil // slate / passthrough
+			return nil // no fill: keep content
 		}
-		filled++
 		adTrace := winner.TraceID
 		if adTrace == "" {
 			adTrace = session
@@ -384,42 +380,48 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 		// hand-rolled sig). This is the whole point: SSAI fires the real
 		// beacons, just server-side instead of from the player.
 		mc := macroCtxFor(winner, adTrace, d.trackerURL)
-
-		// Impression fires server-side now: the ad is guaranteed to be in the
-		// stream, so this is the SSAI impression moment.
-		d.fireBeacon(ctx, adserving.BuildImpressionURL(mc))
-
 		adIdx := i
 
 		// Real SSAI: condition the winning ad to the content profile so its
 		// segments are byte-compatible with the content stream. Cache-only so we
-		// never block on ffmpeg; on a hit we splice the real .ts.
-		if cond := d.conditionCached(ctx, winner, adProfile, reqLog); cond != nil && len(cond.Segments) > 0 {
-			segs := make([]ssai.Segment, len(cond.Segments))
-			var start float64
-			for n, cs := range cond.Segments {
-				ev := quartileForSegment(start, cond.Duration, cs.Duration)
-				signedBeacon := adserving.BuildVideoEventURL(mc, ev)
-				// The segment endpoint fires the beacon server-side then 302s to
-				// the real conditioned .ts (cs.URI).
-				segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, adIdx, n, ev, signedBeacon, cs.URI)}
-				start += cs.Duration
-			}
-			return segs
+		// never block on ffmpeg.
+		cond := d.conditionCached(ctx, winner, adProfile, reqLog)
+		if cond == nil || len(cond.Segments) == 0 {
+			// Not conditioned yet: warm for next time and keep content this break.
+			// We must NOT splice the raw mezzanine as pseudo-segments — a whole MP4
+			// handed to the player as .ts stalls it — and we do NOT fire the
+			// impression, because no ad was served (avoids over-counting).
+			d.warmCondition(winner, adProfile)
+			reqLog.Info("ssai break not conditioned yet, keeping content + warming",
+				"break", i, "creative", winner.CreativeID)
+			return nil
 		}
 
-		// Miss: warm the conditioner for next time and slate THIS break with the
-		// whole-file fallback (plays, just not seamless until conditioned).
-		d.warmCondition(winner, adProfile)
-		dur := float64(winner.DurationSeconds)
-		if dur <= 0 {
-			dur = span.Duration
+		filled++
+		// Impression is attached to the FIRST ad segment (fired on fetch), not
+		// here at manifest time — so a viewer who abandons before a mid/post-roll
+		// never books its impression.
+		impression := adserving.BuildImpressionURL(mc)
+		segs := make([]ssai.Segment, len(cond.Segments))
+		var start float64
+		for n, cs := range cond.Segments {
+			// Fire every VAST quartile whose time-mark the segment crosses (a
+			// segment can cross more than one; short ads with few segments still
+			// emit all of start/firstQuartile/midpoint/thirdQuartile/complete).
+			evs := eventsForSegment(start, cs.Duration, cond.Duration)
+			beacons := make([]string, 0, len(evs)+1)
+			if n == 0 {
+				beacons = append(beacons, impression)
+			}
+			for _, ev := range evs {
+				beacons = append(beacons, adserving.BuildVideoEventURL(mc, ev))
+			}
+			// The segment endpoint fires the beacon(s) server-side then 302s to
+			// the real conditioned .ts (cs.URI).
+			segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, adIdx, n, evs, beacons, cs.URI)}
+			start += cs.Duration
 		}
-		return ssai.SegmentAds(dur, segDur, func(n int, start float64) string {
-			ev := quartileForSegment(start, dur, segDur)
-			signedBeacon := adserving.BuildVideoEventURL(mc, ev)
-			return d.segmentURL(session, adTrace, adIdx, n, ev, signedBeacon, winner.MediaURL)
-		})
+		return segs
 	})
 
 	reqLog.Info("ssai manifest stitched",
@@ -482,11 +484,14 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, breakDur
 func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	redir := q.Get("redir")
-	// beacon is the pre-signed, HMAC-valid tracker URL built at stitch time.
-	// Firing it here (not reconstructing it) is what keeps SSAI's beacons
-	// identical to the ones the player would fire in the client-side flow.
-	if beacon := q.Get("beacon"); beacon != "" {
-		d.fireBeacon(r.Context(), beacon)
+	// beacon values are the pre-signed, HMAC-valid tracker URLs built at stitch
+	// time (a segment may carry several: the impression plus any quartiles it
+	// crosses). Firing them here (not reconstructing them) is what keeps SSAI's
+	// beacons identical to the ones the player would fire in the client-side flow.
+	for _, beacon := range q["beacon"] {
+		if beacon != "" {
+			d.fireBeacon(r.Context(), beacon)
+		}
 	}
 	if redir == "" {
 		http.Error(w, "missing redir", http.StatusBadRequest)
@@ -497,18 +502,18 @@ func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 
 // segmentURL builds the manifest URI for one ad segment: a call back into this
 // service's segment beacon endpoint (via the browser-reachable public URL),
-// carrying the pre-signed quartile beacon to fire and the real media to redirect
-// to. event is kept as a plain param for readability/debugging of the manifest.
-func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, event, signedBeacon, mediaURL string) string {
+// carrying the pre-signed beacon(s) to fire and the real media to redirect to.
+// events is kept as a plain param for readability/debugging of the manifest.
+func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, events, beacons []string, mediaURL string) string {
 	q := url.Values{}
 	q.Set("session", session)
 	q.Set("ad", adTrace)
 	q.Set("break", strconv.Itoa(adIdx))
 	q.Set("seg", strconv.Itoa(n))
-	if event != "" {
-		q.Set("event", event)
+	if len(events) > 0 {
+		q.Set("event", strings.Join(events, ","))
 	}
-	q.Set("beacon", signedBeacon)
+	q["beacon"] = beacons
 	q.Set("redir", mediaURL)
 	return d.publicURL + routes.SSAISegment + "?" + q.Encode()
 }
@@ -529,27 +534,39 @@ func (d *stitcherDeps) fireBeacon(ctx context.Context, beaconURL string) {
 	}
 }
 
-// quartileForSegment maps an ad segment (by its start offset) to the VAST
-// quartile event it represents. Segment 0 fires "start"; segments crossing the
-// 25/50/75% marks fire the quartile; the final segment fires "complete".
-func quartileForSegment(start, total, segDur float64) string {
-	if start <= 0.001 {
-		return "start"
+// eventsForSegment returns the VAST tracking events whose time-marks fall within
+// the ad segment [start, start+segDur) of a total-second ad: start (t=0),
+// firstQuartile (25%), midpoint (50%), thirdQuartile (75%), complete (100%). A
+// single segment can cross several marks — a 15s ad in two 6s segments plus a 3s
+// tail still emits all five — which is why this returns a slice rather than one
+// event per segment. Marks are assigned to the half-open interval that contains
+// them (a mark exactly on a boundary belongs to the following segment); complete
+// is assigned to the last segment (end >= total).
+func eventsForSegment(start, segDur, total float64) []string {
+	if total <= 0 {
+		return nil
 	}
-	if start+segDur >= total-0.001 {
-		return "complete"
+	const eps = 0.001
+	end := start + segDur
+	marks := []struct {
+		name string
+		t    float64
+	}{
+		{"start", 0},
+		{"firstQuartile", 0.25 * total},
+		{"midpoint", 0.5 * total},
+		{"thirdQuartile", 0.75 * total},
 	}
-	frac := start / total
-	switch {
-	case frac >= 0.75:
-		return "thirdQuartile"
-	case frac >= 0.5:
-		return "midpoint"
-	case frac >= 0.25:
-		return "firstQuartile"
-	default:
-		return "start"
+	var evs []string
+	for _, m := range marks {
+		if m.t >= start-eps && m.t < end-eps {
+			evs = append(evs, m.name)
+		}
 	}
+	if end >= total-eps {
+		evs = append(evs, "complete")
+	}
+	return evs
 }
 
 // macroCtxFor builds the beacon-signing context for a winner — the same shape
