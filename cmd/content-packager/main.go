@@ -36,6 +36,7 @@ var schema = []config.SchemaEntry{
 	{Key: "packager.break_at_segment", Type: "int", Tier: config.TierStatic, Default: "2", Description: "Segment index where the mid-roll ad break opens (#EXT-X-CUE-OUT).", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.break_segments", Type: "int", Tier: config.TierStatic, Default: "5", Description: "Number of content segments the ad break spans (replaced by the stitched ad).", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.audio", Type: "bool", Tier: config.TierStatic, Default: "false", Description: "Package a single audio-only rendition ({prefix}/{content_id}/audio/index.m3u8, no master) instead of the video ABR ladder — for audio SSAI origins.", Service: "content-packager", Since: "v1.6"},
+	{Key: "transcode.ladder", Type: "string", Tier: config.TierLive, Default: "", Description: "ABR ladder spec: comma-separated WxH@vbitrateKbps rungs (e.g. 640x360@800,1280x720@2800). Empty = built-in 360/480/720p default. Shared with prewarm/stitcher.", Service: "content-packager", Since: "v1.6"},
 }
 
 func main() {
@@ -76,7 +77,7 @@ func main() {
 	//      collecting variants for the master. Real content carries SCTE-35; we
 	//      stamp CUE-OUT/CUE-IN so the stitcher has an avail to fill.
 	base := fmt.Sprintf("%s/%s", prefix, contentID)
-	profiles := transcode.DefaultLadder()
+	profiles := transcode.ParseLadder(cfg.Get("transcode.ladder", ""))
 	if audioMode {
 		profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
 	}

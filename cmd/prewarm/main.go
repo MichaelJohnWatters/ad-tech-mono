@@ -29,6 +29,7 @@ var log = logger.New("prewarm")
 
 var schema = []config.SchemaEntry{
 	{Key: "prewarm.transcoder_url", Type: "string", Tier: config.TierStatic, Default: routes.DefaultTranscoderURL, Description: "Transcoder the prewarm job conditions creatives against.", Service: constants.ServiceTranscoder, Since: "v1.6"},
+	{Key: "transcode.ladder", Type: "string", Tier: config.TierLive, Default: "", Description: "ABR ladder spec: comma-separated WxH@vbitrateKbps rungs. Empty = built-in default. Shared with packager/stitcher — prewarm conditions video creatives across these rungs.", Service: constants.ServiceTranscoder, Since: "v1.6"},
 }
 
 func main() {
@@ -60,7 +61,7 @@ func main() {
 	for _, c := range creatives {
 		// Audio creatives condition to a single audio-only profile; video
 		// creatives condition across the whole ABR ladder.
-		profiles := transcode.DefaultLadder()
+		profiles := transcode.ParseLadder(cfg.Get("transcode.ladder", ""))
 		if c.format == "audio" {
 			profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
 		}

@@ -74,6 +74,36 @@ func TestFFmpegArgsTS(t *testing.T) {
 	}
 }
 
+func TestParseLadder(t *testing.T) {
+	// A valid spec builds the requested rungs, inheriting the default base params.
+	got := ParseLadder("640x360@800, 1280x720@2800")
+	if len(got) != 2 {
+		t.Fatalf("want 2 rungs, got %d: %+v", len(got), got)
+	}
+	if got[0].Width != 640 || got[0].Height != 360 || got[0].VBitrateKbps != 800 {
+		t.Errorf("rung 0 wrong: %+v", got[0])
+	}
+	if got[1].Width != 1280 || got[1].Height != 720 || got[1].VBitrateKbps != 2800 {
+		t.Errorf("rung 1 wrong: %+v", got[1])
+	}
+	// Inherited base params.
+	if got[0].VCodec != "h264" || got[0].SegDurSec != 6 || got[0].ACodec != "aac" {
+		t.Errorf("rung didn't inherit base params: %+v", got[0])
+	}
+
+	// Empty + fully-garbage specs fall back to the default ladder (never empty).
+	if len(ParseLadder("")) != len(DefaultLadder()) {
+		t.Error("empty spec should fall back to DefaultLadder")
+	}
+	if len(ParseLadder("nonsense,,x@,bad")) != len(DefaultLadder()) {
+		t.Error("unparseable spec should fall back to DefaultLadder")
+	}
+	// A partially-valid spec keeps the good rungs, drops the bad.
+	if n := len(ParseLadder("640x360@800,garbage,854x480")); n != 2 {
+		t.Errorf("partial spec = %d rungs, want 2 (bad dropped)", n)
+	}
+}
+
 func TestFFmpegArgsAudioOnly(t *testing.T) {
 	p := DefaultAudioProfile()
 	args := p.FFmpegArgs("/tmp/spot.mp3", "/out")

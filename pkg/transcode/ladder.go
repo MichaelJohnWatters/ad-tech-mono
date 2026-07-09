@@ -3,6 +3,7 @@ package transcode
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // The ABR ladder — the set of bitrate rungs content is packaged to and ads are
@@ -23,6 +24,52 @@ func DefaultLadder() []Profile {
 		mk(854, 480, 1400),
 		mk(1280, 720, 2800),
 	}
+}
+
+// ParseLadder builds an ABR ladder from a compact spec so the rungs are config-
+// driven rather than hardcoded: comma-separated "WxH@vbitrateKbps" entries (e.g.
+// "640x360@800,1280x720@2800"), each inheriting the codec/fps/audio/segment
+// params of DefaultProfile. An empty or unparseable spec falls back to
+// DefaultLadder, so a bad config value can never break packaging/conditioning.
+//
+// NB: content and the ads spliced into it must share the ladder — if you change
+// this, re-run the content-packager so origins are re-segmented to the new rungs.
+func ParseLadder(spec string) []Profile {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return DefaultLadder()
+	}
+	base := DefaultProfile()
+	var out []Profile
+	for _, rung := range strings.Split(spec, ",") {
+		rung = strings.TrimSpace(rung)
+		if rung == "" {
+			continue
+		}
+		dims, bitrate := rung, ""
+		if at := strings.IndexByte(rung, '@'); at >= 0 {
+			dims, bitrate = rung[:at], rung[at+1:]
+		}
+		x := strings.IndexAny(dims, "xX")
+		if x < 0 {
+			continue
+		}
+		w, err1 := strconv.Atoi(strings.TrimSpace(dims[:x]))
+		h, err2 := strconv.Atoi(strings.TrimSpace(dims[x+1:]))
+		if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+			continue
+		}
+		p := base
+		p.Width, p.Height = w, h
+		if vb, err := strconv.Atoi(strings.TrimSpace(bitrate)); err == nil && vb > 0 {
+			p.VBitrateKbps = vb
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return DefaultLadder()
+	}
+	return out
 }
 
 // RungName is the human/URL label for a profile's rung, e.g. "360p".
