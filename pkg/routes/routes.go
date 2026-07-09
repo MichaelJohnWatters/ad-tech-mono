@@ -289,6 +289,9 @@ const (
 	// server-side. Query: content (origin key), placement_id, plus the usual
 	// geo/device/consent/identity signals.
 	SSAIManifest = "/v1/ssai/manifest.m3u8"
+	// SSAIManifestMPD is the DASH counterpart of SSAIManifest: the same stitch
+	// pipeline rendered as a multi-period MPEG-DASH MPD (over CMAF segments).
+	SSAIManifestMPD = "/v1/ssai/manifest.mpd"
 	// SSAISegment is the per-ad-segment beacon+redirect endpoint referenced by
 	// the stitched manifest. When the player fetches an ad segment, this fires
 	// the segment's quartile beacon server-side (the SSAI beacon model) and

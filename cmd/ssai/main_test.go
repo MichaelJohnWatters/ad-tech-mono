@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dash"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/transcode"
@@ -541,6 +542,79 @@ func TestServeMasterRewritesRenditions(t *testing.T) {
 	}
 	if !strings.Contains(out, "rung=360") {
 		t.Errorf("video variant not rewritten with its rung:\n%s", out)
+	}
+}
+
+// TestDASHManifest asserts the DASH path: ?format=mpd runs the same stitch
+// pipeline but renders a multi-period MPD — content periods + ad periods, the ad
+// period referencing the conditioned CMAF init + segments.
+func TestDASHManifest(t *testing.T) {
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer tracker.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{
+			TraceID: "t-dash", CreativeID: "cr-v", CampaignID: "li-v", PlacementID: "pl",
+			PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4",
+		})
+	}))
+	defer ssp.Close()
+
+	// CMAF-conditioned ad: fMP4 init + .m4s segments.
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(200)
+			return
+		}
+		out := transcode.Conditioned{Cached: true, InitURI: "http://cdn.local/cond/init.mp4"}
+		for i, ds := range []float64{6, 6} {
+			out.Segments = append(out.Segments, transcode.CondSegment{URI: fmt.Sprintf("http://cdn.local/cond/seg_%d.m4s", i), Duration: ds})
+			out.Duration += ds
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.mpd", nil))
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/dash+xml" {
+		t.Fatalf("content-type = %q, want application/dash+xml", ct)
+	}
+	out := rec.Body.String()
+	if !dash.IsMPD(out) {
+		t.Fatalf("response is not an MPD:\n%s", out)
+	}
+	mpd, err := dash.ParseMPD(out)
+	if err != nil {
+		t.Fatalf("MPD parse: %v", err)
+	}
+	// Sample content has 2 breaks → content/ad periods interleaved; at least one
+	// ad period must exist, carrying the conditioned init + a /v1/ssai/seg URL.
+	var adPeriods int
+	for _, p := range mpd.Periods {
+		if !strings.HasPrefix(p.ID, "ad-") {
+			continue
+		}
+		adPeriods++
+		sl := p.AdaptationSets[0].Representations[0].SegmentList
+		if sl.Initialization == nil || !strings.Contains(sl.Initialization.SourceURL, "init.mp4") {
+			t.Errorf("ad period missing conditioned init: %+v", sl.Initialization)
+		}
+		if len(sl.SegmentURLs) == 0 || !strings.Contains(sl.SegmentURLs[0].Media, "/v1/ssai/seg") {
+			t.Errorf("ad period segment not a stitcher beacon URL: %+v", sl.SegmentURLs)
+		}
+	}
+	if adPeriods == 0 {
+		t.Errorf("no ad periods in the MPD:\n%s", out)
 	}
 }
 

@@ -36,6 +36,7 @@ var schema = []config.SchemaEntry{
 	{Key: "packager.break_at_segment", Type: "int", Tier: config.TierStatic, Default: "2", Description: "Segment index where the mid-roll ad break opens (#EXT-X-CUE-OUT).", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.break_segments", Type: "int", Tier: config.TierStatic, Default: "5", Description: "Number of content segments the ad break spans (replaced by the stitched ad).", Service: "content-packager", Since: "v1.6"},
 	{Key: "packager.audio", Type: "bool", Tier: config.TierStatic, Default: "false", Description: "Package a single audio-only rendition ({prefix}/{content_id}/audio/index.m3u8, no master) instead of the video ABR ladder — for audio SSAI origins.", Service: "content-packager", Since: "v1.6"},
+	{Key: "packager.container", Type: "string", Tier: config.TierStatic, Default: "ts", Description: "Segment container: 'ts' (MPEG-TS, HLS-only) or 'cmaf' (fMP4 .m4s + init.mp4, shared by HLS and DASH). Use cmaf for DASH SSAI origins.", Service: "content-packager", Since: "v1.6"},
 	{Key: "transcode.ladder", Type: "string", Tier: config.TierLive, Default: "", Description: "ABR ladder spec: comma-separated WxH@vbitrateKbps rungs (e.g. 640x360@800,1280x720@2800). Empty = built-in 360/480/720p default. Shared with prewarm/stitcher.", Service: "content-packager", Since: "v1.6"},
 }
 
@@ -77,12 +78,22 @@ func main() {
 	//      collecting variants for the master. Real content carries SCTE-35; we
 	//      stamp CUE-OUT/CUE-IN so the stitcher has an avail to fill.
 	base := fmt.Sprintf("%s/%s", prefix, contentID)
+	// CMAF mode packages fMP4 (.m4s + init.mp4) so the SAME segments serve both
+	// HLS (with #EXT-X-MAP) and DASH; TS mode is HLS-only.
+	cmaf := strings.EqualFold(cfg.Get("packager.container", "ts"), "cmaf")
+	segCT := "video/mp2t"
+	if cmaf {
+		segCT = "video/mp4"
+	}
 	profiles := transcode.ParseLadder(cfg.Get("transcode.ladder", ""))
 	if audioMode {
 		profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
 	}
 	var variants []ssai.Variant
 	for _, profile := range profiles {
+		if cmaf {
+			profile.Container = transcode.ContainerCMAF
+		}
 		res, err := runner.Package(ctx, src, profile)
 		if err != nil {
 			log.Error("ffmpeg package failed", "rung", profile.RungName(), "error", err)
@@ -102,8 +113,15 @@ func main() {
 			log.Error("upload variant playlist failed", "rung", rung, "error", err)
 			os.Exit(1)
 		}
+		// fMP4 init segment (shared by all media segments of the rung).
+		if res.Init != nil {
+			if err := put(ctx, store, bucket, rbase+"/"+res.Init.Name, res.Init.Data, "video/mp4"); err != nil {
+				log.Error("upload init failed", "rung", rung, "error", err)
+				os.Exit(1)
+			}
+		}
 		for _, s := range res.Segments {
-			if err := put(ctx, store, bucket, rbase+"/"+s.Name, s.Data, "video/mp2t"); err != nil {
+			if err := put(ctx, store, bucket, rbase+"/"+s.Name, s.Data, segCT); err != nil {
 				log.Error("upload segment failed", "rung", rung, "seg", s.Name, "error", err)
 				os.Exit(1)
 			}
