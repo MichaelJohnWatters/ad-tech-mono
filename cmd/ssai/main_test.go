@@ -1,20 +1,149 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/transcode"
 )
+
+// TestStitchWithRealConditioner is the R1 HTTP-path proof: the real stitcher
+// against a real ffmpeg conditioner (fs object store, no cluster). It conditions
+// a genuine clip, then asserts the stitched manifest points each ad segment at a
+// real conditioned .ts. Auto-skips without ffmpeg.
+func TestStitchWithRealConditioner(t *testing.T) {
+	r := transcode.Runner{}
+	if !r.Available() {
+		t.Skip("ffmpeg not installed; skipping real-conditioner stitch")
+	}
+	ctx := context.Background()
+
+	// Object store + a real mezzanine seeded under the /v1/creatives key space.
+	store, err := fs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket := "adtech-creatives"
+	if err := store.EnsureBucket(ctx, bucket); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "spot.mp4")
+	gen := exec.Command("ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=6:size=320x240:rate=30",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=6", "-c:v", "libx264", "-c:a", "aac", "-shortest", src)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Fatalf("generate fixture: %v\n%s", err, out)
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(ctx, bucket, "media/spot.mp4", strings.NewReader(string(b)), int64(len(b)), "video/mp4"); err != nil {
+		t.Fatal(err)
+	}
+	mediaURL := "http://host/v1/creatives/media/spot.mp4"
+
+	cond := &transcode.Conditioner{Store: store, Runner: r, Bucket: bucket,
+		Prefix: "ssai/cond", PublicBase: "http://pub.local/v1/creatives"}
+	// Pre-warm the cache so the stitcher's cache-only lookup hits deterministically.
+	if _, err := cond.Condition(ctx, "cr-v", mediaURL, transcode.DefaultProfile()); err != nil {
+		t.Fatalf("pre-warm condition: %v", err)
+	}
+
+	// A real transcoder HTTP endpoint backed by the conditioner.
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, hr *http.Request) {
+		var req struct {
+			CreativeID string            `json:"creative_id"`
+			MediaURL   string            `json:"media_url"`
+			Profile    transcode.Profile `json:"profile"`
+		}
+		_ = json.NewDecoder(hr.Body).Decode(&req)
+		if req.Profile.Zero() {
+			req.Profile = transcode.DefaultProfile()
+		}
+		if hr.URL.Query().Get("cache_only") == "1" {
+			out, _ := cond.Cached(hr.Context(), req.CreativeID, req.MediaURL, req.Profile)
+			if out == nil {
+				http.Error(w, "not conditioned", http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
+		out, err := cond.Condition(hr.Context(), req.CreativeID, req.MediaURL, req.Profile)
+		if err != nil {
+			http.Error(w, "fail", http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, hr *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{
+			TraceID: "trace-real", CreativeID: "cr-v", CampaignID: "li-v",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD",
+			MediaURL: mediaURL, DurationSeconds: 6,
+		})
+	}))
+	defer ssp.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub.local",
+		placementFn:   func() string { return "pl" },
+		transcoderURL: transcoder.URL,
+		maxPodAdsFn:   func() int { return 1 },
+		client:        &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+
+	if strings.Contains(out, "content_000.ts") {
+		t.Errorf("content-during-break not replaced by real conditioned ad:\n%s", out)
+	}
+	if !strings.Contains(out, "/v1/ssai/seg?") {
+		t.Fatalf("no ad segments stitched:\n%s", out)
+	}
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Errorf("stitched manifest invalid: %v", err)
+	}
+
+	// Follow the first ad segment: its redirect must resolve to a real conditioned
+	// .ts under ssai/cond (proof the stitcher wired real conditioned output, not a
+	// slate or the raw mezzanine).
+	var segLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "/v1/ssai/seg?") {
+			segLine = strings.TrimSpace(line)
+			break
+		}
+	}
+	segRec := httptest.NewRecorder()
+	d.segmentHandler(segRec, httptest.NewRequest("GET", segLine, nil))
+	if segRec.Code != http.StatusFound {
+		t.Fatalf("segment endpoint status = %d, want 302", segRec.Code)
+	}
+	loc := segRec.Header().Get("Location")
+	if !strings.Contains(loc, "ssai/cond/cr-v") || !strings.HasSuffix(loc, ".ts") {
+		t.Errorf("ad segment redirect not a real conditioned .ts: %q", loc)
+	}
+}
 
 // fakeTranscoder stands in for cmd/transcoder: on the serving (cache_only) call
 // it returns a Conditioned ad of the given per-segment durations (default a 30s

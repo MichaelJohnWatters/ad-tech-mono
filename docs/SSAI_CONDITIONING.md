@@ -201,20 +201,22 @@ tab is still video-only). Roadmap below.
 Six phases, ordered by value + dependency. R1 comes first because it verifies
 everything already built; the rest are independent and can be reordered.
 
-### R1 — Runtime verification (the de-risker) · effort M · **do first**
-Everything from P1–P7 is unit-tested but the real ffmpeg transcode + hls.js
-playback has never run here. Nothing else is trustworthy until this does.
-- `pkg/transcode`: a `-tags=ffmpeg` golden test that generates a ~2s fixture with
-  `ffmpeg lavfi` (testsrc + sine — no binary asset committed), packages it across
-  the TS, CMAF, and audio profiles, and asserts: segments + `init.mp4` produced,
-  keyframe-at-segment-boundary, and that content+ad conditioned to the SAME
-  profile are splice-compatible (same codecs/timescale).
-- `tests/e2e` (or a `make ssai-smoke`): content-packager Job → transcoder
-  `condition` → ssai `manifest.m3u8` → assert the stitched manifest's segment
-  URLs resolve 200 and the ad `.ts`/`.m4s` decode. Runs only where ffmpeg + the
-  cluster are up (CI image / OrbStack), skips locally.
-- Exit criteria: one stitched stream plays end-to-end in hls.js; the golden test
-  is green in the ffmpeg CI image.
+### R1 — Runtime verification (the de-risker) · **DONE (code) 2026-07-09**
+Everything from P1–P7 was unit-tested but the real ffmpeg transcode had never
+run. It has now — ffmpeg 8.1.2 installed locally; these auto-skip when ffmpeg is
+absent so the unit suite stays green everywhere:
+- `pkg/transcode/golden_test.go` — TS/CMAF/audio profiles each package a real
+  lavfi fixture to valid HLS (CMAF carries `init.mp4`, audio-only has no video
+  stream); **splice proof**: two clips at the same profile concatenate with
+  `-c copy` (no re-encode) and decode cleanly; conditioner cache round-trip.
+- `cmd/ssai` `TestStitchWithRealConditioner` — the full stitcher → transcoder →
+  real conditioner HTTP path (fs store, no cluster): the stitched manifest points
+  each ad segment at a real conditioned `.ts` and the seg endpoint 302s to
+  `ssai/cond/...`.
+- **Remaining for full R1 sign-off:** actual hls.js browser playback + the live
+  cluster (Minio/SSP/pods) — needs `tilt up` on OrbStack with the transcoder pod.
+  A `make ssai-smoke` against the running stack is the last step; the byte-splice
+  and server pipeline are otherwise proven.
 
 ### R2 — Audio origin + web sim toggle · effort M · user-facing
 The audio *stitcher* path is done but there's no audio *origin* to point it at,
