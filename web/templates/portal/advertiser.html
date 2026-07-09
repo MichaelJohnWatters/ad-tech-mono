@@ -54,9 +54,9 @@
 
     <!-- ============ Campaigns ============ -->
     <section id="section-campaigns" class="portal-section p-6 space-y-6 hidden">
-      {{ template "card-start" (dict "title" "Campaigns") }}
-      {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Base bid" "Daily budget" "Spend today" "")) }}
-        <tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "card-start" (dict "title" "Campaigns" "subtitle" "Performance is last 7 days") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Daily budget" "Spend today" "Impr. 7d" "Clicks 7d" "CTR" "Spend 7d" "")) }}
+        <tr><td colspan="11" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -528,34 +528,66 @@ const BADGE = {
   live: 'bg-success/15 text-success', paused: 'bg-warn/15 text-warn',
   ended: 'bg-gray-200 dark:bg-gray-800 text-gray-500', archived: 'bg-gray-200 dark:bg-gray-800 text-gray-500',
 };
+// rowsByKey turns a grouped report result ({columns, rows}) into a map keyed by
+// the given dimension column; each value is that row's column→value object.
+function rowsByKey(res, keyCol) {
+  const cols = (res && res.columns) || [];
+  const ki = cols.indexOf(keyCol);
+  const out = {};
+  if (ki < 0) return out;
+  (res.rows || []).forEach(r => { out[r[ki]] = Object.fromEntries(cols.map((c, i) => [c, r[i]])); });
+  return out;
+}
+
 let campaignsCache = [];
 async function loadCampaigns() {
   const tbody = tbodyOf('campaigns');
+  let perf = {};
   try {
     campaignsCache = await fetchJSON('/v1/api/campaigns') || [];
+    // Per-campaign performance (last 7 days), merged into the rows. Best-effort:
+    // a reporting hiccup shows the campaigns without perf rather than failing the list.
+    try {
+      const [imps, clks] = await Promise.all([
+        reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
+        reportQuery({table: 'clicks', metrics: ['count'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
+      ]);
+      const im = rowsByKey(imps, 'campaign_id'), cm = rowsByKey(clks, 'campaign_id');
+      new Set([...Object.keys(im), ...Object.keys(cm)]).forEach(id => {
+        const i = Number(im[id]?.count || 0), c = Number(cm[id]?.count || 0);
+        perf[id] = {imps: i, clicks: c, spend: Number(im[id]?.sum_cost || 0), ctr: i ? (100 * c / i) : null};
+      });
+    } catch (_) { /* perf is optional decoration */ }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
     return;
   }
   if (!campaignsCache.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">
+    tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-8 text-center text-sm text-gray-400">
       No campaigns yet — create your first with “+ New campaign”.</td></tr>`;
     return;
   }
-  tbody.innerHTML = campaignsCache.map(c => `
+  const dash = '<span class="text-gray-300 dark:text-gray-600">—</span>';
+  tbody.innerHTML = campaignsCache.map(c => {
+    const p = perf[c.ID] || {};
+    return `
     <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-medium">${esc(c.Name)}</td>
       <td class="px-3 py-2 text-gray-500">${esc(c.AdvertiserName || (c.AdvertiserID || '').slice(0, 8))}</td>
       <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${BADGE[c.Status] || BADGE.ended}">${esc(c.Status)}</span></td>
       <td class="px-3 py-2 font-mono text-xs">${esc(c.BidModel || 'cpm')}</td>
-      <td class="px-3 py-2 font-mono">${fmtUSD(c.BaseBid)}</td>
       <td class="px-3 py-2 font-mono">${fmtUSD(c.DailyBudget)}</td>
       <td class="px-3 py-2 font-mono">${fmtUSD(c.SpentToday)}</td>
+      <td class="px-3 py-2 font-mono">${p.imps ? fmtInt(p.imps) : dash}</td>
+      <td class="px-3 py-2 font-mono">${p.clicks ? fmtInt(p.clicks) : dash}</td>
+      <td class="px-3 py-2 font-mono">${p.ctr != null ? p.ctr.toFixed(2) + '%' : dash}</td>
+      <td class="px-3 py-2 font-mono">${p.spend ? fmtUSD(p.spend) : dash}</td>
       <td class="px-3 py-2 text-right whitespace-nowrap">
         <button onclick="togglePause('${esc(c.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${c.Status === 'paused' ? 'Resume' : 'Pause'}</button>
         <button onclick="openEdit('${esc(c.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 // parseModMap turns "mobile:20, desktop:-10" into {mobile:20, desktop:-10}.
