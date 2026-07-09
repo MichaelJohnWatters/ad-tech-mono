@@ -97,6 +97,8 @@ func main() {
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
+	metrics := middleware.NewMetrics(constants.ServiceSSAI)
+
 	deps := &stitcherDeps{
 		sspURL:     sspURL,
 		trackerURL: trackerURL,
@@ -104,15 +106,19 @@ func main() {
 		placementFn: func() string {
 			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
 		},
-		originFn:      func() string { return cfg.Get("ssai.origin_url", "") },
-		transcoderURL: cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
-		client:        &http.Client{Timeout: 4 * time.Second},
+		originFn:        func() string { return cfg.Get("ssai.origin_url", "") },
+		transcoderURL:   cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
+		maxPodAdsFn:     func() int { return cfg.GetInt("ssai.max_pod_ads", 4) },
+		slateCreativeFn: func() string { return cfg.Get("ssai.slate_creative_id", "") },
+		slateMediaFn:    func() string { return cfg.Get("ssai.slate_media_url", "") },
+		metrics:         newStitcherMetrics(metrics.Registry()),
+		client:          &http.Client{Timeout: 4 * time.Second},
 	}
 
-	metrics := middleware.NewMetrics(constants.ServiceSSAI)
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
+	mux.Handle(routes.Metrics, metrics.Handler())
 	mux.HandleFunc(routes.SSAIContent, serveContentManifest)
 	mux.HandleFunc(routes.SSAIManifest, deps.manifestHandler)
 	mux.HandleFunc(routes.SSAISegment, deps.segmentHandler)
@@ -125,13 +131,27 @@ func main() {
 }
 
 type stitcherDeps struct {
-	sspURL        string
-	trackerURL    string
-	publicURL     string
-	placementFn   func() string
-	originFn      func() string // configured origin manifest URL ("" = built-in sample)
-	transcoderURL string        // runtime ad-conditioning service ("" = disabled)
-	client        *http.Client
+	sspURL          string
+	trackerURL      string
+	publicURL       string
+	placementFn     func() string
+	originFn        func() string // configured origin manifest URL ("" = built-in sample)
+	transcoderURL   string        // runtime ad-conditioning service ("" = disabled)
+	maxPodAdsFn     func() int    // max ads per avail (ad pod); nil/≤0 → 1
+	slateCreativeFn func() string // slate creative id ("" = no slate, keep content)
+	slateMediaFn    func() string // slate media URL (to warm-condition the slate)
+	metrics         *stitcherMetrics
+	client          *http.Client
+}
+
+func (d *stitcherDeps) maxPodAds() int {
+	if d.maxPodAdsFn == nil {
+		return 1
+	}
+	if n := d.maxPodAdsFn(); n > 0 {
+		return n
+	}
+	return 1
 }
 
 // conditionCached asks the transcoder for the winner's already-conditioned
@@ -365,61 +385,9 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	adProfile := d.profileForRung(r) // condition ads to the rung the player is watching
 	filled := 0
 	m.Stitch(func(i int, span ssai.BreakSpan) []ssai.Segment {
-		winner := d.runAuction(ctx, r, span.Duration, reqLog)
-		if winner == nil || winner.NoBid || winner.MediaURL == "" {
-			reqLog.Info("ssai break unfilled, keeping content", "break", i)
-			return nil // no fill: keep content
-		}
-		adTrace := winner.TraceID
-		if adTrace == "" {
-			adTrace = session
-		}
-		// Build the same MacroContext the publisher-adserver uses, so every
-		// beacon SSAI fires is the identical HMAC-signed URL the platform's
-		// tracker expects (passes tracker.signature_validation, unlike a
-		// hand-rolled sig). This is the whole point: SSAI fires the real
-		// beacons, just server-side instead of from the player.
-		mc := macroCtxFor(winner, adTrace, d.trackerURL)
-		adIdx := i
-
-		// Real SSAI: condition the winning ad to the content profile so its
-		// segments are byte-compatible with the content stream. Cache-only so we
-		// never block on ffmpeg.
-		cond := d.conditionCached(ctx, winner, adProfile, reqLog)
-		if cond == nil || len(cond.Segments) == 0 {
-			// Not conditioned yet: warm for next time and keep content this break.
-			// We must NOT splice the raw mezzanine as pseudo-segments — a whole MP4
-			// handed to the player as .ts stalls it — and we do NOT fire the
-			// impression, because no ad was served (avoids over-counting).
-			d.warmCondition(winner, adProfile)
-			reqLog.Info("ssai break not conditioned yet, keeping content + warming",
-				"break", i, "creative", winner.CreativeID)
-			return nil
-		}
-
-		filled++
-		// Impression is attached to the FIRST ad segment (fired on fetch), not
-		// here at manifest time — so a viewer who abandons before a mid/post-roll
-		// never books its impression.
-		impression := adserving.BuildImpressionURL(mc)
-		segs := make([]ssai.Segment, len(cond.Segments))
-		var start float64
-		for n, cs := range cond.Segments {
-			// Fire every VAST quartile whose time-mark the segment crosses (a
-			// segment can cross more than one; short ads with few segments still
-			// emit all of start/firstQuartile/midpoint/thirdQuartile/complete).
-			evs := eventsForSegment(start, cs.Duration, cond.Duration)
-			beacons := make([]string, 0, len(evs)+1)
-			if n == 0 {
-				beacons = append(beacons, impression)
-			}
-			for _, ev := range evs {
-				beacons = append(beacons, adserving.BuildVideoEventURL(mc, ev))
-			}
-			// The segment endpoint fires the beacon(s) server-side then 302s to
-			// the real conditioned .ts (cs.URI).
-			segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, adIdx, n, evs, beacons, cs.URI)}
-			start += cs.Duration
+		segs := d.fillBreak(ctx, r, i, span, session, adProfile, reqLog)
+		if len(segs) > 0 {
+			filled++
 		}
 		return segs
 	})
@@ -430,6 +398,146 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, m.Render())
+}
+
+// fillBreak builds the ad segments for one avail. It runs back-to-back auctions
+// (an ad pod), conditioning each winner to the content profile, until the avail
+// duration is filled or maxPodAds is reached. Each ad fires its own impression
+// (on first-segment fetch) and full quartile set over its own duration, with a
+// discontinuity at its boundary. If nothing fills, it splices a slate (when
+// configured) or keeps content; a winner that can't be conditioned fires a VAST
+// error beacon and is warmed for next time.
+func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, breakIdx int, span ssai.BreakSpan, session string, adProfile transcode.Profile, reqLog *slog.Logger) []ssai.Segment {
+	maxAds := d.maxPodAds()
+	var out []ssai.Segment
+	var filledDur float64
+	ads := 0
+	sawError := false
+	seen := map[string]bool{}
+
+	for ads < maxAds {
+		remaining := span.Duration - filledDur
+		if remaining < 1.0 {
+			break // avail full
+		}
+		winner := d.runAuction(ctx, r, remaining, reqLog)
+		if winner == nil || winner.NoBid || winner.MediaURL == "" {
+			break // no more demand for this avail
+		}
+		if winner.CreativeID != "" && seen[winner.CreativeID] {
+			break // same ad again → stop (no duplicate creatives inside one pod)
+		}
+		seen[winner.CreativeID] = true
+
+		adTrace := winner.TraceID
+		if adTrace == "" {
+			adTrace = fmt.Sprintf("%s-b%d-p%d", session, breakIdx, ads)
+		}
+		// Build the same MacroContext the publisher-adserver uses, so every beacon
+		// SSAI fires is the identical HMAC-signed URL the tracker expects (passes
+		// signature_validation, unlike a hand-rolled sig).
+		mc := macroCtxFor(winner, adTrace, d.trackerURL)
+
+		// Cache-only conditioning: never block serving on ffmpeg.
+		cond := d.conditionCached(ctx, winner, adProfile, reqLog)
+		if cond == nil || len(cond.Segments) == 0 {
+			d.metrics.recordCond(false)
+			d.warmCondition(winner, adProfile) // ready for the next viewer
+			// VAST error: the winning ad couldn't be served this time.
+			d.fireBeacon(ctx, adserving.BuildVideoEventURL(mc, "error"))
+			reqLog.Info("ssai pod ad not conditioned; error beacon + warming",
+				"break", breakIdx, "pod", ads, "creative", winner.CreativeID)
+			sawError = true
+			break // stop the pod; fall through to slate/content
+		}
+		d.metrics.recordCond(true)
+		out = append(out, d.adSegments(cond, mc, session, adTrace, breakIdx, false)...)
+		filledDur += cond.Duration
+		ads++
+	}
+
+	if len(out) > 0 {
+		d.metrics.recordBreak("filled")
+		d.metrics.recordPod(ads, filledDur)
+		reqLog.Info("ssai avail filled", "break", breakIdx, "pod_ads", ads, "ad_seconds", filledDur)
+		return out
+	}
+
+	// Nothing filled: prefer a slate over dropping to content.
+	if slate := d.slateSegments(ctx, adProfile, session, breakIdx, reqLog); len(slate) > 0 {
+		d.metrics.recordBreak("slate")
+		reqLog.Info("ssai avail slated", "break", breakIdx)
+		return slate
+	}
+	if sawError {
+		d.metrics.recordBreak("error")
+	} else {
+		d.metrics.recordBreak("unfilled")
+	}
+	reqLog.Info("ssai break unfilled, keeping content", "break", breakIdx)
+	return nil
+}
+
+// adSegments turns a conditioned ad into stitched manifest segments. For a real
+// ad it attaches the impression to the first segment and the VAST quartiles each
+// segment crosses; a slate carries no beacons. The first segment gets a
+// discontinuity so the decoder resets at the content↔ad (and ad↔ad) boundary.
+func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.MacroContext, session, adTrace string, breakIdx int, isSlate bool) []ssai.Segment {
+	var impression string
+	if !isSlate {
+		impression = adserving.BuildImpressionURL(mc)
+	}
+	segs := make([]ssai.Segment, len(cond.Segments))
+	var start float64
+	for n, cs := range cond.Segments {
+		var evs, beacons []string
+		if !isSlate {
+			// Fire every VAST quartile whose time-mark the segment crosses (a
+			// segment can cross more than one; short ads still emit all five).
+			evs = eventsForSegment(start, cs.Duration, cond.Duration)
+			beacons = make([]string, 0, len(evs)+1)
+			if n == 0 {
+				beacons = append(beacons, impression)
+			}
+			for _, ev := range evs {
+				beacons = append(beacons, adserving.BuildVideoEventURL(mc, ev))
+			}
+		}
+		segs[n] = ssai.Segment{Duration: cs.Duration, URI: d.segmentURL(session, adTrace, breakIdx, n, evs, beacons, cs.URI)}
+		start += cs.Duration
+	}
+	if len(segs) > 0 {
+		segs[0].Discontinuity = true
+	}
+	return segs
+}
+
+// slateSegments conditions and returns the configured slate clip for an unfilled
+// avail (cache-only, no beacons). Returns nil when no slate is configured or the
+// slate isn't conditioned yet (in which case it warm-conditions it for next time
+// and the caller keeps content).
+func (d *stitcherDeps) slateSegments(ctx context.Context, adProfile transcode.Profile, session string, breakIdx int, reqLog *slog.Logger) []ssai.Segment {
+	if d.slateCreativeFn == nil {
+		return nil
+	}
+	slateID := d.slateCreativeFn()
+	if slateID == "" {
+		return nil
+	}
+	mediaURL := ""
+	if d.slateMediaFn != nil {
+		mediaURL = d.slateMediaFn()
+	}
+	winner := &sspWinner{CreativeID: slateID, MediaURL: mediaURL}
+	cond := d.conditionCached(ctx, winner, adProfile, reqLog)
+	if cond == nil || len(cond.Segments) == 0 {
+		if mediaURL != "" {
+			d.warmCondition(winner, adProfile) // ready next time
+		}
+		return nil
+	}
+	mc := macroCtxFor(winner, session, d.trackerURL)
+	return d.adSegments(cond, mc, session, "slate-"+session, breakIdx, true)
 }
 
 // runAuction calls the SSP channel=video, forwarding the viewer's signals so
@@ -448,6 +556,11 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, breakDur
 	}
 	if q.Get("device") == "" {
 		q.Set("device", "ctv") // SSAI is overwhelmingly CTV/OTT
+	}
+	// Advertise the remaining avail so demand can return an ad that fits the pod
+	// slot (a real SSP honours max ad duration; the built-in demo ignores it).
+	if breakDur > 0 {
+		q.Set("max_duration", strconv.Itoa(int(breakDur)))
 	}
 
 	target := d.sspURL + routes.SSPServe + "?" + q.Encode()

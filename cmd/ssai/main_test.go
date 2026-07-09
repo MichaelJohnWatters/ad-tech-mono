@@ -149,6 +149,124 @@ func TestManifestHandlerStitches(t *testing.T) {
 	}
 }
 
+// TestAdPodFillsMultipleAds asserts ad-pod filling: a 30s avail is filled with
+// two back-to-back conditioned ads (not one), so across the sample's two breaks
+// three ads run — proving the pod loop, distinct-creative dedup, and per-ad
+// impressions.
+func TestAdPodFillsMultipleAds(t *testing.T) {
+	var mu sync.Mutex
+	var impressions int
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if strings.Contains(r.URL.Path, "/v1/t/imp") {
+			impressions++
+		}
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer tracker.Close()
+
+	var call int
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		call++
+		n := call
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// Distinct creative + trace per call so the pod dedup doesn't stop early.
+		_ = json.NewEncoder(w).Encode(sspWinner{
+			TraceID: fmt.Sprintf("t-%d", n), CreativeID: fmt.Sprintf("cr-%d", n),
+			CampaignID: fmt.Sprintf("li-%d", n), PlacementID: "pl-sim-video",
+			PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4",
+		})
+	}))
+	defer ssp.Close()
+
+	transcoder := fakeTranscoder(6, 6, 3) // each ad conditions to 15s
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn:   func() string { return "pl-sim-video" },
+		transcoderURL: transcoder.URL,
+		maxPodAdsFn:   func() int { return 4 },
+		client:        &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Fatalf("stitched manifest invalid: %v", err)
+	}
+
+	replaySegments(d, out)
+	mu.Lock()
+	defer mu.Unlock()
+	// Break 0 (30s avail) takes two 15s ads; break 1 (15s avail) takes one → 3.
+	// Without pods this would be 2 (one ad per break).
+	if impressions != 3 {
+		t.Errorf("want 3 impressions (2-ad pod in the 30s avail + 1 in the 15s), got %d", impressions)
+	}
+}
+
+// TestSlateFillsUnfilledBreak asserts that when no ad bids, a configured slate
+// clip is spliced into the avail (with no beacons) rather than dropping to
+// content.
+func TestSlateFillsUnfilledBreak(t *testing.T) {
+	var mu sync.Mutex
+	var impressions int
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if strings.Contains(r.URL.Path, "/v1/t/imp") {
+			impressions++
+		}
+		mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	defer tracker.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{NoBid: true}) // nobody bids
+	}))
+	defer ssp.Close()
+
+	transcoder := fakeTranscoder(6, 6) // slate conditions to 12s
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn:     func() string { return "pl-sim-video" },
+		transcoderURL:   transcoder.URL,
+		maxPodAdsFn:     func() int { return 4 },
+		slateCreativeFn: func() string { return "house-slate" },
+		slateMediaFn:    func() string { return "https://cdn/slate.mp4" },
+		client:          &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+
+	if strings.Contains(out, "content_000.ts") || strings.Contains(out, "content_005.ts") {
+		t.Errorf("unfilled avail not slated (content-during-break kept):\n%s", out)
+	}
+	if !strings.Contains(out, "/v1/ssai/seg?") {
+		t.Errorf("slate segments not stitched:\n%s", out)
+	}
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Errorf("slated manifest invalid: %v", err)
+	}
+
+	replaySegments(d, out)
+	mu.Lock()
+	defer mu.Unlock()
+	if impressions != 0 {
+		t.Errorf("slate must not fire impressions, got %d", impressions)
+	}
+}
+
 // TestSegmentHandlerFiresBeaconAndRedirects asserts the per-segment endpoint
 // fires the pre-signed quartile beacon verbatim (an HMAC-signed tracker URL —
 // NOT a hand-rolled one) and 302s to the media.
