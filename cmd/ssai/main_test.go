@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,21 +13,64 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/transcode"
 )
 
+// fakeTranscoder stands in for cmd/transcoder: on the serving (cache_only) call
+// it returns a Conditioned ad of the given per-segment durations (default a 30s
+// ad in five 6s segments), so the stitcher has real conditioned segments to
+// splice — the on-disk ffmpeg path can't run in unit tests.
+func fakeTranscoder(segDurs ...float64) *httptest.Server {
+	if len(segDurs) == 0 {
+		segDurs = []float64{6, 6, 6, 6, 6}
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(http.StatusOK) // warm call
+			return
+		}
+		var out transcode.Conditioned
+		out.Cached = true
+		for i, ds := range segDurs {
+			out.Segments = append(out.Segments, transcode.CondSegment{
+				URI: fmt.Sprintf("http://cdn.local/cond/seg_%d.ts", i), Duration: ds,
+			})
+			out.Duration += ds
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+}
+
+// replaySegments simulates the player fetching each stitched ad segment,
+// firing its embedded server-side beacons (impression + quartiles).
+func replaySegments(d *stitcherDeps, manifest string) {
+	for _, line := range strings.Split(manifest, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "/v1/ssai/seg?") {
+			continue
+		}
+		d.segmentHandler(httptest.NewRecorder(), httptest.NewRequest("GET", line, nil))
+	}
+}
+
 // TestManifestHandlerStitches asserts the end-to-end stitch: two breaks in the
-// sample content each get filled from a stub SSP, the content-during-break
-// segments are replaced with SSAI segment beacon URLs, and the impression
-// beacon fires server-side.
+// sample content each get filled from a stub SSP with conditioned ad segments,
+// the content-during-break segments are replaced with SSAI segment beacon URLs,
+// and the impression fires server-side — on ad-segment FETCH, not at manifest
+// generation (so an unwatched mid/post-roll never books an impression).
 func TestManifestHandlerStitches(t *testing.T) {
 	var mu sync.Mutex
-	var impressions int
+	var impressions, videoEvents int
 	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		if strings.Contains(r.URL.Path, "/v1/t/imp") {
-			mu.Lock()
 			impressions++
-			mu.Unlock()
 		}
+		if strings.Contains(r.URL.Path, "/v1/t/video") {
+			videoEvents++
+		}
+		mu.Unlock()
 		w.WriteHeader(200)
 	}))
 	defer tracker.Close()
@@ -49,10 +93,14 @@ func TestManifestHandlerStitches(t *testing.T) {
 	}))
 	defer ssp.Close()
 
+	transcoder := fakeTranscoder() // 30s ad in five 6s conditioned segments
+	defer transcoder.Close()
+
 	d := &stitcherDeps{
 		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
-		segDurFn: func() float64 { return 6 }, placementFn: func() string { return "pl-sim-video" },
-		client: &http.Client{},
+		placementFn:   func() string { return "pl-sim-video" },
+		transcoderURL: transcoder.URL,
+		client:        &http.Client{},
 	}
 
 	req := httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8?geo=GBR&device=ctv", nil)
@@ -80,10 +128,24 @@ func TestManifestHandlerStitches(t *testing.T) {
 		t.Errorf("stitched manifest invalid: %v", err)
 	}
 
+	// No beacon fires from manifest generation alone — impressions are deferred
+	// to segment fetch.
+	mu.Lock()
+	if impressions != 0 {
+		t.Errorf("impression fired at manifest time (over-counting risk), got %d", impressions)
+	}
+	mu.Unlock()
+
+	// Now the player fetches the segments: exactly one impression per filled
+	// break (2), and all five quartiles per break fire (2×5 = 10 video events).
+	replaySegments(d, out)
 	mu.Lock()
 	defer mu.Unlock()
 	if impressions != 2 {
-		t.Errorf("want 2 server-side impressions (one per filled break), got %d", impressions)
+		t.Errorf("want 2 impressions (one per filled break, on first ad segment), got %d", impressions)
+	}
+	if videoEvents != 10 {
+		t.Errorf("want 10 video events (5 quartiles × 2 breaks), got %d", videoEvents)
 	}
 }
 
@@ -125,17 +187,46 @@ func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	}
 }
 
-func TestQuartileForSegment(t *testing.T) {
-	// 30s ad, 6s segments → segment start offsets 0,6,12,18,24.
-	if got := quartileForSegment(0, 30, 6); got != "start" {
-		t.Errorf("seg@0 = %q, want start", got)
+func TestEventsForSegment(t *testing.T) {
+	// Walk an ad of `total` seconds split into `segs`, flattening every event
+	// each segment fires. All five VAST marks must fire exactly once, in order,
+	// regardless of how the ad divides into segments.
+	walk := func(total float64, segs []float64) []string {
+		var all []string
+		var start float64
+		for _, d := range segs {
+			all = append(all, eventsForSegment(start, d, total)...)
+			start += d
+		}
+		return all
 	}
-	if got := quartileForSegment(24, 30, 6); got != "complete" {
-		t.Errorf("seg@24 (last) = %q, want complete", got)
+	want := []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"}
+
+	// 30s ad in five 6s segments: one mark per segment.
+	if got := walk(30, []float64{6, 6, 6, 6, 6}); !equalStrs(got, want) {
+		t.Errorf("30s/6s events = %v, want %v", got, want)
 	}
-	if got := quartileForSegment(18, 30, 6); got != "midpoint" && got != "thirdQuartile" {
-		t.Errorf("seg@18 = %q, want a mid/third quartile", got)
+	// 15s ad in 6/6/3 segments: some segments cross two marks — all five still
+	// fire (the old one-event-per-segment logic dropped midpoint/thirdQuartile).
+	if got := walk(15, []float64{6, 6, 3}); !equalStrs(got, want) {
+		t.Errorf("15s/[6,6,3] events = %v, want %v", got, want)
 	}
+	// A single-segment ad still fires every mark.
+	if got := walk(6, []float64{6}); !equalStrs(got, want) {
+		t.Errorf("6s/[6] events = %v, want %v", got, want)
+	}
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestOriginManifestFetched asserts the stitcher fetches a configured origin
@@ -153,11 +244,15 @@ func TestOriginManifestFetched(t *testing.T) {
 	}))
 	defer ssp.Close()
 
+	transcoder := fakeTranscoder(6) // one 6s conditioned ad segment
+	defer transcoder.Close()
+
 	d := &stitcherDeps{
 		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub",
-		segDurFn: func() float64 { return 6 }, placementFn: func() string { return "pl" },
-		originFn: func() string { return origin.URL }, // <- real origin
-		client:   &http.Client{},
+		placementFn:   func() string { return "pl" },
+		originFn:      func() string { return origin.URL }, // <- real origin
+		transcoderURL: transcoder.URL,
+		client:        &http.Client{},
 	}
 	rec := httptest.NewRecorder()
 	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
