@@ -358,18 +358,49 @@ func resolveContentURIs(m *ssai.Manifest, originURL string) {
 // each rung through this stitcher and gets an ad conditioned to that rung.
 func (d *stitcherDeps) serveMaster(w http.ResponseWriter, r *http.Request, master, masterURL string, reqLog *slog.Logger) {
 	variants := ssai.ParseMaster(master)
+	media := ssai.ParseRenditions(master)
 	baseU, _ := url.Parse(masterURL)
-	for i := range variants {
-		abs := variants[i].URI
-		if u, err := url.Parse(abs); err == nil && !u.IsAbs() && baseU != nil {
-			abs = baseU.ResolveReference(u).String()
+	abs := func(ref string) string {
+		if u, err := url.Parse(ref); err == nil && !u.IsAbs() && baseU != nil {
+			return baseU.ResolveReference(u).String()
 		}
-		variants[i].URI = d.variantStitchURL(r, abs, variants[i].Height)
+		return ref
 	}
-	reqLog.Info("ssai master rewritten", "rungs", len(variants))
+	for i := range variants {
+		variants[i].URI = d.variantStitchURL(r, abs(variants[i].URI), variants[i].Height)
+	}
+	// Demuxed audio/subtitle renditions must be stitched too, or the audio track
+	// wouldn't carry the ad. Rewrite each rendition's URI to a stitcher URL for
+	// its media type (AUDIO → channel=audio); a URI-less rendition (e.g. some
+	// CLOSED-CAPTIONS) is left as-is.
+	for i := range media {
+		if media[i].URI == "" {
+			continue
+		}
+		media[i].URI = d.renditionStitchURL(r, abs(media[i].URI), media[i].Type)
+	}
+	reqLog.Info("ssai master rewritten", "rungs", len(variants), "renditions", len(media))
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.WriteString(w, ssai.BuildMaster(variants))
+	_, _ = io.WriteString(w, ssai.BuildMaster(variants, media))
+}
+
+// renditionStitchURL builds a stitcher URL for an #EXT-X-MEDIA rendition, setting
+// the channel from its TYPE (AUDIO → channel=audio) so the ad is conditioned to
+// match the rendition. No rung — renditions are single-quality.
+func (d *stitcherDeps) renditionStitchURL(r *http.Request, absURL, mediaType string) string {
+	q := url.Values{}
+	for k, v := range r.URL.Query() {
+		if k == "origin" || k == "rung" || k == "channel" || k == "t" {
+			continue
+		}
+		q[k] = append([]string(nil), v...)
+	}
+	q.Set("origin", absURL)
+	if strings.EqualFold(mediaType, "AUDIO") {
+		q.Set("channel", constants.ChannelAudio)
+	}
+	return strings.TrimRight(d.publicURL, "/") + routes.SSAIManifest + "?" + q.Encode()
 }
 
 // variantStitchURL builds a browser-reachable stitcher URL that stitches one

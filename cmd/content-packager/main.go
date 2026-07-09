@@ -121,8 +121,9 @@ func main() {
 		return
 	}
 
-	// Master playlist referencing the rungs (relative variant URIs).
-	master := ssai.BuildMaster(variants)
+	// Master playlist referencing the rungs (relative variant URIs). Muxed A/V
+	// variants — no separate audio rendition group.
+	master := ssai.BuildMaster(variants, nil)
 	if err := put(ctx, store, bucket, base+"/master.m3u8", []byte(master), "application/vnd.apple.mpegurl"); err != nil {
 		log.Error("upload master failed", "error", err)
 		os.Exit(1)
