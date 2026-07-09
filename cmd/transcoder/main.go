@@ -119,7 +119,7 @@ func conditionHandler(cond *transcode.Conditioner, tm *transcoderMetrics) http.H
 		// cache_only=1: return the conditioned ad if already cached, else 404 —
 		// never transcodes. Serving paths use this so they don't block on ffmpeg.
 		if r.URL.Query().Get("cache_only") == "1" {
-			out, err := cond.Cached(ctx, req.CreativeID, p)
+			out, err := cond.Cached(ctx, req.CreativeID, req.MediaURL, p)
 			if err != nil {
 				http.Error(w, "cache lookup failed", http.StatusBadGateway)
 				return
