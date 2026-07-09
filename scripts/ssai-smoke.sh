@@ -46,4 +46,29 @@ ffprobe -v error -show_entries stream=codec_type,codec_name,width,height \
   -show_entries format=duration -of default=noprint_wrappers=1 "$WORK/ad.ts"
 ffmpeg -v error -i "$WORK/ad.ts" -f null - || { echo "FAIL: segment did not decode"; exit 1; }
 
+# DASH: only if CMAF content has been packaged (packager.container=cmaf,
+# content_id=sample-cmaf). Skipped otherwise so the HLS smoke still stands alone.
+CMAF="$GATEWAY/v1/creatives/ssai/content/sample-cmaf/master.m3u8"
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "$CMAF")" = "200" ]; then
+  echo "==> DASH: fetch a multi-period MPD (warming CMAF ad conditioning)"
+  mpdurl="$SSAI/v1/ssai/manifest.mpd?placement_id=pl-sim-video&geo=USA&device=ctv&origin=$(printf %s "$CMAF" | sed 's|:|%3A|g; s|/|%2F|g')"
+  adp=0
+  for i in $(seq 1 6); do
+    curl -s "$mpdurl" -o "$WORK/out.mpd"
+    adp=$(grep -c '<Period id="ad-' "$WORK/out.mpd" || true)
+    echo "   attempt $i: ad periods = $adp"
+    [ "$adp" -gt 0 ] && break
+    sleep 3
+  done
+  [ "$adp" -gt 0 ] || { echo "FAIL: MPD never got an ad period"; exit 1; }
+  echo "==> DASH: content CMAF segment (init + .m4s) must decode"
+  cb="$GATEWAY/v1/creatives/ssai/content/sample-cmaf/720p"
+  curl -s "$cb/init.mp4" -o "$WORK/ci.mp4"; curl -s "$cb/seg_0.m4s" -o "$WORK/cs.m4s"
+  cat "$WORK/ci.mp4" "$WORK/cs.m4s" > "$WORK/cf.mp4"
+  ffmpeg -v error -i "$WORK/cf.mp4" -f null - || { echo "FAIL: CMAF content segment did not decode"; exit 1; }
+  echo "   DASH OK: multi-period MPD + decodable CMAF content"
+else
+  echo "==> DASH: skipped (no sample-cmaf origin — package with packager.container=cmaf to enable)"
+fi
+
 echo "==> PASS: real stack conditioned a decodable ad segment end-to-end"
