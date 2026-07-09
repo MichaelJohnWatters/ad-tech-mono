@@ -33,6 +33,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dash"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -169,6 +170,7 @@ func main() {
 	mux.Handle(routes.Metrics, metrics.Handler())
 	mux.HandleFunc(routes.SSAIContent, serveContentManifest)
 	mux.HandleFunc(routes.SSAIManifest, deps.manifestHandler)
+	mux.HandleFunc(routes.SSAIManifestMPD, deps.manifestHandler) // DASH (same pipeline, MPD output)
 	mux.HandleFunc(routes.SSAISegment, deps.segmentHandler)
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSAI)(metrics.Wrap(middleware.CORS(mux)))
@@ -324,6 +326,46 @@ func (d *stitcherDeps) originManifest(ctx context.Context, r *http.Request, chan
 	return string(body), origin
 }
 
+// dashRequested reports whether the client wants a DASH MPD (vs an HLS playlist)
+// — either the .mpd path or ?format=mpd.
+func dashRequested(r *http.Request) bool {
+	return strings.HasSuffix(r.URL.Path, ".mpd") || r.URL.Query().Get("format") == "mpd"
+}
+
+// readManifest reads an origin/variant manifest by URL: from the object store for
+// a /v1/creatives URL (the in-cluster stitcher can't reach the gateway host),
+// else over HTTP. Returns ("", false) on any failure.
+func (d *stitcherDeps) readManifest(ctx context.Context, u string, reqLog *slog.Logger) (string, bool) {
+	if key := creativesStoreKey(u); key != "" && d.store != nil {
+		rc, err := d.store.Get(ctx, d.bucket, key)
+		if err == nil {
+			defer rc.Close()
+			if b, err := io.ReadAll(rc); err == nil {
+				return string(b), true
+			}
+		}
+		reqLog.Warn("readManifest store read failed", "key", key, "error", err)
+		return "", false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
 // creativesStoreKey extracts the object key from a /v1/creatives/<key> URL, or ""
 // if the URL isn't a creatives-proxy URL (then it's HTTP-fetched).
 func creativesStoreKey(u string) string {
@@ -346,12 +388,19 @@ func resolveContentURIs(m *ssai.Manifest, originURL string) {
 	if err != nil {
 		return
 	}
-	for i := range m.Segments {
-		u, err := url.Parse(m.Segments[i].URI)
-		if err != nil || u.IsAbs() {
-			continue
+	abs := func(ref string) string {
+		if ref == "" {
+			return ref
 		}
-		m.Segments[i].URI = base.ResolveReference(u).String()
+		u, err := url.Parse(ref)
+		if err != nil || u.IsAbs() {
+			return ref
+		}
+		return base.ResolveReference(u).String()
+	}
+	for i := range m.Segments {
+		m.Segments[i].URI = abs(m.Segments[i].URI)
+		m.Segments[i].Map = abs(m.Segments[i].Map) // fMP4 init (needed for DASH + CMAF-HLS)
 	}
 }
 
@@ -478,13 +527,33 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
 
 	channel := channelFor(r)
+	wantDASH := dashRequested(r)
 	manifest, originURL := d.originManifest(ctx, r, channel, reqLog)
+
+	// DASH is single-rung: if handed an ABR master, resolve the top variant's
+	// media playlist and remember its rung so ads condition to match.
+	dashRung := 0
+	if wantDASH && ssai.IsMaster(manifest) {
+		if vs := ssai.ParseMaster(manifest); len(vs) > 0 {
+			top := vs[len(vs)-1]
+			topAbs := top.URI
+			if base, e := url.Parse(originURL); e == nil {
+				if u, e2 := url.Parse(top.URI); e2 == nil {
+					topAbs = base.ResolveReference(u).String()
+				}
+			}
+			if txt, ok := d.readManifest(ctx, topAbs, reqLog); ok {
+				manifest, originURL, dashRung = txt, topAbs, top.Height
+			}
+		}
+	}
 
 	// ABR: if the origin is a master playlist, rewrite each variant URI to point
 	// back at this stitcher (so every rung is stitched independently, with the
 	// ad conditioned to that rung's profile) and re-serve the master. Audio is
-	// single-rendition — no ladder — so this only applies to video.
-	if channel == constants.ChannelVideo && ssai.IsMaster(manifest) {
+	// single-rendition — no ladder — so this only applies to video. DASH doesn't
+	// use the HLS master (it resolves a single rung above).
+	if !wantDASH && channel == constants.ChannelVideo && ssai.IsMaster(manifest) {
 		d.serveMaster(w, r, manifest, originURL, reqLog)
 		return
 	}
@@ -506,10 +575,24 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Condition ads to the audio-only profile for audio, else the video rung the
-	// player is watching.
+	// player is watching. DASH needs CMAF (fMP4) so ad segments are byte-
+	// compatible with CMAF content.
 	adProfile := d.profileForRung(r)
 	if channel == constants.ChannelAudio {
 		adProfile = transcode.DefaultAudioProfile()
+	}
+	if wantDASH {
+		if dashRung > 0 && d.ladderFn != nil {
+			for _, p := range d.ladderFn() {
+				if p.Height == dashRung {
+					adProfile = p
+					break
+				}
+			}
+		}
+		if channel != constants.ChannelAudio {
+			adProfile.Container = transcode.ContainerCMAF
+		}
 	}
 	filled := 0
 	m.Stitch(func(i int, span ssai.BreakSpan) []ssai.Segment {
@@ -521,11 +604,58 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	reqLog.Info("ssai manifest stitched",
-		"channel", channel, "breaks", len(m.Breaks()), "filled", filled, "ad_seconds", m.AdDuration())
+		"channel", channel, "format", formatLabel(wantDASH), "breaks", len(m.Breaks()),
+		"filled", filled, "ad_seconds", m.AdDuration())
 
+	if wantDASH {
+		d.serveDASH(w, m, channel, adProfile, reqLog)
+		return
+	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, m.Render())
+}
+
+func formatLabel(dash bool) string {
+	if dash {
+		return "dash"
+	}
+	return "hls"
+}
+
+// serveDASH renders the stitched manifest as a multi-period DASH MPD: each
+// contiguous run of content or ad segments (and each init change) becomes a
+// Period. Ad segments keep their /v1/ssai/seg beacon URLs (dash.js follows the
+// 302 to the conditioned .m4s), so server-side beaconing works identically to
+// HLS.
+func (d *stitcherDeps) serveDASH(w http.ResponseWriter, m *ssai.Manifest, channel string, p transcode.Profile, reqLog *slog.Logger) {
+	rep := dash.RepInfo{
+		ID:        p.RungName(),
+		Bandwidth: p.BandwidthBps(),
+		Codecs:    p.Codecs(),
+		Width:     p.Width,
+		Height:    p.Height,
+		MimeType:  "video/mp4",
+	}
+	if channel == constants.ChannelAudio {
+		rep.MimeType = "audio/mp4"
+		rep.AudioRate = p.ASampleRate
+		rep.Width, rep.Height = 0, 0
+	}
+	segs := make([]dash.Seg, 0, len(m.Segments))
+	for _, s := range m.Segments {
+		segs = append(segs, dash.Seg{Media: s.URI, Init: s.Map, Duration: s.Duration, Ad: s.Ad})
+	}
+	mpd := dash.AssembleVOD(rep, segs)
+	xmlDoc, err := mpd.XML()
+	if err != nil {
+		http.Error(w, "mpd build failed", http.StatusInternalServerError)
+		reqLog.Error("dash mpd marshal failed", "error", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/dash+xml")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, xmlDoc)
 }
 
 // fillBreak builds the ad segments for one avail. It runs back-to-back auctions
