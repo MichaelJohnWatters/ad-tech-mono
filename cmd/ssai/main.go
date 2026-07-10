@@ -524,6 +524,13 @@ type sspWinner struct {
 	Height           int     `json:"height"`
 	DurationSeconds  int     `json:"duration_seconds"`
 	MediaURL         string  `json:"media_url"`
+
+	// podTrace is the fresh 32-hex trace the stitcher mints for this pod ad and
+	// forces onto the auction (not decoded from the SSP JSON). Each pod ad gets a
+	// distinct trace so its win/impression/quartiles don't collide; in multi-rung
+	// DASH it must stay identical across rungs for the same ad, so it rides the
+	// winner rather than being re-derived per rung. See fillBreak / podWinners.
+	podTrace string
 }
 
 // manifestHandler is the player-facing endpoint. It parses the content
@@ -586,10 +593,12 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	resolveContentURIs(m, originURL)
 
 	// Session id lets the segment beacons correlate back to this stitch. Derive
-	// from the trace so all beacons share the auction trace where possible.
+	// from the trace so all beacons share the auction trace where possible; when
+	// the request arrived without a trace, mint a fresh 32-hex one rather than a
+	// non-conforming ssai-<ts> string (keeps the trace_id unification intact).
 	session := traceID
 	if session == "" {
-		session = fmt.Sprintf("ssai-%d", time.Now().UnixMilli())
+		session, _ = tracing.NewClientTraceparent()
 	}
 
 	// Condition ads to the audio-only profile for audio, else the video rung the
@@ -701,7 +710,15 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, channel s
 		if remaining < 1.0 {
 			break // avail full
 		}
-		winner := d.runAuction(ctx, r, channel, remaining, reqLog)
+		// Each pod ad is its own auction → its own win, impression and quartile
+		// unit, so it MUST carry a distinct trace. Mint a fresh 32-hex trace and
+		// force it as the auction's outbound traceparent (the SSP adopts an inbound
+		// trace for its win event) AND use it for this ad's beacons. Without this
+		// every pod auction rides the shared manifest-request trace: the SSP returns
+		// one trace for all pod ads and the tracker's ("impression", trace) dedup
+		// then drops all but the first ad's impression.
+		adTrace, traceparent := tracing.NewClientTraceparent()
+		winner := d.runAuction(ctx, r, channel, remaining, traceparent, reqLog)
 		if winner == nil || winner.NoBid || winner.MediaURL == "" {
 			break // no more demand for this avail
 		}
@@ -710,10 +727,6 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, channel s
 		}
 		seen[winner.CreativeID] = true
 
-		adTrace := winner.TraceID
-		if adTrace == "" {
-			adTrace = fmt.Sprintf("%s-b%d-p%d", session, breakIdx, ads)
-		}
 		// Build the same MacroContext the publisher-adserver uses, so every beacon
 		// SSAI fires is the identical HMAC-signed URL the tracker expects (passes
 		// signature_validation, unlike a hand-rolled sig).
@@ -889,8 +902,9 @@ func (d *stitcherDeps) slateSegments(ctx context.Context, adProfile transcode.Pr
 
 // runAuction calls the SSP for the given channel (audio|video), forwarding the
 // viewer's signals so the ad is targeted to the real request (not a hardcoded
-// default).
-func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel string, breakDur float64, reqLog *slog.Logger) *sspWinner {
+// default). traceparent is this pod ad's distinct W3C trace, set as the outbound
+// header so the SSP's win event uses it (each pod ad is its own trace unit).
+func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel string, breakDur float64, traceparent string, reqLog *slog.Logger) *sspWinner {
 	q := url.Values{}
 	for k, v := range r.URL.Query() {
 		q[k] = append([]string(nil), v...)
@@ -922,7 +936,11 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel 
 		reqLog.Warn("ssai auction request build failed", "error", err)
 		return nil
 	}
-	tracing.InjectHTTP(ctx, req)
+	// Force this pod ad's distinct trace as the outbound traceparent so the SSP
+	// adopts it for the win event. Deliberately NOT tracing.InjectHTTP(ctx, …):
+	// that would propagate the shared manifest-request trace and collide every
+	// pod ad onto one trace (see fillBreak).
+	req.Header.Set("traceparent", traceparent)
 	resp, err := d.client.Do(req)
 	if err != nil {
 		reqLog.Warn("ssai auction call failed", "error", err)
