@@ -49,11 +49,13 @@ func TestAssembleVODPeriods(t *testing.T) {
 }
 
 func TestAssembleVODQuartileEvents(t *testing.T) {
-	// A 12s ad → an EventStream with the 5 quartile marks at 0/3/6/9/12s.
+	// A 10s ad → an EventStream (ms timescale) with the 5 quartile marks at
+	// 0/2.5/5/7.5/10s = 0/2500/5000/7500/10000ms. The 2.5s/7.5s marks exercise the
+	// sub-second precision that the old whole-second timescale truncated to 2s/7s.
 	segs := []Seg{
 		{Media: "c0.m4s", Init: "cinit.mp4", Duration: 6},
 		{Media: "ad0.m4s", Init: "ainit.mp4", Duration: 6, Ad: true},
-		{Media: "ad1.m4s", Duration: 6, Ad: true},
+		{Media: "ad1.m4s", Duration: 4, Ad: true},
 	}
 	m := AssembleVOD(RepInfo{ID: "360p", Bandwidth: 928000, MimeType: "video/mp4"}, segs, true)
 
@@ -69,13 +71,17 @@ func TestAssembleVODQuartileEvents(t *testing.T) {
 	if es.SchemeIDURI != QuartileScheme {
 		t.Errorf("scheme = %q, want %q", es.SchemeIDURI, QuartileScheme)
 	}
+	// Millisecond timescale so sub-second quartiles land exactly.
+	if es.Timescale != 1000 {
+		t.Errorf("EventStream timescale = %d, want 1000 (ms)", es.Timescale)
+	}
 	if len(es.Events) != 5 {
 		t.Fatalf("want 5 quartile events, got %d", len(es.Events))
 	}
 	want := []struct {
 		name string
 		t    int
-	}{{"start", 0}, {"firstQuartile", 3}, {"midpoint", 6}, {"thirdQuartile", 9}, {"complete", 12}}
+	}{{"start", 0}, {"firstQuartile", 2500}, {"midpoint", 5000}, {"thirdQuartile", 7500}, {"complete", 10000}}
 	for i, w := range want {
 		if es.Events[i].Body != w.name || es.Events[i].PresentationTime != w.t {
 			t.Errorf("event %d = %s@%d, want %s@%d", i, es.Events[i].Body, es.Events[i].PresentationTime, w.name, w.t)

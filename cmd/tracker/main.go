@@ -442,32 +442,52 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Video/Audio events. Publish through the same eventPublisher used by
-	// impression/click — bus may be nil in dev-no-NATS mode, in which case
-	// the publish is a no-op and we still return 204 so the player keeps
-	// firing pings.
+	// Shared gate for the /v1/t/video + /v1/t/audio beacons: the same
+	// sig → expiry → fraud → dedup checks the impression pixel runs, with the
+	// same live-tunable strictness knobs. See mediagate.go.
+	mediaGate := mediaEventGate{
+		signingKey:    signingKey,
+		sigValidation: func() bool { return cfg.GetBool("tracker.signature_validation", false) },
+		expValidation: func() bool { return cfg.GetBool("tracker.exp_validation", true) },
+		fraud:         fraudChecker,
+		dedup:         dedup,
+		publisher:     publisher,
+	}
+
+	// Video/Audio events. Gated identically to the impression pixel (sig →
+	// fraud → dedup). Publish through the same eventPublisher — bus may be nil
+	// in dev-no-NATS mode, in which case the publish is a no-op and we still
+	// return 204 so the player keeps firing pings.
 	mux.HandleFunc(routes.TrackerVideo, func(w http.ResponseWriter, r *http.Request) {
 		traceID := r.URL.Query().Get("tid")
 		eventType := r.URL.Query().Get("event")
 		ctx := logger.WithTraceID(r.Context(), traceID)
-		logger.WithContext(log, ctx).Info("video_event", "event_type", eventType)
+		reqLog := logger.WithContext(log, ctx)
+		reqLog.Info("video_event", "event_type", eventType)
+		if !mediaGate.allow(w, r, "video", eventType, traceID, reqLog) {
+			return
+		}
 		go publisher.publishVideo(context.WithoutCancel(ctx), events.VideoEvent{
 			TraceID:   traceID,
 			EventType: eventType,
 			Timestamp: time.Now(),
-		}, log)
+		}, reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
 		traceID := r.URL.Query().Get("tid")
 		eventType := r.URL.Query().Get("event")
 		ctx := logger.WithTraceID(r.Context(), traceID)
-		logger.WithContext(log, ctx).Info("audio_event", "event_type", eventType)
+		reqLog := logger.WithContext(log, ctx)
+		reqLog.Info("audio_event", "event_type", eventType)
+		if !mediaGate.allow(w, r, "audio", eventType, traceID, reqLog) {
+			return
+		}
 		go publisher.publishAudio(context.WithoutCancel(ctx), events.AudioEvent{
 			TraceID:   traceID,
 			EventType: eventType,
 			Timestamp: time.Now(),
-		}, log)
+		}, reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
