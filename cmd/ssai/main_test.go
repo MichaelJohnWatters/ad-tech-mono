@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -340,6 +341,121 @@ func TestAdPodFillsMultipleAds(t *testing.T) {
 	}
 }
 
+// TestPodAdsGetDistinctTraces proves the ad-pod beacon trace-collision fix: each
+// pod auction is forced onto its OWN fresh 32-hex trace (the SSP adopts an inbound
+// trace as the win event's trace) and that same trace is used for the ad's
+// beacons. Even when the SSP echoes ONE shared trace for every pod ad — the exact
+// shape that used to collide — the stitcher mints distinct traces, so the
+// tracker's ("impression", trace) dedup can't collapse a pod of distinct ads into
+// a single impression.
+func TestPodAdsGetDistinctTraces(t *testing.T) {
+	var mu sync.Mutex
+	var impTraces []string
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/v1/t/imp") {
+			mu.Lock()
+			impTraces = append(impTraces, r.URL.Query().Get("tid"))
+			mu.Unlock()
+		}
+		w.WriteHeader(200)
+	}))
+	defer tracker.Close()
+
+	var mu2 sync.Mutex
+	var auctionTraceparents []string
+	var call int
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu2.Lock()
+		auctionTraceparents = append(auctionTraceparents, r.Header.Get("traceparent"))
+		call++
+		n := call
+		mu2.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// Distinct creatives (so the pod fills more than one ad) but ONE shared
+		// TraceID for every ad — the exact shape that used to collide.
+		_ = json.NewEncoder(w).Encode(sspWinner{
+			TraceID: "shared-collision-trace", CreativeID: fmt.Sprintf("cr-%d", n),
+			CampaignID: fmt.Sprintf("li-%d", n), PlacementID: "pl-sim-video",
+			PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4",
+		})
+	}))
+	defer ssp.Close()
+
+	transcoder := fakeTranscoder(6, 6, 3) // each ad conditions to 15s
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn:   func() string { return "pl-sim-video" },
+		transcoderURL: transcoder.URL,
+		maxPodAdsFn:   func() int { return 4 },
+		client:        &http.Client{},
+	}
+
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	replaySegments(d, rec.Body.String())
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Break 0 (30s avail) → two 15s ads, break 1 (15s avail) → one → 3 impressions.
+	if len(impTraces) != 3 {
+		t.Fatalf("want 3 impressions across the pods, got %d (%v)", len(impTraces), impTraces)
+	}
+	seen := map[string]bool{}
+	for _, tid := range impTraces {
+		if tid == "shared-collision-trace" {
+			t.Errorf("impression used the SSP's shared trace — collision not fixed: %q", tid)
+		}
+		if !isHex32(tid) {
+			t.Errorf("impression trace not a 32-hex id: %q", tid)
+		}
+		if seen[tid] {
+			t.Errorf("duplicate impression trace %q — pod ads collided", tid)
+		}
+		seen[tid] = true
+	}
+
+	// Each ad's distinct trace must also be what its auction was forced onto, so
+	// the SSP's win event and the beacon share the ad's trace (win↔impression
+	// correlation). Every impression trace must map back to an auction traceparent.
+	mu2.Lock()
+	defer mu2.Unlock()
+	tpTraces := map[string]bool{}
+	for _, tp := range auctionTraceparents {
+		tid := traceIDFromTraceparent(tp)
+		if !isHex32(tid) {
+			t.Errorf("auction call missing a valid traceparent: %q", tp)
+			continue
+		}
+		tpTraces[tid] = true
+	}
+	for tid := range seen {
+		if !tpTraces[tid] {
+			t.Errorf("impression trace %q was never sent as an auction traceparent", tid)
+		}
+	}
+}
+
+// isHex32 reports whether s is a 32-char lowercase-hex string (a W3C trace id).
+func isHex32(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// traceIDFromTraceparent extracts the 32-hex trace id from a W3C traceparent
+// header (00-<trace>-<span>-<flags>), or "" if malformed.
+func traceIDFromTraceparent(tp string) string {
+	parts := strings.Split(tp, "-")
+	if len(parts) != 4 {
+		return ""
+	}
+	return parts[1]
+}
+
 // TestSlateFillsUnfilledBreak asserts that when no ad bids, a configured slate
 // clip is spliced into the avail (with no beacons) rather than dropping to
 // content.
@@ -672,6 +788,87 @@ func TestMultiRungDASH(t *testing.T) {
 	}
 	if adPeriods == 0 {
 		t.Errorf("no ad periods in multi-rung MPD:\n%s", rec.Body.String())
+	}
+}
+
+// TestMultiRungDASHFallbackOnMisalignedRungs asserts the structural-equality
+// gate: when the ABR variants are differently segmented (one rung has an extra
+// content segment), the rungs don't line up, so multi-rung assembly is abandoned
+// and the handler falls back to the proven single-rung DASH path — a valid MPD
+// with ONE Representation per period, and no panic from a misaligned assembly.
+func TestMultiRungDASHFallbackOnMisalignedRungs(t *testing.T) {
+	// 360p (rung 0) has 3 content segments around a mid-roll; 480p has 4 — a
+	// differently-segmented origin variant, the exact misalignment the gate guards.
+	pl360 := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:6.0,\nseg_0.m4s\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nseg_2.m4s\n#EXT-X-ENDLIST\n"
+	pl480 := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:6.0,\nseg_0.m4s\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nseg_2.m4s\n#EXTINF:6.0,\nseg_3.m4s\n#EXT-X-ENDLIST\n"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "master.m3u8"):
+			io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=928000,RESOLUTION=640x360\n360p/index.m3u8\n"+
+				"#EXT-X-STREAM-INF:BANDWIDTH=1528000,RESOLUTION=854x480\n480p/index.m3u8\n")
+		case strings.Contains(r.URL.Path, "480p"):
+			io.WriteString(w, pl480)
+		default:
+			io.WriteString(w, pl360)
+		}
+	}))
+	defer origin.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t-mis", CreativeID: "cr-v", CampaignID: "li",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4"})
+	}))
+	defer ssp.Close()
+
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(200)
+			return
+		}
+		var req struct {
+			Profile transcode.Profile `json:"profile"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		h := req.Profile.Height
+		out := transcode.Conditioned{Cached: true, InitURI: fmt.Sprintf("http://cdn.local/cond/%dp/init.mp4", h)}
+		out.Segments = []transcode.CondSegment{{URI: fmt.Sprintf("http://cdn.local/cond/%dp/seg_0.m4s", h), Duration: 6}}
+		out.Duration = 6
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		ladderFn:    func() []transcode.Profile { return transcode.DefaultLadder() },
+		multiRungFn: func() bool { return true },
+	}
+	u := "/v1/ssai/manifest.mpd?format=mpd&origin=" + url.QueryEscape(origin.URL+"/hls/master.m3u8")
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", u, nil))
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/dash+xml" {
+		t.Fatalf("content-type = %q, want application/dash+xml (single-rung fallback)", ct)
+	}
+	mpd, err := dash.ParseMPD(rec.Body.String())
+	if err != nil {
+		t.Fatalf("MPD parse: %v\n%s", err, rec.Body.String())
+	}
+	if len(mpd.Periods) == 0 {
+		t.Fatalf("no periods in fallback MPD:\n%s", rec.Body.String())
+	}
+	// Single-rung fallback → exactly one Representation per period (multi-rung
+	// would have two). Proves the gate abandoned the misaligned multi-rung path.
+	for _, p := range mpd.Periods {
+		if n := len(p.AdaptationSets[0].Representations); n != 1 {
+			t.Errorf("period %s has %d representations, want 1 (single-rung fallback)", p.ID, n)
+		}
 	}
 }
 

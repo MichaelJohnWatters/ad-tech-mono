@@ -338,13 +338,25 @@ func (m *Manifest) closeScteBreaks(starts []int) {
 		}
 		planned := m.Segments[start].CueOut
 		var acc float64
+		reached := false
 		for j := start; j < len(m.Segments); j++ {
 			acc += m.Segments[j].Duration
 			if acc >= planned {
+				reached = true
 				if j+1 < len(m.Segments) {
 					m.Segments[j+1].CueIn = true
 				}
 				break
+			}
+		}
+		// Planned length exceeds the remaining content: the loop ran off the end
+		// without ever reaching `planned`, so no CUE-IN was set. Left as-is, Breaks()
+		// would treat the CUE-OUT as unterminated and swallow every trailing segment
+		// into the avail. Cap the break at the final segment so it stays bounded and
+		// the last content segment survives.
+		if !reached {
+			if last := len(m.Segments) - 1; last > start {
+				m.Segments[last].CueIn = true
 			}
 		}
 	}

@@ -65,9 +65,12 @@ func contentVersion(mediaURL string) string {
 	if mediaURL == "" {
 		return ""
 	}
-	h := fnv.New32a()
+	// FNV-64 (not 32): a 32-bit space collides at ~1-in-a-few-tens-of-thousands
+	// by the birthday bound, and a collision here serves a STALE conditioned ad
+	// under a reused creative id. 64 bits shrinks that window to negligible.
+	h := fnv.New64a()
 	_, _ = io.WriteString(h, mediaURL)
-	return strconv.FormatUint(uint64(h.Sum32()), 36)
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // Condition returns the conditioned segments for (creativeID, mediaURL, profile),
