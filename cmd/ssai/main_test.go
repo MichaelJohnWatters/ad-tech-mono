@@ -791,6 +791,87 @@ func TestMultiRungDASH(t *testing.T) {
 	}
 }
 
+// TestMultiRungDASHFallbackOnMisalignedRungs asserts the structural-equality
+// gate: when the ABR variants are differently segmented (one rung has an extra
+// content segment), the rungs don't line up, so multi-rung assembly is abandoned
+// and the handler falls back to the proven single-rung DASH path — a valid MPD
+// with ONE Representation per period, and no panic from a misaligned assembly.
+func TestMultiRungDASHFallbackOnMisalignedRungs(t *testing.T) {
+	// 360p (rung 0) has 3 content segments around a mid-roll; 480p has 4 — a
+	// differently-segmented origin variant, the exact misalignment the gate guards.
+	pl360 := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:6.0,\nseg_0.m4s\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nseg_2.m4s\n#EXT-X-ENDLIST\n"
+	pl480 := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:6.0,\nseg_0.m4s\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nseg_2.m4s\n#EXTINF:6.0,\nseg_3.m4s\n#EXT-X-ENDLIST\n"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "master.m3u8"):
+			io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=928000,RESOLUTION=640x360\n360p/index.m3u8\n"+
+				"#EXT-X-STREAM-INF:BANDWIDTH=1528000,RESOLUTION=854x480\n480p/index.m3u8\n")
+		case strings.Contains(r.URL.Path, "480p"):
+			io.WriteString(w, pl480)
+		default:
+			io.WriteString(w, pl360)
+		}
+	}))
+	defer origin.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t-mis", CreativeID: "cr-v", CampaignID: "li",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4"})
+	}))
+	defer ssp.Close()
+
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(200)
+			return
+		}
+		var req struct {
+			Profile transcode.Profile `json:"profile"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		h := req.Profile.Height
+		out := transcode.Conditioned{Cached: true, InitURI: fmt.Sprintf("http://cdn.local/cond/%dp/init.mp4", h)}
+		out.Segments = []transcode.CondSegment{{URI: fmt.Sprintf("http://cdn.local/cond/%dp/seg_0.m4s", h), Duration: 6}}
+		out.Duration = 6
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		ladderFn:    func() []transcode.Profile { return transcode.DefaultLadder() },
+		multiRungFn: func() bool { return true },
+	}
+	u := "/v1/ssai/manifest.mpd?format=mpd&origin=" + url.QueryEscape(origin.URL+"/hls/master.m3u8")
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", u, nil))
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/dash+xml" {
+		t.Fatalf("content-type = %q, want application/dash+xml (single-rung fallback)", ct)
+	}
+	mpd, err := dash.ParseMPD(rec.Body.String())
+	if err != nil {
+		t.Fatalf("MPD parse: %v\n%s", err, rec.Body.String())
+	}
+	if len(mpd.Periods) == 0 {
+		t.Fatalf("no periods in fallback MPD:\n%s", rec.Body.String())
+	}
+	// Single-rung fallback → exactly one Representation per period (multi-rung
+	// would have two). Proves the gate abandoned the misaligned multi-rung path.
+	for _, p := range mpd.Periods {
+		if n := len(p.AdaptationSets[0].Representations); n != 1 {
+			t.Errorf("period %s has %d representations, want 1 (single-rung fallback)", p.ID, n)
+		}
+	}
+}
+
 // TestOMIDDelivery asserts OMID verification-resource delivery via the manifest
 // (SSAI has no VAST): HLS DATERANGE X-OMID-RESOURCE, independent of quartile
 // timed metadata.
