@@ -6,9 +6,9 @@ merged to `main`). Two findings were independently verified against the code;
 the rest are review findings with the confidence noted. Execute on branch
 `fix/ssai-review-fixes` (this doc is its first commit).
 
-Status: **Phase 1 (the two HIGH bugs) DONE 2026-07-10** — units green (67 pkgs)
-+ full e2e suite green against the live stack. Phases 2 & 3 outstanding. Tick
-items as they land.
+Status: **ALL 8 findings DONE 2026-07-10** — units green (67 pkgs) + full e2e
+suite green against the live stack (verified after Phase 1; Phases 2-3 are
+unit-covered and build-clean). Nothing outstanding.
 
 ## How to verify fixes (READ FIRST — the e2e environment has gotchas)
 - Unit tests: `go test ./...` (67 pkgs green as of the merge).
@@ -83,7 +83,7 @@ key per-ad).
 
 ## Phase 2 — correctness edges (MEDIUM, independent)
 
-### [ ] #3 Multi-rung DASH has no structural-equality gate  · effort S
+### [x] #3 Multi-rung DASH has no structural-equality gate  · effort S  · DONE (db43e52)
 `AssembleMultiRung` (`pkg/dash/multirung.go`) assumes every rung has identical
 period structure; `serveMultiRungDASH` (`cmd/ssai/multirung.go`) only guarantees
 SAME ad decisions, not equal CONTENT-segment counts (each rung reads its own
@@ -94,7 +94,7 @@ matching per-index `Ad`/`Duration`/init-change positions; else `return false` �
 single-rung fallback. Default-off feature, so low blast radius. Test: mismatched
 rungs → fallback, no panic.
 
-### [ ] #4 `closeScteBreaks` unclosed break when planned > remaining content · S
+### [x] #4 `closeScteBreaks` unclosed break when planned > remaining content · S  · DONE (44ed12a)
 `pkg/ssai/manifest.go` — if the cumulative loop reaches playlist end without
 hitting `planned`, no CueIn is set → `Breaks()` treats the CUE-OUT as unterminated
 and swallows every remaining segment. **Fix:** close at the last segment (cap the
@@ -105,17 +105,17 @@ planned > content → closes at end.
 
 ## Phase 3 — robustness (LOW, quick + safe)
 
-- [ ] **#5** `segmentURL` (`cmd/ssai/main.go`): use
+- [x] **#5** DONE (61b0bae) — `segmentURL` (`cmd/ssai/main.go`): use
   `strings.TrimRight(d.publicURL,"/") + routes.SSAISegment` (siblings already do;
   a trailing-slash `ssai.public_url` yields `//v1/ssai/seg`). Trivial.
-- [ ] **#6** `pkg/id3.synchsafe`/`Encode`: guard payload > `0x0FFFFFFF` (28 bits)
+- [x] **#6** DONE (67c6fc4) — `pkg/id3.synchsafe`/`Encode`: guard payload > `0x0FFFFFFF` (28 bits)
   — currently silently truncates the size field → corrupt tag. Return error or
   panic with a clear message. Tiny in the SSAI path but it's a public encoder.
-- [ ] **#7** `contentVersion` (`pkg/transcode/conditioner.go`): FNV-32 → **FNV-64**
+- [x] **#7** DONE (8e2691e) — `contentVersion` (`pkg/transcode/conditioner.go`): FNV-32 → **FNV-64**
   (`fnv.New64a`) to shrink the stale-serve collision window. Invalidates existing
   conditioned-ad cache paths once (re-conditions; acceptable). Update
   `TestConditionerCacheHit` (uses `cacheBase`).
-- [ ] **#8** DASH `quartileStream` (`pkg/dash/assemble.go`): `Timescale=1000`,
+- [x] **#8** DONE (6933634) — DASH `quartileStream` (`pkg/dash/assemble.go`): `Timescale=1000`,
   `presentationTime=int(frac*dur*1000)` — int-second truncation makes sub-second
   quartiles disagree with the HLS `X-QUARTILES` (`ftoa`) precision. Update
   `TestAssembleVODQuartileEvents`.
