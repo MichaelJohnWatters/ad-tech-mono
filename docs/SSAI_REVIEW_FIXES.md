@@ -6,7 +6,9 @@ merged to `main`). Two findings were independently verified against the code;
 the rest are review findings with the confidence noted. Execute on branch
 `fix/ssai-review-fixes` (this doc is its first commit).
 
-Status: **planned 2026-07-10, not started.** Tick items as they land.
+Status: **Phase 1 (the two HIGH bugs) DONE 2026-07-10** — units green (67 pkgs)
++ full e2e suite green against the live stack. Phases 2 & 3 outstanding. Tick
+items as they land.
 
 ## How to verify fixes (READ FIRST — the e2e environment has gotchas)
 - Unit tests: `go test ./...` (67 pkgs green as of the merge).
@@ -24,7 +26,7 @@ Status: **planned 2026-07-10, not started.** Tick items as they land.
 
 ## Phase 1 — the real bugs (HIGH, do first; #1 and #2 interlock)
 
-### [ ] #1 Ad-pod beacon trace collision  · effort M
+### [x] #1 Ad-pod beacon trace collision  · effort M  · DONE 2026-07-10 (94f439b)
 **Root cause (verified):** `fillBreak` (`cmd/ssai/main.go`) runs every pod
 auction on the SAME request context → `tracing.InjectHTTP` sends the same
 traceparent → the SSP (`cmd/ssp/main.go:346`, `TraceIDFromContext`, only mints
@@ -56,7 +58,7 @@ Each pod ad becomes its own win↔impression↔quartile unit. No SSP change need
   (`ssai-{ts}`, `session-bN-pM`) already violate the 32-hex convention — fix those
   too while here.
 
-### [ ] #2 `/v1/t/video` + `/v1/t/audio` lack HMAC / fraud / dedup  · effort M
+### [x] #2 `/v1/t/video` + `/v1/t/audio` lack HMAC / fraud / dedup  · effort M  · DONE 2026-07-10 (54b80c7)
 **Root cause (verified):** those handlers (`cmd/tracker/main.go:449-472`) just
 read `tid`/`event`, log, `go publishVideo/publishAudio`, 204 — NO
 `ValidateSignature`, NO fraud check, NO `dedup.FirstSeen`, unlike imp/click/conv/
