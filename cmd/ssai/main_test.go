@@ -592,6 +592,46 @@ func TestHLSDateRange(t *testing.T) {
 	}
 }
 
+// TestOMIDDelivery asserts OMID verification-resource delivery via the manifest
+// (SSAI has no VAST): HLS DATERANGE X-OMID-RESOURCE, independent of quartile
+// timed metadata.
+func TestOMIDDelivery(t *testing.T) {
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer tracker.Close()
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t-om", CreativeID: "cr-v", CampaignID: "li",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4"})
+	}))
+	defer ssp.Close()
+	transcoder := fakeTranscoder(6, 6)
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		timedMetadataFn: func() bool { return false }, // OMID must work without quartile metadata
+		omidFn:          func() (string, string) { return "acme-om", "https://meas.adtech.local/omweb.js" },
+	}
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+
+	if !strings.Contains(out, "#EXT-X-DATERANGE:") || !strings.Contains(out, `X-OMID-RESOURCE="https://meas.adtech.local/omweb.js"`) {
+		t.Errorf("OMID resource not in HLS DATERANGE:\n%s", out)
+	}
+	if !strings.Contains(out, `X-OMID-VENDOR="acme-om"`) {
+		t.Errorf("OMID vendor missing:\n%s", out)
+	}
+	if strings.Contains(out, "X-QUARTILES=") {
+		t.Errorf("quartile metadata leaked when timed_metadata off:\n%s", out)
+	}
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Errorf("manifest invalid: %v", err)
+	}
+}
+
 // TestDASHManifest asserts the DASH path: ?format=mpd runs the same stitch
 // pipeline but renders a multi-period MPD — content periods + ad periods, the ad
 // period referencing the conditioned CMAF init + segments.
@@ -629,6 +669,7 @@ func TestDASHManifest(t *testing.T) {
 		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
 		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
 		timedMetadataFn: func() bool { return true }, // emit quartile EventStreams
+		omidFn:          func() (string, string) { return "acme-om", "https://meas.adtech.local/omweb.js" },
 	}
 
 	rec := httptest.NewRecorder()
@@ -660,12 +701,24 @@ func TestDASHManifest(t *testing.T) {
 		if len(sl.SegmentURLs) == 0 || !strings.Contains(sl.SegmentURLs[0].Media, "/v1/ssai/seg") {
 			t.Errorf("ad period segment not a stitcher beacon URL: %+v", sl.SegmentURLs)
 		}
-		// timed_metadata on → ad period carries a quartile EventStream.
-		if len(p.EventStreams) != 1 || p.EventStreams[0].SchemeIDURI != dash.QuartileScheme {
-			t.Errorf("ad period missing quartile EventStream: %+v", p.EventStreams)
+		// timed_metadata on → quartile EventStream; omid on → OMID EventStream.
+		var quartile, omid bool
+		for _, es := range p.EventStreams {
+			switch es.SchemeIDURI {
+			case dash.QuartileScheme:
+				quartile = true
+				if len(es.Events) != 5 {
+					t.Errorf("want 5 quartile events, got %d", len(es.Events))
+				}
+			case dash.OMIDScheme:
+				omid = true
+				if len(es.Events) == 0 || !strings.Contains(es.Events[0].Body, "omweb.js") {
+					t.Errorf("OMID EventStream missing resource: %+v", es.Events)
+				}
+			}
 		}
-		if len(p.EventStreams[0].Events) != 5 {
-			t.Errorf("want 5 quartile events, got %d", len(p.EventStreams[0].Events))
+		if !quartile || !omid {
+			t.Errorf("ad period missing EventStreams (quartile=%v omid=%v): %+v", quartile, omid, p.EventStreams)
 		}
 	}
 	if adPeriods == 0 {

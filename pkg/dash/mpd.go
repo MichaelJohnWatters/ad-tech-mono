@@ -57,6 +57,29 @@ type Event struct {
 // events emitted by the SSAI stitcher.
 const QuartileScheme = "urn:adtech:ssai:quartile"
 
+// OMIDScheme is the schemeIdUri carrying an Open Measurement verification
+// resource for a stitched ad. SSAI has no VAST to hang <AdVerifications> off, so
+// the resource is delivered via the manifest; an OM-SDK player registers it for
+// the ad session (client-side viewability/verification).
+const OMIDScheme = "urn:adtech:ssai:omid"
+
+// AddOMID attaches an OMID verification EventStream (vendor + JS resource URL) to
+// every ad Period. No-op when resourceURL is empty.
+func (m *MPD) AddOMID(vendor, resourceURL string) {
+	if resourceURL == "" {
+		return
+	}
+	for i := range m.Periods {
+		if !strings.HasPrefix(m.Periods[i].ID, "ad-") {
+			continue
+		}
+		m.Periods[i].EventStreams = append(m.Periods[i].EventStreams, EventStream{
+			SchemeIDURI: OMIDScheme, Value: vendor, Timescale: 1,
+			Events: []Event{{PresentationTime: 0, ID: "omid", Body: resourceURL}},
+		})
+	}
+}
+
 // AdaptationSet groups interchangeable Representations (e.g. all video rungs).
 type AdaptationSet struct {
 	MimeType         string           `xml:"mimeType,attr"`
