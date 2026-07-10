@@ -88,6 +88,61 @@ func TestParseSCTE35Daterange(t *testing.T) {
 	}
 }
 
+// scteOverrunManifest opens a DATERANGE SCTE-35 break whose PLANNED-DURATION
+// (3600s) far exceeds the remaining content and carries no SCTE35-IN — the case
+// where the close post-pass used to give up (never reaching `planned`) and leave
+// the break unterminated.
+const scteOverrunManifest = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXTINF:6.0,
+content_001.ts
+#EXT-X-DATERANGE:ID="ad1",START-DATE="2026-01-01T00:00:06Z",PLANNED-DURATION=3600,SCTE35-OUT=0xFC30
+#EXTINF:6.0,
+content_002.ts
+#EXTINF:6.0,
+content_003.ts
+#EXTINF:6.0,
+content_004.ts
+#EXT-X-ENDLIST
+`
+
+// TestSCTE35OverrunClosesAtEnd asserts the unclosed-break guard: when a DATERANGE
+// break's planned length exceeds the remaining content, the break is capped at
+// the final segment instead of running to the playlist end and swallowing every
+// trailing segment.
+func TestSCTE35OverrunClosesAtEnd(t *testing.T) {
+	m, err := ParseMedia(scteOverrunManifest)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// CUE-OUT opens on content_002 (index 1). With planned 3600s never reached,
+	// the break is capped: CUE-IN lands on the last segment (content_004, index 3),
+	// which survives as content.
+	if !m.Segments[3].CueIn {
+		t.Errorf("overrun break not capped at the final segment: %+v", m.Segments)
+	}
+	breaks := m.Breaks()
+	if len(breaks) != 1 {
+		t.Fatalf("want 1 break, got %d", len(breaks))
+	}
+	// End must be 3 (bounded), NOT 4 (= len, the unterminated-swallow the guard
+	// prevents).
+	if b := breaks[0]; b.Start != 1 || b.End != 3 {
+		t.Errorf("overrun break span = {%d %d}, want {1 3} (bounded, not run-to-end)", b.Start, b.End)
+	}
+
+	// End-to-end: the trailing content segment must survive the stitch (not be
+	// swallowed into the avail and replaced by the ad).
+	m.Stitch(func(i int, span BreakSpan) []Segment {
+		return []Segment{{Duration: 6, URI: "ad_0.ts"}}
+	})
+	out := m.Render()
+	if !strings.Contains(out, "content_004.ts") {
+		t.Errorf("trailing content segment swallowed by the overrun break:\n%s", out)
+	}
+}
+
 // fmp4Manifest is fMP4/CMAF content: it declares a content init via #EXT-X-MAP
 // and uses .m4s segments, with one mid-roll avail.
 const fmp4Manifest = `#EXTM3U
