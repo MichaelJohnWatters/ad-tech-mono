@@ -33,7 +33,8 @@ test-duckdb: ## Run the CGO DuckDB analytics tests (requires a C toolchain)
 test-clickhouse: ## Run the ClickHouse analytics integration tests (needs a live CH; tilt forwards :9010)
 	CLICKHOUSE_ADDR=$${CLICKHOUSE_ADDR:-127.0.0.1:9010} go test -tags=clickhouse_integration ./pkg/store/analytics/... -count=1 -run ClickHouse
 
-test-e2e: ## Run end-to-end tests on k3s
+test-e2e: ## Run end-to-end tests on k3s (pins reporting to the memory backend — ADR 0001)
+	./scripts/e2e-preflight.sh
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
 
 ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segment (needs tilt up + ffmpeg)
