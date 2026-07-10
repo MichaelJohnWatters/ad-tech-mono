@@ -164,8 +164,9 @@ func main() {
 		omidFn: func() (string, string) {
 			return cfg.Get("ssai.omid_vendor", "adtech-om"), cfg.Get("ssai.omid_verification_url", "")
 		},
-		metrics: newStitcherMetrics(metrics.Registry()),
-		client:  &http.Client{Timeout: 4 * time.Second},
+		multiRungFn: func() bool { return cfg.GetBool("ssai.dash_multi_rung", false) },
+		metrics:     newStitcherMetrics(metrics.Registry()),
+		client:      &http.Client{Timeout: 4 * time.Second},
 	}
 
 	mux := http.NewServeMux()
@@ -197,6 +198,7 @@ type stitcherDeps struct {
 	slateMediaFn    func() string              // slate media URL (to warm-condition the slate)
 	timedMetadataFn func() bool                // emit DASH quartile EventStreams (client-side timed beacons)
 	omidFn          func() (string, string)    // (vendor, verification resource URL) for OMID; "" URL disables
+	multiRungFn     func() bool                // DASH: emit a multi-Representation ABR MPD (default single-rung)
 	metrics         *stitcherMetrics
 	store           objects.Store // reads /v1/creatives origins from object storage (in-cluster)
 	bucket          string        // object-store bucket for origin reads
@@ -536,6 +538,16 @@ func (d *stitcherDeps) manifestHandler(w http.ResponseWriter, r *http.Request) {
 	wantDASH := dashRequested(r)
 	manifest, originURL := d.originManifest(ctx, r, channel, reqLog)
 
+	// Multi-rung ABR DASH: emit one Representation per rung. Off by default (the
+	// single-rung path below is the proven default); handled here when enabled.
+	if wantDASH && channel == constants.ChannelVideo && ssai.IsMaster(manifest) &&
+		d.multiRungFn != nil && d.multiRungFn() {
+		if d.serveMultiRungDASH(ctx, w, r, manifest, originURL, reqLog) {
+			return
+		}
+		reqLog.Warn("multi-rung DASH fell back to single-rung")
+	}
+
 	// DASH is single-rung: if handed an ABR master, resolve the top variant's
 	// media playlist and remember its rung so ads condition to match.
 	dashRung := 0
@@ -648,10 +660,7 @@ func (d *stitcherDeps) serveDASH(w http.ResponseWriter, m *ssai.Manifest, channe
 		rep.AudioRate = p.ASampleRate
 		rep.Width, rep.Height = 0, 0
 	}
-	segs := make([]dash.Seg, 0, len(m.Segments))
-	for _, s := range m.Segments {
-		segs = append(segs, dash.Seg{Media: s.URI, Init: s.Map, Duration: s.Duration, Ad: s.Ad})
-	}
+	segs := toDashSegs(m)
 	quartileEvents := d.timedMetadataFn != nil && d.timedMetadataFn()
 	mpd := dash.AssembleVOD(rep, segs, quartileEvents)
 	// OMID: deliver the verification resource per ad Period so an OM-SDK player

@@ -592,6 +592,89 @@ func TestHLSDateRange(t *testing.T) {
 	}
 }
 
+// TestMultiRungDASH asserts multi-rung ABR DASH: a 2-rung CMAF master yields an
+// MPD where each Period carries a Representation per rung, ads decided once and
+// conditioned per rung.
+func TestMultiRungDASH(t *testing.T) {
+	variantPL := "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:6.0,\nseg_0.m4s\n#EXT-X-CUE-OUT:DURATION=6\n#EXTINF:6.0,\nseg_1.m4s\n#EXT-X-CUE-IN\n#EXTINF:6.0,\nseg_2.m4s\n#EXT-X-ENDLIST\n"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		if strings.HasSuffix(r.URL.Path, "master.m3u8") {
+			io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=928000,RESOLUTION=640x360\n360p/index.m3u8\n"+
+				"#EXT-X-STREAM-INF:BANDWIDTH=1528000,RESOLUTION=854x480\n480p/index.m3u8\n")
+			return
+		}
+		io.WriteString(w, variantPL) // both 360p/ and 480p/ media playlists
+	}))
+	defer origin.Close()
+
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t-mr", CreativeID: "cr-v", CampaignID: "li",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4"})
+	}))
+	defer ssp.Close()
+
+	// CMAF conditioned ad; init URL keyed by the requested rung so per-rung inits differ.
+	transcoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cache_only") != "1" {
+			w.WriteHeader(200)
+			return
+		}
+		var req struct {
+			Profile transcode.Profile `json:"profile"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		h := req.Profile.Height
+		out := transcode.Conditioned{Cached: true, InitURI: fmt.Sprintf("http://cdn.local/cond/%dp/init.mp4", h)}
+		out.Segments = []transcode.CondSegment{{URI: fmt.Sprintf("http://cdn.local/cond/%dp/seg_0.m4s", h), Duration: 6}}
+		out.Duration = 6
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}))
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: "http://tracker", publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		ladderFn:    func() []transcode.Profile { return transcode.DefaultLadder() },
+		multiRungFn: func() bool { return true },
+	}
+	u := "/v1/ssai/manifest.mpd?format=mpd&origin=" + url.QueryEscape(origin.URL+"/hls/master.m3u8")
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", u, nil))
+
+	if ct := rec.Header().Get("Content-Type"); ct != "application/dash+xml" {
+		t.Fatalf("content-type = %q, want application/dash+xml", ct)
+	}
+	mpd, err := dash.ParseMPD(rec.Body.String())
+	if err != nil {
+		t.Fatalf("MPD parse: %v\n%s", err, rec.Body.String())
+	}
+	// Every period must carry both rungs (360p + 480p) as Representations.
+	var adPeriods int
+	for _, p := range mpd.Periods {
+		reps := p.AdaptationSets[0].Representations
+		if len(reps) != 2 {
+			t.Fatalf("period %s has %d reps, want 2 (two rungs)", p.ID, len(reps))
+		}
+		if strings.HasPrefix(p.ID, "ad-") {
+			adPeriods++
+			// Each rung's ad Representation uses its OWN conditioned init.
+			if !strings.Contains(reps[0].SegmentList.Initialization.SourceURL, "360p/init.mp4") ||
+				!strings.Contains(reps[1].SegmentList.Initialization.SourceURL, "480p/init.mp4") {
+				t.Errorf("per-rung ad inits wrong: %q / %q",
+					reps[0].SegmentList.Initialization.SourceURL, reps[1].SegmentList.Initialization.SourceURL)
+			}
+		}
+	}
+	if adPeriods == 0 {
+		t.Errorf("no ad periods in multi-rung MPD:\n%s", rec.Body.String())
+	}
+}
+
 // TestOMIDDelivery asserts OMID verification-resource delivery via the manifest
 // (SSAI has no VAST): HLS DATERANGE X-OMID-RESOURCE, independent of quartile
 // timed metadata.
