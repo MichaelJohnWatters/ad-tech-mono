@@ -999,7 +999,9 @@ func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, events,
 	}
 	q["beacon"] = beacons
 	q.Set("redir", mediaURL)
-	return d.publicURL + routes.SSAISegment + "?" + q.Encode()
+	// TrimRight the public URL (siblings do the same): a trailing-slash
+	// ssai.public_url would otherwise yield a //v1/ssai/seg double slash.
+	return strings.TrimRight(d.publicURL, "/") + routes.SSAISegment + "?" + q.Encode()
 }
 
 // fireBeacon fires a tracker beacon server-side with a browser-shaped UA so the
