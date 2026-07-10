@@ -30,8 +30,32 @@ type MPD struct {
 type Period struct {
 	ID             string          `xml:"id,attr"`
 	Duration       string          `xml:"duration,attr,omitempty"` // ISO-8601
+	EventStreams   []EventStream   `xml:"EventStream"`
 	AdaptationSets []AdaptationSet `xml:"AdaptationSet"`
 }
+
+// EventStream is MPD-level timed metadata: dash.js fires each Event at its
+// presentationTime during playback, so a client can attribute ad quartiles at
+// the moment they actually play (unlike the server beacons, which fire on
+// segment fetch). SSAI uses it to surface the ad's quartile timeline.
+type EventStream struct {
+	SchemeIDURI string  `xml:"schemeIdUri,attr"`
+	Value       string  `xml:"value,attr,omitempty"`
+	Timescale   int     `xml:"timescale,attr"`
+	Events      []Event `xml:"Event"`
+}
+
+// Event is one timed-metadata point within an EventStream (period-relative time).
+type Event struct {
+	PresentationTime int    `xml:"presentationTime,attr"`
+	Duration         int    `xml:"duration,attr,omitempty"`
+	ID               string `xml:"id,attr,omitempty"`
+	Body             string `xml:",chardata"` // event name (e.g. "firstQuartile")
+}
+
+// QuartileScheme is the schemeIdUri the player subscribes to for ad quartile
+// events emitted by the SSAI stitcher.
+const QuartileScheme = "urn:adtech:ssai:quartile"
 
 // AdaptationSet groups interchangeable Representations (e.g. all video rungs).
 type AdaptationSet struct {

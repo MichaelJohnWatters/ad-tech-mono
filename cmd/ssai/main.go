@@ -160,6 +160,7 @@ func main() {
 		maxPodAdsFn:     func() int { return cfg.GetInt("ssai.max_pod_ads", 4) },
 		slateCreativeFn: func() string { return cfg.Get("ssai.slate_creative_id", "") },
 		slateMediaFn:    func() string { return cfg.Get("ssai.slate_media_url", "") },
+		timedMetadataFn: func() bool { return cfg.GetBool("ssai.timed_metadata", false) },
 		metrics:         newStitcherMetrics(metrics.Registry()),
 		client:          &http.Client{Timeout: 4 * time.Second},
 	}
@@ -191,6 +192,7 @@ type stitcherDeps struct {
 	maxPodAdsFn     func() int                 // max ads per avail (ad pod); nil/≤0 → 1
 	slateCreativeFn func() string              // slate creative id ("" = no slate, keep content)
 	slateMediaFn    func() string              // slate media URL (to warm-condition the slate)
+	timedMetadataFn func() bool                // emit DASH quartile EventStreams (client-side timed beacons)
 	metrics         *stitcherMetrics
 	store           objects.Store // reads /v1/creatives origins from object storage (in-cluster)
 	bucket          string        // object-store bucket for origin reads
@@ -646,7 +648,8 @@ func (d *stitcherDeps) serveDASH(w http.ResponseWriter, m *ssai.Manifest, channe
 	for _, s := range m.Segments {
 		segs = append(segs, dash.Seg{Media: s.URI, Init: s.Map, Duration: s.Duration, Ad: s.Ad})
 	}
-	mpd := dash.AssembleVOD(rep, segs)
+	quartileEvents := d.timedMetadataFn != nil && d.timedMetadataFn()
+	mpd := dash.AssembleVOD(rep, segs, quartileEvents)
 	xmlDoc, err := mpd.XML()
 	if err != nil {
 		http.Error(w, "mpd build failed", http.StatusInternalServerError)

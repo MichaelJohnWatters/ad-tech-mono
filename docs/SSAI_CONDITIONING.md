@@ -296,11 +296,23 @@ Full DASH SSAI over the same conditioned CMAF segments:
   structure); browser *visual* playback isn't headless-verifiable (same caveat as
   hls.js), but the MPD is valid + every segment decodes.
 
-### R5 — ID3 timed-metadata beacons · effort M · low value
-Alternative to segment-driven beacons for players that attribute client-side. Our
-server beacons already cover the common case, so this is optional.
-- `pkg/transcode`: optional muxing pass embedding ID3 `PRIV`/`TXXX` at quartile
-  offsets; player fires on `hls.js FRAG_PARSING_METADATA`.
+### R5 — timed-metadata beacons · **DONE (DASH EventStream, 2026-07-09)**
+Client-side, playback-accurate quartile attribution (complements the server
+segment beacons, which fire on fetch). In-band ID3 would need a per-segment
+ffmpeg re-mux that's expensive and not meaningfully verifiable here; the
+standards-based, no-remux equivalent is the DASH **`<EventStream>`** — dash.js
+fires each `<Event>` at its presentation time.
+- `pkg/dash`: `EventStream`/`Event` model + `quartileStream` (5 VAST marks at
+  0/25/50/75/100% of the ad); `AssembleVOD(…, quartileEvents)` attaches one to
+  each ad Period. Scheme `urn:adtech:ssai:quartile`.
+- `cmd/ssai`: `ssai.timed_metadata` (default off, avoids double-count) gates
+  emission in `serveDASH`.
+- sim: dash.js subscribes to the scheme and logs each mark as it plays.
+- Tests: `TestAssembleVODQuartileEvents` (marks + off-by-default),
+  `TestDASHManifest` asserts the ad period's EventStream when enabled.
+- **HLS equivalent (not built):** `#EXT-X-DATERANGE` with the quartile schedule
+  is the HLS-side analogue; documented as a follow-up. In-band ID3 remains the
+  other alternative for players without manifest-event support.
 
 ### R6 — OMID / server-side viewability · effort XL · separate epic
 CTV/SSAI viewability needs OM SDK verification resources threaded through VAST +
