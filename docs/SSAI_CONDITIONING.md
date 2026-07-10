@@ -292,9 +292,14 @@ Full DASH SSAI over the same conditioned CMAF segments:
   MPD has an `ad-0` Period (conditioned CMAF ad init + .m4s via beacon URLs,
   quartiles split) then a content Period; both content and conditioned-ad CMAF
   segments decode (init+m4s) in ffmpeg.
-- **Follow-up:** multi-rung ABR DASH (several Representations sharing the period
-  structure); browser *visual* playback isn't headless-verifiable (same caveat as
-  hls.js), but the MPD is valid + every segment decodes.
+- **Multi-rung ABR DASH — DONE.** `ssai.dash_multi_rung` (default off) emits one
+  Representation per rung: `dash.AssembleMultiRung` (one Rep/rung per Period, own
+  init) + `serveMultiRungDASH` decides ads once per break and keeps only ads
+  conditioned on EVERY rung so periods stay aligned (missing → warm + drop this
+  request). Tests: `TestAssembleMultiRung`, `TestMultiRungDASH`. Caveat: a rung
+  switch mid-ad plays that rung's matching-quality ad segment. Browser *visual*
+  playback isn't headless-verifiable (same as hls.js), but the MPD is valid +
+  every segment decodes.
 
 ### R5 — timed-metadata beacons · **DONE (DASH EventStream, 2026-07-09)**
 Client-side, playback-accurate quartile attribution (complements the server
@@ -310,16 +315,31 @@ fires each `<Event>` at its presentation time.
 - sim: dash.js subscribes to the scheme and logs each mark as it plays.
 - Tests: `TestAssembleVODQuartileEvents` (marks + off-by-default),
   `TestDASHManifest` asserts the ad period's EventStream when enabled.
-- **HLS equivalent (not built):** `#EXT-X-DATERANGE` with the quartile schedule
-  is the HLS-side analogue; documented as a follow-up. In-band ID3 remains the
-  other alternative for players without manifest-event support.
+- **HLS equivalent — DONE.** `#EXT-X-DATERANGE` (CLASS=urn:adtech:ssai:quartile,
+  X-QUARTILES) on the ad's first segment; `pkg/ssai` Segment.DateRange +
+  `adDateRange`; hls.js surfaces it via dateRanges (sim logs it). Test
+  `TestHLSDateRange`.
+- **In-band ID3 — encoder DONE, muxing deferred.** `pkg/id3` is a tested ID3v2.4
+  encoder (TXXX/PRIV, `QuartileTag`) — the reusable core for players that read
+  ID3 from segment bytes. Embedding a tag at a PTS (TS metadata PES / CMAF emsg)
+  is a muxing step that consumes `Encode()`; the manifest-level timed metadata
+  above already covers the common case.
 
-### R6 — OMID / server-side viewability · effort XL · separate epic
-CTV/SSAI viewability needs OM SDK verification resources threaded through VAST +
-the segment beacons. Large, client-SDK-heavy — track as its own workstream, not
-part of the stitcher.
+### R6 — OMID / server-side viewability · **DONE (delivery), client SDK deferred**
+The CSAI path already emits VAST `<AdVerifications>` (publisher-adserver). SSAI
+has no VAST, so the OM verification resource is delivered via the manifest:
+- DASH: an OMID `EventStream` (scheme `urn:adtech:ssai:omid`) per ad Period
+  (`dash.MPD.AddOMID`). HLS: `X-OMID-VENDOR`/`X-OMID-RESOURCE` on the ad
+  `#EXT-X-DATERANGE`. Config `ssai.omid_verification_url` + `ssai.omid_vendor`
+  (self-hosted, no third-party). sim logs the received resource. Test
+  `TestOMIDDelivery` + `TestDASHManifest`.
+- **Deferred (the actual "epic"):** integrating a self-hosted OM SDK in the
+  player to *measure* viewability and report — the platform's IAB viewability
+  tracker already exists to receive it.
 
-**Suggested sequence:** R1 → R2 → R3 → R4 → (R5, R6 as demand dictates).
+**Status:** R1–R6 + ladder config + all follow-ups DONE (multi-rung ABR DASH,
+HLS DATERANGE, ID3 encoder). Deferred by design: in-band ID3 muxing, client OM
+SDK measurement — both need client/muxer work, not stitcher work.
 
 ## Risks
 
