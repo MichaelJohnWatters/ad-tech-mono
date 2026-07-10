@@ -773,8 +773,34 @@ func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.Macr
 		// segment (the player then decodes ad segments against the ad init, and
 		// Stitch restores the content init on the segment after the break).
 		segs[0].Map = cond.InitURI
+		// HLS timed metadata: a #EXT-X-DATERANGE carrying the ad's quartile
+		// schedule, the HLS analogue of the DASH EventStream (hls.js surfaces it
+		// via dateRanges). Gated by ssai.timed_metadata; not on slates.
+		if !isSlate && d.timedMetadataFn != nil && d.timedMetadataFn() {
+			segs[0].DateRange = quartileDateRange(adTrace, cond.Duration)
+		}
 	}
 	return segs
+}
+
+// quartileDateRange builds the #EXT-X-DATERANGE attribute list advertising an
+// ad's VAST quartile offsets (seconds from the ad start). START-DATE is required
+// by the HLS spec; a synthetic epoch is fine for a VOD timed-metadata marker.
+func quartileDateRange(adTrace string, dur float64) string {
+	off := func(f float64) string { return ftoa(f * dur) }
+	quartiles := "start:0,firstQuartile:" + off(0.25) + ",midpoint:" + off(0.5) +
+		",thirdQuartile:" + off(0.75) + ",complete:" + off(1)
+	return fmt.Sprintf("ID=%q,CLASS=%q,START-DATE=%q,DURATION=%s,X-QUARTILES=%q",
+		"ad-"+adTrace, "urn:adtech:ssai:quartile", "1970-01-01T00:00:00.000Z", ftoa(dur), quartiles)
+}
+
+func ftoa(f float64) string {
+	s := strconv.FormatFloat(f, 'f', 3, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" {
+		return "0"
+	}
+	return s
 }
 
 // eventBeacon builds the signed quartile/error tracker URL for the channel:

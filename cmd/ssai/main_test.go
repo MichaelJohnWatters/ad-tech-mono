@@ -545,6 +545,53 @@ func TestServeMasterRewritesRenditions(t *testing.T) {
 	}
 }
 
+// TestHLSDateRange asserts the HLS timed-metadata analogue: with
+// ssai.timed_metadata on, each ad break carries an #EXT-X-DATERANGE advertising
+// the quartile schedule (hls.js surfaces it via dateRanges).
+func TestHLSDateRange(t *testing.T) {
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer tracker.Close()
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sspWinner{TraceID: "t-dr", CreativeID: "cr-v", CampaignID: "li",
+			PlacementID: "pl", PublisherID: "pub", ClearingPrice: 5, Currency: "USD", MediaURL: "https://cdn/ad.mp4"})
+	}))
+	defer ssp.Close()
+	transcoder := fakeTranscoder(6, 6) // 12s ad
+	defer transcoder.Close()
+
+	d := &stitcherDeps{
+		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
+		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
+		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		timedMetadataFn: func() bool { return true },
+	}
+	rec := httptest.NewRecorder()
+	d.manifestHandler(rec, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	out := rec.Body.String()
+
+	if !strings.Contains(out, "#EXT-X-DATERANGE:") {
+		t.Fatalf("no #EXT-X-DATERANGE emitted:\n%s", out)
+	}
+	if !strings.Contains(out, `CLASS="urn:adtech:ssai:quartile"`) || !strings.Contains(out, "X-QUARTILES=") {
+		t.Errorf("DATERANGE missing quartile metadata:\n%s", out)
+	}
+	if !strings.Contains(out, "thirdQuartile:9") || !strings.Contains(out, "complete:12") {
+		t.Errorf("quartile offsets wrong for a 12s ad:\n%s", out)
+	}
+	if _, err := ssai.ParseMedia(out); err != nil {
+		t.Errorf("manifest with DATERANGE invalid: %v", err)
+	}
+
+	// Off by default: no DATERANGE without the flag.
+	d.timedMetadataFn = func() bool { return false }
+	rec2 := httptest.NewRecorder()
+	d.manifestHandler(rec2, httptest.NewRequest("GET", "/v1/ssai/manifest.m3u8", nil))
+	if strings.Contains(rec2.Body.String(), "#EXT-X-DATERANGE:") {
+		t.Error("DATERANGE emitted with timed_metadata off")
+	}
+}
+
 // TestDASHManifest asserts the DASH path: ?format=mpd runs the same stitch
 // pipeline but renders a multi-period MPD — content periods + ad periods, the ad
 // period referencing the conditioned CMAF init + segments.
