@@ -9,6 +9,26 @@ func desynchsafe(b []byte) int {
 	return int(b[0])<<21 | int(b[1])<<14 | int(b[2])<<7 | int(b[3])
 }
 
+// TestSynchsafeBoundaries checks the 28-bit range guard: the max value encodes,
+// and anything larger (or negative) panics rather than silently truncating the
+// size field into a corrupt tag.
+func TestSynchsafeBoundaries(t *testing.T) {
+	// Max 28-bit value round-trips.
+	if got := desynchsafe(synchsafe(0x0FFFFFFF)); got != 0x0FFFFFFF {
+		t.Errorf("synchsafe(0x0FFFFFFF) round-trip = %d, want %d", got, 0x0FFFFFFF)
+	}
+	for _, n := range []int{0x10000000, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("synchsafe(%d) did not panic on out-of-range size", n)
+				}
+			}()
+			synchsafe(n)
+		}()
+	}
+}
+
 func TestEncodeQuartileTag(t *testing.T) {
 	tag := QuartileTag("firstQuartile")
 

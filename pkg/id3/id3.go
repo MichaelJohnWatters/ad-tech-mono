@@ -9,6 +9,8 @@
 // — see docs/SSAI_CONDITIONING.md (R5 / in-band ID3).
 package id3
 
+import "fmt"
+
 // Frame is one ID3v2 frame: a 4-char ID and its payload bytes.
 type Frame struct {
 	ID   string
@@ -63,7 +65,14 @@ const Scheme = "urn:adtech:ssai:quartile"
 
 // synchsafe encodes n as a 4-byte synchsafe integer (7 bits per byte, high bit
 // clear) — the format ID3 uses so tag data can't be mistaken for an MPEG sync.
+// A 4-byte synchsafe int holds 28 bits, so n must be in [0, 0x0FFFFFFF]; a larger
+// value would silently drop its high bits and write a corrupt (too-small) size,
+// so we panic with a clear message instead. Not reachable for SSAI quartile tags
+// (payloads are a few bytes), but this is a public encoder.
 func synchsafe(n int) []byte {
+	if n < 0 || n > 0x0FFFFFFF {
+		panic(fmt.Sprintf("id3: size %d out of range for a 28-bit synchsafe integer [0, %d]", n, 0x0FFFFFFF))
+	}
 	return []byte{
 		byte((n >> 21) & 0x7f),
 		byte((n >> 14) & 0x7f),
