@@ -168,6 +168,7 @@ func main() {
 	publicBase := cfg.Get("publisher_adserver.public_url", "http://localhost:8080")
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
 	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL))
+	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
