@@ -574,6 +574,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					H:        winnerBid.Height,
 					Dur:      winnerBid.Duration,
 					MediaURL: winnerBid.MediaURL,
+					AdM:      winnerBid.AdM, // native markup — dropped before this fix, breaking native fill
 					ADomain:  adomain,
 					BidModel: winnerBid.BidModel,
 					// Deal ID flows into the response so SSPs/tools see which
@@ -897,6 +898,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						Width:        b.W,
 						Height:       b.H,
 						MediaURL:     b.MediaURL,
+						AdM:          b.AdM,
 						AdvertiserID: sb.Seat,
 						AdomainHost:  adomain,
 						ResponseTime: responseTime,

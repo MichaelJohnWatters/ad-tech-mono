@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: transcoder, namespace: adtech, labels: { app: transcoder } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: transcoder } }
+  template:
+    metadata: { labels: { app: transcoder } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: transcoder
+          image: adtech-transcoder
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8094, name: http }]
+          env:
+            - { name: POD_NAME, value: "transcoder-0" }
+            # Writes conditioned ad segments to Minio, so it needs real creds
+            # (unlike read-only services). Matches the Minio root + seed creds.
+            - { name: S3_ENDPOINT, value: "http://minio:9000" }
+            - { name: S3_ACCESS_KEY, value: "adtech" }
+            - { name: S3_SECRET_KEY, value: "adtech-local-dev" }
+            - { name: TRANSCODER_BUCKET, value: "adtech-creatives" }
+            # Browser-reachable base for conditioned segment URLs (gateway proxy).
+            - { name: TRANSCODER_PUBLIC_BASE, value: "http://localhost:8080/v1/creatives" }
+            - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
+          # ffmpeg is CPU-heavy — generous limits, kept off the hot serving path
+          # by the conditioning cache.
+          resources: { requests: { cpu: 200m, memory: 128Mi }, limits: { cpu: "2", memory: 1Gi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8094 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8094 }, periodSeconds: 5, failureThreshold: 5 }

@@ -402,16 +402,40 @@ API gap lands in Phase 4.
 
 ---
 
-## Immediate next actions (ready to execute)
+## Status reconciliation (2026-07-09)
 
-1. **F1 tokens** — consolidate `theme.css` into the single token set (light+dark, service palette),
-   map Tailwind config to it in the head partial. *(additive, low-risk)*
-2. **F3 components** — create the Phase-1 component partials (`table`, `card`, `stat`, `form-field`,
-   `badge`, `tabs`, `pill`, `empty-state`) as new files with a demo page. *(additive, zero-risk to
-   existing pages)*
-3. **F2 shell** — wire a real `layout.html` + role-aware nav; migrate the dashboard to it first.
-4. **F4 auth** — login/session + claims-in-templates (unblocks Phase 1).
-Then start **Phase 1 (Advertiser MVP)**.
+Phases F + 1–4 and the API Gaps register are effectively **shipped**: all three portals run on
+real, tenant-scoped APIs (campaigns/placements/deals/moderation/fraud/payouts/billing/reports),
+the money loop is closed, and campaign/deal/placement *depth* is done. Auth got its last two gaps
+closed (logout button in the shell + constant-time JWT sig compare, 2026-07-09).
+
+The remaining work is **depth, a few missing screens, and polish** — NOT backend wiring. The old
+"Immediate next actions" (F1 tokens / F3 components / F2 shell / F4 auth) are all done and were
+removed. What's actually left, ordered:
+
+### Outstanding — cross-cutting (lifts all three portals)
+- **App-shell consistency** 🟡 — portals are standalone full pages (own `<!DOCTYPE>`), not a shared
+  `layout.html`; two nav systems coexist (`nav.html` for dev pages vs `app-sidebar.html` for
+  portals). Consolidate onto one shell; show the logged-in user in the top bar.
+- **States** — consistent empty/first-run (CTA), loading, and inline error states on every screen.
+- **Visual polish** — density/hierarchy/contrast pass over the existing component set (needs a human
+  in the loop to review the rendered result).
+
+### Outstanding — Advertiser
+- Campaign **drill-down** (IO › line-item › creative detail: config, targeting incl/excl, creatives,
+  recent performance) — data exists (`line_items`/`targeting_rules`/`line_item_creatives`).
+- **Pacing viz** (budget burndown vs flight) — reads existing spend/committed.
+- **Audiences** management screen (upload API exists → needs list/view/edit) · **Settings** · **Team**
+  screen (`/v1/api/team` exists) · onboarding **wizard** ("first campaign in 5 min").
+
+### Outstanding — Publisher
+- **Per-placement fill-rate** breakdown · **net (post-revshare) earnings** · downloadable **payout
+  statements** · onboarding wizard. All read existing data/APIs.
+
+### Outstanding — Staff
+- **Accounts admin** (account CRUD — needs new backend) · **support / impersonation** (audited —
+  needs new backend) · moderation **appeal/bulk** actions · graduate the **config manager** into the
+  staff shell (exists at `/dev/console`).
 
 > Keep expanding the Area Cards and the API Gaps register as each screen is picked up — that's the
 > "self-expandable" contract of this doc.

@@ -280,6 +280,7 @@ var standardSizes = []struct{ W, H int }{
 	{300, 600}, // Half-page
 	{320, 50},  // Mobile banner
 	{160, 600}, // Wide skyscraper
-	{970, 250}, // Billboard
-	{336, 280}, // Large rectangle
+	{970, 250},  // Billboard
+	{336, 280},  // Large rectangle
+	{1200, 627}, // Native main image (1.91:1)
 }

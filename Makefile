@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -35,6 +35,9 @@ test-clickhouse: ## Run the ClickHouse analytics integration tests (needs a live
 
 test-e2e: ## Run end-to-end tests on k3s
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
+
+ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segment (needs tilt up + ffmpeg)
+	./scripts/ssai-smoke.sh
 
 test-all: test test-integration test-duckdb test-e2e ## Run all test layers
 

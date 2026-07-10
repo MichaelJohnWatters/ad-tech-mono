@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ssai, namespace: adtech, labels: { app: ssai } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ssai } }
+  template:
+    metadata: { labels: { app: ssai } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: ssai
+          image: adtech-ssai
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8093, name: http }]
+          env:
+            - { name: POD_NAME, value: "ssai-0" }
+            - { name: SSAI_SSP_URL, value: "http://ssp:8084" }
+            # Server-side beacons fire from the stitcher, so the tracker can be
+            # cluster-internal (unlike browser-fired beacons).
+            - { name: SSAI_TRACKER_URL, value: "http://tracker:8083" }
+            # Browser-reachable origin the stitched manifest tells the player to
+            # fetch ad segments from — points at the gateway's /v1/ssai/ proxy.
+            - { name: SSAI_PUBLIC_URL, value: "http://localhost:8080" }
+            # Runtime ad conditioning: the stitcher asks the transcoder (cache-
+            # only) for the winner's byte-compatible segments; slate + warm on miss.
+            - { name: SSAI_TRANSCODER_URL, value: "http://transcoder:8094" }
+            # Object store: the in-cluster stitcher reads /v1/creatives origin
+            # manifests straight from Minio (it can't reach the browser-facing
+            # gateway host that serves them).
+            - { name: S3_ENDPOINT, value: "http://minio:9000" }
+            - { name: S3_ACCESS_KEY, value: "adtech" }
+            - { name: S3_SECRET_KEY, value: "adtech-local-dev" }
+            - { name: NATS_URL, value: "nats://nats:4222" }
+            - { name: LOKI_URL, value: "http://loki:3100" }
+            - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
+          resources: { requests: { cpu: 50m, memory: 32Mi }, limits: { cpu: 500m, memory: 128Mi } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8093 }, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8093 }, periodSeconds: 2, failureThreshold: 5 }

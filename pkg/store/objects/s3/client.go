@@ -104,3 +104,14 @@ func (c *Client) EnsureBucket(ctx context.Context, bucket string) error {
 	}
 	return c.mc.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
 }
+
+// SetPublicRead makes every object in the bucket anonymously GET-able, so a
+// browser can fetch creative assets through the gateway's /v1/creatives proxy
+// (which forwards unsigned requests). Without this the bucket denies anonymous
+// reads and every creative image 403s. Idempotent — safe to call on each seed.
+// Callers apply it only to buckets that are meant to be public (e.g. creatives),
+// never to private data buckets.
+func (c *Client) SetPublicRead(ctx context.Context, bucket string) error {
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::` + bucket + `/*"]}]}`
+	return c.mc.SetBucketPolicy(ctx, bucket, policy)
+}

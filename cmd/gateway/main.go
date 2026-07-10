@@ -154,6 +154,11 @@ func main() {
 	mux.HandleFunc("/dev/publisher-simulator", renderSim)
 	mux.HandleFunc("/dev/publisher-simulator/", renderSim)
 	mux.HandleFunc("/dev/publisher-simulator/minimal", renderSim)
+
+	// Simulator request-construction, single-sourced from pkg/simulator/request
+	// so the web UI doesn't duplicate the consent/identity encoding in JS.
+	mux.Handle(routes.SimRealism, middleware.CORS(http.HandlerFunc(simRealismHandler)))
+	mux.Handle(routes.SimPersonas, middleware.CORS(http.HandlerFunc(simPersonasHandler)))
 	mux.HandleFunc("/dev/trace-explorer", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "explorer.html", nil)
 	})
@@ -479,6 +484,7 @@ func main() {
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
 	mux.Handle(routes.ProxyPubAd, middleware.CORS(middleware.ReverseProxy(pubadURL, log)))
+	mux.Handle(routes.ProxySSAI, middleware.CORS(middleware.ReverseProxy(cfg.Get("gateway.ssai_url", routes.DefaultSSAIURL), log)))
 	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	// Jaeger query API (browser → gateway → jaeger; Jaeger v1.58 has no CORS
 	// on the query endpoint, so the pub sim reads spans through here).
