@@ -73,10 +73,14 @@ func quartileStream(dur float64) EventStream {
 	}{
 		{"start", 0}, {"firstQuartile", 0.25}, {"midpoint", 0.5}, {"thirdQuartile", 0.75}, {"complete", 1},
 	}
-	es := EventStream{SchemeIDURI: QuartileScheme, Timescale: 1}
+	// Timescale 1000 (ms), not 1 (whole seconds): int-second truncation would put
+	// firstQuartile of a 15s ad at 3s instead of 3.75s, disagreeing with the HLS
+	// X-QUARTILES offsets (sub-second ftoa). Millisecond ticks keep the two formats
+	// consistent.
+	es := EventStream{SchemeIDURI: QuartileScheme, Timescale: 1000}
 	for i, m := range marks {
 		es.Events = append(es.Events, Event{
-			PresentationTime: int(m.frac * dur),
+			PresentationTime: int(m.frac * dur * 1000),
 			ID:               fmt.Sprintf("%d", i),
 			Body:             m.name,
 		})
