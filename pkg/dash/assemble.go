@@ -33,7 +33,7 @@ type periodBuild struct {
 	dur  float64
 }
 
-func (p *periodBuild) toPeriod(id string, r RepInfo) Period {
+func (p *periodBuild) toPeriod(id string, r RepInfo, quartileEvents bool) Period {
 	sl := &SegmentList{Timescale: 1}
 	if p.init != "" {
 		sl.Initialization = &Initialization{SourceURL: p.init}
@@ -49,20 +49,48 @@ func (p *periodBuild) toPeriod(id string, r RepInfo) Period {
 		ID: r.ID, Bandwidth: r.Bandwidth, Codecs: r.Codecs,
 		Width: r.Width, Height: r.Height, AudioRate: r.AudioRate, SegmentList: sl,
 	}
-	return Period{
+	period := Period{
 		ID:       id,
 		Duration: Duration(p.dur),
 		AdaptationSets: []AdaptationSet{{
 			MimeType: r.MimeType, ContentType: ct, SegmentAlignment: true, Representations: []Representation{rep},
 		}},
 	}
+	if p.ad && quartileEvents {
+		period.EventStreams = []EventStream{quartileStream(p.dur)}
+	}
+	return period
+}
+
+// quartileStream builds a timed-metadata EventStream for an ad of dur seconds:
+// the five VAST marks at their period-relative times (start=0, firstQuartile=
+// 25%, midpoint=50%, thirdQuartile=75%, complete=100%). dash.js fires these at
+// playback, giving the client a playback-accurate view of the ad's progress.
+func quartileStream(dur float64) EventStream {
+	marks := []struct {
+		name string
+		frac float64
+	}{
+		{"start", 0}, {"firstQuartile", 0.25}, {"midpoint", 0.5}, {"thirdQuartile", 0.75}, {"complete", 1},
+	}
+	es := EventStream{SchemeIDURI: QuartileScheme, Timescale: 1}
+	for i, m := range marks {
+		es.Events = append(es.Events, Event{
+			PresentationTime: int(m.frac * dur),
+			ID:               fmt.Sprintf("%d", i),
+			Body:             m.name,
+		})
+	}
+	return es
 }
 
 // AssembleVOD builds a multi-period VOD MPD from an ordered segment list. A new
 // Period starts at each content↔ad transition and at each init-segment change
 // (a segment carrying a new non-empty Init) — exactly the DASH multi-period
-// ad-insertion model. Empty-Init segments inherit the current init.
-func AssembleVOD(r RepInfo, segs []Seg) *MPD {
+// ad-insertion model. Empty-Init segments inherit the current init. When
+// quartileEvents is set, each ad Period gets a timed-metadata EventStream of the
+// VAST quartile marks (dash.js fires them at playback for client-side attribution).
+func AssembleVOD(r RepInfo, segs []Seg, quartileEvents bool) *MPD {
 	m := NewVOD()
 	var total float64
 	var cur *periodBuild
@@ -79,7 +107,7 @@ func AssembleVOD(r RepInfo, segs []Seg) *MPD {
 		} else {
 			contentN++
 		}
-		m.Periods = append(m.Periods, cur.toPeriod(id, r))
+		m.Periods = append(m.Periods, cur.toPeriod(id, r, quartileEvents))
 		cur = nil
 	}
 

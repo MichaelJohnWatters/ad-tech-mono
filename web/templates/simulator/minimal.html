@@ -4168,6 +4168,16 @@
             ssaiDash.on(dashjs.MediaPlayer.events.CAN_PLAY, function(){
                 logVideoEvent('SSAI DASH stream playing (dash.js · server-side beacons)', '', 'success');
             });
+            // Client-side timed metadata: when ssai.timed_metadata is on, ad periods
+            // carry a quartile EventStream; dash.js fires each mark at playback time,
+            // so quartiles are attributed when actually watched (complements the
+            // server segment beacons). Requires no extra tracker calls here — we log
+            // to show the client received the playback-accurate timeline.
+            ssaiDash.on('urn:adtech:ssai:quartile', function(e){
+                var ev = e && e.event;
+                var name = (ev && (ev.messageData || ev.text || (ev.eventStream && ev.eventStream.value))) || 'quartile';
+                logVideoEvent('SSAI DASH client quartile (timed metadata @ playback): ' + name, '', 'success');
+            });
             ssaiDash.initialize(v, url, true);
         }
 

@@ -581,6 +581,7 @@ func TestDASHManifest(t *testing.T) {
 		sspURL: ssp.URL, trackerURL: tracker.URL, publicURL: "http://pub.local",
 		placementFn: func() string { return "pl" }, transcoderURL: transcoder.URL,
 		maxPodAdsFn: func() int { return 1 }, client: &http.Client{},
+		timedMetadataFn: func() bool { return true }, // emit quartile EventStreams
 	}
 
 	rec := httptest.NewRecorder()
@@ -611,6 +612,13 @@ func TestDASHManifest(t *testing.T) {
 		}
 		if len(sl.SegmentURLs) == 0 || !strings.Contains(sl.SegmentURLs[0].Media, "/v1/ssai/seg") {
 			t.Errorf("ad period segment not a stitcher beacon URL: %+v", sl.SegmentURLs)
+		}
+		// timed_metadata on → ad period carries a quartile EventStream.
+		if len(p.EventStreams) != 1 || p.EventStreams[0].SchemeIDURI != dash.QuartileScheme {
+			t.Errorf("ad period missing quartile EventStream: %+v", p.EventStreams)
+		}
+		if len(p.EventStreams[0].Events) != 5 {
+			t.Errorf("want 5 quartile events, got %d", len(p.EventStreams[0].Events))
 		}
 	}
 	if adPeriods == 0 {
