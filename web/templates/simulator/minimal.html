@@ -251,6 +251,27 @@
                 <option value="2">Desktop</option>
                 <option value="5">Tablet</option>
             </select>
+            <!-- Request realism: consent regime + identity type. These append
+                 the same production-like privacy/identity signals every real
+                 request carries (GDPR/TCF, US Privacy, GPP, GPC, COPPA; UID2 /
+                 hashed-email / first-party id) so the auction exercises the
+                 DSP's privacy + identity paths, not just geo/device. See
+                 realismParams() and pkg/simulator/request. -->
+            <select id="consentSelect" title="Privacy / consent regime" onchange="refreshRealism()">
+                <option value="us_clear">US · no opt-out</option>
+                <option value="gdpr_consented">EU · GDPR consented</option>
+                <option value="gdpr_no_consent">EU · GDPR no consent</option>
+                <option value="ccpa_opt_out">US · CCPA opt-out</option>
+                <option value="gpc">US · GPC on</option>
+                <option value="coppa">COPPA (child)</option>
+                <option value="gpp_opt_out">US · GPP opt-out</option>
+            </select>
+            <select id="identitySelect" title="Identity type" onchange="refreshRealism()">
+                <option value="uid2">UID2</option>
+                <option value="hashed_email">Hashed email</option>
+                <option value="publisher_id">First-party ID</option>
+                <option value="anonymous">Anonymous</option>
+            </select>
             <!-- Placement picker. Replaces the static size dropdown: every
                  option is a real seeded placement from the SSP. Selecting one
                  changes (a) which placement_id we POST in the ad request,
@@ -289,10 +310,34 @@
                     <select id="videoScheduleMode" style="font-size: 13px; padding: 4px 8px;">
                         <option value="vast">VAST (pre-roll)</option>
                         <option value="vmap">VMAP (pre + mid + post)</option>
+                        <option value="pod">Ad pod (CTV, 3 ads)</option>
                     </select>
                 </label>
                 <button class="btn btn-primary" onclick="playVideoDemo()">Play</button>
                 <button class="btn btn-secondary" onclick="resetVideoDemo()">Reset</button>
+            </span>
+
+            <!-- Native channel controls. -->
+            <span class="native-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="loadNativeDemo()">Load Native</button>
+                <button class="btn btn-secondary" onclick="clearNativeDemo()">Clear</button>
+            </span>
+
+            <!-- Audio channel controls. -->
+            <span class="audio-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <button class="btn btn-primary" onclick="playAudioDemo()">Load &amp; Play Audio</button>
+                <button class="btn btn-secondary" onclick="resetAudioDemo()">Reset</button>
+            </span>
+
+            <!-- SSAI channel controls. -->
+            <span class="ssai-only-controls" style="display: none; gap: 8px; align-items: center;">
+                <select id="ssaiChannel" title="SSAI media type + protocol" style="padding: 6px 8px; background: var(--bg-inset, #0d1117); color: var(--fg, #c9d1d9); border: 1px solid var(--border, #30363d); border-radius: 4px; font-size: 13px;">
+                    <option value="video">Video · HLS (CTV)</option>
+                    <option value="dash">Video · DASH (CMAF)</option>
+                    <option value="audio">Audio · HLS (podcast)</option>
+                </select>
+                <button class="btn btn-primary" onclick="playSSAIStream()">Play SSAI Stream</button>
+                <button class="btn btn-secondary" onclick="resetSSAI()">Reset</button>
             </span>
 
             <button class="btn btn-secondary" id="drainBtn" onclick="drainBudgets()" style="margin-left: 12px;">Drain budgets</button>
@@ -310,6 +355,9 @@
             <div class="channel-tabs" style="display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid var(--border, #2a3441);">
                 <button type="button" id="tab-display" class="channel-tab active" onclick="switchChannel('display')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid #2d8cf0; color: var(--fg, #e6edf3); font-weight: 600; cursor: pointer; font-size: 13px;">Display</button>
                 <button type="button" id="tab-video" class="channel-tab" onclick="switchChannel('video')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Video (VAST / VMAP)</button>
+                <button type="button" id="tab-native" class="channel-tab" onclick="switchChannel('native')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Native</button>
+                <button type="button" id="tab-audio" class="channel-tab" onclick="switchChannel('audio')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Audio (DAAST)</button>
+                <button type="button" id="tab-ssai" class="channel-tab" onclick="switchChannel('ssai')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">SSAI (CTV)</button>
             </div>
 
             <!-- Display pane: the original 300x250 ad slot. -->
@@ -329,13 +377,66 @@
             <div id="pane-video" class="channel-pane" style="display: none;">
                 <p>Sample content video with an ad break served via VAST or VMAP. Each break runs a real auction through SSP → Exchange → DSP. Pick a schedule above, press Play.</p>
                 <div id="video-player-wrap" style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
-                    <video id="content-video" controls playsinline preload="metadata" style="width: 100%; height: 100%; display: block;"
-                        src="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
+                    <!-- preload="none": the content player fetches nothing until Play
+                         triggers the flow, so opening the Video tab makes no network
+                         request — the ad + content only load on Play. -->
+                    <video id="content-video" controls playsinline preload="none" style="width: 100%; height: 100%; display: block;"
+                        src="/v1/creatives/media/bbb-720-10mb.mp4"></video>
                     <div id="ad-container" style="position: absolute; inset: 0;"></div>
                 </div>
                 <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
                     <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">VAST / VMAP request URL + raw response</summary>
                     <pre id="video-adtag-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- Native pane: fetches an OpenRTB Native 1.2 winner from the
+                 publisher-adserver (/v1/pubad/native) and drops the returned
+                 HTML fragment (title/image/sponsored/CTA + signed trackers)
+                 into an in-feed card slot. -->
+            <div id="pane-native" class="channel-pane" style="display: none;">
+                <p>Native in-feed unit. The publisher ad server runs a real auction (SSP → Exchange → DSP), the DSP fills an OpenRTB Native response, and the ad server renders it into the card below with signed impression/click trackers.</p>
+                <div id="native-slot" style="max-width: 420px; border: 1px solid var(--border, #2a3441); border-radius: 8px; overflow: hidden; background: var(--bg-card, #1c2532); min-height: 120px;">
+                    <div style="padding: 24px; color: #999; font-size: 13px;">Click "Load Native" to fill this in-feed slot.</div>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Native request URL + raw response</summary>
+                    <pre id="native-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- Audio pane: fetches an audio VAST from /v1/pubad/audio, plays
+                 the MediaFile through a native <audio> element, and fires the
+                 impression + quartile beacons (routed through /v1/t/audio) as
+                 playback progresses. -->
+            <div id="pane-audio" class="channel-pane" style="display: none;">
+                <p>Audio spot (podcast / streaming radio). The player fetches an audio VAST from the publisher ad server, plays the ad's MediaFile, and fires impression + quartile beacons through <code>/v1/t/audio</code> so the tracker publishes typed AudioEvents.</p>
+                <div style="max-width: 520px; background: var(--bg-card, #1c2532); border: 1px solid var(--border, #2a3441); border-radius: 8px; padding: 16px;">
+                    <div id="audio-advertiser" style="font-size: 13px; color: var(--fg-muted, #8b949e); margin-bottom: 8px;">No audio ad loaded</div>
+                    <audio id="audio-player" controls preload="none" style="width: 100%;"></audio>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Audio VAST request URL + raw response</summary>
+                    <pre id="audio-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(load to populate)</pre>
+                </details>
+            </div>
+
+            <!-- SSAI pane: server-side ad insertion. The stitcher rewrites the
+                 origin HLS manifest to splice the ad into the content stream;
+                 as the player walks the manifest and requests each ad segment,
+                 the SSAI server fires the impression/quartile beacons SERVER-SIDE
+                 (unlike client-side VAST). The player here plays the stitched ad
+                 inline, then the content, and fires each segment's server beacon
+                 by fetching the segment URL. -->
+            <div id="pane-ssai" class="channel-pane" style="display: none;">
+                <p>Server-side ad insertion (CTV). The stitcher rewrites the origin HLS manifest to splice the ad into the content stream. As the player fetches each ad segment, the <strong>server</strong> fires the impression/quartile beacons — not the player. Below: the content plays, the stitched ad plays inline (badge on), and each segment fetch triggers a server-side beacon (watch the trace timeline).</p>
+                <div style="position: relative; background: #000; aspect-ratio: 16/9; max-width: 720px; border-radius: 8px; overflow: hidden;">
+                    <video id="ssai-video" controls playsinline preload="none" style="width: 100%; height: 100%; display: block;"></video>
+                    <div id="ssai-badge" style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.7); color: #ffd166; font-size: 11px; padding: 3px 10px; border-radius: 3px; display: none;">● Stitched Ad · server-side beacons</div>
+                </div>
+                <details style="margin-top: 12px; background: var(--bg-card, #1c2532); padding: 8px 12px; border-radius: 4px;">
+                    <summary style="cursor: pointer; color: var(--fg-muted, #79c0ff); font-size: 12px;">Stitched HLS manifest (content + spliced ad segments)</summary>
+                    <pre id="ssai-preview" style="font-size: 11px; color: var(--fg, #c9d1d9); white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;">(play to populate)</pre>
                 </details>
             </div>
 
@@ -1437,12 +1538,15 @@
         const JAEGER_API = window.location.protocol + '//' + window.location.host + '/v1/jaeger/api';
         let jaegerPollTimer = null;
         let jaegerPollIteration = 0;
+        let jaegerNoNewStreak = 0; // consecutive polls that added no new spans
         const JAEGER_POLL_INTERVAL = 3000;
-        const JAEGER_POLL_MAX = 100;  // 100 × 3s = 5 min
+        const JAEGER_POLL_MAX = 30;       // hard cap: 30 × 3s = 90s
+        const JAEGER_STABLE_STOP = 3;     // stop once 3 polls in a row add nothing (trace is complete)
 
         function startJaegerPoll(traceID) {
             stopJaegerPoll();
             jaegerPollIteration = 0;
+            jaegerNoNewStreak = 0;
             // Fire one immediate fetch so the JAEGER rows that have already
             // landed (the ad-server / tracker spans typically ingest within
             // 1-2s) appear right away. Then schedule the periodic poll for
@@ -1474,7 +1578,11 @@
                 jaegerPollTimer = null;
                 jaegerPollIteration += 1;
                 fetchJaegerTrace(traceID).finally(() => {
-                    if (jaegerPollIteration < JAEGER_POLL_MAX) {
+                    // Stop once the trace has stopped growing (complete) or the
+                    // hard cap is hit — no more 5-minute polling storms.
+                    if (jaegerNoNewStreak >= JAEGER_STABLE_STOP) {
+                        status.textContent = `· trace complete (${knownSpans.size} spans)`;
+                    } else if (jaegerPollIteration < JAEGER_POLL_MAX) {
                         scheduleNextPoll(traceID);
                     } else {
                         status.textContent = `· poll complete (${jaegerPollIteration} fetches)`;
@@ -1557,6 +1665,9 @@
                     traceLog(serviceTag(service), label, { detail: `${durMs}ms`, src: 'jaeger', meta, elapsedMs });
                     newCount += 1;
                 }
+                // Track stability: once the trace stops growing it's complete,
+                // so we can stop polling instead of hammering Jaeger for 5 min.
+                jaegerNoNewStreak = newCount > 0 ? 0 : jaegerNoNewStreak + 1;
                 if (newCount > 0) {
                     status.textContent = `· +${newCount} new span${newCount === 1 ? '' : 's'} this poll`;
                     setTimeout(() => {
@@ -1871,7 +1982,7 @@
             // SSP accepts placement_id as either a UUID (UI-created) or an
             // external key (seed-derived). The picker holds UUIDs, so we
             // send those directly.
-            const sspURL = `${SSP_URL}/v1/ssp/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            const sspURL = `${SSP_URL}/v1/ssp/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}${realismQuery()}`;
             // Resize ad slot to match the selected placement's dimensions.
             const slot = document.getElementById('adSlot');
             slot.style.width = sel.Width + 'px';
@@ -2184,7 +2295,7 @@
                 },
             });
 
-            const url = `${PUBAD_URL}/v1/pubad/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}`;
+            const url = `${PUBAD_URL}/v1/pubad/serve?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device === 2 ? 'desktop' : device === 5 ? 'tablet' : 'mobile'}&user_id=${encodeURIComponent(userID)}${realismQuery()}`;
             const auctionStart = performance.now();
             let serveResp;
             try {
@@ -3385,7 +3496,14 @@
          Access policy refuses cross-origin fetches into loopback
          addresses (our localhost VAST endpoint) from non-secure
          contexts, regardless of any server-side CORS / PNA header. -->
-    <script src="https://imasdk.googleapis.com/js/sdkloader/ima3.js"></script>
+    <!-- No Google IMA SDK. The Video tab uses a small self-hosted VAST player
+         (see playVideoDemo) that plays our own VAST + Minio media directly and
+         fires the tracking beacons itself — zero external player dependency. -->
+    <!-- hls.js (Apache-2.0), vendored + self-hosted, for the SSAI tab to play the
+         real stitched HLS stream (Chrome; Safari plays HLS natively). No phone
+         home, unlike IMA. -->
+    <script src="/static/vendor/hls.min.js"></script>
+    <script src="/static/vendor/dash.min.js"></script>
     <script>
         // ----------------------------------------------------------------
         // Channel tab switch + video player wiring. Display sim lives
@@ -3412,6 +3530,23 @@
             { value: 'pl-sport-mpu',       label: 'Live Page MPU (Sport, display floor)' },
             { value: 'pl-news-mpu',        label: 'Article MPU (News, display floor)' }
         ];
+        // Dedicated native + audio placements on the simulator publisher
+        // (profiles/publishers/standard.yaml). The SSP accepts these external
+        // keys directly (it derives the UUID), so they don't need to come from
+        // the /v1/ssp/placements list.
+        var NATIVE_PLACEMENTS = [
+            { value: 'pl-sim-native', label: 'Simulator Native In-Feed ($1 floor)' },
+            { value: 'pl-news-mpu',   label: 'Article MPU as native (News)' }
+        ];
+        var AUDIO_PLACEMENTS = [
+            { value: 'pl-sim-audio', label: 'Simulator Audio Podcast Spot ($1.50 floor)' }
+        ];
+        // SSAI stitches an ad into a CTV video stream; it runs a video auction
+        // per break, so it uses the video placements.
+        var SSAI_PLACEMENTS = [
+            { value: 'pl-sim-video',          label: 'Simulator Video Pre-Roll (SSAI)' },
+            { value: 'pl-sport-live-preroll', label: 'Live Game Pre-Roll (Sport)' }
+        ];
 
         // Cache the display dropdown's HTML on first channel-switch so
         // we can swap back to it without re-querying /v1/ssp/placements
@@ -3421,15 +3556,18 @@
         function applyPlacementListForChannel(channel) {
             var sel = document.getElementById('placementSelect');
             if (!sel) return;
-            if (channel === 'video') {
+            var lists = { video: VIDEO_PLACEMENTS, native: NATIVE_PLACEMENTS, audio: AUDIO_PLACEMENTS, ssai: SSAI_PLACEMENTS };
+            var list = lists[channel];
+            if (list) {
+                // Stash the real (SSP-loaded) display placement list once so we
+                // can restore it when switching back to display.
                 if (_displayPlacementsHTML === null) _displayPlacementsHTML = sel.innerHTML;
-                sel.innerHTML = VIDEO_PLACEMENTS.map(function(p){
+                sel.innerHTML = list.map(function(p){
                     return '<option value="' + p.value + '">' + p.label + '</option>';
                 }).join('');
-                // Preserve previous selection where possible so toggling
-                // back and forth doesn't surprise the user.
-                sel.value = VIDEO_PLACEMENTS[0].value;
+                sel.value = list[0].value;
             } else {
+                // Display: restore the SSP-loaded placement list.
                 if (_displayPlacementsHTML !== null) {
                     sel.innerHTML = _displayPlacementsHTML;
                     _displayPlacementsHTML = null;
@@ -3437,37 +3575,26 @@
             }
         }
 
-        function switchChannel(channel) {
-            var displayBtn = document.getElementById('tab-display');
-            var videoBtn = document.getElementById('tab-video');
-            var displayPane = document.getElementById('pane-display');
-            var videoPane = document.getElementById('pane-video');
-            var displayCtrls = document.querySelectorAll('.display-only-controls');
-            var videoCtrls = document.querySelectorAll('.video-only-controls');
+        // Channels the simulator can drive. Each has a tab button, a content
+        // pane, and a control-group class, all named by convention so
+        // switchChannel can toggle them generically.
+        var SIM_CHANNELS = ['display', 'video', 'native', 'audio', 'ssai'];
 
-            if (channel === 'video') {
-                videoBtn.style.borderBottomColor = '#2d8cf0';
-                videoBtn.style.color = 'var(--fg, #e6edf3)';
-                videoBtn.style.fontWeight = '600';
-                displayBtn.style.borderBottomColor = 'transparent';
-                displayBtn.style.color = 'var(--fg-muted, #8b949e)';
-                displayBtn.style.fontWeight = '400';
-                displayPane.style.display = 'none';
-                videoPane.style.display = '';
-                displayCtrls.forEach(function(el){ el.style.display = 'none'; });
-                videoCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
-            } else {
-                displayBtn.style.borderBottomColor = '#2d8cf0';
-                displayBtn.style.color = 'var(--fg, #e6edf3)';
-                displayBtn.style.fontWeight = '600';
-                videoBtn.style.borderBottomColor = 'transparent';
-                videoBtn.style.color = 'var(--fg-muted, #8b949e)';
-                videoBtn.style.fontWeight = '400';
-                displayPane.style.display = '';
-                videoPane.style.display = 'none';
-                displayCtrls.forEach(function(el){ el.style.display = 'inline-flex'; });
-                videoCtrls.forEach(function(el){ el.style.display = 'none'; });
-            }
+        function switchChannel(channel) {
+            SIM_CHANNELS.forEach(function(ch) {
+                var active = ch === channel;
+                var btn = document.getElementById('tab-' + ch);
+                var pane = document.getElementById('pane-' + ch);
+                if (btn) {
+                    btn.style.borderBottomColor = active ? '#2d8cf0' : 'transparent';
+                    btn.style.color = active ? 'var(--fg, #e6edf3)' : 'var(--fg-muted, #8b949e)';
+                    btn.style.fontWeight = active ? '600' : '400';
+                }
+                if (pane) pane.style.display = active ? '' : 'none';
+                document.querySelectorAll('.' + ch + '-only-controls').forEach(function(el) {
+                    el.style.display = active ? 'inline-flex' : 'none';
+                });
+            });
             applyPlacementListForChannel(channel);
         }
 
@@ -3476,26 +3603,9 @@
         // the shared controls bar above (placementSelect +
         // videoScheduleMode). Tracker beacons fire via the same
         // /v1/t/* endpoints display does.
-        var videoAdsLoader = null;
-        var videoAdsManager = null;
         var videoTraceID = null;
 
-        // Resolve player dimensions even if the video pane was just
-        // unhidden. clientWidth reads 0 in the layout tick after a
-        // display: change; fall back to the wrap div or a sensible
-        // default so IMA doesn't bail on a 0×0 slot.
-        function playerSize() {
-            var v = document.getElementById('content-video');
-            var wrap = document.getElementById('video-player-wrap');
-            var w = v.clientWidth || (wrap && wrap.clientWidth) || 640;
-            var h = v.clientHeight || (wrap && wrap.clientHeight) || 360;
-            // Aspect-ratio CSS is 16/9 on the wrap; if height didn't
-            // resolve, derive it.
-            if (!h && w) h = Math.round(w * 9 / 16);
-            return { w: w, h: h };
-        }
-
-        // Surface IMA AdEvents into the same debug panel + trace
+        // Surface video-player events into the same debug panel + trace
         // timeline display uses. Mirrors the existing traceLog()
         // shape so the two channels read consistently.
         function logVideoEvent(name, meta, cls) {
@@ -3514,119 +3624,597 @@
             }
         }
 
+        // Self-hosted VAST player — no Google IMA. Mirrors the Audio tab: fetch
+        // the VAST, parse the MediaFile + tracking URLs, play the ad in the
+        // <video> element, and fire the impression + quartile beacons ourselves
+        // as playback crosses each mark. Then play the content clip. For a pod
+        // (multiple <Ad> in one VAST) the ads play back-to-back. Zero external
+        // player dependency — the ad plays entirely from our VAST + Minio media.
+        var videoAdQueue = [];
+        var videoContentSrc = null;
+
         function playVideoDemo() {
             var contentVideo = document.getElementById('content-video');
-            var adContainer = document.getElementById('ad-container');
             var preview = document.getElementById('video-adtag-preview');
             var placement = document.getElementById('placementSelect').value || 'pl-sport-mpu';
             var mode = document.getElementById('videoScheduleMode').value;
             var path = mode === 'vmap' ? '/v1/pubad/video/vmap' : '/v1/pubad/video/vast';
-            var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) + '&t=' + Date.now();
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var podQuery = mode === 'pod' ? '&pod=3' : '';
+            var adTagUrl = window.location.origin + path + '?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                podQuery + realismQuery() + '&t=' + Date.now();
             preview.textContent = adTagUrl + '\n\n(fetching…)';
-
+            if (!videoContentSrc) videoContentSrc = contentVideo.getAttribute('src');
+            if (typeof traceReset === 'function') traceReset();
             logVideoEvent('Video request', mode.toUpperCase() + ' · ' + placement, 'success');
 
-            fetch(adTagUrl).then(function(r){ return r.text(); }).then(function(text){
-                preview.textContent = adTagUrl + '\n\n' + text.substring(0, 2000) + (text.length > 2000 ? '…' : '');
-                // Pull the auction trace_id out of the response so the
-                // trace timeline can stitch player events to the backend
-                // auction. VAST has <Ad id="<tid>">; VMAP has it on the
-                // first inline ad once IMA fetches the break.
-                var m = text.match(/<Ad id="([0-9a-f]{32})"/);
+            fetchVastDoc(adTagUrl, mode).then(function(res){
+                preview.textContent = adTagUrl + '\n\n' + res.text.substring(0, 2000) + (res.text.length > 2000 ? '…' : '');
+                var m = res.text.match(/<Ad id="([0-9a-f]{32})"/);
                 if (m) {
                     videoTraceID = m[1];
                     logVideoEvent('Auction trace', videoTraceID, 'success');
                     if (typeof startJaegerPoll === 'function') startJaegerPoll(videoTraceID);
                 }
-            }).catch(function(){ preview.textContent = adTagUrl + '\n\n(fetch failed)'; });
-
-            var adDisplay = new google.ima.AdDisplayContainer(adContainer, contentVideo);
-            adDisplay.initialize();
-            videoAdsLoader = new google.ima.AdsLoader(adDisplay);
-            videoAdsLoader.addEventListener(google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED, function(ev){
-                var settings = new google.ima.AdsRenderingSettings();
-                settings.restoreCustomPlaybackStateOnAdBreakComplete = true;
-                videoAdsManager = ev.getAdsManager(contentVideo, settings);
-
-                var E = google.ima.AdEvent.Type;
-                // Wire every player event into the shared debug + trace
-                // panels so the Video flow shows up alongside Display
-                // calls in the same operator surfaces.
-                [
-                    ['LOADED',          E.LOADED,         'success'],
-                    ['STARTED',         E.STARTED,        'success'],
-                    ['IMPRESSION',      E.IMPRESSION,     'success'],
-                    ['FIRST_QUARTILE',  E.FIRST_QUARTILE, ''],
-                    ['MIDPOINT',        E.MIDPOINT,       ''],
-                    ['THIRD_QUARTILE',  E.THIRD_QUARTILE, ''],
-                    ['COMPLETE',        E.COMPLETE,       'success'],
-                    ['CLICK',           E.CLICK,          ''],
-                    ['PAUSED',          E.PAUSED,         ''],
-                    ['RESUMED',         E.RESUMED,        ''],
-                    ['SKIPPED',         E.SKIPPED,        ''],
-                    ['ALL_ADS_COMPLETED',E.ALL_ADS_COMPLETED, 'success'],
-                ].forEach(function(spec) {
-                    videoAdsManager.addEventListener(spec[1], function(e){
-                        var ad = e.getAd && e.getAd();
-                        var meta = ad ? ('#' + ad.getAdId() + ' · ' + ad.getDuration() + 's · ' + ad.getAdvertiserName()) : '';
-                        logVideoEvent(spec[0], meta, spec[2]);
-                    });
-                });
-
-                videoAdsManager.addEventListener(E.CONTENT_PAUSE_REQUESTED, function(){
-                    contentVideo.pause();
-                    logVideoEvent('Content paused for ad', '', 'success');
-                });
-                videoAdsManager.addEventListener(E.CONTENT_RESUME_REQUESTED, function(){
-                    try { contentVideo.play(); } catch (e) {}
-                    logVideoEvent('Content resumed', '', 'success');
-                });
-                videoAdsManager.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                    var e = err.getError();
-                    var detail = 'code=' + e.getErrorCode() +
-                                 ' type=' + e.getType() +
-                                 ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
-                                 ' msg=' + e.getMessage();
-                    logVideoEvent('AD_ERROR', detail, 'error');
-                    try { contentVideo.play(); } catch (e2) {}
-                });
-
-                try {
-                    var sz = playerSize();
-                    videoAdsManager.init(sz.w, sz.h, google.ima.ViewMode.NORMAL);
-                    videoAdsManager.start();
-                } catch (e) {
-                    logVideoEvent('IMA init failed', String(e), 'error');
-                    try { contentVideo.play(); } catch (e2) {}
-                }
-            }, false);
-            videoAdsLoader.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR, function(err){
-                var e = err.getError();
-                var detail = 'code=' + e.getErrorCode() +
-                             ' type=' + e.getType() +
-                             ' inner=' + (e.getInnerError && e.getInnerError() ? e.getInnerError().getErrorCode() : 'n/a') +
-                             ' msg=' + e.getMessage();
-                logVideoEvent('AdsLoader error', detail, 'error');
-                try { contentVideo.play(); } catch (ex) {}
-            }, false);
-            contentVideo.addEventListener('ended', function(){ if (videoAdsLoader) videoAdsLoader.contentComplete(); });
-
-            var req = new google.ima.AdsRequest();
-            req.adTagUrl = adTagUrl;
-            var sz = playerSize();
-            req.linearAdSlotWidth = sz.w;
-            req.linearAdSlotHeight = sz.h;
-            videoAdsLoader.requestAds(req);
+                var ads = parseVastAds(res.doc);
+                if (!ads.length) { logVideoEvent('No ad returned', '', 'nobid'); playVideoContent(); return; }
+                logVideoEvent('Ad(s) parsed', ads.length + ' in pod', 'success');
+                videoAdQueue = ads;
+                playNextVideoAd();
+            }).catch(function(err){
+                preview.textContent = adTagUrl + '\n\n(failed: ' + err + ')';
+                logVideoEvent('Video error', String(err), 'error');
+            });
         }
+
+        // fetchVastDoc returns {text, doc}. For VMAP it first fetches the schedule
+        // then the pre-roll break's VAST (mid/post-roll timeline is out of scope
+        // for the simple player).
+        function fetchVastDoc(url, mode) {
+            var parse = function(text){ return { text: text, doc: new DOMParser().parseFromString(text, 'application/xml') }; };
+            if (mode !== 'vmap') return fetch(url).then(function(r){ return r.text(); }).then(parse);
+            return fetch(url).then(function(r){ return r.text(); }).then(function(vmapXml){
+                var vdoc = new DOMParser().parseFromString(vmapXml, 'application/xml');
+                var tag = vdoc.querySelector('AdTagURI');
+                if (!tag) throw new Error('no ad break in VMAP');
+                logVideoEvent('VMAP pre-roll break', '', 'success');
+                return fetch(tag.textContent.trim()).then(function(r){ return r.text(); }).then(parse);
+            });
+        }
+
+        function parseVastAds(doc) {
+            var out = [];
+            doc.querySelectorAll('Ad').forEach(function(ad){
+                var media = ad.querySelector('MediaFile');
+                if (!ad.querySelector('InLine') || !media) return;
+                var trackers = {};
+                ad.querySelectorAll('Tracking').forEach(function(t){
+                    var ev = t.getAttribute('event');
+                    (trackers[ev] = trackers[ev] || []).push(t.textContent.trim());
+                });
+                var click = ad.querySelector('ClickThrough');
+                out.push({
+                    mediaURL: media.textContent.trim(),
+                    title: (ad.querySelector('AdTitle') || {}).textContent || 'Video Ad',
+                    impressions: Array.prototype.map.call(ad.querySelectorAll('Impression'), function(i){ return i.textContent.trim(); }),
+                    trackers: trackers,
+                    clickThrough: click ? click.textContent.trim() : null,
+                    clickTracking: Array.prototype.map.call(ad.querySelectorAll('ClickTracking'), function(c){ return c.textContent.trim(); }),
+                    errors: Array.prototype.map.call(ad.querySelectorAll('Error'), function(e){ return e.textContent.trim(); }),
+                    fired: {}
+                });
+            });
+            return out;
+        }
+
+        // fireVideoTracker fires the VAST tracker URL(s) for a given event (a no-op
+        // when the VAST doesn't carry that event), so the player emits the full
+        // standard VAST set — quartiles AND mute/pause/resume/skip/fullscreen/
+        // click/error — exactly what a real IMA/VAST integration reports.
+        function fireVideoTracker(ad, event) {
+            var urls = ad.trackers[event] || [];
+            urls.forEach(function(u){ fireBeacon(u, event); });
+            if (urls.length) logVideoEvent('Ad ' + event, '', event === 'skip' ? 'nobid' : '');
+            return urls.length > 0;
+        }
+
+        function playNextVideoAd() {
+            var v = document.getElementById('content-video');
+            if (!videoAdQueue.length) { clearAdOverlay(); playVideoContent(); return; }
+            var ad = videoAdQueue.shift();
+            var started = false, done = false;
+            logVideoEvent('Ad loaded', ad.title, 'success');
+
+            function finish() {
+                if (done) return; done = true;
+                v.removeEventListener('playing', onPlaying);
+                v.removeEventListener('timeupdate', onTime);
+                v.removeEventListener('pause', onPause);
+                v.removeEventListener('play', onPlay);
+                v.removeEventListener('volumechange', onVol);
+                v.removeEventListener('ended', onEnded);
+                v.removeEventListener('error', onError);
+                document.removeEventListener('fullscreenchange', onFs);
+                clearAdOverlay();
+                playNextVideoAd(); // next pod ad, or content when the queue empties
+            }
+
+            var onPlaying = function(){
+                if (started) return; started = true;
+                ad.impressions.forEach(function(u){ fireBeacon(u, 'impression'); });
+                fireVideoTracker(ad, 'start');
+                logVideoEvent('Ad impression + start', ad.title, 'success');
+                showAdOverlay(ad, finish);
+            };
+            var onTime = function(){
+                if (!v.duration) return;
+                var f = v.currentTime / v.duration;
+                [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]].forEach(function(q){
+                    if (f >= q[1] && !ad.fired[q[0]]) { ad.fired[q[0]] = true; fireVideoTracker(ad, q[0]); }
+                });
+                // TODO(video-viewability): quartiles measure how much was WATCHED,
+                // not whether the ad was on-screen. IAB video viewability (≥50%
+                // pixels for ≥2s continuous) is a separate metric — measure it
+                // here with an IntersectionObserver on `v` and fire a viewable
+                // beacon. See docs/PLAN.md → "Video / CTV measurement".
+            };
+            // Interaction events, straight off the native <video> — no player SDK.
+            var onPause = function(){ if (started && !done && !v.ended) fireVideoTracker(ad, 'pause'); };
+            var onPlay = function(){ if (started && !done) fireVideoTracker(ad, 'resume'); };
+            var onVol = function(){ if (!started) return; fireVideoTracker(ad, (v.muted || v.volume === 0) ? 'mute' : 'unmute'); };
+            var onFs = function(){ if (started) fireVideoTracker(ad, document.fullscreenElement ? 'fullscreen' : 'exitFullscreen'); };
+            var onError = function(){ ad.errors.forEach(function(u){ fireBeacon(u, 'error'); }); logVideoEvent('Ad playback error', ad.title, 'error'); finish(); };
+            var onEnded = function(){ fireVideoTracker(ad, 'complete'); logVideoEvent('Ad complete', ad.title, 'success'); finish(); };
+
+            v.addEventListener('playing', onPlaying);
+            v.addEventListener('timeupdate', onTime);
+            v.addEventListener('pause', onPause);
+            v.addEventListener('play', onPlay);
+            v.addEventListener('volumechange', onVol);
+            v.addEventListener('ended', onEnded);
+            v.addEventListener('error', onError);
+            document.addEventListener('fullscreenchange', onFs);
+
+            // expose skip/click for the overlay via the ad object
+            ad._fire = fireVideoTracker;
+            ad._finish = finish;
+
+            v.src = ad.mediaURL;
+            v.load();
+            v.play().catch(function(e){ logVideoEvent('Ad autoplay blocked (click the player)', String(e), ''); });
+        }
+
+        // showAdOverlay draws the standard video-ad affordances over the player:
+        // an "Ad" label, a Skip button (fires the VAST skip tracker), and a
+        // Learn More button (fires ClickTracking + opens the ClickThrough).
+        function showAdOverlay(ad, finish) {
+            var c = document.getElementById('ad-container');
+            if (!c) return;
+            c.style.pointerEvents = 'none';
+            c.innerHTML =
+                '<div style="position:absolute;top:8px;left:8px;background:rgba(0,0,0,.65);color:#fff;font-size:11px;padding:2px 8px;border-radius:3px;">Ad · ' + (ad.title || '') + '</div>';
+            var btnCss = 'position:absolute;bottom:12px;pointer-events:auto;background:rgba(0,0,0,.75);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;';
+            if (ad.clickThrough) {
+                var lm = document.createElement('button');
+                lm.textContent = 'Learn More →';
+                lm.style.cssText = btnCss + 'left:12px;';
+                lm.onclick = function(){
+                    (ad.clickTracking || []).forEach(function(u){ fireBeacon(u, 'clickTracking'); });
+                    logVideoEvent('Ad click', ad.title, 'success');
+                    window.open(ad.clickThrough, '_blank');
+                };
+                c.appendChild(lm);
+            }
+            var sk = document.createElement('button');
+            sk.textContent = 'Skip Ad ⏭';
+            sk.style.cssText = btnCss + 'right:12px;';
+            sk.onclick = function(){ ad._fire(ad, 'skip'); finish(); };
+            c.appendChild(sk);
+        }
+
+        function clearAdOverlay() {
+            var c = document.getElementById('ad-container');
+            if (c) { c.innerHTML = ''; c.style.pointerEvents = 'none'; }
+        }
+
+        function playVideoContent() {
+            var contentVideo = document.getElementById('content-video');
+            if (!videoContentSrc) return;
+            contentVideo.src = videoContentSrc;
+            contentVideo.load();
+            logVideoEvent('Content playing', '', 'success');
+            contentVideo.play().catch(function(){});
+        }
+
         function resetVideoDemo() {
             var contentVideo = document.getElementById('content-video');
             try { contentVideo.pause(); } catch (e) {}
-            contentVideo.currentTime = 0;
-            if (videoAdsManager) { try { videoAdsManager.destroy(); } catch (e) {} videoAdsManager = null; }
+            videoAdQueue = [];
+            if (videoContentSrc) { contentVideo.src = videoContentSrc; contentVideo.load(); }
             videoTraceID = null;
             var preview = document.getElementById('video-adtag-preview');
             if (preview) preview.textContent = '(load to populate)';
+            if (typeof stopJaegerPoll === 'function') stopJaegerPoll();
             logVideoEvent('Reset', '', '');
+        }
+
+        // ---- Request realism (consent + identity) ------------------------
+        //
+        // The consent + identity ENCODING (TCF / GPP / US-privacy / UID2) is the
+        // single source of truth in Go (pkg/simulator/request). Rather than
+        // duplicate that fiddly, correctness-critical encoding here, we fetch it
+        // from /v1/sim/realism — the exact same code the CLI uses. We cache the
+        // encoded query and refresh it whenever the Consent / Identity dropdowns
+        // change, so realismQuery() stays synchronous and its call sites (the
+        // display/video/native/audio request builders) are unchanged.
+        var _realismQuery = '';
+        async function refreshRealism() {
+            var consent = (document.getElementById('consentSelect') || {}).value || 'us_clear';
+            var identity = (document.getElementById('identitySelect') || {}).value || 'uid2';
+            try {
+                var r = await fetch('/v1/sim/realism?consent=' + encodeURIComponent(consent) + '&identity=' + encodeURIComponent(identity));
+                var j = await r.json();
+                _realismQuery = j.query ? '&' + j.query : '';
+            } catch (e) {
+                _realismQuery = '';
+                console.warn('[sim] /v1/sim/realism fetch failed', e);
+            }
+        }
+
+        // realismQuery returns the cached realism params as a leading-"&" query
+        // string fragment (empty when none), for string-built URLs.
+        function realismQuery() {
+            return _realismQuery;
+        }
+
+        // Seed the cache on load and refresh on dropdown change. This inline
+        // script may run after DOMContentLoaded already fired, so call directly
+        // when the document is ready.
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', refreshRealism);
+        } else {
+            refreshRealism();
+        }
+
+        // ---- Native channel ----------------------------------------------
+        function loadNativeDemo() {
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-native';
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var slot = document.getElementById('native-slot');
+            var preview = document.getElementById('native-preview');
+            var url = PUBAD_URL + '/v1/pubad/native?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                realismQuery() + '&t=' + Date.now();
+            preview.textContent = url + '\n\n(fetching…)';
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('Native request', placement + ' · ' + geo + '/' + device, 'success');
+            fetch(url).then(function(r){ return r.text(); }).then(function(html){
+                slot.innerHTML = html;
+                preview.textContent = url + '\n\n' + html.substring(0, 2000) + (html.length > 2000 ? '…' : '');
+                logVideoEvent('Native rendered', '', 'success');
+            }).catch(function(err){
+                slot.innerHTML = '<div style="padding:24px;color:#e5534b;font-size:13px;">Native load failed: ' + err + '</div>';
+                preview.textContent = url + '\n\n(fetch failed: ' + err + ')';
+                logVideoEvent('Native error', String(err), 'error');
+            });
+        }
+        function clearNativeDemo() {
+            document.getElementById('native-slot').innerHTML =
+                '<div style="padding:24px;color:#999;font-size:13px;">Click "Load Native" to fill this in-feed slot.</div>';
+            document.getElementById('native-preview').textContent = '(load to populate)';
+        }
+
+        // ---- Audio channel -----------------------------------------------
+        // Fetches an audio VAST, plays the MediaFile through a native <audio>
+        // element, and fires the impression + quartile beacons from the VAST as
+        // playback crosses each quartile (the VAST beacons already route through
+        // /v1/t/audio, so the tracker publishes typed AudioEvents).
+        var audioBeacons = null;
+        function playAudioDemo() {
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-audio';
+            var geo = document.getElementById('geoSelect').value;
+            var device = deviceName(parseInt(document.getElementById('deviceSelect').value));
+            var player = document.getElementById('audio-player');
+            var preview = document.getElementById('audio-preview');
+            var advLabel = document.getElementById('audio-advertiser');
+            var url = PUBAD_URL + '/v1/pubad/audio?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + encodeURIComponent(device) +
+                realismQuery() + '&t=' + Date.now();
+            preview.textContent = url + '\n\n(fetching…)';
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('Audio request', placement + ' · ' + geo + '/' + device, 'success');
+            fetch(url).then(function(r){ return r.text(); }).then(function(xmlText){
+                preview.textContent = url + '\n\n' + xmlText.substring(0, 2000) + (xmlText.length > 2000 ? '…' : '');
+                var doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+                var media = doc.querySelector('MediaFile');
+                var mediaURL = media ? media.textContent.trim() : '';
+                var adTitle = (doc.querySelector('AdTitle') || {}).textContent || 'Audio Ad';
+                var tid = (doc.querySelector('Ad') || {}).getAttribute && doc.querySelector('Ad').getAttribute('id');
+                if (tid) { logVideoEvent('Auction trace', tid, 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tid); }
+                if (!mediaURL) { logVideoEvent('Audio: no MediaFile', '', 'error'); return; }
+                advLabel.textContent = 'Now playing: ' + adTitle;
+                // Collect quartile beacon URLs keyed by event name.
+                audioBeacons = { fired: {} };
+                doc.querySelectorAll('Tracking').forEach(function(t){
+                    audioBeacons[t.getAttribute('event')] = t.textContent.trim();
+                });
+                var impEl = doc.querySelector('Impression');
+                if (impEl) fireBeacon(impEl.textContent.trim(), 'impression');
+                if (audioBeacons['start']) fireBeacon(audioBeacons['start'], 'start');
+                player.src = mediaURL;
+                player.play().catch(function(e){ logVideoEvent('Audio autoplay blocked', String(e), ''); });
+            }).catch(function(err){
+                preview.textContent = url + '\n\n(fetch failed: ' + err + ')';
+                logVideoEvent('Audio error', String(err), 'error');
+            });
+        }
+        function fireBeacon(url, name) {
+            if (!url) return;
+            var img = new Image();
+            img.src = url;
+            logVideoEvent('Audio beacon: ' + name, '', name === 'impression' ? 'success' : '');
+        }
+        // Quartile firing driven by the <audio> element's timeupdate.
+        (function wireAudioQuartiles(){
+            document.addEventListener('DOMContentLoaded', function(){
+                var player = document.getElementById('audio-player');
+                if (!player) return;
+                player.addEventListener('timeupdate', function(){
+                    if (!audioBeacons || !player.duration) return;
+                    var frac = player.currentTime / player.duration;
+                    var marks = [['firstQuartile', 0.25], ['midpoint', 0.5], ['thirdQuartile', 0.75]];
+                    marks.forEach(function(m){
+                        if (frac >= m[1] && audioBeacons[m[0]] && !audioBeacons.fired[m[0]]) {
+                            audioBeacons.fired[m[0]] = true;
+                            fireBeacon(audioBeacons[m[0]], m[0]);
+                        }
+                    });
+                });
+                player.addEventListener('ended', function(){
+                    if (audioBeacons && audioBeacons['complete'] && !audioBeacons.fired['complete']) {
+                        audioBeacons.fired['complete'] = true;
+                        fireBeacon(audioBeacons['complete'], 'complete');
+                    }
+                });
+            });
+        })();
+        function resetAudioDemo() {
+            var player = document.getElementById('audio-player');
+            try { player.pause(); } catch (e) {}
+            player.removeAttribute('src'); player.load();
+            audioBeacons = null;
+            document.getElementById('audio-advertiser').textContent = 'No audio ad loaded';
+            document.getElementById('audio-preview').textContent = '(load to populate)';
+            logVideoEvent('Audio reset', '', '');
+        }
+
+        // deviceName maps the numeric OpenRTB device type from the dropdown to
+        // the string the SSP/pubad endpoints expect.
+        function deviceName(dt) {
+            return dt === 2 ? 'desktop' : dt === 5 ? 'tablet' : dt === 3 ? 'ctv' : 'mobile';
+        }
+
+        // ---- SSAI (server-side ad insertion) -----------------------------
+        //
+        // Fetches the stitched HLS manifest from the SSAI service, plays the
+        // spliced ad inline, then the content. The defining SSAI trait: the
+        // player does NOT fire the ad beacons — the SERVER does, when the player
+        // requests each ad segment. We reproduce that faithfully by fetching each
+        // stitched ad-segment URL (which reaches the SSAI seg handler → fires the
+        // beacon server-side) with redirect:'manual' so we don't re-download the
+        // media. The ad media + trace id are pulled from the manifest.
+        var ssaiHls = null;
+        var ssaiDash = null;
+        function playSSAIStream() {
+            var v = document.getElementById('ssai-video');
+            var badge = document.getElementById('ssai-badge');
+            var preview = document.getElementById('ssai-preview');
+            var placement = document.getElementById('placementSelect').value || 'pl-sim-video';
+            var geo = document.getElementById('geoSelect').value;
+            var channelSel = document.getElementById('ssaiChannel');
+            var mode = channelSel ? channelSel.value : 'video';
+            var isDash = mode === 'dash';
+            // The auction channel is audio|video; DASH is a video protocol.
+            var channel = (mode === 'audio') ? 'audio' : 'video';
+            // Stitch real packaged content (segmented in Minio) so the player gets a
+            // seamless content+ad byte stream. Audio is single-rendition; HLS video
+            // is a TS ABR master; DASH video is a CMAF (fMP4) master.
+            var origin, device;
+            if (mode === 'audio') {
+                origin = window.location.origin + '/v1/creatives/ssai/content/sample-audio/audio/index.m3u8';
+                device = 'mobile';
+            } else if (isDash) {
+                origin = window.location.origin + '/v1/creatives/ssai/content/sample-cmaf/master.m3u8';
+                device = 'ctv';
+            } else {
+                origin = window.location.origin + '/v1/creatives/ssai/content/sample/master.m3u8';
+                device = 'ctv';
+            }
+            var manifestPath = isDash ? '/v1/ssai/manifest.mpd' : '/v1/ssai/manifest.m3u8';
+            var url = window.location.origin + manifestPath + '?placement_id=' + encodeURIComponent(placement) +
+                '&geo=' + encodeURIComponent(geo) + '&device=' + device + '&channel=' + channel +
+                '&origin=' + encodeURIComponent(origin) + realismQuery() + '&t=' + Date.now();
+            if (typeof traceReset === 'function') traceReset();
+            logVideoEvent('SSAI manifest request', placement, 'success');
+
+            // DASH: dash.js loads the multi-period MPD directly (it walks the ad +
+            // content periods and fetches the /v1/ssai/seg beacon URLs server-side).
+            if (isDash) { playSSAIDash(v, url, badge, preview); return; }
+
+            preview.textContent = url + '\n\n(fetching manifest…)';
+
+            fetch(url).then(function(r){ return r.text(); }).then(function(manifest){
+                preview.textContent = url + '\n\n' + manifest;
+                // ABR: the stitcher returns a master (variant URIs point back at
+                // the stitcher). Trace + badge come from a variant's media
+                // playlist; for a single media playlist they come from it directly.
+                var isMaster = manifest.indexOf('#EXT-X-STREAM-INF') >= 0;
+                ssaiTraceAndBadge(manifest, isMaster, badge);
+
+                if (ssaiHls) { ssaiHls.destroy(); ssaiHls = null; }
+                // Real HLS: a master (ABR) or a media playlist with absolute
+                // Minio content segments.
+                var realStream = isMaster || manifest.indexOf('/v1/creatives/ssai/content/') >= 0;
+                if (realStream && window.Hls && window.Hls.isSupported()) {
+                    // hls.js walks the stitched manifest, fetching content + ad
+                    // segments. Each ad-segment request hits /v1/ssai/seg which
+                    // fires the beacon SERVER-SIDE and 302s to the conditioned .ts
+                    // — real SSAI, no client-side beacon code.
+                    ssaiHls = new Hls();
+                    ssaiHls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); logVideoEvent('SSAI stream playing (hls.js · server-side beacons)', '', 'success'); });
+                    // Client-side timed metadata (ssai.timed_metadata): surface any
+                    // #EXT-X-DATERANGE quartile markers hls.js parses — the HLS
+                    // analogue of the DASH EventStream.
+                    ssaiHls.on(Hls.Events.LEVEL_UPDATED, function(e, data){
+                        try {
+                            var drs = data && data.details && data.details.dateRanges; if (!drs) return;
+                            Object.keys(drs).forEach(function(id){
+                                var dr = drs[id]; var attr = dr && dr.attr || {};
+                                if (attr.CLASS === 'urn:adtech:ssai:quartile' && !dr._ssaiLogged) {
+                                    dr._ssaiLogged = true;
+                                    if (attr['X-QUARTILES']) logVideoEvent('SSAI HLS timed metadata (DATERANGE): ' + id + ' · ' + attr['X-QUARTILES'], '', 'success');
+                                    if (attr['X-OMID-RESOURCE']) logVideoEvent('SSAI OMID verification resource received (register w/ OM SDK): ' + attr['X-OMID-RESOURCE'], '', 'success');
+                                }
+                            });
+                        } catch (x) {}
+                    });
+                    ssaiHls.on(Hls.Events.ERROR, function(e, data){
+                        if (!data.fatal) return;
+                        logVideoEvent('SSAI hls error — using demo player', data.details, 'error');
+                        try { ssaiHls.destroy(); } catch (x) {} ssaiHls = null;
+                        ssaiFallback(manifest, v, badge);
+                    });
+                    ssaiHls.loadSource(url);
+                    ssaiHls.attachMedia(v);
+                } else if (realStream && v.canPlayType('application/vnd.apple.mpegurl')) {
+                    v.src = url; v.play().catch(function(){}); // Safari native HLS
+                    logVideoEvent('SSAI stream playing (native HLS)', '', 'success');
+                } else {
+                    // Packaged content not available yet (run the content-packager
+                    // Job) → the demonstration player.
+                    logVideoEvent('Packaged content not available — demo player', '', 'nobid');
+                    ssaiFallback(manifest, v, badge);
+                }
+            }).catch(function(err){ preview.textContent = url + '\n\n(failed: ' + err + ')'; logVideoEvent('SSAI error', String(err), 'error'); });
+        }
+
+        // ssaiFallback is the demonstration player (plays the ad media + fires the
+        // beacons via segment fetches) used when real packaged content isn't
+        // available or hls.js fails.
+        function ssaiFallback(manifest, v, badge) {
+            var segs = manifest.split('\n').filter(function(l){ return l.indexOf('/v1/ssai/seg?') >= 0; });
+            if (!segs.length) { ssaiPlayContent(v); return; }
+            var rm = segs[0].match(/[?&]redir=([^&]+)/);
+            ssaiPlayAd(v, badge, segs, rm ? decodeURIComponent(rm[1]) : null);
+        }
+
+        function ssaiPlayAd(v, badge, segs, adMedia) {
+            if (!adMedia) { ssaiPlayContent(v); return; }
+            badge.style.display = '';
+            var segDur = 6, fired = {};
+            var onTime = function(){
+                if (!v.duration) return;
+                segs.forEach(function(seg, i){
+                    if (fired[i] || v.currentTime < i * segDur) return;
+                    fired[i] = true;
+                    // The GET reaches the SSAI seg handler, which fires the
+                    // quartile beacon SERVER-SIDE, then 302s. redirect:'manual'
+                    // means we don't follow to re-download the media.
+                    fetch(seg, { redirect: 'manual' }).catch(function(){});
+                    var ev = (seg.match(/[?&]event=([a-zA-Z]+)/) || [])[1] || 'segment';
+                    logVideoEvent('Segment fetched → server fires ' + ev, '', 'success');
+                });
+            };
+            var onEnded = function(){
+                v.removeEventListener('timeupdate', onTime);
+                v.removeEventListener('ended', onEnded);
+                badge.style.display = 'none';
+                logVideoEvent('SSAI ad complete → content resumes', '', 'success');
+                ssaiPlayContent(v);
+            };
+            v.addEventListener('timeupdate', onTime);
+            v.addEventListener('ended', onEnded);
+            v.src = adMedia; v.load();
+            v.play().catch(function(e){ logVideoEvent('SSAI autoplay blocked (click play)', String(e), ''); });
+        }
+
+        function ssaiPlayContent(v) {
+            v.src = '/v1/creatives/media/bbb-720-10mb.mp4'; v.load();
+            logVideoEvent('SSAI content playing', '', 'success');
+            v.play().catch(function(){});
+        }
+
+        // ssaiTraceAndBadge extracts the auction trace + sets the "stitched" badge.
+        // A master has neither (they live in the variant media playlists), so we
+        // fetch the first variant (a stitcher URL) to read them.
+        function ssaiTraceAndBadge(manifest, isMaster, badge) {
+            var apply = function(text){
+                var tm = text.match(/tid%3D([0-9a-f]{32})/) || text.match(/tid=([0-9a-f]{32})/);
+                if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
+                if (badge) badge.style.display = text.indexOf('/v1/ssai/seg') >= 0 ? '' : 'none';
+            };
+            if (!isMaster) { apply(manifest); return; }
+            var variant = null, lines = manifest.split('\n');
+            for (var i = 0; i < lines.length; i++) { var l = lines[i].trim(); if (l && l.charAt(0) !== '#') { variant = l; break; } }
+            if (variant) fetch(variant).then(function(r){ return r.text(); }).then(apply).catch(function(){});
+        }
+
+        // playSSAIDash plays a stitched multi-period DASH MPD with dash.js. The
+        // player fetches each Period's segments — including the /v1/ssai/seg ad
+        // beacon URLs (server fires the beacon, 302s to the conditioned .m4s) —
+        // exactly like the HLS path, just a different manifest format.
+        function playSSAIDash(v, url, badge, preview) {
+            preview.textContent = url + '\n\n(DASH — dash.js loading the MPD…)';
+            if (ssaiHls) { try { ssaiHls.destroy(); } catch (e) {} ssaiHls = null; }
+            if (ssaiDash) { try { ssaiDash.reset(); } catch (e) {} ssaiDash = null; }
+            // Show the MPD for transparency (same as the HLS preview).
+            fetch(url).then(function(r){ return r.text(); }).then(function(mpd){ preview.textContent = url + '\n\n' + mpd; }).catch(function(){});
+            if (!(window.dashjs && dashjs.MediaPlayer)) {
+                logVideoEvent('dash.js not loaded — cannot play DASH', '', 'error');
+                return;
+            }
+            badge.style.display = 'block';
+            ssaiDash = dashjs.MediaPlayer().create();
+            ssaiDash.on(dashjs.MediaPlayer.events.ERROR, function(e){
+                logVideoEvent('SSAI DASH error', (e && e.error && e.error.message) || String(e), 'error');
+            });
+            ssaiDash.on(dashjs.MediaPlayer.events.CAN_PLAY, function(){
+                logVideoEvent('SSAI DASH stream playing (dash.js · server-side beacons)', '', 'success');
+            });
+            // Client-side timed metadata: when ssai.timed_metadata is on, ad periods
+            // carry a quartile EventStream; dash.js fires each mark at playback time,
+            // so quartiles are attributed when actually watched (complements the
+            // server segment beacons). Requires no extra tracker calls here — we log
+            // to show the client received the playback-accurate timeline.
+            ssaiDash.on('urn:adtech:ssai:quartile', function(e){
+                var ev = e && e.event;
+                var name = (ev && (ev.messageData || ev.text || (ev.eventStream && ev.eventStream.value))) || 'quartile';
+                logVideoEvent('SSAI DASH client quartile (timed metadata @ playback): ' + name, '', 'success');
+            });
+            // OMID: the manifest carries an Open Measurement verification resource
+            // per ad period (SSAI has no VAST). A real player registers it with the
+            // OM SDK for viewability; here we log that it reached the client.
+            ssaiDash.on('urn:adtech:ssai:omid', function(e){
+                var ev = e && e.event;
+                var res = (ev && (ev.messageData || ev.text)) || '';
+                logVideoEvent('SSAI OMID verification resource received (register w/ OM SDK): ' + res, '', 'success');
+            });
+            ssaiDash.initialize(v, url, true);
+        }
+
+        function resetSSAI() {
+            var v = document.getElementById('ssai-video');
+            if (ssaiHls) { try { ssaiHls.destroy(); } catch (e) {} ssaiHls = null; }
+            if (ssaiDash) { try { ssaiDash.reset(); } catch (e) {} ssaiDash = null; }
+            try { v.pause(); } catch (e) {}
+            v.removeAttribute('src'); v.load();
+            var b = document.getElementById('ssai-badge'); if (b) b.style.display = 'none';
+            var p = document.getElementById('ssai-preview'); if (p) p.textContent = '(play to populate)';
+            if (typeof stopJaegerPoll === 'function') stopJaegerPoll();
+            logVideoEvent('SSAI reset', '', '');
         }
     </script>
 

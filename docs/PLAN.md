@@ -350,6 +350,17 @@ Carry-over from the analytics-gap audit (2026-06-03). Eight gaps were identified
 - *Sketch:* Pubad's `writePrebidWinner` injects our `<img src="${VIEWABILITY_URL}">` and impression pixel into the bid's `adm` HTML before serving. Tracker beacons fire alongside the external bidder's. Reporting attributes views to the Prebid endpoint via a new `prebid_endpoint` column on `view_events`.
 - *Subtle:* If the external bid's `adm` is a script or iframe (common), simple HTML injection may not work. May need an outer wrapper div with our pixel + the bid contents inside.
 
+### Video / CTV measurement
+
+**6. Video viewability (IAB 50% / 2s)** (L — its own project)
+- *Gap:* The video/audio path emits the full VAST tracking set (impression, quartile funnel → VCR, mute/pause/resume/skip/fullscreen, click, error), but there is **no video viewability** metric. Video viewability (IAB/MRC standard: ≥50% of the ad's pixels on-screen for ≥2 continuous seconds) is a *distinct* measurement from completion — the quartiles tell you how much was watched, not whether it was on-screen. Display has viewability (`/v1/t/view`); video does not.
+- *Why it matters:* Video viewability is a headline CTV/OLV buying metric (advertisers pay on viewable impressions, vCPM). We already settle vCPM for display views; video vCPM can't be honoured without a video-viewable signal. Also "zero data slippage": we report VCR but stay silent on viewability, so a viewability-bought video campaign has a blind spot.
+- *Why it's not just another VAST event:* Viewability isn't in the VAST tracking vocabulary — the industry measures it via the **Open Measurement SDK (OMID)**, which the player loads and which observes the ad's actual on-screen geometry. VAST only carries an `<AdVerifications>` pointer to the OM verification resource (we already emit that element for OMID when `omid_verification_url` is set).
+- *Sketch — two options:*
+  1. **OMID integration (industry-standard, but heavy + reintroduces a Google/IAB SDK):** ship the OM Web SDK, register the ad session, and let it fire the viewable beacon. Faithful, but it's another third-party SDK on the client — cuts against the "everything local / no external player" direction we took by dropping IMA.
+  2. **Self-measured (fits our local-first stance):** in our own player (`minimal.html playNextVideoAd`, and in `adtech.js` for a shipped video player), use an `IntersectionObserver` on the `<video>` element to track the % of pixels in the viewport, start a 2s timer when it crosses 50%, and fire a signed `/v1/t/view` (or a new `/v1/t/video?event=viewable`) beacon once the dwell completes — exactly how the display viewability path works, applied to the video element. No external SDK. Tracker already computes the server-authoritative IAB verdict for display; extend it to a `video` channel viewable event, persist `ViewEvent{Channel:"video", …}`, and let `handleViewabilityFromTracker` settle video vCPM (the vCPM settle machinery already exists).
+- *Decision needed:* OMID (standard, external SDK) vs. self-measured IntersectionObserver (local, ours). Given we just removed IMA to stay Google-free, the self-measured route is the more consistent choice; OMID only if a real buyer requires certified OM measurement. Note: SSAI/CTV viewability is harder still (server-side, no client geometry) — punt until client-side video viewability lands.
+
 ### Other tracks queued behind Prebid
 
 Items the user surfaced as "we'll handle them next" while we focused on Prebid.

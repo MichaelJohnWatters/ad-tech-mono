@@ -49,15 +49,42 @@ campaigns:
     creatives:
       - id: cr-shoes-native-001
         format: native
+        # Images point at seed-generated local theme SVGs (served via the
+        # gateway /v1/creatives proxy from Minio) rather than an external CDN,
+        # so the native ad renders in local dev. acme-shoes.com → "retail" theme.
         native:
           title: "Acme Running Shoes — 20% Off"
-          main_image: "https://cdn.acme-shoes.com/native/runner-1200x627.jpg"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-1200x627.svg"
           main_image_w: 1200
           main_image_h: 627
-          icon: "https://cdn.acme-shoes.com/native/icon-128.png"
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
           sponsored: "Acme"
           body: "Lightweight, all-day comfort. Free returns on every pair."
           cta: "Shop now"
+
+  - id: li-audio-001
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-001
+    name: "Acme Shoes - Audio Podcast Spot"
+    creative_domain: acme-shoes.com
+    base_bid: 4.00
+    currency: USD
+    daily_budget: 500
+    total_budget: 10000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    format: audio
+    targeting:
+      include:
+        geo: [GBR, USA]
+    # Audio spot: the DSP bids when the SSP sends an audio request
+    # (channel=audio) and ships the media URL + duration; the
+    # publisher-adserver assembles the audio VAST (audio/mpeg MediaFile).
+    creatives:
+      - { id: cr-shoes-audio-30s, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/audio-2.mp3" }
 
   - id: li-002
     account_id: adv-acme

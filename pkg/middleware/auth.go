@@ -186,10 +186,11 @@ func validateToken(token, signingKey string) (*auth.Claims, error) {
 		return nil, errInvalidToken
 	}
 
-	// Verify signature
+	// Verify signature with a constant-time compare so the check can't be
+	// timing-probed byte-by-byte.
 	signingInput := parts[0] + "." + parts[1]
 	expectedSig := sign(signingInput, signingKey)
-	if parts[2] != expectedSig {
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
 		return nil, errInvalidSignature
 	}
 
