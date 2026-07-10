@@ -26,6 +26,7 @@ type Segment struct {
 	CueIn         bool    // emit #EXT-X-CUE-IN before this segment
 	Ad            bool    // stitched ad segment (not original content)
 	Map           string  // fMP4 init URI → emit #EXT-X-MAP:URI="<map>" before this segment
+	DateRange     string  // raw #EXT-X-DATERANGE attribute list → emit before this segment (timed metadata)
 }
 
 // Manifest is a parsed HLS media playlist.
@@ -218,6 +219,9 @@ func (m *Manifest) Render() string {
 	for _, s := range m.Segments {
 		if s.Discontinuity {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
+		}
+		if s.DateRange != "" {
+			fmt.Fprintf(&b, "#EXT-X-DATERANGE:%s\n", s.DateRange)
 		}
 		if s.Map != "" {
 			fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", s.Map)

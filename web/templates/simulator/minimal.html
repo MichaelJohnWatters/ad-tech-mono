@@ -4065,6 +4065,21 @@
                     // — real SSAI, no client-side beacon code.
                     ssaiHls = new Hls();
                     ssaiHls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); logVideoEvent('SSAI stream playing (hls.js · server-side beacons)', '', 'success'); });
+                    // Client-side timed metadata (ssai.timed_metadata): surface any
+                    // #EXT-X-DATERANGE quartile markers hls.js parses — the HLS
+                    // analogue of the DASH EventStream.
+                    ssaiHls.on(Hls.Events.LEVEL_UPDATED, function(e, data){
+                        try {
+                            var drs = data && data.details && data.details.dateRanges; if (!drs) return;
+                            Object.keys(drs).forEach(function(id){
+                                var dr = drs[id]; var attr = dr && dr.attr || {};
+                                if (attr.CLASS === 'urn:adtech:ssai:quartile' && !dr._ssaiLogged) {
+                                    dr._ssaiLogged = true;
+                                    logVideoEvent('SSAI HLS timed metadata (DATERANGE): ' + id + ' · ' + (attr['X-QUARTILES'] || ''), '', 'success');
+                                }
+                            });
+                        } catch (x) {}
+                    });
                     ssaiHls.on(Hls.Events.ERROR, function(e, data){
                         if (!data.fatal) return;
                         logVideoEvent('SSAI hls error — using demo player', data.details, 'error');
