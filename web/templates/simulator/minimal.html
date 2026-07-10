@@ -4075,7 +4075,8 @@
                                 var dr = drs[id]; var attr = dr && dr.attr || {};
                                 if (attr.CLASS === 'urn:adtech:ssai:quartile' && !dr._ssaiLogged) {
                                     dr._ssaiLogged = true;
-                                    logVideoEvent('SSAI HLS timed metadata (DATERANGE): ' + id + ' · ' + (attr['X-QUARTILES'] || ''), '', 'success');
+                                    if (attr['X-QUARTILES']) logVideoEvent('SSAI HLS timed metadata (DATERANGE): ' + id + ' · ' + attr['X-QUARTILES'], '', 'success');
+                                    if (attr['X-OMID-RESOURCE']) logVideoEvent('SSAI OMID verification resource received (register w/ OM SDK): ' + attr['X-OMID-RESOURCE'], '', 'success');
                                 }
                             });
                         } catch (x) {}
@@ -4192,6 +4193,14 @@
                 var ev = e && e.event;
                 var name = (ev && (ev.messageData || ev.text || (ev.eventStream && ev.eventStream.value))) || 'quartile';
                 logVideoEvent('SSAI DASH client quartile (timed metadata @ playback): ' + name, '', 'success');
+            });
+            // OMID: the manifest carries an Open Measurement verification resource
+            // per ad period (SSAI has no VAST). A real player registers it with the
+            // OM SDK for viewability; here we log that it reached the client.
+            ssaiDash.on('urn:adtech:ssai:omid', function(e){
+                var ev = e && e.event;
+                var res = (ev && (ev.messageData || ev.text)) || '';
+                logVideoEvent('SSAI OMID verification resource received (register w/ OM SDK): ' + res, '', 'success');
             });
             ssaiDash.initialize(v, url, true);
         }

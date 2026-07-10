@@ -161,8 +161,11 @@ func main() {
 		slateCreativeFn: func() string { return cfg.Get("ssai.slate_creative_id", "") },
 		slateMediaFn:    func() string { return cfg.Get("ssai.slate_media_url", "") },
 		timedMetadataFn: func() bool { return cfg.GetBool("ssai.timed_metadata", false) },
-		metrics:         newStitcherMetrics(metrics.Registry()),
-		client:          &http.Client{Timeout: 4 * time.Second},
+		omidFn: func() (string, string) {
+			return cfg.Get("ssai.omid_vendor", "adtech-om"), cfg.Get("ssai.omid_verification_url", "")
+		},
+		metrics: newStitcherMetrics(metrics.Registry()),
+		client:  &http.Client{Timeout: 4 * time.Second},
 	}
 
 	mux := http.NewServeMux()
@@ -193,6 +196,7 @@ type stitcherDeps struct {
 	slateCreativeFn func() string              // slate creative id ("" = no slate, keep content)
 	slateMediaFn    func() string              // slate media URL (to warm-condition the slate)
 	timedMetadataFn func() bool                // emit DASH quartile EventStreams (client-side timed beacons)
+	omidFn          func() (string, string)    // (vendor, verification resource URL) for OMID; "" URL disables
 	metrics         *stitcherMetrics
 	store           objects.Store // reads /v1/creatives origins from object storage (in-cluster)
 	bucket          string        // object-store bucket for origin reads
@@ -650,6 +654,13 @@ func (d *stitcherDeps) serveDASH(w http.ResponseWriter, m *ssai.Manifest, channe
 	}
 	quartileEvents := d.timedMetadataFn != nil && d.timedMetadataFn()
 	mpd := dash.AssembleVOD(rep, segs, quartileEvents)
+	// OMID: deliver the verification resource per ad Period so an OM-SDK player
+	// can register it (SSAI has no VAST <AdVerifications> to carry it).
+	if d.omidFn != nil {
+		if vendor, res := d.omidFn(); res != "" {
+			mpd.AddOMID(vendor, res)
+		}
+	}
 	xmlDoc, err := mpd.XML()
 	if err != nil {
 		http.Error(w, "mpd build failed", http.StatusInternalServerError)
@@ -774,24 +785,42 @@ func (d *stitcherDeps) adSegments(cond *transcode.Conditioned, mc adserving.Macr
 		// Stitch restores the content init on the segment after the break).
 		segs[0].Map = cond.InitURI
 		// HLS timed metadata: a #EXT-X-DATERANGE carrying the ad's quartile
-		// schedule, the HLS analogue of the DASH EventStream (hls.js surfaces it
-		// via dateRanges). Gated by ssai.timed_metadata; not on slates.
-		if !isSlate && d.timedMetadataFn != nil && d.timedMetadataFn() {
-			segs[0].DateRange = quartileDateRange(adTrace, cond.Duration)
+		// schedule (hls.js surfaces it via dateRanges) and/or the OMID verification
+		// resource. The HLS analogue of the DASH EventStream; not on slates.
+		if !isSlate {
+			tm := d.timedMetadataFn != nil && d.timedMetadataFn()
+			omidVendor, omidRes := "", ""
+			if d.omidFn != nil {
+				omidVendor, omidRes = d.omidFn()
+			}
+			if dr := adDateRange(adTrace, cond.Duration, tm, omidVendor, omidRes); dr != "" {
+				segs[0].DateRange = dr
+			}
 		}
 	}
 	return segs
 }
 
-// quartileDateRange builds the #EXT-X-DATERANGE attribute list advertising an
-// ad's VAST quartile offsets (seconds from the ad start). START-DATE is required
-// by the HLS spec; a synthetic epoch is fine for a VOD timed-metadata marker.
-func quartileDateRange(adTrace string, dur float64) string {
-	off := func(f float64) string { return ftoa(f * dur) }
-	quartiles := "start:0,firstQuartile:" + off(0.25) + ",midpoint:" + off(0.5) +
-		",thirdQuartile:" + off(0.75) + ",complete:" + off(1)
-	return fmt.Sprintf("ID=%q,CLASS=%q,START-DATE=%q,DURATION=%s,X-QUARTILES=%q",
-		"ad-"+adTrace, "urn:adtech:ssai:quartile", "1970-01-01T00:00:00.000Z", ftoa(dur), quartiles)
+// adDateRange builds the #EXT-X-DATERANGE attribute list for an ad: the VAST
+// quartile offsets (when tm) and/or the OMID verification resource (when a URL is
+// given). Returns "" when neither is requested. START-DATE is required by the HLS
+// spec; a synthetic epoch is fine for a VOD timed-metadata marker.
+func adDateRange(adTrace string, dur float64, tm bool, omidVendor, omidRes string) string {
+	if !tm && omidRes == "" {
+		return ""
+	}
+	attrs := fmt.Sprintf("ID=%q,CLASS=%q,START-DATE=%q,DURATION=%s",
+		"ad-"+adTrace, "urn:adtech:ssai:quartile", "1970-01-01T00:00:00.000Z", ftoa(dur))
+	if tm {
+		off := func(f float64) string { return ftoa(f * dur) }
+		quartiles := "start:0,firstQuartile:" + off(0.25) + ",midpoint:" + off(0.5) +
+			",thirdQuartile:" + off(0.75) + ",complete:" + off(1)
+		attrs += fmt.Sprintf(",X-QUARTILES=%q", quartiles)
+	}
+	if omidRes != "" {
+		attrs += fmt.Sprintf(",X-OMID-VENDOR=%q,X-OMID-RESOURCE=%q", omidVendor, omidRes)
+	}
+	return attrs
 }
 
 func ftoa(f float64) string {
