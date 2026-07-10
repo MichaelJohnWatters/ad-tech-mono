@@ -47,6 +47,36 @@ tags:
     description: "[Internal] Supply-side bid request generation"
   - name: Dev Tools
     description: "[Dev] Debugging and simulation endpoints"
+  - name: Direct Line Items
+    description: "[Customer] Publisher direct-sold line items"
+  - name: Agency
+    description: "[Customer] Agency act-as: managed advertiser accounts"
+  - name: Billing
+    description: "[Customer] Advertiser prepay balance + top-ups"
+  - name: Deals
+    description: "[Customer] Deal management (PMP/PG/preferred) with allowlists"
+  - name: Revenue Share
+    description: "[Staff] Per-publisher revenue-share configuration"
+  - name: Payouts
+    description: "[Customer] Publisher earnings and payouts"
+  - name: Team
+    description: "[Customer] Team / user management"
+  - name: Secrets
+    description: "[Operator] API secrets and key rotation"
+  - name: Webhooks
+    description: "[Customer] Webhook subscriptions"
+  - name: Audit
+    description: "[Staff] Audit log queries"
+  - name: Moderation
+    description: "[Staff] Creative review queue"
+  - name: Quality
+    description: "[Customer] Publisher quality controls (allow/blocklists)"
+  - name: Fraud
+    description: "[Staff] Fraud blocklists"
+  - name: Identity
+    description: "[Operator] Identity-graph edge ingestion"
+  - name: SSAI
+    description: "[Public] Server-side ad insertion (HLS/DASH stitching)"
 
 paths:
   # ============================================================
@@ -106,15 +136,58 @@ paths:
     get:
       tags: [Campaigns]
       summary: List campaigns
-      security:
-        - bearerAuth: []
+      description: Returns the caller's campaigns, denormalised with targeting, modifiers, attached creatives and spent-today.
+      security: [{ bearerAuth: [] }]
       responses:
-        "200":
-          description: List of campaigns
-        "401":
-          description: Unauthorized
-        "403":
-          description: Forbidden - requires campaigns:read permission
+        "200": { description: List of campaigns }
+        "401": { description: Unauthorized }
+        "403": { description: Forbidden (needs campaigns read permission) }
+    post:
+      tags: [Campaigns]
+      summary: Create a campaign
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CampaignInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  account_id: { type: string }
+                  status: { type: string, example: created }
+        "400": { description: Invalid body }
+
+  /v1/api/campaigns/{id}:
+    patch:
+      tags: [Campaigns]
+      summary: Update a campaign (partial)
+      description: Any omitted field is left unchanged; an empty array clears that targeting list.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CampaignUpdate" }
+      responses:
+        "204": { description: Updated }
+        "400": { description: Invalid body }
+    delete:
+      tags: [Campaigns]
+      summary: Archive/delete a campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
 
   # ============================================================
   # Public API - Placements (proxied to SSP)
@@ -123,13 +196,67 @@ paths:
     get:
       tags: [Placements]
       summary: List publisher placements
-      security:
-        - bearerAuth: []
+      security: [{ bearerAuth: [] }]
       responses:
-        "200":
-          description: List of placements
-        "401":
-          description: Unauthorized
+        "200": { description: List of placements }
+        "401": { description: Unauthorized }
+    post:
+      tags: [Placements]
+      summary: Create a placement
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publisher_id, name, width, height]
+              properties:
+                publisher_id: { type: string, format: uuid }
+                name: { type: string }
+                format: { type: string, enum: [display, video, native, audio], default: display }
+                width: { type: integer }
+                height: { type: integer }
+                floor_price: { type: number, default: 0 }
+                page_url_pattern: { type: string }
+                floor_config: { $ref: "#/components/schemas/FloorConfig" }
+                video_config: { $ref: "#/components/schemas/VideoConfig" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { type: object, properties: { id: { type: string }, status: { type: string, example: created } } }
+
+  /v1/api/placements/{id}:
+    patch:
+      tags: [Placements]
+      summary: Update a placement (partial)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                floor_price: { type: number }
+                status: { type: string, enum: [active, paused, archived] }
+                floor_config: { $ref: "#/components/schemas/FloorConfig" }
+                video_config: { $ref: "#/components/schemas/VideoConfig" }
+      responses:
+        "204": { description: Updated }
+    delete:
+      tags: [Placements]
+      summary: Delete a placement
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Deleted }
 
   /v1/api/identity-links:
     post:
@@ -605,6 +732,639 @@ paths:
             text/xml:
               schema: { type: string }
 
+  # ============================================================
+  # Public API - Creatives
+  # ============================================================
+  /v1/api/creatives:
+    get:
+      tags: [Creatives]
+      summary: List creatives
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List of creatives } }
+    post:
+      tags: [Creatives]
+      summary: Upload a creative (enters review)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, format, landing_url]
+              properties:
+                name: { type: string }
+                format: { type: string, enum: [display, video, native, audio] }
+                width: { type: integer }
+                height: { type: integer }
+                html_content: { type: string }
+                landing_url: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { type: object, properties: { id: { type: string }, review_status: { type: string, example: pending_review } } }
+
+  # ============================================================
+  # Public API - Direct-sold line items (publisher)
+  # ============================================================
+  /v1/api/direct-line-items:
+    get:
+      tags: [Direct Line Items]
+      summary: List direct-sold line items
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List } }
+    post:
+      tags: [Direct Line Items]
+      summary: Create a direct-sold line item
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publisher_id, name, priority_tier]
+              properties:
+                publisher_id: { type: string, format: uuid }
+                name: { type: string }
+                demand_source: { type: string }
+                priority_tier: { type: string, enum: [sponsorship, guaranteed, preferred, house] }
+                placement_ids: { type: array, items: { type: string, format: uuid } }
+                impressions_committed: { type: integer }
+                delivery_start: { type: string, format: date }
+                delivery_end: { type: string, format: date }
+                cpm: { type: number }
+                currency: { type: string }
+                pacing_mode: { type: string, enum: [even, asap], default: even }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { type: object, properties: { id: { type: string }, status: { type: string } } } } }
+  /v1/api/direct-line-items/{id}:
+    patch:
+      tags: [Direct Line Items]
+      summary: Update a direct-sold line item
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                demand_source: { type: string }
+                priority_tier: { type: string, enum: [sponsorship, guaranteed, preferred, house] }
+                placement_ids: { type: array, items: { type: string } }
+                impressions_committed: { type: integer }
+                delivery_start: { type: string, format: date }
+                delivery_end: { type: string, format: date }
+                cpm: { type: number }
+                pacing_mode: { type: string, enum: [even, asap] }
+                status: { type: string, enum: [draft, active, paused, ended] }
+      responses: { "200": { description: Updated } }
+
+  # ============================================================
+  # Public API - Agency act-as
+  # ============================================================
+  /v1/api/agency-accounts:
+    get:
+      tags: [Agency]
+      summary: List managed advertiser accounts
+      description: An agency session sees its own managed accounts; staff see all (filter with ?agency_id).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: agency_id, in: query, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: "List of managed-account rows (agency_id, agency_name, managed_account_id, managed_account_name)" } }
+    post:
+      tags: [Agency]
+      summary: Assign a managed account to an agency (staff)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agency_account_id, managed_account_id]
+              properties:
+                agency_account_id: { type: string, format: uuid }
+                managed_account_id: { type: string, format: uuid }
+      responses: { "201": { description: Assigned } }
+    delete:
+      tags: [Agency]
+      summary: Unassign a managed account (staff)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: agency_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: managed_account_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: Unassigned } }
+
+  # ============================================================
+  # Public API - Billing top-up (advertiser prepay)
+  # ============================================================
+  /v1/api/billing/topup:
+    get:
+      tags: [Billing]
+      summary: Balance + top-up history
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ balance, currency, topups[] }" } }
+    post:
+      tags: [Billing]
+      summary: Add prepay funds (idempotent)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, idempotency_key]
+              properties:
+                amount: { type: number, description: "0 < amount <= 10000" }
+                currency: { type: string, default: USD }
+                idempotency_key: { type: string }
+      responses:
+        "201":
+          description: Top-up applied (or 200 on idempotent replay)
+          content: { application/json: { schema: { type: object, properties: { id: { type: string }, amount: { type: number }, currency: { type: string }, status: { type: string }, balance: { type: number }, duplicate: { type: boolean } } } } }
+
+  # ============================================================
+  # Public API - Deals (publisher, with allowlists)
+  # ============================================================
+  /v1/api/deals:
+    get:
+      tags: [Deals]
+      summary: List deals
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List of deals } }
+    post:
+      tags: [Deals]
+      summary: Create a deal
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publisher_id, name]
+              properties:
+                publisher_id: { type: string, format: uuid }
+                name: { type: string }
+                deal_type: { type: string, enum: [open, pmp, pg, preferred], default: pmp }
+                price: { type: number }
+                price_currency: { type: string, default: USD }
+                advertiser_ids: { type: array, items: { type: string, format: uuid }, description: "empty = match all" }
+                placement_ids: { type: array, items: { type: string, format: uuid }, description: "empty = match all" }
+                guaranteed_volume: { type: integer }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+      responses: { "201": { description: Created } }
+  /v1/api/deals/{id}:
+    patch:
+      tags: [Deals]
+      summary: Update a deal
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                price: { type: number }
+                status: { type: string, enum: [active, paused] }
+                advertiser_ids: { type: array, items: { type: string } }
+                placement_ids: { type: array, items: { type: string } }
+                guaranteed_volume: { type: integer }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+      responses: { "200": { description: Updated } }
+
+  # ============================================================
+  # Staff API - Revenue share
+  # ============================================================
+  /v1/api/revshare:
+    get:
+      tags: [Revenue Share]
+      summary: List per-publisher revenue-share config (staff)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List of revshare config } }
+    patch:
+      tags: [Revenue Share]
+      summary: Update a publisher's revenue-share config (staff)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid }, description: publisher id }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fee_pct]
+              properties:
+                revshare_model: { type: string, enum: [fixed, tiered, guaranteed_minimum, deal_type, hybrid], default: fixed }
+                fee_pct: { type: number, description: "0-100" }
+                tiers: { type: array, items: { $ref: "#/components/schemas/RevShareTier" } }
+                guaranteed_min_cpm: { type: number }
+                deal_type_modifiers: { type: object, additionalProperties: { type: number }, description: "deal_type -> modifier% (-100..100)" }
+                payment_terms: { type: string, enum: [prepay, net_15, net_30, net_60, net_90] }
+      responses: { "200": { description: Updated } }
+
+  # ============================================================
+  # Publisher API - Payouts (read-only)
+  # ============================================================
+  /v1/api/payouts:
+    get:
+      tags: [Payouts]
+      summary: Publisher earnings + payout history
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ payouts[], pending_cents, paid_cents, currency }" } }
+
+  # ============================================================
+  # Public API - Team management
+  # ============================================================
+  /v1/api/team:
+    get:
+      tags: [Team]
+      summary: List team members
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "List of team members (id, email, name, role, status)" } }
+    post:
+      tags: [Team]
+      summary: Invite a team member (returns a one-time temp password)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, name]
+              properties:
+                email: { type: string }
+                name: { type: string }
+                role: { type: string, enum: [owner, manager, analyst, finance, viewer, ad_ops], default: viewer }
+      responses: { "201": { description: "Created; response includes temp_password (shown once)" } }
+
+  # ============================================================
+  # Operator API - Secrets (X-API-Key)
+  # ============================================================
+  /v1/api/secrets:
+    get:
+      tags: [Secrets]
+      summary: List secrets (values previewed only)
+      parameters:
+        - { name: service, in: query, schema: { type: string } }
+        - { name: purpose, in: query, schema: { type: string } }
+        - { name: include_revoked, in: query, schema: { type: string } }
+      responses: { "200": { description: List; value_preview only, never the full value } }
+    post:
+      tags: [Secrets]
+      summary: Create/store a secret (full value returned once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, purpose]
+              properties:
+                name: { type: string }
+                purpose: { type: string }
+                owner: { type: string, default: platform }
+                status: { type: string, enum: [active, rotating, revoked], default: active }
+                value: { type: string, description: auto-generated when absent }
+      responses: { "201": { description: "Created; response value shown ONCE" } }
+  /v1/api/secrets/{id}:
+    patch:
+      tags: [Secrets]
+      summary: Update secret status (rotate/revoke)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { status: { type: string, enum: [active, rotating, revoked] } } } } }
+      responses: { "204": { description: Updated } }
+    delete:
+      tags: [Secrets]
+      summary: Delete a revoked secret
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { "204": { description: Deleted } }
+
+  # ============================================================
+  # Public API - Webhooks
+  # ============================================================
+  /v1/api/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List webhook subscriptions
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "List of webhooks (id, url, events, status)" } }
+    post:
+      tags: [Webhooks]
+      summary: Create a webhook subscription (returns HMAC secret once)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url: { type: string }
+                events: { type: array, items: { type: string } }
+      responses: { "201": { description: "Created; response includes secret (shown once)" } }
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook subscription
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Deleted } }
+
+  # ============================================================
+  # Staff API - Audit / Moderation / Quality / Fraud
+  # ============================================================
+  /v1/api/audit:
+    get:
+      tags: [Audit]
+      summary: Query the audit log (staff)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: account_id, in: query, schema: { type: string, format: uuid } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: resource_type, in: query, schema: { type: string } }
+        - { name: resource_id, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } }
+      responses: { "200": { description: List of audit entries } }
+  /v1/api/moderation:
+    get:
+      tags: [Moderation]
+      summary: Creative review queue (staff)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: Pending creatives } }
+    post:
+      tags: [Moderation]
+      summary: Approve or reject a creative (staff)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [creative_id, action]
+              properties:
+                creative_id: { type: string, format: uuid }
+                action: { type: string, enum: [approve, reject] }
+                reason: { type: string, description: required when action=reject }
+      responses: { "200": { description: "{ id, review_status }" } }
+  /v1/api/quality-controls:
+    get:
+      tags: [Quality]
+      summary: List publisher quality controls (allow/blocklists)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List } }
+    post:
+      tags: [Quality]
+      summary: Upsert a quality control list
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publisher_id, type, values]
+              properties:
+                publisher_id: { type: string, format: uuid }
+                type: { type: string, enum: [advertiser_blocklist, category_blocklist, creative_blocklist, advertiser_allowlist, domain_blocklist] }
+                values: { type: array, items: { type: string } }
+      responses: { "200": { description: Upserted } }
+    delete:
+      tags: [Quality]
+      summary: Delete a quality control list
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Deleted } }
+  /v1/api/fraud/blocklists:
+    get:
+      tags: [Fraud]
+      summary: List fraud blocklist entries (staff)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List } }
+    post:
+      tags: [Fraud]
+      summary: Add a fraud blocklist entry (staff)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, value]
+              properties:
+                type: { type: string, enum: [ip, ua, domain, app_bundle] }
+                value: { type: string }
+                reason: { type: string }
+      responses: { "201": { description: Created } }
+    delete:
+      tags: [Fraud]
+      summary: Remove a fraud blocklist entry (staff)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Deleted } }
+
+  # ============================================================
+  # Publisher API - Ad tag generator + saved reports
+  # ============================================================
+  /v1/api/adtag:
+    get:
+      tags: [Placements]
+      summary: Generate an embed ad tag for a placement
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: placement_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: tag_type, in: query, schema: { type: string, enum: [js, prebid, vast], default: js } }
+      responses: { "200": { description: "{ placement_id, format, tag_type, tag }" } }
+  /v1/api/reports/saved:
+    get:
+      tags: [Reports]
+      summary: List saved / scheduled reports
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: List } }
+    post:
+      tags: [Reports]
+      summary: Save a report (optionally scheduled)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, query_config]
+              properties:
+                name: { type: string }
+                query_config: { type: object, description: report query specification }
+                schedule: { type: string, description: "interval keyword (@hourly/@daily/@weekly/@monthly) or empty for manual" }
+                delivery: { type: string, enum: [email, webhook, none], default: none }
+      responses: { "201": { description: Created } }
+    delete:
+      tags: [Reports]
+      summary: Delete a saved report
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: Deleted } }
+
+  # ============================================================
+  # Publisher Ad Server - audio + VMAP
+  # ============================================================
+  /v1/pubad/audio:
+    get:
+      tags: [Ad Serving]
+      summary: Serve an audio ad (VAST 4.2, audio MediaFile)
+      description: Runs an SSP auction (channel=audio) and returns VAST with an audio/mpeg MediaFile and signed impression/click/quartile beacons. Falls back to a house creative on no-bid.
+      parameters:
+        - { name: placement_id, in: query, schema: { type: string }, description: "default pl-sim-audio" }
+        - { name: geo, in: query, schema: { type: string } }
+        - { name: consent, in: query, schema: { type: string } }
+        - { name: uid2, in: query, schema: { type: string } }
+      responses: { "200": { description: VAST 4.2 audio XML, content: { text/xml: { schema: { type: string } } } } }
+  /v1/pubad/video/vmap:
+    get:
+      tags: [Ad Serving]
+      summary: Serve a VMAP ad schedule (pre/mid/post breaks)
+      parameters:
+        - { name: placement_id, in: query, schema: { type: string } }
+      responses: { "200": { description: VMAP 1.0 XML, content: { application/xml: { schema: { type: string } } } } }
+
+  # ============================================================
+  # SSAI - server-side ad insertion
+  # ============================================================
+  /v1/ssai/manifest.m3u8:
+    get:
+      tags: [SSAI]
+      summary: Stitched HLS manifest (ads spliced into content)
+      description: >
+        Runs a per-break auction, conditions winning ads to the content profile,
+        and returns an HLS playlist with ad segments spliced in. Ad segments point
+        at /v1/ssai/seg (server-side beacons). ?channel=audio serves the audio path.
+      parameters:
+        - { name: origin, in: query, schema: { type: string }, description: origin content manifest URL (else built-in sample) }
+        - { name: placement_id, in: query, schema: { type: string } }
+        - { name: channel, in: query, schema: { type: string, enum: [video, audio], default: video } }
+        - { name: geo, in: query, schema: { type: string } }
+        - { name: device, in: query, schema: { type: string } }
+        - { name: rung, in: query, schema: { type: string }, description: ABR rung height to condition ads to }
+      responses: { "200": { description: HLS media playlist, content: { application/vnd.apple.mpegurl: { schema: { type: string } } } } }
+  /v1/ssai/manifest.mpd:
+    get:
+      tags: [SSAI]
+      summary: Stitched MPEG-DASH manifest (multi-period MPD over CMAF)
+      description: DASH counterpart of manifest.m3u8; multi-period MPD (content + ad periods). ssai.dash_multi_rung emits one Representation per rung.
+      parameters:
+        - { name: origin, in: query, schema: { type: string }, description: CMAF content master/media URL }
+        - { name: placement_id, in: query, schema: { type: string } }
+        - { name: geo, in: query, schema: { type: string } }
+        - { name: device, in: query, schema: { type: string } }
+      responses: { "200": { description: DASH MPD, content: { application/dash+xml: { schema: { type: string } } } } }
+  /v1/ssai/seg:
+    get:
+      tags: [SSAI]
+      summary: Per-ad-segment beacon + redirect
+      description: Fires the embedded pre-signed tracker beacon(s) server-side, then 302-redirects to the conditioned media segment.
+      parameters:
+        - { name: beacon, in: query, schema: { type: array, items: { type: string } }, description: pre-signed tracker URLs to fire }
+        - { name: redir, in: query, required: true, schema: { type: string }, description: media segment to redirect to }
+        - { name: session, in: query, schema: { type: string } }
+        - { name: ad, in: query, schema: { type: string } }
+        - { name: break, in: query, schema: { type: integer } }
+        - { name: seg, in: query, schema: { type: integer } }
+      responses: { "302": { description: Redirect to the media segment (beacons fired) } }
+
+  # ============================================================
+  # Simulator - single source of truth for realism params
+  # ============================================================
+  /v1/sim/realism:
+    get:
+      tags: [Dev Tools]
+      summary: Encode a consent regime + identity type as signed query params
+      parameters:
+        - { name: consent, in: query, schema: { type: string, enum: [us_clear, gdpr_consented, gdpr_no_consent, ccpa_opt_out, gpc, coppa, gpp_opt_out] } }
+        - { name: identity, in: query, schema: { type: string, enum: [anonymous, publisher_id, uid2, hashed_email] } }
+        - { name: seed, in: query, schema: { type: string } }
+      responses: { "200": { description: "{ query: <url-encoded consent/identity params> }", content: { application/json: { schema: { type: object, properties: { query: { type: string } } } } } } }
+  /v1/sim/personas:
+    get:
+      tags: [Dev Tools]
+      summary: List simulator personas (weighted registry)
+      responses: { "200": { description: JSON array of personas } }
+
+  # ============================================================
+  # Transcoder - runtime ad conditioning (internal, SSAI-only)
+  # ============================================================
+  /v1/transcode/condition:
+    post:
+      tags: [Ad Serving]
+      summary: "[Internal] Condition an ad to a content profile (cache-first)"
+      description: Transcodes + segments an ad to a byte-compatible HLS/CMAF profile and caches it. ?cache_only=1 returns a hit or 404 (never transcodes) — the SSAI serving path.
+      parameters: [{ name: cache_only, in: query, schema: { type: string }, description: "'1' = cache-only (404 on miss)" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [creative_id, media_url]
+              properties:
+                creative_id: { type: string }
+                media_url: { type: string }
+                profile: { $ref: "#/components/schemas/TranscodeProfile" }
+      responses:
+        "200": { description: Conditioned, content: { application/json: { schema: { $ref: "#/components/schemas/Conditioned" } } } }
+        "404": { description: cache_only miss (not conditioned yet) }
+        "502": { description: Conditioning failed }
+
+  # ============================================================
+  # Tracker - video/audio/conversion events
+  # ============================================================
+  /v1/t/video:
+    get:
+      tags: [Tracker]
+      summary: Video quartile event
+      parameters:
+        - { name: tid, in: query, schema: { type: string } }
+        - { name: event, in: query, schema: { type: string, enum: [start, firstQuartile, midpoint, thirdQuartile, complete] } }
+        - { name: sig, in: query, schema: { type: string } }
+      responses: { "204": { description: Recorded } }
+  /v1/t/audio:
+    get:
+      tags: [Tracker]
+      summary: Audio quartile event
+      parameters:
+        - { name: tid, in: query, schema: { type: string } }
+        - { name: event, in: query, schema: { type: string } }
+        - { name: sig, in: query, schema: { type: string } }
+      responses: { "204": { description: Recorded } }
+  /v1/t/conv:
+    get:
+      tags: [Tracker]
+      summary: Conversion event (CPA billing trigger — signature always enforced)
+      parameters:
+        - { name: tid, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: rev, in: query, schema: { type: string } }
+        - { name: cur, in: query, schema: { type: string, default: USD } }
+        - { name: sig, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Recorded (1x1 GIF) }
+        "403": { description: Invalid signature }
+        "410": { description: Expired }
+
   /healthz:
     get:
       tags: [Dev Tools]
@@ -629,6 +1389,148 @@ components:
       bearerFormat: JWT
 
   schemas:
+    BidModifiers:
+      type: object
+      description: Per-signal bid adjustments (percentages, -100..1000).
+      properties:
+        device: { type: object, additionalProperties: { type: number } }
+        geo_country: { type: object, additionalProperties: { type: number } }
+        time_of_day:
+          type: array
+          items:
+            type: object
+            properties:
+              start_hour: { type: integer }
+              end_hour: { type: integer }
+              modifier: { type: number }
+    FrequencyCap:
+      type: object
+      properties:
+        limit: { type: integer, description: "<= 0 clears the cap" }
+        window: { type: string, enum: [hour, day, week], default: day }
+    CampaignInput:
+      type: object
+      required: [name]
+      description: Create-campaign body (full targeting + modifiers + creatives).
+      properties:
+        name: { type: string }
+        base_bid: { type: number, default: 2.50 }
+        daily_budget: { type: number, default: 500 }
+        total_budget: { type: number }
+        format: { type: string, enum: [display, native, video, audio], default: display }
+        bid_strategy: { type: string, enum: [cpm, cpc, cpa, vcpm, cpcv], default: cpm }
+        pacing_mode: { type: string, enum: [even, asap, front_loaded], default: even }
+        creative_rotation: { type: string, enum: [even, weighted, bandit, sequential], default: bandit }
+        timezone: { type: string, description: IANA name, default: UTC }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        include_geo: { type: array, items: { type: string } }
+        exclude_geo: { type: array, items: { type: string } }
+        include_device: { type: array, items: { type: string } }
+        exclude_device: { type: array, items: { type: string } }
+        include_domains: { type: array, items: { type: string } }
+        exclude_domains: { type: array, items: { type: string } }
+        include_categories: { type: array, items: { type: string } }
+        exclude_categories: { type: array, items: { type: string } }
+        include_os: { type: array, items: { type: string } }
+        include_keywords: { type: array, items: { type: string } }
+        exclude_keywords: { type: array, items: { type: string } }
+        include_inventory_type: { type: array, items: { type: string } }
+        include_segments: { type: array, items: { type: string } }
+        exclude_segments: { type: array, items: { type: string } }
+        bid_modifiers: { $ref: "#/components/schemas/BidModifiers" }
+        frequency_cap: { $ref: "#/components/schemas/FrequencyCap" }
+        viewability_target_pct: { type: integer, minimum: 0, maximum: 100 }
+    CampaignUpdate:
+      type: object
+      description: Partial update — omitted fields unchanged; empty arrays clear a list.
+      properties:
+        base_bid: { type: number }
+        daily_budget: { type: number }
+        status: { type: string, enum: [live, paused, archived, ended] }
+        bid_strategy: { type: string, enum: [cpm, cpc, cpa, vcpm, cpcv] }
+        pacing_mode: { type: string, enum: [even, asap, front_loaded] }
+        timezone: { type: string }
+        creative_rotation: { type: string, enum: [even, weighted, bandit, sequential] }
+        creatives:
+          type: array
+          items:
+            type: object
+            properties:
+              creative_id: { type: string, format: uuid }
+              weight: { type: integer }
+        include_geo: { type: array, items: { type: string } }
+        exclude_geo: { type: array, items: { type: string } }
+        include_device: { type: array, items: { type: string } }
+        include_segments: { type: array, items: { type: string } }
+        bid_modifiers: { $ref: "#/components/schemas/BidModifiers" }
+        frequency_cap: { $ref: "#/components/schemas/FrequencyCap" }
+    FloorConfig:
+      type: object
+      description: Per-device / per-geo / dayparting price floors for a placement.
+      properties:
+        device: { type: object, additionalProperties: { type: number }, description: device -> cpm floor }
+        geo: { type: object, additionalProperties: { type: number }, description: country -> cpm floor }
+        timezone: { type: string }
+        dayparts:
+          type: array
+          items:
+            type: object
+            properties:
+              days: { type: array, items: { type: integer }, description: "0=Sun..6=Sat; empty=every day" }
+              start_hour: { type: integer }
+              end_hour: { type: integer }
+              floor: { type: number }
+    VideoConfig:
+      type: object
+      description: Video placement constraints (OpenRTB video object).
+      properties:
+        skippable: { type: boolean }
+        skip_after: { type: integer }
+        min_duration: { type: integer }
+        max_duration: { type: integer }
+        plcmt: { type: integer }
+        linearity: { type: integer }
+        w: { type: integer }
+        h: { type: integer }
+        mimes: { type: array, items: { type: string } }
+        protocols: { type: array, items: { type: integer } }
+    RevShareTier:
+      type: object
+      properties:
+        min_impressions: { type: integer }
+        max_impressions: { type: integer, description: "0 = unlimited" }
+        fee_pct: { type: number }
+    TranscodeProfile:
+      type: object
+      description: Target encoding profile for ad conditioning.
+      properties:
+        container: { type: string, enum: [ts, cmaf] }
+        audio_only: { type: boolean }
+        vcodec: { type: string, enum: [h264, hevc] }
+        width: { type: integer }
+        height: { type: integer }
+        fps: { type: integer }
+        vbitrate_kbps: { type: integer }
+        acodec: { type: string, example: aac }
+        asample_rate: { type: integer }
+        abitrate_kbps: { type: integer }
+        seg_dur_sec: { type: integer }
+    Conditioned:
+      type: object
+      properties:
+        creative_id: { type: string }
+        profile_hash: { type: string }
+        cached: { type: boolean }
+        duration: { type: number }
+        init_uri: { type: string, description: fMP4 init URL (empty for TS) }
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              uri: { type: string }
+              duration: { type: number }
     QueryParams:
       type: object
       required: [table]
