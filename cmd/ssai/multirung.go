@@ -110,6 +110,19 @@ func (d *stitcherDeps) serveMultiRungDASH(ctx context.Context, w http.ResponseWr
 		rungInputs = append(rungInputs, dash.RungInput{Rep: rc.rep, Segs: toDashSegs(rc.content)})
 	}
 
+	// AssembleMultiRung takes the period structure from rung 0 and assumes every
+	// other rung matches it segment-for-segment. serveMultiRungDASH only guarantees
+	// the same AD DECISIONS — each rung reads its OWN origin variant, so a
+	// demuxed/differently-segmented content variant would misalign the periods
+	// (AssembleMultiRung's `i < len(segs)` guard would silently drop/misplace a
+	// rung's segments rather than error). Bail to the proven single-rung path when
+	// the stitched rungs don't line up.
+	if !rungsAligned(rungInputs) {
+		reqLog.Warn("multi-rung DASH rungs not structurally aligned; falling back to single-rung",
+			"rungs", len(rungInputs))
+		return false
+	}
+
 	quartileEvents := d.timedMetadataFn != nil && d.timedMetadataFn()
 	mpd := dash.AssembleMultiRung(rungInputs, quartileEvents)
 	if d.omidFn != nil {
@@ -164,6 +177,36 @@ func (d *stitcherDeps) podWinners(ctx context.Context, r *http.Request, channel 
 		filled += dur
 	}
 	return out
+}
+
+// rungsAligned reports whether every rung shares the SAME period structure —
+// the precondition dash.AssembleMultiRung relies on. It requires equal segment
+// count and, per index, the same content/ad flag, the same init-change position
+// (a non-empty Init marks a period boundary), and matching durations. A false
+// return means the rungs diverged (e.g. a differently-segmented origin variant)
+// and the caller must fall back to single-rung rather than emit a misaligned MPD.
+func rungsAligned(rungs []dash.RungInput) bool {
+	if len(rungs) < 2 {
+		return true
+	}
+	base := rungs[0].Segs
+	for _, r := range rungs[1:] {
+		if len(r.Segs) != len(base) {
+			return false
+		}
+		for i := range base {
+			if r.Segs[i].Ad != base[i].Ad {
+				return false
+			}
+			if (r.Segs[i].Init != "") != (base[i].Init != "") {
+				return false // init change (period boundary) at a different index
+			}
+			if d := r.Segs[i].Duration - base[i].Duration; d > 1e-3 || d < -1e-3 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // profileByHeight returns the ladder profile whose height matches h (the DASH
