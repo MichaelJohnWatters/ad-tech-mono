@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dash"
@@ -30,7 +28,7 @@ func (d *stitcherDeps) serveMultiRungDASH(ctx context.Context, w http.ResponseWr
 	}
 	session := tracing.TraceIDFromContext(ctx)
 	if session == "" {
-		session = fmt.Sprintf("ssai-%d", time.Now().UnixMilli())
+		session, _ = tracing.NewClientTraceparent()
 	}
 	ladder := transcode.DefaultLadder()
 	if d.ladderFn != nil {
@@ -99,17 +97,13 @@ func (d *stitcherDeps) serveMultiRungDASH(ctx context.Context, w http.ResponseWr
 	for _, rc := range rungs {
 		rc.content.Stitch(func(i int, _ ssai.BreakSpan) []ssai.Segment {
 			var segs []ssai.Segment
-			for pod, wn := range breakAds[i] {
+			for _, wn := range breakAds[i] {
 				cond := d.conditionCached(ctx, wn, rc.profile, reqLog)
 				if cond == nil || len(cond.Segments) == 0 {
 					continue
 				}
-				adTrace := wn.TraceID
-				if adTrace == "" {
-					adTrace = fmt.Sprintf("%s-b%d-p%d", session, i, pod)
-				}
-				mc := macroCtxFor(wn, adTrace, d.trackerURL)
-				segs = append(segs, d.adSegments(cond, mc, constants.ChannelVideo, session, adTrace, i, false)...)
+				mc := macroCtxFor(wn, wn.podTrace, d.trackerURL)
+				segs = append(segs, d.adSegments(cond, mc, constants.ChannelVideo, session, wn.podTrace, i, false)...)
 			}
 			return segs
 		})
@@ -149,7 +143,11 @@ func (d *stitcherDeps) podWinners(ctx context.Context, r *http.Request, channel 
 		if remaining < 1.0 {
 			break
 		}
-		wn := d.runAuction(ctx, r, channel, remaining, reqLog)
+		// Distinct trace per pod ad (see fillBreak), carried on the winner so every
+		// rung stitches the SAME ad with the SAME trace — one ad is one impression
+		// regardless of which ABR rung the player fetches.
+		podTrace, traceparent := tracing.NewClientTraceparent()
+		wn := d.runAuction(ctx, r, channel, remaining, traceparent, reqLog)
 		if wn == nil || wn.NoBid || wn.MediaURL == "" {
 			break
 		}
@@ -157,6 +155,7 @@ func (d *stitcherDeps) podWinners(ctx context.Context, r *http.Request, channel 
 			break
 		}
 		seen[wn.CreativeID] = true
+		wn.podTrace = podTrace
 		out = append(out, wn)
 		dur := float64(wn.DurationSeconds)
 		if dur <= 0 {
