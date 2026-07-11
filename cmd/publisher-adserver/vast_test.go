@@ -317,3 +317,55 @@ func TestVASTHandler_FreshTraceIDPerRequest(t *testing.T) {
 		t.Errorf("Ad IDs must not be empty: %q vs %q", a, b)
 	}
 }
+
+// nobidSSP returns a no-bid for every channel — used to exercise the no-fill
+// path (stub off) without a real auction.
+func nobidSSP(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = encodeJSON(w, sspVideoWinner{NoBid: true})
+	}))
+}
+
+// noStub is the production default: the demo house-ad fallback is OFF, so a
+// no-bid returns an honest no-fill (empty VAST / 204), never fake data.
+func noStub() bool { return false }
+
+// TestVASTHandler_NoFillWhenStubOff: on a no-bid with the stub disabled, the
+// video handler must return a valid but EMPTY VAST (zero Ads), not a canned
+// house ad — so no fake impression is ever recorded.
+func TestVASTHandler_NoFillWhenStubOff(t *testing.T) {
+	ssp := nobidSSP(t)
+	defer ssp.Close()
+
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, noStub)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200 (empty VAST): %s", rec.Code, rec.Body.String())
+	}
+	var doc vast.VAST
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("empty VAST must still parse: %v\nbody=%s", err, rec.Body.String())
+	}
+	if len(doc.Ads) != 0 {
+		t.Errorf("no-bid + stub off must yield 0 Ads (honest no-fill), got %d", len(doc.Ads))
+	}
+}
+
+// TestNativeHandler_NoFillWhenStubOff: native no-bid with stub off returns 204
+// (no ad), not a demo native card.
+func TestNativeHandler_NoFillWhenStubOff(t *testing.T) {
+	ssp := nobidSSP(t)
+	defer ssp.Close()
+
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, noStub)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("native no-bid + stub off: status = %d, want 204 (honest no-fill): %s", rec.Code, rec.Body.String())
+	}
+}
