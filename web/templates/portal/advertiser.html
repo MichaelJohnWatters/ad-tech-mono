@@ -74,6 +74,18 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Audiences ============ -->
+    <section id="section-audiences" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Audience segments" "subtitle" "First-party & derived lists used for targeting and suppression") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Members" "Updated")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
@@ -328,6 +340,41 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- Upload audience modal -->
+{{ template "modal-start" (dict "id" "newAudience" "title" "Upload audience") }}
+  <form onsubmit="uploadAudience(event)">
+    {{ template "form-field" (dict "label" "Name" "name" "au_name" "placeholder" "high-value-customers" "required" true) }}
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Type</span>
+        <select id="au_type" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="first_party">First party (CRM)</option>
+          <option value="retargeting">Retargeting</option>
+          <option value="suppression">Suppression</option>
+          <option value="lookalike">Lookalike</option>
+          <option value="behavioral">Behavioral</option>
+        </select>
+      </label>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Visibility</span>
+        <select id="au_visibility" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="dsp_private">DSP-private (only your campaigns)</option>
+          <option value="public">Public (SSP-shareable)</option>
+        </select>
+      </label>
+    </div>
+    <label class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">User IDs — one per line (hash client-side; no raw PII)</span>
+      <textarea id="au_users" rows="6" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-xs font-mono" placeholder="a1b2c3…&#10;d4e5f6…" required></textarea>
+    </label>
+    <p class="mb-4 text-xs text-gray-400">Re-uploading the same name adds members to the existing segment (idempotent).</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newAudience').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Upload" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
 <!-- Edit campaign drawer -->
 {{ template "drawer-start" (dict "id" "editCampaign" "title" "Edit campaign") }}
   <form onsubmit="saveCampaign(event)">
@@ -447,7 +494,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'reports', 'billing', 'team'];
+const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'reports', 'billing', 'team'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -464,7 +511,8 @@ function showSection(name) {
   if (!loaded[name]) {
     loaded[name] = true;
     ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
-      creatives: loadCreatives, reports: loadSaved, billing: loadBilling, team: loadTeam}[name])?.();
+      creatives: loadCreatives, audiences: loadAudiences, reports: loadSaved,
+      billing: loadBilling, team: loadTeam}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -927,6 +975,43 @@ async function inviteMember(ev) {
     toast('Invite created', 'success');
     loadTeam();
   } catch (err) { toast('Invite failed: ' + err.message, 'error'); }
+}
+
+// ---- Audiences ----
+const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch { return s; } };
+async function loadAudiences() {
+  const tbody = tbodyOf('audiences');
+  try {
+    const list = await fetchJSON('/v1/api/audiences') || [];
+    tbody.innerHTML = list.length ? list.map(a => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(a.type)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${a.visibility === 'public' ? 'bg-info/15 text-info' : 'bg-surface-3 text-gray-500'}">${a.visibility === 'public' ? 'public' : 'DSP-private'}</span></td>
+        <td class="px-3 py-2 font-mono">${fmtInt(a.members)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+async function uploadAudience(ev) {
+  ev.preventDefault();
+  const ids = $('au_users').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
+  if (!ids.length) { toast('Add at least one user ID', 'error'); return; }
+  const body = {
+    name: $('au_name').value.trim(),
+    type: $('au_type').value,
+    visibility: $('au_visibility').value,
+    user_ids: ids,
+  };
+  try {
+    const res = await fetchJSON('/v1/api/audiences', {method: 'POST', body: JSON.stringify(body)});
+    $('newAudience').classList.add('hidden');
+    toast(`Uploaded — ${res.members_added} new of ${res.members_sent} members`, 'success');
+    loadAudiences();
+  } catch (err) { toast('Upload failed: ' + err.message, 'error'); }
 }
 
 // ---- Saved queries ----

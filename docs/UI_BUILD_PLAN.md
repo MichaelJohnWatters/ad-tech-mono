@@ -429,8 +429,13 @@ removed. What's actually left, ordered:
   section (nav gated on `team:read`): lists members (name/email/role/status) on `/v1/api/team`,
   invite modal (name/email/role) → POST reveals the one-time temp password in-place (copy button;
   toasts fade so it persists). Verified live in both portals (list + invite → 201 → member appears).
-- **Audiences** management screen (upload API exists → needs list/view/edit) · **Settings** ·
-  onboarding **wizard** ("first campaign in 5 min").
+- ✅ **Audiences screen SHIPPED (2026-07-11)** — advertiser portal Audiences section (nav gated on
+  `audiences:read`): lists segments (name/type/visibility/member count/updated) + upload modal
+  (name/type/visibility/user-IDs). `GET/POST /v1/api/audiences` is now **tenant-scoped from JWT
+  claims** (was service-key + body `account_id` — a spoofing vector; body id is now ignored),
+  matching PLAN.md's intended surface. New `audiencepg.ListSegments`. Verified live (GET []→200,
+  upload 3 members, GET shows count). Remaining: edit/delete, per-segment analytics.
+- **Settings** · onboarding **wizard** ("first campaign in 5 min").
 
 ### Outstanding — Publisher
 - **Per-placement fill-rate** breakdown · **net (post-revshare) earnings** · downloadable **payout
