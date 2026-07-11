@@ -165,6 +165,7 @@ var staffNav = []NavItem{
 	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
 	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
+	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},
 	{Label: "Tools", Href: "#tools", Icon: "⚙", Perm: "config:read"},
 }
 
