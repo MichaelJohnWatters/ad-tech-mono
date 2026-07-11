@@ -36,6 +36,17 @@ campaigns:
       - { id: c1-cr-001-billboard, width: 970, height: 250 }
       - { id: c1-cr-001-mobile, width: 320, height: 50 }
       - { id: c1-cr-001-halfpage, width: 300, height: 600 }
+      - id: c1-cr-001-native
+        format: native
+        native:
+          title: "MegaStore Summer Blowout — up to 60% off"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          sponsored: "MegaStore"
+          body: "Summer deals across every department. Free shipping over $25."
+          cta: "Shop the sale"
 
   - id: c1-002
     account_id: agency-omnicom
@@ -94,8 +105,13 @@ campaigns:
       geo_country:
         USA: 40
         GBR: 20
-    # App install — mobile-only sizes.
+    # App install — mobile display + a mobile-video pre-roll + an audio spot
+    # (app-install advertisers lean heavily on video/audio for installs).
     creatives:
       - { id: c1-cr-003, width: 300, height: 250 }
       - { id: c1-cr-003-mobile, width: 320, height: 50 }
       - { id: c1-cr-003-halfpage, width: 300, height: 600 }
+      - { id: c1-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/bbb-360-2mb.mp4" }
+      - { id: c1-cr-003-audio-30s, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/audio-2.mp3" }

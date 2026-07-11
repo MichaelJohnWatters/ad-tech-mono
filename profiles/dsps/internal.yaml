@@ -130,11 +130,25 @@ campaigns:
       geo_country:
         USA: 20
         GBR: 10
-    # Desktop-leaning tech brand — MPU + leaderboard + sky.
+    # Desktop-leaning tech brand — MPU + leaderboard + sky, plus native +
+    # instream video so Globex competes across formats (not display only).
     creatives:
       - { id: cr-tech-001, width: 300, height: 250 }
       - { id: cr-tech-001-leader, width: 728, height: 90 }
       - { id: cr-tech-001-sky, width: 160, height: 600 }
+      - id: cr-tech-001-native
+        format: native
+        native:
+          title: "Globex Cloud — Ship faster"
+          main_image: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          sponsored: "Globex"
+          body: "The developer platform trusted by 10,000 teams."
+          cta: "Start free"
+      - { id: cr-tech-001-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/sintel-360-1mb.mp4" }
 
   - id: li-004
     account_id: adv-initech
@@ -156,9 +170,12 @@ campaigns:
         USA: 15
         GBR: 10
         DEU: 5
-    # Pure RoN — MPU + leaderboard + half-page + mobile banner.
+    # Pure RoN — MPU + leaderboard + half-page + mobile banner + an audio
+    # spot so Initech also bids podcast/streaming-audio inventory.
     creatives:
       - { id: cr-saas-001, width: 300, height: 250 }
       - { id: cr-saas-001-leader, width: 728, height: 90 }
       - { id: cr-saas-001-halfpage, width: 300, height: 600 }
       - { id: cr-saas-001-mobile, width: 320, height: 50 }
+      - { id: cr-saas-001-audio-30s, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/audio-1.mp3" }
