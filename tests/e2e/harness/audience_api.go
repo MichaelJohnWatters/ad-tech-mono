@@ -24,8 +24,15 @@ const devAPIKey = "dev-api-key-do-not-use-in-prod"
 // opposed to the direct-SQL CreateSegment/AddUserToSegment helpers).
 func (h *Harness) UploadAudience(t *testing.T, accountID, name, visibility string, userIDs []string) string {
 	t.Helper()
+	// The audiences endpoint is now tenant-scoped from the JWT claims (was a
+	// service-key operator endpoint). Authenticate as an owner of accountID —
+	// the endpoint binds the segment to the session's account and ignores any
+	// body account_id, so a caller can't write another tenant's data.
+	email := "aud-upload-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+
 	body, _ := json.Marshal(map[string]any{
-		"account_id": accountID,
 		"name":       name,
 		"visibility": visibility,
 		"user_ids":   userIDs,
@@ -37,8 +44,7 @@ func (h *Harness) UploadAudience(t *testing.T, accountID, name, visibility strin
 		t.Fatalf("build audience upload: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", devAPIKey)
-	resp, err := h.HTTP.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("audience upload call: %v", err)
 	}

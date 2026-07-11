@@ -23,6 +23,16 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
+// browserHeaders makes a request look like a real player/browser (UA + Referer)
+// so the tracker's real-time fraud check doesn't drop it as a bot. Beacon-firing
+// tests must set these — the tracker scores a Go-default UA + no Referer as
+// fraud (bot_user_agent, no_referer) and rejects the event instead of recording
+// it. Mirrors what cmd/simulator sends on its mirror path.
+func browserHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-e2e)")
+	req.Header.Set("Referer", "https://e2e.dev/")
+}
+
 // TestBudgetDepletedEventReachesReporting — shrink a campaign's daily
 // budget to 1.00, fire one auction (wins, consumes budget), fire a
 // second (campaign now flagged exhausted, DSP publishes
@@ -63,6 +73,7 @@ func TestVideoTrackerEventReachesReporting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	browserHeaders(req) // a real player's UA/referer — else the tracker's fraud check drops the media event
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
 		t.Fatalf("video pixel: %v", err)
@@ -87,6 +98,7 @@ func TestAudioTrackerEventReachesReporting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	browserHeaders(req) // see the video test — fraud check drops bot-UA media events
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
 		t.Fatalf("audio pixel: %v", err)
