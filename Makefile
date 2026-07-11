@@ -89,7 +89,7 @@ reset: ## Wipe ALL data (Postgres+ClickHouse+Redis) then re-populate — a clean
 	bash scripts/reset.sh
 
 traffic: ## Continuous simulator at a set speed (override with DEMO_RPS, default 5). Ctrl-C to stop.
-	go run ./cmd/simulator run --duration 12h --rps $${DEMO_RPS:-5}
+	go run ./cmd/simulator run --profile steady --duration 12h --rps $${DEMO_RPS:-5}
 
 seed: ## Seed database with standard profile
 	go run ./cmd/seed --profile standard

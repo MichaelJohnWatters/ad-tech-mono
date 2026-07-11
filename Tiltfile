@@ -468,7 +468,7 @@ local_resource('sim-continuous',
     # Continuous traffic at a SET speed — toggle on for a live-feeling stack.
     # Change --rps to taste (or DEMO_RPS via `make traffic`). Manual, so it only
     # runs when you want it. Long duration ≈ "until you stop it".
-    cmd='go run ./cmd/simulator run --duration 12h --rps 5',
+    cmd='go run ./cmd/simulator run --profile steady --duration 12h --rps 5',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['simulation'], auto_init=False,
     resource_deps=['exchange', 'tracker'])
 

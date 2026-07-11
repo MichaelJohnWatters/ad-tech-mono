@@ -141,11 +141,11 @@ var profiles = map[string]profile{
 		FloorPrice: 0.50, ClickRate: 0.05, ViewPct: 80,
 	},
 	// steady: a broad, realistic open-exchange blend across regions, consent
-	// regimes, and display/native/video.
+	// regimes, and every serving format (display/native/video/audio).
 	"steady": {
 		Name: "steady", RPS: 10,
 		Personas:   request.Personas, // full registry, weighted
-		Channels:   []channelWeight{{request.Display, 60}, {request.Native, 25}, {request.Video, 15}},
+		Channels:   []channelWeight{{request.Display, 55}, {request.Native, 20}, {request.Video, 15}, {request.Audio, 10}},
 		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70,
 	},
 	// burst: high volume across every channel including audio + CTV personas.
