@@ -24,6 +24,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reporting"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -154,7 +155,11 @@ func main() {
 	mux.Handle(routes.Metrics, metrics.Handler())
 
 	// Query API
-	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, store))
+	// The metrics engine computes derived metrics (ecpm/ctr/fill_rate/
+	// net_revenue) server-side. It's a drop-in for the raw store: queries
+	// without derived metrics pass straight through unchanged.
+	engine := reporting.NewQueryEngine(store, contractNet{contracts})
+	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, engine))
 
 	// HTTP event ingestion
 	mux.HandleFunc(routes.ReportingEvents, consumer.HTTPHandler())
@@ -1044,7 +1049,21 @@ func (c *EventConsumer) HTTPHandler() http.HandlerFunc {
 }
 
 // queryHandler serves analytics queries via HTTP.
-func queryHandler(log *slog.Logger, store analytics.Store) http.HandlerFunc {
+// querier is the read surface queryHandler needs — satisfied by both a raw
+// analytics.Store and the reporting.QueryEngine wrapping it.
+type querier interface {
+	Query(ctx context.Context, params analytics.QueryParams) (*analytics.QueryResult, error)
+}
+
+// contractNet adapts the warm ContractStore to reporting.NetResolver so the
+// metrics engine computes net_revenue without pkg/reporting importing pkg/billing.
+type contractNet struct{ store *billing.ContractStore }
+
+func (c contractNet) Net(publisherID string, gross float64) float64 {
+	return c.store.Get(publisherID).CalculateRevenue(gross, "").PublisherRevenue
+}
+
+func queryHandler(log *slog.Logger, q querier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1057,7 +1076,7 @@ func queryHandler(log *slog.Logger, store analytics.Store) http.HandlerFunc {
 			return
 		}
 
-		result, err := store.Query(r.Context(), params)
+		result, err := q.Query(r.Context(), params)
 		if err != nil {
 			log.Error("query failed", "error", err)
 			http.Error(w, "query failed", http.StatusInternalServerError)
