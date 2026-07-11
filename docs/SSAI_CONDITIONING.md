@@ -351,6 +351,19 @@ SDK measurement — both need client/muxer work, not stitcher work.
 - **CTV player quirks** — discontinuity handling varies; test hls.js + Safari
   native first; real CTV devices later.
 
+## Deploy notes
+
+- **One-time re-condition after the FNV-64 cache-key change (merge 06e5734,
+  2026-07-11).** `contentVersion` (the media-URL hash baked into the conditioned-ad
+  cache path `ssai/cond/{creative}-{contentVersion}/{profileHash}/`) switched from
+  FNV-32 to FNV-64 to shrink the stale-serve collision window. The path string
+  therefore changes, so on first deploy every previously-conditioned ad is a cache
+  MISS and gets re-conditioned **once** on first serve. Expect a brief, one-time
+  bump in transcoder CPU right after rollout, then steady-state cache hits resume.
+  No action required (self-healing); the miss-path already slates/pre-warms so
+  serving isn't blocked. Old FNV-32 cache objects are orphaned — harmless, delete
+  later only to reclaim disk. Watch transcoder CPU/HPA for the first few minutes.
+
 ## Testing
 
 - `pkg/transcode`: unit-test ffmpeg arg construction + HLS parse/build + profile
