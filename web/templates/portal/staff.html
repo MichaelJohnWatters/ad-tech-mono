@@ -14,6 +14,15 @@
       <div class="text-sm text-gray-500 dark:text-gray-400">Staff · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Moderation</span></div>
     </div>
 
+    <!-- ============ Impersonate ============ -->
+    <section id="section-impersonate" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "View as account" "subtitle" "Open any advertiser or publisher portal as that account — scoped + audited") }}
+      {{ template "table-start" (dict "headers" (slice "Account" "Type" "")) }}
+        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Moderation ============ -->
     <section id="section-moderation" class="portal-section p-6 space-y-6">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -182,12 +191,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['moderation', 'fraud', 'revshare', 'audit', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', tools: 'Tools'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', tools: 'Tools'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -198,7 +207,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -210,6 +219,29 @@ const ago = (iso) => {
   if (s < 129600) return Math.round(s / 3600) + 'h ago';
   return Math.round(s / 86400) + 'd ago';
 };
+
+// ---- Impersonate ----
+async function loadImpersonate() {
+  const tbody = tbodyOf('impersonate');
+  let list;
+  try { list = await fetchJSON('/v1/api/accounts') || []; }
+  catch (err) { tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`; return; }
+  if (!list.length) { tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No accounts to view.</td></tr>`; return; }
+  tbody.innerHTML = list.map(a => `
+    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
+      <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">${esc(a.type)}</span></td>
+      <td class="px-3 py-2 text-right">
+        <button onclick="viewAs('${esc(a.type)}','${esc(a.id)}')" class="text-xs px-2 py-1 rounded bg-brand text-white hover:bg-brand-hover">View as →</button>
+      </td>
+    </tr>`).join('');
+}
+// viewAs sets the act_as_account cookie ("type:id") the gateway proxy + report
+// scope honour for staff, then opens the matching persona portal.
+function viewAs(type, id) {
+  document.cookie = 'act_as_account=' + type + ':' + id + '; path=/; max-age=43200; samesite=lax';
+  location.href = type === 'publisher' ? '/portal/publisher' : '/portal/advertiser';
+}
 
 // ---- Moderation ----
 let queueCache = [];
