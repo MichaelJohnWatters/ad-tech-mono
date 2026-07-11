@@ -10,26 +10,21 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
-// querier is the read surface the engine composes over — satisfied by
-// analytics.Store, the tiered router, or any wrapper. Keeping it minimal lets
-// the engine sit above whatever storage/rollup layering exists.
-type querier interface {
-	Query(ctx context.Context, params analytics.QueryParams) (*analytics.QueryResult, error)
-}
-
 // QueryEngine computes derived metrics (ecpm/ctr/fill_rate/net_revenue)
 // SERVER-SIDE so clients only render. It's a drop-in for store.Query: a query
 // with no derived metrics passes straight through unchanged (the raw path stays
 // byte-identical). Derived metrics are composed from base queries — each base
 // query carries the SAME params.Filters, so the gateway's tenant scope rides
-// through every sub-query (no cross-tenant leak).
+// through every sub-query (no cross-tenant leak). The store may be a tiered
+// router; base queries run through an AutoTier Builder so rollups are used
+// when the range/metrics allow (correctness is never rollup-dependent).
 type QueryEngine struct {
-	store querier
+	store analytics.Store
 	net   NetResolver
 }
 
 // NewQueryEngine wraps a store (+ optional net resolver for net_revenue).
-func NewQueryEngine(store querier, net NetResolver) *QueryEngine {
+func NewQueryEngine(store analytics.Store, net NetResolver) *QueryEngine {
 	return &QueryEngine{store: store, net: net}
 }
 
@@ -48,10 +43,30 @@ func (e *QueryEngine) Query(ctx context.Context, params analytics.QueryParams) (
 	return e.resolveDerived(ctx, params)
 }
 
-// baseQuery runs one backing query. Phase 2 wraps this with an AutoTier Builder
-// so rollups become reachable; today it's the raw store.
+// baseQuery runs one backing query through an AutoTier Builder — so a query
+// with both time bounds + additive metrics + rollup dimensions is served from
+// pre-aggregated rollups, and everything else transparently falls back to a raw
+// store.Query (the Builder guarantees the fallback, so correctness never
+// depends on rollups). This is the seam that finally makes rollups reachable
+// from the query API.
 func (e *QueryEngine) baseQuery(ctx context.Context, params analytics.QueryParams) (*analytics.QueryResult, error) {
-	return e.store.Query(ctx, params)
+	b := NewBuilder(e.store).AutoTier().
+		Table(params.Table).
+		Metrics(params.Metrics...).
+		GroupBy(params.Dimensions...).
+		TimeRange(params.TimeFrom, params.TimeTo).
+		Limit(params.Limit)
+	for k, v := range params.Filters {
+		b.Filter(k, v)
+	}
+	if params.OrderBy != "" {
+		if params.OrderDir == "desc" {
+			b.OrderByDesc(params.OrderBy)
+		} else {
+			b.OrderByAsc(params.OrderBy)
+		}
+	}
+	return b.Build(ctx)
 }
 
 // tableData indexes one table's result by dimension-key.
