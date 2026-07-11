@@ -85,6 +85,9 @@ migrate-status: ## Show migration status
 demo: ## One-command rich local setup: seed + baseline traffic (needs `tilt up`). Everyone runs this.
 	bash scripts/demo.sh
 
+reset: ## Wipe ALL data (Postgres+ClickHouse+Redis) then re-populate — a clean fresh run.
+	bash scripts/reset.sh
+
 traffic: ## Continuous simulator at a set speed (override with DEMO_RPS, default 5). Ctrl-C to stop.
 	go run ./cmd/simulator run --duration 12h --rps $${DEMO_RPS:-5}
 
@@ -105,11 +108,6 @@ simulate-trickle: ## Start trickle simulation (1 req/sec)
 
 simulate-burst: ## Start burst simulation
 	go run ./cmd/simulator --profile burst
-
-reset: ## Wipe database and reseed with standard profile
-	go run ./cmd/migrate reset
-	go run ./cmd/migrate
-	go run ./cmd/seed --profile standard
 
 # --- Performance Testing ---
 perf-tracker: ## Run k6 load test on tracker
