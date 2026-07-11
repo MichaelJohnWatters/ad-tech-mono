@@ -93,6 +93,10 @@ Run flags:
   --direct            Raw load mode: POST OpenRTB to the exchange directly
   --geo <geo>         Override geo on every request (ISO alpha-3)
   --device <type>     Override device: mobile, desktop, tablet, ctv
+  --verify            After the run, read counts back from reporting and assert
+                      the pipeline recorded them (impressions == wins); exits
+                      non-zero on mismatch. Use against a quiescent stack.
+  --reporting-url <u> Reporting URL for --verify (default: http://localhost:8086)
 
 Single flags:
   --persona <name>    Persona (default: us-personalised-mobile)
@@ -220,15 +224,14 @@ func runSimulation() {
 	sent, wins, errors := 0, 0, 0
 	start := time.Now()
 
+loop:
 	for {
 		select {
 		case <-deadline:
-			printResults(sent, wins, errors, time.Since(start))
-			return
+			break loop
 		case <-ticker.C:
 			if maxRequests > 0 && sent >= maxRequests {
-				printResults(sent, wins, errors, time.Since(start))
-				return
+				break loop
 			}
 
 			traceID, traceparent := tracing.NewClientTraceparent()
@@ -256,6 +259,16 @@ func runSimulation() {
 					"elapsed", time.Since(start).Round(time.Second),
 				)
 			}
+		}
+	}
+
+	printResults(sent, wins, errors, time.Since(start))
+	// --verify: read the counts back out of reporting and assert the pipeline
+	// recorded what we fired (impressions == wins). Exit non-zero on mismatch so
+	// it's usable as a CI/scripts gate, not just a human-readable report.
+	if hasFlag("--verify") {
+		if !verifyPipeline(getFlag("--reporting-url", routes.DefaultReportingURL), start, sent, wins, errors) {
+			os.Exit(1)
 		}
 	}
 }
