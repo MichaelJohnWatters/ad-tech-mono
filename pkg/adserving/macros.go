@@ -31,6 +31,7 @@ type MacroContext struct {
 	Height       int
 	Geo          string // request geo (country) — baked into tracker beacons for analytics
 	Device       string // request device type — baked into tracker beacons for analytics
+	Channel      string // display|video|native|audio — baked into tracker beacons so analytics label the right channel
 	UserAgent    string
 	IP           string
 	TrackerURL   string // base URL for tracker service
@@ -201,5 +202,8 @@ func setGeoDevice(params url.Values, ctx MacroContext) {
 	}
 	if ctx.Device != "" {
 		params.Set("dev", ctx.Device)
+	}
+	if ctx.Channel != "" {
+		params.Set("ch", ctx.Channel)
 	}
 }

@@ -27,6 +27,8 @@ type sspVideoWinner struct {
 	TraceID          string  `json:"trace_id"`
 	NoBid            bool    `json:"nobid"`
 	Channel          string  `json:"channel"`
+	Geo              string  `json:"geo"`
+	Device           string  `json:"device"`
 	CreativeID       string  `json:"creative_id"`
 	CampaignID       string  `json:"campaign_id"`
 	PlacementID      string  `json:"placement_id"`
@@ -118,6 +120,9 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 		macroCtx := adserving.MacroContext{
 			AuctionID:    auctionTrace,
 			AuctionPrice: winner.ClearingPrice,
+			Channel:      firstNonEmpty(winner.Channel, "video"),
+			Geo:          winner.Geo,
+			Device:       winner.Device,
 			Currency:     defaultStr2(winner.Currency, "USD"),
 			CampaignID:   winner.CampaignID,
 			CreativeID:   winner.CreativeID,
@@ -220,6 +225,9 @@ func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.Macr
 	return adserving.MacroContext{
 		AuctionID:    firstNonEmpty(winner.TraceID, winner.CampaignID),
 		AuctionPrice: winner.ClearingPrice,
+		Channel:      firstNonEmpty(winner.Channel, "video"),
+		Geo:          winner.Geo,
+		Device:       winner.Device,
 		Currency:     defaultStr2(winner.Currency, "USD"),
 		CampaignID:   winner.CampaignID,
 		CreativeID:   winner.CreativeID,

@@ -635,6 +635,8 @@ type serveAdResponse struct {
 	// VAST builder lives in publisher-adserver (pkg/vast) rather than
 	// here so the SSP stays format-agnostic.
 	Channel          string `json:"channel,omitempty"`
+	Geo              string `json:"geo,omitempty"`    // request geo — publisher-adserver bakes it into video/native/audio beacons
+	Device           string `json:"device,omitempty"` // request device — same
 	CreativeID       string `json:"creative_id,omitempty"`
 	CampaignID       string `json:"campaign_id,omitempty"`
 	PlacementID      string `json:"placement_id,omitempty"`
@@ -693,6 +695,8 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			json.NewEncoder(w).Encode(serveAdResponse{
 				TraceID:          ac.TraceID,
 				Channel:          ch,
+				Geo:              r.URL.Query().Get("geo"),
+				Device:           r.URL.Query().Get("device"),
 				CreativeID:       winner.CrID,
 				CampaignID:       winner.CID,
 				PlacementID:      ac.Placement.ID,
@@ -723,6 +727,8 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			json.NewEncoder(w).Encode(serveAdResponse{
 				TraceID:          ac.TraceID,
 				Channel:          "native",
+				Geo:              r.URL.Query().Get("geo"),
+				Device:           r.URL.Query().Get("device"),
 				AdM:              winner.AdM,
 				CreativeID:       winner.CrID,
 				CampaignID:       winner.CID,
