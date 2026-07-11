@@ -448,6 +448,24 @@ local_resource('asciline-demo',
 # Simulation
 # ============================================================
 
+local_resource('demo',
+    # THE one-command setup everyone shares: seed accounts/logins/campaigns/
+    # placements/deals + a baseline of realistic attributed traffic, so every
+    # portal shows live data and every account is loginable
+    # (<slug>@adtech.local / admin). Same as `make demo`. Click after the stack
+    # is green. See scripts/demo.sh.
+    cmd='bash scripts/demo.sh',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
+    resource_deps=['postgres', 'exchange', 'tracker'])
+
+local_resource('sim-continuous',
+    # Continuous traffic at a SET speed — toggle on for a live-feeling stack.
+    # Change --rps to taste (or DEMO_RPS via `make traffic`). Manual, so it only
+    # runs when you want it. Long duration ≈ "until you stop it".
+    cmd='go run ./cmd/simulator run --duration 12h --rps 5',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['simulation'], auto_init=False,
+    resource_deps=['exchange', 'tracker'])
+
 local_resource('sim-single',
     cmd='go run ./cmd/simulator single --geo GBR --device mobile',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['simulation'], auto_init=False,

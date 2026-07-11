@@ -82,6 +82,12 @@ migrate-status: ## Show migration status
 	go run ./cmd/migrate status
 
 # --- Seed & Simulation ---
+demo: ## One-command rich local setup: seed + baseline traffic (needs `tilt up`). Everyone runs this.
+	bash scripts/demo.sh
+
+traffic: ## Continuous simulator at a set speed (override with DEMO_RPS, default 5). Ctrl-C to stop.
+	go run ./cmd/simulator run --duration 12h --rps $${DEMO_RPS:-5}
+
 seed: ## Seed database with standard profile
 	go run ./cmd/seed --profile standard
 
