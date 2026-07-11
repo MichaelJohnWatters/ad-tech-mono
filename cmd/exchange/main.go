@@ -457,6 +457,27 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 			reqLog.Info("auction complete", "result", "no_bids", "duration_ms", clk.Since(start).Milliseconds())
 			am.auctionsTotal.WithLabelValues("no_bids", channel).Inc()
+			// Record the no-bid auction too, so the auctions table reflects
+			// EVERY ad request (won + unfilled). Without this, fill rate
+			// (impressions / auctions) reads ~100% because only won auctions
+			// land — the denominator would silently drop every no-bid.
+			if pub != nil {
+				placementID, publisherID := placementPublisherFromReq(&bidReq)
+				floor := 0.0
+				if len(bidReq.Imp) > 0 {
+					floor = bidReq.Imp[0].BidFloor
+				}
+				go pub.AuctionComplete(context.WithoutCancel(ctx), events.AuctionCompleteEvent{
+					TraceID:     traceID,
+					PlacementID: placementID,
+					PublisherID: publisherID,
+					Channel:     routingChannel,
+					NumBids:     0,
+					FloorPrice:  floor,
+					DurationMs:  clk.Since(start).Milliseconds(),
+					Timestamp:   clk.Now(),
+				})
+			}
 			return
 		}
 
@@ -790,6 +811,26 @@ type dspBidRecord struct {
 // "all" bucket lets display auctions drag a native/audio-only DSP's bid rate
 // below the drop threshold, after which that DSP is never called for the format
 // it actually bids — and native/audio silently stop filling.
+// placementPublisherFromReq derives the placement + publisher IDs from a bid
+// request the same way the winning path does (Imp.TagID = placement UUID set
+// by the SSP, Site.Publisher.ID = publisher UUID), so a no-bid auction can be
+// recorded with the same keys a won one would carry.
+func placementPublisherFromReq(req *openrtb.BidRequest) (placementID, publisherID string) {
+	if req.Site != nil && req.Site.Publisher != nil && req.Site.Publisher.ID != "" {
+		publisherID = req.Site.Publisher.ID
+	} else if req.Site != nil {
+		publisherID = req.Site.Domain
+	}
+	if len(req.Imp) > 0 {
+		if req.Imp[0].TagID != "" {
+			placementID = req.Imp[0].TagID
+		} else {
+			placementID = req.Imp[0].ID
+		}
+	}
+	return placementID, publisherID
+}
+
 func channelForRequest(req *openrtb.BidRequest) string {
 	if len(req.Imp) == 0 {
 		return constants.ChannelDisplay
