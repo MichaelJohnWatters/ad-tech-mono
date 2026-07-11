@@ -22,11 +22,13 @@
 
     <!-- ============ Dashboard ============ -->
     <section id="section-dashboard" class="portal-section p-6 space-y-6">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
         {{ template "stat" (dict "label" "Ad requests today" "value" "—" "id" "kpiAuctions") }}
         {{ template "stat" (dict "label" "Impressions today" "value" "—" "id" "kpiImps") }}
         {{ template "stat" (dict "label" "Fill rate" "value" "—" "id" "kpiFill") }}
-        {{ template "stat" (dict "label" "Earnings today" "value" "—" "id" "kpiEarnings" "hint" "gross, before rev-share") }}
+        {{ template "stat" (dict "label" "eCPM" "value" "—" "id" "kpiEcpm" "hint" "gross revenue per 1,000 impressions") }}
+        {{ template "stat" (dict "label" "Gross earnings today" "value" "—" "id" "kpiEarnings" "hint" "before rev-share") }}
+        {{ template "stat" (dict "label" "Net earnings today" "value" "—" "id" "kpiNet" "hint" "after platform fee") }}
       </div>
 
       {{ template "card-start" (dict "title" "Earnings — last 7 days (gross)") }}
@@ -46,8 +48,8 @@
 
       {{ template "card-start" (dict "title" "Fill rate by placement" "subtitle" "Ad requests vs filled impressions, last 7 days") }}
       <div id="fillWrap">
-      {{ template "table-start" (dict "headers" (slice "Placement" "Ad requests" "Impressions" "Fill rate" "Earnings")) }}
-        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Placement" "Ad requests" "Impressions" "Fill rate" "eCPM" "Gross" "Net")) }}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -569,24 +571,49 @@ const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return 
 // Result rows come back positionally; map columns -> value for row 0.
 const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [c, res.rows?.[0]?.[i]]));
 
+// Business metrics — eCPM, net earnings, fill rate, CTR — are computed
+// SERVER-SIDE by the reporting metrics engine. The browser only asks for named
+// metrics (ecpm/net_revenue/fill_rate) and renders the result; there is NO money
+// math in the client (single source of truth). net_revenue is contract-aware
+// server-side and always runs under the caller's validated publisher_id scope.
+
 // ---- Dashboard ----
 async function loadDashboard() {
   try {
+    // One derived-metric call carries fill_rate/ecpm/net_revenue (all computed
+    // server-side); a tiny auctions.count call feeds the "Ad requests" card.
     const [aucs, imps] = await Promise.all([
       reportQuery({table: 'auctions', metrics: ['count'], time_from: todayStart()}),
-      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], time_from: todayStart()}),
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue'], time_from: todayStart()}),
     ]);
     const a = firstRow(aucs), i = firstRow(imps);
+    const pct = (v) => v == null ? '—' : (+v).toFixed(1) + '%';
+    const usd = (v) => v == null ? '—' : fmtUSD(+v);
     $('kpiAuctions').textContent = fmtInt(a.count);
     $('kpiImps').textContent = fmtInt(i.count);
-    $('kpiFill').textContent = a.count > 0 ? (100 * (i.count || 0) / a.count).toFixed(1) + '%' : '—';
-    $('kpiEarnings').textContent = fmtUSD(i.sum_cost);
+    $('kpiFill').textContent = pct(i.fill_rate);
+    $('kpiEcpm').textContent = usd(i.ecpm);
+    $('kpiEarnings').textContent = fmtUSD(+i.sum_cost || 0);
+    $('kpiNet').textContent = usd(i.net_revenue);
   } catch (err) { toast('KPIs failed: ' + err.message, 'error'); }
   try {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('earnTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
 }
+
+// ---- Live dashboard polling ----
+// Refresh KPIs every 15s, but only while the dashboard is on screen and the tab
+// is visible; skip if a refresh is still in flight (no overlap, no work hidden).
+let dashInFlight = false;
+async function refreshDashboard() {
+  if (dashInFlight) return;
+  if (document.visibilityState !== 'visible') return;
+  if ($('section-dashboard')?.classList.contains('hidden')) return;
+  dashInFlight = true;
+  try { await loadDashboard(); } finally { dashInFlight = false; }
+}
+setInterval(refreshDashboard, 15000);
 
 // Inline bar trend — data arrives after render, so bars are built client-side.
 function renderTrend(res) {
@@ -648,9 +675,11 @@ async function loadPlacementFill() {
   const tbody = document.querySelector('#fillWrap tbody');
   if (!tbody) return;
   try {
+    // fill_rate/ecpm/net_revenue per placement all come back from the engine in
+    // one grouped call; the auctions.count call feeds the "Ad requests" column.
     const [aucs, imps] = await Promise.all([
       reportQuery({table: 'auctions', metrics: ['count'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
-      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
     ]);
     const nameOf = Object.fromEntries(placementsCache.map(p => [p.ID, p.Name]));
     const rowsBy = (res, keyCol) => {
@@ -662,24 +691,31 @@ async function loadPlacementFill() {
     const aMap = rowsBy(aucs, 'placement_id'), iMap = rowsBy(imps, 'placement_id');
     // Union of placement ids seen in either result, sorted by ad requests desc.
     const ids = [...new Set([...Object.keys(aMap), ...Object.keys(iMap)])]
-      .map(id => ({id, req: +(aMap[id]?.count) || 0, imp: +(iMap[id]?.count) || 0, earn: +(iMap[id]?.sum_cost) || 0}))
+      .map(id => ({
+        id, req: +(aMap[id]?.count) || 0, imp: +(iMap[id]?.count) || 0,
+        earn: +(iMap[id]?.sum_cost) || 0,
+        fill: iMap[id]?.fill_rate, ecpm: iMap[id]?.ecpm, net: iMap[id]?.net_revenue,
+      }))
       .sort((a, b) => b.req - a.req);
     if (!ids.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No auction activity in the last 7 days.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No auction activity in the last 7 days.</td></tr>';
       return;
     }
+    const usd = (v) => v == null ? '—' : fmtUSD(+v);
     tbody.innerHTML = ids.map(x => {
-      const fill = x.req > 0 ? (100 * x.imp / x.req) : 0;
+      const fill = x.fill == null ? null : +x.fill;
       return `<tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 font-medium">${esc(nameOf[x.id] || x.id || '—')}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(x.req)}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(x.imp)}</td>
-        <td class="px-3 py-2 font-mono ${fill < 40 ? 'text-warn' : ''}">${x.req > 0 ? fill.toFixed(1) + '%' : '—'}</td>
-        <td class="px-3 py-2 font-mono">${fmtUSD(x.earn)}</td>
+        <td class="px-3 py-2 font-mono ${fill != null && fill < 40 ? 'text-warn' : ''}">${fill == null ? '—' : fill.toFixed(1) + '%'}</td>
+        <td class="px-3 py-2 font-mono">${usd(x.ecpm)}</td>
+        <td class="px-3 py-2 font-mono text-gray-500">${fmtUSD(x.earn)}</td>
+        <td class="px-3 py-2 font-mono">${usd(x.net)}</td>
       </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -1309,6 +1345,8 @@ async function inviteMember(ev) {
   } catch (err) { toast('Invite failed: ' + err.message, 'error'); }
 }
 
+// Load the site list + revshare terms before the first section renders, so the
+// dashboard nets out earnings on its first paint.
 loadPublishers().then(() => showSection(location.hash.slice(1) || 'dashboard'));
 </script>
 </body>

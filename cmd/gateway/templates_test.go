@@ -178,7 +178,7 @@ func TestPublisherPortalRenders(t *testing.T) {
 		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Publisher", `href="#placements"`, `href="#adtag"`, `href="#earnings"`, "Earnings today", "New placement", "Get your ad tag"} {
+	for _, want := range []string{"Publisher", `href="#placements"`, `href="#adtag"`, `href="#earnings"`, "Gross earnings today", "Net earnings today", "New placement", "Get your ad tag"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered publisher portal missing %q", want)
 		}
