@@ -51,7 +51,7 @@ func TestPodVASTFillsDistinctAds(t *testing.T) {
 	ssp := rotatingSSP(t, []string{"acme", "globex", "initech"})
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-sport-live-preroll&pod=3", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -85,7 +85,7 @@ func TestPodCompetitiveSeparation(t *testing.T) {
 	ssp := rotatingSSP(t, []string{"acme"}) // always the same advertiser
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-sport-live-preroll&pod=4", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -104,7 +104,7 @@ func TestSingleAdNotAPod(t *testing.T) {
 	ssp := rotatingSSP(t, []string{"acme", "globex"})
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-sport-live-preroll", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)

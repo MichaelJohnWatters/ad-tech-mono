@@ -32,7 +32,7 @@ import (
 // Modern audio ad serving uses VAST 4.x audio MediaFiles rather than the
 // deprecated DAAST document, so we reuse pkg/vast — the only difference from
 // video is the MediaFile MIME type and the beacon endpoint.
-func audioHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
+func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -48,14 +48,19 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc 
 
 		winner, err := fetchAudioWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
-			if err != nil {
-				reqLog.Warn("audio auction failed, serving demo VAST", "error", err)
-			} else if winner == nil || winner.NoBid {
-				reqLog.Info("audio auction: no bid, serving demo VAST")
-			} else {
-				reqLog.Warn("winner had empty MediaURL, serving demo VAST", "crid", winner.CreativeID)
+			switch {
+			case err != nil:
+				reqLog.Warn("audio auction failed", "error", err)
+			case winner == nil || winner.NoBid:
+				reqLog.Info("audio auction: no bid")
+			default:
+				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
 			}
-			writeStubAudioVAST(w, reqLog, trackerURL, traceID, placementID)
+			if stubFn() {
+				writeStubAudioVAST(w, reqLog, trackerURL, traceID, placementID)
+			} else {
+				writeNoFillVAST(w)
+			}
 			return
 		}
 

@@ -65,7 +65,7 @@ type sspVideoWinner struct {
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken
 // player. The failure reason gets logged but the response stays valid.
-func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string)) http.HandlerFunc {
+func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string), stubFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -91,21 +91,31 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 				w.Write(xmlBytes)
 				return
 			}
-			reqLog.Info("video pod: no fills, serving demo VAST")
-			writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			if stubFn() {
+				reqLog.Info("video pod: no fills, serving demo VAST (stub_on_nobid)")
+				writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			} else {
+				reqLog.Info("video pod: no fills, empty VAST")
+				writeNoFillVAST(w)
+			}
 			return
 		}
 
 		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
-			if err != nil {
-				reqLog.Warn("video auction failed, serving demo VAST", "error", err)
-			} else if winner == nil || winner.NoBid {
-				reqLog.Info("video auction: no bid, serving demo VAST")
-			} else {
-				reqLog.Warn("winner had empty MediaURL, serving demo VAST", "crid", winner.CreativeID)
+			switch {
+			case err != nil:
+				reqLog.Warn("video auction failed", "error", err)
+			case winner == nil || winner.NoBid:
+				reqLog.Info("video auction: no bid")
+			default:
+				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
 			}
-			writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			if stubFn() {
+				writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
+			} else {
+				writeNoFillVAST(w)
+			}
 			return
 		}
 
@@ -374,9 +384,19 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 	}
 }
 
-// writeStubVAST is the fallback path: same shape as before the
-// auction-driven flow, used when SSP is unreachable or there's no bid.
-// Keeps the demo player from seeing a 500.
+// writeNoFillVAST returns a valid, empty VAST document — the honest "no ad"
+// response for a genuine no-bid (default, per the real-data-only rule). A
+// compliant player treats an Ad-less VAST as an empty break; the CLI/simulator
+// sees zero Impression tags and records a no-fill (not a fake impression).
+func writeNoFillVAST(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/xml")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<VAST version="4.2"></VAST>`))
+}
+
+// writeStubVAST is the OPT-IN demo fallback (publisher_adserver.stub_on_nobid):
+// a canned house ad so a fully-empty dev environment still renders something.
+// Off by default — production serves only real auctioned demand.
 func writeStubVAST(w http.ResponseWriter, reqLog *slog.Logger, trackerURL, traceID, placementID string) {
 	macroCtx := adserving.MacroContext{
 		AuctionID:    traceID,

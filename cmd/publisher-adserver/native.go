@@ -33,7 +33,7 @@ import (
 //
 // On any failure (SSP unreachable, no bid, unparseable markup) we render a
 // demo native ad so the simulator never sees a broken slot.
-func nativeHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc {
+func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -50,18 +50,29 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc
 		winner, err := fetchNativeWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		var resp native.Response
 		var macroCtx adserving.MacroContext
+		// noFill: genuine no-bid/unparseable and the stub fallback is off →
+		// return an honest 204 (no ad), not fake data.
+		noFill := false
 		if err != nil || winner == nil || winner.NoBid || winner.AdM == "" {
 			if err != nil {
-				reqLog.Warn("native auction failed, serving demo native", "error", err)
+				reqLog.Warn("native auction failed", "error", err)
 			} else {
-				reqLog.Info("native auction: no bid / no markup, serving demo native")
+				reqLog.Info("native auction: no bid / no markup")
 			}
-			resp, macroCtx = stubNative(trackerURL, traceID, placementID)
+			if stubFn() {
+				resp, macroCtx = stubNative(trackerURL, traceID, placementID)
+			} else {
+				noFill = true
+			}
 		} else {
 			parsed, perr := native.ParseResponse(winner.AdM)
 			if perr != nil {
-				reqLog.Warn("native markup unparseable, serving demo native", "error", perr)
-				resp, macroCtx = stubNative(trackerURL, traceID, placementID)
+				reqLog.Warn("native markup unparseable", "error", perr)
+				if stubFn() {
+					resp, macroCtx = stubNative(trackerURL, traceID, placementID)
+				} else {
+					noFill = true
+				}
 			} else {
 				resp = parsed
 				macroCtx = nativeMacroCtx(winner, trackerURL, resp.Native.Link.URL)
@@ -71,6 +82,11 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc
 					"advertiser", winner.AdvertiserDomain,
 					"price", winner.ClearingPrice)
 			}
+		}
+
+		if noFill {
+			w.WriteHeader(http.StatusNoContent) // 204: honest no-ad
+			return
 		}
 
 		html, err := renderNativeHTML(resp, macroCtx)
