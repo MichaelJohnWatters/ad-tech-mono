@@ -143,6 +143,41 @@ func TestEngine_NetRevenue_RequiresPublisherScope(t *testing.T) {
 	}
 }
 
+// TestEngine_DerivedFromRollups proves Phase 2: with both time bounds set, the
+// engine's base query runs through the AutoTier Builder and is served from
+// rollups — the store holds NO raw impressions, so a non-zero count can only
+// come from the rollup path. The derived ecpm is then computed on that.
+func TestEngine_DerivedFromRollups(t *testing.T) {
+	store := analytics.NewMemory()
+	ctx := context.Background()
+	to := time.Now()
+	from := to.Add(-time.Hour) // 1h range → hourly tier
+	wf, wt := to.Add(-30*time.Minute), to.Add(-29*time.Minute)
+	if err := store.InsertRollups(ctx, []analytics.RollupRow{
+		rr("events", "hourly", wf, wt,
+			map[string]string{"publisher_id": "pubA"},
+			map[string]float64{"count": 100, "sum_cost": 0.3}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eng := NewQueryEngine(store, nil)
+	res, err := eng.Query(ctx, analytics.QueryParams{
+		Table:    "impressions",
+		Metrics:  []string{"count", "ecpm"},
+		Filters:  map[string]string{"publisher_id": "pubA"},
+		TimeFrom: from, TimeTo: to,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := col(t, res, "count"); !approx(got, 100) {
+		t.Errorf("count = %v, want 100 (served from rollups, not raw 0)", got)
+	}
+	if got := col(t, res, "ecpm"); !approx(got, 3.0) {
+		t.Errorf("ecpm from rollup = %v, want 3.0", got)
+	}
+}
+
 // TestEngine_TenantIsolation: a scoped query must never return another tenant's
 // rows, and every cross-table sub-query must carry the same filter (else the
 // auctions/clicks sub-query would leak the other publisher's counts).
