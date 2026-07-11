@@ -61,6 +61,7 @@ var advertiserNav = []NavItem{
 	{Label: "Creatives", Href: "#creatives", Icon: "▣", Perm: "creatives:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
+	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
 }
 
 // advertiserPortalData is what advertiser.html renders with. AccountID/
@@ -82,6 +83,7 @@ var publisherNav = []NavItem{
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Ad tag", Href: "#adtag", Icon: "⧉", Perm: "placements:read"},
 	{Label: "Earnings", Href: "#earnings", Icon: "▦", Perm: "earnings:view"},
+	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
 }
 
 // portalData is what the portal templates render with. AccountID/IsCustomer

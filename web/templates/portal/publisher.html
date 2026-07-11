@@ -197,8 +197,52 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
+
+    <!-- ============ Team ============ -->
+    <section id="section-team" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Team members" "subtitle" "People who can sign in to this account") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Invite member" "variant" "secondary" "size" "sm" "onclick" "openInvite()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Email" "Role" "Status")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
+
+<!-- Invite team member modal -->
+{{ template "modal-start" (dict "id" "inviteModal" "title" "Invite team member") }}
+  <form id="inviteForm" onsubmit="inviteMember(event)">
+    {{ template "form-field" (dict "label" "Name" "name" "tm_name" "placeholder" "Jane Doe" "required" true) }}
+    {{ template "form-field" (dict "label" "Email" "name" "tm_email" "type" "email" "placeholder" "jane@company.com" "required" true) }}
+    <label class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Role</span>
+      <select id="tm_role" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="viewer">Viewer — read-only</option>
+        <option value="analyst">Analyst — reports</option>
+        <option value="ad_ops">Ad ops — placements &amp; deals</option>
+        <option value="finance">Finance — earnings</option>
+        <option value="owner">Owner — full access</option>
+      </select>
+    </label>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('inviteModal').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Send invite" "type" "submit") }}
+    </div>
+  </form>
+  <div id="inviteResult" class="hidden mt-1">
+    <p class="text-sm mb-2">Invited <span id="ir_email" class="font-medium"></span>. Share this one-time password — it won't be shown again:</p>
+    <div class="flex items-center gap-2 mb-4">
+      <code id="ir_pw" class="flex-1 px-2 py-1.5 rounded bg-surface-3 font-mono text-sm select-all"></code>
+      {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyTempPw()") }}
+    </div>
+    <div class="flex justify-end">
+      {{ template "button" (dict "label" "Done" "onclick" "closeInvite()") }}
+    </div>
+  </div>
+{{ template "modal-end" . }}
 
 <!-- New placement modal -->
 {{ template "modal-start" (dict "id" "newPlacement" "title" "New placement") }}
@@ -481,7 +525,7 @@ function onPublisherChange() {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'reports', 'adtag', 'earnings'];
+const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'reports', 'adtag', 'earnings', 'team'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -499,7 +543,7 @@ function showSection(name) {
     loaded[name] = true;
     ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
       directsold: loadDirect, quality: loadQuality, reports: loadSaved,
-      adtag: loadTagPicker, earnings: loadEarnings}[name])?.();
+      adtag: loadTagPicker, earnings: loadEarnings, team: loadTeam}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -1163,6 +1207,56 @@ async function loadEarnings() {
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+}
+
+// ---- Team ----
+const ROLE_BADGE = {
+  owner: 'bg-brand/15 text-brand', manager: 'bg-info/15 text-info',
+  ad_ops: 'bg-info/15 text-info', analyst: 'bg-surface-3 text-gray-500',
+  finance: 'bg-warn/15 text-warn', viewer: 'bg-surface-3 text-gray-400',
+};
+async function loadTeam() {
+  const tbody = tbodyOf('team');
+  try {
+    const list = await fetchJSON('/v1/api/team') || [];
+    tbody.innerHTML = list.length ? list.map(m => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(m.name)}</td>
+        <td class="px-3 py-2 text-gray-500">${esc(m.email)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${ROLE_BADGE[m.role] || ROLE_BADGE.viewer}">${esc(m.role)}</span></td>
+        <td class="px-3 py-2 text-xs">${esc(m.status)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No team members yet — invite your first above.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openInvite() {
+  $('inviteForm').reset();
+  $('inviteForm').classList.remove('hidden');
+  $('inviteResult').classList.add('hidden');
+  $('inviteModal').classList.remove('hidden');
+}
+function closeInvite() { $('inviteModal').classList.add('hidden'); }
+function copyTempPw() {
+  navigator.clipboard?.writeText($('ir_pw').textContent).then(() => toast('Password copied', 'info'));
+}
+async function inviteMember(ev) {
+  ev.preventDefault();
+  const body = {
+    name: $('tm_name').value.trim(),
+    email: $('tm_email').value.trim(),
+    role: $('tm_role').value,
+  };
+  try {
+    const res = await fetchJSON('/v1/api/team', {method: 'POST', body: JSON.stringify(body)});
+    $('ir_email').textContent = res.email;
+    $('ir_pw').textContent = res.temp_password;
+    $('inviteForm').classList.add('hidden');
+    $('inviteResult').classList.remove('hidden');
+    toast('Invite created', 'success');
+    loadTeam();
+  } catch (err) { toast('Invite failed: ' + err.message, 'error'); }
 }
 
 loadPublishers().then(() => showSection(location.hash.slice(1) || 'dashboard'));
