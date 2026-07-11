@@ -12,10 +12,39 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
-// actAsCookieName is the portal switcher's selected managed account. The proxy
-// resolves it (validated against the agency's managed set) the same as the
+// actAsCookieName is the portal switcher's selected act-as account. The proxy
+// resolves it (validated via auth.CanAccessAccount) the same as the
 // X-Act-As-Account header.
 const actAsCookieName = "act_as_account"
+
+// ActAsTarget returns the caller's requested act-as target — the
+// X-Act-As-Account header (API clients) or the act_as_account cookie (the
+// portal switcher, which can't set headers on navigations). Header wins.
+// Empty when the caller isn't acting-as/impersonating.
+func ActAsTarget(r *http.Request) string {
+	if h := strings.TrimSpace(r.Header.Get(constants.HeaderActAs)); h != "" {
+		return h
+	}
+	if ck, err := r.Cookie(actAsCookieName); err == nil {
+		return strings.TrimSpace(ck.Value)
+	}
+	return ""
+}
+
+// ParseActAsTarget splits an act-as value into (accountType, accountID). The
+// staff impersonation switcher sets "advertiser:<id>" / "publisher:<id>" (it
+// knows the target's type); the agency switcher sets a bare "<id>" which
+// defaults to advertiser (agencies only manage advertisers). An unrecognised
+// type prefix also defaults to advertiser.
+func ParseActAsTarget(s string) (auth.AccountType, string) {
+	if i := strings.IndexByte(s, ':'); i > 0 {
+		if t := auth.AccountType(s[:i]); t == auth.AccountAdvertiser || t == auth.AccountPublisher {
+			return t, s[i+1:]
+		}
+		return auth.AccountAdvertiser, s[i+1:]
+	}
+	return auth.AccountAdvertiser, s
+}
 
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
 // to a backend service. Used by the gateway to proxy API calls to internal services.
@@ -61,29 +90,22 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 		if claims != nil {
 			acctID := claims.AccountID
 			acctType := string(claims.AccountType)
-			// Agency act-as: an agency session may target one of its managed
-			// advertiser accounts via X-Act-As-Account. Validate against the
-			// agency's managed set, then forward that account as the effective
-			// advertiser tenant so downstream scoping applies to it. A target
-			// outside the managed set is rejected (never silently ignored).
-			if claims.AccountType == auth.AccountAgency {
-				// Target comes from the X-Act-As-Account header (API clients) or
-				// the act_as_account cookie (the portal switcher, which can't set
-				// headers on navigations). Header wins if both are present.
-				target := strings.TrimSpace(r.Header.Get(constants.HeaderActAs))
-				if target == "" {
-					if ck, err := r.Cookie(actAsCookieName); err == nil {
-						target = strings.TrimSpace(ck.Value)
-					}
+			// Act-as / impersonation: an agency may target one of its managed
+			// advertiser accounts; staff/admin may impersonate ANY account
+			// (advertiser or publisher). auth.CanAccessAccount is the authority —
+			// it already encodes "agency → managed set" and "staff → any". When a
+			// target is set and permitted, forward it (with the target's real
+			// type) as the effective tenant so downstream scoping applies to it.
+			// A target the caller can't access is rejected, never silently ignored.
+			if target := ActAsTarget(r); target != "" {
+				tType, tID := ParseActAsTarget(target)
+				if !auth.CanAccessAccount(claims, tID) {
+					http.Error(w, "forbidden: cannot act as that account", http.StatusForbidden)
+					return
 				}
-				if target != "" {
-					if !auth.CanAccessAccount(claims, target) {
-						http.Error(w, "forbidden: not one of your managed accounts", http.StatusForbidden)
-						return
-					}
-					acctID = target
-					acctType = string(auth.AccountAdvertiser)
-				}
+				acctID = tID
+				acctType = string(tType)
+				log.Info("act-as", "caller", claims.AccountID, "caller_type", claims.AccountType, "as_account", tID, "as_type", tType)
 			}
 			upstreamReq.Header.Set(constants.HeaderAccountID, acctID)
 			upstreamReq.Header.Set(constants.HeaderAccountType, acctType)

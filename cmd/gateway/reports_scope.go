@@ -34,9 +34,29 @@ func enforceReportTenant(pubs reportTenantPublisherLookup, log *slog.Logger) fun
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := middleware.ClaimsFromContext(r.Context())
-			if claims == nil || auth.IsPlatformUser(claims) || r.Method != http.MethodPost {
+			if claims == nil || r.Method != http.MethodPost {
 				next.ServeHTTP(w, r)
 				return
+			}
+
+			// Effective tenant to scope report queries to. A customer session
+			// scopes to its own account. Staff/admin are platform-wide (untouched)
+			// UNLESS impersonating an account (act-as) — then scope to the target,
+			// so an impersonated portal shows only that account's data (audited by
+			// the proxy). A target the caller can't access is rejected.
+			effType, effID := claims.AccountType, claims.AccountID
+			if auth.IsPlatformUser(claims) {
+				target := middleware.ActAsTarget(r)
+				if target == "" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				t, id := middleware.ParseActAsTarget(target)
+				if !auth.CanAccessAccount(claims, id) {
+					http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+					return
+				}
+				effType, effID = t, id
 			}
 
 			var q map[string]any
@@ -53,14 +73,14 @@ func enforceReportTenant(pubs reportTenantPublisherLookup, log *slog.Logger) fun
 				filters = map[string]any{}
 			}
 
-			switch claims.AccountType {
+			switch effType {
 			case auth.AccountAdvertiser, auth.AccountAgency:
-				filters["account_id"] = claims.AccountID
+				filters["account_id"] = effID
 
 			case auth.AccountPublisher:
-				owned, err := pubs.PublisherIDs(r.Context(), claims.AccountID)
+				owned, err := pubs.PublisherIDs(r.Context(), effID)
 				if err != nil {
-					log.Error("report tenant: publisher lookup failed", "error", err, "account_id", claims.AccountID)
+					log.Error("report tenant: publisher lookup failed", "error", err, "account_id", effID)
 					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 					return
 				}
