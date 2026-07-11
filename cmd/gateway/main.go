@@ -298,7 +298,7 @@ func main() {
 	if gwDB != nil {
 		audStore = audiencepg.New(gwDB)
 	}
-	mux.Handle(routes.APIAudiences, secretsAuth(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
+	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
 
 	// Identity-graph ingestion (link UID2 / hashed-email / device ids). gwDB may
 	// be nil if Postgres was unreachable at boot; the handler 503s.

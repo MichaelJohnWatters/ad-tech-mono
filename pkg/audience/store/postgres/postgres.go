@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 )
@@ -22,6 +23,51 @@ import (
 // Store reads audience segment memberships from Postgres.
 type Store struct {
 	db *sql.DB
+}
+
+// Segment is a segment row with its member count, for the management UI.
+type Segment struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Type       string    `json:"type"`
+	Status     string    `json:"status"`
+	Source     string    `json:"source"`
+	Visibility string    `json:"visibility"`
+	Members    int       `json:"members"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ListSegments returns every segment for an account with its member count,
+// most-recently-updated first. Tenant-scoped via RLS (withTenant sets
+// app.current_account_id) plus an explicit account_id filter.
+func (s *Store) ListSegments(ctx context.Context, accountID string) ([]Segment, error) {
+	out := []Segment{}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+SELECT s.id::text, s.name, s.type, s.status, s.source, s.visibility,
+       COALESCE(c.n, 0), s.updated_at
+FROM audience_segments s
+LEFT JOIN (
+    SELECT segment_id, count(*) AS n FROM audience_segment_members GROUP BY segment_id
+) c ON c.segment_id = s.id
+WHERE s.account_id = $1::uuid
+ORDER BY s.updated_at DESC`
+		rows, err := tx.QueryContext(ctx, q, accountID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var seg Segment
+			if err := rows.Scan(&seg.ID, &seg.Name, &seg.Type, &seg.Status,
+				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt); err != nil {
+				return err
+			}
+			out = append(out, seg)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // New returns a Store backed by the given *sql.DB. The caller owns the
