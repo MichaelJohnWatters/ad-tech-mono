@@ -1,0 +1,25 @@
+{{/* impersonation-banner: shown on a persona portal when a staff/admin session
+     is viewing it as another account (act-as). Driven by portalData.Impersonating
+     / .ImpersonatingID. "Stop" clears the act_as_account cookie and returns to
+     the staff console. */}}
+{{ define "impersonation-banner" }}
+{{ if .Impersonating }}
+<div class="sticky top-0 z-40 bg-warn text-white text-sm px-6 py-2 flex items-center justify-between shadow">
+  <span>👁 Staff view — viewing as <b id="impersonatingName">{{ printf "%.8s" .ImpersonatingID }}…</b></span>
+  <button onclick="stopImpersonation()" class="px-2.5 py-1 rounded bg-black/25 hover:bg-black/40 text-xs font-medium">Stop &amp; return to staff</button>
+</div>
+<script>
+(function(){
+  var id = "{{ .ImpersonatingID }}";
+  fetch('/v1/api/accounts').then(function(r){ return r.ok ? r.json() : []; }).then(function(list){
+    var a = (list || []).find(function(x){ return x.id === id; });
+    if (a) document.getElementById('impersonatingName').textContent = a.name;
+  }).catch(function(){});
+})();
+function stopImpersonation(){
+  document.cookie = 'act_as_account=; path=/; max-age=0; samesite=lax';
+  location.href = '/portal/staff';
+}
+</script>
+{{ end }}
+{{ end }}

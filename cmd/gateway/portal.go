@@ -93,7 +93,12 @@ type portalData struct {
 	// IsAgency drives the advertiser portal's account switcher — an agency
 	// session picks which managed advertiser account it acts as.
 	IsAgency bool
-	Nav      []map[string]any
+	// Impersonating is true when a staff/admin session is viewing a persona
+	// portal as another account (act-as). Drives the "Viewing as X — Stop"
+	// banner; ImpersonatingID is the account being viewed.
+	Impersonating   bool
+	ImpersonatingID string
+	Nav             []map[string]any
 }
 
 // portalHandler renders a persona portal page with session claims driving the
@@ -114,7 +119,21 @@ func portalHandler(templates *templateManager, signingKey, page string, nav []Na
 			data.AccountID = claims.AccountID
 			data.IsCustomer = claims.AccountType == customerType
 			data.IsAgency = claims.AccountType == auth.AccountAgency
-			items = filterNav(nav, claims)
+			// Staff/admin impersonating a customer account on a PERSONA portal
+			// (not the staff console): show the full persona nav — they can open
+			// every screen, and their own staff perms wouldn't pass filterNav —
+			// and flag the impersonation banner. The proxy + report-scope already
+			// scope the data to the target.
+			if auth.IsPlatformUser(claims) && customerType != auth.AccountStaff {
+				if target := middleware.ActAsTarget(r); target != "" {
+					_, id := middleware.ParseActAsTarget(target)
+					data.Impersonating = true
+					data.ImpersonatingID = id
+				}
+			}
+			if !data.Impersonating {
+				items = filterNav(nav, claims)
+			}
 		}
 		// app-sidebar's items are lowercase-keyed dicts (see the partial);
 		// convert the filtered NavItems to that shape.
@@ -141,6 +160,7 @@ func publisherPortalHandler(templates *templateManager, signingKey string) http.
 // support-only role sees just what it can act on. The Tools section links
 // out to the existing operator surfaces (config manager, trace explorer).
 var staffNav = []NavItem{
+	{Label: "Impersonate", Href: "#impersonate", Icon: "👤", Perm: "support:read"},
 	{Label: "Moderation", Href: "#moderation", Icon: "⚑", Perm: "moderation:read"},
 	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
 	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
