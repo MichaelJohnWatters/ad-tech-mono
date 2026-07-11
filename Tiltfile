@@ -382,7 +382,11 @@ local_resource('migrate',
     resource_deps=['postgres'])
 
 local_resource('reset',
-    cmd='go run ./cmd/migrate reset && go run ./cmd/migrate && go run ./cmd/seed --profile standard',
+    # Fresh run: wipe ALL data (Postgres tenant tables + ClickHouse analytics +
+    # Redis) then re-seed + re-populate via demo.sh. Config/secrets/schema kept,
+    # so no gateway/DSP restart. Same as `make reset`. (For a SCHEMA rebuild
+    # after a migration change, run `go run ./cmd/migrate reset && ./cmd/migrate`.)
+    cmd='bash scripts/reset.sh',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres'])
 
@@ -449,14 +453,16 @@ local_resource('asciline-demo',
 # ============================================================
 
 local_resource('demo',
-    # THE one-command setup everyone shares: seed accounts/logins/campaigns/
-    # placements/deals + a baseline of realistic attributed traffic, so every
-    # portal shows live data and every account is loginable
-    # (<slug>@adtech.local / admin). Same as `make demo`. Click after the stack
-    # is green. See scripts/demo.sh.
+    # THE one-command setup everyone shares. Runs AUTOMATICALLY once `tilt up`
+    # brings the stack green (auto_init) — so `tilt up` is the single command:
+    # seeds accounts/logins/campaigns/placements/deals + a baseline of realistic
+    # attributed traffic, so every portal is populated and every account is
+    # loginable (<slug>@adtech.local / admin). Same as `make demo`; re-run from
+    # here or the CLI anytime. For a clean slate use the 'reset' resource /
+    # `make reset`. See scripts/demo.sh.
     cmd='bash scripts/demo.sh',
-    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
-    resource_deps=['postgres', 'exchange', 'tracker'])
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=True,
+    resource_deps=['postgres', 'gateway', 'exchange', 'ssp', 'tracker', 'reporting', 'dsp-internal'])
 
 local_resource('sim-continuous',
     # Continuous traffic at a SET speed — toggle on for a live-feeling stack.

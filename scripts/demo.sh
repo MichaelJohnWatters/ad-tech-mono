@@ -24,22 +24,39 @@ REP="${DEMO_REPORTING:-http://localhost:8086}"
 REQ="${DEMO_REQUESTS:-800}"
 RPS="${DEMO_RPS:-50}"
 
-echo "▶ waiting for the stack ($GW)…"
-for i in $(seq 1 30); do
-  if curl -fsS -o /dev/null "$GW/healthz" 2>/dev/null; then break; fi
-  if [ "$i" = 30 ]; then echo "✗ gateway not reachable — is 'tilt up' running?"; exit 1; fi
+# Wait for the serving stack the simulator hits directly (exchange :8081,
+# tracker :8083) plus the gateway (:8080). Generous timeout so this survives an
+# auto-run on `tilt up` while images are still building.
+EXCHANGE="${DEMO_EXCHANGE:-http://localhost:8081}"
+TRACKER="${DEMO_TRACKER:-http://localhost:8083}"
+echo "▶ waiting for the stack (gateway/exchange/tracker)…"
+for i in $(seq 1 90); do
+  if curl -fsS -o /dev/null "$GW/healthz" 2>/dev/null \
+     && curl -fsS -o /dev/null "$EXCHANGE/healthz" 2>/dev/null \
+     && curl -fsS -o /dev/null "$TRACKER/healthz" 2>/dev/null; then break; fi
+  if [ "$i" = 90 ]; then echo "✗ stack not reachable — is 'tilt up' running / done building?"; exit 1; fi
   sleep 2
 done
 
-echo "▶ [1/3] seeding accounts, logins, campaigns, placements, deals…"
+echo "▶ [1/4] seeding accounts, logins, campaigns, placements, deals…"
 S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
   SEED_CREATIVES_URL_BASE="$GW/v1/creatives" \
   go run ./cmd/seed --profile standard
 
-echo "▶ [2/3] generating $REQ realistic auctions at ~$RPS rps (impressions/clicks/views)…"
+# Warm caches (campaigns/placements/creatives) must reload the freshly-seeded
+# data before auctions run — otherwise (esp. right after a reset that truncated
+# everything) the caches are empty and every auction no-bids. Synchronous refresh
+# beats waiting on the 30s poll. DSP :8082, competitors :8089/:8090, SSP :8084,
+# exchange :8081, adserver :8085, reporting :8086.
+echo "▶ [2/4] refreshing warm caches so services see the seed…"
+for port in 8082 8089 8090 8084 8081 8085 8086; do
+  curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
+done
+
+echo "▶ [3/4] generating $REQ realistic auctions at ~$RPS rps (impressions/clicks/views)…"
 go run ./cmd/simulator run --requests "$REQ" --rps "$RPS"
 
-echo "▶ [3/3] rolling up analytics…"
+echo "▶ [4/4] rolling up analytics…"
 for lvl in minute hourly daily; do
   curl -fsS -o /dev/null -X POST "$REP/debug/rollup/run?level=$lvl" 2>/dev/null || true
 done
