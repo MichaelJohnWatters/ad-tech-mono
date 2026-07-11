@@ -40,6 +40,9 @@ test-e2e: ## Run end-to-end tests on k3s (pins reporting to the memory backend â
 ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segment (needs tilt up + ffmpeg)
 	./scripts/ssai-smoke.sh
 
+asciline-demo: ## Ad-free ASCILINE reference testbed on :8000 (clones to third_party/; content only â€” never the ad path)
+	./scripts/asciline-demo.sh
+
 test-all: test test-integration test-duckdb test-e2e ## Run all test layers
 
 # --- Linting ---

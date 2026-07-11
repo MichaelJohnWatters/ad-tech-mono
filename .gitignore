@@ -78,3 +78,7 @@ k6-results/
 # mkcert-issued localhost certs for the dev gateway's HTTPS listener.
 # Per-developer; never checked in. Regenerate with scripts/setup-tls.sh.
 dev/tls/
+
+# Third-party checkouts for local reference demos (e.g. scripts/asciline-demo.sh).
+# Never vendored — cloned on demand, per-developer.
+third_party/
