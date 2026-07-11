@@ -8,10 +8,15 @@
 package harness
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // chaosNamespace is the k8s namespace the local stack runs in.
@@ -89,6 +94,52 @@ func (h *Harness) WithChaos(t *testing.T, app string, during func()) {
 	defer func() {
 		h.ChaosWaitReady(t, app, 90*time.Second)
 		time.Sleep(3 * time.Second)
+		// Pod-ready is NOT the same as functionally recovered for stateful
+		// infra. Postgres is a StatefulSet with headless-service DNS: after a
+		// force-delete+recreate the `postgres` service name doesn't resolve for
+		// a beat (endpoints re-propagate, dependent pools redial, Go negative-DNS
+		// cache clears). The next test's /readyz-based WaitReady doesn't catch it
+		// (services fail-open on readyz), so it would inherit a stack where a
+		// Postgres-backed cache refresh 500s ("lookup postgres: no such host").
+		// Poll a real Postgres query until it succeeds before handing off.
+		if app == "postgres" {
+			h.waitPostgresReachable(t, 60*time.Second)
+		}
 	}()
 	during()
+}
+
+// waitPostgresReachable blocks until the DSP can actually query Postgres again
+// (the audience-refresh endpoint reads audience_segment_members, so it 500s
+// while Postgres is unresolvable and 200s once recovered). A functional gate,
+// not just pod-readiness.
+func (h *Harness) waitPostgresReachable(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if postgresReachableVia(h.HTTP, h.URLs.DSP) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("Postgres-backed services did not recover within %s after restart "+
+		"(dependent query still failing) — the next test would inherit a broken stack", timeout)
+}
+
+// postgresReachableVia POSTs the DSP audience-refresh (a Postgres-backed read)
+// and reports whether it succeeded. Non-fatal, for polling.
+func postgresReachableVia(client *http.Client, dspBase string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dspBase+routes.DebugAudienceRefresh, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode == http.StatusOK
 }

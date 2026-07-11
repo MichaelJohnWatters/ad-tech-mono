@@ -104,6 +104,19 @@ func (l *PostgresLoader) LoadAll(ctx context.Context) ([]Secret, error) {
 	l.mu.Lock()
 	db := l.db
 	l.mu.Unlock()
+	if db == nil {
+		// Race: ensureDB above set l.db, but a concurrent LoadAll (poll tick,
+		// manual refresh, and NATS invalidate can all fire at once when
+		// Postgres flaps) pinged, failed, and dropped the pool (l.db = nil)
+		// before we read it. Treat like unreachable — serve the cached
+		// snapshot, retry next tick — rather than nil-deref db.QueryContext
+		// and crash the whole service.
+		if l.Log != nil {
+			l.Log.Warn("secrets loader: db pool dropped concurrently, will retry on next poll",
+				"service", l.ServiceName)
+		}
+		return nil, nil
+	}
 
 	const q = `
 SELECT
