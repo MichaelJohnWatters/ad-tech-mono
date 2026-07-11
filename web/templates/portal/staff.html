@@ -107,11 +107,37 @@
     </section>
 
     <!-- ============ Tools ============ -->
+    <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Interactive simulator") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        Fire real auctions through the live stack — SSP → exchange → DSP fan-out →
+        win → serve → tracker — and follow each one on a trace timeline. Use this to
+        exercise a specific placement, geo, or device on demand.
+      </p>
+      <a class="inline-block" href="/dev/publisher-simulator">
+        {{ template "button" (dict "label" "Open publisher simulator →") }}
+      </a>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Continuous traffic") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        Keep a steady stream of realistic attributed traffic flowing so dashboards,
+        spend, fill and earnings stay live. This runs as a background job (no server
+        button — it's a long-running process), started from the CLI or Tilt:
+      </p>
+      <ul class="space-y-2 text-sm">
+        <li><code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make traffic</code> <span class="text-gray-400">— continuous sim at a set speed (<code class="font-mono">DEMO_RPS</code>, default 5). Ctrl-C to stop.</span></li>
+        <li>Tilt <span class="font-medium">sim-continuous</span> resource <span class="text-gray-400">— same thing, start/stop from the Tilt UI.</span></li>
+        <li><code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make demo</code> <span class="text-gray-400">— one-off baseline burst + rollups (runs automatically on <code class="font-mono">tilt up</code>).</span></li>
+        <li><code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make reset</code> <span class="text-gray-400">— wipe all data (Postgres+ClickHouse+Redis) then re-populate for a fresh run.</span></li>
+      </ul>
+      {{ template "card-end" . }}
+    </section>
+
     <section id="section-tools" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Operator tools") }}
       <ul class="space-y-2 text-sm">
         <li><a class="text-brand hover:underline" href="/dev/console">Config manager + Secrets</a> <span class="text-gray-400">— live config, per-pod overrides, secret rotation</span></li>
-        <li><a class="text-brand hover:underline" href="/dev/publisher-simulator">Publisher simulator</a> <span class="text-gray-400">— run real auctions, trace timeline</span></li>
         <li><a class="text-brand hover:underline" href="/dev/trace-explorer">Trace explorer</a> <span class="text-gray-400">— trace lookup + batch reconciliation</span></li>
         <li><a class="text-brand hover:underline" href="http://localhost:3001" target="_blank">Grafana</a> <span class="text-gray-400">— metrics + logs (Loki pivot)</span></li>
         <li><a class="text-brand hover:underline" href="http://localhost:16686" target="_blank">Jaeger</a> <span class="text-gray-400">— distributed traces</span></li>
@@ -191,12 +217,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'simulator', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', tools: 'Tools'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', tools: 'Tools'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
