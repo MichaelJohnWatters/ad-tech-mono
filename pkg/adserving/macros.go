@@ -29,6 +29,8 @@ type MacroContext struct {
 	AppBundle    string
 	Width        int
 	Height       int
+	Geo          string // request geo (country) — baked into tracker beacons for analytics
+	Device       string // request device type — baked into tracker beacons for analytics
 	UserAgent    string
 	IP           string
 	TrackerURL   string // base URL for tracker service
@@ -94,6 +96,7 @@ func BuildImpressionURL(ctx MacroContext) string {
 	if ctx.BidModel != "" {
 		params.Set("bm", ctx.BidModel)
 	}
+	setGeoDevice(params, ctx)
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
@@ -114,6 +117,7 @@ func BuildClickURL(ctx MacroContext) string {
 	if ctx.LandingURL != "" {
 		params.Set("redir", ctx.LandingURL)
 	}
+	setGeoDevice(params, ctx)
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
@@ -186,4 +190,16 @@ func setExp(params url.Values, ttl time.Duration) {
 		return
 	}
 	params.Set("exp", strconv.FormatInt(time.Now().Add(ttl).Unix(), 10))
+}
+
+// setGeoDevice adds geo/dev params to a tracker-URL param set when present.
+// Added before SignURL so they're covered by the HMAC. The tracker reads
+// these onto the impression/click analytics events (geo/device columns).
+func setGeoDevice(params url.Values, ctx MacroContext) {
+	if ctx.Geo != "" {
+		params.Set("geo", ctx.Geo)
+	}
+	if ctx.Device != "" {
+		params.Set("dev", ctx.Device)
+	}
 }

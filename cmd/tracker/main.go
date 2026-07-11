@@ -271,6 +271,8 @@ func main() {
 			PlacementID: q.Get("pid"),
 			PublisherID: q.Get("pubid"),
 			AccountID:   q.Get("advid"),
+			Geo:         q.Get("geo"),
+			Device:      q.Get("dev"),
 			LandingURL:  redir,
 			Timestamp:   time.Now().UTC(),
 		}, reqLog)
