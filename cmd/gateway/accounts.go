@@ -11,9 +11,10 @@ import (
 
 // account is the shape the staff impersonation picker consumes.
 type account struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Competitor bool   `json:"competitor"` // advertiser backed by a competitor DSP — simulated external demand, shown distinctly
 }
 
 // accountsListHandler lists advertiser + publisher accounts for the staff
@@ -33,10 +34,11 @@ func accountsListHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(), `
-SELECT id::text, name, type
-FROM accounts
-WHERE type IN ('advertiser', 'publisher') AND status != 'archived'
-ORDER BY type, name`)
+SELECT a.id::text, a.name, a.type, COALESCE(d.profile_type = 'competitor', false) AS competitor
+FROM accounts a
+LEFT JOIN dsps d ON d.id = a.dsp_id
+WHERE a.type IN ('advertiser', 'publisher') AND a.status != 'archived'
+ORDER BY competitor, a.type, a.name`)
 		if err != nil {
 			log.Error("accounts list query failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -46,7 +48,7 @@ ORDER BY type, name`)
 		out := []account{}
 		for rows.Next() {
 			var a account
-			if err := rows.Scan(&a.ID, &a.Name, &a.Type); err != nil {
+			if err := rows.Scan(&a.ID, &a.Name, &a.Type, &a.Competitor); err != nil {
 				log.Error("accounts list scan failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return

@@ -254,11 +254,12 @@ async function loadImpersonate() {
   catch (err) { tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`; return; }
   if (!list.length) { tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No accounts to view.</td></tr>`; return; }
   tbody.innerHTML = list.map(a => `
-    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
-      <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
+    <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 ${a.competitor ? 'bg-error/5' : ''}">
+      <td class="px-3 py-2 font-medium">${esc(a.name)}
+        ${a.competitor ? '<span class="ml-1.5 text-xs px-1.5 py-0.5 rounded bg-error/15 text-error font-medium">🤖 competitor demand</span>' : ''}</td>
       <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">${esc(a.type)}</span></td>
       <td class="px-3 py-2 text-right">
-        <button onclick="viewAs('${esc(a.type)}','${esc(a.id)}')" class="text-xs px-2 py-1 rounded bg-brand text-white hover:bg-brand-hover">View as →</button>
+        <button onclick="viewAs('${esc(a.type)}','${esc(a.id)}')" class="text-xs px-2 py-1 rounded ${a.competitor ? 'bg-error text-white hover:opacity-90' : 'bg-brand text-white hover:bg-brand-hover'}">View as →</button>
       </td>
     </tr>`).join('');
 }

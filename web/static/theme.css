@@ -409,3 +409,13 @@ select {
   font-size: 12px;
 }
 .page-footer a { color: var(--brand-primary); }
+
+/* ============================================================
+   Competitor-demand view (staff impersonating a competitor DSP
+   account). Added to <body> by the impersonation banner so the
+   whole page reads as "simulated external buyer", not one of our
+   own advertisers — a red inset frame under the red top banner.
+   ============================================================ */
+body.competitor-view {
+  box-shadow: inset 0 0 0 3px rgb(var(--brand-error-rgb) / 0.55);
+}

@@ -4,8 +4,8 @@
      the staff console. */}}
 {{ define "impersonation-banner" }}
 {{ if .Impersonating }}
-<div class="sticky top-0 z-40 bg-warn text-white text-sm px-6 py-2 flex items-center justify-between shadow">
-  <span>👁 Staff view — viewing as <b id="impersonatingName">{{ printf "%.8s" .ImpersonatingID }}…</b></span>
+<div id="impBanner" class="sticky top-0 z-40 bg-warn text-white text-sm px-6 py-2 flex items-center justify-between shadow">
+  <span id="impLabel">👁 Staff view — viewing as <b id="impersonatingName">{{ printf "%.8s" .ImpersonatingID }}…</b></span>
   <button onclick="stopImpersonation()" class="px-2.5 py-1 rounded bg-black/25 hover:bg-black/40 text-xs font-medium">Stop &amp; return to staff</button>
 </div>
 <script>
@@ -13,7 +13,19 @@
   var id = "{{ .ImpersonatingID }}";
   fetch('/v1/api/accounts').then(function(r){ return r.ok ? r.json() : []; }).then(function(list){
     var a = (list || []).find(function(x){ return x.id === id; });
-    if (a) document.getElementById('impersonatingName').textContent = a.name;
+    if (!a) return;
+    document.getElementById('impersonatingName').textContent = a.name;
+    if (a.competitor) {
+      // Competitor DSPs are simulated external demand, not one of our own
+      // advertisers — flag it in a distinct colour so a staff viewer never
+      // mistakes it for a real managed account.
+      var banner = document.getElementById('impBanner');
+      banner.classList.remove('bg-warn');
+      banner.classList.add('bg-error');
+      document.getElementById('impLabel').innerHTML =
+        '🤖 COMPETITOR DEMAND — simulated external buyer <b>' + a.name.replace(/[<>&]/g, '') + '</b>';
+      document.body.classList.add('competitor-view');
+    }
   }).catch(function(){});
 })();
 function stopImpersonation(){
