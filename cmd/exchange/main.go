@@ -346,6 +346,14 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			return
 		}
 
+		// Smart routing keys on the REQUEST's actual format, not the static
+		// exchange.channel knob. Routing on "all" averages every format's bid
+		// rate together, so a DSP that only has (say) native demand gets
+		// starved out once display auctions drag its blended bid rate below
+		// the drop threshold — and native/audio then never fill. Per-format
+		// stats keep each DSP eligible for the formats it actually bids.
+		routingChannel := channelForRequest(&bidReq)
+
 		// W3C trace ID from the OTel span HTTPMiddleware created (or
 		// extracted from the inbound traceparent header if the SSP propagated
 		// one). Falls back to bidReq.ID for callers that still send their
@@ -404,7 +412,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// or timeout patterns drop a DSP for this auction (still gets occasional
 		// traffic via the periodic poll model — see optimise.SmartRouter).
 		dspEndpoints := dspEndpointsFn()
-		selectedEndpoints := router.SelectDSPs(channel, dspEndpoints)
+		selectedEndpoints := router.SelectDSPs(routingChannel, dspEndpoints)
 		if len(selectedEndpoints) == 0 {
 			// Safety floor: if the router would skip everyone (cold start edge
 			// case or learned-bad state), fall back to the full list. We never
@@ -412,7 +420,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			selectedEndpoints = dspEndpoints
 		}
 
-		reqLog.Info("auction started", "channel", channel, "num_dsps_total", len(dspEndpoints), "num_dsps_called", len(selectedEndpoints))
+		reqLog.Info("auction started", "channel", routingChannel, "num_dsps_total", len(dspEndpoints), "num_dsps_called", len(selectedEndpoints))
 
 		// Fan out to DSPs in parallel. The fan-out context carries the
 		// bid_timeout deadline so:
@@ -440,7 +448,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
 		}
 
-		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, channel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID))
+		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID))
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
 
@@ -523,7 +531,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			}
 			auctionReq := auction.AuctionRequest{
 				RequestID:  bidReq.ID,
-				Channel:    channel,
+				Channel:    routingChannel,
 				PriceMode:  "first_price",
 				FloorPrice: bidReq.Imp[0].BidFloor,
 				TraceID:    traceID,
@@ -629,7 +637,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// per DSP on the same axis.
 		for _, rec := range bidRecords {
 			if rec.Bid.DSPID == winnerBid.DSPID {
-				router.RecordWin(channel, rec.Endpoint)
+				router.RecordWin(routingChannel, rec.Endpoint)
 				am.auctionsWonTotal.WithLabelValues(rec.Endpoint).Inc()
 				break
 			}
@@ -661,7 +669,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					ClearingPrice: clearingPrice,
 					Currency:      "USD",
 					BidModel:      winnerBid.BidModel,
-					Channel:       channel,
+					Channel:       routingChannel,
 					DealID:        winningDealID,
 					Timestamp:     clk.Now(),
 				})
@@ -680,7 +688,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					TraceID:       traceID,
 					PlacementID:   placementID,
 					PublisherID:   publisherID,
-					Channel:       channel,
+					Channel:       routingChannel,
 					NumBids:       len(bids),
 					WinnerDSP:     winnerBid.DSPID,
 					ClearingPrice: clearingPrice,
@@ -777,6 +785,27 @@ type dspBidRecord struct {
 // latency, so this should be gated by debug.endpoints_enabled in callers
 // — currently the dev/staging deployment runs with that on and prod will
 // not, so prod requests pass empty here and the header is ignored.
+// channelForRequest derives the routing channel from the request's imp format
+// so the smart router keeps per-format bid stats. Routing on a single blended
+// "all" bucket lets display auctions drag a native/audio-only DSP's bid rate
+// below the drop threshold, after which that DSP is never called for the format
+// it actually bids — and native/audio silently stop filling.
+func channelForRequest(req *openrtb.BidRequest) string {
+	if len(req.Imp) == 0 {
+		return constants.ChannelDisplay
+	}
+	switch {
+	case req.Imp[0].Video != nil:
+		return "video"
+	case req.Imp[0].Audio != nil:
+		return "audio"
+	case req.Imp[0].Native != nil:
+		return "native"
+	default:
+		return constants.ChannelDisplay
+	}
+}
+
 func parseSlowDSPs(csv string) map[int]bool {
 	if csv == "" {
 		return nil

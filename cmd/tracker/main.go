@@ -205,7 +205,7 @@ func main() {
 			AccountID:        q.Get("advid"),
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
-			Channel:          constants.ChannelDisplay,
+			Channel:          channelOrDefault(q.Get("ch")),
 			ClearingPrice:    price,
 			ClearingCurrency: q.Get("cur"),
 			ClearingPriceUSD: price,
@@ -516,6 +516,16 @@ type eventPublisher struct {
 	typed        *events.Publisher
 	reportingURL string
 	log          *slog.Logger
+}
+
+// channelOrDefault maps the beacon's ch= param to a channel, defaulting to
+// display when absent (display beacons don't bother setting it; video/native/
+// audio beacons do, so their impressions are labelled correctly).
+func channelOrDefault(ch string) string {
+	if ch == "" {
+		return constants.ChannelDisplay
+	}
+	return ch
 }
 
 func (p *eventPublisher) publishImpression(ctx context.Context, e analytics.ImpressionEvent, log *slog.Logger) {

@@ -125,6 +125,9 @@ func nativeMacroCtx(winner *sspVideoWinner, trackerURL, linkURL string) adservin
 	return adserving.MacroContext{
 		AuctionID:    defaultStr2(winner.TraceID, "native"),
 		AuctionPrice: winner.ClearingPrice,
+		Channel:      firstNonEmpty(winner.Channel, "native"),
+		Geo:          winner.Geo,
+		Device:       winner.Device,
 		Currency:     defaultStr2(winner.Currency, "USD"),
 		CampaignID:   winner.CampaignID,
 		CreativeID:   winner.CreativeID,

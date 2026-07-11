@@ -67,6 +67,9 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL string) http.HandlerFunc 
 		macroCtx := adserving.MacroContext{
 			AuctionID:    auctionTrace,
 			AuctionPrice: winner.ClearingPrice,
+			Channel:      firstNonEmpty(winner.Channel, "audio"),
+			Geo:          winner.Geo,
+			Device:       winner.Device,
 			Currency:     defaultStr2(winner.Currency, "USD"),
 			CampaignID:   winner.CampaignID,
 			CreativeID:   winner.CreativeID,
