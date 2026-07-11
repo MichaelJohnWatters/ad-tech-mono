@@ -53,8 +53,8 @@ for port in 8082 8089 8090 8084 8081 8085 8086; do
   curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
 done
 
-echo "▶ [3/4] generating $REQ realistic auctions at ~$RPS rps (impressions/clicks/views)…"
-go run ./cmd/simulator run --requests "$REQ" --rps "$RPS"
+echo "▶ [3/4] generating $REQ realistic auctions at ~$RPS rps (display/native/video/audio)…"
+go run ./cmd/simulator run --profile steady --requests "$REQ" --rps "$RPS"
 
 echo "▶ [4/4] rolling up analytics…"
 for lvl in minute hourly daily; do
