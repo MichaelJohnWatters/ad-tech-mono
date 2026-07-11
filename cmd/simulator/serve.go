@@ -50,9 +50,11 @@ func placementKeyFor(ch request.Channel) string {
 }
 
 // serveMirror runs one request through the first-party flow for its channel and
-// fires the server-returned beacons. Returns whether an ad was served.
-func serveMirror(client *http.Client, u endpoints, persona request.Persona, ch request.Channel, pod int, p profile, rng *rand.Rand, traceparent string) (bool, error) {
-	params := persona.QueryParams(placementKeyFor(ch), ch)
+// fires the server-returned beacons. Returns whether an ad was served. The
+// placementKey selects which seeded placement (and thus publisher) the request
+// targets — the caller picks it so traffic spreads across all publishers.
+func serveMirror(client *http.Client, u endpoints, persona request.Persona, ch request.Channel, pod int, p profile, rng *rand.Rand, traceparent, placementKey string) (bool, error) {
+	params := persona.QueryParams(placementKey, ch)
 	switch ch {
 	case request.Video:
 		if pod > 1 {

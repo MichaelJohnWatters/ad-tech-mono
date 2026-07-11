@@ -202,6 +202,9 @@ func runSimulation() {
 	geoOverride := getFlag("--geo", "")
 	deviceOverride := getFlag("--device", "")
 
+	// Load the seeded placement pool so requests spread across every publisher.
+	initInventory(getFlag("--publishers-dir", "profiles/publishers"), log)
+
 	log.Info("simulation starting",
 		"profile", p.Name, "rps", p.RPS, "duration", duration,
 		"max_requests", maxRequests, "personas", len(p.Personas),
@@ -307,10 +310,29 @@ func runSingle() {
 // the SSP / publisher-adserver, firing the server's signed beacons); --direct
 // posts OpenRTB straight to the exchange and self-fires beacons (raw load mode).
 func runOne(client *http.Client, eps endpoints, exchangeURL, trackerURL string, persona request.Persona, ch request.Channel, pod int, p profile, rng *rand.Rand, traceID, traceparent string, direct bool) (bool, error) {
+	// Pick a seeded placement for this channel so traffic spreads across every
+	// publisher. Falls back to the built-in simulator placement when the
+	// inventory has none for the channel (native/audio) or wasn't loaded.
+	pl, haveSeeded := invPick(ch, rng)
 	if !direct {
-		return serveMirror(client, eps, persona, ch, pod, p, rng, traceparent)
+		key := placementKeyFor(ch)
+		if haveSeeded {
+			key = pl.Key
+		}
+		return serveMirror(client, eps, persona, ch, pod, p, rng, traceparent, key)
 	}
 	placement := simPlacement(p.FloorPrice)
+	if haveSeeded {
+		placement = request.Placement{
+			Domain:      pl.Domain,
+			Name:        pl.Name,
+			Page:        "https://" + pl.Domain + "/article",
+			PublisherID: pl.PublisherID,
+			TagID:       pl.TagID,
+			Categories:  pl.Categories,
+			BidFloor:    pl.Floor,
+		}
+	}
 	bidReq := request.Build(request.Input{TraceID: traceID, Channel: ch, Persona: persona, Placement: placement, Rand: rng})
 	winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 	if err != nil {
