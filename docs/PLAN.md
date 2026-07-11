@@ -15339,6 +15339,35 @@ Jaeger client wrapper + single-step migration mode.
 
 > Coordination: 58 and 63 both touch files (`pkg/fraud`, `cmd/exchange`) that were under concurrent edit on 2026-07-06 — sequence them after that work merges to avoid conflicts.
 
+### Ideas — could do, not scheduled
+
+- **Text-video channel (ASCII/cell-grid streaming) — clean-room, our own Go implementation.**
+  Inspired by [ASCILINE](https://github.com/YusufB5/ASCILINE) (researched 2026-07-10): a
+  server renders each video frame to a grid of colored text cells and pushes
+  delta-encoded binary frames over a WebSocket; the browser paints them onto a
+  Canvas. No `<video>` element and no separate ad request, so ad frames are
+  indistinguishable from content frames — SSAI taken to its logical extreme
+  (the server owns the frame pipeline; ad insertion = switching the frame
+  source at a cue point). Tracking becomes fully server-authoritative and
+  frame-accurate: the server knows exactly which frames it delivered, so
+  impressions/quartiles fire on frame delivery — stronger than the current
+  segment-fetch beacons and a good "zero data slippage" showcase.
+  **License constraint: we CANNOT use ASCILINE's code** — its MIT license has an
+  explicit anti-advertisement clause (ad-serving use terminates the license).
+  The technique isn't restricted, so we build our own: a small Go frame
+  streamer (ffmpeg decode via the `pkg/transcode` seam, pixel→cell mapping,
+  RAW/zlib/delta frame codec, WebSocket push), reusing `cmd/ssai`'s SSP
+  auction + beacon plumbing at ad breaks, plus a vanilla-JS Canvas player page
+  in `web/`. Scope if picked up: one demo service (or a `cmd/ssai` WebSocket
+  endpoint), player page, e2e test. Known ceilings (fine for a demo channel):
+  ~360p max, per-viewer server render cost (no CDN segment caching), no DRM.
+  **Decision (2026-07-10): ASCILINE may run locally as an ad-free reference
+  testbed only** (`make asciline-demo` / Tilt `asciline-demo` — clones into
+  gitignored `third_party/`, streams a generated test clip). It must never be
+  wired to the SSAI stitcher, SSP, or any ad path — even simulated ads would
+  violate its anti-advertisement license clause. The production-shaped idea
+  above remains a from-scratch Go implementation.
+
 ---
 
 ## Business Operations (Running the Platform)

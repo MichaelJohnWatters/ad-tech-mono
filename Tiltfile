@@ -435,6 +435,15 @@ local_resource('privacy-verify',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres'])
 
+local_resource('asciline-demo',
+    # Ad-free ASCILINE reference testbed (docs/PLAN.md -> "Ideas — could do").
+    # Clones the upstream engine into gitignored third_party/, streams a
+    # generated test clip at http://localhost:8000 so we can study the
+    # WebSocket frame pipeline before building our own Go text-video channel.
+    # LICENSE: anti-ad clause — content only, must NEVER touch the ad path.
+    serve_cmd='./scripts/asciline-demo.sh',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['demo'], auto_init=False)
+
 # ============================================================
 # Simulation
 # ============================================================
