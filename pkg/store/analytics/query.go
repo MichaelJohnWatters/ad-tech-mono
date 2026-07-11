@@ -5,9 +5,19 @@ import (
 	"strings"
 )
 
-// BuildQuery constructs a SQL query from QueryParams.
-// Used by DuckDB and ClickHouse implementations.
+// BuildQuery constructs a SQL query from QueryParams against params.Table.
+// Used by the DuckDB and ClickHouse implementations.
 func BuildQuery(params QueryParams) (string, []interface{}) {
+	return BuildQueryFrom(params, params.Table)
+}
+
+// BuildQueryFrom is BuildQuery with an explicit FROM expression. The hot store
+// passes the table name; the cold tier passes a delta_scan('s3://…') expression
+// so BOTH compute identical aggregates AND apply the identical tenant WHERE —
+// which keeps the hot/cold boundary merge sound and prevents a filter from being
+// dropped on the cold path (a cross-tenant leak). Everything but the FROM target
+// is shared.
+func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{}) {
 	var b strings.Builder
 	var args []interface{}
 
@@ -49,7 +59,7 @@ func BuildQuery(params QueryParams) (string, []interface{}) {
 
 	// FROM
 	b.WriteString(" FROM ")
-	b.WriteString(params.Table)
+	b.WriteString(fromExpr)
 
 	// WHERE
 	var conditions []string

@@ -146,6 +146,15 @@ var eventTables = map[string]struct {
 		str("placement_id"), str("publisher_id"), str("advertiser_id"), f64("clearing_price"),
 		str("currency"), str("bid_model"), str("deal_id"), str("channel"), ts("timestamp"),
 	}}},
+	// The auction (ad-request) record — one per completed auction, filled or not.
+	// Reporting lands the same event in its `auctions` table; mirroring it into
+	// the lake lets the cold tier serve fill_rate (impressions/auctions) for deep
+	// history, not just the hot window.
+	events.SubjectAuctionComplete: {"auctions", datalake.Schema{Version: 1, Columns: []datalake.Column{
+		str("trace_id"), str("placement_id"), str("publisher_id"), str("channel"),
+		i64("num_bids"), f64("winning_bid"), f64("clearing_price"), str("currency"),
+		f64("clearing_price_usd"), str("winner_dsp"), i64("duration_ms"), str("deal_id"), ts("timestamp"),
+	}}},
 	events.SubjectDSPCall: {"dsp_calls", datalake.Schema{Version: 1, Columns: []datalake.Column{
 		str("trace_id"), str("auction_id"), str("channel"), str("dsp_endpoint"), boolC("bid_received"),
 		f64("bid_price_usd"), i64("latency_ms"), boolC("timed_out"), ts("timestamp"),
