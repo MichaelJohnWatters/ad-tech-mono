@@ -433,9 +433,12 @@ removed. What's actually left, ordered:
   statements** · onboarding wizard. All read existing data/APIs.
 
 ### Outstanding — Staff
-- **Accounts admin** (account CRUD — needs new backend) · **support / impersonation** (audited —
-  needs new backend) · moderation **appeal/bulk** actions · graduate the **config manager** into the
-  staff shell (exists at `/dev/console`).
+- ✅ **Support / impersonation SHIPPED (2026-07-11)** — staff "View as account" picker
+  (`GET /v1/api/accounts`) → opens any advertiser/publisher persona portal scoped to that
+  account (proxy + report-scope honour the act-as for staff), with a "Staff view — Stop"
+  banner. Reuses the agency act-as machinery.
+- **Accounts admin** (account CRUD — needs new backend) · moderation **appeal/bulk** actions ·
+  graduate the **config manager** into the staff shell (exists at `/dev/console`).
 
 > Keep expanding the Area Cards and the API Gaps register as each screen is picked up — that's the
 > "self-expandable" contract of this doc.
