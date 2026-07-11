@@ -117,6 +117,10 @@ const (
 	// a publisher session gets only its own publishers; platform users all.
 	APIPublishers = apiPrefix + "/api/publishers"
 
+	// APIAccounts lists advertiser + publisher accounts for the staff
+	// impersonation picker (GET only, support:read). Platform-wide, read-only.
+	APIAccounts = apiPrefix + "/api/accounts"
+
 	// APIAuditLog is the staff audit-log viewer (GET only, audit:read).
 	// Platform-wide by design (operator tool) with exact-match filters:
 	// ?account_id=&action=&resource_type=&resource_id=&limit=.

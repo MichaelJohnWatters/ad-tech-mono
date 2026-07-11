@@ -371,6 +371,10 @@ func main() {
 	// platform-wide by design).
 	mux.Handle(routes.APIAuditLog, authMiddleware(http.HandlerFunc(auditLogHandler(pgAuditLogStore{db: gwDB}, log))))
 
+	// Accounts list — powers the staff impersonation picker (support:read,
+	// platform-wide, read-only).
+	mux.Handle(routes.APIAccounts, authMiddleware(middleware.RequirePermission("support:read")(accountsListHandler(gwDB, log))))
+
 	// Revshare — staff editor for publisher revenue-share splits (support:read
 	// list / support:update edit); invalidates the billing-rates cache.
 	mux.Handle(routes.APIRevshare, authMiddleware(http.HandlerFunc(revshareHandler(pgRevshareStore{db: gwDB}, secretsBus, log))))
