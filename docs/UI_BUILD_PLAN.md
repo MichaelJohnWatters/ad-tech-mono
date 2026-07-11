@@ -302,7 +302,7 @@ portals they unblock. Each becomes its own small design when picked up.
 | Gap | Unblocks | Sketch |
 |---|---|---|
 | **Real auth/login + session** | all portals | ✅ SHIPPED (F4a) — login → bcrypt verify → JWT → cookie; logout. Remaining: refresh, agency act-as, password reset. |
-| **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). Remaining: edit/remove member, agency mappings. |
+| **Signup + accounts + team CRUD** | all | ✅ SHIPPED — `POST /v1/auth/signup` (account+owner), `GET/POST /v1/api/team` (list/invite, tenant-scoped). ✅ **Team UI shipped** in advertiser + publisher portals (list + invite modal w/ one-time temp password, 2026-07-11). Remaining: edit/remove member, agency mappings. |
 | **Creative upload** | advertiser | ✅ SHIPPED — `GET/POST /v1/api/creatives` (tenant-scoped library list with review state + upload → pending_review → moderation queue). Remaining: asset (image) upload to S3/Minio, edit/delete. |
 | **Deals CRUD** | publisher, advertiser | ✅ SHIPPED (create/list/edit/pause + depth) — `GET/POST /v1/api/deals` + `PATCH /v1/api/deals/{id}` (name/price/status **+ advertiser/placement allowlists, flight dates, PG guaranteed_volume**; placement allowlist ownership-checked; empty allowlist = match-all, which the exchange matcher already consumes; cache-invalidating). ✅ Portal placement allowlist is a checkbox multiselect (was hand-typed UUIDs). Remaining: none core. |
 | **Saved + scheduled reports** | advertiser, publisher | ✅ SHIPPED (create/list/delete) — `GET/POST/DELETE /v1/api/reports/saved`, persists `saved_reports` with optional schedule + delivery. Portal UI shipped (save/run/delete in both report consoles). ✅ **Runner SHIPPED** — `cmd/report-runner` (pkg/reportrunner) fires interval schedules (@hourly/@daily/@weekly/@monthly) → emails the owner (migration 033 last_run_at; Tilt resource; verified live). Remaining: webhook delivery + full cron syntax. |
@@ -425,8 +425,12 @@ removed. What's actually left, ordered:
 - Campaign **drill-down** (IO › line-item › creative detail: config, targeting incl/excl, creatives,
   recent performance) — data exists (`line_items`/`targeting_rules`/`line_item_creatives`).
 - **Pacing viz** (budget burndown vs flight) — reads existing spend/committed.
-- **Audiences** management screen (upload API exists → needs list/view/edit) · **Settings** · **Team**
-  screen (`/v1/api/team` exists) · onboarding **wizard** ("first campaign in 5 min").
+- ✅ **Team screen SHIPPED (2026-07-11)** — advertiser + publisher portals both have a Team
+  section (nav gated on `team:read`): lists members (name/email/role/status) on `/v1/api/team`,
+  invite modal (name/email/role) → POST reveals the one-time temp password in-place (copy button;
+  toasts fade so it persists). Verified live in both portals (list + invite → 201 → member appears).
+- **Audiences** management screen (upload API exists → needs list/view/edit) · **Settings** ·
+  onboarding **wizard** ("first campaign in 5 min").
 
 ### Outstanding — Publisher
 - **Per-placement fill-rate** breakdown · **net (post-revshare) earnings** · downloadable **payout
