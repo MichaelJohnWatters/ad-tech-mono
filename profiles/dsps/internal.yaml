@@ -10,7 +10,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - UK Mobile"
     creative_domain: acme-shoes.com
-    base_bid: 3.20
+    base_bid: 5.00
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -33,7 +33,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - Native In-Feed"
     creative_domain: acme-shoes.com
-    base_bid: 3.50
+    base_bid: 5.00
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -68,7 +68,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - Audio Podcast Spot"
     creative_domain: acme-shoes.com
-    base_bid: 4.00
+    base_bid: 5.60
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -92,7 +92,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - US All Devices"
     creative_domain: acme-shoes.com
-    base_bid: 3.00
+    base_bid: 5.40
     currency: USD
     daily_budget: 1000
     total_budget: 25000
@@ -119,7 +119,7 @@ campaigns:
     io_id: io-002
     name: "Globex Tech - Desktop Worldwide"
     creative_domain: globex-tech.com
-    base_bid: 3.80
+    base_bid: 5.50
     currency: USD
     daily_budget: 300
     total_budget: 5000
@@ -142,7 +142,7 @@ campaigns:
     io_id: io-003
     name: "Initech SaaS - Run of Network"
     creative_domain: initech.io
-    base_bid: 3.40
+    base_bid: 5.60
     currency: USD
     daily_budget: 200
     total_budget: 3000
