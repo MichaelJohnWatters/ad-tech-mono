@@ -751,6 +751,10 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			Width:         ac.Placement.Width,
 			Height:        ac.Placement.Height,
 			UserID:        r.URL.Query().Get("user_id"),
+			// geo/device ride the same serve request the SSP received; bake
+			// them into the tracker beacons so impression analytics carry them.
+			Geo:    r.URL.Query().Get("geo"),
+			Device: r.URL.Query().Get("device"),
 		}
 		body, _ := json.Marshal(serveReq)
 		adReq, err := http.NewRequestWithContext(ctx, http.MethodPost, adServerURL+routes.AdServe, bytes.NewReader(body))

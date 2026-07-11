@@ -372,6 +372,8 @@ type ServeRequest struct {
 	Width         int     `json:"width"`
 	Height        int     `json:"height"`
 	UserID        string  `json:"user_id,omitempty"` // hashed user id; empty = no consent, skip freq cap
+	Geo           string  `json:"geo,omitempty"`     // request geo (country) — baked into tracker beacons for analytics
+	Device        string  `json:"device,omitempty"`  // request device type — baked into tracker beacons for analytics
 }
 
 // ServeResponse contains the rendered ad HTML with all macros substituted.

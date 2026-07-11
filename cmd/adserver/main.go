@@ -404,6 +404,8 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			SiteDomain:   req.SiteDomain,
 			Width:        req.Width,
 			Height:       req.Height,
+			Geo:          req.Geo,
+			Device:       req.Device,
 			TrackerURL:   trackerURL,
 			LandingURL:   creative.LandingURL,
 			URLTTL:       urlTTLFn(),
