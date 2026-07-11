@@ -206,7 +206,16 @@ func main() {
 			if q.Get("preview") == "true" {
 				channel := q.Get("channel")
 				if channel == "" {
+					// Routing stats are keyed per request format. A multi-format
+					// exchange (exchange.channel="all") never accumulates stats
+					// under "all", so previewing it would show a stale/empty
+					// state — fall to the dominant format. A channel-restricted
+					// exchange (video/native/…) keeps its configured channel,
+					// which is exactly what its traffic records under.
 					channel = knobs.Channel()
+					if channel == constants.ChannelAll {
+						channel = constants.ChannelDisplay
+					}
 				}
 				selected := router.Preview(channel, dspEndpointsFn())
 				json.NewEncoder(w).Encode(map[string]any{
