@@ -158,6 +158,8 @@ func defaultSchema() []SchemaEntry {
 		{Key: "cache.warm.advertiser_balances.poll_interval", Type: "duration", Tier: TierLive, Default: "30s", Description: "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", Service: "dsp", Since: "v1.2"},
 		{Key: "dsp.balance_gate_enabled", Type: "bool", Tier: TierLive, Default: "true", Description: "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", Service: "dsp", Since: "v1.2"},
 		{Key: "billing.balance_invalidate_min_interval", Type: "duration", Tier: TierLive, Default: "5s", Description: "Per-account throttle on the advertiser-balance cache invalidates published by the billing drawdown sink.", Service: "reporting", Since: "v1.2"},
+		{Key: "reporting.tiered_enabled", Type: "bool", Tier: TierStatic, Default: "false", Description: "Route deep-history reads to the Parquet lake (DuckDB delta_scan) below reporting.hot_window; recent reads stay on ClickHouse. Requires the clickhouse backend and a binary built with the duckdb tag (build/Dockerfile.reporting); otherwise degrades to hot-only.", Service: "reporting", Since: "v1.4"},
+		{Key: "reporting.hot_window", Type: "duration", Tier: TierStatic, Default: "168h", Description: "How far back the hot store (ClickHouse) is authoritative. Reads older than this fall to the cold Parquet lake; queries spanning the boundary are split and merged additively. Only used when reporting.tiered_enabled.", Service: "reporting", Since: "v1.4"},
 	}
 }
 
