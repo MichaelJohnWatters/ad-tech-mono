@@ -438,8 +438,15 @@ removed. What's actually left, ordered:
 - **Settings** · onboarding **wizard** ("first campaign in 5 min").
 
 ### Outstanding — Publisher
-- **Per-placement fill-rate** breakdown · **net (post-revshare) earnings** · downloadable **payout
-  statements** · onboarding wizard. All read existing data/APIs.
+- ✅ **Per-placement fill-rate SHIPPED (2026-07-11)** — publisher Placements section now has a
+  "Fill rate by placement" card (ad requests vs filled impressions + earnings, 7d, per placement,
+  publisher-scoped). Uncovered + fixed a data-slippage bug: the exchange recorded
+  AuctionWin/AuctionComplete events with `PlacementID = Imp[0].ID` ("imp-1") and an empty
+  `PublisherID`, so `auctions` analytics rows couldn't be attributed to a publisher/placement.
+  Now populated from the real `Site.Publisher.ID` + `Imp.TagID` (matches impressions). Verified
+  live (post-fix auctions carry the real UUIDs; fill query returns per-placement rows).
+- **net (post-revshare) earnings** · downloadable **payout statements** · onboarding wizard.
+  All read existing data/APIs.
 
 ### Outstanding — Staff
 - ✅ **Support / impersonation SHIPPED (2026-07-11)** — staff "View as account" picker

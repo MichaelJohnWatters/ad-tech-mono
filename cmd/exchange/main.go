@@ -656,7 +656,8 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					WinnerDSP:     winnerBid.DSPID,
 					CampaignID:    winnerBid.CampaignID,
 					CreativeID:    winnerBid.CreativeID,
-					PlacementID:   bidReq.Imp[0].ID,
+					PlacementID:   placementID,
+					PublisherID:   publisherID,
 					ClearingPrice: clearingPrice,
 					Currency:      "USD",
 					BidModel:      winnerBid.BidModel,
@@ -677,7 +678,8 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				}
 				pub.AuctionComplete(pubCtx, events.AuctionCompleteEvent{
 					TraceID:       traceID,
-					PlacementID:   bidReq.Imp[0].ID,
+					PlacementID:   placementID,
+					PublisherID:   publisherID,
 					Channel:       channel,
 					NumBids:       len(bids),
 					WinnerDSP:     winnerBid.DSPID,
