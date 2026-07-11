@@ -10,6 +10,20 @@ check the same quantity at several independent stages. When independent sources
 agree, the path is real and lossless. Reason in **deltas** (before/after a known
 batch), not absolutes — the analytics tables accumulate across runs.
 
+## Fastest path: `simulator run --verify`
+
+The whole check is built into the simulator. On a quiescent stack this is the
+one-liner — it fires, reads the counts back from reporting, asserts
+`impressions == wins`, prints the report, and exits non-zero on mismatch:
+
+```
+go run ./cmd/simulator run --profile trickle --requests 200 --rps 50 --verify
+```
+
+Use the manual procedure below when you need to inspect a specific
+publisher/account, cross-check the reporting API vs raw ClickHouse, or verify a
+window you didn't just generate.
+
 ## Inputs
 
 - **Stack must be up** (if unsure, run the `local-stack` skill first).
