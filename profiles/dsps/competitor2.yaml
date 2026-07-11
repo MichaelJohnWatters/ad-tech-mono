@@ -38,6 +38,19 @@ campaigns:
       - { id: c2-cr-001-halfpage, width: 300, height: 600 }
       - { id: c2-cr-001-sky, width: 160, height: 600 }
       - { id: c2-cr-001-billboard, width: 970, height: 250 }
+      - id: c2-cr-001-native
+        format: native
+        native:
+          title: "VPN Plus — browse private, anywhere"
+          main_image: "http://localhost:8080/v1/creatives/themes/privacy-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/privacy-300x250.svg"
+          sponsored: "VPN Plus"
+          body: "Encrypt your connection on every device. 30-day guarantee."
+          cta: "Get protected"
+      - { id: c2-cr-001-audio-30s, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/audio-1.mp3" }
 
   - id: c2-002
     account_id: dsp-perf-media
@@ -64,6 +77,17 @@ campaigns:
       - { id: c2-cr-002-leader, width: 728, height: 90 }
       - { id: c2-cr-002-sky, width: 160, height: 600 }
       - { id: c2-cr-002-billboard, width: 970, height: 250 }
+      - id: c2-cr-002-native
+        format: native
+        native:
+          title: "CryptoEx — trade 200+ coins, low fees"
+          main_image: "http://localhost:8080/v1/creatives/themes/finance-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/finance-300x250.svg"
+          sponsored: "CryptoEx"
+          body: "Institutional-grade security. Trade in seconds."
+          cta: "Start trading"
 
   - id: c2-003
     account_id: dsp-perf-media
@@ -93,6 +117,17 @@ campaigns:
       - { id: c2-cr-003-halfpage, width: 300, height: 600 }
       - { id: c2-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
           media_url: "http://localhost:8080/v1/creatives/media/sintel-360-1mb.mp4" }
+      - id: c2-cr-003-native
+        format: native
+        native:
+          title: "Epic Quest — the #1 mobile RPG"
+          main_image: "http://localhost:8080/v1/creatives/themes/gaming-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/gaming-300x250.svg"
+          sponsored: "Epic Quest"
+          body: "Build your team. Battle live. Play free today."
+          cta: "Install now"
 
   - id: c2-004
     account_id: dsp-perf-media
