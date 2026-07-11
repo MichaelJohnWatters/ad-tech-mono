@@ -192,6 +192,12 @@ func getBody(client *http.Client, url, traceparent string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// 204 No Content is an honest no-fill (the publisher-adserver returns it
+	// for a genuine native no-bid with the demo stub off). Not an error —
+	// return an empty body so callers see "no ad" and record a no-fill.
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err

@@ -160,15 +160,19 @@ func main() {
 		return cfg.Get("publisher_adserver.omid_vendor", "ad-tech-mono-omid"),
 			cfg.Get("publisher_adserver.omid_verification_url", "")
 	}
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn))
+	// stubFn gates the demo-house-ad fallback on a no-bid. OFF by default:
+	// the platform serves only real auctioned demand, so a no-bid returns an
+	// honest empty no-fill rather than fake data (per the real-data-only rule).
+	stubFn := func() bool { return cfg.GetBool("publisher_adserver.stub_on_nobid", false) }
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn))
 	// publisher_adserver.public_url is the browser-reachable origin
 	// the VMAP schedule will tell the player to call back into for
 	// each break's VAST. Defaults to the gateway's local origin since
 	// every demo path runs through it.
 	publicBase := cfg.Get("publisher_adserver.public_url", "http://localhost:8080")
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
-	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL))
-	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL))
+	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, stubFn))
+	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, stubFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh

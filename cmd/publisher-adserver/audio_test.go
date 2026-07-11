@@ -47,7 +47,7 @@ func TestAudioHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub)
 
 	// Visitor is an EU GDPR-consented listener — signals must reach the SSP.
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio&geo=DEU&gdpr=1&consent=abc&device=mobile", nil)
@@ -103,7 +103,7 @@ func TestAudioHandlerNoBidStub(t *testing.T) {
 	}))
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub)
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
