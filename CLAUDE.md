@@ -1,5 +1,12 @@
 # Ad Tech Mono - AI Context
 
+## Git Workflow (IMPORTANT)
+
+**Always work on `main`.** Commit and push directly to `main` — do NOT create
+feature branches for this project. This overrides the default "branch first"
+behaviour; feature branches here just create stale, confusing duplicates. When
+asked to commit or push, do it on `main`.
+
 ## What This Is
 
 A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking - runs locally on K8s (Colima + k3s). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
