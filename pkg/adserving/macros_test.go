@@ -39,6 +39,50 @@ func TestSubstituteMacros(t *testing.T) {
 	}
 }
 
+// TestBuildImpressionURL_GeoDeviceChannel guards the data-slippage fix: the
+// impression + click beacons must carry geo=/dev=/ch= when the context has them
+// (so analytics record geo/device and the right channel instead of empty +
+// hardcoded "display"), and must OMIT them when unset — all covered by the HMAC
+// since they're added before signing.
+func TestBuildImpressionURL_GeoDeviceChannel(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID: "t1", PlacementID: "pl-1", PublisherID: "pub-1",
+		Geo: "USA", Device: "mobile", Channel: "video",
+		TrackerURL: "http://tracker:8083",
+	}
+	for _, b := range []struct {
+		name string
+		fn   func(MacroContext) string
+	}{{"impression", BuildImpressionURL}, {"click", BuildClickURL}} {
+		signed := b.fn(ctx)
+		u, err := url.Parse(signed)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", b.name, err)
+		}
+		if !ValidateSignature(u.Path, u.Query(), DefaultSigningKey) {
+			t.Errorf("%s: geo/dev/ch params must be covered by the HMAC (added pre-sign): %s", b.name, signed)
+		}
+		q := u.Query()
+		if q.Get("geo") != "USA" {
+			t.Errorf("%s: geo=USA missing: %s", b.name, signed)
+		}
+		if q.Get("dev") != "mobile" {
+			t.Errorf("%s: dev=mobile missing: %s", b.name, signed)
+		}
+		if q.Get("ch") != "video" {
+			t.Errorf("%s: ch=video missing: %s", b.name, signed)
+		}
+	}
+
+	// Unset geo/device/channel → params omitted (not empty-valued).
+	bare := BuildImpressionURL(MacroContext{AuctionID: "t2", TrackerURL: "http://tracker:8083"})
+	for _, p := range []string{"geo=", "dev=", "ch="} {
+		if strings.Contains(bare, p) {
+			t.Errorf("expected no %q when unset: %s", p, bare)
+		}
+	}
+}
+
 func TestBuildImpressionURL(t *testing.T) {
 	ctx := MacroContext{
 		AuctionID:    "trace-abc",

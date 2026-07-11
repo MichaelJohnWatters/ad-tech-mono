@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+// TestChannelOrDefault guards the channel-labelling fix: impression beacons
+// carry ch= for video/native/audio; display omits it, so an empty ch must map
+// to "display" (not "") — otherwise the impression lands with an empty channel.
+func TestChannelOrDefault(t *testing.T) {
+	cases := map[string]string{
+		"":       "display", // display beacons don't set ch → default
+		"video":  "video",
+		"native": "native",
+		"audio":  "audio",
+	}
+	for in, want := range cases {
+		if got := channelOrDefault(in); got != want {
+			t.Errorf("channelOrDefault(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestAppendTraceQuery(t *testing.T) {
 	t.Run("no existing query → adds with ?", func(t *testing.T) {
 		got := appendTraceQuery("https://example.com/landing", "abc-123")
