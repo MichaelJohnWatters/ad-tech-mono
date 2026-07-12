@@ -514,7 +514,7 @@ async function ensureArchLibs() {
   if (archLibs) return;
   await loadScript('/static/vendor/svg-pan-zoom.min.js');
   await loadScript('/static/vendor/mermaid.min.js');
-  if (window.mermaid) window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+  if (window.mermaid) window.mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
   archLibs = true;
 }
 async function loadArchitecture() {
@@ -551,7 +551,9 @@ async function renderDiagram(i) {
       }
     } else {
       const blocks = [...body.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
-      v.innerHTML = '<div class="p-4 space-y-8"></div>';
+      // Render on a white "paper" card so the default (dark-on-light) mermaid
+      // theme stays high-contrast against the dark portal.
+      v.innerHTML = '<div class="p-6 space-y-8 bg-white rounded-lg m-3 overflow-auto"></div>';
       const host = v.firstElementChild;
       if (!blocks.length) { host.innerHTML = '<div class="text-sm text-gray-400">no diagram blocks</div>'; return; }
       for (let k = 0; k < blocks.length; k++) {

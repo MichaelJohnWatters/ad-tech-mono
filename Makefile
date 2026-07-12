@@ -16,7 +16,7 @@ diagrams: ## Regenerate SVG diagrams from D2 source, then sync into the staff po
 	@for f in docs/diagrams/*.d2; do \
 		name=$$(basename "$$f" .d2); \
 		echo "Rendering $$name..."; \
-		d2 "$$f" "docs/diagrams/$${name}.svg"; \
+		d2 --layout elk --pad 40 "$$f" "docs/diagrams/$${name}.svg"; \
 	done
 	@echo "Syncing to web/static/diagrams (served by the staff-portal Architecture tab)..."
 	@mkdir -p web/static/diagrams
