@@ -114,11 +114,14 @@ func main() {
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
 
-	// Opt-in bulk NATS consumer for high-volume core events. Requires a
+	// Bulk NATS consumer for high-volume core events. Default ON: single-row
+	// ClickHouse inserts can't keep up with sustained traffic (~2/sec) and pile
+	// up MergeTree parts (the "too many broken parts" failure). Requires a
 	// backend that supports bulk inserts (ClickHouse today); on memory/duckdb
 	// the flag is a no-op warning and the per-message path is used. Dedup
-	// (Redis SetNX on the stream sequence) makes redelivery idempotent.
-	if cfg.GetBool("reporting.clickhouse_batch_consumer", false) {
+	// (Redis SetNX on the stream sequence) makes redelivery idempotent. Set
+	// reporting.clickhouse_batch_consumer=false to force the per-message path.
+	if cfg.GetBool("reporting.clickhouse_batch_consumer", true) {
 		if bi, ok := store.(analytics.BatchInserter); ok {
 			dedup := cache.NewDedupAdapter(connectReportingRedis(cfg, log))
 			ttl := cfg.GetDuration("reporting.dedup_ttl", 24*time.Hour)
