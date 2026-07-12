@@ -1,12 +1,19 @@
 //go:build duckdb
 
-// Full cold-path integration test: write Parquet+Delta to Minio via ObjectStore,
-// compact, then read it back with DuckDB over delta_scan. Requires a live Minio
-// and network (extensions download on first INSTALL):
+// Cold-path compaction test: write three Parquet parts to Minio via ObjectStore,
+// compact them into one (which tombstones the originals in our Delta log), then
+// read back through ColdStore — the count must be 3, proving the cold reader
+// honours the active-file set and does NOT double-count compacted-away parts.
+// Requires a live Minio and network (DuckDB extensions download on first
+// INSTALL):
 //
-//	MINIO_ENDPOINT=127.0.0.1:9000 go test -tags duckdb -run TestParquetReader ./pkg/store/datalake/...
+//	MINIO_ENDPOINT=127.0.0.1:9000 go test -tags duckdb -run TestColdStore ./pkg/store/datalake/...
 //
-// Locally the Tiltfile forwards Minio to 127.0.0.1:9000.
+// NB: our lake uses a home-grown _delta_log (one custom transaction JSON per
+// file), NOT the real Delta protocol — so DuckDB's delta_scan() cannot read it.
+// ColdStore instead resolves the active parquet files from that log and reads
+// them with read_parquet([...]); this test guards that tombstone-correctness.
+// Locally the Tiltfile / a port-forward exposes Minio on 127.0.0.1:9000.
 package datalake
 
 import (
@@ -16,16 +23,17 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 )
 
-func TestParquetReader_DeltaScanRoundTrip(t *testing.T) {
+func TestColdStore_CompactionTombstoneSkip(t *testing.T) {
 	endpoint := os.Getenv("MINIO_ENDPOINT")
 	if endpoint == "" {
-		t.Skip("set MINIO_ENDPOINT to run the DuckDB-over-Parquet integration test")
+		t.Skip("set MINIO_ENDPOINT to run the ColdStore compaction integration test")
 	}
 	ctx := context.Background()
-	bucket := "adtech-datalake-test"
+	bucket := "adtech-coldstore-compact-it-" + time.Now().Format("150405")
 
 	obj, err := objs3.New(objs3.Config{
 		Endpoint: endpoint, AccessKey: "adtech", SecretKey: "adtech-local-dev",
@@ -37,35 +45,36 @@ func TestParquetReader_DeltaScanRoundTrip(t *testing.T) {
 	if err := obj.EnsureBucket(ctx, bucket); err != nil {
 		t.Fatalf("ensure bucket: %v", err)
 	}
-	lake := NewObjectStore(obj, bucket, logger.New("dl-it"))
-	table := "impressions_it_" + time.Now().Format("150405")
+	lake := NewObjectStore(obj, bucket, logger.New("cold-compact-it"))
 
 	// Three small writes → three Parquet files, then compact to one.
 	for i := 0; i < 3; i++ {
 		rec := []Record{{"campaign_id": "c1", "impressions": int64(1), "revenue": 1.0, "viewable": true, "geo": "GBR", "timestamp": time.Now().UTC()}}
-		if err := lake.Write(ctx, table, rec, testSchema); err != nil {
+		if err := lake.Write(ctx, "impressions", rec, testSchema); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
 	}
-	if _, err := lake.Compact(ctx, table); err != nil {
+	if _, err := lake.Compact(ctx, "impressions"); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
 
-	// DuckDB reads it back over delta_scan — must see exactly 3 rows (compaction
-	// tombstones must be skipped, not double-counted).
 	reader, err := NewParquetReader(S3Config{
 		Endpoint: endpoint, AccessKey: "adtech", SecretKey: "adtech-local-dev", UseSSL: false,
 	}, bucket)
 	if err != nil {
 		t.Fatalf("duckdb reader: %v", err)
 	}
-	defer reader.Close()
+	cold := NewColdStore(reader, lake)
+	defer cold.Close()
 
-	n, err := reader.CountDeltaScan(ctx, table)
+	res, err := cold.Query(ctx, analytics.QueryParams{Table: "impressions", Metrics: []string{"count"}})
 	if err != nil {
-		t.Fatalf("count delta_scan: %v", err)
+		t.Fatalf("cold count query: %v", err)
 	}
-	if n != 3 {
-		t.Fatalf("delta_scan count = %d, want 3 (tombstoned parts skipped)", n)
+	if len(res.Rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(res.Rows), res)
+	}
+	if n := numOf(res.Rows[0][0]); n != 3 {
+		t.Fatalf("cold count = %v, want 3 (tombstoned parts must be skipped, not double-counted)", n)
 	}
 }

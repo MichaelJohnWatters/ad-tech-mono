@@ -1,10 +1,17 @@
 //go:build duckdb
 
 // DuckDB-over-Parquet read surface — the serverless ad-hoc / historical / ML
-// query path over the Parquet+Delta cold archive on S3/Minio (ADR 0001/0002).
-// DuckDB reads the same open files the pipeline writes: no data movement, no
-// server. delta_scan honours the _delta_log (skips tombstoned parts after
-// compaction); read_parquet globs raw files for a quick pre-compaction look.
+// query path over the Parquet cold archive on S3/Minio (ADR 0001/0002). DuckDB
+// reads the same open files the pipeline writes: no data movement, no server.
+//
+// NB: our lake uses a home-grown _delta_log (one custom transaction JSON per
+// file — see objstore.go), NOT the real Delta Lake protocol. So DuckDB's
+// delta_scan() cannot read it (it needs protocol/metaData actions we don't
+// emit). The cold tier (ColdStore) instead resolves the ACTIVE file set from
+// that log via ObjectStore.Snapshot and reads exactly those parts with
+// read_parquet([...]) — correct AND tombstone-aware after compaction. The
+// DeltaScanURI/CountDeltaScan helpers below are retained for a future migration
+// to real Delta logs but are not on the live read path.
 //
 // Requires the `duckdb` build tag (CGO driver) plus network access the first
 // time (httpfs/delta extensions are downloaded by INSTALL).
@@ -54,6 +61,19 @@ func NewParquetReader(cfg S3Config, bucket string) (*ParquetReader, error) {
 	if cfg.Region != "" {
 		setup = append(setup, fmt.Sprintf("SET s3_region='%s'", cfg.Region))
 	}
+	// The delta extension's Rust kernel does NOT read the legacy SET s3_*
+	// settings above (those only reach httpfs/read_parquet). Without an explicit
+	// entry in the DuckDB Secrets manager it falls back to the EC2 instance
+	// metadata provider (169.254.169.254) and fails against Minio/any non-AWS S3.
+	// Register an S3 secret so delta_scan authenticates the same way httpfs does.
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	setup = append(setup, fmt.Sprintf(
+		"CREATE OR REPLACE SECRET adtech_s3 (TYPE S3, KEY_ID '%s', SECRET '%s', ENDPOINT '%s', REGION '%s', URL_STYLE 'path', USE_SSL %t)",
+		cfg.AccessKey, cfg.SecretKey, cfg.Endpoint, region, cfg.UseSSL,
+	))
 	for _, s := range setup {
 		if _, err := db.ExecContext(ctx, s); err != nil {
 			db.Close()
@@ -65,9 +85,11 @@ func NewParquetReader(cfg S3Config, bucket string) (*ParquetReader, error) {
 
 func (r *ParquetReader) Close() error { return r.db.Close() }
 
-// DeltaScanURI returns the delta_scan target for a table (its root, which holds
-// _delta_log). The correct reader once compaction rewrites files — it resolves
-// the transaction log and skips tombstoned parts (no double-count).
+// DeltaScanURI returns the delta_scan target for a table (its root). NOTE:
+// delta_scan needs a real Delta protocol/metaData log, which our ObjectStore
+// writer does NOT emit — so this only works against a genuine Delta table.
+// Retained for a future real-Delta migration; the live cold path uses
+// read_parquet over the active file set instead (see ColdStore).
 func (r *ParquetReader) DeltaScanURI(table string) string {
 	return fmt.Sprintf("s3://%s/%s", r.bucket, table)
 }
@@ -112,9 +134,11 @@ func (r *ParquetReader) Query(ctx context.Context, query string, args ...any) ([
 	return out, rows.Err()
 }
 
-// CountDeltaScan returns the total row count of a table via delta_scan — the
-// on-disk figure that should reconcile with the reporting/NATS event count for
-// the archived window (the zero-slippage check across the hot/cold boundary).
+// CountDeltaScan returns a table's row count via delta_scan. NOTE: this requires
+// a real Delta protocol log (which our ObjectStore writer does not emit) and so
+// does not work against our lake — retained for a future real-Delta migration.
+// For the zero-slippage reconciliation on our lake, count via ColdStore (which
+// reads the active file set) instead.
 func (r *ParquetReader) CountDeltaScan(ctx context.Context, table string) (int64, error) {
 	var n int64
 	err := r.db.QueryRowContext(ctx,
