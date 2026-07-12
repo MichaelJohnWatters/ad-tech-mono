@@ -127,6 +127,100 @@ func (t *HotColdStore) InsertBatch(ctx context.Context, events []Event) error {
 	return t.hot.InsertBatch(ctx, events)
 }
 
+// Compile-time guard: HotColdStore MUST satisfy BatchInserter, else reporting's
+// bulk consumer silently falls back to the slow per-message path at runtime.
+var _ BatchInserter = (*HotColdStore)(nil)
+
+// BatchInserter — reporting's high-volume bulk consumer type-asserts the store
+// to BatchInserter. When the hot store is wrapped here those methods must exist,
+// or the assertion fails and reporting silently drops to the slow per-message
+// path (~2 events/sec, and it piles up ClickHouse MergeTree parts). Delegate to
+// the hot store's bulk inserts (ClickHouse supports them); per-row fallback
+// otherwise.
+func (t *HotColdStore) InsertImpressions(ctx context.Context, es []*ImpressionEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertImpressions(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertImpression(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertClicks(ctx context.Context, es []*ClickEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertClicks(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertClick(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertConversions(ctx context.Context, es []*ConversionEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertConversions(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertConversion(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertViews(ctx context.Context, es []*ViewEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertViews(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertView(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertAuctions(ctx context.Context, es []*AuctionEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertAuctions(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertAuction(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertAuctionWins(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertAuctionWin(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertMediaEvents(ctx context.Context, es []*MediaEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertMediaEvents(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertMediaEvent(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertDSPCalls(ctx, es)
+	}
+	return nil // Store has no single-row DSPCall insert; hot always supports batch in practice
+}
+
 // Close closes the hot store; if the cold reader owns a closable handle it's
 // closed too (idempotent — the caller may also close it).
 func (t *HotColdStore) Close() error {
