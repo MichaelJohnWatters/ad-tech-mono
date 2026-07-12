@@ -16,14 +16,14 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
-// Helpers for the hot/cold tiering long-run test (tiering_test.go). They read
-// the reporting query API (the tiered store under test), the pipeline's lake
+// Helpers for the hot/cold store long-run test (hot/cold storage_test.go). They read
+// the reporting query API (the hot/cold store under test), the pipeline's lake
 // snapshot (the cold write path), and the reporting deployment env (to learn the
-// live hot_window + whether tiering is enabled at all).
+// live hot_window + whether hot/cold storage is enabled at all).
 
 // ReportImpressionCountSince POSTs a count query to the reporting query API
 // (the same endpoint the gateway proxies) scoped to time_from, and returns the
-// scalar count. This routes through the TieredStore, so the answer comes from
+// scalar count. This routes through the HotColdStore, so the answer comes from
 // ClickHouse (hot), the lake (cold), or a merge, depending on the range.
 func (h *Harness) ReportImpressionCountSince(t *testing.T, from time.Time) int {
 	t.Helper()
@@ -102,7 +102,7 @@ func (h *Harness) LakeRows(t *testing.T, table string) int {
 }
 
 // ReportingEnvVar reads an env value from the running reporting deployment via
-// kubectl (used to learn the live hot_window and whether tiering is enabled).
+// kubectl (used to learn the live hot_window and whether hot/cold storage is enabled).
 // Returns ("", false) if absent.
 func (h *Harness) ReportingEnvVar(t *testing.T, name string) (string, bool) {
 	t.Helper()

@@ -11,8 +11,8 @@ import (
 
 // ColdStore adapts the Parquet data lake to analytics.ColdReader: it maps a
 // QueryParams to SQL via the SAME analytics.BuildQueryFrom aggregate logic as
-// the hot store, so the cold tier computes byte-identical columns and applies
-// the identical tenant WHERE — the two properties the TieredStore relies on to
+// the hot store, so the cold store computes byte-identical columns and applies
+// the identical tenant WHERE — the two properties the HotColdStore relies on to
 // merge across the boundary and to never leak across tenants.
 //
 // It reads via DuckDB delta_scan() over the table root. Our writer now emits a
@@ -29,7 +29,7 @@ type ColdStore struct {
 // NewColdStore wraps an open ParquetReader (the DuckDB SQL engine over the lake).
 func NewColdStore(reader *ParquetReader) *ColdStore { return &ColdStore{reader: reader} }
 
-// coldTables is the allowlist of tables the cold tier will scan. params.Table is
+// coldTables is the allowlist of tables the cold store will scan. params.Table is
 // interpolated into the delta_scan URI (not a bind parameter), so it MUST be
 // validated against this set — never let an arbitrary string reach the FROM
 // expression.

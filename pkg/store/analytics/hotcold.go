@@ -11,21 +11,21 @@ import (
 
 // ColdReader answers historical queries from cold storage (the Parquet data
 // lake). It's implemented by pkg/store/datalake (behind the `duckdb` build tag);
-// when cold isn't available it's nil and the TieredStore degrades to hot-only.
+// when cold isn't available it's nil and the HotColdStore degrades to hot-only.
 type ColdReader interface {
 	Query(ctx context.Context, params QueryParams) (*QueryResult, error)
 }
 
-// TieredStore routes reads by time: rows within hotWindow of now come from the
+// HotColdStore routes reads by time: rows within hotWindow of now come from the
 // hot store (ClickHouse), older rows from cold (the Parquet lake). WRITES ALWAYS
-// go to hot — the pipeline independently writes the lake, so the tiered store
+// go to hot — the pipeline independently writes the lake, so the hot/cold store
 // never writes cold. A query spanning the hot/cold boundary is split, run
-// against both tiers, and merged additively by dimension key.
+// against both stores, and merged additively by dimension key.
 //
 // It implements analytics.Store, so it drops in wherever a Store is expected
 // (the reporting query path, the rollup Builder's raw fallback). The tenant
 // scope in params.Filters rides through both sub-queries unchanged.
-type TieredStore struct {
+type HotColdStore struct {
 	hot       Store
 	cold      ColdReader
 	hotWindow time.Duration
@@ -33,19 +33,19 @@ type TieredStore struct {
 	log       *slog.Logger
 }
 
-// NewTieredStore wraps a hot store with a cold reader. If cold is nil the store
+// NewHotColdStore wraps a hot store with a cold reader. If cold is nil the store
 // is hot-only (every read passes straight through). hotWindow is how far back
 // the hot store is authoritative (e.g. 7d). log may be nil.
-func NewTieredStore(hot Store, cold ColdReader, hotWindow time.Duration, log *slog.Logger) *TieredStore {
+func NewHotColdStore(hot Store, cold ColdReader, hotWindow time.Duration, log *slog.Logger) *HotColdStore {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &TieredStore{hot: hot, cold: cold, hotWindow: hotWindow, now: time.Now, log: log}
+	return &HotColdStore{hot: hot, cold: cold, hotWindow: hotWindow, now: time.Now, log: log}
 }
 
 // Query routes by time range. Boundary = now − hotWindow; rows at or after it
 // are hot, strictly before it are cold.
-func (t *TieredStore) Query(ctx context.Context, params QueryParams) (*QueryResult, error) {
+func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryResult, error) {
 	if t.cold == nil {
 		return t.hot.Query(ctx, params)
 	}
@@ -55,7 +55,7 @@ func (t *TieredStore) Query(ctx context.Context, params QueryParams) (*QueryResu
 		to = t.now()
 	}
 
-	// Entirely in one tier → single pass, native result (no float coercion).
+	// Entirely in one store → single pass, native result (no float coercion).
 	if !params.TimeFrom.IsZero() && !params.TimeFrom.Before(boundary) {
 		return t.hot.Query(ctx, params) // from >= boundary
 	}
@@ -64,10 +64,10 @@ func (t *TieredStore) Query(ctx context.Context, params QueryParams) (*QueryResu
 	}
 
 	// Spanning the boundary. Non-additive metrics (avg_*) can't be merged across
-	// tiers correctly, so serve them from hot only (documented approximation —
+	// stores correctly, so serve them from hot only (documented approximation —
 	// the derived-metric engine only ever asks for additive base metrics).
 	if hasNonAdditive(params.Metrics) {
-		t.log.Warn("tiered: non-additive metric over a hot/cold span — serving hot only (approximate)",
+		t.log.Warn("hotcold: non-additive metric over a hot/cold span — serving hot only (approximate)",
 			"table", params.Table, "metrics", params.Metrics)
 		return t.hot.Query(ctx, params)
 	}
@@ -92,51 +92,51 @@ func (t *TieredStore) Query(ctx context.Context, params QueryParams) (*QueryResu
 	if err != nil {
 		// Cold is best-effort (S3/DuckDB may be down): degrade to the hot half
 		// rather than fail the whole query. Logged so staleness is visible.
-		t.log.Warn("tiered: cold query failed, serving hot window only", "table", params.Table, "error", err)
+		t.log.Warn("hotcold: cold query failed, serving hot window only", "table", params.Table, "error", err)
 		coldRes = &QueryResult{}
 	}
 
 	merged := mergeAdditive(params.Dimensions, params.Metrics, hotRes, coldRes)
-	applyTieredOrderLimit(merged, params.OrderBy, params.OrderDir, params.Limit)
+	applyHotColdOrderLimit(merged, params.OrderBy, params.OrderDir, params.Limit)
 	return merged, nil
 }
 
 // Write path + lifecycle all delegate to hot (the lake is written by the pipeline).
-func (t *TieredStore) InsertImpression(ctx context.Context, e *ImpressionEvent) error {
+func (t *HotColdStore) InsertImpression(ctx context.Context, e *ImpressionEvent) error {
 	return t.hot.InsertImpression(ctx, e)
 }
-func (t *TieredStore) InsertClick(ctx context.Context, e *ClickEvent) error {
+func (t *HotColdStore) InsertClick(ctx context.Context, e *ClickEvent) error {
 	return t.hot.InsertClick(ctx, e)
 }
-func (t *TieredStore) InsertConversion(ctx context.Context, e *ConversionEvent) error {
+func (t *HotColdStore) InsertConversion(ctx context.Context, e *ConversionEvent) error {
 	return t.hot.InsertConversion(ctx, e)
 }
-func (t *TieredStore) InsertView(ctx context.Context, e *ViewEvent) error {
+func (t *HotColdStore) InsertView(ctx context.Context, e *ViewEvent) error {
 	return t.hot.InsertView(ctx, e)
 }
-func (t *TieredStore) InsertAuction(ctx context.Context, e *AuctionEvent) error {
+func (t *HotColdStore) InsertAuction(ctx context.Context, e *AuctionEvent) error {
 	return t.hot.InsertAuction(ctx, e)
 }
-func (t *TieredStore) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error {
+func (t *HotColdStore) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error {
 	return t.hot.InsertAuctionWin(ctx, e)
 }
-func (t *TieredStore) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {
+func (t *HotColdStore) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {
 	return t.hot.InsertMediaEvent(ctx, e)
 }
-func (t *TieredStore) InsertBatch(ctx context.Context, events []Event) error {
+func (t *HotColdStore) InsertBatch(ctx context.Context, events []Event) error {
 	return t.hot.InsertBatch(ctx, events)
 }
 
 // Close closes the hot store; if the cold reader owns a closable handle it's
 // closed too (idempotent — the caller may also close it).
-func (t *TieredStore) Close() error {
+func (t *HotColdStore) Close() error {
 	if c, ok := t.cold.(interface{ Close() error }); ok {
 		_ = c.Close()
 	}
 	return t.hot.Close()
 }
 
-// additiveMetrics are the base metrics that sum across tiers/rollups. avg_* are
+// additiveMetrics are the base metrics that sum across stores/rollups. avg_* are
 // deliberately absent — a mean can't be re-derived by adding two means.
 var additiveMetrics = map[string]bool{
 	"count": true, "sum_cost": true, "sum_revenue": true, "sum_bids": true,
@@ -208,10 +208,10 @@ func mergeAdditive(dims, metrics []string, parts ...*QueryResult) *QueryResult {
 	return res
 }
 
-// applyTieredOrderLimit sorts the merged rows by a metric column and truncates —
-// order/limit can't be pushed down when two tiers are merged, so it's applied
+// applyHotColdOrderLimit sorts the merged rows by a metric column and truncates —
+// order/limit can't be pushed down when two stores are merged, so it's applied
 // once on the combined result.
-func applyTieredOrderLimit(res *QueryResult, orderBy, orderDir string, limit int) {
+func applyHotColdOrderLimit(res *QueryResult, orderBy, orderDir string, limit int) {
 	if res == nil {
 		return
 	}

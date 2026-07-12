@@ -57,10 +57,10 @@ func main() {
 	// selected by reporting.analytics_backend. Core events flow through
 	// the analytics.Store interface so they persist on whichever backend.
 	store := selectAnalyticsStore(cfg, log)
-	// Route deep-history reads to the Parquet lake when tiering is enabled and
+	// Route deep-history reads to the Parquet lake when the cold store is enabled and
 	// the binary was built with the duckdb tag; otherwise this is a no-op and
 	// the hot store answers everything.
-	store = maybeWrapTiered(store, cfg, log)
+	store = maybeWrapHotCold(store, cfg, log)
 	lc.OnShutdown("analytics-store", func(_ context.Context) error {
 		return store.Close()
 	})

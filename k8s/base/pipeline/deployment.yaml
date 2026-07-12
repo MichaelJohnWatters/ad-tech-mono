@@ -1,7 +1,7 @@
 # Pipeline — the data-lake BATCH layer. Consumes the event stream from NATS
 # (its own consumer group, so it sees every event independently of reporting)
 # and lands events as Parquet + a real Delta transaction log in object storage
-# (Minio). This is what populates the COLD tier the reporting TieredStore reads.
+# (Minio). This is what populates the COLD store the reporting HotColdStore reads.
 # Background consumer (no external ingress); exposes /healthz, /readyz,
 # /debug/datalake/snapshot on 8087. Image built via Tilt's docker_build.
 apiVersion: apps/v1
@@ -40,7 +40,7 @@ spec:
               value: "nats://nats:4222"
             - name: DATABASE_URL
               value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
-            # Cold-tier storage: Minio, host:port (no scheme) for both minio-go
+            # Cold-store storage: Minio, host:port (no scheme) for both minio-go
             # (writer) and DuckDB delta_scan (reader).
             - name: S3_ENDPOINT
               value: "minio:9000"
@@ -52,9 +52,9 @@ spec:
               value: "us-east-1"
             - name: S3_USE_SSL
               value: "false"
-            # Fresh bucket for the tiering test (non-destructive; all real-Delta).
+            # Fresh bucket for the hot/cold storage test (non-destructive; all real-Delta).
             - name: PIPELINE_DATALAKE_BUCKET
-              value: "adtech-datalake-tiertest"
+              value: "adtech-datalake-hotcold"
             # Flush fast so the lake is visible quickly during the test.
             - name: PIPELINE_DATALAKE_FLUSH_INTERVAL
               value: "10s"

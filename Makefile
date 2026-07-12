@@ -37,10 +37,10 @@ test-e2e: ## Run end-to-end tests on k3s (pins reporting to the memory backend â
 	./scripts/e2e-preflight.sh
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
 
-test-e2e-tiering: ## Long-running hot/cold tiering e2e (~3min). Needs the tiering stack (duckdb reporting + pipeline). Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden.
+test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs the hot/cold stack (duckdb reporting + pipeline). Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden.
 	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=90s
 	kubectl rollout status deployment/reporting -n adtech --timeout=150s
-	-go test ./tests/e2e/ -tags=e2e -run TestHotColdTiering -count=1 -timeout=10m -v
+	-go test ./tests/e2e/ -tags=e2e -run TestHotColdStore -count=1 -timeout=10m -v
 	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=15m
 	kubectl rollout status deployment/reporting -n adtech --timeout=150s
 
