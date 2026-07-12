@@ -131,16 +131,11 @@ See `docs/PLAN.md` for the comprehensive project plan.
 
 ## When to Update Diagrams
 
-After making changes, check if any diagrams need updating:
+**Source of truth: [`docs/diagrams/README.md`](docs/diagrams/README.md)** — the
+diagram index with a per-diagram "Update when" column and a shared visual legend.
+Don't duplicate that table here (it drifts); check it there.
 
-| Change type | Diagram to check |
-|---|---|
-| New service added | `docs/diagrams/architecture.d2` - add the service and its connections |
-| New NATS subject | `docs/PLAN.md` -> NATS Event Flow mermaid diagram |
-| New database table | `docs/PLAN.md` -> ER diagram |
-| Service-to-service connection changed | `docs/diagrams/architecture.d2` + sequence diagram in PLAN.md |
-| New infrastructure component | `docs/diagrams/architecture.d2` + `k8s/CLAUDE.md` |
-| New API endpoint group | Check if Gateway routing diagram needs updating |
-| Traefik routing changed | `docs/diagrams/architecture.d2` - ingress section |
-
-**Rule: if your PR changes how services connect, it MUST include a diagram update.** CI can check if `.d2` files are modified when `cmd/` or `k8s/` files change.
+**Rule: if your PR changes how services connect, or a data / money / event flow,
+it MUST update the matching diagram in the same PR** — find it via the "Update
+when" column in `docs/diagrams/README.md`, then `make diagrams` to re-render. CI
+can flag `cmd/`/`k8s/` changes that touch no `.d2`.
