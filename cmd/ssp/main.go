@@ -778,6 +778,22 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			return
 		}
 		defer adResp.Body.Close()
+		// The ad server can decline to render even after an auction win — most
+		// commonly a frequency cap (429), which is a normal no-fill, not an
+		// error. Treat any non-200 as an unfilled opportunity and return the
+		// same nobid response the no-winner path uses, instead of JSON-decoding
+		// a plain-text error body (which produced spurious "decode failed"
+		// ERRORs + 502s: "frequency cap exceeded" parses as a bad `false`).
+		if adResp.StatusCode != http.StatusOK {
+			if adResp.StatusCode == http.StatusTooManyRequests {
+				reqLog.Debug("ad server declined: frequency cap", "status", adResp.StatusCode)
+			} else {
+				reqLog.Warn("ad server declined to render", "status", adResp.StatusCode)
+			}
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
+			return
+		}
 		var sr models.ServeResponse
 		if err := json.NewDecoder(adResp.Body).Decode(&sr); err != nil {
 			reqLog.Error("ad server response decode failed", "error", err)
