@@ -169,8 +169,16 @@ var profiles = map[string]profile{
 
 func runSimulation() {
 	profileName := getFlag("--profile", "trickle")
+	durationSet := getFlag("--duration", "") != ""
 	duration := parseDuration(getFlag("--duration", "1m"))
 	maxRequests := parseInt(getFlag("--requests", "0"))
+	// --requests is the stop condition when set (per the flag docs) — don't let
+	// the DEFAULT 1m duration truncate a large bounded run (e.g. --requests 1M
+	// would otherwise cap at ~1 minute). An explicitly-passed --duration still
+	// applies as a combined cap.
+	if maxRequests > 0 && !durationSet {
+		duration = 100 * 365 * 24 * time.Hour
+	}
 	exchangeURL := getFlag("--exchange-url", routes.DefaultExchangeURL)
 	trackerURL := getFlag("--tracker-url", routes.DefaultTrackerURL)
 	eps := endpoints{
