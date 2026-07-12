@@ -25,6 +25,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ Run flags:
   --duration <dur>    Duration: 30s, 5m, 1h (default: 1m)
   --requests <n>      Stop after N requests (0 = use duration)
   --rps <n>           Override requests per second
+  --conv-rate <f>     Override conversion rate (fraction of clicks that convert)
   --ssp-url <u>       SSP URL (default: http://localhost:8084)
   --pubad-url <u>     Publisher ad server URL (default: http://localhost:8088)
   --exchange-url <u>  Exchange URL for --direct mode (default: http://localhost:8081)
@@ -124,6 +126,10 @@ type profile struct {
 	FloorPrice float64
 	ClickRate  float64
 	ViewPct    int
+	// ConvRate is P(conversion | click) — the sim plays the advertiser's site
+	// pixel for this fraction of the clicks it fires (real conversions happen
+	// off-platform, so there's no human to generate them; we synthesise them).
+	ConvRate float64
 }
 
 func personaPool(names ...string) []request.Persona {
@@ -142,7 +148,7 @@ var profiles = map[string]profile{
 		Name: "trickle", RPS: 1,
 		Personas:   personaPool("us-personalised-mobile", "uk-consented-desktop"),
 		Channels:   []channelWeight{{request.Display, 1}},
-		FloorPrice: 0.50, ClickRate: 0.05, ViewPct: 80,
+		FloorPrice: 0.50, ClickRate: 0.05, ViewPct: 80, ConvRate: 0.15,
 	},
 	// steady: a broad, realistic open-exchange blend across regions, consent
 	// regimes, and every serving format (display/native/video/audio).
@@ -150,14 +156,14 @@ var profiles = map[string]profile{
 		Name: "steady", RPS: 10,
 		Personas:   request.Personas, // full registry, weighted
 		Channels:   []channelWeight{{request.Display, 55}, {request.Native, 20}, {request.Video, 15}, {request.Audio, 10}},
-		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70,
+		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10,
 	},
 	// burst: high volume across every channel including audio + CTV personas.
 	"burst": {
 		Name: "burst", RPS: 100,
 		Personas:   request.Personas,
 		Channels:   []channelWeight{{request.Display, 45}, {request.Video, 25}, {request.Audio, 15}, {request.Native, 15}},
-		FloorPrice: 0.50, ClickRate: 0.01, ViewPct: 60,
+		FloorPrice: 0.50, ClickRate: 0.01, ViewPct: 60, ConvRate: 0.08,
 	},
 }
 
@@ -187,6 +193,11 @@ func runSimulation() {
 
 	if rps := getFlag("--rps", ""); rps != "" {
 		p.RPS = parseInt(rps)
+	}
+	if cr := getFlag("--conv-rate", ""); cr != "" {
+		if v, err := strconv.ParseFloat(cr, 64); err == nil {
+			p.ConvRate = v
+		}
 	}
 	// --persona narrows the pool to one persona; --channel forces one channel.
 	forcedPersona := getFlag("--persona", "")
