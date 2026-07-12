@@ -105,20 +105,10 @@ func (l *Ledger) Record(entry billing.LedgerEntry) int64 {
 	id := l.nextID.Add(1)
 	entry.ID = id
 
-	var err error
-	switch entry.Type {
-	case billing.EntrySpend:
-		err = l.recordSpend(entry)
-	case billing.EntryReservation:
-		err = l.recordReservation(entry)
-	case billing.EntrySettlement:
-		err = l.recordSettlement(entry)
-	case billing.EntryRelease:
-		err = l.recordRelease(entry)
-	default:
-		err = fmt.Errorf("%w: %s", ErrUnsupportedEntryType, entry.Type)
+	transfers, err := l.buildTransfers(entry)
+	if err == nil {
+		err = l.createTransfers(transfers)
 	}
-
 	if err != nil {
 		l.log.Error("tigerbeetle ledger record failed",
 			"entry_type", string(entry.Type),
@@ -133,24 +123,115 @@ func (l *Ledger) Record(entry billing.LedgerEntry) int64 {
 	return id
 }
 
-func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
+// buildTransfers turns one ledger entry into its TigerBeetle transfer group (a
+// self-terminating linked chain for spend/settle, a single pending for reserve,
+// a void for release). Splitting build from submit is what lets RecordBatch
+// concatenate many entries' groups into one CreateTransfers request.
+func (l *Ledger) buildTransfers(entry billing.LedgerEntry) ([]tbtypes.Transfer, error) {
+	switch entry.Type {
+	case billing.EntrySpend:
+		return l.buildSpend(entry)
+	case billing.EntryReservation:
+		return l.buildReservation(entry)
+	case billing.EntrySettlement:
+		return l.buildSettlement(entry)
+	case billing.EntryRelease:
+		return l.buildRelease(entry)
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedEntryType, entry.Type)
+	}
+}
+
+// maxTransfersPerRequest bounds a single CreateTransfers call. TigerBeetle's
+// wire limit is 8190 transfers/request; stay just under it. Each entry's group
+// is <= 3 transfers, and RecordBatch never splits a group across this boundary.
+const maxTransfersPerRequest = 8189
+
+// RecordBatch submits many entries in as few CreateTransfers requests as
+// possible: it builds each entry's transfer group, concatenates groups into
+// chunks of <= maxTransfersPerRequest transfers (never splitting a group), and
+// submits one request per chunk. On a chunk error it falls back to per-entry
+// submission so one poison entry (e.g. a TB linked-chain rejection) can't fail
+// the whole batch. Returns each entry's assigned ID in order (0 if its build
+// failed). This is the throughput lever: N events → ~1 CreateTransfers.
+func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
+	ids := make([]int64, len(entries))
+
+	type built struct {
+		entry     billing.LedgerEntry
+		transfers []tbtypes.Transfer
+	}
+	chunk := make([]tbtypes.Transfer, 0, 256)
+	chunkEntries := make([]built, 0, 128)
+
+	flush := func() {
+		if len(chunk) == 0 {
+			return
+		}
+		if err := l.createTransfers(chunk); err != nil {
+			// One bad entry rejects its whole linked chain (and, with a shared
+			// request, surfaces as a batch error). Retry each entry alone so the
+			// rest of the batch still records.
+			l.log.Error("tigerbeetle batch chunk failed; retrying per-entry",
+				"entries", len(chunkEntries), "error", err)
+			for _, b := range chunkEntries {
+				if e2 := l.createTransfers(b.transfers); e2 != nil {
+					l.log.Error("tigerbeetle ledger record failed",
+						"entry_type", string(b.entry.Type), "trace_id", b.entry.TraceID,
+						"campaign_id", b.entry.CampaignID, "error", e2)
+					continue
+				}
+				l.bumpSummary(b.entry)
+			}
+		} else {
+			for _, b := range chunkEntries {
+				l.bumpSummary(b.entry)
+			}
+		}
+		chunk = chunk[:0]
+		chunkEntries = chunkEntries[:0]
+	}
+
+	for i := range entries {
+		entry := entries[i]
+		entry.ID = l.nextID.Add(1)
+		transfers, err := l.buildTransfers(entry)
+		if err != nil {
+			l.log.Error("tigerbeetle ledger record failed",
+				"entry_type", string(entry.Type), "trace_id", entry.TraceID,
+				"campaign_id", entry.CampaignID, "error", err)
+			ids[i] = 0
+			continue
+		}
+		ids[i] = entry.ID
+		if len(chunk)+len(transfers) > maxTransfersPerRequest {
+			flush()
+		}
+		chunk = append(chunk, transfers...)
+		chunkEntries = append(chunkEntries, built{entry: entry, transfers: transfers})
+	}
+	flush()
+	return ids
+}
+
+func (l *Ledger) buildSpend(e billing.LedgerEntry) ([]tbtypes.Transfer, error) {
 	advID, err := parseAdvertiserAccount(e.DebitAccount)
 	if err != nil {
-		return fmt.Errorf("parse advertiser account: %w", err)
+		return nil, fmt.Errorf("parse advertiser account: %w", err)
 	}
 	pubID, err := parsePublisherAccount(e.CreditAccount)
 	if err != nil {
-		return fmt.Errorf("parse publisher account: %w", err)
+		return nil, fmt.Errorf("parse publisher account: %w", err)
 	}
 
 	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(pubID, tb.AccountCodePublisher); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse); err != nil {
-		return err
+		return nil, err
 	}
 
 	revenueMicros := tb.USDToMicros(e.PublisherRevenue)
@@ -158,7 +239,7 @@ func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
 	userData := tb.PackBidModel(e.BidModel)
 	traceUD := tb.TraceUserData(e.TraceID)
 
-	return l.createTransfers([]tbtypes.Transfer{
+	return []tbtypes.Transfer{
 		{
 			ID:              tb.SpendTransferID(e.TraceID),
 			DebitAccountID:  advID,
@@ -180,26 +261,26 @@ func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
 			Ledger:          tb.USDLedger,
 			Code:            tb.CodeMargin,
 		},
-	})
+	}, nil
 }
 
-func (l *Ledger) recordReservation(e billing.LedgerEntry) error {
+func (l *Ledger) buildReservation(e billing.LedgerEntry) ([]tbtypes.Transfer, error) {
 	advID, err := parseAdvertiserAccount(e.DebitAccount)
 	if err != nil {
-		return fmt.Errorf("parse advertiser account: %w", err)
+		return nil, fmt.Errorf("parse advertiser account: %w", err)
 	}
 
 	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow); err != nil {
-		return err
+		return nil, err
 	}
 
 	cents := tb.USDToMicros(e.Amount)
 	userData := tb.PackBidModel(e.BidModel)
 
-	return l.createTransfers([]tbtypes.Transfer{{
+	return []tbtypes.Transfer{{
 		ID:              tb.ReservationID(e.TraceID),
 		DebitAccountID:  advID,
 		CreditAccountID: tb.EscrowAccountID,
@@ -210,39 +291,39 @@ func (l *Ledger) recordReservation(e billing.LedgerEntry) error {
 		Ledger:          tb.USDLedger,
 		Code:            tb.CodeReservation,
 		Flags:           tbtypes.TransferFlags{Pending: true}.ToUint16(),
-	}})
+	}}, nil
 }
 
-func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
+func (l *Ledger) buildSettlement(e billing.LedgerEntry) ([]tbtypes.Transfer, error) {
 	// Settle moves money out of escrow. e.DebitAccount is "escrow:<resID>"
 	// (from billing.Engine.settle) and e.CreditAccount is "publisher:<UUID>".
 	pubID, err := parsePublisherAccount(e.CreditAccount)
 	if err != nil {
-		return fmt.Errorf("parse publisher account: %w", err)
+		return nil, fmt.Errorf("parse publisher account: %w", err)
 	}
 
 	// We need the advertiser too — it isn't on the settle entry directly,
 	// but Engine carries it through as AdvertiserID. Defensive: AdvertiserID
 	// is required because the pending was advertiser→escrow.
 	if e.AdvertiserID == "" {
-		return errors.New("settle entry missing advertiser_id")
+		return nil, errors.New("settle entry missing advertiser_id")
 	}
 	advID, err := tb.AdvertiserAccountID(e.AdvertiserID)
 	if err != nil {
-		return fmt.Errorf("parse advertiser id %q: %w", e.AdvertiserID, err)
+		return nil, fmt.Errorf("parse advertiser id %q: %w", e.AdvertiserID, err)
 	}
 
 	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(pubID, tb.AccountCodePublisher); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow); err != nil {
-		return err
+		return nil, err
 	}
 	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse); err != nil {
-		return err
+		return nil, err
 	}
 
 	revenueMicros := tb.USDToMicros(e.PublisherRevenue)
@@ -255,7 +336,7 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 	// two, terminator (Linked=false) on the third. If any fail, all roll
 	// back, leaving the pending reservation intact for retry or eventual
 	// timeout-driven void.
-	return l.createTransfers([]tbtypes.Transfer{
+	return []tbtypes.Transfer{
 		{
 			ID:              tb.SettlementID(e.TraceID),
 			DebitAccountID:  advID,
@@ -298,18 +379,18 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 			Ledger:          tb.USDLedger,
 			Code:            tb.CodeMargin,
 		},
-	})
+	}, nil
 }
 
-func (l *Ledger) recordRelease(e billing.LedgerEntry) error {
+func (l *Ledger) buildRelease(e billing.LedgerEntry) ([]tbtypes.Transfer, error) {
 	advID, err := tb.AdvertiserAccountID(e.AdvertiserID)
 	if err != nil {
-		return fmt.Errorf("parse advertiser id %q: %w", e.AdvertiserID, err)
+		return nil, fmt.Errorf("parse advertiser id %q: %w", e.AdvertiserID, err)
 	}
 
 	pendingID := tb.ReservationID(e.TraceID)
 
-	return l.createTransfers([]tbtypes.Transfer{{
+	return []tbtypes.Transfer{{
 		ID:              tb.ReleaseTransferID(e.TraceID),
 		DebitAccountID:  advID,
 		CreditAccountID: tb.EscrowAccountID,
@@ -318,7 +399,7 @@ func (l *Ledger) recordRelease(e billing.LedgerEntry) error {
 		Ledger:          tb.USDLedger,
 		Code:            tb.CodeRelease,
 		Flags:           tbtypes.TransferFlags{VoidPendingTransfer: true}.ToUint16(),
-	}})
+	}}, nil
 }
 
 // createTransfers submits to TB and turns every non-OK result into a

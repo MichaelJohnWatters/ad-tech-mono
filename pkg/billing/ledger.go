@@ -57,6 +57,12 @@ type LedgerEntry struct {
 type Ledger interface {
 	// Record appends an entry and returns its assigned ID.
 	Record(entry LedgerEntry) int64
+	// RecordBatch appends multiple entries in one operation and returns their
+	// assigned IDs in order. Equivalent to calling Record for each entry, but
+	// backends that batch their durable write (e.g. TigerBeetle) submit all
+	// entries' transfers in a single request — the throughput win. MemoryLedger
+	// appends them under a single lock.
+	RecordBatch(entries []LedgerEntry) []int64
 	// Entries returns all entries (for debugging/export).
 	Entries() []LedgerEntry
 	// EntriesForTrace returns all entries for a given trace ID.
@@ -111,6 +117,22 @@ func (l *MemoryLedger) Record(entry LedgerEntry) int64 {
 	l.nextID++
 	l.entries = append(l.entries, entry)
 	return entry.ID
+}
+
+// RecordBatch appends all entries under a single lock, assigning sequential
+// IDs, and returns them in order. Semantically identical to calling Record for
+// each entry.
+func (l *MemoryLedger) RecordBatch(entries []LedgerEntry) []int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ids := make([]int64, len(entries))
+	for i := range entries {
+		entries[i].ID = l.nextID
+		l.nextID++
+		l.entries = append(l.entries, entries[i])
+		ids[i] = entries[i].ID
+	}
+	return ids
 }
 
 // Entries returns all ledger entries (for debugging/export).

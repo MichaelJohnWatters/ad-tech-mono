@@ -3,6 +3,7 @@ package tigerbeetle
 import (
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 
 	tbtypes "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
@@ -17,10 +18,11 @@ import (
 // directly. Anything that needs real balance math is in integration_test.go
 // behind the build tag.
 type fakeClient struct {
-	accounts          []tbtypes.Account
-	transfers         []tbtypes.Transfer
-	createAccountsErr error
-	createTransfersErr error
+	accounts             []tbtypes.Account
+	transfers            []tbtypes.Transfer
+	createTransfersCalls int
+	createAccountsErr    error
+	createTransfersErr   error
 	transferResults   map[int]tbtypes.CreateTransferResult
 	accountResults    map[int]tbtypes.CreateAccountResult
 	lookupAccount     map[tbtypes.Uint128]tbtypes.Account
@@ -54,6 +56,7 @@ func (f *fakeClient) CreateAccounts(accounts []tbtypes.Account) ([]tbtypes.Accou
 }
 
 func (f *fakeClient) CreateTransfers(transfers []tbtypes.Transfer) ([]tbtypes.TransferEventResult, error) {
+	f.createTransfersCalls++
 	if f.createTransfersErr != nil {
 		return nil, f.createTransfersErr
 	}
@@ -169,6 +172,47 @@ func TestLedgerSpendProducesTwoTransfers(t *testing.T) {
 	}
 	if mar.CreditAccountID != tb.HouseAccountID {
 		t.Error("margin must credit the house account")
+	}
+}
+
+// RecordBatch collapses N entries into ONE CreateTransfers request while
+// producing the exact same transfers as N per-entry Record calls — the
+// throughput lever (N events → ~1 round-trip instead of N).
+func TestRecordBatchOneCallSameTransfers(t *testing.T) {
+	mk := func(trace, advKey, pubKey string, rev, mar float64) billing.LedgerEntry {
+		adv, pub := advUUID(advKey), pubUUID(pubKey)
+		return billing.LedgerEntry{
+			Type: billing.EntrySpend, TraceID: trace, AdvertiserID: adv, PublisherID: pub,
+			DebitAccount: "advertiser:" + adv, CreditAccount: "publisher:" + pub,
+			Amount: rev + mar, PublisherRevenue: rev, PlatformMargin: mar, Currency: "USD", BidModel: "cpm",
+		}
+	}
+	entries := []billing.LedgerEntry{
+		mk("trace-a", "acme", "dailynews", 0.80, 0.20),
+		mk("trace-b", "globex", "dailynews", 4.00, 1.00),
+		mk("trace-c", "acme", "sports", 2.40, 0.60),
+	}
+
+	batchFC := newFakeClient()
+	New(batchFC, silentLogger()).RecordBatch(entries)
+
+	perFC := newFakeClient()
+	perLedger := New(perFC, silentLogger())
+	for _, e := range entries {
+		perLedger.Record(e)
+	}
+
+	if batchFC.createTransfersCalls != 1 {
+		t.Errorf("RecordBatch made %d CreateTransfers calls, want 1 (batched)", batchFC.createTransfersCalls)
+	}
+	if perFC.createTransfersCalls != len(entries) {
+		t.Errorf("per-entry made %d CreateTransfers calls, want %d", perFC.createTransfersCalls, len(entries))
+	}
+	if got, want := len(batchFC.transfers), len(entries)*2; got != want {
+		t.Errorf("batch produced %d transfers, want %d (2 per CPM spend)", got, want)
+	}
+	if !reflect.DeepEqual(batchFC.transfers, perFC.transfers) {
+		t.Errorf("batched transfers differ from per-entry:\n batch=%+v\n per  =%+v", batchFC.transfers, perFC.transfers)
 	}
 }
 

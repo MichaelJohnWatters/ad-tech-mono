@@ -49,7 +49,7 @@ func batchProcess[T any](
 	msgs []*events.Message,
 	decode func(data []byte) (*T, bool),
 	insert func(ctx context.Context, es []*T) error,
-	after func(ctx context.Context, e *T),
+	afterBatch func(ctx context.Context, es []*T),
 ) error {
 	keep := make([]batchKeep[T], 0, len(msgs))
 	for _, m := range msgs {
@@ -101,12 +101,13 @@ func batchProcess[T any](
 		return err
 	}
 
-	// 2) bill each survivor, then 3) ack. Billing is best-effort relative to
-	//    the ack gate, exactly as in the single-message handlers.
+	// 2) bill the whole batch in ONE call (the scale lever: N events → ~1
+	//    ledger + ~1 balance round-trip), then 3) ack. Billing is best-effort
+	//    relative to the ack gate, exactly as in the single-message handlers.
+	if afterBatch != nil {
+		afterBatch(ctx, es)
+	}
 	for _, k := range keep {
-		if after != nil {
-			after(ctx, k.event)
-		}
 		k.msg.Ack()
 	}
 	return nil
@@ -129,17 +130,21 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 			return &e, true
 		},
 		c.batch.InsertImpressions,
-		func(ctx context.Context, e *analytics.ImpressionEvent) {
+		func(ctx context.Context, es []*analytics.ImpressionEvent) {
 			if c.billing == nil {
 				return
 			}
-			c.billing.ProcessEvent(ctx, billing.SpendEvent{
-				TraceID: e.TraceID, CampaignID: e.CampaignID, CreativeID: e.CreativeID,
-				PlacementID: e.PlacementID, PublisherID: e.PublisherID, AdvertiserID: e.AccountID,
-				ClearingPrice: e.ClearingPriceUSD, Currency: "USD",
-				BidModel: billing.BidModel(e.BidModel), DealType: e.DealID,
-				EventType: "impression", Timestamp: e.Timestamp,
-			})
+			spends := make([]billing.SpendEvent, len(es))
+			for i, e := range es {
+				spends[i] = billing.SpendEvent{
+					TraceID: e.TraceID, CampaignID: e.CampaignID, CreativeID: e.CreativeID,
+					PlacementID: e.PlacementID, PublisherID: e.PublisherID, AdvertiserID: e.AccountID,
+					ClearingPrice: e.ClearingPriceUSD, Currency: "USD",
+					BidModel: billing.BidModel(e.BidModel), DealType: e.DealID,
+					EventType: "impression", Timestamp: e.Timestamp,
+				}
+			}
+			c.billing.ProcessBatch(ctx, spends)
 		},
 	)
 }
@@ -161,12 +166,16 @@ func (c *EventConsumer) handleClickBatch(ctx context.Context, msgs []*events.Mes
 			return &e, true
 		},
 		c.batch.InsertClicks,
-		func(ctx context.Context, e *analytics.ClickEvent) {
+		func(ctx context.Context, es []*analytics.ClickEvent) {
 			if c.billing == nil {
 				return
 			}
-			if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "click"); err != nil {
-				c.log.Warn("batch click settle failed", "trace_id", e.TraceID, "error", err)
+			// Settles stay per-trace (they look up each reservation); lower
+			// volume than impressions.
+			for _, e := range es {
+				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "click"); err != nil {
+					c.log.Warn("batch click settle failed", "trace_id", e.TraceID, "error", err)
+				}
 			}
 		},
 	)
@@ -189,12 +198,14 @@ func (c *EventConsumer) handleConversionBatch(ctx context.Context, msgs []*event
 			return &e, true
 		},
 		c.batch.InsertConversions,
-		func(ctx context.Context, e *analytics.ConversionEvent) {
+		func(ctx context.Context, es []*analytics.ConversionEvent) {
 			if c.billing == nil {
 				return
 			}
-			if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "conversion"); err != nil {
-				c.log.Warn("batch conversion settle failed", "trace_id", e.TraceID, "error", err)
+			for _, e := range es {
+				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "conversion"); err != nil {
+					c.log.Warn("batch conversion settle failed", "trace_id", e.TraceID, "error", err)
+				}
 			}
 		},
 	)
@@ -217,13 +228,18 @@ func (c *EventConsumer) handleViewBatch(ctx context.Context, msgs []*events.Mess
 			return &e, true
 		},
 		c.batch.InsertViews,
-		func(ctx context.Context, e *analytics.ViewEvent) {
-			// vCPM settles only on a viewable impression (see handleView).
-			if c.billing == nil || !e.IABViewable {
+		func(ctx context.Context, es []*analytics.ViewEvent) {
+			if c.billing == nil {
 				return
 			}
-			if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "viewable"); err != nil {
-				c.log.Warn("batch view settle failed", "trace_id", e.TraceID, "error", err)
+			for _, e := range es {
+				// vCPM settles only on a viewable impression (see handleView).
+				if !e.IABViewable {
+					continue
+				}
+				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "viewable"); err != nil {
+					c.log.Warn("batch view settle failed", "trace_id", e.TraceID, "error", err)
+				}
 			}
 		},
 	)
