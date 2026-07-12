@@ -126,6 +126,9 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 			if e.SchemaVersion == 0 {
 				e.SchemaVersion = 1
 			}
+			// CPM → realized per-impression cost, once at ingestion, for both
+			// the analytics store and the billing callback below.
+			normalizeImpressionCost(&e)
 			return &e, true
 		},
 		c.batch.InsertImpressions,

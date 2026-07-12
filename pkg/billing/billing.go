@@ -40,6 +40,12 @@ type SpendEvent struct {
 	PlacementID   string
 	PublisherID   string
 	AdvertiserID  string
+	// ClearingPrice is the realized per-impression cost in Currency (dollars),
+	// NOT the auction CPM. Callers convert the CPM (bid.price = cost per 1000
+	// impressions) to per-impression cost before ingestion — see
+	// cmd/reporting normalizeImpressionCost — so a $5.00 CPM arrives as $0.005.
+	// The ledger, pacing, and balance drawdown book this amount directly, and
+	// reservations carry it through to settle unchanged (no re-conversion).
 	ClearingPrice float64
 	Currency      string
 	BidModel      BidModel
@@ -143,7 +149,7 @@ func NewEngine(ledger Ledger, contracts *ContractStore, clk clock.Clock, log *sl
 }
 
 // SnapshotCommitted returns today's committed spend (settled + open reserves),
-// in cents, per campaign id. This is the authoritative pacing figure the
+// in micro-dollars (1 USD = 1e6 µ), per campaign id. This is the authoritative pacing figure the
 // reporting service publishes to DSPs so their budget gate reflects billed
 // reality (phantom wins that never impressed are absent; reserves that never
 // settle are swept) rather than the raw win prices the DSP counts locally.

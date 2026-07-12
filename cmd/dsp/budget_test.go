@@ -48,7 +48,8 @@ func TestBudgetTracker_ReconcileOverwrites(t *testing.T) {
 	}
 
 	// Billing snapshot says only $2.00 actually committed — reconcile down.
-	b.Reconcile("", "camp-1", 200)
+	// Snapshot values are micro-dollars: $2.00 = 2,000,000 µ.
+	b.Reconcile("", "camp-1", 2_000_000)
 	if got := b.Spend("camp-1"); got != 2.00 {
 		t.Fatalf("post-reconcile Spend = %f, want 2.00", got)
 	}
@@ -83,7 +84,8 @@ func TestBudgetTracker_UTCDayIsolation(t *testing.T) {
 	}
 
 	// Reconcile explicitly targets day1's key regardless of "now".
-	b.Reconcile("2026-07-06", "camp-1", 250)
+	// Micro-dollars: $2.50 = 2,500,000 µ.
+	b.Reconcile("2026-07-06", "camp-1", 2_500_000)
 	if got := b.Spend("camp-1"); got != 2.50 {
 		t.Fatalf("after reconcile day1 spend = %f, want 2.50", got)
 	}

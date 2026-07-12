@@ -31,11 +31,12 @@ func TestBalanceExhaustionStopsBidding(t *testing.T) {
 		fmt.Sprintf(`{"publisher_id":%q,"name":"Exhaust MPU","format":"display","width":300,"height":250,"floor_price":0.5}`, site["id"]))
 	placementID := pl["id"].(string)
 
-	// Advertiser with a TINY wallet: 6.00 at 2.50/bid → 2 clean wins, a
+	// Advertiser with a TINY wallet. base_bid 2.50 is a CPM, so each win draws
+	// down 2.50/1000 = $0.0025. A $0.006 wallet → 2 clean wins ($0.005), a
 	// possible overshoot 3rd, then the gate must flip.
 	adv := h.Signup(t, "Tiny Wallet", uniq+"-adv@api.test", "pw-e2e-1", "advertiser")
 	h.APIJSON(t, adv, "POST", "/v1/api/campaigns", `{"name":"Tiny Wallet Campaign","base_bid":2.5,"daily_budget":100}`)
-	h.APIJSON(t, adv, "POST", "/v1/api/billing/topup", `{"amount":6,"idempotency_key":"`+uniq+`-seed"}`)
+	h.APIJSON(t, adv, "POST", "/v1/api/billing/topup", `{"amount":0.006,"idempotency_key":"`+uniq+`-seed"}`)
 	h.RefreshAllCaches(t)
 
 	hasBid := func(res harness.AuctionResult) bool {
@@ -51,7 +52,7 @@ func TestBalanceExhaustionStopsBidding(t *testing.T) {
 	}
 
 	// Auctions win while funds last; the gate flips within the wallet's
-	// arithmetic (2 wins + at most 1 overshoot on 6.00 at 2.50).
+	// arithmetic (2 wins + at most 1 overshoot on $0.006 at $0.0025/win).
 	wins, noBidSeen := 0, false
 	for i := 0; i < 10 && !noBidSeen; i++ {
 		if hasBid(h.RunAuction(t, placementID, "GBR", "mobile", fmt.Sprintf("exhaust-user-%d", i))) {
@@ -61,12 +62,12 @@ func TestBalanceExhaustionStopsBidding(t *testing.T) {
 		noBidSeen = true
 	}
 	if !noBidSeen {
-		t.Fatalf("gate never flipped: %d straight wins on a 6.00 wallet at 2.50/win", wins)
+		t.Fatalf("gate never flipped: %d straight wins on a $0.006 wallet at $0.0025/win", wins)
 	}
 	if wins < 2 || wins > 3 {
-		t.Errorf("wins before exhaustion = %d, want 2-3 (6.00 wallet, 2.50 bids, ≤1 overshoot)", wins)
+		t.Errorf("wins before exhaustion = %d, want 2-3 ($0.006 wallet, $0.0025/win, ≤1 overshoot)", wins)
 	}
-	t.Logf("exhaustion: %d wins on a 6.00 wallet, then no-bid", wins)
+	t.Logf("exhaustion: %d wins on a $0.006 wallet, then no-bid", wins)
 
 	// A refill topup publishes the balances invalidate — bidding resumes
 	// within NATS RTT (poll a few auctions to absorb propagation).

@@ -1139,17 +1139,26 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 		campaignID := q.Get("campaign_id")
 
 		if campaignID != "" {
-			budget.Record(campaignID, price)
+			// price is the auction CPM (OpenRTB bid.price = cost per 1000
+			// impressions). The budget + balance meters track realized
+			// per-impression DOLLARS, so book CPM/1000 — a $5.00 CPM win
+			// spends $0.005, not $5.00. This keeps the local over-count meter
+			// in the same units as the billing engine's committed-spend
+			// snapshot it reconciles against.
+			impCost := price / 1000
+			budget.Record(campaignID, impCost)
 			// Mirror the spend into the account-level balance counter so
 			// the prepay gate sees it before the billing drawdown lands in
 			// Postgres (money loop).
 			if balanceGate != nil && campaigns != nil {
 				if c, ok := campaigns.ByID(campaignID); ok {
-					balanceGate.RecordWin(c.AccountID, price)
+					balanceGate.RecordWin(c.AccountID, impCost)
 				}
 			}
 		}
 		if placementID != "" {
+			// Bid-shading reasons in CPM rates, not booked dollars — pass the
+			// raw clearing CPM.
 			tracker.RecordWin(placementID, price, price)
 		}
 

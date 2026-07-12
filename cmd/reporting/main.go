@@ -491,6 +491,11 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 		e.SchemaVersion = 1
 	}
 
+	// The impression carries the auction CPM; convert to realized
+	// per-impression cost before it is stored (sum_cost/eCPM aggregate this
+	// column) and billed (ledger + balance drawdown). See normalizeImpressionCost.
+	normalizeImpressionCost(&e)
+
 	if err := c.store.InsertImpression(ctx, &e); err != nil {
 		c.log.Error("failed to write impression", "error", err, "trace_id", e.TraceID)
 		return msg.Nak()
@@ -509,6 +514,19 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 
 	c.log.Debug("impression recorded + billed", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
 	return msg.Ack()
+}
+
+// normalizeImpressionCost converts an impression's clearing price from the
+// auction CPM (OpenRTB bid.price = cost per 1000 impressions) to the realized
+// per-impression cost. Every impression sink needs dollars-per-impression, not
+// the CPM rate: the analytics store aggregates this column as sum_cost (spend)
+// and eCPM (= sum_cost/count*1000), and the billing ledger/balance drawdown
+// bills it directly. Applied once at ingestion so a $5.00 CPM books $0.005 per
+// impression. Auction-win rows keep the CPM — that's the clearing rate, not a
+// per-impression cost — so this is scoped to impressions only.
+func normalizeImpressionCost(e *analytics.ImpressionEvent) {
+	e.ClearingPriceUSD /= 1000
+	e.ClearingPrice /= 1000
 }
 
 func (c *EventConsumer) handleClick(ctx context.Context, msg *events.Message) error {
@@ -1024,6 +1042,14 @@ func (c *EventConsumer) HTTPHandler() http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
+		}
+
+		// Convert each impression's CPM clearing price to per-impression cost
+		// before it is stored or billed (see normalizeImpressionCost).
+		for i := range batch {
+			if batch[i].Type == analytics.EventImpression && batch[i].Impression != nil {
+				normalizeImpressionCost(batch[i].Impression)
+			}
 		}
 
 		if err := c.store.InsertBatch(r.Context(), batch); err != nil {
