@@ -153,8 +153,8 @@ func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
 		return err
 	}
 
-	revenueCents := tb.USDToCents(e.PublisherRevenue)
-	marginCents := tb.USDToCents(e.PlatformMargin)
+	revenueMicros := tb.USDToMicros(e.PublisherRevenue)
+	marginMicros := tb.USDToMicros(e.PlatformMargin)
 	userData := tb.PackBidModel(e.BidModel)
 	traceUD := tb.TraceUserData(e.TraceID)
 
@@ -163,7 +163,7 @@ func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
 			ID:              tb.SpendTransferID(e.TraceID),
 			DebitAccountID:  advID,
 			CreditAccountID: pubID,
-			Amount:          tb.CentsToAmount(revenueCents),
+			Amount:          tb.MicrosToAmount(revenueMicros),
 			UserData128:     traceUD,
 			UserData32:      userData,
 			Ledger:          tb.USDLedger,
@@ -174,7 +174,7 @@ func (l *Ledger) recordSpend(e billing.LedgerEntry) error {
 			ID:              tb.SpendMarginTransferID(e.TraceID),
 			DebitAccountID:  advID,
 			CreditAccountID: tb.HouseAccountID,
-			Amount:          tb.CentsToAmount(marginCents),
+			Amount:          tb.MicrosToAmount(marginMicros),
 			UserData128:     traceUD,
 			UserData32:      userData,
 			Ledger:          tb.USDLedger,
@@ -196,14 +196,14 @@ func (l *Ledger) recordReservation(e billing.LedgerEntry) error {
 		return err
 	}
 
-	cents := tb.USDToCents(e.Amount)
+	cents := tb.USDToMicros(e.Amount)
 	userData := tb.PackBidModel(e.BidModel)
 
 	return l.createTransfers([]tbtypes.Transfer{{
 		ID:              tb.ReservationID(e.TraceID),
 		DebitAccountID:  advID,
 		CreditAccountID: tb.EscrowAccountID,
-		Amount:          tb.CentsToAmount(cents),
+		Amount:          tb.MicrosToAmount(cents),
 		UserData128:     tb.TraceUserData(e.TraceID),
 		UserData32:      userData,
 		Timeout:         tb.ReservationTimeoutSeconds,
@@ -245,8 +245,8 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 		return err
 	}
 
-	revenueCents := tb.USDToCents(e.PublisherRevenue)
-	marginCents := tb.USDToCents(e.PlatformMargin)
+	revenueMicros := tb.USDToMicros(e.PublisherRevenue)
+	marginMicros := tb.USDToMicros(e.PlatformMargin)
 	userData := tb.PackBidModel(e.BidModel)
 	traceUD := tb.TraceUserData(e.TraceID)
 	pendingID := tb.ReservationID(e.TraceID)
@@ -281,7 +281,7 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 			ID:              tb.SpendTransferID(e.TraceID),
 			DebitAccountID:  tb.EscrowAccountID,
 			CreditAccountID: pubID,
-			Amount:          tb.CentsToAmount(revenueCents),
+			Amount:          tb.MicrosToAmount(revenueMicros),
 			UserData128:     traceUD,
 			UserData32:      userData,
 			Ledger:          tb.USDLedger,
@@ -292,7 +292,7 @@ func (l *Ledger) recordSettlement(e billing.LedgerEntry) error {
 			ID:              tb.MarginTransferID(e.TraceID),
 			DebitAccountID:  tb.EscrowAccountID,
 			CreditAccountID: tb.HouseAccountID,
-			Amount:          tb.CentsToAmount(marginCents),
+			Amount:          tb.MicrosToAmount(marginMicros),
 			UserData128:     traceUD,
 			UserData32:      userData,
 			Ledger:          tb.USDLedger,

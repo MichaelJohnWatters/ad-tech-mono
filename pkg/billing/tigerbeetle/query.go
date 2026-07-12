@@ -125,20 +125,20 @@ func (l *Ledger) BalanceFor(accountID string) billing.BalanceSummary {
 	}
 	a := accs[0]
 
-	debitsPosted, ok := tb.AmountToCents(a.DebitsPosted)
+	debitsPosted, ok := tb.AmountToMicros(a.DebitsPosted)
 	if !ok {
 		l.log.Error("tigerbeetle BalanceFor: debits exceed uint64",
 			"account_id", accountID)
 	}
-	creditsPosted, _ := tb.AmountToCents(a.CreditsPosted)
-	debitsPending, _ := tb.AmountToCents(a.DebitsPending)
+	creditsPosted, _ := tb.AmountToMicros(a.CreditsPosted)
+	debitsPending, _ := tb.AmountToMicros(a.DebitsPending)
 
 	return billing.BalanceSummary{
 		AccountID:    accountID,
-		TotalDebit:   tb.CentsToUSD(debitsPosted),
-		TotalCredit:  tb.CentsToUSD(creditsPosted),
-		Balance:      tb.CentsToUSD(debitsPosted) - tb.CentsToUSD(creditsPosted),
-		Reservations: tb.CentsToUSD(debitsPending),
+		TotalDebit:   tb.MicrosToUSD(debitsPosted),
+		TotalCredit:  tb.MicrosToUSD(creditsPosted),
+		Balance:      tb.MicrosToUSD(debitsPosted) - tb.MicrosToUSD(creditsPosted),
+		Reservations: tb.MicrosToUSD(debitsPending),
 	}
 }
 
@@ -176,11 +176,11 @@ func (l *Ledger) entriesForAccountID(tbID tbtypes.Uint128, label string) []billi
 // the Postgres warm cache when callers need them. For now they're left
 // zero so the entry still serializes.
 func transferToEntry(t tbtypes.Transfer, traceID string) billing.LedgerEntry {
-	cents, _ := tb.AmountToCents(t.Amount)
+	micros, _ := tb.AmountToMicros(t.Amount)
 	return billing.LedgerEntry{
 		TraceID:       traceID,
 		Type:          entryTypeForCode(t.Code, t.TransferFlags()),
-		Amount:        tb.CentsToUSD(cents),
+		Amount:        tb.MicrosToUSD(micros),
 		Currency:      "USD",
 		BidModel:      tb.UnpackBidModel(t.UserData32),
 		ReservationID: traceID, // best-effort surface; full reservation linkage via PendingID
