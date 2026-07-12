@@ -1,6 +1,8 @@
 # Competitor 2 - Performance-focused DSP.
-# Mix of cheap high-volume and expensive niche campaigns.
-# More volatile bidding: ±40% noise, 15% no-bid rate.
+# Bids competitively (base 5.00-5.40, on par with the internal DSP and
+# competitor1) so all three demand sources genuinely contest the auction —
+# but with the most volatile behaviour of the three: ±40% noise, 15% no-bid
+# rate, so it wins a realistic share rather than every impression.
 name: competitor2
 competitor: true
 noise_pct: 40       # ±40% random bid noise (more volatile)
@@ -13,7 +15,7 @@ campaigns:
     io_id: c2-io-001
     name: "VPN Plus - Global RON"
     creative_domain: vpnplus.com
-    base_bid: 3.30
+    base_bid: 5.00
     currency: USD
     daily_budget: 10000
     total_budget: 200000
@@ -58,7 +60,7 @@ campaigns:
     io_id: c2-io-002
     name: "CryptoEx - High Value Geo"
     creative_domain: cryptoex.io
-    base_bid: 4.10
+    base_bid: 5.20
     currency: USD
     daily_budget: 1000
     total_budget: 20000
@@ -95,7 +97,7 @@ campaigns:
     io_id: c2-io-003
     name: "Epic Quest - Mobile Gamers"
     creative_domain: epicquest.game
-    base_bid: 4.70
+    base_bid: 5.40
     currency: USD
     daily_budget: 4000
     total_budget: 80000
@@ -135,7 +137,7 @@ campaigns:
     io_id: c2-io-004
     name: "CloudCRM - B2B"
     creative_domain: cloudcrm.io
-    base_bid: 4.40
+    base_bid: 5.10
     currency: USD
     daily_budget: 800
     total_budget: 15000

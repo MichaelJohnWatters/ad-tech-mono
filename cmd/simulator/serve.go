@@ -56,6 +56,16 @@ func placementKeyFor(ch request.Channel) string {
 // targets — the caller picks it so traffic spreads across all publishers.
 func serveMirror(client *http.Client, u endpoints, persona request.Persona, ch request.Channel, pod int, p profile, rng *rand.Rand, traceparent, placementKey string) (bool, error) {
 	params := persona.QueryParams(placementKey, ch)
+	// QueryParams derives a deterministic per-persona user_id (stable identity
+	// for the trace explorer / web UI). For traffic generation that collapses
+	// all volume onto the handful of personas and trips the ad server's
+	// per-user-per-campaign frequency cap almost immediately, starving fill.
+	// Give each served impression a fresh high-cardinality user so fill reflects
+	// a realistic audience spread. Anonymous personas (no user_id) stay
+	// anonymous — they carry no identifier and bypass the cap by design.
+	if params.Get(request.ParamUserID) != "" {
+		params.Set(request.ParamUserID, fmt.Sprintf("pub-user-%08x", rng.Uint32()))
+	}
 	switch ch {
 	case request.Video:
 		if pod > 1 {
