@@ -1,71 +1,107 @@
-# Billing Flow - how money moves through the system
-# Render: d2 docs/diagrams/billing-flow.d2 docs/diagrams/billing-flow.svg
+# Money — budgets (fast) to ledger (truth) to payout
+# Render: make diagrams
+# The Money plane: fast Redis gates at bid time, reconciled to the TigerBeetle
+# ledger which is the accounting source of truth. See e2e-trace.md sections 1 and 4.
 
 direction: down
 
 # ============================================================
-# CPM (bill on impression)
+# 1 - Budgets and pacing  (FAST path - Redis, at bid time)
 # ============================================================
+budgets: Budgets and pacing (fast, Redis) {
+  style.fill: "#b45309"
+  style.font-color: "#fff"
 
-cpm: CPM - Bill Immediately {
+  balance_gate: Prepay-balance gate (no funds, no bid)
+  budget_gate: Daily-budget gate (stop at daily_budget)
+  win_notice: Local win-notice decrement (instant, approximate)
+  reconcile: Reconcile to committed-spend snapshot (authoritative)
+
+  win_notice -> reconcile: overwritten by truth
+}
+
+dsp: DSP :8082 {
+  style.fill: "#22d3ee"
+}
+dsp -> budgets.balance_gate: check
+dsp -> budgets.budget_gate: check
+dsp -> budgets.win_notice: on win
+
+# ============================================================
+# 2 - Accrual and settlement  (on the EVENT - Reporting hosts billing)
+# ============================================================
+accrual: Accrual and settlement (Reporting billing engine) {
   style.fill: "#166534"
   style.font-color: "#fff"
 
-  win: AuctionWinEvent {shape: parallelogram}
-  report: Write to Analytics Store
-  bill: Double-Entry Ledger (debit advertiser, credit publisher)
+  win: AuctionWinEvent - single source of truth for cost {
+    shape: parallelogram
+  }
+  cpm: CPM - accrue on IMPRESSION
+  cpc: CPC - reserve on win, settle on click (else expire)
+  cpa: CPA / vCPM / CPCV - reserve, settle on event (else expire)
 
-  win -> report
-  report -> bill: atomic (same consumer)
+  win -> cpm
+  win -> cpc
+  win -> cpa
 }
 
 # ============================================================
-# CPC (reserve on impression, settle on click)
+# 3 - The ledger (accounting source of truth)
 # ============================================================
-
-cpc: CPC - Reserve then Settle {
-  style.fill: "#1e3a5f"
+ledger: TigerBeetle ledger {
+  shape: cylinder
+  style.fill: "#111827"
   style.font-color: "#fff"
+  info: double-entry (debit advertiser, credit publisher + platform); backend = memory or tigerbeetle
+}
+accrual -> ledger: post transfers (double-entry)
 
-  imp: Impression arrives
-  reserve: Reserve (debit advertiser, credit escrow)
-  click: Click arrives
-  settle: Settle (debit escrow, credit publisher)
-  no_click: No click (24h timeout)
-  release: Release (debit escrow, credit advertiser refund)
-
-  imp -> reserve
-  reserve -> click: user clicks
-  click -> settle
-  reserve -> no_click: timeout
-  no_click -> release
+balances: advertiser_balances (Redis) {
+  shape: cylinder
+  style.fill: "#dc382d"
+  style.font-color: "#fff"
+}
+accrual -> balances: prepay drawdown + invalidate DSP cache
+accrual -> budgets.reconcile: campaign_spend_snapshot (NATS) {
+  style.stroke-dash: 4
 }
 
 # ============================================================
-# Revenue Share Models
+# 4 - Revenue share  (publisher NET - contract per publisher)
 # ============================================================
-
-revenue: Revenue Share Models {
+revenue: Revenue share models {
   style.fill: "#581c87"
   style.font-color: "#fff"
-
-  fixed: Fixed 20% fee
+  fixed: Fixed fee percent
   tiered: Tiered (volume brackets)
-  guaranteed: Guaranteed Min CPM
-  deal: Deal-Type modifiers
+  guaranteed: Guaranteed min CPM
+  deal: Deal-type modifiers
+  hybrid: Hybrid
 }
+ledger -> revenue: gross to net (CalculateRevenue)
 
 # ============================================================
-# Invoice / Payout
+# 5 - Output
 # ============================================================
-
 output: Output {
-  invoice: Advertiser Invoice (monthly)
-  payout: Publisher Payout (net-30)
-  reconciliation: Daily Reconciliation Check
+  invoice: Advertiser invoice (monthly)
+  payout: Publisher payout (net-30)
+  recon: Daily reconciliation check
+  payout -> recon: verify vs ledger
 }
-
-cpm -> output.invoice
-cpc -> output.invoice
 revenue -> output.payout
-output.payout -> output.reconciliation: daily verify
+ledger -> output.invoice
+
+legend: Legend {
+  near: bottom-right
+  style.fill: "#f8fafc"
+  a: A
+  b: B
+  a -> b: sync
+  c: A2
+  d: B2
+  c -> d: NATS async {
+    style.stroke-dash: 4
+  }
+}

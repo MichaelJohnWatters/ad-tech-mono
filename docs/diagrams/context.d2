@@ -1,0 +1,34 @@
+# System context (L0) — the platform and the outside world
+# Render: make diagrams
+# One box for the whole platform. Zoom in via architecture.svg.
+
+direction: right
+
+browser:    Browser / Publisher SDK { shape: person; style.fill: "#94a3b8" }
+advertiser: Advertiser              { shape: person; style.fill: "#818cf8" }
+publisher:  Publisher               { shape: person; style.fill: "#34d399" }
+
+platform: Ad Tech Platform {
+  style.fill: "#4361ee"; style.font-color: "#fff"
+  d: |md
+    programmatic ad exchange + DSP/SSP + ad server
+    + tracking, reporting, billing, identity
+    (one Go monorepo, runs on K8s)
+  |
+}
+
+compdsp: Competitor DSPs { shape: hexagon; style.fill: "#fb923c" }
+s3:      S3 / object storage { shape: cylinder; style.fill: "#c72e49"; style.font-color: "#fff" }
+
+browser    -> platform: ad requests + tracking pixels
+advertiser -> platform: fund + run campaigns (portal)
+publisher  -> platform: manage inventory + get payouts (portal)
+platform   -> compdsp: OpenRTB bid requests (auction fan-out)
+compdsp    -> platform: bids
+platform   -> s3: creatives + Parquet/Delta data lake
+
+legend: Legend {
+  near: bottom-left; style.fill: "#f8fafc"
+  a: actor { shape: person; style.fill: "#94a3b8" }
+  e: external system { shape: hexagon; style.fill: "#cbd5e1" }
+}
