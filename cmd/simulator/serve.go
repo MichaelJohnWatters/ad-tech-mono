@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -100,8 +101,44 @@ func serveDisplay(client *http.Client, url, traceparent string, p profile, rng *
 	}
 	if r.ClickURL != "" && rng.Float64() < p.ClickRate {
 		fireGet(client, r.ClickURL, traceparent)
+		maybeConvert(client, r.ImpressionURL, traceparent, p, rng) // post-click conversion
 	}
 	return true, nil
+}
+
+// maybeConvert plays the advertiser's site conversion pixel for a fraction
+// (p.ConvRate) of the clicks. Real conversions happen off-platform — a human
+// completes an action on the advertiser's own site — so with no user in the
+// loop we synthesise one: derive the trace (and campaign) from the impression
+// beacon the server issued, then POST /v1/t/conv. Unsigned is fine by default
+// (exp absent → isExpired=false, signature validation off); billing attributes
+// the CPA settle by trace_id.
+func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile, rng *rand.Rand) {
+	if p.ConvRate <= 0 || rng.Float64() >= p.ConvRate {
+		return
+	}
+	u, err := url.Parse(strings.TrimSpace(impBeacon))
+	if err != nil {
+		return
+	}
+	q := u.Query()
+	if q.Get("tid") == "" {
+		return // no trace → can't attribute
+	}
+	nq := url.Values{}
+	nq.Set("tid", q.Get("tid"))
+	// Carry the attribution context the impression already has.
+	for _, k := range []string{"cid", "crid", "pid", "advid", "pubid"} {
+		if v := q.Get(k); v != "" {
+			nq.Set(k, v)
+		}
+	}
+	nq.Set("type", "purchase")
+	nq.Set("rev", fmt.Sprintf("%.2f", 5+rng.Float64()*95)) // $5–100 order value
+	nq.Set("cur", "USD")
+	u.Path = routes.TrackerConversion
+	u.RawQuery = nq.Encode()
+	fireGet(client, u.String(), traceparent)
 }
 
 // serveVAST mirrors the web video/audio tabs: GET the VAST, then fire the
@@ -123,8 +160,13 @@ func serveVAST(client *http.Client, url, traceparent string, p profile, rng *ran
 		if ad.InLine == nil {
 			continue
 		}
+		var firstImp string
 		for _, imp := range ad.InLine.Impressions {
-			fireGet(client, strings.TrimSpace(imp.URI), traceparent)
+			uri := strings.TrimSpace(imp.URI)
+			if firstImp == "" {
+				firstImp = uri
+			}
+			fireGet(client, uri, traceparent)
 		}
 		for _, cr := range ad.InLine.Creatives.Creatives {
 			if cr.Linear == nil {
@@ -146,6 +188,7 @@ func serveVAST(client *http.Client, url, traceparent string, p profile, rng *ran
 				for _, c := range cr.Linear.VideoClicks.ClickTracking {
 					fireGet(client, strings.TrimSpace(c.URI), traceparent)
 				}
+				maybeConvert(client, firstImp, traceparent, p, rng) // post-click conversion
 			}
 		}
 	}
@@ -163,15 +206,18 @@ func serveNative(client *http.Client, url, traceparent string, p profile, rng *r
 		return false, err
 	}
 	served := false
+	var impBeacon string
 	for _, m := range trackerURLRe.FindAllStringSubmatch(string(body), -1) {
 		beacon := html.UnescapeString(m[1]) // HTML attrs escape & as &amp;
 		switch {
 		case strings.Contains(beacon, routes.TrackerImpression):
 			fireGet(client, beacon, traceparent)
 			served = true
+			impBeacon = beacon
 		case strings.Contains(beacon, routes.TrackerClick):
 			if rng.Float64() < p.ClickRate {
 				fireGet(client, beacon, traceparent)
+				maybeConvert(client, impBeacon, traceparent, p, rng) // post-click conversion
 			}
 		}
 	}
