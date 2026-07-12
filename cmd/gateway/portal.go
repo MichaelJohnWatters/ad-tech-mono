@@ -170,7 +170,7 @@ var staffNav = []NavItem{
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},
 	{Label: "Architecture", Href: "#architecture", Icon: "🗺", Perm: "config:read"},
-	{Label: "Tools", Href: "#tools", Icon: "⚙", Perm: "config:read"},
+	{Label: "Control center", Href: "#tools", Icon: "🎛", Perm: "config:read"},
 }
 
 // staffPortalHandler renders the staff console (UI plan Phase 3). Staff is

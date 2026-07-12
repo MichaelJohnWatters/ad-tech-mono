@@ -99,6 +99,12 @@ spec:
               value: "true"
             - name: GF_AUTH_ANONYMOUS_ORG_ROLE
               value: Viewer
+            # Allow the staff-console Control Center to embed Grafana in an iframe
+            # (drops X-Frame-Options; cookie SameSite=none so it works cross-port).
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: none
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
