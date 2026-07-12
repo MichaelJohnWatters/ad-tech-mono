@@ -85,11 +85,22 @@ func NewParquetReader(cfg S3Config, bucket string) (*ParquetReader, error) {
 
 func (r *ParquetReader) Close() error { return r.db.Close() }
 
+// tableExists reports whether the table has a Delta log (at least one commit
+// file). A table the pipeline hasn't written yet has no _delta_log, and
+// delta_scan on it errors — ColdStore uses this to return an empty result
+// instead of a hard failure.
+func (r *ParquetReader) tableExists(ctx context.Context, table string) bool {
+	var n int64
+	err := r.db.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT count(*) FROM glob('s3://%s/%s/_delta_log/*.json')", r.bucket, table)).Scan(&n)
+	return err == nil && n > 0
+}
+
 // Query runs arbitrary SQL and returns rows as maps. The live caller is
-// ColdStore, which builds a read_parquet([...]) FROM clause over the active file
-// set resolved from our Delta log, e.g.
+// ColdStore, which builds a delta_scan('s3://…/<table>') FROM clause; delta_scan
+// resolves the active file set from the Delta log, e.g.
 //
-//	SELECT campaign_id, count(*) FROM read_parquet(['s3://…/part-0.parquet']) GROUP BY 1
+//	SELECT campaign_id, count(*) FROM delta_scan('s3://…/impressions') GROUP BY 1
 func (r *ParquetReader) Query(ctx context.Context, query string, args ...any) ([]map[string]any, error) {
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {

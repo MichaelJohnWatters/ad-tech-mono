@@ -10,7 +10,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
-	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 )
 
 // maybeWrapTiered wraps the hot store in a TieredStore that serves deep history
@@ -47,19 +46,9 @@ func maybeWrapTiered(store analytics.Store, cfg *config.Config, log *slog.Logger
 		log.Error("reporting: cold tier reader failed to open — serving hot-only", "error", err)
 		return store
 	}
-	// The ObjectStore resolves the active parquet file set from our Delta log so
-	// the cold reader is tombstone-aware (see ColdStore).
-	obj, err := objs3.New(objs3.Config{
-		Endpoint: endpoint, AccessKey: accessKey, SecretKey: secretKey, Region: region, UseSSL: useSSL,
-	})
-	if err != nil {
-		log.Error("reporting: cold tier object store failed to open — serving hot-only", "error", err)
-		_ = reader.Close()
-		return store
-	}
 
 	hotWindow := cfg.GetDuration("reporting.hot_window", 7*24*time.Hour)
-	cold := datalake.NewColdStore(reader, datalake.NewObjectStore(obj, bucket, log))
+	cold := datalake.NewColdStore(reader)
 	log.Info("reporting: hot/cold tiering enabled", "hot_window", hotWindow, "lake_bucket", bucket, "s3_endpoint", endpoint)
 	return analytics.NewTieredStore(store, cold, hotWindow, log)
 }

@@ -2,19 +2,16 @@ package datalake
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
-// Real Delta Lake transaction-log encoding (protocol / metaData / add / remove
-// actions, newline-delimited JSON) — as opposed to our home-grown
-// one-Transaction-per-file log (see objstore.go). This is the building block for
-// making the lake readable by STANDARD Delta readers (Spark, Trino, DuckDB
-// delta_scan) instead of only our own reader.
-//
-// PROTOTYPE STATUS: this encoder is exercised by deltalog_test.go (shape) and
-// deltalog_integration_test.go (a real Delta log wrapping our Parquet files, read
-// back via delta_scan). It is NOT yet wired into ObjectStore.Write/Compact — that
-// migration is the follow-up this prototype de-risks.
+// Real Delta Lake transaction-log encoding/decoding (protocol / metaData / add /
+// remove actions, newline-delimited JSON). This is what ObjectStore.Write and
+// Compact commit and what Log reads back, so the lake is a genuine Delta table —
+// readable both by our own reader and by STANDARD Delta readers (Spark, Trino,
+// DuckDB delta_scan). Verified by deltalog_test.go (shape) and the delta_scan
+// integration tests.
 
 // A commit file is a list of these action objects, one JSON object per line.
 // Each concrete action is emitted as a single-key wrapper object, e.g.
@@ -45,6 +42,28 @@ type deltaAdd struct {
 	Size             int64             `json:"size"`
 	ModificationTime int64             `json:"modificationTime"`
 	DataChange       bool              `json:"dataChange"`
+	// Stats is Delta's per-file statistics as a JSON string, e.g.
+	// {"numRecords":5}. We populate numRecords so Snapshot can report row counts
+	// without opening the Parquet, and delta_scan can use it for planning.
+	Stats string `json:"stats,omitempty"`
+}
+
+// deltaStats renders the minimal Delta per-file stats string (row count only).
+func deltaStats(numRecords int) string {
+	return fmt.Sprintf(`{"numRecords":%d}`, numRecords)
+}
+
+// numRecordsFromStats extracts numRecords from a Delta add-stats string (0 if
+// absent/unparseable).
+func numRecordsFromStats(s string) int {
+	if s == "" {
+		return 0
+	}
+	var st struct {
+		NumRecords int `json:"numRecords"`
+	}
+	_ = json.Unmarshal([]byte(s), &st)
+	return st.NumRecords
 }
 
 type deltaRemove struct {
@@ -145,4 +164,89 @@ func encodeDeltaActions(actions []interface{}) ([]byte, error) {
 		b.WriteByte('\n')
 	}
 	return []byte(b.String()), nil
+}
+
+// deltaCommit is a parsed commit file: the schema (only when the commit carried
+// a metaData action) plus its add/remove actions in file order.
+type deltaCommit struct {
+	schema  *Schema
+	adds    []deltaAdd
+	removes []deltaRemove
+}
+
+// parseDeltaCommit decodes one newline-delimited Delta commit file into its
+// actions. protocol actions are ignored; metaData yields the schema.
+func parseDeltaCommit(body []byte) (deltaCommit, error) {
+	var c deltaCommit
+	for _, line := range strings.Split(strings.TrimRight(string(body), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			return c, fmt.Errorf("delta commit line: %w", err)
+		}
+		if raw, ok := m["metaData"]; ok {
+			var md deltaMetaData
+			if err := json.Unmarshal(raw, &md); err != nil {
+				return c, fmt.Errorf("delta metaData: %w", err)
+			}
+			s, err := parseDeltaSchemaString(md.SchemaString)
+			if err != nil {
+				return c, err
+			}
+			c.schema = &s
+		}
+		if raw, ok := m["add"]; ok {
+			var a deltaAdd
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return c, fmt.Errorf("delta add: %w", err)
+			}
+			c.adds = append(c.adds, a)
+		}
+		if raw, ok := m["remove"]; ok {
+			var r deltaRemove
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return c, fmt.Errorf("delta remove: %w", err)
+			}
+			c.removes = append(c.removes, r)
+		}
+	}
+	return c, nil
+}
+
+// columnTypeForDelta is the inverse of deltaType: a Delta/Spark type name → our
+// Schema column type.
+func columnTypeForDelta(t string) string {
+	switch t {
+	case "long":
+		return "int64"
+	case "double":
+		return "float64"
+	case "boolean":
+		return "bool"
+	case "timestamp":
+		return "timestamp"
+	default: // "string" and anything unknown
+		return "string"
+	}
+}
+
+// parseDeltaSchemaString decodes a Delta schemaString back into our Schema.
+func parseDeltaSchemaString(s string) (Schema, error) {
+	var st struct {
+		Fields []struct {
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			Nullable bool   `json:"nullable"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal([]byte(s), &st); err != nil {
+		return Schema{}, fmt.Errorf("delta schemaString: %w", err)
+	}
+	sc := Schema{Version: 1, Columns: make([]Column, 0, len(st.Fields))}
+	for _, f := range st.Fields {
+		sc.Columns = append(sc.Columns, Column{Name: f.Name, Type: columnTypeForDelta(f.Type), Nullable: f.Nullable})
+	}
+	return sc, nil
 }
