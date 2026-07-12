@@ -1,222 +1,184 @@
-# Ad Tech Platform - System Architecture
-# Render: d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg
+# Ad Tech Platform — System Architecture (by plane)
+# Render: make diagrams   (or: d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg)
+# Legend + "update when" index: docs/diagrams/README.md
 
 direction: right
 
 # ============================================================
-# External
+# Legend (same key in every D2 diagram — see README)
 # ============================================================
+legend: Legend {
+  near: top-left
+  grid-columns: 1
+  style.fill: "#f8fafc"
 
-browser: Browser {
-  shape: person
-  style.fill: "#94a3b8"
-}
+  actor: External actor { shape: person; style.fill: "#94a3b8" }
+  svc: Service (cmd/*) { style.fill: "#e2e8f0" }
+  store: Datastore { shape: cylinder; style.fill: "#cbd5e1" }
+  bus: Event bus { shape: queue; style.fill: "#22c55e" }
 
-advertiser: Advertiser {
-  shape: person
-  style.fill: "#818cf8"
-}
-
-publisher: Publisher {
-  shape: person
-  style.fill: "#34d399"
-}
-
-# ============================================================
-# Gateway (entry point)
-# ============================================================
-
-gateway: Gateway :8080 {
-  style.fill: "#4361ee"
-  style.font-color: "#fff"
-
-  dashboard: HTMX Dashboard
-  swagger: Swagger UI
-  auth: JWT Auth + RBAC
-  proxy: API Proxy
-  sellers: sellers.json
-}
-
-browser -> gateway: HTTP/HTMX
-advertiser -> gateway: REST API + JWT
-publisher -> gateway: REST API + JWT
-
-# ============================================================
-# Auction Pipeline
-# ============================================================
-
-ssp: SSP :8084 {
-  style.fill: "#34d399"
-  placements: 5 Placements
-  bidgen: Bid Request Generator
-}
-
-exchange: Exchange :8081 {
-  style.fill: "#818cf8"
-  auction: First-Price Auction
-  fanout: 3-DSP Fan-out
-  winloss: Win/Loss Notifications
-}
-
-dsp_internal: DSP Internal :8082 {
-  style.fill: "#22d3ee"
-  campaigns: 4 Campaigns (YAML)
-  targeting: 11-Dim Targeting
-  pacing: Even/ASAP/Front-loaded
-  shading: Bid Shading (win-rate curves)
-}
-
-dsp_comp1: DSP Competitor1 :8089 {
-  style.fill: "#fb923c"
-  noise: "±30% noise, 20% no-bid"
-}
-
-dsp_comp2: DSP Competitor2 :8090 {
-  style.fill: "#f472b6"
-  noise: "±40% noise, 15% no-bid"
-}
-
-adserver: Ad Server :8085 {
-  style.fill: "#a78bfa"
-  macros: 20 Macros
-  pixels: Pixel URL Generator
-  creatives: 4 Seed Creatives
-}
-
-tracker: Tracker :8083 {
-  style.fill: "#fbbf24"
-  imp: /v1/t/imp (1x1 GIF)
-  click: /v1/t/click (302)
-  conv: /v1/t/conv (1x1 GIF)
-  view: /v1/t/view (204)
-}
-
-gateway -> ssp: placement request
-ssp -> exchange: OpenRTB bid request
-exchange -> dsp_internal: OpenRTB HTTP
-exchange -> dsp_comp1: OpenRTB HTTP
-exchange -> dsp_comp2: OpenRTB HTTP
-exchange -> adserver: serve creative
-browser -> tracker: pixel requests
-
-# ============================================================
-# NATS JetStream (async event bus)
-# ============================================================
-
-nats: NATS JetStream {
-  shape: queue
-  style.fill: "#22c55e"
-
-  stream: "Stream: adtech"
-  subjects: |md
-    adtech.events.impression
-    adtech.events.click
-    adtech.events.conversion
-    adtech.auction.win
-    adtech.auction.complete
-  |
-}
-
-tracker -> nats: publish events
-exchange -> nats: publish auction.win + auction.complete
-
-# ============================================================
-# Reporting + Billing (unified consumer)
-# ============================================================
-
-reporting: Reporting :8086 {
-  style.fill: "#60a5fa"
-  consumer: NATS Consumer
-  analytics: Analytics Store (Memory/DuckDB)
-  billing: Billing Engine
-  ledger: Double-Entry Ledger
-  query: Query API
-}
-
-nats -> reporting: consume events
-
-pipeline: Pipeline :8087 {
-  style.fill: "#a78bfa"
-  ingest: CSV/TSV Ingest
-  validate: Validate + Normalise
-  enrich: Enrich
-}
-
-dayboundary: Day Boundary Job {
-  shape: hexagon
-  style.fill: "#f59e0b"
-  budget: Daily Budget Reset
-  flights: Flight Transitions
+  s1: A; s2: B; s1 -> s2: sync HTTP/gRPC
+  a1: A; a2: B; a1 -> a2: async NATS { style.stroke-dash: 4 }
+  r1: A; r2: B; r1 -> r2: read/query { style.stroke-dash: 2; style.stroke: "#64748b" }
 }
 
 # ============================================================
-# Infrastructure (K8s)
+# External actors
 # ============================================================
-
-postgres: PostgreSQL {
-  shape: cylinder
-  style.fill: "#336791"
-  style.font-color: "#fff"
-}
-
-redis: Redis {
-  shape: cylinder
-  style.fill: "#dc382d"
-  style.font-color: "#fff"
-}
-
-minio: Minio (S3) {
-  shape: cylinder
-  style.fill: "#c72e49"
-  style.font-color: "#fff"
-}
-
-dsp_internal -> redis: budget counters
-dsp_internal -> postgres: campaigns (future)
-reporting -> postgres: billing tables (future)
-adserver -> minio: creative assets (future)
+browser:    Browser / Pub SDK { shape: person; style.fill: "#94a3b8" }
+advertiser: Advertiser         { shape: person; style.fill: "#818cf8" }
+publisher:  Publisher          { shape: person; style.fill: "#34d399" }
 
 # ============================================================
-# Observability
+# CONTROL plane  (gateway, portals, config)
 # ============================================================
+control: Control plane {
+  style.fill: "#f1f5f9"
 
-grafana: Grafana :3000 {
-  style.fill: "#f46800"
-  style.font-color: "#fff"
-  dashboards: 3 Dashboards
+  gateway: Gateway :8080 {
+    style.fill: "#4361ee"; style.font-color: "#fff"
+    portals: Portals (advertiser / publisher / staff)
+    api: REST API + JWT/RBAC · proxy
+    scope: enforceReportTenant (tenant scoping)
+  }
 }
 
-prometheus: Prometheus :9090 {
-  shape: cylinder
-  style.fill: "#e6522c"
-  style.font-color: "#fff"
-}
-
-loki: Loki :3100 {
-  shape: cylinder
-  style.fill: "#f4b400"
-}
-
-jaeger: Jaeger :16686 {
-  style.fill: "#66d3f8"
-}
-
-promtail: Promtail {
-  style.fill: "#f4b400"
-}
-
-grafana -> prometheus: metrics
-grafana -> loki: logs
-grafana -> jaeger: traces
-promtail -> loki: ship logs
+browser    -> control.gateway: HTTP/HTMX
+advertiser -> control.gateway: REST + JWT
+publisher  -> control.gateway: REST + JWT
 
 # ============================================================
-# Gateway proxies to all services
+# SERVING plane  (synchronous RTB path)
 # ============================================================
+serving: Serving · sync RTB {
+  style.fill: "#eef2ff"
 
-gateway -> exchange: /v1/openrtb/*
-gateway -> dsp_internal: /v1/dsp/*
-gateway -> ssp: /v1/ssp/*
-gateway -> adserver: /v1/ad/*
-gateway -> reporting: /v1/reporting/* + /v1/billing/*
-gateway -> tracker: /v1/t/*
+  ssp: SSP :8084          { style.fill: "#34d399"; d: placements · floors · bid-req gen }
+  exchange: Exchange :8081 { style.fill: "#818cf8"; d: first-price auction · deal priority · 3-DSP fan-out }
+  dsp: DSP internal :8082  { style.fill: "#22d3ee"; d: bid · targeting · pacing · shading }
+  dspc: DSP competitors ×2 { style.fill: "#fb923c"; d: :8089 / :8090 (noise + no-bid) }
+  adserver: Ad Server :8085 { style.fill: "#a78bfa"; d: creative resolve · macros · pixel URLs }
+  pubad: Publisher Ad Server :8088 { style.fill: "#a78bfa"; d: serves markup to the page }
+  tracker: Tracker :8083   { style.fill: "#fbbf24"; d: imp · click · conv · view }
+
+  ssp -> exchange: OpenRTB
+  exchange -> dsp: OpenRTB
+  exchange -> dspc: OpenRTB
+  exchange -> adserver: serve
+}
+
+control.gateway -> serving.ssp: ad request
+browser -> serving.pubad: page ad slot
+serving.pubad -> serving.ssp: bid request
+browser -> serving.tracker: pixels
+
+# ============================================================
+# ASYNC / EVENTS plane  (NATS + consumers)
+# ============================================================
+events: Async · events {
+  style.fill: "#ecfdf5"
+
+  nats: NATS JetStream {
+    shape: queue; style.fill: "#22c55e"; style.font-color: "#fff"
+    s: |md
+      adtech.events.{impression,click,conversion,view}
+      adtech.auction.{win,complete}
+      adtech.billing.campaign_spend_snapshot
+    |
+  }
+
+  reporting: Reporting :8086 {
+    style.fill: "#60a5fa"
+    consumer: NATS consumer (+ ClickHouse batch)
+    engine: QueryEngine (ecpm/ctr/fill_rate/net)
+    hotcold: HotColdStore (hot↔cold router)
+    billing: Billing engine (accrue + settle)
+    rollups: Rollup engine
+  }
+
+  pipeline: Pipeline :8087 {
+    style.fill: "#a78bfa"
+    sink: Datalake sink (ack-after-flush)
+    write: Parquet + real Delta log
+  }
+
+  webhooks: Webhooks :8091 { style.fill: "#f472b6"; d: HMAC HTTP delivery }
+  identity: Identity consumer :8092 { style.fill: "#c084fc"; d: builds identity graph }
+}
+
+# serving publishes async events
+serving.tracker  -> events.nats: events { style.stroke-dash: 4 }
+serving.exchange -> events.nats: auction.win / complete { style.stroke-dash: 4 }
+serving.ssp      -> events.nats: identity.observed { style.stroke-dash: 4 }
+
+# nats fans out to consumers
+events.nats -> events.reporting: consume { style.stroke-dash: 4 }
+events.nats -> events.pipeline: consume (own group) { style.stroke-dash: 4 }
+events.nats -> events.webhooks: consume { style.stroke-dash: 4 }
+events.nats -> events.identity: consume { style.stroke-dash: 4 }
+
+# ============================================================
+# DATA / ANALYTICS plane  (hot + cold)
+# ============================================================
+data: Data · analytics {
+  style.fill: "#faf5ff"
+
+  clickhouse: ClickHouse {
+    shape: cylinder; style.fill: "#faff69"; d: HOT store (recent) + rollup MVs
+  }
+  lake: Delta lake (Minio/S3) {
+    shape: cylinder; style.fill: "#c72e49"; style.font-color: "#fff"
+    d: COLD store · Parquet + Delta log
+  }
+}
+
+events.reporting -> data.clickhouse: write + query (hot)
+events.pipeline  -> data.lake: write Parquet+Delta
+events.reporting -> data.lake: delta_scan (cold) { style.stroke-dash: 2; style.stroke: "#64748b" }
+control.gateway  -> events.reporting: /v1/api/reports (tenant-scoped) { style.stroke-dash: 2; style.stroke: "#64748b" }
+
+compact: Datalake compaction (CronJob :05) { shape: hexagon; style.fill: "#f59e0b" }
+compact -> data.lake: bin-pack + tombstone
+
+# ============================================================
+# MONEY plane  (budgets, billing ledger)
+# ============================================================
+money: Money {
+  style.fill: "#fffbeb"
+
+  redis_budget: Redis {
+    shape: cylinder; style.fill: "#dc382d"; style.font-color: "#fff"
+    d: budget counters · balance cache · freq caps · dedup
+  }
+  tigerbeetle: TigerBeetle {
+    shape: cylinder; style.fill: "#111827"; style.font-color: "#fff"
+    d: double-entry billing ledger
+  }
+}
+
+serving.dsp -> money.redis_budget: spend gate + record (local win-notice)
+events.reporting -> money.tigerbeetle: accrue / settle (double-entry)
+events.reporting -> money.redis_budget: advertiser balance drawdown
+events.reporting -> events.nats: campaign_spend_snapshot { style.stroke-dash: 4 }
+events.nats -> serving.dsp: reconcile pacing counters { style.stroke-dash: 4 }
+
+# ============================================================
+# Shared infra + observability
+# ============================================================
+postgres: PostgreSQL { shape: cylinder; style.fill: "#336791"; style.font-color: "#fff"; d: accounts · campaigns · placements · config (RLS) }
+
+control.gateway  -> postgres: accounts · config
+serving.dsp      -> postgres: campaigns (warm cache)
+serving.ssp      -> postgres: placements (warm cache)
+events.reporting -> postgres: contracts · saved reports
+
+obs: Observability {
+  style.fill: "#f8fafc"
+  grafana: Grafana { style.fill: "#f46800"; style.font-color: "#fff" }
+  prometheus: Prometheus { shape: cylinder; style.fill: "#e6522c"; style.font-color: "#fff" }
+  loki: Loki { shape: cylinder; style.fill: "#f4b400" }
+  jaeger: Jaeger { style.fill: "#66d3f8" }
+  grafana -> prometheus: metrics
+  grafana -> loki: logs (trace_id pivots)
+  grafana -> jaeger: traces
+}
