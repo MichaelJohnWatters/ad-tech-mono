@@ -2,7 +2,7 @@
 
 // Cold-tier integration test: write a known impressions fixture to Minio as
 // Parquet+Delta, then read it back THROUGH ColdStore (the analytics.ColdReader
-// adapter) — proving BuildQueryFrom → delta_scan produces the right aggregates
+// adapter) — proving BuildQueryFrom → read_parquet produces the right aggregates
 // AND that the tenant filter is applied on the cold path (no cross-tenant leak).
 //
 //	MINIO_ENDPOINT=127.0.0.1:9000 go test -tags duckdb -run TestColdStore ./pkg/store/datalake/...

@@ -9,9 +9,9 @@
 // delta_scan() cannot read it (it needs protocol/metaData actions we don't
 // emit). The cold tier (ColdStore) instead resolves the ACTIVE file set from
 // that log via ObjectStore.Snapshot and reads exactly those parts with
-// read_parquet([...]) — correct AND tombstone-aware after compaction. The
-// DeltaScanURI/CountDeltaScan helpers below are retained for a future migration
-// to real Delta logs but are not on the live read path.
+// read_parquet([...]) — correct AND tombstone-aware after compaction. (Real
+// delta_scan/Spark interop would need the writer to emit proper Delta logs — a
+// future migration, not needed by the cold tier.)
 //
 // Requires the `duckdb` build tag (CGO driver) plus network access the first
 // time (httpfs/delta extensions are downloaded by INSTALL).
@@ -85,26 +85,11 @@ func NewParquetReader(cfg S3Config, bucket string) (*ParquetReader, error) {
 
 func (r *ParquetReader) Close() error { return r.db.Close() }
 
-// DeltaScanURI returns the delta_scan target for a table (its root). NOTE:
-// delta_scan needs a real Delta protocol/metaData log, which our ObjectStore
-// writer does NOT emit — so this only works against a genuine Delta table.
-// Retained for a future real-Delta migration; the live cold path uses
-// read_parquet over the active file set instead (see ColdStore).
-func (r *ParquetReader) DeltaScanURI(table string) string {
-	return fmt.Sprintf("s3://%s/%s", r.bucket, table)
-}
-
-// ParquetGlobURI returns the read_parquet glob for a table (all part files,
-// blind to the Delta log). Fine for a pre-compaction quick look; prefer
-// DeltaScanURI once removes are in play.
-func (r *ParquetReader) ParquetGlobURI(table string) string {
-	return fmt.Sprintf("s3://%s/%s/*.parquet", r.bucket, table)
-}
-
-// Query runs arbitrary SQL and returns rows as maps. Callers build the FROM
-// clause with DeltaScanURI/ParquetGlobURI, e.g.
+// Query runs arbitrary SQL and returns rows as maps. The live caller is
+// ColdStore, which builds a read_parquet([...]) FROM clause over the active file
+// set resolved from our Delta log, e.g.
 //
-//	SELECT campaign_id, count(*) FROM delta_scan('s3://…/impressions') GROUP BY 1
+//	SELECT campaign_id, count(*) FROM read_parquet(['s3://…/part-0.parquet']) GROUP BY 1
 func (r *ParquetReader) Query(ctx context.Context, query string, args ...any) ([]map[string]any, error) {
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -132,19 +117,4 @@ func (r *ParquetReader) Query(ctx context.Context, query string, args ...any) ([
 		out = append(out, m)
 	}
 	return out, rows.Err()
-}
-
-// CountDeltaScan returns a table's row count via delta_scan. NOTE: this requires
-// a real Delta protocol log (which our ObjectStore writer does not emit) and so
-// does not work against our lake — retained for a future real-Delta migration.
-// For the zero-slippage reconciliation on our lake, count via ColdStore (which
-// reads the active file set) instead.
-func (r *ParquetReader) CountDeltaScan(ctx context.Context, table string) (int64, error) {
-	var n int64
-	err := r.db.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT count(*) FROM delta_scan('%s')", r.DeltaScanURI(table))).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("count delta_scan %s: %w", table, err)
-	}
-	return n, nil
 }

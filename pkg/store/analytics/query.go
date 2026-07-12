@@ -12,8 +12,9 @@ func BuildQuery(params QueryParams) (string, []interface{}) {
 }
 
 // BuildQueryFrom is BuildQuery with an explicit FROM expression. The hot store
-// passes the table name; the cold tier passes a delta_scan('s3://…') expression
-// so BOTH compute identical aggregates AND apply the identical tenant WHERE —
+// passes the table name; the cold tier passes a read_parquet([...]) expression
+// over the active file set so BOTH compute identical aggregates AND apply the
+// identical tenant WHERE —
 // which keeps the hot/cold boundary merge sound and prevents a filter from being
 // dropped on the cold path (a cross-tenant leak). Everything but the FROM target
 // is shared.
