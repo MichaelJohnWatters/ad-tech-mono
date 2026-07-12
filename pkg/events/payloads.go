@@ -34,7 +34,7 @@ type AuctionWinEvent struct {
 
 // CampaignSpendSnapshotEvent is the periodic per-campaign committed-spend
 // broadcast from Reporting (billing engine) to every DSP pod. Committed maps a
-// campaign id (the line-item UUID) to committed spend in CENTS for the given
+// campaign id (the line-item UUID) to committed spend in MICRO-DOLLARS (1 USD = 1e6 µ) for the given
 // UTC Day, where committed = settled-today + open-reserves. A DSP reconciles
 // each of its own campaigns' pacing counters to this value; campaigns absent
 // from the map had no billing activity today and are left untouched (so a DSP
@@ -43,7 +43,7 @@ type CampaignSpendSnapshotEvent struct {
 	SchemaVersion int              `json:"schema_version"`
 	Day           string           `json:"day"` // UTC yyyy-mm-dd the totals belong to
 	Currency      string           `json:"currency"`
-	Committed     map[string]int64 `json:"committed"` // campaign_id → committed cents
+	Committed     map[string]int64 `json:"committed"` // campaign_id → committed micro-dollars
 	Timestamp     time.Time        `json:"timestamp"`
 }
 

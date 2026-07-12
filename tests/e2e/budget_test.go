@@ -22,13 +22,14 @@ func TestBudgetCap(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "budget")
 
-	// Shrink the budget so only a couple of auctions exhaust it. Bid is
-	// 3.50 base; budget of 5.00 means the second win pushes spend over the
-	// cap, and the third auction must NoBid.
-	h.SetCampaignDailyBudget(t, w.Campaign, 5.00)
+	// Shrink the budget so only a couple of auctions exhaust it. Bid is 3.50
+	// CPM, which books 3.50/1000 = $0.0035 per winning impression; a budget of
+	// $0.005 means the second win pushes spend over the cap and the third
+	// auction must NoBid.
+	h.SetCampaignDailyBudget(t, w.Campaign, 0.005)
 	h.RefreshAllCaches(t)
 
-	// First auction: campaign bids and wins. Spend goes from 0 → ~3.50.
+	// First auction: campaign bids and wins. Spend goes from 0 → ~$0.0035.
 	res1 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-001")
 	win1 := h.ExtractWinner(t, res1)
 	if win1.NoBid {
@@ -44,8 +45,8 @@ func TestBudgetCap(t *testing.T) {
 	// HTTP call back to the DSP. 500ms is plenty for localhost.
 	time.Sleep(500 * time.Millisecond)
 
-	// Second auction: still under budget (spend 3.50 < 5.00), bids and wins.
-	// Spend goes to ~7.00 — over the cap.
+	// Second auction: still under budget (spend $0.0035 < $0.005), bids and wins.
+	// Spend goes to ~$0.007 — over the cap.
 	res2 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-002")
 	win2 := h.ExtractWinner(t, res2)
 	if win2.NoBid {
@@ -54,7 +55,7 @@ func TestBudgetCap(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Third auction: internal DSP's spend (~7.00) >= budget (5.00), so our
+	// Third auction: internal DSP's spend (~$0.007) >= budget ($0.005), so our
 	// campaign drops out of the internal DSP's bid candidates. Competitor
 	// DSPs (dsp-competitor1/2) keep bidding on this placement from their
 	// own campaigns, so the auction still returns a winner — but the

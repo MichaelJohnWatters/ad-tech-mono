@@ -3,16 +3,24 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strconv"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 )
 
+// microsPerUSD is the fixed-point scale for the spend counter: 1 USD =
+// 1,000,000 micro-dollars. Micros (not cents) because a realized per-impression
+// cost is sub-cent — a $5.00 CPM books $0.005 = 5,000 µ, which cents would
+// truncate to zero. Must match pkg/billing's pacing accumulator so the
+// committed-spend snapshot reconciles onto this counter in the same unit.
+const microsPerUSD = 1_000_000
+
 // BudgetTracker is the Redis-backed daily spend ledger.
 //
-// Spend is stored as fixed-point cents (price × 100) in an INT64 counter
-// so DECRBY/INCRBY remain atomic across pods.
+// Spend is stored as fixed-point micro-dollars (price × 1_000_000) in an INT64
+// counter so DECRBY/INCRBY remain atomic across pods.
 //
 // The key is stamped with the UTC calendar day (dsp:budget:{yyyy-mm-dd}:{cid}:
 // spent) so the budget resets at UTC midnight — matching the billing engine's
@@ -53,8 +61,8 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 	if !ok {
 		return 0
 	}
-	cents, _ := strconv.ParseInt(v, 10, 64)
-	return float64(cents) / 100.0
+	micros, _ := strconv.ParseInt(v, 10, 64)
+	return float64(micros) / microsPerUSD
 }
 
 // Record adds amount (in major units) to today's spend for a campaign.
@@ -63,7 +71,7 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 func (b *BudgetTracker) Record(campaignID string, amount float64) {
 	ctx := context.Background()
 	key := budgetKey(b.today(), campaignID)
-	cents := int64(amount * 100)
+	micros := int64(math.Round(amount * microsPerUSD))
 
 	// Set the TTL on the first write of the day; INCRBY preserves it after.
 	if _, ok, _ := b.l2.Get(ctx, key); !ok {
@@ -73,13 +81,13 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 		}
 	}
 
-	if _, err := b.l2.IncrBy(ctx, key, cents); err != nil {
+	if _, err := b.l2.IncrBy(ctx, key, micros); err != nil {
 		b.log.Warn("budget incr failed", "campaign", campaignID, "error", err)
 	}
 }
 
 // Reconcile overwrites a campaign's spend counter to an authoritative value in
-// cents, sourced from the billing engine's committed-spend snapshot. The local
+// micro-dollars, sourced from the billing engine's committed-spend snapshot. The local
 // Record path (win notice) is a fast, conservative over-count — it counts every
 // win, including phantom wins that never impress and the full clearing price on
 // CPC/CPA where only the settle bills. This Set corrects the counter to what
@@ -92,14 +100,14 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 // day is the snapshot's UTC day (the day the committed value is FOR), so the
 // Set lands on the same key Spend reads for that day. An empty day falls back
 // to the tracker's today (defensive — publishers always stamp it).
-func (b *BudgetTracker) Reconcile(day, campaignID string, cents int64) {
-	if cents < 0 {
-		cents = 0
+func (b *BudgetTracker) Reconcile(day, campaignID string, micros int64) {
+	if micros < 0 {
+		micros = 0
 	}
 	if day == "" {
 		day = b.today()
 	}
-	if err := b.l2.Set(context.Background(), budgetKey(day, campaignID), strconv.FormatInt(cents, 10), b.ttlFn()); err != nil {
+	if err := b.l2.Set(context.Background(), budgetKey(day, campaignID), strconv.FormatInt(micros, 10), b.ttlFn()); err != nil {
 		b.log.Warn("budget reconcile failed", "campaign", campaignID, "error", err)
 	}
 }

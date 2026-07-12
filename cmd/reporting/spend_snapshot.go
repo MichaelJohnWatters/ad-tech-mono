@@ -261,7 +261,7 @@ func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clo
 }
 
 // spendSnapshotDebugHandler exposes the billing engine's committed-spend view.
-// GET returns the current per-campaign committed cents; POST forces an
+// GET returns the current per-campaign committed micro-dollars; POST forces an
 // immediate publish (used by e2e to drive DSP reconciliation without waiting
 // for the ticker) and returns the same map. bus may be nil (NATS down) — GET
 // still works; POST reports that it couldn't publish.

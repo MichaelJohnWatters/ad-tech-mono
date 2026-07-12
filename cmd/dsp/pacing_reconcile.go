@@ -45,11 +45,11 @@ func startPacingReconcile(ctx context.Context, bus events.EventBus, campaigns *w
 			return msg.Ack()
 		}
 		reconciled := 0
-		for campaignID, cents := range ev.Committed {
+		for campaignID, micros := range ev.Committed {
 			if _, ok := campaigns.ByID(campaignID); !ok {
 				continue // not this pod's campaign
 			}
-			budget.Reconcile(ev.Day, campaignID, cents)
+			budget.Reconcile(ev.Day, campaignID, micros)
 			reconciled++
 		}
 		if reconciled > 0 {

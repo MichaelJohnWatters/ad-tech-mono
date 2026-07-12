@@ -29,8 +29,8 @@ func TestPacing_CPMImmediate(t *testing.T) {
 	}
 
 	snap := e.SnapshotCommitted()
-	if got := snap["camp-a"]; got != 250 {
-		t.Fatalf("committed cents = %d, want 250", got)
+	if got := snap["camp-a"]; got != 2500000 {
+		t.Fatalf("committed micros = %d, want 2500000 ($2.50)", got)
 	}
 }
 
@@ -49,8 +49,8 @@ func TestPacing_CPCReserveThenSettle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if got := e.SnapshotCommitted()["camp-a"]; got != 100 {
-		t.Fatalf("after reserve committed = %d, want 100", got)
+	if got := e.SnapshotCommitted()["camp-a"]; got != 1000000 {
+		t.Fatalf("after reserve committed = %d, want 1000000 ($1.00)", got)
 	}
 
 	// click → settle
@@ -60,8 +60,8 @@ func TestPacing_CPCReserveThenSettle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
-	if got := e.SnapshotCommitted()["camp-a"]; got != 100 {
-		t.Fatalf("after settle committed = %d, want 100 (net-neutral)", got)
+	if got := e.SnapshotCommitted()["camp-a"]; got != 1000000 {
+		t.Fatalf("after settle committed = %d, want 1000000 (net-neutral)", got)
 	}
 }
 
@@ -79,8 +79,8 @@ func TestPacing_ReserveExpiryReleases(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if got := e.SnapshotCommitted()["camp-a"]; got != 300 {
-		t.Fatalf("before expiry committed = %d, want 300", got)
+	if got := e.SnapshotCommitted()["camp-a"]; got != 3000000 {
+		t.Fatalf("before expiry committed = %d, want 3000000 ($3.00)", got)
 	}
 
 	clk.Advance(6 * time.Minute)
@@ -118,8 +118,8 @@ func TestPacing_SettleAfterSweepStillCounts(t *testing.T) {
 		TraceID: "t1", CampaignID: "camp-a", AdvertiserID: "adv-1",
 		ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPC, EventType: "click",
 	})
-	if got := e.SnapshotCommitted()["camp-a"]; got != 200 {
-		t.Fatalf("after late settle committed = %d, want 200", got)
+	if got := e.SnapshotCommitted()["camp-a"]; got != 2000000 {
+		t.Fatalf("after late settle committed = %d, want 2000000 ($2.00)", got)
 	}
 }
 
@@ -133,8 +133,8 @@ func TestPacing_DayRollover(t *testing.T) {
 		TraceID: "t1", CampaignID: "camp-a", AdvertiserID: "adv-1",
 		ClearingPrice: 5.00, Currency: "USD", BidModel: BidCPM, EventType: "impression",
 	})
-	if got := e.SnapshotCommitted()["camp-a"]; got != 500 {
-		t.Fatalf("day-1 committed = %d, want 500", got)
+	if got := e.SnapshotCommitted()["camp-a"]; got != 5000000 {
+		t.Fatalf("day-1 committed = %d, want 5000000 ($5.00)", got)
 	}
 
 	clk.Advance(2 * time.Hour) // now 2026-07-06 01:00 UTC
@@ -157,27 +157,27 @@ func TestPacing_PersistRoundTrip(t *testing.T) {
 	e.ProcessEvent(ctx, SpendEvent{TraceID: "t2", CampaignID: "camp-a", AdvertiserID: "adv",
 		ClearingPrice: 1.00, Currency: "USD", BidModel: BidCPC, EventType: "impression"})
 
-	// committed = 400 settled + 100 reserved = 500.
-	if got := e.SnapshotCommitted()["camp-a"]; got != 500 {
-		t.Fatalf("committed = %d, want 500", got)
+	// committed = 4000000 settled + 1000000 reserved = 5000000 micros ($4 + $1).
+	if got := e.SnapshotCommitted()["camp-a"]; got != 5000000 {
+		t.Fatalf("committed = %d, want 5000000", got)
 	}
 	day, settled, reserved := e.PacingState()
-	if settled["camp-a"] != 400 || reserved["camp-a"] != 100 {
-		t.Fatalf("pacingState settled=%d reserved=%d, want 400/100", settled["camp-a"], reserved["camp-a"])
+	if settled["camp-a"] != 4000000 || reserved["camp-a"] != 1000000 {
+		t.Fatalf("pacingState settled=%d reserved=%d, want 4000000/1000000", settled["camp-a"], reserved["camp-a"])
 	}
 
 	// Simulate a restart: fresh engine, hydrate settled + reserved.
 	e2 := newPacingEngine(t, clk)
 	e2.HydratePacing(day, settled, reserved)
-	if got := e2.SnapshotCommitted()["camp-a"]; got != 500 {
-		t.Fatalf("after hydrate committed = %d, want 500 (settled AND reserves restored)", got)
+	if got := e2.SnapshotCommitted()["camp-a"]; got != 5000000 {
+		t.Fatalf("after hydrate committed = %d, want 5000000 (settled AND reserves restored)", got)
 	}
 	// The restored reserve is a real hold: it sweeps after the TTL.
 	e2.SetPacingHoldTTL(1 * time.Minute)
 	clk.Advance(2 * time.Minute)
 	e2.SweepExpiredHolds()
-	if got := e2.SnapshotCommitted()["camp-a"]; got != 400 {
-		t.Fatalf("after sweep committed = %d, want 400 (restored reserve released)", got)
+	if got := e2.SnapshotCommitted()["camp-a"]; got != 4000000 {
+		t.Fatalf("after sweep committed = %d, want 4000000 (restored reserve released)", got)
 	}
 }
 

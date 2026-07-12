@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -47,8 +48,8 @@ type BalanceGate struct {
 }
 
 type balanceBaseline struct {
-	balanceCents int64
-	counterAt    int64
+	balanceMicros int64
+	counterAt     int64
 }
 
 func balanceKey(accountID string) string {
@@ -78,8 +79,8 @@ func (g *BalanceGate) rebase(ctx context.Context, rows []postgres.AdvertiserBala
 			counter, _ = strconv.ParseInt(v, 10, 64)
 		}
 		next[b.AccountID] = balanceBaseline{
-			balanceCents: int64(b.Balance * 100),
-			counterAt:    counter,
+			balanceMicros: int64(math.Round(b.Balance * microsPerUSD)),
+			counterAt:     counter,
 		}
 	}
 	g.mu.Lock()
@@ -114,8 +115,8 @@ func (g *BalanceGate) HasFunds(accountID string) (bool, float64) {
 		}
 	}
 
-	remainingCents := base.balanceCents - delta
-	return remainingCents > 0, float64(remainingCents) / 100.0
+	remainingMicros := base.balanceMicros - delta
+	return remainingMicros > 0, float64(remainingMicros) / microsPerUSD
 }
 
 // RecordWin mirrors a won auction's clearing price into the Redis counter so
@@ -132,7 +133,7 @@ func (g *BalanceGate) RecordWin(accountID string, amount float64) {
 			return
 		}
 	}
-	if _, err := g.l2.IncrBy(ctx, key, int64(amount*100)); err != nil {
+	if _, err := g.l2.IncrBy(ctx, key, int64(math.Round(amount*microsPerUSD))); err != nil {
 		g.log.Warn("balance mirror incr failed", "account", accountID, "error", err)
 	}
 }

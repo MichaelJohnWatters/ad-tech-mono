@@ -40,12 +40,12 @@ type pacingAccumulator struct {
 }
 
 type campaignPacing struct {
-	settledCents int64
-	holds        map[string]pacingHold // keyed by traceID
+	settledMicros int64
+	holds         map[string]pacingHold // keyed by traceID
 }
 
 type pacingHold struct {
-	cents   int64
+	micros  int64
 	created time.Time
 }
 
@@ -57,7 +57,11 @@ func newPacingAccumulator(clk clock.Clock) *pacingAccumulator {
 	}
 }
 
-func toCents(amount float64) int64 { return int64(math.Round(amount * 100)) }
+// toMicros converts a dollar amount to integer micro-dollars (1 USD =
+// 1,000,000 µ). Micros — not cents — because a realized per-impression cost is
+// sub-cent: a $5.00 CPM books $0.005 = 5,000 µ, which cents (int64(0.5)) would
+// truncate to zero. All the committed-spend counters are keyed in micros.
+func toMicros(amount float64) int64 { return int64(math.Round(amount * 1_000_000)) }
 
 func dayKey(t time.Time) string { return t.UTC().Format("2006-01-02") }
 
@@ -101,7 +105,7 @@ func (p *pacingAccumulator) recordBilled(campaignID string, amount float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
-	p.campaignLocked(campaignID).settledCents += toCents(amount)
+	p.campaignLocked(campaignID).settledMicros += toMicros(amount)
 }
 
 // recordReserve opens a hold for an impression awaiting its settle event. The
@@ -113,7 +117,7 @@ func (p *pacingAccumulator) recordReserve(campaignID, traceID string, amount flo
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
-	p.campaignLocked(campaignID).holds[traceID] = pacingHold{cents: toCents(amount), created: p.clk.Now()}
+	p.campaignLocked(campaignID).holds[traceID] = pacingHold{micros: toMicros(amount), created: p.clk.Now()}
 }
 
 // recordSettle converts an open hold into settled spend (net-neutral to
@@ -129,7 +133,7 @@ func (p *pacingAccumulator) recordSettle(campaignID, traceID string, amount floa
 	p.rollLocked()
 	cp := p.campaignLocked(campaignID)
 	delete(cp.holds, traceID)
-	cp.settledCents += toCents(amount)
+	cp.settledMicros += toMicros(amount)
 }
 
 // sweepExpired releases holds older than holdTTL and returns the number
@@ -158,7 +162,7 @@ func (p *pacingAccumulator) sweepExpired() int {
 const hydratedHoldKey = "__hydrated__"
 
 // pacingState returns the UTC day plus the persistable portions per campaign:
-// settled cents (realized) and the aggregate open-reserved cents (sum of holds).
+// settled micros (realized) and the aggregate open-reserved micros (sum of holds).
 // Both are persisted so a restart can re-hydrate — settled resumes the day's
 // realized spend, reserved restores in-flight holds so committed doesn't drop
 // (which would reconcile DSP counters down and risk overspend).
@@ -169,12 +173,12 @@ func (p *pacingAccumulator) pacingState() (string, map[string]int64, map[string]
 	settled := make(map[string]int64)
 	reserved := make(map[string]int64)
 	for id, cp := range p.campaigns {
-		if cp.settledCents > 0 {
-			settled[id] = cp.settledCents
+		if cp.settledMicros > 0 {
+			settled[id] = cp.settledMicros
 		}
 		var r int64
 		for _, h := range cp.holds {
-			r += h.cents
+			r += h.micros
 		}
 		if r > 0 {
 			reserved[id] = r
@@ -203,17 +207,17 @@ func (p *pacingAccumulator) hydrate(day string, settled, reserved map[string]int
 	now := p.clk.Now()
 	for id, cents := range settled {
 		if cents > 0 {
-			p.campaignLocked(id).settledCents = cents
+			p.campaignLocked(id).settledMicros = cents
 		}
 	}
 	for id, cents := range reserved {
 		if cents > 0 {
-			p.campaignLocked(id).holds[hydratedHoldKey] = pacingHold{cents: cents, created: now}
+			p.campaignLocked(id).holds[hydratedHoldKey] = pacingHold{micros: cents, created: now}
 		}
 	}
 }
 
-// snapshot returns committed cents (settled + open holds) per campaign for
+// snapshot returns committed micro-dollars (settled + open holds) per campaign for
 // today, for every campaign TOUCHED today — including those now at zero. A
 // campaign whose only activity was reserves that all expired drops to zero, and
 // it must still appear so the DSP reconciles its counter DOWN (otherwise the
@@ -227,9 +231,9 @@ func (p *pacingAccumulator) snapshot() map[string]int64 {
 	p.rollLocked()
 	out := make(map[string]int64, len(p.campaigns))
 	for id, cp := range p.campaigns {
-		committed := cp.settledCents
+		committed := cp.settledMicros
 		for _, h := range cp.holds {
-			committed += h.cents
+			committed += h.micros
 		}
 		out[id] = committed
 	}
