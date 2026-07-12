@@ -196,6 +196,14 @@ func main() {
 			bidModel = constants.BidModelCPM
 		}
 
+		// price is the auction CPM (OpenRTB clearing price = cost per 1000
+		// impressions) signed into the beacon. Convert to the realized
+		// per-impression cost HERE at the source, so every downstream consumer
+		// — reporting→ClickHouse (hot), pipeline→Delta lake (cold), and the
+		// billing ledger — books the same per-impression dollars. (Was
+		// previously converted only in the reporting consumer, so the lake kept
+		// the raw CPM and hot/cold disagreed 1000×.)
+		impCost := price / 1000
 		go publisher.publishImpression(context.WithoutCancel(ctx), analytics.ImpressionEvent{
 			TraceID:          traceID,
 			CampaignID:       q.Get("cid"),
@@ -206,9 +214,9 @@ func main() {
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
 			Channel:          channelOrDefault(q.Get("ch")),
-			ClearingPrice:    price,
+			ClearingPrice:    impCost,
 			ClearingCurrency: q.Get("cur"),
-			ClearingPriceUSD: price,
+			ClearingPriceUSD: impCost,
 			BidModel:         bidModel,
 			DealID:           q.Get("deal"),
 			SchemaVersion:    1,
