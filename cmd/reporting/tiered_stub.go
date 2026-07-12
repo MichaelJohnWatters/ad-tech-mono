@@ -10,7 +10,7 @@ import (
 )
 
 // maybeWrapTiered is a no-op in the CGO-free build: the cold tier needs DuckDB
-// (delta_scan over the Parquet lake), which is only compiled with `-tags duckdb`
+// (DuckDB read_parquet over the Parquet lake), which is only compiled with `-tags duckdb`
 // (see build/Dockerfile.reporting). If tiered reads are requested here we log
 // once and serve hot-only rather than pretend history is reachable.
 func maybeWrapTiered(store analytics.Store, cfg *config.Config, log *slog.Logger) analytics.Store {
