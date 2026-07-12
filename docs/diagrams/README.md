@@ -27,13 +27,13 @@ Status: ✅ current · ⚠️ stale (needs a refresh) · 🚧 planned (not built
 | Diagram | File | Level | Tool | Shows | **Update when** | Covers |
 |---|---|---|---|---|---|---|
 | Context | `context.d2` | L0 | D2 | platform box + external actors (browser/SDK, publisher, advertiser, competitor DSPs, S3) | 🚧 an external integration is added/removed | boundary |
-| Architecture | `architecture.d2` | L1 | D2 | all services + datastores + infra, grouped into the 5 planes | ⚠️ a **service, datastore, or service→service link** changes | `cmd/*`, `k8s/*` |
+| Architecture | `architecture.d2` | L1 | D2 | all services + datastores + infra, grouped into the 5 planes | ✅ a **service, datastore, or service→service link** changes | `cmd/*`, `k8s/*` |
 | Ad-request lifecycle | `auction-flow.d2` | flow | D2 | bid req → auction → win → serve → track | ✅ the serving/auction path changes | ssp, exchange, dsp, adserver, tracker |
 | Async event fan-out | `nats-events.d2` | flow | D2 | NATS subjects → reporting/pipeline/billing/webhooks/identity | ✅ a **NATS subject or consumer** changes | `pkg/events`, consumers |
 | Money loop | `billing-flow.d2` | flow | D2 | budget gate → win → impression → billing accrual → **TigerBeetle** → committed-spend snapshot → DSP reconcile | ⚠️ billing/budget/ledger flow changes | dsp budget, `pkg/billing`, reporting |
 | Data & reporting | `data-reporting.md` | flow | Mermaid | event → **dual-write** (ClickHouse hot + Delta lake cold) → rollups → **hot/cold store** → gateway → portal | 🚧 a store, rollup, or read path changes | reporting, `pkg/store/*`, pipeline |
 | Data lake / batch | `data-pipeline.d2` | flow | D2 | pipeline → Parquet+Delta → compaction → delta_scan | ⚠️ lake write/compaction/format changes | `cmd/pipeline`, `pkg/store/datalake` |
-| **E2E trace** ★ | `e2e-trace.md` | headline | Mermaid | **one `trace_id`, all planes**: request → auction → win (single source of truth) → serve → impression → {hot CH, cold lake, billing→TB, budget reconcile} → report | 🚧 any **new hop** in the request/event lifecycle | everything |
+| **E2E trace** ★ | `e2e-trace.md` | headline | Mermaid | **one `trace_id`, all planes**: request → auction → win (single source of truth) → serve → impression → {hot CH, cold lake, billing→TB, budget reconcile} → report | ✅ any **new hop** in the request/event lifecycle | everything |
 | End-to-end (subsystems) | `end-to-end-flow.md` | flow | Mermaid | per-subsystem sequences + standards overlays | ✅ a subsystem sequence changes | mixed |
 
 `request-flow.txt` is a legacy ASCII sketch — superseded by `e2e-trace`; keep or delete.
