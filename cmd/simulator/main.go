@@ -27,6 +27,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
@@ -83,7 +85,8 @@ Run flags:
   --profile <name>    Profile: trickle, steady, burst (default: trickle)
   --duration <dur>    Duration: 30s, 5m, 1h (default: 1m)
   --requests <n>      Stop after N requests (0 = use duration)
-  --rps <n>           Override requests per second
+  --rps <n>           Aggregate rate cap (0 = spam: fire as fast as the backend takes it)
+  --concurrency <n>   Parallel in-flight requests / worker pool size (default 64)
   --conv-rate <f>     Override conversion rate (fraction of clicks that convert)
   --ssp-url <u>       SSP URL (default: http://localhost:8084)
   --pubad-url <u>     Publisher ad server URL (default: http://localhost:8088)
@@ -235,51 +238,112 @@ func runSimulation() {
 	)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	client := &http.Client{Timeout: 5 * time.Second}
-	ticker := time.NewTicker(time.Second / time.Duration(p.RPS))
-	defer ticker.Stop()
+	// A high-idle-conn transport so concurrent workers reuse connections instead
+	// of exhausting ephemeral ports / re-dialing on every request.
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        4096,
+			MaxIdleConnsPerHost: 4096,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
 
-	deadline := time.After(duration)
-	sent, wins, errors := 0, 0, 0
+	// Worker pool: --concurrency workers each fire runOne independently, so
+	// requests fly in PARALLEL. A sequential loop caps at 1/round-trip-latency
+	// (~25/sec locally) no matter what --rps says — this removes that wall.
+	// --rps still caps the AGGREGATE rate via a shared token ticker; --rps 0
+	// removes the cap → spam as fast as the backend can take it.
+	concurrency := parseInt(getFlag("--concurrency", "64"))
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	var tokens <-chan time.Time
+	if p.RPS > 0 {
+		ticker := time.NewTicker(time.Second / time.Duration(p.RPS))
+		defer ticker.Stop()
+		tokens = ticker.C
+	}
+	log.Info("worker pool", "concurrency", concurrency, "rps_cap", p.RPS, "spam", p.RPS == 0)
+
+	stop := make(chan struct{})
+	time.AfterFunc(duration, func() { close(stop) })
+
+	var dispatched, completed, wins64, errors64 int64
+	var wg sync.WaitGroup
 	start := time.Now()
 
-loop:
-	for {
-		select {
-		case <-deadline:
-			break loop
-		case <-ticker.C:
-			if maxRequests > 0 && sent >= maxRequests {
-				break loop
-			}
-
-			traceID, traceparent := tracing.NewClientTraceparent()
-			persona := request.Pick(rng, p.Personas)
-			applyOverrides(&persona, geoOverride, deviceOverride)
-			channel := pickChannel(rng, p.Channels)
-
-			served, err := runOne(client, eps, exchangeURL, trackerURL, persona, channel, podSize, p, rng, traceID, traceparent, directMode)
-			sent++
-			if err != nil {
-				errors++
-				if sent <= 3 {
-					log.Error("request failed", "error", err, "trace_id", traceID)
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func(seed int64) {
+			defer wg.Done()
+			wrng := rand.New(rand.NewSource(seed))
+			for {
+				select {
+				case <-stop:
+					return
+				default:
 				}
-				continue
-			}
-			if served {
-				wins++
-			}
+				if maxRequests > 0 && atomic.AddInt64(&dispatched, 1) > int64(maxRequests) {
+					return
+				}
+				if tokens != nil { // aggregate rate cap (skipped in spam mode)
+					select {
+					case <-stop:
+						return
+					case <-tokens:
+					}
+				}
+				traceID, traceparent := tracing.NewClientTraceparent()
+				persona := request.Pick(wrng, p.Personas)
+				applyOverrides(&persona, geoOverride, deviceOverride)
+				channel := pickChannel(wrng, p.Channels)
 
-			if sent%p.RPS == 0 {
+				served, err := runOne(client, eps, exchangeURL, trackerURL, persona, channel, podSize, p, wrng, traceID, traceparent, directMode)
+				n := atomic.AddInt64(&completed, 1)
+				if err != nil {
+					atomic.AddInt64(&errors64, 1)
+					if n <= 3 {
+						log.Error("request failed", "error", err, "trace_id", traceID)
+					}
+					continue
+				}
+				if served {
+					atomic.AddInt64(&wins64, 1)
+				}
+			}
+		}(rng.Int63() + int64(w)*7919)
+	}
+
+	// Progress logger: throughput once a second from the atomic counters.
+	runDone := make(chan struct{})
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-runDone:
+				return
+			case <-t.C:
+				c := atomic.LoadInt64(&completed)
+				w := atomic.LoadInt64(&wins64)
+				el := time.Since(start)
 				log.Info("progress",
-					"sent", sent, "wins", wins, "errors", errors,
-					"win_rate", fmt.Sprintf("%.1f%%", pct(wins, sent)),
-					"elapsed", time.Since(start).Round(time.Second),
+					"sent", c, "wins", w, "errors", atomic.LoadInt64(&errors64),
+					"win_rate", fmt.Sprintf("%.1f%%", pct(int(w), int(c))),
+					"rps", fmt.Sprintf("%.0f", float64(c)/el.Seconds()),
+					"elapsed", el.Round(time.Second),
 				)
 			}
 		}
-	}
+	}()
+
+	wg.Wait()
+	close(runDone)
+
+	sent := int(atomic.LoadInt64(&completed))
+	wins := int(atomic.LoadInt64(&wins64))
+	errors := int(atomic.LoadInt64(&errors64))
 
 	printResults(sent, wins, errors, time.Since(start))
 	// --verify: read the counts back out of reporting and assert the pipeline
