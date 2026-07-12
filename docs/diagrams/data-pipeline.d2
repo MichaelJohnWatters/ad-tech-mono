@@ -1,123 +1,95 @@
-# Data Pipeline - how events become queryable analytics
-# Render: d2 docs/diagrams/data-pipeline.d2 docs/diagrams/data-pipeline.svg
+# Data lake - the COLD store batch layer (internals)
+# Render: make diagrams
+# How the pipeline turns the event stream into a real Delta table that DuckDB
+# delta_scan can read. The system-level flow is in data-reporting.md.
 
 direction: right
 
 # ============================================================
-# Event Sources
+# Inputs
 # ============================================================
-
-sources: Event Sources {
-  browser: Browser Pixels
-  exchange: Exchange Auctions
-}
-
-# ============================================================
-# NATS
-# ============================================================
-
 nats: NATS JetStream {
   shape: queue
   style.fill: "#22c55e"
-}
-
-sources.browser -> nats: impression/click/conv/view
-sources.exchange -> nats: auction.win/complete
-
-# ============================================================
-# Reporting Service (unified consumer)
-# ============================================================
-
-reporting: Reporting Service :8086 {
-  style.fill: "#60a5fa"
-
-  consumer: NATS Consumer
-  analytics: Analytics Store {
-    shape: cylinder
-    tables: |md
-      impressions
-      clicks
-      conversions
-      auctions
-    |
-  }
-  billing: Billing Engine {
-    ledger: Double-Entry Ledger {shape: cylinder}
-  }
-
-  consumer -> analytics: write event
-  consumer -> billing: bill atomically
-}
-
-nats -> reporting.consumer
-
-# ============================================================
-# Rollup Chain
-# ============================================================
-
-rollups: Rollup Chain {
-  style.fill: "#1e1e3a"
-  style.font-color: "#fff"
-
-  raw: Raw Events {style.fill: "#dc2626"; note: "retained 24-48h"}
-  minute: Minute Rollups {style.fill: "#ea580c"; note: "retained 7d"}
-  hourly: Hourly Rollups {style.fill: "#d97706"; note: "retained 90d"}
-  daily: Daily Rollups {style.fill: "#65a30d"; note: "retained 2y"}
-  monthly: Monthly Rollups {style.fill: "#0891b2"; note: "retained forever"}
-
-  raw -> minute: every minute
-  minute -> hourly: every hour
-  hourly -> daily: daily at 00:30 UTC
-  daily -> monthly: 1st of month
-}
-
-reporting.analytics -> rollups.raw
-
-# ============================================================
-# Query Layer
-# ============================================================
-
-query: Query Layer {
-  builder: Report Builder {
-    templates: |md
-      Campaign Performance
-      Creative Performance
-      Geo Breakdown
-      Publisher Yield
-    |
-  }
-  hll: HLL Reach/Frequency
-  forecast: Forecasting
-  auto_tier: Auto Tier Select {
-    note: |md
-      ≤30min → Minute
-      ≤24h → Hourly
-      ≤90d → Daily
-      else → Monthly
-    |
-  }
-}
-
-rollups -> query.auto_tier: read from right tier
-query -> gateway: REST API / dashboard
-
-gateway: Gateway :8080 {
-  style.fill: "#4361ee"
   style.font-color: "#fff"
 }
+files: Publisher files (CSV / TSV / Parquet) {
+  shape: page
+  style.fill: "#e2e8f0"
+}
 
 # ============================================================
-# Publisher Data Pipeline
+# Pipeline - the datalake sink  (cmd/pipeline)
 # ============================================================
-
-pipeline: Pipeline :8087 {
+sink: Pipeline - datalake sink :8087 {
   style.fill: "#a78bfa"
 
-  ingest: Ingest (CSV/TSV)
-  validate: Validate
-  normalise: Normalise (field mapping)
-  enrich: Enrich (geo, device)
-  datalake: Delta Lake {shape: cylinder}
+  handler: Per-subject handler (own NATS group)
+  buffer: Per-table buffer (batch size or flush interval)
+  ackflush: Ack AFTER durable flush (at-least-once; NAK re-delivers)
 
-  ingest -> validate -> normalise -> enrich -> datalake
+  handler -> buffer -> ackflush
+}
+
+# secondary input path: publisher file ingestion
+ingest: File ingest {
+  style.fill: "#c4b5fd"
+  stages: validate - normalise (field map) - enrich (geo/device)
+}
+
+nats -> sink.handler: events (impression / click / conv / view / auction)
+files -> ingest
+ingest -> lake.parts: normalised rows
+
+# ============================================================
+# The lake  (Minio / S3)  -  a REAL Delta table
+# ============================================================
+lake: Delta lake (Minio / S3) {
+  style.fill: "#faf5ff"
+
+  parts: part-NNNNN.parquet {
+    shape: cylinder
+    style.fill: "#c72e49"
+    style.font-color: "#fff"
+  }
+  log: _delta_log/ (real Delta protocol) {
+    shape: cylinder
+    style.fill: "#111827"
+    style.font-color: "#fff"
+    info: NDJSON actions - protocol / metaData / add / remove
+  }
+}
+sink.ackflush -> lake.parts: write Parquet
+sink.ackflush -> lake.log: commit add (v0 = protocol + metaData)
+
+# ============================================================
+# Compaction  (CronJob at :05)
+# ============================================================
+compact: Compaction CronJob (:05) {
+  shape: hexagon
+  style.fill: "#f59e0b"
+}
+compact -> lake.parts: bin-pack small files
+compact -> lake.log: one atomic commit (add + N removes)
+
+# ============================================================
+# Read  ->  reporting cold path
+# ============================================================
+reader: Reporting cold read {
+  style.fill: "#60a5fa"
+  scan: DuckDB delta_scan (resolves active file set from the log)
+}
+lake -> reader.scan: delta_scan (tombstone-aware)
+reader -> hotcold: merged in HotColdStore (see data-reporting)
+
+hotcold: HotColdStore {
+  style.fill: "#faff69"
+}
+
+legend: Legend {
+  near: bottom-right
+  style.fill: "#f8fafc"
+  a: A
+  b: B
+  a -> b: sync
 }
