@@ -15,7 +15,7 @@ import (
 // with no derived metrics passes straight through unchanged (the raw path stays
 // byte-identical). Derived metrics are composed from base queries — each base
 // query carries the SAME params.Filters, so the gateway's tenant scope rides
-// through every sub-query (no cross-tenant leak). The store may be a tiered
+// through every sub-query (no cross-tenant leak). The store may be a hot/cold
 // router; base queries run through an AutoTier Builder so rollups are used
 // when the range/metrics allow (correctness is never rollup-dependent).
 type QueryEngine struct {

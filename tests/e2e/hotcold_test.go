@@ -10,8 +10,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
-// TestHotColdTiering is a LONG-RUNNING test (it waits out the reporting
-// hot_window on purpose). It proves the hot/cold TieredStore end-to-end against
+// TestHotColdStore is a LONG-RUNNING test (it waits out the reporting
+// hot_window on purpose). It proves the hot/cold HotColdStore end-to-end against
 // the live stack:
 //
 //  1. fire a known burst -> reporting (hot/ClickHouse) reports it, and the
@@ -21,15 +21,15 @@ import (
 //  3. fire fresh traffic -> a boundary-spanning query merges cold + fresh-hot
 //     exactly.
 //
-// Runs only against a tiering-enabled stack (duckdb reporting + pipeline). On the
-// default/memory e2e stack it skips. Use `make test-e2e-tiering`.
-func TestHotColdTiering(t *testing.T) {
+// Runs only against a hot/cold storage-enabled stack (duckdb reporting + pipeline). On the
+// default/memory e2e stack it skips. Use `make test-e2e-hotcold`.
+func TestHotColdStore(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 
-	// Guard: only meaningful with tiering on — otherwise every query is hot-only
+	// Guard: only meaningful with hot/cold storage on — otherwise every query is hot-only
 	// and a passing count would prove nothing.
-	if v, ok := h.ReportingEnvVar(t, "REPORTING_TIERED_ENABLED"); !ok || v != "true" {
-		t.Skip("tiering not enabled (REPORTING_TIERED_ENABLED != true) — run `make test-e2e-tiering`")
+	if v, ok := h.ReportingEnvVar(t, "REPORTING_COLD_STORE_ENABLED"); !ok || v != "true" {
+		t.Skip("hot/cold storage not enabled (REPORTING_COLD_STORE_ENABLED != true) — run `make test-e2e-hotcold`")
 	}
 	hwStr, _ := h.ReportingEnvVar(t, "REPORTING_HOT_WINDOW")
 	hotWindow, err := time.ParseDuration(hwStr)
@@ -38,7 +38,7 @@ func TestHotColdTiering(t *testing.T) {
 	}
 	t.Logf("hot_window=%s — this test waits it out (long-running by design)", hotWindow)
 
-	w := harness.BuildBasicWorld(t, h, "tiering") // resets state
+	w := harness.BuildBasicWorld(t, h, "hot/cold storage") // resets state
 	from := time.Now().UTC().Add(-5 * time.Second)
 	lakeBefore := h.LakeRows(t, "impressions") // lake is cumulative across runs
 
@@ -50,7 +50,7 @@ func TestHotColdTiering(t *testing.T) {
 	}
 	t.Logf("phase 1: fired %d impressions", fired)
 
-	// Hot baseline: the tiered query (data still fresh) == fired, from ClickHouse.
+	// Hot baseline: the hot/cold query (data still fresh) == fired, from ClickHouse.
 	harness.WaitFor(t, 30*time.Second, "hot count to reach fired", func() bool {
 		return h.ReportImpressionCountSince(t, from) >= fired
 	})
@@ -105,7 +105,7 @@ func fireImpressions(t *testing.T, h *harness.Harness, w harness.World, tag stri
 	t.Helper()
 	fired := 0
 	for i := 0; i < n; i++ {
-		user := fmt.Sprintf("tier-%s-%d", tag, i)
+		user := fmt.Sprintf("hc-%s-%d", tag, i)
 		res := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", user)
 		win := h.ExtractWinner(t, res)
 		if win.NoBid {

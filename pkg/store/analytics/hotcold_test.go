@@ -54,19 +54,19 @@ func floatCol(t *testing.T, res *QueryResult, key string, col string) float64 {
 	return 0
 }
 
-func newTiered(cold ColdReader, hotWindow time.Duration, now time.Time) (*TieredStore, *MemoryStore) {
+func newHotCold(cold ColdReader, hotWindow time.Duration, now time.Time) (*HotColdStore, *MemoryStore) {
 	hot := NewMemory()
-	ts := NewTieredStore(hot, cold, hotWindow, nil)
+	ts := NewHotColdStore(hot, cold, hotWindow, nil)
 	ts.now = func() time.Time { return now }
 	return ts, hot
 }
 
-// TestTiered_HotOnly_NoColdCall: a query fully inside the hot window must not
+// TestHotCold_HotOnly_NoColdCall: a query fully inside the hot window must not
 // touch cold at all.
-func TestTiered_HotOnly_NoColdCall(t *testing.T) {
+func TestHotCold_HotOnly_NoColdCall(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	cold := &fakeCold{result: &QueryResult{Columns: []string{"count"}, Rows: [][]interface{}{{999.0}}}}
-	ts, hot := newTiered(cold, 7*24*time.Hour, now)
+	ts, hot := newHotCold(cold, 7*24*time.Hour, now)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		_ = hot.InsertImpression(ctx, &ImpressionEvent{PublisherID: "pubA", Timestamp: now.Add(-time.Hour)})
@@ -83,12 +83,12 @@ func TestTiered_HotOnly_NoColdCall(t *testing.T) {
 	}
 }
 
-// TestTiered_ColdOnly: a query entirely before the boundary is served from cold,
+// TestHotCold_ColdOnly: a query entirely before the boundary is served from cold,
 // carrying the tenant filter.
-func TestTiered_ColdOnly(t *testing.T) {
+func TestHotCold_ColdOnly(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	cold := &fakeCold{result: &QueryResult{Columns: []string{"count"}, Rows: [][]interface{}{{500.0}}}}
-	ts, _ := newTiered(cold, 7*24*time.Hour, now)
+	ts, _ := newHotCold(cold, 7*24*time.Hour, now)
 	res, err := ts.Query(context.Background(), QueryParams{
 		Table: "impressions", Metrics: []string{"count"},
 		Filters:  map[string]string{"publisher_id": "pubA"},
@@ -105,9 +105,9 @@ func TestTiered_ColdOnly(t *testing.T) {
 	}
 }
 
-// TestTiered_Spanning_MergesAdditive: a range crossing the boundary sums hot +
+// TestHotCold_Spanning_MergesAdditive: a range crossing the boundary sums hot +
 // cold per dimension key, and both sub-queries carry the tenant filter.
-func TestTiered_Spanning_MergesAdditive(t *testing.T) {
+func TestHotCold_Spanning_MergesAdditive(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	// Cold returns two placements; hot will add its own recent rows.
 	cold := &fakeCold{result: &QueryResult{
@@ -117,7 +117,7 @@ func TestTiered_Spanning_MergesAdditive(t *testing.T) {
 			{"pl2", int64(40), 0.4},
 		},
 	}}
-	ts, hot := newTiered(cold, 7*24*time.Hour, now)
+	ts, hot := newHotCold(cold, 7*24*time.Hour, now)
 	ctx := context.Background()
 	// Hot rows within the window for pl1 only.
 	for i := 0; i < 10; i++ {
@@ -149,12 +149,12 @@ func TestTiered_Spanning_MergesAdditive(t *testing.T) {
 	}
 }
 
-// TestTiered_ColdFailure_DegradesToHot: if cold errors, the hot half is still
+// TestHotCold_ColdFailure_DegradesToHot: if cold errors, the hot half is still
 // returned (best-effort), never a hard failure.
-func TestTiered_ColdFailure_DegradesToHot(t *testing.T) {
+func TestHotCold_ColdFailure_DegradesToHot(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 	cold := &fakeCold{err: context.DeadlineExceeded}
-	ts, hot := newTiered(cold, 7*24*time.Hour, now)
+	ts, hot := newHotCold(cold, 7*24*time.Hour, now)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		_ = hot.InsertImpression(ctx, &ImpressionEvent{PublisherID: "pubA", Timestamp: now.Add(-time.Hour)})
@@ -171,10 +171,10 @@ func TestTiered_ColdFailure_DegradesToHot(t *testing.T) {
 	}
 }
 
-// TestTiered_NilCold_PassesThrough: with no cold reader every read is hot.
-func TestTiered_NilCold_PassesThrough(t *testing.T) {
+// TestHotCold_NilCold_PassesThrough: with no cold reader every read is hot.
+func TestHotCold_NilCold_PassesThrough(t *testing.T) {
 	now := time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
-	ts, hot := newTiered(nil, 7*24*time.Hour, now)
+	ts, hot := newHotCold(nil, 7*24*time.Hour, now)
 	ctx := context.Background()
 	for i := 0; i < 7; i++ {
 		_ = hot.InsertImpression(ctx, &ImpressionEvent{PublisherID: "pubA", Timestamp: now.Add(-100 * 24 * time.Hour)})
