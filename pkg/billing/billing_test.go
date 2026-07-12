@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -405,6 +406,66 @@ func (f *fakeBalanceSink) Debit(_ context.Context, advertiserID string, amount f
 		Amount                  float64
 	}{advertiserID, eventType, amount})
 	return 100 - amount, true, f.err
+}
+
+func (f *fakeBalanceSink) DebitBatch(_ context.Context, debits []BatchDebit) ([]BatchDebitResult, error) {
+	out := make([]BatchDebitResult, 0, len(debits))
+	for _, d := range debits {
+		f.calls = append(f.calls, struct {
+			AdvertiserID, EventType string
+			Amount                  float64
+		}{d.AdvertiserID, d.EventType, d.Amount})
+		out = append(out, BatchDebitResult{AdvertiserID: d.AdvertiserID, NewBalance: 100 - d.Amount})
+	}
+	return out, f.err
+}
+
+// ProcessBatch must produce EXACTLY what N individual ProcessEvent calls would:
+// identical ledger entries, committed spend, balance drawdowns, and results.
+// This is the correctness contract for the batching scale path.
+func TestProcessBatch_EqualsSumOfProcessEvent(t *testing.T) {
+	events := []SpendEvent{
+		{TraceID: "t1", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1", ClearingPrice: 3.00, Currency: "USD", BidModel: BidCPM, EventType: "impression"},
+		{TraceID: "t2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv2", ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression"},  // reserve, no debit
+		{TraceID: "t3", CampaignID: "c2", PublisherID: "pub2", AdvertiserID: "adv1", ClearingPrice: 5.00, Currency: "USD", BidModel: BidCPM, EventType: "impression"},
+		{TraceID: "t4", CampaignID: "c2", PublisherID: "pub2", AdvertiserID: "adv3", ClearingPrice: 2.00, Currency: "USD", BidModel: BidVCPM, EventType: "impression"}, // reserve
+	}
+	fixed := time.Now()
+
+	batchLedger, batchSink := NewMemoryLedger(), &fakeBalanceSink{}
+	batchEngine := NewEngine(batchLedger, NewContractStore(), clock.NewFake(fixed), logger.New("billing-test"))
+	batchEngine.SetBalanceSink(batchSink)
+	batchResults, err := batchEngine.ProcessBatch(context.Background(), events)
+	if err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+
+	perLedger, perSink := NewMemoryLedger(), &fakeBalanceSink{}
+	perEngine := NewEngine(perLedger, NewContractStore(), clock.NewFake(fixed), logger.New("billing-test"))
+	perEngine.SetBalanceSink(perSink)
+	perResults := make([]*SpendResult, len(events))
+	for i, e := range events {
+		perResults[i], _ = perEngine.ProcessEvent(context.Background(), e)
+	}
+
+	if !reflect.DeepEqual(batchLedger.Entries(), perLedger.Entries()) {
+		t.Errorf("ledger entries differ:\n batch=%+v\n per  =%+v", batchLedger.Entries(), perLedger.Entries())
+	}
+	if !reflect.DeepEqual(batchEngine.SnapshotCommitted(), perEngine.SnapshotCommitted()) {
+		t.Errorf("committed spend differs: batch=%v per=%v", batchEngine.SnapshotCommitted(), perEngine.SnapshotCommitted())
+	}
+	if !reflect.DeepEqual(batchSink.calls, perSink.calls) {
+		t.Errorf("balance drawdowns differ:\n batch=%+v\n per  =%+v", batchSink.calls, perSink.calls)
+	}
+	// Only the two CPM events debit the balance; the CPC/vCPM reserves don't.
+	if len(batchSink.calls) != 2 {
+		t.Errorf("balance calls = %d, want 2 (only CPM debits)", len(batchSink.calls))
+	}
+	for i := range events {
+		if batchResults[i].Action != perResults[i].Action || batchResults[i].AdvertiserSpend != perResults[i].AdvertiserSpend {
+			t.Errorf("result[%d]: batch=%+v per=%+v", i, batchResults[i], perResults[i])
+		}
+	}
 }
 
 // The prepay drawdown fires exactly at the spend-realization points: CPM

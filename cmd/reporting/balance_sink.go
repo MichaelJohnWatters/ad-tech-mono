@@ -161,6 +161,36 @@ func (s *pgBalanceSink) Debit(ctx context.Context, advertiserID string, amount f
 	return newBalance, applied, nil
 }
 
+// DebitBatch applies many realized spends in one Postgres round-trip, then
+// fires the throttled cache-invalidate / depleted notifications per affected
+// advertiser. Same self-healing drop-on-error as Debit.
+func (s *pgBalanceSink) DebitBatch(ctx context.Context, debits []billing.BatchDebit) ([]billing.BatchDebitResult, error) {
+	store, err := s.connect()
+	if err != nil {
+		return nil, err
+	}
+	pd := make([]postgres.BatchDebit, len(debits))
+	for i, d := range debits {
+		pd[i] = postgres.BatchDebit{
+			AccountID: d.AdvertiserID, Amount: d.Amount, Currency: d.Currency,
+			TraceID: d.TraceID, EventType: d.EventType,
+		}
+	}
+	res, err := store.DebitSpendBatch(ctx, pd)
+	if err != nil {
+		s.mu.Lock()
+		s.store = nil
+		s.mu.Unlock()
+		return nil, err
+	}
+	out := make([]billing.BatchDebitResult, len(res))
+	for i, r := range res {
+		out[i] = billing.BatchDebitResult{AdvertiserID: r.AccountID, NewBalance: r.NewBalance}
+		s.notify(ctx, r.AccountID, r.NewBalance)
+	}
+	return out, nil
+}
+
 // notify publishes the (throttled) cache invalidate and the one-shot
 // depleted event. Best-effort — the balance row is already committed.
 func (s *pgBalanceSink) notify(ctx context.Context, accountID string, newBalance float64) {

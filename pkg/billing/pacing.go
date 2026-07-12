@@ -136,6 +136,50 @@ func (p *pacingAccumulator) recordSettle(campaignID, traceID string, amount floa
 	cp.settledMicros += toMicros(amount)
 }
 
+// pacingKind selects which accumulator mutation a batch item applies.
+type pacingKind int
+
+const (
+	pacingBilled  pacingKind = iota // CPM immediate → settled
+	pacingReserve                   // CPC/CPA/vCPM/CPCV impression → open hold
+)
+
+// pacingItem is one campaign's contribution to a batched pacing update.
+type pacingItem struct {
+	campaignID string
+	traceID    string // reserve holds are keyed by trace
+	amount     float64
+	kind       pacingKind
+}
+
+// recordBatch applies all items under a SINGLE lock (one rollLocked), removing
+// the N lock acquisitions a per-event loop would take. Semantics are identical
+// to calling recordBilled / recordReserve for each item in order.
+func (p *pacingAccumulator) recordBatch(items []pacingItem) {
+	if len(items) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rollLocked()
+	now := p.clk.Now()
+	for _, it := range items {
+		if it.campaignID == "" || it.amount <= 0 {
+			continue
+		}
+		cp := p.campaignLocked(it.campaignID)
+		switch it.kind {
+		case pacingBilled:
+			cp.settledMicros += toMicros(it.amount)
+		case pacingReserve:
+			if it.traceID == "" {
+				continue
+			}
+			cp.holds[it.traceID] = pacingHold{micros: toMicros(it.amount), created: now}
+		}
+	}
+}
+
 // sweepExpired releases holds older than holdTTL and returns the number
 // released. An expired hold is an impression whose billable settle event never
 // arrived; freeing it keeps pacing from permanently over-counting.

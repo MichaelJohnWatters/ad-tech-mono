@@ -73,6 +73,27 @@ type SpendResult struct {
 // replay must return applied=false rather than double-debit.
 type BalanceSink interface {
 	Debit(ctx context.Context, advertiserID string, amount float64, currency, traceID, eventType string) (newBalance float64, applied bool, err error)
+	// DebitBatch applies many realized spends in one round-trip (the scale
+	// path). Same idempotency contract as Debit. Returns the post-decrement
+	// balance for each advertiser that had NEW spend applied — replays that
+	// inserted nothing are absent from the result.
+	DebitBatch(ctx context.Context, debits []BatchDebit) ([]BatchDebitResult, error)
+}
+
+// BatchDebit is one realized spend for BalanceSink.DebitBatch.
+type BatchDebit struct {
+	AdvertiserID string
+	Amount       float64
+	Currency     string
+	TraceID      string
+	EventType    string
+}
+
+// BatchDebitResult is the post-decrement balance for an advertiser that had new
+// spend applied in a DebitBatch call.
+type BatchDebitResult struct {
+	AdvertiserID string
+	NewBalance   float64
 }
 
 // ReservationContext is the auction context of a reserve/settle reservation
@@ -225,6 +246,100 @@ func (e *Engine) ProcessEvent(ctx context.Context, event SpendEvent) (*SpendResu
 	default:
 		return e.billImmediate(ctx, event) // default to CPM
 	}
+}
+
+// ProcessBatch handles a batch of impression spend events in as few durable
+// round-trips as possible — ONE ledger RecordBatch, ONE balance DebitBatch, and
+// ONE pacing update — instead of N of each. It is the batched twin of
+// ProcessEvent and produces the same per-event result and ledger entries; the
+// per-entry idempotency keys (TB transfer IDs, the Postgres spend unique index)
+// make a whole-batch replay safe. Settles (click/conversion/view) are NOT
+// batched here: they arrive on separate subjects and go through SettleByTrace.
+func (e *Engine) ProcessBatch(ctx context.Context, events []SpendEvent) ([]*SpendResult, error) {
+	results := make([]*SpendResult, len(events))
+	entries := make([]LedgerEntry, 0, len(events))
+	var debits []BatchDebit
+	pacingItems := make([]pacingItem, 0, len(events))
+	now := e.clk.Now()
+
+	for i := range events {
+		event := events[i]
+		// Only impressions are batched here. Anything else (shouldn't reach this
+		// path from the impression consumer) falls back to the per-event path.
+		if event.EventType != "" && event.EventType != "impression" {
+			results[i], _ = e.ProcessEvent(ctx, event)
+			continue
+		}
+
+		reserveModel := event.BidModel == BidCPC || event.BidModel == BidCPA ||
+			event.BidModel == BidVCPM || event.BidModel == BidCPCV
+
+		if reserveModel {
+			// Reserve: hold budget in escrow, NO balance drawdown (billing.go
+			// SetBalanceSink: reserves don't touch the balance; settle realizes).
+			resID := fmt.Sprintf("res-%s", event.TraceID)
+			entries = append(entries, LedgerEntry{
+				Timestamp: now, TraceID: event.TraceID, CampaignID: event.CampaignID,
+				PublisherID: event.PublisherID, AdvertiserID: event.AdvertiserID,
+				Type: EntryReservation, DebitAccount: "advertiser:" + event.AdvertiserID,
+				CreditAccount: "escrow:" + resID, Amount: event.ClearingPrice,
+				Currency: event.Currency, BidModel: string(event.BidModel),
+				DealType: event.DealType, ReservationID: resID,
+			})
+			if e.reservations != nil {
+				if err := e.reservations.SaveReservation(ctx, ReservationContext{
+					TraceID: event.TraceID, CampaignID: event.CampaignID, CreativeID: event.CreativeID,
+					PlacementID: event.PlacementID, PublisherID: event.PublisherID,
+					AdvertiserID: event.AdvertiserID, DealType: event.DealType,
+					Currency: event.Currency, Amount: event.ClearingPrice, BidModel: string(event.BidModel),
+				}); err != nil {
+					e.log.Error("reservation context save failed", "trace_id", event.TraceID, "error", err)
+				}
+			}
+			pacingItems = append(pacingItems, pacingItem{campaignID: event.CampaignID, traceID: event.TraceID, amount: event.ClearingPrice, kind: pacingReserve})
+			results[i] = &SpendResult{TraceID: event.TraceID, AdvertiserSpend: event.ClearingPrice, Action: "reserved", ReservationID: resID}
+			continue
+		}
+
+		// CPM (and default): bill immediately.
+		contract := e.contracts.Get(event.PublisherID)
+		revenue := contract.CalculateRevenue(event.ClearingPrice, event.DealType)
+		entries = append(entries, LedgerEntry{
+			Timestamp: now, TraceID: event.TraceID, CampaignID: event.CampaignID,
+			PublisherID: event.PublisherID, AdvertiserID: event.AdvertiserID,
+			Type: EntrySpend, DebitAccount: "advertiser:" + event.AdvertiserID,
+			CreditAccount: "publisher:" + event.PublisherID, Amount: event.ClearingPrice,
+			PublisherRevenue: revenue.PublisherRevenue, PlatformMargin: revenue.PlatformMargin,
+			Currency: event.Currency,
+		})
+		if event.AdvertiserID != "" && event.ClearingPrice > 0 {
+			debits = append(debits, BatchDebit{
+				AdvertiserID: event.AdvertiserID, Amount: event.ClearingPrice,
+				Currency: event.Currency, TraceID: event.TraceID, EventType: event.EventType,
+			})
+		}
+		pacingItems = append(pacingItems, pacingItem{campaignID: event.CampaignID, amount: event.ClearingPrice, kind: pacingBilled})
+		results[i] = &SpendResult{
+			TraceID: event.TraceID, AdvertiserSpend: event.ClearingPrice,
+			PublisherRevenue: revenue.PublisherRevenue, PlatformMargin: revenue.PlatformMargin,
+			FeePercent: revenue.FeePercent, Subsidy: revenue.Subsidy, Action: "billed",
+		}
+	}
+
+	if len(entries) > 0 {
+		e.ledger.RecordBatch(entries)
+	}
+	if len(debits) > 0 && e.balances != nil {
+		if _, err := e.balances.DebitBatch(ctx, debits); err != nil {
+			// Best-effort, exactly like drawdown: the ledger is the source of
+			// truth and the sink is idempotent, so a reconciliation replay
+			// recovers a failed batch. Never fails the events.
+			e.log.Error("balance batch drawdown failed", "debits", len(debits), "error", err)
+		}
+	}
+	e.pacing.recordBatch(pacingItems)
+
+	return results, nil
 }
 
 func (e *Engine) billImmediate(ctx context.Context, event SpendEvent) (*SpendResult, error) {
