@@ -48,7 +48,11 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	}
 	lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
 
-	flushInterval := cfg.GetDuration("pipeline.datalake_flush_interval", 30*time.Second)
+	// Keep this comfortably UNDER the NATS consumer AckWait (30s): with
+	// ack-after-flush, an event stays un-acked until its flush, so a flush
+	// interval >= AckWait lets JetStream redeliver before we ack (a harmless
+	// duplicate, never a loss). 15s default gives margin.
+	flushInterval := cfg.GetDuration("pipeline.datalake_flush_interval", 15*time.Second)
 	stop := make(chan struct{})
 	lc.OnShutdown("datalake-sink", func(ctx context.Context) error {
 		close(stop)
@@ -161,6 +165,18 @@ var eventTables = map[string]struct {
 	}}},
 }
 
+// bufferedEvent is a decoded record awaiting flush, paired with its NATS
+// ack/nak. The ack is deferred until the record is DURABLY written (ack-after-
+// flush): on a successful flush we ack, on a failed flush we nak so JetStream
+// redelivers. This makes the lake at-least-once — a crash/restart with a
+// non-empty buffer redelivers the un-acked events instead of losing them.
+// (ack/nak are nil for the direct record() path used by tests.)
+type bufferedEvent struct {
+	rec datalake.Record
+	ack func() error
+	nak func() error
+}
+
 // datalakeSink buffers decoded events per table and flushes them to Parquet.
 type datalakeSink struct {
 	lake      datalake.Store
@@ -168,7 +184,7 @@ type datalakeSink struct {
 	log       *slog.Logger
 
 	mu      sync.Mutex
-	buffers map[string][]datalake.Record
+	buffers map[string][]bufferedEvent
 	schemas map[string]datalake.Schema
 }
 
@@ -180,7 +196,7 @@ func newDatalakeSink(lake datalake.Store, batchSize int, log *slog.Logger) *data
 		lake:      lake,
 		batchSize: batchSize,
 		log:       log,
-		buffers:   map[string][]datalake.Record{},
+		buffers:   map[string][]bufferedEvent{},
 		schemas:   map[string]datalake.Schema{},
 	}
 	for _, t := range eventTables {
@@ -209,14 +225,22 @@ func (s *datalakeSink) handlerFor(table string) events.Handler {
 			s.log.Error("datalake sink: decode failed", "table", table, "error", err)
 			return msg.Ack() // bad data — don't redeliver forever
 		}
-		s.record(table, rec)
-		return msg.Ack()
+		// Buffer WITH the message's ack/nak; do NOT ack here. The ack fires only
+		// once flushTable durably writes this record (ack-after-flush) — so a
+		// crash/restart with a non-empty buffer redelivers instead of losing.
+		s.bufferEvent(table, bufferedEvent{rec: rec, ack: msg.Ack, nak: msg.Nak})
+		return nil
 	}
 }
 
+// record buffers a bare record with no ack/nak — the direct path used by tests.
 func (s *datalakeSink) record(table string, rec datalake.Record) {
+	s.bufferEvent(table, bufferedEvent{rec: rec})
+}
+
+func (s *datalakeSink) bufferEvent(table string, ev bufferedEvent) {
 	s.mu.Lock()
-	s.buffers[table] = append(s.buffers[table], rec)
+	s.buffers[table] = append(s.buffers[table], ev)
 	full := len(s.buffers[table]) >= s.batchSize
 	s.mu.Unlock()
 	if full {
@@ -226,17 +250,33 @@ func (s *datalakeSink) record(table string, rec datalake.Record) {
 
 func (s *datalakeSink) flushTable(ctx context.Context, table string) {
 	s.mu.Lock()
-	recs := s.buffers[table]
+	evs := s.buffers[table]
 	s.buffers[table] = nil
 	s.mu.Unlock()
-	if len(recs) == 0 {
+	if len(evs) == 0 {
 		return
+	}
+	recs := make([]datalake.Record, len(evs))
+	for i, e := range evs {
+		recs[i] = e.rec
 	}
 	if err := s.lake.Write(ctx, table, recs, s.schemas[table]); err != nil {
-		s.log.Error("datalake sink: write failed", "table", table, "records", len(recs), "error", err)
+		// Don't lose the events: nak so JetStream redelivers them (at-least-once).
+		s.log.Error("datalake sink: write failed, naking for redelivery", "table", table, "records", len(evs), "error", err)
+		for _, e := range evs {
+			if e.nak != nil {
+				_ = e.nak()
+			}
+		}
 		return
 	}
-	s.log.Debug("datalake sink: flushed", "table", table, "records", len(recs))
+	// Durably written — now it's safe to ack.
+	for _, e := range evs {
+		if e.ack != nil {
+			_ = e.ack()
+		}
+	}
+	s.log.Debug("datalake sink: flushed", "table", table, "records", len(evs))
 }
 
 // Flush writes every non-empty buffer. Called on the interval ticker and on

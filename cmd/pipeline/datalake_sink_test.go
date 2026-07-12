@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -10,6 +11,58 @@ import (
 )
 
 func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// erroringLake wraps a MemoryStore but fails every Write — to exercise the
+// flush-failure path.
+type erroringLake struct {
+	*datalake.MemoryStore
+}
+
+func (e *erroringLake) Write(context.Context, string, []datalake.Record, datalake.Schema) error {
+	return fmt.Errorf("simulated lake write failure")
+}
+
+// TestDatalakeSink_AckAfterFlush: a buffered event is NOT acked until it is
+// durably flushed — the guarantee that prevents losing acked-but-unwritten
+// events on a crash/restart.
+func TestDatalakeSink_AckAfterFlush(t *testing.T) {
+	sink := newDatalakeSink(datalake.NewMemory(quietLog()), 2, quietLog()) // flush every 2
+	var acks, naks int
+	ack := func() error { acks++; return nil }
+	nak := func() error { naks++; return nil }
+
+	// One event: buffered, under batch size → not flushed → NOT acked yet.
+	sink.bufferEvent("impressions", bufferedEvent{rec: datalake.Record{"trace_id": "t1"}, ack: ack, nak: nak})
+	if acks != 0 {
+		t.Fatalf("acked before durable flush: acks=%d, want 0", acks)
+	}
+
+	// Second event hits the batch size → flush → both acked, none naked.
+	sink.bufferEvent("impressions", bufferedEvent{rec: datalake.Record{"trace_id": "t2"}, ack: ack, nak: nak})
+	if acks != 2 || naks != 0 {
+		t.Fatalf("after flush acks=%d naks=%d, want 2/0", acks, naks)
+	}
+}
+
+// TestDatalakeSink_NakOnWriteFailure: when the durable write fails, events are
+// NAKed (so JetStream redelivers) and never acked — at-least-once, no silent
+// data loss.
+func TestDatalakeSink_NakOnWriteFailure(t *testing.T) {
+	sink := newDatalakeSink(&erroringLake{datalake.NewMemory(quietLog())}, 100, quietLog())
+	var acks, naks int
+	for i := 0; i < 3; i++ {
+		sink.bufferEvent("impressions", bufferedEvent{
+			rec: datalake.Record{"trace_id": "t"},
+			ack: func() error { acks++; return nil },
+			nak: func() error { naks++; return nil },
+		})
+	}
+	sink.Flush(context.Background()) // Write fails inside
+
+	if acks != 0 || naks != 3 {
+		t.Fatalf("on write failure acks=%d naks=%d, want 0/3 (redeliver, never lose)", acks, naks)
+	}
+}
 
 func TestDatalakeSink_BatchFlush(t *testing.T) {
 	lake := datalake.NewMemory(quietLog())
