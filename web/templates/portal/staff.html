@@ -150,14 +150,42 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Control center ============ -->
     <section id="section-tools" class="portal-section p-6 space-y-6 hidden">
-      {{ template "card-start" (dict "title" "Operator tools") }}
-      <ul class="space-y-2 text-sm">
-        <li><a class="text-brand hover:underline" href="/dev/console">Config manager + Secrets</a> <span class="text-gray-400">— live config, per-pod overrides, secret rotation</span></li>
-        <li><a class="text-brand hover:underline" href="/dev/trace-explorer">Trace explorer</a> <span class="text-gray-400">— trace lookup + batch reconciliation</span></li>
-        <li><a class="text-brand hover:underline" href="http://localhost:3001" target="_blank">Grafana</a> <span class="text-gray-400">— metrics + logs (Loki pivot)</span></li>
-        <li><a class="text-brand hover:underline" href="http://localhost:16686" target="_blank">Jaeger</a> <span class="text-gray-400">— distributed traces</span></li>
-      </ul>
+      {{ template "card-start" (dict "title" "Control center") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        Operator hub — metrics, traces, logs, config, and email in one place.
+        Links open the full tool in a new tab; the panels below embed the live views.
+      </p>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <a href="http://localhost:3000" target="_blank" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">📊</div><div class="font-medium">Grafana</div>
+          <div class="text-xs text-gray-400">metrics + logs · Loki→Jaeger pivot</div></a>
+        <a href="http://localhost:16686" target="_blank" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">🔎</div><div class="font-medium">Jaeger</div>
+          <div class="text-xs text-gray-400">distributed traces (per request)</div></a>
+        <a href="http://localhost:9090" target="_blank" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">🔥</div><div class="font-medium">Prometheus</div>
+          <div class="text-xs text-gray-400">raw metrics + PromQL</div></a>
+        <a href="/dev/console" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">⚙️</div><div class="font-medium">Config manager + Secrets</div>
+          <div class="text-xs text-gray-400">live config · per-pod overrides · rotation</div></a>
+        <a href="/dev/trace-explorer" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">🧭</div><div class="font-medium">Trace explorer</div>
+          <div class="text-xs text-gray-400">trace lookup + batch reconciliation</div></a>
+        <a href="http://localhost:8025" target="_blank" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">✉️</div><div class="font-medium">Mailpit</div>
+          <div class="text-xs text-gray-400">local email inbox (verifications, alerts)</div></a>
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Metrics — Grafana (live)") }}
+      <p class="text-xs text-gray-400 mb-2">Blank? Open Grafana in a new tab — embedding needs the pod reachable + <code class="font-mono">allow_embedding</code>.</p>
+      <iframe data-src="http://localhost:3000/?kiosk" class="w-full rounded-lg border border-gray-200 dark:border-gray-800 bg-white" style="height:70vh" title="Grafana"></iframe>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Traces — Jaeger (live)") }}
+      <iframe data-src="http://localhost:16686/search?uiEmbed=v0" class="w-full rounded-lg border border-gray-200 dark:border-gray-800 bg-white" style="height:70vh" title="Jaeger"></iframe>
       {{ template "card-end" . }}
     </section>
   </main>
@@ -238,7 +266,7 @@ const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', architecture: 'Architecture', tools: 'Tools'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -249,7 +277,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, architecture: loadArchitecture}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -570,6 +598,16 @@ async function renderDiagram(i) {
   } catch (err) {
     v.innerHTML = `<div class="p-8 text-center text-sm text-error">render failed — ${esc(err.message)}</div>`;
   }
+}
+
+// ---- Control center ----
+// Lazy-load the Grafana/Jaeger iframes on first open (data-src → src), so the
+// staff page doesn't pull them on every load.
+let ccLoaded = false;
+function loadControlCenter() {
+  if (ccLoaded) return;
+  ccLoaded = true;
+  document.querySelectorAll('#section-tools iframe[data-src]').forEach(f => { f.src = f.dataset.src; });
 }
 
 showSection(location.hash.slice(1) || 'moderation');
