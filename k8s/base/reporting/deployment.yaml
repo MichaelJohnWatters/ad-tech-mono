@@ -51,6 +51,26 @@ spec:
               value: "true"
             - name: REPORTING_ROLLUP_ENABLED
               value: "true"
+            # COLD TIER (tiering test): read deep history from the Parquet/Delta
+            # lake in Minio via DuckDB delta_scan. Requires the duckdb-tagged
+            # image (build/Dockerfile.reporting.duckdb). hot_window is short so
+            # data crosses the hot→cold boundary in ~15m for the test.
+            - name: REPORTING_TIERED_ENABLED
+              value: "true"
+            - name: REPORTING_HOT_WINDOW
+              value: "15m"
+            - name: S3_ENDPOINT
+              value: "minio:9000"
+            - name: S3_ACCESS_KEY
+              value: "adtech"
+            - name: S3_SECRET_KEY
+              value: "adtech-local-dev"
+            - name: S3_REGION
+              value: "us-east-1"
+            - name: S3_USE_SSL
+              value: "false"
+            - name: PIPELINE_DATALAKE_BUCKET
+              value: "adtech-datalake-tiertest"
             # Billing: durable TigerBeetle ledger
             - name: BILLING_LEDGER_BACKEND
               value: "tigerbeetle"

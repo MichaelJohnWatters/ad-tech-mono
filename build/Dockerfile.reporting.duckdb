@@ -1,0 +1,19 @@
+# Reporting built WITH the `duckdb` tag — enables the cold-tier reader
+# (delta_scan over the Parquet/Delta lake). Uses a glibc base (Debian bookworm)
+# on purpose: marcboeker/go-duckdb bundles a prebuilt DuckDB static lib that does
+# NOT link reliably on Alpine/musl, so build/Dockerfile.reporting (Alpine) can't
+# carry the duckdb tag. Reporting also uses CGO for tigerbeetle-go; both link
+# fine on glibc.
+FROM golang:1.25-bookworm AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 go build -tags duckdb -o /app ./cmd/reporting
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app /app
+ENTRYPOINT ["/app"]
