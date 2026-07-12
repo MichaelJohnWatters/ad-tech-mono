@@ -146,6 +146,23 @@ if dev_mode == 'fast':
     k8s_resource('identity-consumer', resource_deps=['identity-consumer-build', 'nats', 'postgres'],
         port_forwards=['8092:8092'], labels=['services'])
 
+    # ---- Pipeline (datalake BATCH layer — writes the COLD tier from NATS) ----
+    # Consumes the event stream (own NATS group) and lands Parquet + a real Delta
+    # log in Minio. This is what populates the cold tier the reporting TieredStore
+    # reads. Pure Go (arrow/minio-go/nats — no CGO), so the standard fast path.
+    local_resource('pipeline-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/pipeline ./cmd/pipeline',
+        deps=['cmd/pipeline', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-pipeline', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'pipeline'},
+        only=['bin/pipeline', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/pipeline', '/app')])
+    k8s_yaml(['k8s/base/pipeline/deployment.yaml', 'k8s/base/pipeline/service.yaml'])
+    k8s_resource('pipeline', resource_deps=['pipeline-build', 'nats', 'minio'],
+        port_forwards=['8087:8087'], labels=['services'])
+
     # ---- Adserver ----
     local_resource('adserver-build',
         cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/adserver ./cmd/adserver',
@@ -307,17 +324,14 @@ if dev_mode == 'fast':
     # populates its cache), incrementals ~2s, and the VM only ever does a
     # trivial COPY. Prereq: `brew install zig` (checked at Tiltfile load).
     # build/Dockerfile.reporting remains the prod/CI in-image build.
-    local_resource('reporting-build',
-        cmd='CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -o ./bin/reporting ./cmd/reporting',
-        deps=['cmd/reporting', 'pkg/'], labels=['build'])
-    docker_build_with_restart('adtech-reporting', '.',
-        dockerfile='build/Dockerfile.dev',
-        build_args={'SERVICE': 'reporting'},
-        only=['bin/reporting', 'web'],
-        entrypoint='/app',
-        live_update=[sync('bin/reporting', '/app')])
+    # TIERING TEST: reporting is built WITH the `duckdb` tag (cold-tier reads via
+    # delta_scan) through an in-image glibc build — go-duckdb doesn't link on the
+    # zig/musl fast path. Slower rebuilds; revert to the zig + Dockerfile.dev
+    # block after the test (see the tiering-longrun skill for the revert).
+    docker_build('adtech-reporting', '.',
+        dockerfile='build/Dockerfile.reporting.duckdb')
     k8s_yaml(['k8s/base/reporting/deployment.yaml', 'k8s/base/reporting/service.yaml'])
-    k8s_resource('reporting', resource_deps=['reporting-build', 'nats', 'postgres', 'clickhouse', 'tigerbeetle'],
+    k8s_resource('reporting', resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle', 'minio'],
         port_forwards=['8086:8086'], labels=['services'])
 
 else:
