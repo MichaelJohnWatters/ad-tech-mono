@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,15 +23,17 @@ import (
 )
 
 // ObjectStore is the real datalake: it writes records as Apache Parquet
-// files to object storage (Minio/S3 via objects.Store) and records each
-// write as a JSON transaction in a Delta-style log under
-// {table}/_delta_log/. Reads replay the log to find the active set of
-// Parquet files, then decode them back to Records. This is the durable
-// counterpart to MemoryStore (which only kept slices + fake paths).
+// files to object storage (Minio/S3 via objects.Store) and commits each write
+// as a real Delta Lake transaction (protocol/metaData/add/remove actions) under
+// {table}/_delta_log/. Reads replay the log to find the active set of Parquet
+// files, then decode them back to Records. Because the log is standard Delta,
+// external readers (Spark/Trino/DuckDB delta_scan) can read the lake too — see
+// deltalog.go. This is the durable counterpart to MemoryStore (which only kept
+// slices + fake paths).
 //
 // Layout in the bucket:
 //
-//	{table}/_delta_log/{version:020d}.json   one transaction per file
+//	{table}/_delta_log/{version:020d}.json   one Delta commit per file
 //	{table}/part-{version:05d}.parquet       one data file per write
 //
 // Parquet is self-describing, so Read recovers the schema from the file —
@@ -63,11 +66,36 @@ func parquetKey(table string, v int) string {
 	return fmt.Sprintf("%s/part-%05d.parquet", table, v)
 }
 
+// deltaTableID is a stable table identifier for the Delta metaData action.
+// (Standard Delta uses a UUID; readers treat it as an opaque string, so a
+// deterministic per-table value is fine and keeps writes reproducible.)
+func deltaTableID(table string) string { return "adtech:" + table }
+
+// relTablePath converts a full object key (table/part-N.parquet) to the path
+// Delta records in add/remove actions: relative to the table root.
+func relTablePath(table, key string) string { return strings.TrimPrefix(key, table+"/") }
+
+// versionFromLogKey parses the commit version out of a _delta_log/{v:020d}.json
+// object key.
+func versionFromLogKey(key string) (int, bool) {
+	base := key
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".json")
+	v, err := strconv.Atoi(base)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 func (o *ObjectStore) Write(ctx context.Context, table string, records []Record, schema Schema) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// Next version = number of existing log entries (0-based monotonic).
+	// Next version = number of existing commit files (0-based, contiguous — Delta
+	// requires a gap-free version sequence).
 	existing, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
 	if err != nil {
 		return fmt.Errorf("list delta log: %w", err)
@@ -84,26 +112,29 @@ func (o *ObjectStore) Write(ctx context.Context, table string, records []Record,
 		return fmt.Errorf("put parquet: %w", err)
 	}
 
-	// Append the transaction to the Delta log. The first write also records
-	// the schema so a reader can inspect the table without opening a file.
-	txn := Transaction{
-		Version:   version,
-		Timestamp: time.Now().UTC(),
-		Action:    "add",
-		Path:      pKey,
-		NumRows:   len(records),
-		ByteSize:  int64(len(parquetBytes)),
+	// Commit a real Delta transaction. Version 0 carries protocol + metaData
+	// (the schema) so standard Delta readers (Spark/Trino/DuckDB delta_scan) can
+	// open the table; later versions are a single add.
+	now := time.Now().UTC()
+	add := deltaAdd{
+		Path:             relTablePath(table, pKey),
+		PartitionValues:  map[string]string{},
+		Size:             int64(len(parquetBytes)),
+		ModificationTime: now.UnixMilli(),
+		DataChange:       true,
+		Stats:            deltaStats(len(records)),
 	}
+	var commit []byte
 	if version == 0 {
-		s := schema
-		txn.Schema = &s
+		commit, err = buildDeltaCommit0(deltaTableID(table), schema, add, now.UnixMilli())
+	} else {
+		commit, err = buildDeltaCommitAdd(add)
 	}
-	txnBytes, err := json.Marshal(txn)
 	if err != nil {
-		return fmt.Errorf("marshal txn: %w", err)
+		return fmt.Errorf("build delta commit: %w", err)
 	}
-	if err := o.obj.Put(ctx, o.bucket, deltaLogKey(table, version), bytes.NewReader(txnBytes), int64(len(txnBytes)), "application/json"); err != nil {
-		return fmt.Errorf("put delta log: %w", err)
+	if err := o.putLogFile(ctx, table, version, commit); err != nil {
+		return err
 	}
 
 	o.log.Debug("datalake write", "table", table, "records", len(records), "version", version, "bytes", len(parquetBytes))
@@ -146,26 +177,52 @@ func (o *ObjectStore) Read(ctx context.Context, table string, filter Filter) ([]
 	return out, nil
 }
 
+// Log replays the Delta commit files into our internal Transaction model (one
+// per add/remove action). Paths are re-expanded from Delta's table-relative form
+// back to full object keys so Read/Compact can fetch the Parquet directly. The
+// schema (recorded once, in version 0's metaData) rides on that commit's add.
 func (o *ObjectStore) Log(ctx context.Context, table string) ([]Transaction, error) {
 	keys, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
 	if err != nil {
 		return nil, fmt.Errorf("list delta log: %w", err)
 	}
 	sort.Strings(keys) // version-ordered: zero-padded names sort lexically
-	out := make([]Transaction, 0, len(keys))
+	var out []Transaction
 	for _, k := range keys {
 		if !strings.HasSuffix(k, ".json") {
+			continue
+		}
+		version, ok := versionFromLogKey(k)
+		if !ok {
 			continue
 		}
 		body, err := o.getAll(ctx, k)
 		if err != nil {
 			return nil, fmt.Errorf("get %s: %w", k, err)
 		}
-		var t Transaction
-		if err := json.Unmarshal(body, &t); err != nil {
-			return nil, fmt.Errorf("unmarshal %s: %w", k, err)
+		commit, err := parseDeltaCommit(body)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", k, err)
 		}
-		out = append(out, t)
+		for _, a := range commit.adds {
+			out = append(out, Transaction{
+				Version:   version,
+				Timestamp: time.UnixMilli(a.ModificationTime).UTC(),
+				Action:    "add",
+				Path:      table + "/" + a.Path,
+				NumRows:   numRecordsFromStats(a.Stats),
+				ByteSize:  a.Size,
+				Schema:    commit.schema, // non-nil only for the commit that carried metaData
+			})
+		}
+		for _, r := range commit.removes {
+			out = append(out, Transaction{
+				Version:   version,
+				Timestamp: time.UnixMilli(r.DeletionTimestamp).UTC(),
+				Action:    "remove",
+				Path:      table + "/" + r.Path,
+			})
+		}
 	}
 	return out, nil
 }
@@ -268,8 +325,9 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 		records = append(records, recs...)
 	}
 
-	// Write the consolidated file at the next version, then remove the old
-	// files in subsequent log entries. Snapshot/Read replay handles the rest.
+	// Write the consolidated file, then commit ONE atomic Delta transaction that
+	// adds it and removes every superseded file. (A single commit means a reader
+	// never sees the new file alongside the old ones — no double-count window.)
 	version := len(txns)
 	parquetBytes, err := o.encodeParquet(records, schema)
 	if err != nil {
@@ -279,20 +337,27 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 	if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
 		return res, fmt.Errorf("put compacted parquet: %w", err)
 	}
-	if err := o.putTxn(ctx, table, version, Transaction{
-		Version: version, Timestamp: time.Now().UTC(), Action: "add",
-		Path: pKey, NumRows: len(records), ByteSize: int64(len(parquetBytes)),
-	}); err != nil {
-		return res, err
+	now := time.Now().UTC()
+	add := deltaAdd{
+		Path:             relTablePath(table, pKey),
+		PartitionValues:  map[string]string{},
+		Size:             int64(len(parquetBytes)),
+		ModificationTime: now.UnixMilli(),
+		DataChange:       true,
+		Stats:            deltaStats(len(records)),
 	}
-	v := version + 1
+	removes := make([]deltaRemove, 0, len(paths))
 	for _, p := range paths {
-		if err := o.putTxn(ctx, table, v, Transaction{
-			Version: v, Timestamp: time.Now().UTC(), Action: "remove", Path: p,
-		}); err != nil {
-			return res, err
-		}
-		v++
+		removes = append(removes, deltaRemove{
+			Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
+		})
+	}
+	commit, err := buildDeltaCommitCompact(add, removes)
+	if err != nil {
+		return res, fmt.Errorf("build compact commit: %w", err)
+	}
+	if err := o.putLogFile(ctx, table, version, commit); err != nil {
+		return res, err
 	}
 
 	res.FilesAfter = 1
@@ -301,12 +366,9 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 	return res, nil
 }
 
-func (o *ObjectStore) putTxn(ctx context.Context, table string, version int, txn Transaction) error {
-	b, err := json.Marshal(txn)
-	if err != nil {
-		return fmt.Errorf("marshal txn: %w", err)
-	}
-	if err := o.obj.Put(ctx, o.bucket, deltaLogKey(table, version), bytes.NewReader(b), int64(len(b)), "application/json"); err != nil {
+// putLogFile writes one Delta commit file at the given version.
+func (o *ObjectStore) putLogFile(ctx context.Context, table string, version int, body []byte) error {
+	if err := o.obj.Put(ctx, o.bucket, deltaLogKey(table, version), bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
 		return fmt.Errorf("put delta log v%d: %w", version, err)
 	}
 	return nil

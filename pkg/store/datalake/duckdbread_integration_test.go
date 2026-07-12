@@ -64,7 +64,7 @@ func TestColdStore_CompactionTombstoneSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("duckdb reader: %v", err)
 	}
-	cold := NewColdStore(reader, lake)
+	cold := NewColdStore(reader)
 	defer cold.Close()
 
 	res, err := cold.Query(ctx, analytics.QueryParams{Table: "impressions", Metrics: []string{"count"}})
