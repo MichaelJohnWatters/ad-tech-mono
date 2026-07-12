@@ -4,9 +4,10 @@ kind: Kustomization
 resources:
   - ../../base
 
-# Local overlay: full HA stack, debug logging
-# Same as staging/prod topology for "works on my machine" guarantee
+# Local overlay: full observability stack, debug logging.
+# Same as staging/prod topology EXCEPT NATS, which runs as a single standalone
+# node here — a 3-node JetStream cluster can't hold a stable raft leader on one
+# OrbStack host (see nats-single.yaml).
 
-patchesStrategicMerge: []
-# Patches will be added as services are built
-# Example: single replica overrides, debug log levels, local storage paths
+patchesStrategicMerge:
+  - nats-single.yaml

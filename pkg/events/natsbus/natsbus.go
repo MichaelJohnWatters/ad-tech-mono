@@ -14,6 +14,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
@@ -31,10 +33,24 @@ var (
 
 // Bus implements events.EventBus using NATS JetStream.
 type Bus struct {
-	conn    *nats.Conn
-	js      jetstream.JetStream
-	service string
-	log     *slog.Logger
+	conn           *nats.Conn
+	js             jetstream.JetStream
+	service        string
+	log            *slog.Logger
+	streamReplicas int
+}
+
+// streamReplicasFromEnv reads NATS_STREAM_REPLICAS (default 1). Local dev runs a
+// single standalone NATS node, so streams are 1× (no raft). Staging/prod run a
+// 3-node cluster and set this to 3 so a stream survives a node failure. Must be
+// <= the NATS cluster size or CreateOrUpdateStream fails with insufficient peers.
+func streamReplicasFromEnv() int {
+	if v := os.Getenv("NATS_STREAM_REPLICAS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			return n
+		}
+	}
+	return 1
 }
 
 // New connects to NATS and returns a JetStream-backed EventBus.
@@ -64,7 +80,7 @@ func New(url, service string, log *slog.Logger) (*Bus, error) {
 
 	log.Info("nats connected", "url", url, "service", service)
 
-	return &Bus{conn: nc, js: js, service: service, log: log}, nil
+	return &Bus{conn: nc, js: js, service: service, log: log, streamReplicas: streamReplicasFromEnv()}, nil
 }
 
 // EnsureStream creates a JetStream stream if it doesn't exist.
@@ -75,7 +91,7 @@ func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) 
 		Retention: jetstream.InterestPolicy, // keep until all consumers ack
 		MaxAge:    24 * time.Hour,
 		Storage:   jetstream.FileStorage,
-		Replicas:  1, // single replica for local dev
+		Replicas:  b.streamReplicas, // 1 local (standalone), 3 in a prod cluster (NATS_STREAM_REPLICAS)
 	})
 	if err != nil {
 		return fmt.Errorf("create stream %s: %w", name, err)
