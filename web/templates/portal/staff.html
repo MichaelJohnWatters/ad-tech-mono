@@ -134,6 +134,22 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Architecture ============ -->
+    <section id="section-architecture" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Architecture diagrams") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        Live system diagrams, rendered from <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">docs/diagrams</code>
+        (kept fresh by <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make diagrams</code>).
+        Maps support scroll-wheel zoom + drag-pan; sequence diagrams render inline.
+        See the index + "update when" legend in <code class="font-mono">docs/diagrams/README.md</code>.
+      </p>
+      <div id="archChips" class="flex flex-wrap gap-2 mb-3"></div>
+      <div id="archViewer" class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-surface-3 overflow-auto" style="min-height:60vh">
+        <div class="p-8 text-center text-sm text-gray-400">Loading…</div>
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
     <section id="section-tools" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Operator tools") }}
       <ul class="space-y-2 text-sm">
@@ -217,12 +233,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'simulator', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', tools: 'Tools'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', architecture: 'Architecture', tools: 'Tools'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -233,7 +249,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, architecture: loadArchitecture}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -479,6 +495,78 @@ async function loadAudit(ev) {
       : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No audit entries match.</td></tr>';
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// ---- Architecture diagrams ----
+// Lazy-loads the vendored render libs (mermaid is ~2.5MB — only fetched when the
+// tab is first opened), reads the manifest, and renders the picked diagram:
+// D2 SVGs inline with scroll/drag pan-zoom, Mermaid blocks rendered client-side.
+let archLibs = false, archManifest = [];
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error('load ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensureArchLibs() {
+  if (archLibs) return;
+  await loadScript('/static/vendor/svg-pan-zoom.min.js');
+  await loadScript('/static/vendor/mermaid.min.js');
+  if (window.mermaid) window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+  archLibs = true;
+}
+async function loadArchitecture() {
+  try {
+    await ensureArchLibs();
+    archManifest = await fetchJSON('/static/diagrams/manifest.json');
+  } catch (err) {
+    $('archViewer').innerHTML = `<div class="p-8 text-center text-sm text-error">could not load diagrams — ${esc(err.message)}</div>`;
+    return;
+  }
+  $('archChips').innerHTML = archManifest.map((d, i) =>
+    `<button data-i="${i}" class="arch-chip text-xs px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">
+       <span class="text-gray-400 mr-1">${esc(d.level)}</span>${esc(d.title)}
+     </button>`).join('');
+  $('archChips').querySelectorAll('.arch-chip').forEach(b => b.addEventListener('click', () => renderDiagram(+b.dataset.i)));
+  renderDiagram(0);
+}
+async function renderDiagram(i) {
+  const d = archManifest[i]; if (!d) return;
+  $('archChips').querySelectorAll('.arch-chip').forEach((b, j) => {
+    b.classList.toggle('bg-brand/10', j === i);
+    b.classList.toggle('text-brand', j === i);
+  });
+  const v = $('archViewer');
+  v.innerHTML = '<div class="p-8 text-center text-sm text-gray-400">Rendering…</div>';
+  try {
+    const body = await fetch('/static/diagrams/' + d.file).then(r => r.text());
+    if (d.type === 'svg') {
+      v.innerHTML = `<div style="width:100%;height:70vh">${body}</div>`;
+      const svg = v.querySelector('svg');
+      if (svg && window.svgPanZoom) {
+        svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
+        window.svgPanZoom(svg, { controlIconsEnabled: true, fit: true, center: true, minZoom: 0.2, maxZoom: 20 });
+      }
+    } else {
+      const blocks = [...body.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
+      v.innerHTML = '<div class="p-4 space-y-8"></div>';
+      const host = v.firstElementChild;
+      if (!blocks.length) { host.innerHTML = '<div class="text-sm text-gray-400">no diagram blocks</div>'; return; }
+      for (let k = 0; k < blocks.length; k++) {
+        const cell = document.createElement('div');
+        try {
+          const { svg } = await window.mermaid.render(`m${i}_${k}_${Date.now()}`, blocks[k]);
+          cell.innerHTML = svg;
+        } catch (e) {
+          cell.innerHTML = `<pre class="text-xs text-error whitespace-pre-wrap">mermaid error: ${esc(e.message)}</pre>`;
+        }
+        host.appendChild(cell);
+      }
+    }
+  } catch (err) {
+    v.innerHTML = `<div class="p-8 text-center text-sm text-error">render failed — ${esc(err.message)}</div>`;
   }
 }
 

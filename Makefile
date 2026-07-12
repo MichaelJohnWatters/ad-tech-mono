@@ -12,13 +12,17 @@ proto: ## Regenerate Go code from proto files (via Buf)
 	buf generate
 	@echo "Proto generation complete."
 
-diagrams: ## Regenerate SVG diagrams from D2 source files
+diagrams: ## Regenerate SVG diagrams from D2 source, then sync into the staff portal
 	@for f in docs/diagrams/*.d2; do \
 		name=$$(basename "$$f" .d2); \
 		echo "Rendering $$name..."; \
 		d2 "$$f" "docs/diagrams/$${name}.svg"; \
 	done
-	@echo "Diagrams regenerated."
+	@echo "Syncing to web/static/diagrams (served by the staff-portal Architecture tab)..."
+	@mkdir -p web/static/diagrams
+	@cp docs/diagrams/*.svg web/static/diagrams/
+	@cp docs/diagrams/e2e-trace.md docs/diagrams/data-reporting.md docs/diagrams/end-to-end-flow.md web/static/diagrams/ 2>/dev/null || true
+	@echo "Diagrams regenerated + synced. (manifest: web/static/diagrams/manifest.json)"
 
 # --- Testing ---
 test: ## Run unit tests
