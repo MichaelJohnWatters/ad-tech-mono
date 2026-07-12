@@ -169,6 +169,7 @@ var staffNav = []NavItem{
 	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},
+	{Label: "Architecture", Href: "#architecture", Icon: "🗺", Perm: "config:read"},
 	{Label: "Tools", Href: "#tools", Icon: "⚙", Perm: "config:read"},
 }
 
