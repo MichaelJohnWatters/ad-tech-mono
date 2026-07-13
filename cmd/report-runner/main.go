@@ -31,8 +31,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
-	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
 )
@@ -72,7 +70,7 @@ func main() {
 
 	// Artifact store (Minio/S3, FS fallback). The bucket is PRIVATE — downloads
 	// stream through the gateway after auth; never SetPublicRead here.
-	objStore := connectObjects(cfg, log)
+	objStore := objects.Connect(cfg, "/tmp/adtech-reports", log)
 	bucket := cfg.Get("report_runner.artifact_bucket", "adtech-reports")
 	if objStore != nil {
 		if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
@@ -201,35 +199,6 @@ func tickLoop(ctx context.Context, interval time.Duration, fn func(context.Conte
 			fn(ctx)
 		}
 	}
-}
-
-// connectObjects returns an S3/Minio store if configured, else a local FS
-// store (mirrors the adserver wiring).
-func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
-	endpoint := cfg.Get("s3.endpoint", "")
-	if endpoint == "" {
-		root := "/tmp/adtech-reports"
-		log.Warn("s3.endpoint not set, using local filesystem", "root", root)
-		store, err := fs.New(root)
-		if err != nil {
-			log.Error("fs store init failed", "error", err)
-		}
-		return store
-	}
-	store, err := objs3.New(objs3.Config{
-		Endpoint:  endpoint,
-		AccessKey: cfg.Get("s3.access_key", "adtech"),
-		SecretKey: cfg.Get("s3.secret_key", "adtech-local-dev"),
-		Region:    cfg.Get("s3.region", "us-east-1"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
-	})
-	if err != nil {
-		log.Error("s3 init failed, falling back to filesystem", "error", err)
-		fsStore, _ := fs.New("/tmp/adtech-reports")
-		return fsStore
-	}
-	log.Info("s3 connected", "endpoint", endpoint)
-	return store
 }
 
 // connectEmail selects SMTP (Mailpit/SES) when configured, else an in-memory

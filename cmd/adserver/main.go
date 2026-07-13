@@ -28,8 +28,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
-	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
@@ -80,7 +78,7 @@ func main() {
 	}
 
 	// Object store for large creative bodies
-	objStore := connectObjects(cfg, log)
+	objStore := objects.Connect(cfg, "/tmp/adtech-creatives", log)
 	bucket := cfg.Get("s3.bucket", "adtech-creatives")
 
 	// Warm cache of creative metadata from Postgres
@@ -282,34 +280,6 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	}
 	log.Info("redis connected", "addr", addr)
 	return client
-}
-
-// connectObjects returns an S3/Minio store if configured, else a local FS store.
-func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
-	endpoint := cfg.Get("s3.endpoint", "")
-	if endpoint == "" {
-		root := "/tmp/adtech-creatives"
-		log.Warn("s3.endpoint not set, using local filesystem", "root", root)
-		store, err := fs.New(root)
-		if err != nil {
-			log.Error("fs store init failed", "error", err)
-		}
-		return store
-	}
-	store, err := objs3.New(objs3.Config{
-		Endpoint:  endpoint,
-		AccessKey: cfg.Get("s3.access_key", "adtech"),
-		SecretKey: cfg.Get("s3.secret_key", "adtech-local-dev"),
-		Region:    cfg.Get("s3.region", "us-east-1"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
-	})
-	if err != nil {
-		log.Error("s3 init failed, falling back to filesystem", "error", err)
-		fsStore, _ := fs.New("/tmp/adtech-creatives")
-		return fsStore
-	}
-	log.Info("s3 connected", "endpoint", endpoint)
-	return store
 }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {

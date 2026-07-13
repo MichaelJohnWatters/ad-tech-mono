@@ -24,8 +24,10 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
@@ -350,9 +352,20 @@ func main() {
 	// reports:read/reports:save gated).
 	mux.Handle(routes.APISavedReports, authMiddleware(http.HandlerFunc(savedReportsHandler(pgSavedReportStore{db: gwDB}, log))))
 
+	// Report jobs — the async report builder (submit/list on reports:read /
+	// reports:export; status + gateway-streamed artifact download on the
+	// subtree). The artifact bucket is private; this download path is the only
+	// way an artifact leaves the platform.
+	reportJobStore := newPGReportJobStore(gwDB)
+	reportScope := reportjobs.PostgresScopeLookup{DB: gwDB}
+	reportObjects := objects.Connect(cfg, "/tmp/adtech-reports", log)
+	mux.Handle(routes.APIReportJobs, authMiddleware(http.HandlerFunc(reportJobsHandler(reportJobStore, reportScope, log))))
+	mux.Handle(routes.APIReportJobs+"/", authMiddleware(http.HandlerFunc(reportJobByIDHandler(reportJobStore, reportObjects, log))))
+
 	// Payouts — publisher earnings/payout history (read-only, tenant-scoped,
 	// earnings:view gated).
 	mux.Handle(routes.APIPayouts, authMiddleware(http.HandlerFunc(payoutsHandler(pgPayoutStore{db: gwDB}, log))))
+	mux.Handle(routes.APIMyRevshare, authMiddleware(http.HandlerFunc(myRevshareHandler(pgMyRevshareStore{db: gwDB}, log))))
 
 	// Quality controls — publisher allow/block lists (tenant-scoped, quality:*
 	// gated); create verifies publisher ownership.
