@@ -168,6 +168,7 @@ func defaultSchema() []SchemaEntry {
 		{Key: "billing.balance_invalidate_min_interval", Type: "duration", Tier: TierLive, Default: "5s", Description: "Per-account throttle on the advertiser-balance cache invalidates published by the billing drawdown sink.", Service: "reporting", Since: "v1.2"},
 		{Key: "reporting.cold_store_enabled", Type: "bool", Tier: TierStatic, Default: "false", Description: "Route deep-history reads to the Parquet lake (DuckDB read_parquet over the active file set) below reporting.hot_window; recent reads stay on ClickHouse. Requires the clickhouse backend and a binary built with the duckdb tag (build/Dockerfile.reporting); otherwise degrades to hot-only.", Service: "reporting", Since: "v1.4"},
 		{Key: "reporting.hot_window", Type: "duration", Tier: TierStatic, Default: "168h", Description: "How far back the hot store (ClickHouse) is authoritative. Reads older than this fall to the cold Parquet lake; queries spanning the boundary are split and merged additively. Only used when reporting.cold_store_enabled.", Service: "reporting", Since: "v1.4"},
+		{Key: "reporting.query_timeout", Type: "duration", Tier: TierLive, Default: "2m", Description: "Per-request deadline on /v1/reporting/query (write deadline + query context). Lets deep-history cold-store reads outlive the server-wide 30s WriteTimeout, which still bounds every other route.", Service: "reporting", Since: "v1.5"},
 	}
 }
 
