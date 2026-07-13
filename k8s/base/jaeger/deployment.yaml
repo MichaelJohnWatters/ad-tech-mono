@@ -37,7 +37,11 @@ spec:
               memory: "128Mi"
             limits:
               cpu: "500m"
-              memory: "512Mi"
+              # 512Mi OOM-killed jaeger (exit 137) under the span volume of a
+              # sustained load run; the all-in-one in-memory trace store fills up.
+              # The OOM briefly blocked services' OTEL export → sim error bursts.
+              # 1.5Gi holds it; alternatively lower otel.sample_ratio to cut spans.
+              memory: "1536Mi"
           livenessProbe:
             httpGet:
               path: /
