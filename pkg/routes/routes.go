@@ -89,6 +89,13 @@ const (
 	// tenant-scoped.
 	APISavedReports = apiPrefix + "/api/reports/saved"
 
+	// APIReportJobs is the async report builder: POST submit a report job
+	// (reports:export), GET list jobs (reports:read); the subtree serves
+	// GET {id} status (reports:read) and GET {id}/download (reports:export,
+	// streamed through the gateway — the artifact bucket is private).
+	// Tenant-scoped.
+	APIReportJobs = apiPrefix + "/api/reports/jobs"
+
 	// APIPayouts is the publisher earnings/payout history (GET only). JWT-gated
 	// on earnings:view; tenant-scoped; read-only (payouts are created by the
 	// billing settlement job).
@@ -131,6 +138,10 @@ const (
 	// publishers.revshare_config and invalidates the billing-rates cache so
 	// reporting's ContractLoader re-reads the split.
 	APIRevshare = apiPrefix + "/api/revshare"
+	// APIMyRevshare is the publisher-scoped read of the caller's OWN revenue-
+	// share terms (GET, earnings:view) — so the publisher portal can show net
+	// (post-fee) earnings and the fee split without the staff-only editor.
+	APIMyRevshare = apiPrefix + "/api/my-revshare"
 
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
@@ -487,6 +498,7 @@ const (
 	PortIdentityConsumer  = "8092"
 	PortSSAI              = "8093"
 	PortTranscoder        = "8094"
+	PortReportRunner      = "8095"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

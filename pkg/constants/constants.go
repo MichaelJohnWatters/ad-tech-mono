@@ -299,6 +299,7 @@ const (
 	ServiceIdentityConsumer  = "identity-consumer"
 	ServiceSSAI              = "ssai"
 	ServiceTranscoder        = "transcoder"
+	ServiceReportRunner      = "report-runner"
 )
 
 // ============================================================

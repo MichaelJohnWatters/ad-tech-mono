@@ -1,13 +1,14 @@
-// Package reportrunner executes due scheduled reports and delivers the results.
+// Package reportrunner turns due scheduled reports into report jobs.
 //
 // It is the runtime behind the saved_reports.schedule field: a report with an
-// interval schedule (@hourly/@daily/@weekly/@monthly) and email delivery is run
-// on its cadence and emailed to the account owner. The runner is a one-shot —
-// a CronJob (or the Tilt manual resource) schedules the cadence; each invocation
-// runs every report that is currently due and exits.
+// interval schedule (@hourly/@daily/@weekly/@monthly) is enqueued on its
+// cadence as an async report job (pkg/reportjobs) — executed by the worker,
+// stored as a downloadable artifact, and emailed as a link when the report's
+// delivery is email. The report-runner service ticks RunDue periodically.
 //
 // The schedule model is interval-based (not full cron) to avoid a parser
-// dependency: "due" means now − last_run ≥ the schedule's interval.
+// dependency: "due" means now − last_run ≥ the schedule's interval. last_run
+// is stamped at enqueue time, so the cadence is enqueue-to-enqueue.
 package reportrunner
 
 import (
@@ -17,18 +18,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
-// ScheduledReport is a saved_reports row the runner may execute, joined with the
-// recipient (account owner email) resolved from team_members.
+// ScheduledReport is a saved_reports row the runner may enqueue, joined with
+// the recipient (account owner email) resolved from team_members.
 type ScheduledReport struct {
 	ID          string
 	AccountID   string
 	Name        string
 	Schedule    string
 	Delivery    string // email | webhook | none
+	Format      string // csv | json | parquet
 	QueryConfig analytics.QueryParams
 	LastRun     *time.Time // nil = never run
 	Recipient   string     // owner email for delivery=email
@@ -45,23 +46,28 @@ type Store interface {
 }
 
 // QueryFunc runs a report query for an account and returns the result. The
-// implementation posts to the reporting service (account_id injected for tenant
-// scope); it is an interface so tests can fake it.
+// implementation posts to the reporting service; it is a func type so tests
+// can fake it. Used by the job executor (pkg/reportjobs).
 type QueryFunc func(ctx context.Context, accountID string, params analytics.QueryParams) (analytics.QueryResult, error)
 
-// Runner executes due reports.
+// EnqueueFunc submits a due scheduled report as an async report job. The
+// implementation (wired in cmd/report-runner) resolves tenant scope filters
+// and inserts into the job queue; it is a func type — not a pkg/reportjobs
+// interface — so neither package imports the other.
+type EnqueueFunc func(ctx context.Context, rep ScheduledReport, now time.Time) error
+
+// Runner enqueues due reports as jobs.
 type Runner struct {
-	Store Store
-	Query QueryFunc
-	Email email.Sender
-	From  string // From address for delivered emails
-	Now   func() time.Time
-	Log   *slog.Logger
+	Store   Store
+	Enqueue EnqueueFunc
+	Now     func() time.Time
+	Log     *slog.Logger
 }
 
-// RunDue runs every report that is currently due and returns how many ran.
-// Individual failures are logged and skipped — one bad report never blocks the
-// rest, and a failed run is NOT marked (so it retries next tick).
+// RunDue enqueues every report that is currently due and returns how many
+// were enqueued. Individual failures are logged and skipped — one bad report
+// never blocks the rest, and a failed enqueue is NOT marked (so it retries
+// next tick).
 func (r *Runner) RunDue(ctx context.Context) (int, error) {
 	now := r.Now()
 	reports, err := r.Store.ScheduledReports(ctx)
@@ -74,7 +80,7 @@ func (r *Runner) RunDue(ctx context.Context) (int, error) {
 			continue
 		}
 		if err := r.runOne(ctx, rep, now); err != nil {
-			r.Log.Error("scheduled report run failed", "report", rep.ID, "name", rep.Name, "error", err)
+			r.Log.Error("scheduled report enqueue failed", "report", rep.ID, "name", rep.Name, "error", err)
 			continue
 		}
 		ran++
@@ -83,38 +89,20 @@ func (r *Runner) RunDue(ctx context.Context) (int, error) {
 }
 
 func (r *Runner) runOne(ctx context.Context, rep ScheduledReport, now time.Time) error {
-	// Tenant scope: force account_id so a report can only ever see its own data.
-	params := rep.QueryConfig
-	if params.Filters == nil {
-		params.Filters = map[string]string{}
+	if rep.Delivery == "email" && rep.Recipient == "" {
+		return fmt.Errorf("no recipient email for account %s", rep.AccountID)
 	}
-	params.Filters["account_id"] = rep.AccountID
-
-	result, err := r.Query(ctx, rep.AccountID, params)
-	if err != nil {
-		return fmt.Errorf("query: %w", err)
+	if err := r.Enqueue(ctx, rep, now); err != nil {
+		return fmt.Errorf("enqueue: %w", err)
 	}
-
-	if rep.Delivery == "email" {
-		if rep.Recipient == "" {
-			return fmt.Errorf("no recipient email for account %s", rep.AccountID)
-		}
-		msg := email.Message{
-			To:      rep.Recipient,
-			From:    r.From,
-			Subject: "Scheduled report: " + rep.Name,
-			Body:    FormatResult(rep.Name, result, now),
-		}
-		if err := r.Email.Send(ctx, msg); err != nil {
-			return fmt.Errorf("email: %w", err)
-		}
-	}
-
+	// MarkRun at enqueue (not completion): the cadence is enqueue-to-enqueue,
+	// and the job queue's schedule-dedupe already prevents pile-ups if a job
+	// is still running when the next interval arrives.
 	if err := r.Store.MarkRun(ctx, rep.ID, now); err != nil {
 		return fmt.Errorf("mark run: %w", err)
 	}
-	r.Log.Info("scheduled report delivered", "report", rep.ID, "name", rep.Name,
-		"delivery", rep.Delivery, "rows", len(result.Rows))
+	r.Log.Info("scheduled report enqueued", "report", rep.ID, "name", rep.Name,
+		"delivery", rep.Delivery, "format", rep.Format)
 	return nil
 }
 
@@ -146,28 +134,4 @@ func scheduleInterval(s string) (time.Duration, bool) {
 		return 30 * 24 * time.Hour, true
 	}
 	return 0, false
-}
-
-// FormatResult renders a query result as a plain-text table for the email body.
-func FormatResult(name string, res analytics.QueryResult, now time.Time) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Scheduled report: %s\nGenerated: %s\n\n", name, now.UTC().Format(time.RFC1123))
-	if len(res.Columns) == 0 {
-		b.WriteString("(no columns)\n")
-		return b.String()
-	}
-	b.WriteString(strings.Join(res.Columns, "\t") + "\n")
-	if len(res.Rows) == 0 {
-		b.WriteString("(no rows in the reporting window)\n")
-		return b.String()
-	}
-	for _, row := range res.Rows {
-		cells := make([]string, len(row))
-		for i, c := range row {
-			cells[i] = fmt.Sprintf("%v", c)
-		}
-		b.WriteString(strings.Join(cells, "\t") + "\n")
-	}
-	fmt.Fprintf(&b, "\n%d row(s).\n", len(res.Rows))
-	return b.String()
 }
