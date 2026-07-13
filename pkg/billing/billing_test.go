@@ -616,3 +616,70 @@ func TestEngine_ReservationStore_MemoryLedgerNeedsNoEnrichment(t *testing.T) {
 		t.Fatalf("memory-ledger settle failed without store: res=%+v err=%v", res, err)
 	}
 }
+
+// TestProcessSettleBatch_EqualsSumOfSettleByTrace proves the batched settle path
+// produces exactly the same ledger entries, committed-spend view, balance
+// drawdowns, and per-request results as settling each trace individually — so
+// batching is a pure throughput change, not a behaviour change. It also covers a
+// no-op (a trace with no reservation).
+func TestProcessSettleBatch_EqualsSumOfSettleByTrace(t *testing.T) {
+	// Reserve-model impressions create the open reservations that settle later.
+	reserves := []SpendEvent{
+		{TraceID: "s1", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1", ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression"},
+		{TraceID: "s2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv2", ClearingPrice: 2.00, Currency: "USD", BidModel: BidCPA, EventType: "impression"},
+		{TraceID: "s3", CampaignID: "c2", PublisherID: "pub2", AdvertiserID: "adv1", ClearingPrice: 4.00, Currency: "USD", BidModel: BidVCPM, EventType: "impression"},
+	}
+	settleReqs := []SettleRequest{
+		{TraceID: "s1", EventType: "click"},      // CPC settles
+		{TraceID: "s2", EventType: "conversion"}, // CPA settles
+		{TraceID: "s3", EventType: "viewable"},   // vCPM settles
+		{TraceID: "s4", EventType: "click"},      // no reservation → no-op
+	}
+	fixed := time.Now()
+
+	batchLedger, batchSink := NewMemoryLedger(), &fakeBalanceSink{}
+	batchEngine := NewEngine(batchLedger, NewContractStore(), clock.NewFake(fixed), logger.New("billing-test"))
+	batchEngine.SetBalanceSink(batchSink)
+	for _, r := range reserves {
+		_, _ = batchEngine.ProcessEvent(context.Background(), r)
+	}
+	batchResults, err := batchEngine.ProcessSettleBatch(context.Background(), settleReqs)
+	if err != nil {
+		t.Fatalf("ProcessSettleBatch: %v", err)
+	}
+
+	perLedger, perSink := NewMemoryLedger(), &fakeBalanceSink{}
+	perEngine := NewEngine(perLedger, NewContractStore(), clock.NewFake(fixed), logger.New("billing-test"))
+	perEngine.SetBalanceSink(perSink)
+	for _, r := range reserves {
+		_, _ = perEngine.ProcessEvent(context.Background(), r)
+	}
+	perResults := make([]*SpendResult, len(settleReqs))
+	for i, r := range settleReqs {
+		perResults[i], _ = perEngine.SettleByTrace(context.Background(), r.TraceID, r.EventType)
+	}
+
+	if !reflect.DeepEqual(batchLedger.Entries(), perLedger.Entries()) {
+		t.Errorf("ledger entries differ:\n batch=%+v\n per  =%+v", batchLedger.Entries(), perLedger.Entries())
+	}
+	if !reflect.DeepEqual(batchEngine.SnapshotCommitted(), perEngine.SnapshotCommitted()) {
+		t.Errorf("committed spend differs: batch=%v per=%v", batchEngine.SnapshotCommitted(), perEngine.SnapshotCommitted())
+	}
+	if !reflect.DeepEqual(batchSink.calls, perSink.calls) {
+		t.Errorf("settle drawdowns differ:\n batch=%+v\n per  =%+v", batchSink.calls, perSink.calls)
+	}
+	if len(batchSink.calls) != 3 {
+		t.Errorf("settle drawdowns = %d, want 3 (s1,s2,s3 settle; s4 is a no-op)", len(batchSink.calls))
+	}
+	for i, wantSettled := range []bool{true, true, true, false} {
+		if wantSettled && (batchResults[i] == nil || batchResults[i].Action != "settled") {
+			t.Errorf("batch result[%d] = %+v, want settled", i, batchResults[i])
+		}
+		if !wantSettled && batchResults[i] != nil {
+			t.Errorf("batch result[%d] = %+v, want nil (no reservation)", i, batchResults[i])
+		}
+		if (batchResults[i] == nil) != (perResults[i] == nil) {
+			t.Errorf("result[%d] nil-ness differs from per-event: batch=%v per=%v", i, batchResults[i], perResults[i])
+		}
+	}
+}
