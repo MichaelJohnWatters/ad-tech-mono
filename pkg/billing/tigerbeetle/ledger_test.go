@@ -495,3 +495,71 @@ func TestRecordUnsupportedTypeReturnsZero(t *testing.T) {
 		t.Fatalf("Adjustment is not yet supported; expected 0, got %d", id)
 	}
 }
+
+// TestRecordBatch_ReplayNoStorm verifies a redelivered entry inside a batch (its
+// transfers come back Exists/LinkedEventFailed) does NOT trigger the whole-chunk
+// per-entry retry — which previously re-submitted the already-committed sibling
+// chains and logged them as failures. The batch stays ONE CreateTransfers call and
+// every entry, including the idempotent replay, counts as recorded.
+func TestRecordBatch_ReplayNoStorm(t *testing.T) {
+	mk := func(trace, advKey, pubKey string, rev, mar float64) billing.LedgerEntry {
+		adv, pub := advUUID(advKey), pubUUID(pubKey)
+		return billing.LedgerEntry{
+			Type: billing.EntrySpend, TraceID: trace, AdvertiserID: adv, PublisherID: pub,
+			DebitAccount: "advertiser:" + adv, CreditAccount: "publisher:" + pub,
+			Amount: rev + mar, PublisherRevenue: rev, PlatformMargin: mar, Currency: "USD", BidModel: "cpm",
+		}
+	}
+	entries := []billing.LedgerEntry{
+		mk("trace-a", "acme", "dailynews", 0.80, 0.20),
+		mk("trace-b", "globex", "dailynews", 4.00, 1.00),
+		mk("trace-c", "acme", "sports", 2.40, 0.60),
+	}
+	fc := newFakeClient()
+	// Entry B (transfers at chunk index 2,3) is a replay: spend Exists, margin cascades.
+	fc.transferResults[2] = tbtypes.TransferExists
+	fc.transferResults[3] = tbtypes.TransferLinkedEventFailed
+
+	l := New(fc, silentLogger())
+	l.RecordBatch(entries)
+
+	if fc.createTransfersCalls != 1 {
+		t.Fatalf("CreateTransfers calls = %d, want 1 (a replay must NOT trigger the per-entry retry storm)", fc.createTransfersCalls)
+	}
+	if got := l.Summary().TotalEntries; got != 3 {
+		t.Fatalf("recorded entries = %d, want 3 (the idempotent replay still counts as recorded)", got)
+	}
+}
+
+// TestRecordBatch_RealFailureIsolated verifies a genuinely-failed chain is dropped
+// (logged) while the sibling chains TB committed still count — and the whole chunk
+// is NOT re-submitted per-entry.
+func TestRecordBatch_RealFailureIsolated(t *testing.T) {
+	mk := func(trace, advKey, pubKey string, rev, mar float64) billing.LedgerEntry {
+		adv, pub := advUUID(advKey), pubUUID(pubKey)
+		return billing.LedgerEntry{
+			Type: billing.EntrySpend, TraceID: trace, AdvertiserID: adv, PublisherID: pub,
+			DebitAccount: "advertiser:" + adv, CreditAccount: "publisher:" + pub,
+			Amount: rev + mar, PublisherRevenue: rev, PlatformMargin: mar, Currency: "USD", BidModel: "cpm",
+		}
+	}
+	entries := []billing.LedgerEntry{
+		mk("trace-a", "acme", "dailynews", 0.80, 0.20),
+		mk("trace-b", "globex", "dailynews", 4.00, 1.00),
+		mk("trace-c", "acme", "sports", 2.40, 0.60),
+	}
+	fc := newFakeClient()
+	// Entry B's spend has a REAL failure (different amount on the same ID); margin cascades.
+	fc.transferResults[2] = tbtypes.TransferExistsWithDifferentAmount
+	fc.transferResults[3] = tbtypes.TransferLinkedEventFailed
+
+	l := New(fc, silentLogger())
+	l.RecordBatch(entries)
+
+	if fc.createTransfersCalls != 1 {
+		t.Fatalf("CreateTransfers calls = %d, want 1 (no whole-chunk retry on a real failure)", fc.createTransfersCalls)
+	}
+	if got := l.Summary().TotalEntries; got != 2 {
+		t.Fatalf("recorded entries = %d, want 2 (A and C commit, B fails)", got)
+	}
+}

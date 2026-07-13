@@ -168,11 +168,11 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 		if len(chunk) == 0 {
 			return
 		}
-		if err := l.createTransfers(chunk); err != nil {
-			// One bad entry rejects its whole linked chain (and, with a shared
-			// request, surfaces as a batch error). Retry each entry alone so the
-			// rest of the batch still records.
-			l.log.Error("tigerbeetle batch chunk failed; retrying per-entry",
+		byIdx, err := l.createTransfersResults(chunk)
+		if err != nil {
+			// Transport-level error (the whole request didn't land) — retry each
+			// entry alone so a single connection hiccup doesn't drop the batch.
+			l.log.Error("tigerbeetle batch chunk transport error; retrying per-entry",
 				"entries", len(chunkEntries), "error", err)
 			for _, b := range chunkEntries {
 				if e2 := l.createTransfers(b.transfers); e2 != nil {
@@ -183,10 +183,34 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 				}
 				l.bumpSummary(b.entry)
 			}
-		} else {
-			for _, b := range chunkEntries {
+			chunk = chunk[:0]
+			chunkEntries = chunkEntries[:0]
+			return
+		}
+		// The request landed. TB commits each independent chain on its own, so
+		// classify per-chain from the sparse results instead of re-submitting the
+		// whole chunk (which would re-hit already-committed chains as Exists). A
+		// chain fails only if one of its transfers has a NON-benign result; a chain
+		// whose only non-OK codes are Exists/LinkedEventFailed is an idempotent
+		// replay (already recorded) and counts as success.
+		idx := 0
+		for _, b := range chunkEntries {
+			var badResult *tbtypes.TransferEventResult
+			for j := idx; j < idx+len(b.transfers); j++ {
+				if r, ok := byIdx[j]; ok && !isBenignTransferResult(r) {
+					rr := r
+					badResult = &rr
+					break
+				}
+			}
+			if badResult != nil {
+				l.log.Error("tigerbeetle ledger record failed",
+					"entry_type", string(b.entry.Type), "trace_id", b.entry.TraceID,
+					"campaign_id", b.entry.CampaignID, "result", badResult.Result)
+			} else {
 				l.bumpSummary(b.entry)
 			}
+			idx += len(b.transfers)
 		}
 		chunk = chunk[:0]
 		chunkEntries = chunkEntries[:0]
@@ -404,20 +428,57 @@ func (l *Ledger) buildRelease(e billing.LedgerEntry) ([]tbtypes.Transfer, error)
 
 // createTransfers submits to TB and turns every non-OK result into a
 // surfaced error. TransferExists is treated as success (idempotent retry).
+// isBenignTransferResult reports whether a per-transfer result code is NOT a
+// genuine failure. OK and Exists are the obvious idempotent cases. LinkedEventFailed
+// is benign BY ITSELF — it only means "another transfer in my linked chain failed";
+// whether that's a real problem is decided by looking at the chain's OTHER results
+// (a real error there will not be benign). So a chain whose only non-OK codes are
+// Exists + LinkedEventFailed is an idempotent replay (the chain was already applied),
+// not a failure — which is exactly what a redelivered event produces.
+func isBenignTransferResult(r tbtypes.TransferEventResult) bool {
+	switch r.Result {
+	case tbtypes.TransferOK, tbtypes.TransferExists, tbtypes.TransferLinkedEventFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// createTransfers submits one logical group (a single linked chain, from the
+// single-entry Record path). TB returns results only for non-OK transfers, so an
+// empty result set is all-OK. A replay yields Exists (+ LinkedEventFailed on its
+// chain-mates), all benign — so this returns nil (no-op), preserving idempotency.
 func (l *Ledger) createTransfers(transfers []tbtypes.Transfer) error {
 	results, err := l.client.CreateTransfers(transfers)
 	if err != nil {
 		return fmt.Errorf("CreateTransfers: %w", err)
 	}
 	for _, r := range results {
-		switch r.Result {
-		case tbtypes.TransferOK, tbtypes.TransferExists:
-			// fine — idempotent
-		default:
+		if !isBenignTransferResult(r) {
 			return fmt.Errorf("transfer result for index %d: %v", r.Index, r.Result)
 		}
 	}
 	return nil
+}
+
+// createTransfersResults submits a multi-chain chunk and returns the raw sparse
+// result set (one entry per NON-OK transfer, keyed by .Index) so the batch caller
+// can classify each independent chain separately. TigerBeetle commits the chains
+// that succeed even when a sibling chain fails, so the caller must NOT re-submit
+// the whole chunk on any failure (that re-hits committed chains as Exists).
+func (l *Ledger) createTransfersResults(transfers []tbtypes.Transfer) (map[int]tbtypes.TransferEventResult, error) {
+	results, err := l.client.CreateTransfers(transfers)
+	if err != nil {
+		return nil, fmt.Errorf("CreateTransfers: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	byIdx := make(map[int]tbtypes.TransferEventResult, len(results))
+	for _, r := range results {
+		byIdx[int(r.Index)] = r
+	}
+	return byIdx, nil
 }
 
 // ensureAccount lazily creates a TB account. Idempotent across processes
