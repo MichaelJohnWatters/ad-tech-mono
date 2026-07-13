@@ -1,0 +1,79 @@
+# Report-runner — the async report worker. Enqueues due saved-report schedules
+# as report jobs, executes the queue (Postgres SKIP LOCKED claims), renders
+# CSV/JSON/Parquet artifacts into the private adtech-reports Minio bucket, and
+# emails download links via Mailpit/SES. Background worker (no external
+# ingress); exposes only /healthz, /readyz, /metrics.
+#
+# SINGLE REPLICA by design: the boot-time stuck-job requeue assumes no other
+# worker is mid-claim. Claims themselves are SKIP LOCKED-safe, so scaling out
+# later only requires rethinking the requeue.
+#
+# Image is built via Tilt's docker_build('adtech-report-runner',
+# build/Dockerfile.dev) which packages the host-built ./bin/report-runner
+# binary for live_update.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-runner
+  namespace: adtech
+  labels:
+    app: report-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: report-runner
+  template:
+    metadata:
+      labels:
+        app: report-runner
+    spec:
+      # See tracker/deployment.yaml — service-link env injection collides with
+      # pkg/config's env-var fallback, so disable it platform-wide.
+      enableServiceLinks: false
+      containers:
+        - name: report-runner
+          image: adtech-report-runner
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8095
+              name: http
+          env:
+            - name: POD_NAME
+              value: "report-runner-0"
+            - name: DATABASE_URL
+              value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+            - name: REPORT_RUNNER_REPORTING_URL
+              value: "http://reporting:8086"
+            # Mailpit in-cluster SMTP; prod overlays swap in SES/Sendgrid.
+            - name: REPORT_RUNNER_SMTP_HOST
+              value: "mailpit:1025"
+            # Download links in report-ready emails point at the host-visible
+            # gateway (Tilt port-forward), not the cluster-internal name.
+            - name: REPORT_RUNNER_PUBLIC_GATEWAY_URL
+              value: "http://localhost:8080"
+            - name: S3_ENDPOINT
+              value: "minio:9000"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: OTEL_ENDPOINT
+              value: "jaeger:4318"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8095
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8095
+            periodSeconds: 2
+            failureThreshold: 3

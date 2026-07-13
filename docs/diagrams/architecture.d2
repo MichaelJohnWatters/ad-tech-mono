@@ -140,6 +140,25 @@ control.gateway  -> events.reporting: /v1/api/reports (tenant-scoped) { style.st
 compact: Datalake compaction (CronJob :05) { shape: hexagon; style.fill: "#f59e0b" }
 compact -> data.lake: bin-pack + tombstone
 
+# Async report builder: gateway enqueues jobs in Postgres (SKIP LOCKED queue);
+# the report-runner worker queries reporting, renders CSV/JSON/Parquet into the
+# private adtech-reports bucket, and emails download links. Downloads stream
+# back through the gateway (auth + ownership), never a public bucket URL.
+data.reportrunner: Report-runner :8095 {
+  style.fill: "#60a5fa"
+  d: schedules → jobs → artifacts (CSV/JSON/Parquet)
+}
+data.reports: Reports bucket (Minio/S3) {
+  shape: cylinder; style.fill: "#c72e49"; style.font-color: "#fff"
+  d: PRIVATE · adtech-reports · 30d retention
+}
+control.gateway -> data.reportrunner: report_jobs queue (Postgres) { style.stroke-dash: 2; style.stroke: "#64748b" }
+data.reportrunner -> events.reporting: /v1/reporting/query (per-job deadline)
+data.reportrunner -> data.reports: write artifact
+control.gateway -> data.reports: stream download (auth'd) { style.stroke-dash: 2; style.stroke: "#64748b" }
+email: Email (Mailpit / SES) { shape: hexagon; style.fill: "#f472b6" }
+data.reportrunner -> email: report-ready link { style.stroke-dash: 4 }
+
 # ============================================================
 # MONEY plane  (budgets, billing ledger)
 # ============================================================

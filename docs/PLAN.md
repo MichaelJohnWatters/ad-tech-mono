@@ -10438,6 +10438,10 @@ The Gateway is the single HTTP entry point for all REST/dashboard traffic. Every
 - `GET    /v1/api/reports/saved` - list saved reports
 - `PUT    /v1/api/reports/saved/{id}` - update saved report (including schedule)
 - `DELETE /v1/api/reports/saved/{id}` - delete saved report
+- `POST   /v1/api/reports/jobs` - submit an async report job (template or ad-hoc; reports:export)
+- `GET    /v1/api/reports/jobs` - list the account's report jobs
+- `GET    /v1/api/reports/jobs/{id}` - job status + artifact metadata
+- `GET    /v1/api/reports/jobs/{id}/download` - stream the CSV/JSON/Parquet artifact (reports:export)
 
 **Billing -> BillingService:**
 - `GET    /v1/api/billing/balance` - current advertiser balance

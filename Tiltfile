@@ -146,6 +146,23 @@ if dev_mode == 'fast':
     k8s_resource('identity-consumer', resource_deps=['identity-consumer-build', 'nats', 'postgres'],
         port_forwards=['8092:8092'], labels=['services'])
 
+    # ---- Report-runner (async report worker: schedules → jobs → artifacts) ----
+    # Enqueues due saved-report schedules as jobs, drains the report_jobs queue
+    # (query reporting → render CSV/JSON/Parquet → Minio adtech-reports bucket),
+    # emails download links via Mailpit. Pure Go, standard fast path.
+    local_resource('report-runner-build',
+        cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/report-runner ./cmd/report-runner',
+        deps=['cmd/report-runner', 'pkg/'], labels=['build'])
+    docker_build_with_restart('adtech-report-runner', '.',
+        dockerfile='build/Dockerfile.dev',
+        build_args={'SERVICE': 'report-runner'},
+        only=['bin/report-runner', 'web'],
+        entrypoint='/app',
+        live_update=[sync('bin/report-runner', '/app')])
+    k8s_yaml(['k8s/base/report-runner/deployment.yaml', 'k8s/base/report-runner/service.yaml'])
+    k8s_resource('report-runner', resource_deps=['report-runner-build', 'postgres', 'reporting', 'mailpit', 'minio'],
+        port_forwards=['8095:8095'], labels=['services'])
+
     # ---- Pipeline (datalake BATCH layer — writes the COLD tier from NATS) ----
     # Consumes the event stream (own NATS group) and lands Parquet + a real Delta
     # log in Minio. This is what populates the cold tier the reporting TieredStore
@@ -426,15 +443,6 @@ local_resource('appadstxt-crawl',
     cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable go run ./cmd/appadstxt',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres'])
-
-local_resource('report-runner',
-    # Scheduled-report runner (normally a periodic CronJob). Runs every saved
-    # report whose interval schedule (@hourly/@daily/@weekly/@monthly) is due
-    # and emails the result via Mailpit (SMTP on 127.0.0.1:1025) — view deliveries
-    # at http://localhost:8025. 127.0.0.1 forces IPv4 (see adstxt-crawl).
-    cmd='DATABASE_URL=postgres://adtech:adtech-local-dev@127.0.0.1:5432/adtech?sslmode=disable REPORT_RUNNER_REPORTING_URL=http://127.0.0.1:8086 REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025 go run ./cmd/report-runner',
-    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
-    resource_deps=['postgres', 'reporting', 'mailpit'])
 
 local_resource('privacy-delete',
     # Level-3 (full deletion) runner (normally a periodic CronJob). Purges every
