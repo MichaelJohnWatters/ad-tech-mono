@@ -93,7 +93,13 @@ spec:
             httpGet: { path: /healthz, port: 8086 }
             initialDelaySeconds: 10
             periodSeconds: 10
+            # Reporting is the heaviest pod (2 replicas draining the event
+            # firehose); under CPU load /healthz can exceed the default 1s and a
+            # liveness timeout would KILL it mid-drain. 3s + 5 failures rides it out.
+            timeoutSeconds: 3
+            failureThreshold: 5
           readinessProbe:
             httpGet: { path: /readyz, port: 8086 }
             periodSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 5
