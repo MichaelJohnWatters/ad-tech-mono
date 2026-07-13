@@ -31,5 +31,5 @@ spec:
             - { name: LOKI_URL, value: "http://loki:3100" }
             - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
           resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 2000m, memory: 512Mi } }
-          livenessProbe:  { httpGet: { path: /healthz, port: 8088 }, initialDelaySeconds: 5 }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8088 }, initialDelaySeconds: 5, timeoutSeconds: 3, failureThreshold: 5 }
           readinessProbe: { httpGet: { path: /readyz, port: 8088 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 5 }

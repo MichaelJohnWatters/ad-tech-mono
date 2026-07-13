@@ -78,6 +78,12 @@ spec:
               port: 8083
             initialDelaySeconds: 5
             periodSeconds: 10
+            # Under CPU starvation /healthz can exceed the default 1s, and a
+            # liveness timeout KILLS the pod (worse than a readiness flap). 3s
+            # timeout + 5 failures stops the pod being liveness-killed and
+            # dropping impression fires while it restarts.
+            timeoutSeconds: 3
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /readyz
