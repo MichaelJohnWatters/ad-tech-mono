@@ -61,6 +61,8 @@ spec:
             httpGet: { path: /healthz, port: 8085 }
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
           readinessProbe:
             httpGet: { path: /readyz, port: 8085 }
             periodSeconds: 2
