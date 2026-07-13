@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -427,6 +428,40 @@ func (c *ClickHouse) QueryRollups(ctx context.Context, config, level string, fro
 			return nil, fmt.Errorf("decode rollup metrics: %w", err)
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CommittedByCampaign implements CommittedReader: realized committed spend per
+// campaign for the UTC day, in micro-dollars, summed from the raw impression
+// stream. clearing_price_usd is per-impression cost (the tracker converts the
+// CPM at source), so summing it over a campaign's CPM impressions is that
+// campaign's realized spend — independent of how many reporting replicas
+// ingested the events, which is exactly what the shared pacing counter's
+// reconcile needs. Covers CPM (billed on impression, the dominant path);
+// reserve/settle models realize on their trigger event and are carried between
+// reconciles by the additive delta path plus the DSP's local over-count guard.
+func (c *ClickHouse) CommittedByCampaign(ctx context.Context, day string) (map[string]int64, error) {
+	q := `SELECT campaign_id, sum(clearing_price_usd) AS spend_usd
+		FROM impressions
+		WHERE toDate(timestamp, 'UTC') = ? AND (bid_model = 'cpm' OR bid_model = '')
+		GROUP BY campaign_id`
+	rows, err := c.db.QueryContext(ctx, q, day)
+	if err != nil {
+		return nil, fmt.Errorf("committed by campaign: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var cid string
+		var spendUSD float64
+		if err := rows.Scan(&cid, &spendUSD); err != nil {
+			return nil, fmt.Errorf("scan committed: %w", err)
+		}
+		if cid == "" {
+			continue
+		}
+		out[cid] = int64(math.Round(spendUSD * 1_000_000))
 	}
 	return out, rows.Err()
 }
