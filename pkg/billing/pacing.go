@@ -157,6 +157,7 @@ type pacingKind int
 const (
 	pacingBilled  pacingKind = iota // CPM immediate → settled
 	pacingReserve                   // CPC/CPA/vCPM/CPCV impression → open hold
+	pacingSettle                    // CPC/CPA/vCPM/CPCV trigger → close hold, realize spend
 )
 
 // pacingItem is one campaign's contribution to a batched pacing update.
@@ -199,6 +200,15 @@ func (p *pacingAccumulator) recordBatch(items []pacingItem) map[string]int64 {
 			old := cp.holds[it.traceID].micros
 			cp.holds[it.traceID] = pacingHold{micros: m, created: now}
 			deltas[it.campaignID] += m - old
+		case pacingSettle:
+			// Close the open hold and realize the spend — net delta is the
+			// settled amount minus the hold it replaces (usually ~zero, since
+			// the hold already counted toward committed). Mirrors recordSettle.
+			m := toMicros(it.amount)
+			removed := cp.holds[it.traceID].micros
+			delete(cp.holds, it.traceID)
+			cp.settledMicros += m
+			deltas[it.campaignID] += m - removed
 		}
 	}
 	return deltas

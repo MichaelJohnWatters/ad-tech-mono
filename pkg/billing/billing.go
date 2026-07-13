@@ -587,6 +587,116 @@ func (e *Engine) SettleByTrace(ctx context.Context, traceID, eventType string) (
 	return e.ProcessEvent(ctx, settle)
 }
 
+// SettleRequest is one settle to attempt in a batch: the trace whose open
+// reservation should settle, and the event type that triggers it
+// (click/conversion/viewable/complete).
+type SettleRequest struct {
+	TraceID   string
+	EventType string
+}
+
+// ProcessSettleBatch settles many reservations in as few durable round-trips as
+// possible — ONE ledger RecordBatch + ONE balance DebitBatch + ONE pacing update
+// — the settle-path twin of ProcessBatch. It is what keeps the CPC/CPA/vCPM/CPCV
+// trigger events (clicks/conversions/views, high volume in a mixed-model stream)
+// from bottlenecking ingestion on per-event TigerBeetle settle chains.
+//
+// The per-trace decisions are IDENTICAL to SettleByTrace — reservation lookup,
+// already-settled dedup, bid-model/event matching, and context recovery from the
+// reservation store — so batching changes only how the WRITES are issued, not
+// what gets settled. Returns one result per request, nil where the settle was a
+// no-op (no reservation yet, already settled, model mismatch, or a duplicate
+// trace within this same batch).
+func (e *Engine) ProcessSettleBatch(ctx context.Context, reqs []SettleRequest) ([]*SpendResult, error) {
+	results := make([]*SpendResult, len(reqs))
+	entries := make([]LedgerEntry, 0, len(reqs))
+	var debits []BatchDebit
+	pacingItems := make([]pacingItem, 0, len(reqs))
+	now := e.clk.Now()
+	seen := make(map[string]bool, len(reqs)) // collapse duplicate triggers within the batch
+
+	for i := range reqs {
+		traceID, eventType := reqs[i].TraceID, reqs[i].EventType
+		if traceID == "" || seen[traceID] {
+			continue
+		}
+		res, ok := e.ledger.ReservationByTrace(traceID)
+		if !ok {
+			continue
+		}
+		if e.ledger.HasSettlement(traceID) {
+			continue
+		}
+		if !settleEventMatches(BidModel(res.BidModel), eventType) {
+			continue
+		}
+
+		settle := SpendEvent{
+			TraceID: traceID, CampaignID: res.CampaignID, PublisherID: res.PublisherID,
+			AdvertiserID: res.AdvertiserID, ClearingPrice: res.Amount, Currency: res.Currency,
+			BidModel: BidModel(res.BidModel), DealType: res.DealType, EventType: eventType, Timestamp: now,
+		}
+		// Recover the account STRINGS the ledger can't retain (TigerBeetle), same
+		// as SettleByTrace, so the settle record + drawdown have their context.
+		if e.reservations != nil && settle.AdvertiserID == "" {
+			if rc, ok, err := e.reservations.GetReservation(ctx, traceID); err != nil {
+				e.log.Error("reservation context lookup failed", "trace_id", traceID, "error", err)
+			} else if ok {
+				settle.CampaignID = rc.CampaignID
+				settle.CreativeID = rc.CreativeID
+				settle.PlacementID = rc.PlacementID
+				settle.PublisherID = rc.PublisherID
+				settle.AdvertiserID = rc.AdvertiserID
+				settle.DealType = rc.DealType
+				if settle.Currency == "" {
+					settle.Currency = rc.Currency
+				}
+			}
+		}
+		seen[traceID] = true
+
+		resID := fmt.Sprintf("res-%s", traceID)
+		contract := e.contracts.Get(settle.PublisherID)
+		revenue := contract.CalculateRevenue(settle.ClearingPrice, settle.DealType)
+		entries = append(entries, LedgerEntry{
+			Timestamp: now, TraceID: traceID, CampaignID: settle.CampaignID,
+			PublisherID: settle.PublisherID, AdvertiserID: settle.AdvertiserID,
+			Type: EntrySettlement, DebitAccount: "escrow:" + resID,
+			CreditAccount: "publisher:" + settle.PublisherID, Amount: settle.ClearingPrice,
+			PublisherRevenue: revenue.PublisherRevenue, PlatformMargin: revenue.PlatformMargin,
+			Currency: settle.Currency, ReservationID: resID,
+		})
+		if settle.AdvertiserID != "" && settle.ClearingPrice > 0 {
+			debits = append(debits, BatchDebit{
+				AdvertiserID: settle.AdvertiserID, Amount: settle.ClearingPrice,
+				Currency: settle.Currency, TraceID: traceID, EventType: eventType,
+			})
+		}
+		pacingItems = append(pacingItems, pacingItem{campaignID: settle.CampaignID, traceID: traceID, amount: settle.ClearingPrice, kind: pacingSettle})
+		results[i] = &SpendResult{
+			TraceID: traceID, AdvertiserSpend: settle.ClearingPrice,
+			PublisherRevenue: revenue.PublisherRevenue, PlatformMargin: revenue.PlatformMargin,
+			FeePercent: revenue.FeePercent, Subsidy: revenue.Subsidy,
+			Action: "settled", ReservationID: resID,
+		}
+	}
+
+	if len(entries) > 0 {
+		e.ledger.RecordBatch(entries)
+	}
+	if len(debits) > 0 && e.balances != nil {
+		if _, err := e.balances.DebitBatch(ctx, debits); err != nil {
+			// Best-effort, like ProcessBatch: the ledger is the source of truth and
+			// the sink is idempotent, so a reconciliation replay recovers a failed
+			// batch. Never fails the events.
+			e.log.Error("settle batch drawdown failed", "debits", len(debits), "error", err)
+		}
+	}
+	e.emitCommitted(ctx, e.pacing.recordBatch(pacingItems))
+
+	return results, nil
+}
+
 // settleEventMatches returns true if the event type would route through
 // the settle branch of ProcessEvent for the given bid model. Keeps the
 // mapping in one place so adding a new bid model means one new line.

@@ -170,12 +170,14 @@ func (c *EventConsumer) handleClickBatch(ctx context.Context, msgs []*events.Mes
 			if c.billing == nil {
 				return
 			}
-			// Settles stay per-trace (they look up each reservation); lower
-			// volume than impressions.
+			// Batch the CPC settles into one ledger + balance + pacing round-trip
+			// (per-trace reservation lookup/dedup is unchanged inside the batch).
+			reqs := make([]billing.SettleRequest, 0, len(es))
 			for _, e := range es {
-				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "click"); err != nil {
-					c.log.Warn("batch click settle failed", "trace_id", e.TraceID, "error", err)
-				}
+				reqs = append(reqs, billing.SettleRequest{TraceID: e.TraceID, EventType: "click"})
+			}
+			if _, err := c.billing.ProcessSettleBatch(ctx, reqs); err != nil {
+				c.log.Error("batch click settle failed", "count", len(reqs), "error", err)
 			}
 		},
 	)
@@ -202,10 +204,12 @@ func (c *EventConsumer) handleConversionBatch(ctx context.Context, msgs []*event
 			if c.billing == nil {
 				return
 			}
+			reqs := make([]billing.SettleRequest, 0, len(es))
 			for _, e := range es {
-				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "conversion"); err != nil {
-					c.log.Warn("batch conversion settle failed", "trace_id", e.TraceID, "error", err)
-				}
+				reqs = append(reqs, billing.SettleRequest{TraceID: e.TraceID, EventType: "conversion"})
+			}
+			if _, err := c.billing.ProcessSettleBatch(ctx, reqs); err != nil {
+				c.log.Error("batch conversion settle failed", "count", len(reqs), "error", err)
 			}
 		},
 	)
@@ -232,13 +236,18 @@ func (c *EventConsumer) handleViewBatch(ctx context.Context, msgs []*events.Mess
 			if c.billing == nil {
 				return
 			}
+			// vCPM settles only on a viewable impression (see handleView), so only
+			// those traces enter the batch.
+			reqs := make([]billing.SettleRequest, 0, len(es))
 			for _, e := range es {
-				// vCPM settles only on a viewable impression (see handleView).
 				if !e.IABViewable {
 					continue
 				}
-				if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "viewable"); err != nil {
-					c.log.Warn("batch view settle failed", "trace_id", e.TraceID, "error", err)
+				reqs = append(reqs, billing.SettleRequest{TraceID: e.TraceID, EventType: "viewable"})
+			}
+			if len(reqs) > 0 {
+				if _, err := c.billing.ProcessSettleBatch(ctx, reqs); err != nil {
+					c.log.Error("batch view settle failed", "count", len(reqs), "error", err)
 				}
 			}
 		},
