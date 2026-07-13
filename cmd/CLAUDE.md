@@ -17,6 +17,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `billing/` | Billing service. Consumes AuctionWinEvents, accrues spend, generates invoices. | NATS, Postgres |
 | `webhooks/` | Webhook dispatcher. Consumes NATS events, delivers HTTP POST to registered URLs. | NATS, Postgres |
 | `identity-consumer/` | Builds the identity graph. Consumes `adtech.identity.observed` from the SSP, batches/dedupes, writes edges (deterministic + probabilistic). Run 1 replica (in-memory fingerprint buckets). | NATS, Postgres |
+| `report-runner/` | Async report worker (:8095). Enqueues due saved-report schedules as report jobs, drains the `report_jobs` Postgres queue (SKIP LOCKED), renders CSV/JSON/Parquet artifacts into the private `adtech-reports` bucket, emails download links. Run 1 replica (boot-time stuck-job requeue). Core in `pkg/reportjobs` + `pkg/reportrunner`. | Postgres, Reporting (HTTP), Minio/S3, SMTP |
 
 ## Jobs (short-lived, K8s CronJobs or one-off)
 
@@ -29,7 +30,6 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `optimise/` | Runs optimisation pipelines (bid, placement, creative). | Hourly/daily |
 | `fraud/` | Batch fraud detection and scoring. | Daily |
 | `adstxt/` | Crawls and caches publisher ads.txt files; publishes the ads-txt cache invalidate on change. | Every 24 hours |
-| `report-runner/` | Runs due scheduled saved reports (interval schedules `@hourly`/`@daily`/`@weekly`/`@monthly`) and emails the account owner. Core in `pkg/reportrunner`. | Periodic (Tilt manual resource locally) |
 
 ## Conventions
 
