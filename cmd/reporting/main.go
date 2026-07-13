@@ -174,7 +174,9 @@ func main() {
 	// net_revenue) server-side. It's a drop-in for the raw store: queries
 	// without derived metrics pass straight through unchanged.
 	engine := reporting.NewQueryEngine(store, contractNet{contracts})
-	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, engine))
+	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, engine, func() time.Duration {
+		return cfg.GetDuration("reporting.query_timeout", 2*time.Minute)
+	}))
 
 	// HTTP event ingestion
 	mux.HandleFunc(routes.ReportingEvents, consumer.HTTPHandler())
@@ -1081,7 +1083,7 @@ func (c contractNet) Net(publisherID string, gross float64) float64 {
 	return c.store.Get(publisherID).CalculateRevenue(gross, "").PublisherRevenue
 }
 
-func queryHandler(log *slog.Logger, q querier) http.HandlerFunc {
+func queryHandler(log *slog.Logger, q querier, queryTimeout func() time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1094,7 +1096,18 @@ func queryHandler(log *slog.Logger, q querier) http.HandlerFunc {
 			return
 		}
 
-		result, err := q.Query(r.Context(), params)
+		// Queries can legitimately outlive the server-wide 30s WriteTimeout —
+		// a deep-history read spans the cold Parquet lake (async report jobs
+		// depend on this). Extend the deadline for THIS response only; every
+		// other reporting route keeps the tight server default.
+		timeout := queryTimeout()
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			log.Warn("query write-deadline extension unsupported", "error", err)
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		result, err := q.Query(ctx, params)
 		if err != nil {
 			log.Error("query failed", "error", err)
 			http.Error(w, "query failed", http.StatusInternalServerError)
