@@ -1220,6 +1220,63 @@ paths:
       parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
       responses: { "200": { description: Deleted } }
 
+  /v1/api/reports/jobs:
+    get:
+      tags: [Reports]
+      summary: List the account's async report jobs (newest first)
+      description: Requires reports:read. Tenant-scoped; supports X-Act-As-Account.
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: Job list with status + artifact metadata } }
+    post:
+      tags: [Reports]
+      summary: Submit a report as an async job
+      description: >
+        Requires reports:export. From a saved-report template (saved_report_id)
+        or ad-hoc (name + query_config). Tenant scope filters are resolved
+        server-side at enqueue; the worker stores the result as a downloadable
+        CSV/JSON/Parquet artifact. delivery=email additionally mails the account
+        owner a download link when the job completes.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                saved_report_id: { type: string, format: uuid, description: template to run (mutually exclusive with name/query_config) }
+                name: { type: string }
+                query_config: { type: object, description: report query specification (ad-hoc submissions) }
+                format: { type: string, enum: [csv, json, parquet], default: csv }
+                delivery: { type: string, enum: [email, none], default: none }
+      responses:
+        "201": { description: "Queued — {id, status}" }
+        "400": { description: Validation or tenant-scope failure }
+  /v1/api/reports/jobs/{id}:
+    get:
+      tags: [Reports]
+      summary: Report job status
+      description: Requires reports:read. 404 for jobs outside the caller's account.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Job with status/error/artifact metadata }
+        "404": { description: Not found (or not the caller's) }
+  /v1/api/reports/jobs/{id}/download:
+    get:
+      tags: [Reports]
+      summary: Download the finished report artifact
+      description: >
+        Requires reports:export. Streams the artifact through the gateway with
+        Content-Disposition attachment — the artifact bucket is private and has
+        no direct URL. 409 until the job is done.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Artifact bytes (text/csv, application/json or parquet) }
+        "409": { description: Job not finished }
+        "404": { description: Not found (or not the caller's) }
+
   # ============================================================
   # Publisher Ad Server - audio + VMAP
   # ============================================================
