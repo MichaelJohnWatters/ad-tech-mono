@@ -101,6 +101,20 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 	return merged, nil
 }
 
+// CommittedByCampaign delegates the shared-pacing-counter reconcile query to the
+// hot store (ClickHouse holds today's raw impressions). Committed spend is always
+// "today", which is inside the hot window, so cold is never involved. Returns nil
+// (additive-only, no store self-heal) when the hot store doesn't implement
+// CommittedReader — the wrapper must forward the capability or reporting can't see
+// it through HotColdStore.
+func (t *HotColdStore) CommittedByCampaign(ctx context.Context, day string) (map[string]int64, error) {
+	cr, ok := t.hot.(CommittedReader)
+	if !ok {
+		return nil, nil
+	}
+	return cr.CommittedByCampaign(ctx, day)
+}
+
 // Write path + lifecycle all delegate to hot (the lake is written by the pipeline).
 func (t *HotColdStore) InsertImpression(ctx context.Context, e *ImpressionEvent) error {
 	return t.hot.InsertImpression(ctx, e)
