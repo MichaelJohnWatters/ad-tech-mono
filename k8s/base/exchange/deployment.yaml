@@ -27,4 +27,4 @@ spec:
             - { name: OTEL_ENDPOINT, value: "jaeger:4318" }
           resources: { requests: { cpu: 100m, memory: 96Mi }, limits: { cpu: 3000m, memory: 512Mi } }
           livenessProbe:  { httpGet: { path: /healthz, port: 8081 }, initialDelaySeconds: 5 }
-          readinessProbe: { httpGet: { path: /readyz, port: 8081 }, periodSeconds: 2, failureThreshold: 5 }
+          readinessProbe: { httpGet: { path: /readyz, port: 8081 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 5 }
