@@ -10,7 +10,11 @@ metadata:
   labels:
     app: reporting
 spec:
-  replicas: 1
+  # >1 replica is safe on the ClickHouse backend (below) with the shared pacing
+  # counter enabled (REPORTING_SHARED_PACING_COUNTER) — the NATS consumer
+  # load-balances ingestion and pacing stays correct across pods. DuckDB's
+  # single-writer constraint does NOT apply here (analytics backend = clickhouse).
+  replicas: 2
   selector:
     matchLabels:
       app: reporting
@@ -48,6 +52,12 @@ spec:
             - name: REPORTING_CLICKHOUSE_ADDR
               value: "clickhouse:9000"
             - name: REPORTING_CLICKHOUSE_BATCH_CONSUMER
+              value: "true"
+            # Multi-replica pacing: store committed spend in a shared Redis
+            # counter (additive across replicas) + periodic store reconcile,
+            # so >1 reporting replica doesn't fragment DSP pacing. See
+            # cmd/reporting/committed_counter.go.
+            - name: REPORTING_SHARED_PACING_COUNTER
               value: "true"
             - name: REPORTING_ROLLUP_ENABLED
               value: "true"

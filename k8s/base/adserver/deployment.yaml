@@ -64,4 +64,5 @@ spec:
           readinessProbe:
             httpGet: { path: /readyz, port: 8085 }
             periodSeconds: 2
+            timeoutSeconds: 3
             failureThreshold: 5

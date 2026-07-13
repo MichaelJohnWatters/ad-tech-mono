@@ -14,7 +14,7 @@ metadata:
   labels:
     app: tracker
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: tracker
@@ -83,4 +83,9 @@ spec:
               path: /readyz
               port: 8083
             periodSeconds: 2
-            failureThreshold: 3
+            # 1s (the default) is too tight under sustained load: /readyz
+            # intermittently exceeds it, flapping the pod out of the Service
+            # endpoints and dropping impression pixels (the 0.97% slippage seen
+            # in the 200qps hour-run). 3s timeout + 5 failures rides out the spikes.
+            timeoutSeconds: 3
+            failureThreshold: 5
