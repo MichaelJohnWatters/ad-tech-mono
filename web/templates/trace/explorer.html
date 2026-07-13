@@ -6,6 +6,7 @@
     <title>Trace Explorer - Ad Tech Platform</title>
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/trace-render.js"></script>
     <style>
         /* Page-local styles: the .flow / .node / .service / .time / .msg
            classes used by renderSteps() below all live in theme.css now
@@ -92,6 +93,27 @@
         }
     }
 
+    // showTrace renders a POST-HOC lookup (a trace already in the analytics
+    // store) via the shared renderer — the same shape the portal "View trace"
+    // drawer will use. summary is {impressions, cost} or null.
+    function showTrace(traceId, _a, _b, summary) {
+        const content = document.getElementById('content');
+        const steps = [];
+        let note, panels = [];
+        if (summary && summary.impressions > 0) {
+            steps.push({ time: '', service: 'reporting', cls: 'active', msg: `${summary.impressions} impression(s) recorded`, detail: `$${(summary.cost || 0).toFixed(2)} cost — analytics store` });
+            note = 'Reconstructed from the analytics store.';
+            panels = [
+                { title: 'Impressions', value: summary.impressions, label: 'in reporting', cls: 'green' },
+                { title: 'Cost', value: '$' + (summary.cost || 0).toFixed(2), label: 'total', cls: 'blue' },
+            ];
+        } else {
+            steps.push({ time: '', service: 'reporting', cls: 'warn', msg: 'No events found for this trace', detail: 'It may not have impressed, or is still in-flight' });
+            note = 'No analytics events for this trace_id.';
+        }
+        renderTrace(content, { traceId: traceId, jaegerBase: 'http://localhost:16686', note: note, steps: steps, panels: panels });
+    }
+
     async function fireSingleRequest() {
         const GW = window.location.protocol + '//' + window.location.hostname + ':8080';
         // Reporting + billing are queried DIRECTLY (:8086), not via the gateway:
@@ -109,26 +131,15 @@
         const steps = [];
         const content = document.getElementById('content');
 
-        function jaegerLink(tid) {
-            if (!tid || tid.length !== 32) return '';
-            return ' <a href="http://localhost:16686/trace/' + tid + '" target="_blank" class="jaeger-link">[Jaeger →]</a>';
-        }
-
+        // Shared renderer (static/trace-render.js). The step shape here
+        // ({time, service, cls, msg, detail}) is exactly what renderTrace draws.
         function renderSteps(status) {
-            const tidHtml = traceId
-                ? 'Trace ID: <code>' + traceId + '</code>' + jaegerLink(traceId)
-                : 'Trace ID: <em>pending exchange response</em>';
-            let html = '<div class="demo-note">' + tidHtml + ' &mdash; ' + status + '</div>';
-            html += '<div class="flow">';
-            for (const s of steps) {
-                html += `<div class="node ${s.cls}">
-                    <span class="time">${s.time}</span>
-                    <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
-                    <span class="msg">${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
-                </div>`;
-            }
-            html += '</div>';
-            content.innerHTML = html;
+            renderTrace(content, {
+                traceId: traceId,
+                jaegerBase: 'http://localhost:16686',
+                note: traceId ? status : '<em>pending exchange response</em> &mdash; ' + status,
+                steps: steps,
+            });
         }
 
         // Step 1: Auction
@@ -259,30 +270,25 @@
             }
         } catch (e) { /* billing not available */ }
 
-        // Summary panels
+        // Summary: same timeline plus the winner / financial panels.
         const totalMs = Math.round(performance.now() - t0);
-        let html = '<div class="demo-note">Trace ID: <code>' + traceId + '</code> &mdash; Full pipeline executed end-to-end in ' + totalMs + 'ms. All data is real.</div>';
-        html += '<div class="flow">';
-        for (const s of steps) {
-            html += `<div class="node ${s.cls}">
-                <span class="time">${s.time}</span>
-                <span class="service ${s.service}">[${s.service.charAt(0).toUpperCase() + s.service.slice(1)}]</span>
-                <span class="msg">${s.msg}${s.detail ? ' <span class="detail">' + s.detail + '</span>' : ''}</span>
-            </div>`;
-        }
-        html += '</div>';
-        html += '<div class="panels">';
-        html += `<div class="panel"><h3>Clearing Price</h3><div class="metric green">$${bid.price.toFixed(2)}</div><div class="label">CPM (first-price)</div></div>`;
-        html += `<div class="panel"><h3>Winner</h3><div class="metric blue">${seat.seat}</div><div class="label">DSP ID</div></div>`;
+        const panels = [
+            { title: 'Clearing Price', value: '$' + bid.price.toFixed(2), label: 'CPM (first-price)', cls: 'green' },
+            { title: 'Winner', value: seat.seat, label: 'DSP ID', cls: 'blue' },
+        ];
         if (billingData) {
-            html += `<div class="panel"><h3>Publisher Revenue</h3><div class="metric yellow">$${billingData.PublisherRevenue.toFixed(2)}</div><div class="label">${(100-billingData.PlatformMargin/billingData.Amount*100).toFixed(0)}% rev share</div></div>`;
-            html += `<div class="panel"><h3>Platform Margin</h3><div class="metric purple">$${billingData.PlatformMargin.toFixed(2)}</div><div class="label">${(billingData.PlatformMargin/billingData.Amount*100).toFixed(0)}% take rate</div></div>`;
+            panels.push({ title: 'Publisher Revenue', value: '$' + billingData.PublisherRevenue.toFixed(2), label: (100 - billingData.PlatformMargin / billingData.Amount * 100).toFixed(0) + '% rev share', cls: 'yellow' });
+            panels.push({ title: 'Platform Margin', value: '$' + billingData.PlatformMargin.toFixed(2), label: (billingData.PlatformMargin / billingData.Amount * 100).toFixed(0) + '% take rate', cls: 'purple' });
         } else {
-            html += `<div class="panel"><h3>Creative</h3><div class="metric yellow">${bid.crid}</div><div class="label">Creative ID</div></div>`;
-            html += `<div class="panel"><h3>Pipeline</h3><div class="metric purple">${totalMs}ms</div><div class="label">End-to-end</div></div>`;
+            panels.push({ title: 'Creative', value: bid.crid, label: 'Creative ID', cls: 'yellow' });
+            panels.push({ title: 'Pipeline', value: totalMs + 'ms', label: 'End-to-end', cls: 'purple' });
         }
-        html += '</div>';
-        content.innerHTML = html;
+        renderTrace(content, {
+            traceId: traceId,
+            note: 'Full pipeline executed end-to-end in ' + totalMs + 'ms. All data is real.',
+            steps: steps,
+            panels: panels,
+        });
     }
 
     // ---- Batch reconciliation: fire N ads, prove every stage adds up ----

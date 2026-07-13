@@ -179,6 +179,17 @@
       </div>
       {{ template "card-end" . }}
 
+      {{ template "card-start" (dict "title" "Trace inspector") }}
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        Look up any request by <code class="font-mono">trace_id</code> and see its flow through the
+        platform — inline, without leaving the console. Staff view is unscoped (full detail).
+      </p>
+      {{ template "trace-inspector" (dict
+          "inputId" "staffTraceId" "btnId" "staffTraceBtn" "outId" "staffTraceOut"
+          "onlookup" "staffLookupTrace"
+          "placeholder" "trace_id (32-hex, from a log line or report row)") }}
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Metrics — Grafana (live)") }}
       <p class="text-xs text-gray-400 mb-2">Blank? Open Grafana in a new tab — embedding needs the pod reachable + <code class="font-mono">allow_embedding</code>.</p>
       <iframe data-src="http://localhost:3000/?kiosk" class="w-full rounded-lg border border-gray-200 dark:border-gray-800 bg-white" style="height:70vh" title="Grafana"></iframe>
@@ -244,10 +255,49 @@
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
+<script src="/static/trace-render.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// staffLookupTrace — the in-portal trace inspector. Staff is unscoped, so it
+// queries the analytics store directly (via the gateway reports proxy) for the
+// trace and renders the shared flow timeline (static/trace-render.js).
+// NOTE: this is the Phase-A "thin" view (impression confirmation + cost). Phase
+// B swaps the fetch for the richer, per-service /v1/api/trace reconstruction and
+// adds the scoped/redacted advertiser + publisher versions.
+async function staffLookupTrace(traceId) {
+  const out = $('staffTraceOut');
+  if (!traceId) { renderTrace(out, { note: 'Enter a trace_id.', steps: [] }); return; }
+  renderTrace(out, { traceId, note: 'Looking up…', steps: [] });
+  try {
+    const data = await fetchJSON('/v1/api/reports', {
+      method: 'POST',
+      body: JSON.stringify({ table: 'impressions', metrics: ['count', 'sum_cost'], filters: { trace_id: traceId } }),
+    });
+    const rows = data?.rows || data?.Rows || [];
+    const count = rows.length ? rows[0][0] : 0;
+    const cost = rows.length ? (rows[0][1] || 0) : 0;
+    if (count > 0) {
+      renderTrace(out, {
+        traceId, jaegerBase: 'http://localhost:16686',
+        note: 'Reconstructed from the analytics store (staff · unscoped).',
+        steps: [{ time: '', service: 'reporting', cls: 'active', msg: esc(count) + ' impression(s) recorded', detail: '$' + cost.toFixed(2) + ' cost' }],
+        panels: [
+          { title: 'Impressions', value: esc(count), label: 'in reporting', cls: 'green' },
+          { title: 'Cost', value: '$' + cost.toFixed(2), label: 'total', cls: 'blue' },
+        ],
+      });
+    } else {
+      renderTrace(out, { traceId, note: 'No analytics events for this trace_id (in-flight, or it never impressed).',
+        steps: [{ time: '', service: 'reporting', cls: 'warn', msg: 'No events found', detail: '' }] });
+    }
+  } catch (err) {
+    renderTrace(out, { traceId, note: 'Lookup failed: ' + esc(err.message),
+      steps: [{ time: '', service: 'reporting', cls: 'error', msg: 'Query error', detail: esc(err.message) }] });
+  }
+}
 
 async function fetchJSON(url, opts = {}) {
   const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});

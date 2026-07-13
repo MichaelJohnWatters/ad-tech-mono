@@ -1,0 +1,29 @@
+{{ define "trace-inspector" }}
+{{/*
+  Reusable trace inspector widget: a trace_id input + a render target for the
+  shared flow timeline (static/trace-render.js -> window.renderTrace).
+
+  The PAGE owns the data fetch: define a JS function named by .onlookup that
+  takes the trace id, fetches the (scoped) trace data, and calls
+  renderTrace(document.getElementById("<outId>"), data). This keeps the widget
+  presentation-only so staff (unscoped) and advertiser/publisher (scoped +
+  redacted) pages can reuse it with different backends.
+
+  Requires the page to include <script src="/static/trace-render.js"></script>.
+
+  Params (pass via dict): .inputId .btnId .outId .onlookup .placeholder
+*/}}
+<div class="trace-inspector space-y-4">
+  <div class="flex gap-2 items-center">
+    <input id="{{ .inputId }}" type="text" placeholder="{{ .placeholder }}"
+           class="flex-1 rounded-lg border border-gray-300 dark:border-gray-700 bg-transparent px-3 py-2 font-mono text-xs"
+           onkeydown="if(event.key==='Enter'){ {{ .onlookup }}(this.value.trim()); }" />
+    <button id="{{ .btnId }}" type="button"
+            onclick="{{ .onlookup }}(document.getElementById('{{ .inputId }}').value.trim())"
+            class="rounded-lg border border-gray-200 dark:border-gray-800 px-4 py-2 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
+      View trace
+    </button>
+  </div>
+  <div id="{{ .outId }}" class="trace-timeline"></div>
+</div>
+{{ end }}
