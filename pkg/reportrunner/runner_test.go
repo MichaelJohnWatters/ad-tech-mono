@@ -2,11 +2,11 @@ package reportrunner
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -59,14 +59,14 @@ type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
 
-func TestRunDue_EmailsAndMarksDueReports(t *testing.T) {
+func TestRunDue_EnqueuesAndMarksDueReports(t *testing.T) {
 	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
 	dayAgo := now.Add(-25 * time.Hour)
 	hourAgo := now.Add(-30 * time.Minute)
 
 	store := &fakeStore{reports: []ScheduledReport{
 		// due (daily, 25h ago)
-		{ID: "r1", AccountID: "acc-1", Name: "Daily spend", Schedule: "@daily", Delivery: "email",
+		{ID: "r1", AccountID: "acc-1", Name: "Daily spend", Schedule: "@daily", Delivery: "email", Format: "csv",
 			QueryConfig: analytics.QueryParams{Table: "impressions"}, LastRun: &dayAgo, Recipient: "a@x.test"},
 		// not due (daily but only 30m ago)
 		{ID: "r2", AccountID: "acc-2", Name: "Recent", Schedule: "@daily", Delivery: "email",
@@ -75,20 +75,17 @@ func TestRunDue_EmailsAndMarksDueReports(t *testing.T) {
 		{ID: "r3", AccountID: "acc-3", Name: "Cron", Schedule: "0 9 * * 1", Delivery: "email", Recipient: "c@x.test"},
 	}}
 
-	mail := email.NewMemory(quietLog())
-	var gotAccount string
-	var gotFilters map[string]string
+	var enqueued []ScheduledReport
+	var enqueuedAt time.Time
 	r := &Runner{
 		Store: store,
-		Email: mail,
-		From:  "reports@adtech.test",
-		Now:   func() time.Time { return now },
-		Log:   quietLog(),
-		Query: func(_ context.Context, accountID string, p analytics.QueryParams) (analytics.QueryResult, error) {
-			gotAccount = accountID
-			gotFilters = p.Filters
-			return analytics.QueryResult{Columns: []string{"day", "spend"}, Rows: [][]any{{"2026-07-04", 12.5}}}, nil
+		Enqueue: func(_ context.Context, rep ScheduledReport, now time.Time) error {
+			enqueued = append(enqueued, rep)
+			enqueuedAt = now
+			return nil
 		},
+		Now: func() time.Time { return now },
+		Log: quietLog(),
 	}
 
 	ran, err := r.RunDue(context.Background())
@@ -101,16 +98,11 @@ func TestRunDue_EmailsAndMarksDueReports(t *testing.T) {
 	if len(store.marked) != 1 || store.marked[0] != "r1" {
 		t.Errorf("marked = %v, want [r1]", store.marked)
 	}
-	// The query was tenant-scoped to the report's account.
-	if gotAccount != "acc-1" || gotFilters["account_id"] != "acc-1" {
-		t.Errorf("query account=%q filter=%q, want acc-1", gotAccount, gotFilters["account_id"])
+	if len(enqueued) != 1 || enqueued[0].ID != "r1" || enqueued[0].Format != "csv" {
+		t.Fatalf("enqueued = %+v, want r1 with csv format", enqueued)
 	}
-	sent := mail.Sent()
-	if len(sent) != 1 || sent[0].To != "a@x.test" || sent[0].From != "reports@adtech.test" {
-		t.Fatalf("sent = %+v, want one email to a@x.test", sent)
-	}
-	if !contains(sent[0].Body, "Daily spend") || !contains(sent[0].Body, "12.5") {
-		t.Errorf("email body missing report name/data: %q", sent[0].Body)
+	if !enqueuedAt.Equal(now) {
+		t.Errorf("enqueued at %v, want %v", enqueuedAt, now)
 	}
 }
 
@@ -119,25 +111,55 @@ func TestRunDue_MissingRecipientDoesNotMark(t *testing.T) {
 	store := &fakeStore{reports: []ScheduledReport{
 		{ID: "r1", AccountID: "acc-1", Name: "No recipient", Schedule: "@daily", Delivery: "email", LastRun: nil, Recipient: ""},
 	}}
+	enqueues := 0
 	r := &Runner{
-		Store: store, Email: email.NewMemory(quietLog()), From: "x@x.test",
-		Now: func() time.Time { return now }, Log: quietLog(),
-		Query: func(context.Context, string, analytics.QueryParams) (analytics.QueryResult, error) {
-			return analytics.QueryResult{}, nil
-		},
+		Store:   store,
+		Enqueue: func(context.Context, ScheduledReport, time.Time) error { enqueues++; return nil },
+		Now:     func() time.Time { return now },
+		Log:     quietLog(),
 	}
 	ran, _ := r.RunDue(context.Background())
-	if ran != 0 || len(store.marked) != 0 {
-		t.Errorf("ran=%d marked=%v, want 0 and none (no recipient → failure, not marked)", ran, store.marked)
+	if ran != 0 || len(store.marked) != 0 || enqueues != 0 {
+		t.Errorf("ran=%d marked=%v enqueues=%d, want all zero (no recipient → failure, not marked)",
+			ran, store.marked, enqueues)
 	}
 }
 
-func contains(s, sub string) bool { return len(s) >= len(sub) && indexOf(s, sub) >= 0 }
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+func TestRunDue_NoneDeliveryNeedsNoRecipient(t *testing.T) {
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{reports: []ScheduledReport{
+		{ID: "r1", AccountID: "acc-1", Name: "Artifact only", Schedule: "@daily", Delivery: "none", LastRun: nil},
+	}}
+	enqueues := 0
+	r := &Runner{
+		Store:   store,
+		Enqueue: func(context.Context, ScheduledReport, time.Time) error { enqueues++; return nil },
+		Now:     func() time.Time { return now },
+		Log:     quietLog(),
 	}
-	return -1
+	ran, _ := r.RunDue(context.Background())
+	if ran != 1 || enqueues != 1 || len(store.marked) != 1 {
+		t.Errorf("ran=%d enqueues=%d marked=%v, want 1/1/[r1] (delivery=none schedules run without a recipient)",
+			ran, enqueues, store.marked)
+	}
+}
+
+func TestRunDue_FailedEnqueueNotMarked(t *testing.T) {
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	store := &fakeStore{reports: []ScheduledReport{
+		{ID: "r1", AccountID: "acc-1", Name: "Broken", Schedule: "@daily", Delivery: "none", LastRun: nil},
+	}}
+	r := &Runner{
+		Store:   store,
+		Enqueue: func(context.Context, ScheduledReport, time.Time) error { return errors.New("queue down") },
+		Now:     func() time.Time { return now },
+		Log:     quietLog(),
+	}
+	ran, err := r.RunDue(context.Background())
+	if err != nil {
+		t.Fatalf("RunDue returned error: %v (individual failures must not bubble)", err)
+	}
+	if ran != 0 || len(store.marked) != 0 {
+		t.Errorf("ran=%d marked=%v, want 0 and none (failed enqueue retries next tick)", ran, store.marked)
+	}
 }

@@ -22,17 +22,20 @@ type PostgresStore struct{ DB *sql.DB }
 // NewPostgresStore returns a Store backed by db.
 func NewPostgresStore(db *sql.DB) PostgresStore { return PostgresStore{DB: db} }
 
-// ScheduledReports returns every email-delivery report with a non-empty
-// schedule, joined with the account owner's email (recipient).
+// ScheduledReports returns every report with a non-empty schedule, joined
+// with the account owner's email (recipient). Delivery no longer gates the
+// query: a schedule with delivery=none still produces a downloadable
+// artifact, just no email.
 func (s PostgresStore) ScheduledReports(ctx context.Context) ([]ScheduledReport, error) {
 	const q = `
 SELECT sr.id::text, sr.account_id::text, sr.name, sr.query_config::text,
-       COALESCE(sr.schedule, ''), COALESCE(sr.delivery, 'none'), sr.last_run_at,
+       COALESCE(sr.schedule, ''), COALESCE(sr.delivery, 'none'),
+       COALESCE(sr.format, 'csv'), sr.last_run_at,
        COALESCE((SELECT tm.email FROM team_members tm
                  WHERE tm.account_id = sr.account_id AND tm.status = 'active'
                  ORDER BY (tm.role = 'owner') DESC, tm.created_at LIMIT 1), '')
 FROM saved_reports sr
-WHERE sr.schedule IS NOT NULL AND sr.schedule <> '' AND sr.delivery = 'email'`
+WHERE sr.schedule IS NOT NULL AND sr.schedule <> ''`
 	rows, err := s.DB.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -44,7 +47,7 @@ WHERE sr.schedule IS NOT NULL AND sr.schedule <> '' AND sr.delivery = 'email'`
 		var queryJSON string
 		var lastRun sql.NullTime
 		if err := rows.Scan(&r.ID, &r.AccountID, &r.Name, &queryJSON,
-			&r.Schedule, &r.Delivery, &lastRun, &r.Recipient); err != nil {
+			&r.Schedule, &r.Delivery, &r.Format, &lastRun, &r.Recipient); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(queryJSON), &r.QueryConfig); err != nil {
