@@ -89,7 +89,7 @@
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
-      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end" onsubmit="runReport(event)">
+      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end" onsubmit="runReport(event)">
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
           <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
@@ -107,12 +107,22 @@
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
-          <select id="repRange" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <select id="repRange" onchange="toggleColdHint()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option>
           </select>
         </label>
-        {{ template "button" (dict "label" "Run query" "type" "submit") }}
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Job format</span>
+          <select id="repFormat" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="csv">CSV</option><option value="json">JSON</option><option value="parquet">Parquet</option>
+          </select>
+        </label>
+        <div class="flex gap-2">
+          {{ template "button" (dict "label" "Run query" "type" "submit") }}
+          {{ template "button" (dict "label" "Run as job" "variant" "secondary" "onclick" "runAsJob(event)" "title" "Run async and download the result — use for long ranges") }}
+        </div>
       </form>
+      <p id="coldHint" class="hidden mt-2 text-xs text-warn">Ranges beyond the last 7 days can read cold storage and run slowly — prefer <b>Run as job</b> and download the result.</p>
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "Results") }}
@@ -132,6 +142,15 @@
       <div id="savedWrap">
       {{ template "table-start" (dict "headers" (slice "Name" "Query" "")) }}
         <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Report jobs") }}
+      <p class="mb-3 text-xs text-gray-400">Async runs — results stay downloadable for 30 days.</p>
+      <div id="jobsWrap">
+      {{ template "table-start" (dict "headers" (slice "Name" "Status" "Format" "Created" "Rows" "")) }}
+        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -511,8 +530,11 @@ function showSection(name) {
   if (!loaded[name]) {
     loaded[name] = true;
     ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
-      creatives: loadCreatives, audiences: loadAudiences, reports: loadSaved,
+      creatives: loadCreatives, audiences: loadAudiences,
+      reports: () => { loadSaved(); loadJobs(); },
       billing: loadBilling, team: loadTeam}[name])?.();
+  } else if (name === 'reports') {
+    loadJobs(); // re-entering restarts the in-flight poll
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -1052,6 +1074,7 @@ async function loadSaved() {
       <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
       <td class="px-3 py-2 text-right whitespace-nowrap">
         <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
+        <button onclick="jobFromSaved('${esc(s.id)}')" title="Run async and download the result" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run as job</button>
         <button onclick="deleteSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
       </td>
     </tr>`;
@@ -1097,6 +1120,80 @@ async function deleteSaved(id) {
     toast('Saved query deleted — save it again to undo', 'success');
     loadSaved();
   } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
+
+// ---- Report jobs (async) ----
+const jobsTbody = () => document.querySelector('#jobsWrap tbody');
+let jobsTimer = null;
+
+function toggleColdHint() {
+  $('coldHint')?.classList.toggle('hidden', parseInt($('repRange').value, 10) <= 7);
+}
+
+function jobStatusBadge(j) {
+  const cls = {queued: 'bg-gray-200/60 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
+               running: 'bg-brand/15 text-brand', done: 'bg-success/15 text-success',
+               failed: 'bg-error/15 text-error'}[j.status] || 'bg-gray-100 text-gray-500';
+  const title = j.status === 'failed' ? ` title="${esc(j.error || '')}"` : '';
+  return `<span${title} class="text-xs px-1.5 py-0.5 rounded ${cls}">${esc(j.status)}</span>`;
+}
+
+async function loadJobs() {
+  clearTimeout(jobsTimer);
+  let jobs = [];
+  try {
+    jobs = await fetchJSON('/v1/api/reports/jobs') || [];
+  } catch (err) {
+    jobsTbody().innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    return;
+  }
+  jobsTbody().innerHTML = jobs.length ? jobs.map(j => `
+    <tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-medium">${esc(j.name)}</td>
+      <td class="px-3 py-2">${jobStatusBadge(j)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(j.format)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc((j.created_at || '').slice(0, 19))}</td>
+      <td class="px-3 py-2 font-mono text-xs text-right">${j.status === 'done' ? (j.row_count ?? 0) : '—'}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">${j.status === 'done'
+        ? `<a href="/v1/api/reports/jobs/${esc(j.id)}/download" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Download</a>`
+        : ''}</td>
+    </tr>`).join('')
+    : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No jobs yet — use “Run as job” above.</td></tr>';
+  // Poll while anything is in flight and the section is visible.
+  if (jobs.some(j => j.status === 'queued' || j.status === 'running')
+      && !$('section-reports').classList.contains('hidden')) {
+    jobsTimer = setTimeout(loadJobs, 3000);
+  }
+}
+
+async function submitReportJob(body, label) {
+  try {
+    await fetchJSON('/v1/api/reports/jobs', {method: 'POST', body: JSON.stringify(body)});
+    toast(`Job queued — ${label}`, 'success');
+    loadJobs();
+  } catch (err) { toast('Job failed: ' + err.message, 'error'); }
+}
+
+function runAsJob(ev) {
+  ev.preventDefault();
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  const days = parseInt($('repRange').value, 10);
+  submitReportJob({
+    name: `${$('repTable').value} last ${days}d`,
+    query_config: {
+      table: $('repTable').value,
+      metrics: split($('repMetrics').value),
+      dimensions: split($('repDims').value),
+      time_from: daysAgo(days),
+    },
+    format: $('repFormat').value,
+  }, 'watch the Report jobs table below');
+}
+
+function jobFromSaved(id) {
+  const s = savedCache.find(x => x.id === id);
+  submitReportJob({saved_report_id: id, format: $('repFormat').value},
+    s ? esc(s.name) : 'from saved query');
 }
 
 // ---- Reports console ----
