@@ -98,42 +98,57 @@ func (p *pacingAccumulator) reset() {
 }
 
 // recordBilled adds an immediately-billed (CPM) spend to today's settled total.
-func (p *pacingAccumulator) recordBilled(campaignID string, amount float64) {
+// Returns the committed-micros delta so the engine can mirror it to the shared
+// CommittedCounter (billed spend raises committed by the full amount).
+func (p *pacingAccumulator) recordBilled(campaignID string, amount float64) int64 {
 	if campaignID == "" || amount <= 0 {
-		return
+		return 0
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
-	p.campaignLocked(campaignID).settledMicros += toMicros(amount)
+	m := toMicros(amount)
+	p.campaignLocked(campaignID).settledMicros += m
+	return m
 }
 
 // recordReserve opens a hold for an impression awaiting its settle event. The
-// hold counts toward committed until it settles or is swept.
-func (p *pacingAccumulator) recordReserve(campaignID, traceID string, amount float64) {
+// hold counts toward committed until it settles or is swept. Returns the
+// committed-micros delta (net of any prior hold on the same trace, so a
+// redelivered reserve doesn't double-count).
+func (p *pacingAccumulator) recordReserve(campaignID, traceID string, amount float64) int64 {
 	if campaignID == "" || traceID == "" || amount <= 0 {
-		return
+		return 0
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
-	p.campaignLocked(campaignID).holds[traceID] = pacingHold{micros: toMicros(amount), created: p.clk.Now()}
+	m := toMicros(amount)
+	cp := p.campaignLocked(campaignID)
+	old := cp.holds[traceID].micros
+	cp.holds[traceID] = pacingHold{micros: m, created: p.clk.Now()}
+	return m - old
 }
 
-// recordSettle converts an open hold into settled spend (net-neutral to
-// committed: the hold was already counted). If the hold is gone (swept, or the
-// reserve landed on a prior day) the settled amount is still counted, because a
-// settle means the spend was realized.
-func (p *pacingAccumulator) recordSettle(campaignID, traceID string, amount float64) {
+// recordSettle converts an open hold into settled spend. Returns the
+// committed-micros delta: the settled amount minus the hold it replaces (usually
+// ~net-zero, since the hold already counted toward committed). If the hold is
+// gone (swept, or the reserve landed on a prior day, or it settled on another
+// replica) removed is zero and the settle raises committed by its full amount —
+// still correct, because a settle means the spend was realized.
+func (p *pacingAccumulator) recordSettle(campaignID, traceID string, amount float64) int64 {
 	if campaignID == "" || amount <= 0 {
-		return
+		return 0
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
 	cp := p.campaignLocked(campaignID)
+	removed := cp.holds[traceID].micros
 	delete(cp.holds, traceID)
-	cp.settledMicros += toMicros(amount)
+	m := toMicros(amount)
+	cp.settledMicros += m
+	return m - removed
 }
 
 // pacingKind selects which accumulator mutation a batch item applies.
@@ -155,14 +170,17 @@ type pacingItem struct {
 // recordBatch applies all items under a SINGLE lock (one rollLocked), removing
 // the N lock acquisitions a per-event loop would take. Semantics are identical
 // to calling recordBilled / recordReserve for each item in order.
-func (p *pacingAccumulator) recordBatch(items []pacingItem) {
+// Returns the per-campaign committed-micros delta for the whole batch so the
+// engine can mirror it to the shared CommittedCounter in one AddDelta call.
+func (p *pacingAccumulator) recordBatch(items []pacingItem) map[string]int64 {
 	if len(items) == 0 {
-		return
+		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
 	now := p.clk.Now()
+	deltas := make(map[string]int64)
 	for _, it := range items {
 		if it.campaignID == "" || it.amount <= 0 {
 			continue
@@ -170,34 +188,43 @@ func (p *pacingAccumulator) recordBatch(items []pacingItem) {
 		cp := p.campaignLocked(it.campaignID)
 		switch it.kind {
 		case pacingBilled:
-			cp.settledMicros += toMicros(it.amount)
+			m := toMicros(it.amount)
+			cp.settledMicros += m
+			deltas[it.campaignID] += m
 		case pacingReserve:
 			if it.traceID == "" {
 				continue
 			}
-			cp.holds[it.traceID] = pacingHold{micros: toMicros(it.amount), created: now}
+			m := toMicros(it.amount)
+			old := cp.holds[it.traceID].micros
+			cp.holds[it.traceID] = pacingHold{micros: m, created: now}
+			deltas[it.campaignID] += m - old
 		}
 	}
+	return deltas
 }
 
 // sweepExpired releases holds older than holdTTL and returns the number
-// released. An expired hold is an impression whose billable settle event never
-// arrived; freeing it keeps pacing from permanently over-counting.
-func (p *pacingAccumulator) sweepExpired() int {
+// released plus the per-campaign committed-micros delta (negative — freeing a
+// hold lowers committed). An expired hold is an impression whose billable settle
+// event never arrived; freeing it keeps pacing from permanently over-counting.
+func (p *pacingAccumulator) sweepExpired() (int, map[string]int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rollLocked()
 	now := p.clk.Now()
 	released := 0
-	for _, cp := range p.campaigns {
+	deltas := make(map[string]int64)
+	for id, cp := range p.campaigns {
 		for tid, h := range cp.holds {
 			if now.Sub(h.created) >= p.holdTTL {
 				delete(cp.holds, tid)
 				released++
+				deltas[id] -= h.micros
 			}
 		}
 	}
-	return released
+	return released, deltas
 }
 
 // hydratedHoldKey is the trace-id slot used for the single synthetic hold that

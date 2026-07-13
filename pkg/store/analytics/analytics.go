@@ -71,6 +71,21 @@ type ObservabilityWriter interface {
 
 var _ ObservabilityWriter = (*MemoryStore)(nil)
 
+// CommittedReader recomputes per-campaign committed spend (in micro-dollars) for
+// a UTC day directly from the raw event stream. It is the authoritative,
+// replica-count-INDEPENDENT source the reporting service uses to periodically
+// reconcile its shared pacing counter (see cmd/reporting's committed counter):
+// because it sums every impression regardless of which replica ingested it, the
+// total is correct no matter how the NATS consumer split the stream.
+//
+// Optional capability — ClickHouse implements it; memory/DuckDB backends may not,
+// in which case the shared counter runs additive-only (no store self-heal).
+type CommittedReader interface {
+	// CommittedByCampaign returns campaign_id -> committed micro-dollars for the
+	// given UTC day ("2006-01-02").
+	CommittedByCampaign(ctx context.Context, day string) (map[string]int64, error)
+}
+
 // RollupRow is one aggregated row produced by the rollup engine: a set of
 // dimension values + metric values for a (config, level, time-window).
 // Dimensions and metrics are maps rather than fixed columns so a single

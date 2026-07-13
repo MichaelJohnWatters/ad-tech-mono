@@ -95,6 +95,14 @@ func main() {
 	committedSpendStore := newCommittedSpendStore(cfg, log)
 	hydrateCommittedSpend(committedSpendStore, billingEngine, clk, log)
 
+	// Multi-replica pacing: when reporting.shared_pacing_counter is on, point the
+	// engine's committed snapshot at a shared Redis counter (additive across
+	// replicas) + a periodic store-backed reconcile, so >1 reporting replica can
+	// run without fragmenting DSP pacing. Opt-in; off = in-memory accumulator,
+	// single-replica behaviour unchanged. Runs before the snapshot publisher so
+	// its boot seed lands first. See committed_counter.go.
+	startSharedPacingCounter(billingEngine, store, cfg, clk, log, lc)
+
 	// Publisher contracts come from Postgres via a warm cache. Each refresh
 	// re-populates the in-memory ContractStore the billing engine reads from,
 	// so editing a publisher's revshare_config takes effect within one poll

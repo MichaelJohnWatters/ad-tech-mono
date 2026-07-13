@@ -129,6 +129,7 @@ type Engine struct {
 	contracts    *ContractStore
 	balances     BalanceSink      // optional; see SetBalanceSink
 	reservations ReservationStore // optional; see SetReservationStore
+	committed    CommittedCounter // optional; see SetCommittedCounter
 	pacing       *pacingAccumulator
 	clk          clock.Clock
 	log          *slog.Logger
@@ -139,6 +140,28 @@ type Engine struct {
 // advertiser's balance through the sink. Reserves do NOT touch the balance;
 // they hold campaign budget, and settle is the realization point.
 func (e *Engine) SetBalanceSink(s BalanceSink) { e.balances = s }
+
+// SetCommittedCounter connects the shared, cross-replica committed-spend store.
+// When set, every committed change is mirrored to it (additive) and
+// SnapshotCommitted reads from it instead of the local in-memory accumulator —
+// so N reporting replicas each seeing part of the stream still produce the
+// correct combined pacing snapshot. When nil (single replica / Redis down), the
+// engine uses its in-memory accumulator exactly as before. See committed.go.
+func (e *Engine) SetCommittedCounter(c CommittedCounter) { e.committed = c }
+
+// emitCommitted mirrors a per-campaign committed delta to the shared counter.
+// No-op when no counter is wired. Best-effort: a failed add is logged but never
+// fails the billing event — the periodic store reconcile (Reconcile) resets the
+// counter to authoritative truth, sweeping any dropped delta.
+func (e *Engine) emitCommitted(ctx context.Context, deltas map[string]int64) {
+	if e.committed == nil || len(deltas) == 0 {
+		return
+	}
+	day := dayKey(e.clk.Now())
+	if err := e.committed.AddDelta(ctx, day, deltas); err != nil {
+		e.log.Error("committed counter add failed", "day", day, "campaigns", len(deltas), "error", err)
+	}
+}
 
 // SetReservationStore connects the settle-enrichment cache: reserve persists
 // the auction context, settle recovers it when the ledger can't (TigerBeetle).
@@ -175,12 +198,32 @@ func NewEngine(ledger Ledger, contracts *ContractStore, clk clock.Clock, log *sl
 // reality (phantom wins that never impressed are absent; reserves that never
 // settle are swept) rather than the raw win prices the DSP counts locally.
 // Campaign ids are the line-item UUIDs the DSP budget counter is keyed by.
-func (e *Engine) SnapshotCommitted() map[string]int64 { return e.pacing.snapshot() }
+//
+// When a shared CommittedCounter is wired (multi-replica reporting), the figure
+// comes from it — the combined additive total across all pods — so no single
+// pod's partial view leaks out. When nil, or if the counter read fails, it falls
+// back to this pod's in-memory accumulator (single-replica behaviour, unchanged).
+func (e *Engine) SnapshotCommitted() map[string]int64 {
+	if e.committed != nil {
+		day := dayKey(e.clk.Now())
+		if snap, err := e.committed.Snapshot(context.Background(), day); err == nil {
+			return snap
+		} else {
+			e.log.Error("committed counter snapshot failed; falling back to in-memory", "error", err)
+		}
+	}
+	return e.pacing.snapshot()
+}
 
 // SweepExpiredHolds releases open reserves older than the pacing hold TTL
 // (impressions whose billable settle never arrived) and returns the count
-// released. Callers should invoke this on the same cadence as snapshotting.
-func (e *Engine) SweepExpiredHolds() int { return e.pacing.sweepExpired() }
+// released. Callers should invoke this on the same cadence as snapshotting. The
+// freed budget is mirrored to the shared committed counter as a negative delta.
+func (e *Engine) SweepExpiredHolds() int {
+	released, deltas := e.pacing.sweepExpired()
+	e.emitCommitted(context.Background(), deltas)
+	return released
+}
 
 // PacingState returns the UTC day plus the persistable settled and open-reserved
 // cents per campaign. Reporting persists this each snapshot tick so a restart
@@ -337,7 +380,7 @@ func (e *Engine) ProcessBatch(ctx context.Context, events []SpendEvent) ([]*Spen
 			e.log.Error("balance batch drawdown failed", "debits", len(debits), "error", err)
 		}
 	}
-	e.pacing.recordBatch(pacingItems)
+	e.emitCommitted(ctx, e.pacing.recordBatch(pacingItems))
 
 	return results, nil
 }
@@ -373,7 +416,7 @@ func (e *Engine) billImmediate(ctx context.Context, event SpendEvent) (*SpendRes
 	})
 
 	e.drawdown(ctx, event, "billed")
-	e.pacing.recordBilled(event.CampaignID, event.ClearingPrice)
+	e.emitCommitted(ctx, map[string]int64{event.CampaignID: e.pacing.recordBilled(event.CampaignID, event.ClearingPrice)})
 
 	e.log.Debug("billed",
 		"trace_id", event.TraceID,
@@ -421,7 +464,7 @@ func (e *Engine) reserve(ctx context.Context, event SpendEvent) (*SpendResult, e
 		}
 	}
 
-	e.pacing.recordReserve(event.CampaignID, event.TraceID, event.ClearingPrice)
+	e.emitCommitted(ctx, map[string]int64{event.CampaignID: e.pacing.recordReserve(event.CampaignID, event.TraceID, event.ClearingPrice)})
 
 	e.log.Debug("reserved",
 		"trace_id", event.TraceID,
@@ -461,7 +504,7 @@ func (e *Engine) settle(ctx context.Context, event SpendEvent) (*SpendResult, er
 	})
 
 	e.drawdown(ctx, event, "settled")
-	e.pacing.recordSettle(event.CampaignID, event.TraceID, event.ClearingPrice)
+	e.emitCommitted(ctx, map[string]int64{event.CampaignID: e.pacing.recordSettle(event.CampaignID, event.TraceID, event.ClearingPrice)})
 
 	e.log.Debug("settled",
 		"trace_id", event.TraceID,
