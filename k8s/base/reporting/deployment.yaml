@@ -78,7 +78,7 @@ spec:
               value: "tigerbeetle:3000"
           resources:
             requests: { cpu: 100m, memory: 128Mi }
-            limits:   { cpu: 1000m, memory: 512Mi }
+            limits:   { cpu: 2000m, memory: 768Mi }
           livenessProbe:
             httpGet: { path: /healthz, port: 8086 }
             initialDelaySeconds: 10
