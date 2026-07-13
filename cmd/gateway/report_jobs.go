@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -166,6 +167,17 @@ func buildJob(ctx context.Context, store reportJobStore, scope reportjobs.ScopeL
 	}
 	if params.Table == "" {
 		return nil, "query_config.table required", nil
+	}
+	// Saved queries store a relative range (range_days) instead of absolute
+	// times — the sync console translates it browser-side; jobs resolve it
+	// here so a template job isn't silently all-time.
+	if params.TimeFrom.IsZero() {
+		var rel struct {
+			RangeDays int `json:"range_days"`
+		}
+		if json.Unmarshal(queryConfig, &rel) == nil && rel.RangeDays > 0 {
+			params.TimeFrom = time.Now().AddDate(0, 0, -rel.RangeDays)
+		}
 	}
 
 	filters, err := reportjobs.ResolveTenantFilters(ctx, scope, accountID, params.Filters)
