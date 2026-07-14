@@ -36,6 +36,14 @@ func TestHotColdStore(t *testing.T) {
 	if err != nil || hotWindow <= 0 {
 		t.Skipf("could not read a usable REPORTING_HOT_WINDOW (%q): %v", hwStr, err)
 	}
+	// This test WAITS OUT the hot window so data crosses the hot→cold
+	// boundary. Inside the default `make test-e2e` (10m budget) a long
+	// deployed window would hang the whole suite at the go-test timeout —
+	// only run when the window fits. `make test-e2e-hotcold` pins a 90s
+	// window before invoking, so it always proceeds there.
+	if hotWindow > 3*time.Minute {
+		t.Skipf("hot_window=%s is too long to wait out inside the default suite — run `make test-e2e-hotcold` (pins a 90s window)", hotWindow)
+	}
 	t.Logf("hot_window=%s — this test waits it out (long-running by design)", hotWindow)
 
 	w := harness.BuildBasicWorld(t, h, "hot/cold storage") // resets state
