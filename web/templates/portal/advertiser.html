@@ -154,6 +154,12 @@
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Recent impressions — inspect a trace") }}
+      <p class="mb-3 text-xs text-gray-400">Your latest impressions. Click <b>View trace</b> to follow one through the platform — auction, serve, impression, viewability, and your spend.</p>
+      <div id="recentImpOut" class="overflow-x-auto"><div class="py-6 text-center text-sm text-gray-400">loading…</div></div>
+      <div id="advTraceOut" class="trace-timeline mt-4"></div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Billing ============ -->
@@ -484,6 +490,7 @@
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
+<script src="/static/trace-render.js"></script>
 <script>
 // Tenant scope for report queries: advertisers see their slice, staff/admin
 // (and the dev bypass) see platform-wide. Set server-side from session claims;
@@ -531,7 +538,7 @@ function showSection(name) {
     loaded[name] = true;
     ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
       creatives: loadCreatives, audiences: loadAudiences,
-      reports: () => { loadSaved(); loadJobs(); },
+      reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
       billing: loadBilling, team: loadTeam}[name])?.();
   } else if (name === 'reports') {
     loadJobs(); // re-entering restarts the in-flight poll
@@ -1219,6 +1226,42 @@ async function runReport(ev) {
         r.map(v => `<td class="px-3 py-2 font-mono text-xs">${typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : esc(v)}</td>`).join('')
       }</tr>`).join('')}</tbody></table>`;
   } catch (err) { toast('Query failed: ' + err.message, 'error'); }
+}
+
+// ---- Recent impressions + trace inspector ----
+async function loadRecentImpressions() {
+  const out = $('recentImpOut');
+  try {
+    const data = await fetchJSON('/v1/api/impressions/recent?limit=50');
+    const rows = data?.impressions || [];
+    if (!rows.length) { out.innerHTML = '<div class="py-6 text-center text-sm text-gray-400">No impressions yet.</div>'; return; }
+    const cols = ['Time', 'Campaign', 'Creative', 'Placement', 'Model', 'Spend', ''];
+    out.innerHTML = `<table class="w-full text-sm"><thead><tr>${
+      cols.map(c => `<th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">${c}</th>`).join('')
+    }</tr></thead><tbody>${rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-mono text-xs">${esc((r.timestamp || '').slice(0, 19).replace('T', ' '))}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc((r.campaign_id || '').slice(0, 8))}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc((r.creative_id || '').slice(0, 8))}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc((r.placement_id || '').slice(0, 8))}</td>
+      <td class="px-3 py-2 text-xs">${esc(r.bid_model || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">$${(r.clearing_price_usd || 0).toFixed(4)}</td>
+      <td class="px-3 py-2"><button type="button" onclick="advViewTrace('${esc(r.trace_id)}')" class="text-brand text-xs font-medium hover:underline">View trace →</button></td>
+    </tr>`).join('')}</tbody></table>`;
+  } catch (err) { out.innerHTML = `<div class="py-6 text-center text-sm text-red-400">Failed to load: ${esc(err.message)}</div>`; }
+}
+
+async function advViewTrace(traceId) {
+  const out = $('advTraceOut');
+  renderTrace(out, { traceId, note: 'Loading…', steps: [] });
+  out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    // The reporting endpoint returns the redacted, render-ready {steps, panels}
+    // scoped to this advertiser (no publisher revenue / margin / other bidders).
+    renderTrace(out, await fetchJSON('/v1/api/trace?trace_id=' + encodeURIComponent(traceId)));
+  } catch (err) {
+    renderTrace(out, { traceId, note: 'Could not load trace: ' + esc(err.message),
+      steps: [{ time: '', service: 'reporting', cls: 'warn', msg: 'Unavailable', detail: '' }] });
+  }
 }
 
 // ---- Billing / topup ----
