@@ -136,11 +136,19 @@ func TestTrackerHMACStrictMode(t *testing.T) {
 
 	h.SetConfigForPod(t, key, "true", pod)
 
+	// The NATS invalidate lands in ~ms, but on a freshly-booted stack the
+	// subscription/poll can lose an instant-assert race — retry briefly
+	// instead of demanding the very next request see the flip.
 	url = h.URLs.Tracker + "/v1/t/imp?tid=trk-hmac-strict&cid=" + w.Campaign.ID
-	resp = get(t, h, url)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("strict-mode unsigned status = %d, want 403", resp.StatusCode)
+	var lastStatus int
+	harness.WaitFor(t, 10*time.Second, "tracker picks up signature_validation=true", func() bool {
+		resp := get(t, h, url)
+		resp.Body.Close()
+		lastStatus = resp.StatusCode
+		return resp.StatusCode == http.StatusForbidden
+	})
+	if lastStatus != http.StatusForbidden {
+		t.Fatalf("strict-mode unsigned status = %d, want 403", lastStatus)
 	}
 }
 
