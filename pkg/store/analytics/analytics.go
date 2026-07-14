@@ -69,7 +69,11 @@ type ObservabilityWriter interface {
 	InsertBudgetDepletion(BudgetDepletion)
 }
 
-var _ ObservabilityWriter = (*MemoryStore)(nil)
+var (
+	_ ObservabilityWriter = (*MemoryStore)(nil)
+	_ ObservabilityWriter = (*ClickHouse)(nil)
+	_ ObservabilityWriter = (*HotColdStore)(nil)
+)
 
 // CommittedReader recomputes per-campaign committed spend (in micro-dollars) for
 // a UTC day directly from the raw event stream. It is the authoritative,

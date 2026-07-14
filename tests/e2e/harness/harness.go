@@ -53,6 +53,7 @@ type URLs struct {
 	RedisAddr         string
 	MinioEndpt        string
 	PostgresURL       string
+	ClickHouseHTTP    string
 
 	// Cluster-internal DNS variants, for config values that pods will
 	// dial. Always populated; the test never has to choose between them.
@@ -83,6 +84,7 @@ func DefaultURLs() URLs {
 		RedisAddr:         routes.DefaultRedisAddr,
 		MinioEndpt:        routes.DefaultMinioEndpoint,
 		PostgresURL:       routes.DefaultPostgresURL,
+		ClickHouseHTTP:    routes.DefaultClickHouseHTTPURL,
 
 		// In-cluster DNS — matches the Service names in k8s/base/*/service.yaml.
 		// Used when a test writes a config value that a pod will dial

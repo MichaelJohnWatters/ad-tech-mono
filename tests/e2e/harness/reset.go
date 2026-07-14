@@ -4,6 +4,10 @@ package harness
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +19,10 @@ import (
 // Specifically:
 //   - TRUNCATE every tenant table (accounts cascade through the FK graph)
 //   - FLUSHDB on Redis (budget counters, freq caps, dedup)
+//   - TRUNCATE every ClickHouse analytics table (the real hot store — the
+//     harness read-backs count rows there, so leftover events from earlier
+//     runs would poison fixed-trace assertions). Best-effort: skipped when
+//     ClickHouse isn't reachable (e.g. a memory-backend stack).
 //   - Skip Minio for now — creative bodies are tiny and Reset would need
 //     bucket enumeration; the seed UPSERT is fine for object storage.
 //
@@ -72,7 +80,45 @@ func (h *Harness) Reset(t *testing.T) {
 		t.Logf("Reset: redis FLUSHDB failed (continuing): %v", err)
 	}
 
+	h.resetClickHouse(t, ctx)
+
 	t.Log("harness reset complete")
+}
+
+// resetClickHouse truncates every adtech.* table via the ClickHouse HTTP
+// interface (h.URLs.ClickHouseHTTP; Tilt forwards it). Best-effort by design:
+// on a stack without ClickHouse (memory backend, CI) the port isn't there and
+// we skip silently.
+func (h *Harness) resetClickHouse(t *testing.T, ctx context.Context) {
+	t.Helper()
+	tables, err := h.clickhouseQuery(ctx, "SHOW TABLES FROM adtech")
+	if err != nil {
+		t.Logf("Reset: clickhouse unreachable, skipping analytics truncate: %v", err)
+		return
+	}
+	for _, table := range strings.Fields(tables) {
+		if _, err := h.clickhouseQuery(ctx, "TRUNCATE TABLE IF EXISTS adtech.`"+table+"`"); err != nil {
+			t.Logf("Reset: clickhouse truncate %s failed (continuing): %v", table, err)
+		}
+	}
+}
+
+func (h *Harness) clickhouseQuery(ctx context.Context, query string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.ClickHouseHTTP, strings.NewReader(query))
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("clickhouse %q: status %d: %s", query, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return string(body), nil
 }
 
 func commaJoin(parts []string) string {
