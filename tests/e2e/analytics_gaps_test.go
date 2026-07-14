@@ -50,18 +50,26 @@ func TestBudgetDepletedEventReachesReporting(t *testing.T) {
 	h.SetCampaignDailyBudget(t, w.Campaign, 0.001)
 	h.RefreshAllCaches(t)
 
-	// First auction wins and exhausts the 0.001 budget.
+	// First auction wins and exhausts the 0.001 budget. Fire the impression
+	// too: a win WITHOUT an impression is a phantom win whose local budget
+	// decrement the pacing reconcile (billing committed snapshot → DSP
+	// counter) correctly releases — a snapshot tick landing between the two
+	// auctions would un-deplete the campaign and flake this test. A billed
+	// impression makes the spend real, so it survives reconciliation.
 	first := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "evt-budget-1")
-	if h.ExtractWinner(t, first).NoBid {
+	win := h.ExtractWinner(t, first)
+	if win.NoBid {
 		t.Fatal("first auction should win — budget exists")
 	}
-	// Brief beat for the OpenRTB nurl callback to register the spend.
+	h.FireImpression(t, first.TraceID, win.CampaignID, win.CreativeID,
+		first.PlacementID, first.PublisherID, w.AdvAcc.ID, "USD", win.Price)
+	// Brief beat for the nurl callback + impression billing to register.
 	time.Sleep(200 * time.Millisecond)
 
-	// Second auction: campaign is exhausted; DSP detects + publishes.
-	h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "evt-budget-2")
-
-	harness.WaitFor(t, 5*time.Second, "budget depleted event recorded", func() bool {
+	// The DSP detects exhaustion at bid time and publishes the depleted
+	// event; retry a few auctions in case the first raced the spend landing.
+	harness.WaitFor(t, 10*time.Second, "budget depleted event recorded", func() bool {
+		h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "evt-budget-2")
 		return h.BudgetDepletionsByCampaign(t, w.Campaign.ID) >= 1
 	})
 }

@@ -100,13 +100,17 @@ func TestTrackerRejectedEventHMACStrict(t *testing.T) {
 	})
 	h.SetConfigForPod(t, key, "true", pod)
 
-	traceID := "rej-hmac-trace-001"
-	url := h.URLs.Tracker + "/v1/t/imp?tid=" + traceID + "&cid=" + w.Campaign.ID
-	resp := get(t, h, url)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("strict-mode unsigned status = %d, want 403", resp.StatusCode)
-	}
+	// The config flip reaches each tracker replica via NATS invalidate +
+	// its own poll — a fire can land on a replica that hasn't applied it
+	// yet, so retry with fresh trace ids until one is strict-rejected
+	// (same de-race as TestTrackerHMACStrictMode).
+	var traceID string
+	harness.WaitFor(t, 10*time.Second, "unsigned impression rejected under strict mode", func() bool {
+		traceID = fmt.Sprintf("rej-hmac-%d", time.Now().UnixNano())
+		resp := get(t, h, h.URLs.Tracker+"/v1/t/imp?tid="+traceID+"&cid="+w.Campaign.ID)
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusForbidden
+	})
 
 	harness.WaitFor(t, 5*time.Second, "invalid_signature rejection recorded", func() bool {
 		return len(h.TrackerRejectionsByTrace(t, traceID, "invalid_signature")) >= 1

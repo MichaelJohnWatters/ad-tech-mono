@@ -419,7 +419,6 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 	// No WithDeterministicCompetitors: MakeDSPAlwaysNoBid overrides comp1
 	// explicitly (no_bid_rate=1.0), so comp1's natural noise is irrelevant.
 	// Comp2's noise doesn't affect the comp1-only assertion.
-	h.ResetSmartRouter(t)
 	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
 	h.RefreshAllCaches(t)
 
@@ -427,17 +426,26 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 	// must record stats against comp1 for the channel we'll preview against.
 	// The default exchange channel is "all" — RunAuction passes nothing
 	// channel-specific, so internal+comp1+comp2 fan out under that channel.
-	h.FireNAuctions(t, 25, "pl-news-mpu", "GBR", "mobile")
-
-	preview := h.SmartRouterPreview(t)
-	for _, ep := range preview.Selected {
-		// In pod mode, the exchange holds cluster-DNS endpoints
-		// (http://dsp-competitor1:8089), so compare against Cluster*.
-		if ep == h.URLs.ClusterDSPComp1 {
-			t.Fatalf("router still selecting comp1 (%s) after 25 no-bids; selected=%v",
-				h.URLs.ClusterDSPComp1, preview.Selected)
+	//
+	// Retried as a whole cycle: auctions fired before comp1 applies
+	// no_bid_rate=1.0 record BIDS, keeping its bid_rate above the 5% skip
+	// threshold — so each attempt resets the router stats and re-trains on
+	// (hopefully now clean) no-bids. 35s covers a missed NATS invalidate
+	// falling back to the config manager's 30s poll.
+	var preview harness.RouterPreview
+	harness.WaitFor(t, 35*time.Second, "router learns to skip always-no-bid comp1", func() bool {
+		h.ResetSmartRouter(t)
+		h.FireNAuctions(t, 25, "pl-news-mpu", "GBR", "mobile")
+		preview = h.SmartRouterPreview(t)
+		for _, ep := range preview.Selected {
+			// In pod mode, the exchange holds cluster-DNS endpoints
+			// (http://dsp-competitor1:8089), so compare against Cluster*.
+			if ep == h.URLs.ClusterDSPComp1 {
+				return false // comp1 still selected — config not applied yet
+			}
 		}
-	}
+		return true
+	})
 	// Sanity: at least one DSP should still be selected (internal at minimum).
 	if len(preview.Selected) == 0 {
 		t.Fatalf("router excluded EVERY DSP; preview=%+v", preview)

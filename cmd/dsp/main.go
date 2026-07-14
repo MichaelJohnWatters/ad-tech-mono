@@ -877,6 +877,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				}
 				continue
 			}
+			// Not exhausted → re-arm the one-shot depleted event for this
+			// campaign. Without this the event fires once per POD lifetime:
+			// a new day (spend resets), a raised budget, or a reconcile-down
+			// all silently skip the next depletion. Mirrors the balance
+			// gate's re-arm-when-funds-return posture.
+			depletedAlreadyPublished.Delete(c.ID)
 			if !pacer.ShouldBid(currentSpend) {
 				reqLog.Debug("campaign throttled by pacing", "campaign", c.ID, "spend", currentSpend)
 				continue
