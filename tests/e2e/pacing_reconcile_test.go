@@ -18,14 +18,11 @@
 package e2e
 
 import (
-	"math"
 	"testing"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
-
-func cents(price float64) int64 { return int64(math.Round(price * 100)) }
 
 // TestPacingCommittedReflectsBilledNotWins — a win with no impression must
 // NOT show up in committed spend (it never bills), and the impression is what
@@ -49,18 +46,20 @@ func TestPacingCommittedReflectsBilledNotWins(t *testing.T) {
 
 	// Committed spend for a freshly-built campaign with no impression is 0:
 	// the phantom win contributed nothing to billing.
-	if got := h.CommittedSpendCents(t, win.CampaignID); got != 0 {
-		t.Fatalf("phantom win: committed = %d cents, want 0 (no impression billed)", got)
+	if got := h.CommittedSpendMicros(t, win.CampaignID); got != 0 {
+		t.Fatalf("phantom win: committed = %d micro-dollars, want 0 (no impression billed)", got)
 	}
 
 	// Now fire the impression (CPM bills immediately) — committed must move to
-	// exactly the clearing price. Billing consumes off NATS, so poll briefly.
+	// exactly the impression's realized cost: the clearing price is a CPM, so
+	// one impression books price/1000 dollars (counters are micro-dollars).
+	// Billing consumes off NATS, so poll briefly.
 	h.FireImpressionWithModel(t, auc.TraceID,
 		win.CampaignID, win.CreativeID,
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID,
 		"USD", win.Price, "cpm")
 
-	h.WaitCommittedCents(t, win.CampaignID, cents(win.Price))
+	h.WaitCommittedMicros(t, win.CampaignID, harness.Micros(win.Price/1000))
 }
 
 // TestPacingReconcileReleasesPhantomWinAtDSP — the DSP end of the loop: after

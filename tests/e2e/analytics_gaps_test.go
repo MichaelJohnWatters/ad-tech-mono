@@ -34,18 +34,23 @@ func browserHeaders(req *http.Request) {
 }
 
 // TestBudgetDepletedEventReachesReporting — shrink a campaign's daily
-// budget to 1.00, fire one auction (wins, consumes budget), fire a
-// second (campaign now flagged exhausted, DSP publishes
-// BudgetDepletedEvent). Reporting must have a depletion record for the
-// campaign.
+// budget below ONE impression's realized cost, fire one auction (wins,
+// consumes budget), fire a second (campaign now flagged exhausted, DSP
+// publishes BudgetDepletedEvent). Reporting must have a depletion record
+// for the campaign.
+//
+// Budget economics post money-precision: a ~3.50 CPM win books
+// 3.50/1000 = $0.0035 against the daily budget, so exhausting a budget
+// in one impression needs a budget under that (0.001 here). The old
+// 1.00 budget would take ~300 impressions to deplete.
 func TestBudgetDepletedEventReachesReporting(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "evt-budget")
 
-	h.SetCampaignDailyBudget(t, w.Campaign, 1.00)
+	h.SetCampaignDailyBudget(t, w.Campaign, 0.001)
 	h.RefreshAllCaches(t)
 
-	// First auction wins and exhausts the 1.00 budget.
+	// First auction wins and exhausts the 0.001 budget.
 	first := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "evt-budget-1")
 	if h.ExtractWinner(t, first).NoBid {
 		t.Fatal("first auction should win — budget exists")

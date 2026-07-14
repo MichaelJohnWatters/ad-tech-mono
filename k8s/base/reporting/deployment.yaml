@@ -10,11 +10,15 @@ metadata:
   labels:
     app: reporting
 spec:
-  # >1 replica is safe on the ClickHouse backend (below) with the shared pacing
-  # counter enabled (REPORTING_SHARED_PACING_COUNTER) — the NATS consumer
-  # load-balances ingestion and pacing stays correct across pods. DuckDB's
-  # single-writer constraint does NOT apply here (analytics backend = clickhouse).
-  replicas: 2
+  # SINGLE replica: multi-replica reporting is only half-supported. The shared
+  # pacing counter (REPORTING_SHARED_PACING_COUNTER) makes PACING replica-safe,
+  # but (a) the billing ledger Summary() is an in-process accumulator — the
+  # NATS queue group delivers an event to one pod while /v1/billing/summary may
+  # be answered by another, so totals fragment across pods — and (b) the spend
+  # snapshot publisher is single-publisher by design (publisherGuard logs ERROR
+  # every tick with >1). Scale out only after Summary is derived from the
+  # shared ledger and the publisher is elected.
+  replicas: 1
   selector:
     matchLabels:
       app: reporting

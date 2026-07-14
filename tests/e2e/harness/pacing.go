@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"testing"
 	"time"
@@ -17,7 +18,9 @@ import (
 // endpoint, forcing an immediate publish of the billing engine's committed
 // spend on adtech.billing.campaign_spend_snapshot (so DSP pacing reconciliation
 // fires without waiting for the periodic ticker). Returns the per-campaign
-// committed spend in CENTS as billing currently sees it.
+// committed spend in MICRO-dollars (1 USD = 1_000_000 µ — the unit
+// Engine.SnapshotCommitted keeps, because a per-impression CPM cost is
+// sub-cent) as billing currently sees it.
 func (h *Harness) ForceSpendSnapshot(t *testing.T) map[string]int64 {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -44,26 +47,31 @@ func (h *Harness) ForceSpendSnapshot(t *testing.T) map[string]int64 {
 	return out.Committed
 }
 
-// CommittedSpendCents returns the billing engine's committed spend (settled +
-// open reserves) for one campaign, in cents. Forces a snapshot so the value is
-// current.
-func (h *Harness) CommittedSpendCents(t *testing.T, campaignID string) int64 {
+// Micros converts a dollar amount to integer micro-dollars — the unit every
+// committed-spend surface uses. Mirror of pkg/billing's toMicros.
+func Micros(dollars float64) int64 { return int64(math.Round(dollars * 1_000_000)) }
+
+// CommittedSpendMicros returns the billing engine's committed spend (settled +
+// open reserves) for one campaign, in micro-dollars. Forces a snapshot so the
+// value is current.
+func (h *Harness) CommittedSpendMicros(t *testing.T, campaignID string) int64 {
 	t.Helper()
 	return h.ForceSpendSnapshot(t)[campaignID]
 }
 
-// WaitCommittedCents polls the committed spend for a campaign until it equals
-// want (billing consumers run async off NATS), failing after a short timeout.
-func (h *Harness) WaitCommittedCents(t *testing.T, campaignID string, want int64) {
+// WaitCommittedMicros polls the committed spend for a campaign until it equals
+// want micro-dollars (billing consumers run async off NATS), failing after a
+// short timeout.
+func (h *Harness) WaitCommittedMicros(t *testing.T, campaignID string, want int64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	var last int64
 	for time.Now().Before(deadline) {
-		last = h.CommittedSpendCents(t, campaignID)
+		last = h.CommittedSpendMicros(t, campaignID)
 		if last == want {
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	t.Fatalf("committed spend for %s = %d cents, want %d", campaignID, last, want)
+	t.Fatalf("committed spend for %s = %d micro-dollars, want %d", campaignID, last, want)
 }

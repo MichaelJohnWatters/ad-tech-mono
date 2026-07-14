@@ -187,11 +187,15 @@ func TestCompetitiveB2_OneDSPNoBidsOthersWin(t *testing.T) {
 	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
 	h.RefreshAllCaches(t)
 
-	res := h.RunAuction(t, "pl-news-mpu", "GBR", "mobile", "comp-b2-user")
-	win := h.ExtractWinner(t, res)
-	if win.NoBid {
-		t.Fatal("expected a winning bid — comp2 + internal should still bid")
-	}
+	// The no-bid config flip propagates to comp1 via NATS invalidate +
+	// config poll — retry briefly instead of racing the very next auction
+	// against it.
+	var win harness.BidResponseWinner
+	harness.WaitFor(t, 35*time.Second, "auction resolves with comp1 out", func() bool {
+		res := h.RunAuction(t, "pl-news-mpu", "GBR", "mobile", "comp-b2-user")
+		win = h.ExtractWinner(t, res)
+		return !win.NoBid
+	})
 	if win.Price <= 0 {
 		t.Errorf("clearing price %v; want > 0", win.Price)
 	}
@@ -272,10 +276,11 @@ func TestCompetitiveA3_BudgetExhaustedCampaignExcludedSiblingBids(t *testing.T) 
 	w := harness.BuildBasicWorld(t, h, "comp-a3")
 
 	// BasicWorld's campaign starts at 3.50 / 500 daily budget. Lower its
-	// budget to 1 (≈ one impression at 3.50 — well above this floor) and
-	// add a sibling at 2.00 with healthy budget.
+	// budget below one impression's realized cost (a 3.50 CPM win books
+	// 3.50/1000 = 0.0035 against the budget post money-precision) and add
+	// a sibling at 2.00 with healthy budget.
 	h.SetCampaignBaseBid(t, w.Campaign, 3.50)
-	h.SetCampaignDailyBudget(t, w.Campaign, 1.00)
+	h.SetCampaignDailyBudget(t, w.Campaign, 0.001)
 	sibling := h.CreateCampaign(t, w.AdvAcc, w.IO,
 		"comp-a3-li-sibling", 2.00, 500,
 		"comp-a3-cr-sibling", "adv-comp-a3.test",
@@ -384,20 +389,19 @@ func TestCompetitiveB5_AllDSPsTimeoutReturnsNoBid(t *testing.T) {
 	h.SetExchangeBidTimeout(t, "50ms")
 	h.RefreshAllCaches(t)
 
-	// All three DSP indices slow.
-	start := time.Now()
-	res := h.RunAuctionWithSlowDSPs(t, "pl-news-mpu", "GBR", "mobile", "comp-b5-user", "0,1,2")
-	elapsed := time.Since(start)
-
-	win := h.ExtractWinner(t, res)
-	if !win.NoBid {
-		t.Errorf("expected nobid when every DSP is slow; got winner %+v", win)
-	}
-	// Auction must complete in roughly bid_timeout + overhead, not hang
-	// for the slow DSPs' full delay. 1s is generous overhead.
-	if elapsed > 1*time.Second {
-		t.Errorf("auction took %v; expected ~bid_timeout (50ms + overhead)", elapsed)
-	}
+	// The 50ms bid_timeout propagates to the exchange via NATS invalidate
+	// (instant) with the manager's 30s Postgres poll as fallback — so the
+	// retry window covers a full poll cycle. An auction fired before the flip
+	// lands still runs at the default timeout: it may nobid too (the slow DSPs
+	// never answer), but slowly. The success condition is therefore nobid AND
+	// fast completion — that pair only happens once the 50ms deadline is live,
+	// and it IS the assertion (no hang, early-finish on ctx.Done works).
+	harness.WaitFor(t, 35*time.Second, "exchange picks up the 50ms bid_timeout (all DSPs slow → fast nobid)", func() bool {
+		start := time.Now()
+		res := h.RunAuctionWithSlowDSPs(t, "pl-news-mpu", "GBR", "mobile", "comp-b5-user", "0,1,2")
+		elapsed := time.Since(start)
+		return h.ExtractWinner(t, res).NoBid && elapsed < 1*time.Second
+	})
 }
 
 // TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP — train the smart

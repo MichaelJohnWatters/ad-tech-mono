@@ -39,8 +39,9 @@ func TestFraudDedupSameImpressionDropped(t *testing.T) {
 
 	// committed spend is PER-CAMPAIGN, so this is isolated from other tests'
 	// spend (unlike the global billing TotalSpend, which flaked here from async
-	// spillover). 5 fires dedup to 1 → one $1.50 CPM impression → 150 cents.
-	h.WaitCommittedCents(t, w.Campaign.ID, 150)
+	// spillover). 5 fires dedup to 1 → one impression at a $1.50 CPM realizes
+	// 1.50/1000 = $0.0015 = 1500 micro-dollars.
+	h.WaitCommittedMicros(t, w.Campaign.ID, harness.Micros(1.50/1000))
 }
 
 // TestTrackerRejectedEventDedup — the dedup test already asserts the
@@ -139,9 +140,14 @@ func TestFraudIPBlocklistRejected(t *testing.T) {
 	h.AddFraudBlocklist(t, "ip", badIP)
 	h.RefreshAllCaches(t)
 
-	if !h.FireImpressionFromIP(t, "fraud-ip-blocked", w.Campaign.ID, badIP) {
-		t.Errorf("request from DB-blocklisted IP %q should be fraud-blocked", badIP)
-	}
+	// RefreshAllCaches only reaches the ONE port-forwarded tracker pod, but
+	// the tracker runs multiple replicas — a fire can land on a replica whose
+	// fraud-rules warm cache hasn't polled/received the invalidate yet. Retry
+	// with fresh trace ids until every path sees the row.
+	harness.WaitFor(t, 10*time.Second, "blocklisted IP rejected by the tracker", func() bool {
+		tid := fmt.Sprintf("fraud-ip-blocked-%d", time.Now().UnixNano())
+		return h.FireImpressionFromIP(t, tid, w.Campaign.ID, badIP)
+	})
 
 	t.Cleanup(func() {
 		h.ClearFraudBlocklist(t, "ip", badIP)
@@ -165,9 +171,11 @@ func TestFraudBotUARejected(t *testing.T) {
 	h.AddFraudBlocklist(t, "ua", pattern)
 	h.RefreshAllCaches(t)
 
-	if !h.FireImpressionUA(t, "fraud-ua-blocked", w.Campaign.ID, "Mozilla/5.0 "+pattern+"/1.0") {
-		t.Errorf("UA matching DB blocklist pattern %q should be fraud-blocked", pattern)
-	}
+	// Same multi-replica cache-propagation retry as the IP test above.
+	harness.WaitFor(t, 10*time.Second, "blocklisted UA rejected by the tracker", func() bool {
+		tid := fmt.Sprintf("fraud-ua-blocked-%d", time.Now().UnixNano())
+		return h.FireImpressionUA(t, tid, w.Campaign.ID, "Mozilla/5.0 "+pattern+"/1.0")
+	})
 
 	// Cleanup the global row.
 	h.ClearFraudBlocklist(t, "ua", pattern)
