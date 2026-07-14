@@ -218,3 +218,8 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.ResponseController reach the underlying writer through
+// this wrapper — without it, per-request controls (SetWriteDeadline on the
+// reporting query path, flush, hijack) report "feature not supported".
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
