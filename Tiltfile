@@ -345,8 +345,13 @@ if dev_mode == 'fast':
     # delta_scan) through an in-image glibc build — go-duckdb doesn't link on the
     # zig/musl fast path. Slower rebuilds; revert to the zig + Dockerfile.dev
     # block after the test (see the tiering-longrun skill for the revert).
+    # only= scopes the rebuild trigger to what the in-image go build actually
+    # consumes. Without it, ANY repo file change (scripts/, tests/, docs/…)
+    # rebuilt + redeployed reporting — which mid-e2e stomps the preflight's
+    # memory-backend/single-replica pin and fails half the suite.
     docker_build('adtech-reporting', '.',
-        dockerfile='build/Dockerfile.reporting.duckdb')
+        dockerfile='build/Dockerfile.reporting.duckdb',
+        only=['cmd', 'pkg', 'go.mod', 'go.sum', 'build', 'migrations', 'web'])
     k8s_yaml(['k8s/base/reporting/deployment.yaml', 'k8s/base/reporting/service.yaml'])
     k8s_resource('reporting', resource_deps=['nats', 'postgres', 'clickhouse', 'tigerbeetle', 'minio'],
         port_forwards=['8086:8086'], labels=['services'])
