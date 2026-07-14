@@ -49,7 +49,7 @@ func TestBillingCPCReserveAndSettle(t *testing.T) {
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID,
 		"USD", win.Price, bidModel)
 
-	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price)
+	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price/1000)
 	// And no settlement should have happened from the impression alone.
 	settledMid := summaryFloat(t, h.BillingSummary(t), "TotalSettled") - settledBefore
 	if settledMid != 0 {
@@ -57,7 +57,7 @@ func TestBillingCPCReserveAndSettle(t *testing.T) {
 	}
 
 	h.FireClick(t, auc.TraceID, win.CampaignID, "https://landing.test/page")
-	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price)
+	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price/1000)
 }
 
 // TestBillingCPAReserveAndSettle — same flow as CPC but settle fires on
@@ -84,7 +84,7 @@ func TestBillingCPAReserveAndSettle(t *testing.T) {
 		win.CampaignID, win.CreativeID,
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID,
 		"USD", win.Price, bidModel)
-	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price)
+	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price/1000)
 
 	// A click should NOT settle CPA — settle only fires on conversion.
 	h.FireClick(t, auc.TraceID, win.CampaignID, "https://landing.test/page")
@@ -94,7 +94,7 @@ func TestBillingCPAReserveAndSettle(t *testing.T) {
 	}
 
 	h.FireConversion(t, auc.TraceID, win.CampaignID, "purchase", "USD", 49.99)
-	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price)
+	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price/1000)
 }
 
 func summaryFloat(t *testing.T, s map[string]any, key string) float64 {
@@ -110,19 +110,26 @@ func summaryFloat(t *testing.T, s map[string]any, key string) float64 {
 // value to differ from `base` by approximately `expected`. NATS publish
 // is async — the tracker returns before the impression event lands in
 // the reporting consumer, and a fixed sleep races on a busy box.
+// Tolerance is relative (1%) with a tiny absolute floor: post
+// money-precision the expected deltas are per-impression amounts
+// (~$0.0035), so the old ±0.01 band would have matched a zero delta.
 func waitForDelta(t *testing.T, h *harness.Harness, key string, base, expected float64) float64 {
 	t.Helper()
+	tol := expected * 0.01
+	if tol < 0.000005 {
+		tol = 0.000005
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		summary := h.BillingSummary(t)
 		got := summaryFloat(t, summary, key) - base
-		if got >= expected-0.01 && got <= expected+0.01 {
+		if got >= expected-tol && got <= expected+tol {
 			return got
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	final := summaryFloat(t, h.BillingSummary(t), key) - base
-	t.Errorf("%s delta = %.4f, want ~%.4f (5s timeout)", key, final, expected)
+	t.Errorf("%s delta = %.6f, want ~%.6f (5s timeout)", key, final, expected)
 	return final
 }
 
@@ -155,14 +162,14 @@ func TestBillingViewabilityVCPMSettle(t *testing.T) {
 		win.CampaignID, win.CreativeID,
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID,
 		"USD", win.Price, bidModel)
-	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price)
+	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price/1000)
 
 	// 2000ms / 75% / no area passes the 50%/1s IAB rule.
 	viewable := h.FireView(t, auc.TraceID, win.CampaignID, auc.PlacementID, auc.PublisherID, 2000, 75, 0)
 	if !viewable {
 		t.Fatal("expected X-IAB-Viewable=1 for 2000ms / 75%")
 	}
-	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price)
+	waitForDelta(t, h, "TotalSettled", settledBefore, win.Price/1000)
 
 	// 2) Non-viewable path — impression reserves but view does NOT settle.
 	settledMid := summaryFloat(t, h.BillingSummary(t), "TotalSettled")
@@ -177,7 +184,7 @@ func TestBillingViewabilityVCPMSettle(t *testing.T) {
 		win2.CampaignID, win2.CreativeID,
 		auc2.PlacementID, auc2.PublisherID, w.AdvAcc.ID,
 		"USD", win2.Price, bidModel)
-	waitForDelta(t, h, "TotalReserved", reservedMid, win2.Price)
+	waitForDelta(t, h, "TotalReserved", reservedMid, win2.Price/1000)
 
 	// 500ms is below the 1s IAB threshold → not viewable.
 	notViewable := h.FireView(t, auc2.TraceID, win2.CampaignID, auc2.PlacementID, auc2.PublisherID, 500, 100, 0)
@@ -199,11 +206,13 @@ func TestBillingTieredRevenueShareTierFlip(t *testing.T) {
 }
 
 // TestBillingGuaranteedMinimumSubsidy — a publisher on a guaranteed-minimum
-// contract earns at least GuaranteedMinCPM per impression even when the fee
-// split would leave less. With clearing ~3.50 and a 20% fee the raw publisher
-// share is 2.80, below the 5.00 floor, so the platform subsidises up to 5.00 —
-// making the booked publisher-revenue delta exactly the floor, independent of
-// the exact clearing price (which is why this assertion is stable).
+// contract earns at least GuaranteedMinCPM (a per-mille rate) even when the
+// fee split would leave less. Amounts are per-impression post money-precision:
+// with a ~3.50 CPM clearing and a 20% fee the raw publisher share is
+// 2.80/1000 = 0.0028 per impression, below the 5.00 CPM floor's 0.005, so the
+// platform subsidises up to 0.005 — making the booked publisher-revenue delta
+// exactly floor/1000, independent of the exact clearing price (which is why
+// this assertion is stable).
 func TestBillingGuaranteedMinimumSubsidy(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "billing-gmin")
@@ -231,7 +240,7 @@ func TestBillingGuaranteedMinimumSubsidy(t *testing.T) {
 	h.FireImpression(t, auc.TraceID, win.CampaignID, win.CreativeID,
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price)
 
-	waitForDelta(t, h, "TotalPublisherRevenue", before, floor)
+	waitForDelta(t, h, "TotalPublisherRevenue", before, floor/1000)
 }
 
 func TestBillingDealTypeFeeModifier(t *testing.T) {

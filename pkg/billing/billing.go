@@ -802,17 +802,24 @@ type RevenueCalc struct {
 	Subsidy          float64
 }
 
-// CalculateRevenue computes publisher revenue from clearing price.
+// CalculateRevenue computes publisher revenue from a realized amount in
+// per-impression dollars (post money-precision: the tracker books CPM/1000, so
+// every ledger amount reaching this is per-impression, not a CPM).
 func (c *Contract) CalculateRevenue(clearingPrice float64, dealType string) RevenueCalc {
 	feePct := c.effectiveFee(dealType)
 	pubRevenue := clearingPrice * (1 - feePct/100)
 	margin := clearingPrice - pubRevenue
 	subsidy := 0.0
 
-	// Check guaranteed minimum
-	if c.GuaranteedMinCPM > 0 && pubRevenue < c.GuaranteedMinCPM {
-		subsidy = c.GuaranteedMinCPM - pubRevenue
-		pubRevenue = c.GuaranteedMinCPM
+	// Guaranteed minimum. The contract rate is CPM-denominated (per 1000
+	// impressions — that's how the staff editor and revshare_config express
+	// it), but the amount being split here is per-impression dollars, so the
+	// floor must be applied at per-impression scale. Comparing against the
+	// raw CPM figure paid publishers the full per-mille floor on EVERY
+	// impression (a 1000× overpay) once amounts became per-impression.
+	if minPerImp := c.GuaranteedMinCPM / 1000; minPerImp > 0 && pubRevenue < minPerImp {
+		subsidy = minPerImp - pubRevenue
+		pubRevenue = minPerImp
 		margin = clearingPrice - pubRevenue
 	}
 

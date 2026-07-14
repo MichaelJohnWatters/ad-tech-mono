@@ -203,18 +203,23 @@ func TestContract_TieredFee(t *testing.T) {
 }
 
 func TestContract_GuaranteedMinimum(t *testing.T) {
+	// GuaranteedMinCPM is a per-mille rate; CalculateRevenue amounts are
+	// per-impression dollars, so the effective floor is 1.50/1000 = 0.0015
+	// per impression.
 	c := &Contract{Model: ModelFixed, FeePct: 20, GuaranteedMinCPM: 1.50}
 
-	// Above minimum
-	rev1 := c.CalculateRevenue(3.00, "open")
+	// Above minimum: a 3.00 CPM impression realizes 0.003; 80% share = 0.0024
+	// which clears the 0.0015 floor.
+	rev1 := c.CalculateRevenue(3.00/1000, "open")
 	if rev1.Subsidy != 0 {
-		t.Errorf("subsidy = %.2f, want 0 (above minimum)", rev1.Subsidy)
+		t.Errorf("subsidy = %.4f, want 0 (above minimum)", rev1.Subsidy)
 	}
 
-	// Below minimum
-	rev2 := c.CalculateRevenue(0.80, "open")
-	if rev2.PublisherRevenue != 1.50 {
-		t.Errorf("pub_rev = %.2f, want 1.50 (guaranteed)", rev2.PublisherRevenue)
+	// Below minimum: a 0.80 CPM impression realizes 0.0008; 80% share =
+	// 0.00064, below the floor → clamped to 0.0015 with a subsidy.
+	rev2 := c.CalculateRevenue(0.80/1000, "open")
+	if math.Abs(rev2.PublisherRevenue-0.0015) > 1e-9 {
+		t.Errorf("pub_rev = %.6f, want 0.0015 (guaranteed floor per impression)", rev2.PublisherRevenue)
 	}
 	if rev2.Subsidy <= 0 {
 		t.Error("expected subsidy when clearing below minimum")

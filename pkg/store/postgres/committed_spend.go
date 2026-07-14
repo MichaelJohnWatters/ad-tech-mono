@@ -15,8 +15,11 @@ type CommittedSpendStore struct {
 	Store *Store
 }
 
-// Save upserts today's settled + open-reserved cents for each campaign under the
-// given UTC day. Whole set in one transaction so a mid-write crash leaves a
+// Save upserts today's settled + open-reserved MICRO-dollars for each campaign
+// under the
+// given UTC day (migration 040 renamed the columns to match — the values were
+// always micros post money-precision). Whole set in one transaction so a
+// mid-write crash leaves a
 // consistent row set. Campaigns present in either map are written (union), so a
 // campaign with only reserves (no settled yet) is still persisted.
 func (s *CommittedSpendStore) Save(ctx context.Context, day string, settled, reserved map[string]int64) error {
@@ -32,10 +35,10 @@ func (s *CommittedSpendStore) Save(ctx context.Context, day string, settled, res
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO campaign_committed_spend (day, campaign_id, settled_cents, reserved_cents, updated_at)
+INSERT INTO campaign_committed_spend (day, campaign_id, settled_micros, reserved_micros, updated_at)
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (day, campaign_id) DO UPDATE SET
-    settled_cents = EXCLUDED.settled_cents, reserved_cents = EXCLUDED.reserved_cents, updated_at = now()`)
+    settled_micros = EXCLUDED.settled_micros, reserved_micros = EXCLUDED.reserved_micros, updated_at = now()`)
 	if err != nil {
 		return fmt.Errorf("prepare committed-spend save: %w", err)
 	}
@@ -58,7 +61,8 @@ ON CONFLICT (day, campaign_id) DO UPDATE SET
 	return nil
 }
 
-// Load returns the persisted settled + open-reserved cents per campaign for the
+// Load returns the persisted settled + open-reserved micro-dollars per campaign
+// for the
 // given UTC day. Empty maps when there's no row (fresh day / first boot).
 func (s *CommittedSpendStore) Load(ctx context.Context, day string) (settled, reserved map[string]int64, err error) {
 	settled = make(map[string]int64)
@@ -67,7 +71,7 @@ func (s *CommittedSpendStore) Load(ctx context.Context, day string) (settled, re
 		return settled, reserved, sql.ErrConnDone
 	}
 	rows, err := s.Store.read.QueryContext(ctx,
-		`SELECT campaign_id, settled_cents, reserved_cents FROM campaign_committed_spend WHERE day = $1`, day)
+		`SELECT campaign_id, settled_micros, reserved_micros FROM campaign_committed_spend WHERE day = $1`, day)
 	if err != nil {
 		return settled, reserved, fmt.Errorf("load committed-spend: %w", err)
 	}
