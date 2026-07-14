@@ -32,6 +32,10 @@ const (
 	APIPlacements = apiPrefix + "/api/placements/"
 	APICreatives  = apiPrefix + "/api/creatives/"
 	APIReports    = apiPrefix + "/api/reports/"
+	// APITrace / APIRecentImpressions back the portal trace inspector; the
+	// gateway proxies them to reporting's ReportingTrace / RecentImpressions.
+	APITrace              = apiPrefix + "/api/trace"
+	APIRecentImpressions  = apiPrefix + "/api/impressions/recent"
 
 	// Gateway-local CRUD: secrets management (operator-only). Reads the
 	// secrets table directly and publishes adtech.cache.invalidate.secrets
@@ -360,8 +364,12 @@ const (
 const (
 	ReportingQuery  = "/v1/reporting/query"
 	ReportingEvents = "/v1/reporting/events"
-	BillingSummary  = "/v1/billing/summary"
-	BillingLedger   = "/v1/billing/ledger"
+	// ReportingTrace reconstructs a single request's flow (scoped + redacted per
+	// caller). ReportingRecentImpressions lists recent impressions to inspect.
+	ReportingTrace             = "/v1/reporting/trace"
+	ReportingRecentImpressions = "/v1/reporting/recent-impressions"
+	BillingSummary             = "/v1/billing/summary"
+	BillingLedger              = "/v1/billing/ledger"
 )
 
 // ============================================================

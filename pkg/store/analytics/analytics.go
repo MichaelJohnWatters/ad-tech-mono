@@ -378,6 +378,74 @@ var (
 	_ CreativeStatAggregator = (*ClickHouse)(nil)
 )
 
+// TraceScope restricts a trace/impression read to one tenant. Exactly one of
+// AccountID (advertiser — the impression's account_id column) or PublisherID
+// (publisher — the impression's publisher_id column) is set for a scoped caller;
+// both empty means staff/unscoped. The gateway is responsible for validating the
+// value against the session before it reaches here (same as the report path).
+type TraceScope struct {
+	AccountID   string
+	PublisherID string
+}
+
+// Unscoped reports whether the scope imposes no tenant restriction (staff).
+func (s TraceScope) Unscoped() bool { return s.AccountID == "" && s.PublisherID == "" }
+
+// TraceEvent is one recorded event on a single trace, normalised across the
+// per-kind analytics tables so the trace inspector can build one timeline.
+// Financial/identity fields are ALL present here; the reporting handler REDACTS
+// them per audience before returning (advertiser sees no margin, publisher sees
+// no advertiser identity, etc.) — never redact in the store.
+type TraceEvent struct {
+	Kind             string    `json:"kind"` // impression|click|conversion|view|auction_win|media
+	Timestamp        time.Time `json:"timestamp"`
+	CampaignID       string    `json:"campaign_id,omitempty"`
+	CreativeID       string    `json:"creative_id,omitempty"`
+	PlacementID      string    `json:"placement_id,omitempty"`
+	PublisherID      string    `json:"publisher_id,omitempty"`
+	AdvertiserID     string    `json:"advertiser_id,omitempty"`
+	AccountID        string    `json:"account_id,omitempty"`
+	WinnerDSP        string    `json:"winner_dsp,omitempty"`
+	BidModel         string    `json:"bid_model,omitempty"`
+	ClearingPriceUSD float64   `json:"clearing_price_usd,omitempty"`
+	DealID           string    `json:"deal_id,omitempty"`
+	EventType        string    `json:"event_type,omitempty"` // media quartile / view verdict / conversion type
+}
+
+// ImpressionRow is one recent impression for the portal "View trace" drill-down
+// list. Scoped by TraceScope; newest first.
+type ImpressionRow struct {
+	TraceID          string    `json:"trace_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	CampaignID       string    `json:"campaign_id"`
+	CreativeID       string    `json:"creative_id"`
+	PlacementID      string    `json:"placement_id"`
+	PublisherID      string    `json:"publisher_id"`
+	BidModel         string    `json:"bid_model,omitempty"`
+	ClearingPriceUSD float64   `json:"clearing_price_usd"`
+	DealID           string    `json:"deal_id,omitempty"`
+}
+
+// TraceReader reconstructs a single trace and lists recent impressions for the
+// trace inspector. Optional capability (ClickHouse + MemoryStore implement it),
+// discovered by type assertion like the other *Reader/*Aggregator interfaces.
+type TraceReader interface {
+	// EventsByTrace returns every recorded event for traceID, ordered by time.
+	// If scope is set, the caller must "own" the trace — at least one row must
+	// match the scope column — else it returns an empty slice (→ 404 upstream).
+	// Once ownership is proven the whole trace is returned (a trace is one
+	// request, so all its rows belong to that one impression's parties).
+	EventsByTrace(ctx context.Context, traceID string, scope TraceScope) ([]TraceEvent, error)
+	// RecentImpressions lists the most recent impressions for the scope, newest
+	// first, capped at limit.
+	RecentImpressions(ctx context.Context, scope TraceScope, limit int) ([]ImpressionRow, error)
+}
+
+var (
+	_ TraceReader = (*MemoryStore)(nil)
+	_ TraceReader = (*ClickHouse)(nil)
+)
+
 // DSPCallEvent is the analytics mirror of events.DSPCallEvent — one row per
 // DSP fan-out call in an auction (routing telemetry). Win attribution is by
 // join to auction_wins on trace_id, not a column here.

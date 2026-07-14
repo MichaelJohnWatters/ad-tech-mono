@@ -115,6 +115,25 @@ func (t *HotColdStore) CommittedByCampaign(ctx context.Context, day string) (map
 	return cr.CommittedByCampaign(ctx, day)
 }
 
+// EventsByTrace / RecentImpressions (TraceReader) delegate to the hot store — a
+// trace inspector only ever looks at recent (hot-window) data, so cold is never
+// involved. Forwarding here keeps the capability visible through the wrapper.
+func (t *HotColdStore) EventsByTrace(ctx context.Context, traceID string, scope TraceScope) ([]TraceEvent, error) {
+	tr, ok := t.hot.(TraceReader)
+	if !ok {
+		return nil, nil
+	}
+	return tr.EventsByTrace(ctx, traceID, scope)
+}
+
+func (t *HotColdStore) RecentImpressions(ctx context.Context, scope TraceScope, limit int) ([]ImpressionRow, error) {
+	tr, ok := t.hot.(TraceReader)
+	if !ok {
+		return nil, nil
+	}
+	return tr.RecentImpressions(ctx, scope, limit)
+}
+
 // Write path + lifecycle all delegate to hot (the lake is written by the pipeline).
 func (t *HotColdStore) InsertImpression(ctx context.Context, e *ImpressionEvent) error {
 	return t.hot.InsertImpression(ctx, e)
