@@ -101,6 +101,50 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 	return merged, nil
 }
 
+// HotStore exposes the wrapped hot store so callers can reach capabilities the
+// wrapper doesn't forward method-by-method (e.g. the DebugReader read-backs —
+// debug reads are recent-window by definition, so the hot store is always the
+// right answerer). Without this, wrapping ClickHouse in HotColdStore hid its
+// DebugReader and the /debug endpoints 501'd on the full-local stack.
+func (t *HotColdStore) HotStore() Store { return t.hot }
+
+// ObservabilityWriter — operational signals (no-fills, freq-cap blocks,
+// render failures, rejections, state changes, depletions) forward to the hot
+// store. Without this the consumer's store.(ObservabilityWriter) assertion
+// failed on the wrapped store and every operational event was silently
+// dropped on the full-local stack. Fire-and-forget like the interface: a hot
+// store without the capability just doesn't record them.
+func (t *HotColdStore) InsertServeNoFill(n ServeNoFill) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertServeNoFill(n)
+	}
+}
+func (t *HotColdStore) InsertFreqCapBlock(b FreqCapBlock) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertFreqCapBlock(b)
+	}
+}
+func (t *HotColdStore) InsertRenderFailure(r RenderFailure) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertRenderFailure(r)
+	}
+}
+func (t *HotColdStore) InsertTrackerRejection(r TrackerRejection) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertTrackerRejection(r)
+	}
+}
+func (t *HotColdStore) InsertCampaignStateChange(cs CampaignStateChange) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertCampaignStateChange(cs)
+	}
+}
+func (t *HotColdStore) InsertBudgetDepletion(b BudgetDepletion) {
+	if ow, ok := t.hot.(ObservabilityWriter); ok {
+		ow.InsertBudgetDepletion(b)
+	}
+}
+
 // CommittedByCampaign delegates the shared-pacing-counter reconcile query to the
 // hot store (ClickHouse holds today's raw impressions). Committed spend is always
 // "today", which is inside the hot window, so cold is never involved. Returns nil

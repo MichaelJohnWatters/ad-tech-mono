@@ -474,6 +474,10 @@ const (
 	DefaultRedisAddr     = DefaultHost + ":" + PortRedis
 	DefaultMinioEndpoint = DefaultHost + ":" + PortMinioAPI
 	DefaultPostgresURL   = "postgres://adtech:adtech-local-dev@" + DefaultHost + ":" + PortPostgres + "/adtech?sslmode=disable"
+	// DefaultClickHouseHTTPURL is ClickHouse's HTTP interface (Tilt forwards
+	// 8123; the native protocol is on 9010 locally to avoid Minio's 9000).
+	// Same local-dev credentials convention as DefaultPostgresURL.
+	DefaultClickHouseHTTPURL = "http://adtech:adtech-local-dev@" + DefaultHost + ":" + PortClickHouseHTTP
 )
 
 // ServiceURL builds a URL from host and port.
@@ -507,6 +511,7 @@ const (
 	PortSSAI              = "8093"
 	PortTranscoder        = "8094"
 	PortReportRunner      = "8095"
+	PortClickHouseHTTP    = "8123"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

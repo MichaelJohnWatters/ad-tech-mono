@@ -69,7 +69,14 @@ func main() {
 	// Both MemoryStore and ClickHouse implement analytics.DebugReader, so the
 	// endpoints work on the full-local (clickhouse) stack as well as memory.
 	// DuckDB doesn't implement it yet → those endpoints degrade to 501 there.
+	// When the cold store wraps the hot backend, unwrap — debug reads are
+	// recent-window by definition, so the hot store answers them.
 	dbg, _ := store.(analytics.DebugReader)
+	if dbg == nil {
+		if hc, ok := store.(*analytics.HotColdStore); ok {
+			dbg, _ = hc.HotStore().(analytics.DebugReader)
+		}
+	}
 
 	// Billing engine (unified with reporting - single consumer)
 	clk := clock.Real{}
