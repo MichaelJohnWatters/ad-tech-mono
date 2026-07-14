@@ -320,6 +320,93 @@ paths:
         "200":
           description: Available report templates
 
+  /v1/api/trace:
+    get:
+      tags: [Reports]
+      summary: Inspect a request trace (scoped + redacted)
+      description: |
+        Reconstruct a single ad request's flow through the platform — auction,
+        serve, impression, viewability, click/conversion, billing — as a
+        render-ready timeline for the portal trace inspector.
+
+        The response is REDACTED server-side by the caller's account type:
+          - staff / admin: full detail (winning DSP, advertiser spend, publisher
+            revenue, platform margin).
+          - advertiser / agency: their spend only — no winner DSP, publisher
+            revenue, platform margin, or other bidders. Scoped to the caller's
+            account_id (injected from the session).
+          - publisher: their revenue only — no advertiser identity or margin.
+            Scoped to a gateway-VALIDATED publisher_id (see the param); a
+            publisher can only inspect traces on its own inventory.
+
+        A caller that does not own the trace (no matching impression) gets 404,
+        indistinguishable from not-found — no cross-tenant existence leak.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: trace_id
+          required: true
+          schema: { type: string }
+          description: The 32-hex OTel trace id (e.g. from a report or impressions row).
+        - in: query
+          name: publisher_id
+          required: false
+          schema: { type: string }
+          description: |
+            Publisher sessions only — which of the account's publishers to scope
+            to. The gateway validates it against the session and forwards a
+            trusted scope header; a client-supplied value is never trusted. If
+            omitted and the account owns exactly one publisher, that one is used.
+      responses:
+        "200":
+          description: Redacted flow timeline (steps + summary panels)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceTimeline"
+        "400":
+          description: trace_id required, or ambiguous publisher (several owned, none given)
+        "403":
+          description: Forbidden — unknown account type, or publisher_id not owned by the session
+        "404":
+          description: Trace not found or not owned by the caller
+
+  /v1/api/impressions/recent:
+    get:
+      tags: [Reports]
+      summary: List recent impressions (scoped) for the trace inspector
+      description: |
+        The caller's most recent impressions, newest first — the drill-down the
+        portal hangs "View trace" off. Scoped like /v1/api/trace (advertiser →
+        account_id; publisher → gateway-validated publisher_id; staff → unscoped).
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, default: 50, maximum: 500 }
+        - in: query
+          name: publisher_id
+          required: false
+          schema: { type: string }
+          description: Publisher sessions only — validated by the gateway (see /v1/api/trace).
+      responses:
+        "200":
+          description: Recent impressions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  impressions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ImpressionRow"
+        "403":
+          description: Forbidden — unknown account type, or publisher scope unresolved
+
   /v1/reporting/query:
     post:
       tags: [Reports]
@@ -1635,6 +1722,62 @@ components:
           items:
             type: array
             items: {}
+
+    TraceTimeline:
+      type: object
+      description: >
+        Render-ready, already-redacted trace flow returned by /v1/api/trace. The
+        server builds it per the caller's account type; hidden fields are absent
+        (not zeroed) so the client never receives them.
+      properties:
+        traceId:
+          type: string
+        note:
+          type: string
+          description: Human status/summary line for the header.
+        steps:
+          type: array
+          description: The timeline rows, ordered by time.
+          items:
+            type: object
+            properties:
+              time:
+                type: string
+                description: Offset from the first event, e.g. "0ms", "+120ms".
+              service:
+                type: string
+                description: exchange | dsp | adserver | tracker | reporting | billing
+              cls:
+                type: string
+                description: Visual state class (active | warn | error | nobid).
+              msg:
+                type: string
+              detail:
+                type: string
+        panels:
+          type: array
+          description: Summary cards (redacted — advertiser sees spend, publisher sees revenue, staff sees the full split).
+          items:
+            type: object
+            properties:
+              title: { type: string }
+              value: { type: string }
+              label: { type: string }
+              cls: { type: string }
+
+    ImpressionRow:
+      type: object
+      description: One recent impression for the /v1/api/impressions/recent drill-down.
+      properties:
+        trace_id: { type: string }
+        timestamp: { type: string, format: date-time }
+        campaign_id: { type: string }
+        creative_id: { type: string }
+        placement_id: { type: string }
+        publisher_id: { type: string }
+        bid_model: { type: string }
+        clearing_price_usd: { type: number }
+        deal_id: { type: string }
 
     BidRequest:
       type: object
