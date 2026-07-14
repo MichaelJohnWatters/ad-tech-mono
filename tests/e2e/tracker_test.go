@@ -6,6 +6,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -127,29 +128,27 @@ func TestTrackerHMACStrictMode(t *testing.T) {
 	})
 	h.SetConfigForPod(t, key, "false", pod)
 
-	url := h.URLs.Tracker + "/v1/t/imp?tid=trk-hmac-baseline&cid=" + w.Campaign.ID
-	resp := get(t, h, url)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("baseline (strict=false) status = %d, want 200", resp.StatusCode)
-	}
+	// Both flips propagate to each tracker replica via NATS invalidate with
+	// the config manager's 30s poll as the fallback — so each direction is
+	// asserted through a retry window that covers a full poll cycle (a
+	// leftover strict=true from a prior failed run makes the baseline race
+	// real, not theoretical). Fresh trace ids per attempt keep dedup out of
+	// the picture.
+	harness.WaitFor(t, 35*time.Second, "tracker accepts unsigned (strict=false baseline)", func() bool {
+		url := h.URLs.Tracker + fmt.Sprintf("/v1/t/imp?tid=trk-hmac-base-%d&cid=%s", time.Now().UnixNano(), w.Campaign.ID)
+		resp := get(t, h, url)
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
 
 	h.SetConfigForPod(t, key, "true", pod)
 
-	// The NATS invalidate lands in ~ms, but on a freshly-booted stack the
-	// subscription/poll can lose an instant-assert race — retry briefly
-	// instead of demanding the very next request see the flip.
-	url = h.URLs.Tracker + "/v1/t/imp?tid=trk-hmac-strict&cid=" + w.Campaign.ID
-	var lastStatus int
-	harness.WaitFor(t, 10*time.Second, "tracker picks up signature_validation=true", func() bool {
+	harness.WaitFor(t, 35*time.Second, "tracker picks up signature_validation=true", func() bool {
+		url := h.URLs.Tracker + fmt.Sprintf("/v1/t/imp?tid=trk-hmac-strict-%d&cid=%s", time.Now().UnixNano(), w.Campaign.ID)
 		resp := get(t, h, url)
 		resp.Body.Close()
-		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusForbidden
 	})
-	if lastStatus != http.StatusForbidden {
-		t.Fatalf("strict-mode unsigned status = %d, want 403", lastStatus)
-	}
 }
 
 func get(t *testing.T, h *harness.Harness, url string) *http.Response {
