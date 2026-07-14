@@ -261,41 +261,24 @@ const $ = (id) => document.getElementById(id);
 const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// staffLookupTrace — the in-portal trace inspector. Staff is unscoped, so it
-// queries the analytics store directly (via the gateway reports proxy) for the
-// trace and renders the shared flow timeline (static/trace-render.js).
-// NOTE: this is the Phase-A "thin" view (impression confirmation + cost). Phase
-// B swaps the fetch for the richer, per-service /v1/api/trace reconstruction and
-// adds the scoped/redacted advertiser + publisher versions.
+// staffLookupTrace — the in-portal trace inspector. The reporting endpoint
+// reconstructs the full per-service flow and returns the render-ready shape
+// ({traceId, note, steps, panels}); staff is unscoped so it sees everything.
 async function staffLookupTrace(traceId) {
   const out = $('staffTraceOut');
   if (!traceId) { renderTrace(out, { note: 'Enter a trace_id.', steps: [] }); return; }
   renderTrace(out, { traceId, note: 'Looking up…', steps: [] });
   try {
-    const data = await fetchJSON('/v1/api/reports', {
-      method: 'POST',
-      body: JSON.stringify({ table: 'impressions', metrics: ['count', 'sum_cost'], filters: { trace_id: traceId } }),
-    });
-    const rows = data?.rows || data?.Rows || [];
-    const count = rows.length ? rows[0][0] : 0;
-    const cost = rows.length ? (rows[0][1] || 0) : 0;
-    if (count > 0) {
-      renderTrace(out, {
-        traceId, jaegerBase: 'http://localhost:16686',
-        note: 'Reconstructed from the analytics store (staff · unscoped).',
-        steps: [{ time: '', service: 'reporting', cls: 'active', msg: esc(count) + ' impression(s) recorded', detail: '$' + cost.toFixed(2) + ' cost' }],
-        panels: [
-          { title: 'Impressions', value: esc(count), label: 'in reporting', cls: 'green' },
-          { title: 'Cost', value: '$' + cost.toFixed(2), label: 'total', cls: 'blue' },
-        ],
-      });
-    } else {
-      renderTrace(out, { traceId, note: 'No analytics events for this trace_id (in-flight, or it never impressed).',
-        steps: [{ time: '', service: 'reporting', cls: 'warn', msg: 'No events found', detail: '' }] });
-    }
+    const data = await fetchJSON('/v1/api/trace?trace_id=' + encodeURIComponent(traceId));
+    data.jaegerBase = 'http://localhost:16686'; // staff-only deep-link to Jaeger
+    renderTrace(out, data);
   } catch (err) {
-    renderTrace(out, { traceId, note: 'Lookup failed: ' + esc(err.message),
-      steps: [{ time: '', service: 'reporting', cls: 'error', msg: 'Query error', detail: esc(err.message) }] });
+    const notFound = /(^|\D)404(\D|$)/.test(err.message);
+    renderTrace(out, {
+      traceId,
+      note: notFound ? 'No trace found for that id (not in the analytics store — in-flight or never impressed).' : 'Lookup failed: ' + esc(err.message),
+      steps: [{ time: '', service: 'reporting', cls: notFound ? 'warn' : 'error', msg: notFound ? 'Not found' : 'Query error', detail: notFound ? '' : esc(err.message) }],
+    });
   }
 }
 

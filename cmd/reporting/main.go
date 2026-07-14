@@ -409,6 +409,12 @@ func main() {
 		json.NewEncoder(w).Encode(entries)
 	})
 
+	// Trace inspector: scoped + redacted per-request flow + a recent-impressions
+	// drill-down for the portals. Scoping/redaction enforced in trace.go from the
+	// gateway-injected X-Account-Type/-ID headers.
+	mux.HandleFunc(routes.ReportingTrace, traceHandler(store, ledger, log))
+	mux.HandleFunc(routes.ReportingRecentImpressions, recentImpressionsHandler(store, log))
+
 	handler := tracing.HTTPMiddleware(constants.ServiceReporting)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
 

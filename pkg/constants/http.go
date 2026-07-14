@@ -27,6 +27,12 @@ const (
 	// account) from a platform operator (unscoped). See middleware.CallerScope.
 	HeaderAccountType = "X-Account-Type"
 	HeaderUserID      = "X-User-ID"
+	// HeaderPublisherID carries a publisher_id the gateway has VALIDATED belongs
+	// to the session, for endpoints that scope by publisher (e.g. the trace
+	// inspector). Internal services trust only this header for publisher scope —
+	// never a client-supplied query param — so a publisher can't read another
+	// publisher's data. Absent = publisher scope not resolved (deny).
+	HeaderPublisherID = "X-Publisher-ID"
 	// HeaderActAs names a managed account an agency session wants to act on
 	// behalf of. The gateway validates it against the agency's managed
 	// accounts and, if allowed, forwards that account as the effective
