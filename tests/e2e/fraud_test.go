@@ -148,7 +148,11 @@ func TestFraudIPBlocklistRejected(t *testing.T) {
 	// the tracker runs multiple replicas — a fire can land on a replica whose
 	// fraud-rules warm cache hasn't polled/received the invalidate yet. Retry
 	// with fresh trace ids until every path sees the row.
-	harness.WaitFor(t, 10*time.Second, "blocklisted IP rejected by the tracker", func() bool {
+	// 70s: the invalidate usually lands in ms, but a tracker replica that
+	// missed it falls back to the fraud-rules warm-cache poll
+	// (cache.warm.fraud_rules.poll_interval, 60s) — the retry window must
+	// cover a full poll cycle for every replica.
+	harness.WaitFor(t, 70*time.Second, "blocklisted IP rejected by the tracker", func() bool {
 		tid := fmt.Sprintf("fraud-ip-blocked-%d", time.Now().UnixNano())
 		return h.FireImpressionFromIP(t, tid, w.Campaign.ID, badIP)
 	})
@@ -176,7 +180,7 @@ func TestFraudBotUARejected(t *testing.T) {
 	h.RefreshAllCaches(t)
 
 	// Same multi-replica cache-propagation retry as the IP test above.
-	harness.WaitFor(t, 10*time.Second, "blocklisted UA rejected by the tracker", func() bool {
+	harness.WaitFor(t, 70*time.Second, "blocklisted UA rejected by the tracker", func() bool {
 		tid := fmt.Sprintf("fraud-ua-blocked-%d", time.Now().UnixNano())
 		return h.FireImpressionUA(t, tid, w.Campaign.ID, "Mozilla/5.0 "+pattern+"/1.0")
 	})
@@ -226,4 +230,3 @@ func TestFraudAdsTxtUnverifiedRejected(t *testing.T) {
 		t.Errorf("strict ads.txt: expected NoBid for a publisher whose ads.txt omits us")
 	}
 }
-
