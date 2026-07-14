@@ -5,7 +5,6 @@ package main
 import (
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
