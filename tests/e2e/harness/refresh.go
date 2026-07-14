@@ -131,15 +131,21 @@ type refreshResult struct {
 
 func (h *Harness) refreshOne(t *testing.T, base string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+routes.DebugCacheRefresh, nil)
-	if err != nil {
-		t.Fatalf("refresh request build (%s): %v", base, err)
+	// Retry transport errors: the Tilt port-forwards flap (EOF / connection
+	// reset) when a pod restarts or the tunnel reconnects — a transient that
+	// used to fail whole tests on the very first refresh POST. h.HTTP's own
+	// 10s timeout bounds each attempt.
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = h.HTTP.Post(base+routes.DebugCacheRefresh, "application/json", nil)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
 	}
-	resp, err := h.HTTP.Do(req)
 	if err != nil {
-		t.Fatalf("refresh call (%s): %v", base, err)
+		t.Fatalf("refresh call (%s) after retries: %v", base, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
