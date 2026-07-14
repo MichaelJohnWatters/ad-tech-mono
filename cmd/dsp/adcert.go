@@ -13,6 +13,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adcert"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
 
@@ -30,7 +31,7 @@ import (
 // stays inert until a key is configured or fetched.
 func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time, keyFn func() ed25519.PublicKey) func(*openrtb.BidRequest) (bool, string) {
 	return func(req *openrtb.BidRequest) (bool, string) {
-		mode := strings.ToLower(strings.TrimSpace(cfg.Get("dsp.adcert_enforcement", "off")))
+		mode := strings.ToLower(strings.TrimSpace(keys.DSP.AdCertEnforcement.Get(cfg)))
 		pub := keyFn()
 		if mode == "" || mode == "off" || pub == nil {
 			return true, ""
@@ -41,7 +42,7 @@ func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time
 		}
 		// Both must hold: a valid signature AND a fresh timestamp (replay
 		// protection). maxAge <= 0 disables the freshness check.
-		maxAge := cfg.GetDuration("dsp.adcert_max_age", 5*time.Minute)
+		maxAge := keys.DSP.AdCertMaxAge.Get(cfg)
 		sigOK := adcert.Verify(pub, req, sig)
 		fresh := adcert.Fresh(req, now(), maxAge)
 		if sigOK && fresh {
@@ -65,16 +66,16 @@ func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time
 // dsp.adcert_verify_key is used. The returned func always prefers a freshly
 // fetched key and falls back to the static one until the first fetch succeeds.
 func adCertKeySource(cfg *config.Config, log *slog.Logger, onShutdown func(name string, fn func())) func() ed25519.PublicKey {
-	staticPub, err := adcert.ParsePublicKey(cfg.Get("dsp.adcert_verify_key", ""))
+	staticPub, err := adcert.ParsePublicKey(keys.DSP.AdCertVerifyKey.Get(cfg))
 	if err != nil {
 		log.Error("adcert: invalid static verify key", "error", err)
 		staticPub = nil
 	}
-	url := cfg.Get("dsp.adcert_key_url", "")
+	url := keys.DSP.AdCertKeyURL.Get(cfg)
 	if url == "" {
 		return func() ed25519.PublicKey { return staticPub }
 	}
-	f := newAdCertKeyFetcher(url, cfg.GetDuration("dsp.adcert_key_refresh", 5*time.Minute), log)
+	f := newAdCertKeyFetcher(url, keys.DSP.AdCertKeyRefresh.Get(cfg), log)
 	f.Start()
 	onShutdown("adcert-key-fetcher", f.Stop)
 	return func() ed25519.PublicKey {

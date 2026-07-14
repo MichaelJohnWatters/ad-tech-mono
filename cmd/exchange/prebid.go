@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -32,7 +33,7 @@ import (
 // duplicating auction logic.
 func prebidAuctionHandler(cfg *config.Config, auction http.HandlerFunc, idPub *identityobserve.Publisher, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !cfg.GetBool("prebid.enabled", true) {
+		if !keys.Exchange.PrebidEnabled.Get(cfg) {
 			http.Error(w, "prebid endpoint disabled", http.StatusServiceUnavailable)
 			return
 		}
@@ -53,7 +54,7 @@ func prebidAuctionHandler(cfg *config.Config, auction http.HandlerFunc, idPub *i
 			return
 		}
 
-		minFloor := cfg.GetFloat("prebid.min_bid_floor", 0)
+		minFloor := keys.Exchange.PrebidMinBidFloor.Get(cfg)
 		reqLog := logger.WithContext(log, r.Context())
 		raised := prebid.ApplyFloorPolicy(&bidReq, minFloor, reqLog)
 

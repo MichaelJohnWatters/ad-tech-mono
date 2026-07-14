@@ -18,6 +18,7 @@ import (
 
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -34,24 +35,24 @@ import (
 
 func main() {
 	log := logger.New(constants.ServiceIdentityConsumer)
-	sc := config.Setup(constants.ServiceIdentityConsumer, identityConsumerSchema, log)
+	sc := config.Setup(constants.ServiceIdentityConsumer, keys.IdentityConsumerSchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceIdentityConsumer,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	port := cfg.Get("identity_consumer.port", routes.PortIdentityConsumer)
+	port := keys.IdentityConsumer.Port.Get(cfg)
 
 	// Postgres — the write target. Readiness pings it; without it we can't write.
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open postgres", "error", err)
@@ -68,33 +69,33 @@ func main() {
 	// coherent if scaled beyond one replica. Falls back to in-memory (single
 	// replica) when unset or unreachable.
 	var fpStore identityobserve.FPStore
-	if addr := cfg.Get("identity_consumer.redis_url", ""); addr != "" {
+	if addr := keys.IdentityConsumer.RedisURL.Get(cfg); addr != "" {
 		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 		rc, rerr := cacheredis.New(rctx, cacheredis.Config{Addr: addr})
 		rcancel()
 		if rerr != nil {
 			log.Warn("identity fingerprint redis unavailable, using in-memory buckets (single replica)", "error", rerr)
 		} else {
-			fpStore = newRedisFPStore(rc, cfg.GetDuration("identity_consumer.fingerprint_ttl", time.Hour), log)
+			fpStore = newRedisFPStore(rc, keys.IdentityConsumer.FingerprintTTL.Get(cfg), log)
 			lc.OnShutdown("fp-redis", func(_ context.Context) error { return rc.Close() })
 			log.Info("identity fingerprint buckets: redis-backed")
 		}
 	}
 
 	observer := identityobserve.New(postgres.NewFromDB(db), identityobserve.Config{
-		Flush:       cfg.GetDuration("identity_consumer.flush_interval", 10*time.Second),
-		SeenCap:     cfg.GetInt("identity_consumer.seen_cap", 100_000),
-		ProbEnabled: cfg.GetBool("identity_consumer.probabilistic_enabled", false),
-		ProbConf:    cfg.GetFloat("identity_consumer.probabilistic_confidence", 0.5),
-		FPMaxUsers:  cfg.GetInt("identity_consumer.fingerprint_max_users", 5),
-		FuzzyUA:     cfg.GetBool("identity_consumer.fuzzy_ua", false),
+		Flush:       keys.IdentityConsumer.FlushInterval.Get(cfg),
+		SeenCap:     keys.IdentityConsumer.SeenCap.Get(cfg),
+		ProbEnabled: keys.IdentityConsumer.ProbabilisticEnabled.Get(cfg),
+		ProbConf:    keys.IdentityConsumer.ProbabilisticConfidence.Get(cfg),
+		FPMaxUsers:  keys.IdentityConsumer.FingerprintMaxUsers.Get(cfg),
+		FuzzyUA:     keys.IdentityConsumer.FuzzyUA.Get(cfg),
 		FPStore:     fpStore,
 	}, log)
 	observer.Start()
 	lc.OnShutdown("identity-observer", func(_ context.Context) error { observer.Stop(); return nil })
 
 	// NATS — the event source. Readiness fails without it.
-	natsURL := cfg.Get("identity_consumer.nats_url", routes.DefaultNATSURL)
+	natsURL := keys.IdentityConsumer.NATSURL.Get(cfg)
 	natsBus, err := natsbus.New(natsURL, constants.ServiceIdentityConsumer, log)
 	if err != nil {
 		log.Error("nats unavailable — no observations consumed until it recovers", "error", err)

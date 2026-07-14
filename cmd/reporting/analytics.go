@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -31,13 +32,13 @@ import (
 // analytics events still persist. Full parity is tracked in
 // docs/PLAN.md -> "Build Status & Outstanding Work".
 func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store {
-	backend := strings.ToLower(strings.TrimSpace(cfg.Get("reporting.analytics_backend", "memory")))
+	backend := strings.ToLower(strings.TrimSpace(keys.Reporting.AnalyticsBackend.Get(cfg)))
 	switch backend {
 	case "memory", "":
 		log.Info("analytics store: memory backend (volatile — events lost on restart)")
 		return analytics.NewMemory()
 	case "duckdb":
-		path := strings.TrimSpace(cfg.Get("reporting.duckdb_path", "/tmp/adtech-analytics.duckdb"))
+		path := strings.TrimSpace(keys.Reporting.DuckDBPath.Get(cfg))
 		store, err := newDuckDBStore(path, log)
 		if err != nil {
 			log.Error("analytics store: duckdb backend requested but unavailable", "path", path, "error", err)
@@ -47,12 +48,12 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/PLAN.md \"Build Status & Outstanding Work\"")
 		return store
 	case "clickhouse":
-		addrs := splitAndTrim(cfg.Get("reporting.clickhouse_addr", "127.0.0.1:9000"))
+		addrs := splitAndTrim(keys.Reporting.ClickHouseAddr.Get(cfg))
 		store, err := analytics.NewClickHouse(analytics.ClickHouseConfig{
 			Addrs:    addrs,
-			Database: cfg.Get("reporting.clickhouse_database", "adtech"),
-			Username: cfg.Get("reporting.clickhouse_user", "adtech"),
-			Password: cfg.Get("reporting.clickhouse_password", "adtech-local-dev"),
+			Database: keys.Reporting.ClickHouseDatabase.Get(cfg),
+			Username: keys.Reporting.ClickHouseUser.Get(cfg),
+			Password: keys.Reporting.ClickHousePassword.Get(cfg),
 			Log:      log,
 		})
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
 
@@ -22,7 +23,7 @@ import (
 // The returned func mutates req in place when appending.
 func schainGateFn(cfg *config.Config, log *slog.Logger) func(req *openrtb.BidRequest, traceID string) (bool, string) {
 	return func(req *openrtb.BidRequest, traceID string) (bool, string) {
-		mode := strings.ToLower(strings.TrimSpace(cfg.Get("exchange.schain_enforcement", "warn")))
+		mode := strings.ToLower(strings.TrimSpace(keys.Exchange.SchainEnforcement.Get(cfg)))
 		if mode == "" || mode == "off" {
 			return true, ""
 		}
@@ -36,7 +37,7 @@ func schainGateFn(cfg *config.Config, log *slog.Logger) func(req *openrtb.BidReq
 			return true, ""
 		}
 
-		if cfg.GetBool("exchange.schain_append_node", false) {
+		if keys.Exchange.SchainAppendNode.Get(cfg) {
 			appendExchangeNode(cfg, req, traceID)
 		}
 		return true, ""
@@ -53,8 +54,8 @@ func appendExchangeNode(cfg *config.Config, req *openrtb.BidRequest, traceID str
 		return
 	}
 	sc.Nodes = append(sc.Nodes, openrtb.SupplyChainNode{
-		ASI: cfg.Get("exchange.adstxt_seller_domain", ""),
-		SID: cfg.Get("exchange.adstxt_seller_id", ""),
+		ASI: keys.Exchange.AdsTxtSellerDomain.Get(cfg),
+		SID: keys.Exchange.AdsTxtSellerID.Get(cfg),
 		RID: traceID,
 		HP:  1,
 	})

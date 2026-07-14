@@ -11,6 +11,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	tbledger "github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing/tigerbeetle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tb"
 )
@@ -25,13 +26,13 @@ import (
 // every spend across restarts. The operator either fixes TB or flips
 // the backend back to memory explicitly.
 func selectLedger(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) billing.Ledger {
-	backend := strings.ToLower(strings.TrimSpace(cfg.Get("billing.ledger_backend", "memory")))
+	backend := strings.ToLower(strings.TrimSpace(keys.Billing.LedgerBackend.Get(cfg)))
 	switch backend {
 	case "memory", "":
 		log.Info("billing ledger: memory backend")
 		return billing.NewMemoryLedger()
 	case "tigerbeetle":
-		addrs := splitAndTrim(cfg.Get("billing.tigerbeetle_addresses", "127.0.0.1:3033"))
+		addrs := splitAndTrim(keys.Billing.TigerBeetleAddresses.Get(cfg))
 		if len(addrs) == 0 {
 			log.Error("billing ledger: tigerbeetle backend requested but billing.tigerbeetle_addresses is empty")
 			os.Exit(1)

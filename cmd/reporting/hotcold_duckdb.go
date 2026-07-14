@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
 )
@@ -19,25 +20,25 @@ import (
 // If the ParquetReader can't open (no S3 config, Minio down) we log and stay
 // hot-only rather than fail boot.
 func maybeWrapHotCold(store analytics.Store, cfg *config.Config, log *slog.Logger) analytics.Store {
-	if !cfg.GetBool("reporting.cold_store_enabled", false) {
+	if !keys.Reporting.ColdStoreEnabled.Get(cfg) {
 		return store
 	}
-	backend := strings.ToLower(strings.TrimSpace(cfg.Get("reporting.analytics_backend", "memory")))
+	backend := strings.ToLower(strings.TrimSpace(keys.Reporting.AnalyticsBackend.Get(cfg)))
 	if backend != "clickhouse" {
 		log.Warn("reporting.cold_store_enabled ignored: cold-store routing only applies to the clickhouse hot backend", "backend", backend)
 		return store
 	}
 
-	endpoint := strings.TrimSpace(cfg.Get("s3.endpoint", ""))
+	endpoint := strings.TrimSpace(cfg.Get(keys.S3.Endpoint.Key(), ""))
 	if endpoint == "" {
 		log.Warn("reporting.cold_store_enabled set but s3.endpoint is empty — serving hot-only (no lake to read)")
 		return store
 	}
-	bucket := cfg.Get("pipeline.datalake_bucket", "adtech-datalake")
-	accessKey := cfg.Get("s3.access_key", "adtech")
-	secretKey := cfg.Get("s3.secret_key", "adtech-local-dev")
-	region := cfg.Get("s3.region", "us-east-1")
-	useSSL := cfg.GetBool("s3.use_ssl", false)
+	bucket := keys.Pipeline.DatalakeBucket.Get(cfg)
+	accessKey := keys.S3.AccessKey.Get(cfg)
+	secretKey := keys.S3.SecretKey.Get(cfg)
+	region := keys.S3.Region.Get(cfg)
+	useSSL := keys.S3.UseSSL.Get(cfg)
 
 	reader, err := datalake.NewParquetReader(datalake.S3Config{
 		Endpoint: endpoint, AccessKey: accessKey, SecretKey: secretKey, Region: region, UseSSL: useSSL,
@@ -47,7 +48,7 @@ func maybeWrapHotCold(store analytics.Store, cfg *config.Config, log *slog.Logge
 		return store
 	}
 
-	hotWindow := cfg.GetDuration("reporting.hot_window", 7*24*time.Hour)
+	hotWindow := keys.Reporting.HotWindow.Get(cfg)
 	cold := datalake.NewColdStore(reader)
 	log.Info("reporting: hot/cold store enabled", "hot_window", hotWindow, "lake_bucket", bucket, "s3_endpoint", endpoint)
 	return analytics.NewHotColdStore(store, cold, hotWindow, log)

@@ -6,11 +6,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
@@ -25,12 +26,12 @@ import (
 // fraud filtering with no DB (consistent with the platform's fail-open
 // boot story).
 func startFraudBlocklistCache(cfg *config.Config, log *slog.Logger, bus events.EventBus, checker *fraud.RealTimeChecker) *warm.Cache[fraud.BlocklistEntry] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, fraud blocklist cache disabled (hardcoded patterns only)")
 		return nil
 	}
-	pollInterval := cfg.GetDuration("cache.warm.fraud_rules.poll_interval", 60*time.Second)
+	pollInterval := keys.Tracker.WarmFraudRulesPollInterval.Get(cfg)
 
 	loader := &warm.RetryingLoader[fraud.BlocklistEntry]{
 		Log:   log,

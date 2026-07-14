@@ -19,6 +19,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/deals"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
@@ -42,7 +43,7 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceExchange)
-	sc := config.Setup(constants.ServiceExchange, exchangeSchema, log)
+	sc := config.Setup(constants.ServiceExchange, keys.ExchangeSchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
@@ -51,15 +52,15 @@ func main() {
 	// disables tracing entirely so dev/test envs without Jaeger still boot.
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceExchange,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	knobs := NewKnobs(sc)
-	port := cfg.Get("exchange.port", routes.PortExchange)
+	port := keys.Exchange.Port.Get(cfg)
 	// dspEndpointsFn reads the in-memory config map per auction (cheap;
 	// it's a sync.RWMutex-guarded map lookup, not a Postgres query). The
 	// freshness story: the config manager polls Postgres every 30s and
@@ -68,9 +69,8 @@ func main() {
 	// lands in this map within NATS round-trip time, and every subsequent
 	// auction sees the new value. Empty entries are filtered so a trailing
 	// comma doesn't introduce a phantom endpoint.
-	defaultEndpoints := routes.DefaultDSPURL + ",http://localhost:" + routes.PortDSPComp1 + ",http://localhost:" + routes.PortDSPComp2
 	dspEndpointsFn := func() []string {
-		raw := cfg.Get("exchange.dsp_endpoints", defaultEndpoints)
+		raw := keys.Exchange.DSPEndpoints.Get(cfg)
 		parts := strings.Split(raw, ",")
 		out := make([]string, 0, len(parts))
 		for _, p := range parts {
@@ -87,14 +87,14 @@ func main() {
 	// context deadline doesn't fire. Live-updated on bid_timeout edits so
 	// the value never drifts from the auction-handler context deadline.
 	httpClient := &http.Client{Timeout: knobs.BidTimeout.Value()}
-	sc.Manager.OnChange("exchange.bid_timeout", func(_, _, newVal string) {
+	sc.Manager.OnChange(keys.Exchange.BidTimeout.Key(), func(_, _, newVal string) {
 		httpClient.Timeout = knobs.BidTimeout.Value()
 		log.Info("bid timeout updated live", "new", newVal)
 	})
 	adsTxtCache := fraud.NewAdsTxtCache()
 
 	// Connect to NATS for auction event publishing
-	natsURL := cfg.Get("exchange.nats_url", routes.DefaultNATSURL)
+	natsURL := keys.Exchange.NATSURL.Get(cfg)
 	var pub *events.Publisher
 	natsBus, err := natsbus.New(natsURL, constants.ServiceExchange, log)
 	if err != nil {
@@ -109,7 +109,7 @@ func main() {
 	// Identity auto-build: publish observed identifiers from inbound Prebid
 	// requests (external demand our SSP never saw) to the identity-consumer.
 	var idPub *identityobserve.Publisher
-	if cfg.GetBool("exchange.identity_observe_enabled", false) && natsBus != nil {
+	if keys.Exchange.IdentityObserveEnabled.Get(cfg) && natsBus != nil {
 		idPub = identityobserve.NewPublisher(natsBus, log)
 		log.Info("exchange identity observation enabled (prebid inbound)")
 	}
@@ -159,7 +159,7 @@ func main() {
 	// handler asks it to filter the fan-out list each request so we stop
 	// calling DSPs that haven't bid in a long time.
 	router := optimise.NewSmartRouter()
-	routerMinCalls := cfg.GetInt("exchange.routing_min_calls", 20)
+	routerMinCalls := keys.Exchange.RoutingMinCalls.Get(cfg)
 	_ = routerMinCalls // SmartRouter uses 20 as a hardcoded threshold today
 	// Warm-start routing from reporting's dsp_calls history (ADR 0003) so a
 	// restarted exchange isn't cold. Async + fail-open — never blocks boot.
@@ -173,7 +173,7 @@ func main() {
 	// Debug surface — all behind debug.endpoints_enabled (default true in
 	// dev, expected false in prod overlays). Reads + mutations both gated
 	// so the prod surface is purely the auction/win/loss/Prebid paths.
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		refreshables := []warm.Refreshable{dealCache}
 		if adsTxtWarm != nil {
 			refreshables = append(refreshables, adsTxtWarm)
@@ -232,17 +232,17 @@ func main() {
 	// Auction handler reads bid_timeout via knobs.BidTimeout per request so
 	// UI edits land without a restart (also used as the fan-out context
 	// deadline).
-	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
+	debugEnabledFn := func() bool { return keys.Debug.EndpointsEnabled.Get(cfg) }
 	// Per-auction decision to emit DSP-call telemetry: gated on/off, then
 	// sampled by a deterministic hash of trace_id so either all or none of an
 	// auction's per-DSP events fire (keeps the win-rate join consistent) and a
 	// high-QPS exchange can throttle background NATS volume without losing the
 	// signal. Both knobs are live-tunable.
 	emitDSPCallFn := func(traceID string) bool {
-		if !cfg.GetBool("exchange.emit_dsp_call_events", true) {
+		if !keys.Exchange.EmitDSPCallEvents.Get(cfg) {
 			return false
 		}
-		ratio := cfg.GetFloat("exchange.dsp_call_sample_ratio", 1.0)
+		ratio := keys.Exchange.DSPCallSampleRatio.Get(cfg)
 		if ratio >= 1.0 {
 			return true
 		}
@@ -273,8 +273,8 @@ func main() {
 
 func startDealCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[models.Deal] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.deals.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.Exchange.WarmDealsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := pickDealLoader(cfg, log)
 	bus := connectInvalidateBus(cfg, log)
@@ -299,7 +299,7 @@ func startDealCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm
 // will pick up rows automatically on the next 30s poll instead of being
 // pinned to an empty cache for its lifetime.
 func pickDealLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Deal] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[models.Deal]{
 		Log:   log,
 		KeyFn: func(d models.Deal) string { return d.ID },
@@ -320,7 +320,7 @@ func pickDealLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Dea
 // The auction publisher uses its own bus instance already; this one stays
 // scoped to the warm cache so its lifecycle is independent.
 func connectInvalidateBus(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("exchange.nats_url", routes.DefaultNATSURL)
+	url := keys.Exchange.NATSURL.Get(cfg)
 	bus, err := natsbus.New(url, constants.ServiceExchange+"-cache", log)
 	if err != nil {
 		log.Warn("nats unavailable for cache invalidate, polling only", "error", err)

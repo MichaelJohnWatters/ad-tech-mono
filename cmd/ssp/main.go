@@ -25,6 +25,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -47,25 +48,25 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceSSP)
-	sc := config.Setup(constants.ServiceSSP, sspSchema, log)
+	sc := config.Setup(constants.ServiceSSP, keys.SSPSchema(), log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("ssp.port", routes.PortSSP)
-	exchangeURL := cfg.Get("ssp.exchange_url", routes.DefaultExchangeURL)
+	port := keys.SSP.Port.Get(cfg)
+	exchangeURL := keys.SSP.ExchangeURL.Get(cfg)
 	// This platform's advertising-system domain, used as the asi of the first
 	// schain node on outbound bid requests. Read once at boot (static tier).
-	sellerDomain := cfg.Get("ssp.seller_domain", "")
+	sellerDomain := keys.SSP.SellerDomain.Get(cfg)
 
 	// OTel — required so HTTPMiddleware's server span has a real trace ID
 	// that flows into logs / NATS events / analytics store.
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceSSP,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -110,12 +111,12 @@ func main() {
 	// Placement management. GET (list, from warm cache) and POST (create new
 	// placement) share the collection route; the by-id route handles PATCH
 	// and DELETE. Mirrors cmd/dsp/management.go's campaign-CRUD layout.
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	mgmtDB := openManagementDB(dbURL, log)
 	if mgmtDB != nil {
 		lc.OnShutdown("ssp-mgmt-db", func(ctx context.Context) error { return mgmtDB.Close() })
 	}
-	bus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceSSP, log)
+	bus, _ := natsbus.New(keys.NATS.URL.Get(cfg), constants.ServiceSSP, log)
 	if bus != nil {
 		lc.OnShutdown("ssp-mgmt-bus", func(ctx context.Context) error { return bus.Close() })
 	}
@@ -156,7 +157,7 @@ func main() {
 	mux.Handle(routes.SSPPlacements+"/", auth(http.HandlerFunc(placementByIDHandler(mgmtDB, bus, log))))
 	mux.Handle(routes.SSPPublishers, auth(http.HandlerFunc(publishersListHandler(mgmtDB, log))))
 
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(placementCache, secretsCache.Cache))
 		if audiencePreloader != nil {
 			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
@@ -166,16 +167,16 @@ func main() {
 	// Identity auto-build: publish per-request identity signals to the
 	// identity-consumer, which builds graph edges. Opt-in; needs NATS.
 	var idPublisher *identityPublisher
-	if cfg.GetBool("ssp.identity_observe_enabled", false) {
+	if keys.SSP.IdentityObserveEnabled.Get(cfg) {
 		idPublisher = newIdentityPublisher(bus, log)
 		if idPublisher != nil {
 			log.Info("ssp identity observation enabled (publishing to identity-consumer)")
 		}
 	}
 
-	debugEnabledFn := func() bool { return cfg.GetBool("debug.endpoints_enabled", true) }
+	debugEnabledFn := func() bool { return keys.Debug.EndpointsEnabled.Get(cfg) }
 	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn))
-	adServerURL := cfg.Get("ssp.adserver_url", routes.DefaultAdServerURL)
+	adServerURL := keys.SSP.AdserverURL.Get(cfg)
 	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, debugEnabledFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
@@ -187,8 +188,8 @@ func main() {
 
 func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[postgres.PlacementRow] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.placements.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.SSP.WarmPlacementsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := pickPlacementLoader(cfg, log)
 	bus := connectNATS(cfg, log)
@@ -212,7 +213,7 @@ func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) 
 // picks up placements automatically if Postgres was unreachable at
 // boot (see also pkg/cache/warm.RetryingLoader doc comment).
 func pickPlacementLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgres.PlacementRow] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[postgres.PlacementRow]{
 		Log:   log,
 		KeyFn: func(r postgres.PlacementRow) string { return r.ID },
@@ -230,7 +231,7 @@ func pickPlacementLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postg
 }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("ssp.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	url := cfg.Get(keys.SSP.NATSURL.Key(), keys.Exchange.NATSURL.Get(cfg))
 	bus, err := natsbus.New(url, constants.ServiceSSP, log)
 	if err != nil {
 		log.Warn("nats unavailable, placement cache will poll only", "error", err)
@@ -243,7 +244,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 // preloader is non-nil only when the warm-preload variant is active —
 // see DSP's matching function for the rationale (debug refresh endpoint).
 func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, func()) {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, audience store disabled")
 		return nil, nil, func() {}
@@ -264,8 +265,8 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 		log.Info("audience store connected (postgres-direct, no L2 cache)")
 		return audiencepg.New(db), nil, func() { _ = db.Close() }
 	}
-	interval := cfg.GetDuration("audience.preload_interval", 30*time.Second)
-	ttl := cfg.GetDuration("audience.cache_ttl", 90*time.Second)
+	interval := keys.Audience.PreloadInterval.Get(cfg)
+	ttl := keys.Audience.CacheTTL.Get(cfg)
 	pre := audpreload.New(audpreload.Config{DB: db, L2: l2, Interval: interval, TTL: ttl, Log: log})
 	if err := pre.Start(context.Background()); err != nil {
 		log.Warn("audience preloader start failed, falling back to lazy cache", "error", err)
@@ -281,9 +282,9 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 // whether the service is run alongside Redis or in a Redis-less unit
 // test environment.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})

@@ -35,7 +35,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 
 - Each service follows the same startup pattern: `config.Setup() -> connect deps -> register health checks -> start server -> wait for shutdown signal`
 - **MUST use shared packages** - never hardcode values that exist in a shared package:
-  - `pkg/config/` - `config.Setup(serviceName, log)` for live config with polling
+  - `pkg/config/` - `config.Setup(serviceName, keys.<Svc>Schema(), log)` for live config with polling; read keys via typed handles (`keys.<Svc>.X.Get(cfg)`) declared once in `pkg/config/keys/` — never string literals
   - `pkg/constants/` - service names, status values, bid models, device types, channels
   - `pkg/routes/` - all HTTP paths, ports, service URLs (versioned with `routes.APIVersion`)
   - `pkg/events/` - NATS subject constants, event payload types, publisher helper

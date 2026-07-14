@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	_ "github.com/lib/pq"
 )
 
@@ -28,7 +28,7 @@ func main() {
 	sc := config.Setup("adstxt", nil, log)
 	cfg := sc.Cfg
 
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open postgres", "error", err)
@@ -74,7 +74,7 @@ func main() {
 	// cache so it re-reads immediately instead of waiting for the 300s poll.
 	// Best-effort: a NATS outage just means the poll picks it up later.
 	if changed > 0 {
-		bus, err := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), "adstxt", log)
+		bus, err := natsbus.New(keys.NATS.URL.Get(cfg), "adstxt", log)
 		if err != nil {
 			log.Warn("nats connect for ads.txt invalidate failed; exchange picks up on next poll", "error", err)
 			return

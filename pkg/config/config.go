@@ -7,11 +7,17 @@
 // Services call config.Load() at startup. Live config is refreshed
 // via NATS cache invalidation or polling (30s fallback).
 //
-// Usage:
+// Every key is declared once as a typed handle in pkg/config/keys (name,
+// type, default, tier, description together — see keys.go in this package
+// for the mechanism). Call sites read through the handle:
 //
-//	cfg := config.Load()
-//	timeout := cfg.GetDuration("exchange.bid_timeout", 100*time.Millisecond)
-//	maxFanout := cfg.GetInt("exchange.max_dsp_fanout", 10)
+//	timeout := keys.Exchange.BidTimeout.Get(cfg)
+//	maxFanout := keys.Exchange.MaxDSPFanout.Get(cfg)
+//
+// The raw string getters below remain for dynamic keys whose names are
+// computed at runtime (serviceName+".nats_url", per-pod conventions) and
+// for sentinel reads that deliberately differ from the schema default
+// (cfg.Get(keys.Database.URL.Key(), "")).
 package config
 
 import (

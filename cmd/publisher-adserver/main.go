@@ -24,6 +24,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -47,22 +48,22 @@ import (
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServicePublisherAdServer)
-	sc := config.Setup(constants.ServicePublisherAdServer, publisherAdServerSchema, log)
+	sc := config.Setup(constants.ServicePublisherAdServer, keys.PublisherAdServerSchema(), log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("publisher_adserver.port", routes.PortPublisherAdServer)
-	sspURL := cfg.Get("publisher_adserver.ssp_url", routes.DefaultSSPURL)
-	adserverURL := cfg.Get("publisher_adserver.adserver_url", routes.DefaultAdServerURL)
-	trackerURL := cfg.Get("publisher_adserver.tracker_url", routes.DefaultTrackerURL)
+	port := keys.PublisherAdServer.Port.Get(cfg)
+	sspURL := keys.PublisherAdServer.SSPURL.Get(cfg)
+	adserverURL := keys.PublisherAdServer.AdserverURL.Get(cfg)
+	trackerURL := keys.PublisherAdServer.TrackerURL.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServicePublisherAdServer,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -113,7 +114,7 @@ func main() {
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
 
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(lineItemCache, placementCache))
 		mux.HandleFunc(routes.DebugPubAdLineItems, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -124,15 +125,15 @@ func main() {
 	// Outbound Prebid client. Timeout is re-read live so config edits to
 	// publisher_adserver.prebid_timeout land without a restart, just like
 	// exchange.bid_timeout does.
-	prebidTimeout := cfg.GetDuration("publisher_adserver.prebid_timeout", 500*time.Millisecond)
+	prebidTimeout := keys.PublisherAdServer.PrebidTimeout.Get(cfg)
 	prebidCli := prebidclient.New(prebidTimeout, log)
-	prebidServersFn := func() string { return cfg.Get("publisher_adserver.prebid_servers", "") }
+	prebidServersFn := func() string { return keys.PublisherAdServer.PrebidServers.Get(cfg) }
 
 	// Event publisher for DirectWin + PrebidOutboundWin. Nil-tolerant —
 	// if NATS is unreachable we skip publishing rather than failing the
 	// serve. Closes the analytics blind spots where direct-sold serves
 	// and external Prebid wins left no reporting record.
-	natsURL := cfg.Get("publisher_adserver.nats_url", cfg.Get("nats.url", routes.DefaultNATSURL))
+	natsURL := cfg.Get(keys.PublisherAdServer.NATSURL.Key(), keys.NATS.URL.Get(cfg))
 	var pub *events.Publisher
 	if pubBus, err := natsbus.New(natsURL, constants.ServicePublisherAdServer+"-events", log); err == nil {
 		ctx := context.Background()
@@ -157,19 +158,19 @@ func main() {
 		pub:             pub,
 	}))
 	omidFn := func() (string, string) {
-		return cfg.Get("publisher_adserver.omid_vendor", "ad-tech-mono-omid"),
-			cfg.Get("publisher_adserver.omid_verification_url", "")
+		return keys.PublisherAdServer.OmidVendor.Get(cfg),
+			keys.PublisherAdServer.OmidVerificationURL.Get(cfg)
 	}
 	// stubFn gates the demo-house-ad fallback on a no-bid. OFF by default:
 	// the platform serves only real auctioned demand, so a no-bid returns an
 	// honest empty no-fill rather than fake data (per the real-data-only rule).
-	stubFn := func() bool { return cfg.GetBool("publisher_adserver.stub_on_nobid", false) }
+	stubFn := func() bool { return keys.PublisherAdServer.StubOnNobid.Get(cfg) }
 	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn))
 	// publisher_adserver.public_url is the browser-reachable origin
 	// the VMAP schedule will tell the player to call back into for
 	// each break's VAST. Defaults to the gateway's local origin since
 	// every demo path runs through it.
-	publicBase := cfg.Get("publisher_adserver.public_url", "http://localhost:8080")
+	publicBase := keys.PublisherAdServer.PublicURL.Get(cfg)
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
 	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, stubFn))
 	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, stubFn))
@@ -781,8 +782,8 @@ func decisionLabel(t arbitration.DecisionType) string {
 
 func startLineItemCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[publisheradserver.PublisherLineItem] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.publisher_line_items.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.PublisherAdServer.WarmPublisherLineItemsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := pickLineItemLoader(cfg, log)
 	bus := connectNATS(cfg, log)
@@ -803,8 +804,8 @@ func startLineItemCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *
 
 func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[postgres.PlacementRow] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.placements.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.SSP.WarmPlacementsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := pickPlacementLoader(cfg, log)
 	bus := connectNATS(cfg, log)
@@ -828,7 +829,7 @@ func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) 
 // on first LoadAll; reconnect after any error so the publisher-adserver
 // picks up rows automatically if Postgres was unreachable at boot.
 func pickLineItemLoader(cfg *config.Config, log *slog.Logger) warm.Loader[publisheradserver.PublisherLineItem] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[publisheradserver.PublisherLineItem]{
 		Log:   log,
 		KeyFn: func(li publisheradserver.PublisherLineItem) string { return li.ID },
@@ -846,7 +847,7 @@ func pickLineItemLoader(cfg *config.Config, log *slog.Logger) warm.Loader[publis
 }
 
 func pickPlacementLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgres.PlacementRow] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[postgres.PlacementRow]{
 		Log:   log,
 		KeyFn: func(r postgres.PlacementRow) string { return r.ID },
@@ -864,7 +865,7 @@ func pickPlacementLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postg
 }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("publisher_adserver.nats_url", cfg.Get("nats.url", routes.DefaultNATSURL))
+	url := cfg.Get(keys.PublisherAdServer.NATSURL.Key(), keys.NATS.URL.Get(cfg))
 	bus, err := natsbus.New(url, constants.ServicePublisherAdServer, log)
 	if err != nil {
 		log.Warn("nats unavailable, caches will poll only", "error", err)
@@ -874,9 +875,9 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 }
 
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})

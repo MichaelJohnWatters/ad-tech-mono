@@ -8,7 +8,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 )
 
 // Dedup is the SetNX-backed event dedup gate.
@@ -47,9 +47,9 @@ func (d *Dedup) FirstSeen(ctx context.Context, eventType, traceID string) bool {
 
 // connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})

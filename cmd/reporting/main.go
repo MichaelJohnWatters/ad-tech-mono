@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -34,7 +35,7 @@ import (
 
 func main() {
 	log := logger.New(constants.ServiceReporting)
-	sc := config.Setup(constants.ServiceReporting, reportingSchema, log)
+	sc := config.Setup(constants.ServiceReporting, keys.ReportingSchema(), log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()
@@ -44,14 +45,14 @@ func main() {
 	// without Jaeger still boot.
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceReporting,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	port := cfg.Get("reporting.port", routes.PortReporting)
+	port := keys.Reporting.Port.Get(cfg)
 
 	// Analytics store — memory (volatile, default) or durable DuckDB,
 	// selected by reporting.analytics_backend. Core events flow through
@@ -129,10 +130,10 @@ func main() {
 	// the flag is a no-op warning and the per-message path is used. Dedup
 	// (Redis SetNX on the stream sequence) makes redelivery idempotent. Set
 	// reporting.clickhouse_batch_consumer=false to force the per-message path.
-	if cfg.GetBool("reporting.clickhouse_batch_consumer", true) {
+	if keys.Reporting.ClickHouseBatchConsumer.Get(cfg) {
 		if bi, ok := store.(analytics.BatchInserter); ok {
 			dedup := cache.NewDedupAdapter(connectReportingRedis(cfg, log))
-			ttl := cfg.GetDuration("reporting.dedup_ttl", 24*time.Hour)
+			ttl := keys.Reporting.DedupTTL.Get(cfg)
 			consumer.EnableBatchConsumer(bi, dedup, ttl)
 			log.Info("reporting: batch consumer enabled for core events", "dedup_ttl", ttl)
 		} else {
@@ -141,7 +142,7 @@ func main() {
 	}
 
 	// Connect to NATS for event consumption
-	natsURL := cfg.Get("reporting.nats_url", routes.DefaultNATSURL)
+	natsURL := keys.Reporting.NATSURL.Get(cfg)
 	natsBus, err := natsbus.New(natsURL, constants.ServiceReporting, log)
 	if err != nil {
 		log.Warn("nats unavailable, events only via HTTP endpoint", "error", err)
@@ -175,13 +176,13 @@ func main() {
 	// without derived metrics pass straight through unchanged.
 	engine := reporting.NewQueryEngine(store, contractNet{contracts})
 	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, engine, func() time.Duration {
-		return cfg.GetDuration("reporting.query_timeout", 2*time.Minute)
+		return keys.Reporting.QueryTimeout.Get(cfg)
 	}))
 
 	// HTTP event ingestion
 	mux.HandleFunc(routes.ReportingEvents, consumer.HTTPHandler())
 
-	if cfg.GetBool("debug.endpoints_enabled", true) && contractCache != nil {
+	if keys.Debug.EndpointsEnabled.Get(cfg) && contractCache != nil {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(contractCache))
 		// Billing rates dump — read by the pub sim's Billing Rates
 		// panel so operators can see which publisher contract a
@@ -213,7 +214,7 @@ func main() {
 	// assert auction.win NATS events reached the analytics store. Returns
 	// {"count": N} so tests can verify exactly-once delivery (no dupes).
 	// Gated by debug.endpoints_enabled to keep it off prod surface.
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		// These read-back endpoints are MemoryStore-only (used by the e2e
 		// harness, which runs the memory backend). memGuard returns false
 		// and writes 501 when reporting.analytics_backend isn't memory, so
@@ -1126,8 +1127,8 @@ func queryHandler(log *slog.Logger, q querier, queryTimeout func() time.Duration
 // so the service still boots and uses the ContractStore's default fallback.
 func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, contracts *billing.ContractStore) *warm.Cache[postgres.ContractRow] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.billing_rates.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 300*time.Second),
+		cfg.GetDuration(keys.Reporting.WarmBillingRatesPollInterval.Key(), 0),
+		cfg.GetDuration(keys.CacheWarm.PollInterval.Key(), 300*time.Second),
 	)
 	loader := pickContractLoader(cfg, log)
 	bus := connectInvalidateBus(cfg, log)
@@ -1158,7 +1159,7 @@ func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, c
 // contracts automatically on the next 30s poll. Mirrors the pattern
 // from pkg/secrets and pickDealLoader in cmd/exchange.
 func pickContractLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgres.ContractRow] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[postgres.ContractRow]{
 		Log:   log,
 		KeyFn: func(r postgres.ContractRow) string { return r.PublisherID },
@@ -1176,7 +1177,7 @@ func pickContractLoader(cfg *config.Config, log *slog.Logger) warm.Loader[postgr
 }
 
 func connectInvalidateBus(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("reporting.nats_url", routes.DefaultNATSURL)
+	url := keys.Reporting.NATSURL.Get(cfg)
 	bus, err := natsbus.New(url, constants.ServiceReporting+"-cache", log)
 	if err != nil {
 		log.Warn("nats unavailable for cache invalidate, polling only", "error", err)

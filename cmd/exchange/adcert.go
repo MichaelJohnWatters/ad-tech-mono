@@ -8,6 +8,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adcert"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 )
@@ -25,7 +26,7 @@ type AdCertKeyResponse struct {
 func adCertKeyHandler(cfg *config.Config, log *slog.Logger) http.HandlerFunc {
 	// Derived once at boot: the sign key is TierSecret (env-only), so it can't
 	// change without a restart anyway.
-	priv, err := adcert.ParsePrivateKey(cfg.Get("exchange.adcert_sign_key", ""))
+	priv, err := adcert.ParsePrivateKey(keys.Exchange.AdCertSignKey.Get(cfg))
 	if err != nil {
 		log.Error("adcert: invalid signing key, key endpoint disabled", "error", err)
 	}
@@ -48,7 +49,7 @@ func adCertKeyHandler(cfg *config.Config, log *slog.Logger) http.HandlerFunc {
 // no-op so signing simply stays off — matching the fail-open posture of the
 // other trust gates. The key is TierSecret, read once at boot.
 func adCertSignerFn(cfg *config.Config, log *slog.Logger, now func() time.Time) func(*openrtb.BidRequest) {
-	priv, err := adcert.ParsePrivateKey(cfg.Get("exchange.adcert_sign_key", ""))
+	priv, err := adcert.ParsePrivateKey(keys.Exchange.AdCertSignKey.Get(cfg))
 	if err != nil {
 		log.Error("adcert: invalid signing key, request signing disabled", "error", err)
 		return func(*openrtb.BidRequest) {}

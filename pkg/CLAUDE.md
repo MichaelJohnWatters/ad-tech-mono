@@ -19,7 +19,7 @@ All reusable libraries live here. Every service imports from `pkg/`. Nothing is 
 | `store/datalake/` | Parquet read/write, Delta Log | Used by pipeline and rollups |
 | `events/` | Event bus interface | `EventBus` interface - Publish/Subscribe/Ack/Nak |
 | `events/nats/` | NATS JetStream implementation | Swappable for Kafka later |
-| `config/` | Configuration loading | defaults.go -> env vars -> live Postgres config |
+| `config/` | Configuration loading | defaults -> env vars -> live Postgres config; every key is a typed handle in `config/keys/` (`keys.DSP.NoisePct.Get(cfg)`) — no magic strings at call sites |
 | `middleware/` | HTTP/gRPC middleware | Auth, tenant, rate limit, circuit breaker, audit |
 | `logger/` | Structured logging (slog) | JSON output, trace_id in every line |
 | `proto/` | Protobuf definitions + generated Go code | Single source of truth for gRPC contracts |

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
@@ -24,13 +25,13 @@ func main() {
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("pipeline.port", routes.PortPipeline)
+	port := keys.Pipeline.Port.Get(cfg)
 
 	// Data-lake batch layer: consume the event stream (own NATS group, so it
 	// runs alongside reporting's real-time consumer) and land events as
 	// Parquet in object storage. Off only if pipeline.datalake_enabled=false.
 	var sink *datalakeSink
-	if cfg.GetBool("pipeline.datalake_enabled", true) {
+	if keys.Pipeline.DatalakeEnabled.Get(cfg) {
 		sink = startDatalakeSink(cfg, log, lc)
 	}
 
@@ -42,7 +43,7 @@ func main() {
 	// total rows/bytes from the Delta log) for a table, or all tables. Used by
 	// ops and e2e to confirm the log→Parquet spine landed every event — the
 	// Parquet TotalRows should reconcile with the reporting/NATS event count.
-	if sink != nil && cfg.GetBool("debug.endpoints_enabled", true) {
+	if sink != nil && keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc("/debug/datalake/snapshot", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			ctx := r.Context()

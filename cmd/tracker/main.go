@@ -15,9 +15,10 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
@@ -41,21 +42,23 @@ var pixel = []byte{
 
 func main() {
 	log := logger.New(constants.ServiceTracker)
-	sc := config.Setup(constants.ServiceTracker, trackerSchema, log)
+	sc := config.Setup(constants.ServiceTracker, keys.TrackerSchema(), log)
 	cfg := sc.Cfg
-	knobs := NewKnobs(sc)
+	// Live-tunable dedup knobs, consumed inside the Dedup constructor.
+	dedupTTL := config.NewLiveDuration(sc.Manager, cfg, keys.Tracker.DedupTTL.Key(), keys.Tracker.DedupTTL.Default())
+	dedupEnabled := config.NewLiveBool(sc.Manager, cfg, keys.Tracker.DedupEnabled.Key(), keys.Tracker.DedupEnabled.Default())
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("tracker.port", routes.PortTracker)
-	natsURL := cfg.Get("tracker.nats_url", routes.DefaultNATSURL)
-	reportingURL := cfg.Get("tracker.reporting_url", routes.DefaultReportingURL)
+	port := keys.Tracker.Port.Get(cfg)
+	natsURL := keys.Tracker.NATSURL.Get(cfg)
+	reportingURL := keys.Tracker.ReportingURL.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceTracker,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 0.1), // pixels are high volume — sample only 10% by default
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    cfg.GetFloat(keys.Otel.SampleRatio.Key(), 0.1), // pixels are high volume — sample only 10% by default (platform default is 1.0)
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -93,11 +96,11 @@ func main() {
 	if blocklistCache != nil {
 		lc.OnShutdown("fraud-blocklist-cache", func(_ context.Context) error { blocklistCache.Stop(); return nil })
 	}
-	signingKey := cfg.Get("tracker.signing_key", adserving.DefaultSigningKey)
+	signingKey := keys.Tracker.SigningKey.Get(cfg)
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
 	l2 := connectRedis(cfg, log)
-	dedup := NewDedup(l2, knobs.DedupTTL.Value, knobs.DedupEnabled.Value, log)
+	dedup := NewDedup(l2, dedupTTL.Value, dedupEnabled.Value, log)
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
@@ -106,7 +109,7 @@ func main() {
 
 	// Debug-gated synchronous cache refresh — lets the e2e harness force a
 	// reload after inserting a fraud_blocklists row.
-	if cfg.GetBool("debug.endpoints_enabled", true) && blocklistCache != nil {
+	if keys.Debug.EndpointsEnabled.Get(cfg) && blocklistCache != nil {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(blocklistCache))
 	}
 
@@ -124,7 +127,7 @@ func main() {
 		// strictness without a redeploy.
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
-			if cfg.GetBool("tracker.signature_validation", false) {
+			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
 					"impression", "invalid_signature", "", traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
@@ -132,7 +135,7 @@ func main() {
 			}
 		}
 
-		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+		if keys.Tracker.ExpValidation.Get(cfg) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
 			go publisher.publishRejected(context.WithoutCancel(ctx),
 				"impression", "expired", q.Get("exp"), traceID, reqLog)
@@ -149,7 +152,7 @@ func main() {
 		// to deliberately trip a block, so the UI can demonstrate the
 		// fraud-rejection flow. Gated by debug.endpoints_enabled — prod
 		// requests can't be forced into the blocked path by a forged param.
-		if q.Get("dev_force_fraud") == "1" && cfg.GetBool("debug.endpoints_enabled", true) {
+		if q.Get("dev_force_fraud") == "1" && keys.Debug.EndpointsEnabled.Get(cfg) {
 			fraudResult.Blocked = true
 			fraudResult.Reasons = append([]string{"dev_force_fraud"}, fraudResult.Reasons...)
 		}
@@ -161,7 +164,7 @@ func main() {
 			// Dev-mode signal so the pub sim UI can show fraud was tripped.
 			// Real bots get the silent pixel-return treatment in prod (this
 			// header simply isn't set when debug endpoints are off).
-			if cfg.GetBool("debug.endpoints_enabled", true) {
+			if keys.Debug.EndpointsEnabled.Get(cfg) {
 				w.Header().Set("X-Dev-Fraud-Blocked", "1")
 				w.Header().Set("X-Dev-Fraud-Reasons", strings.Join(fraudResult.Reasons, ","))
 			}
@@ -244,7 +247,7 @@ func main() {
 		// tracker as an open redirect.
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
-			if cfg.GetBool("tracker.signature_validation", false) {
+			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
 					"click", "invalid_signature", "", traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
@@ -252,7 +255,7 @@ func main() {
 			}
 		}
 
-		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+		if keys.Tracker.ExpValidation.Get(cfg) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
 			go publisher.publishRejected(context.WithoutCancel(ctx),
 				"click", "expired", q.Get("exp"), traceID, reqLog)
@@ -309,7 +312,7 @@ func main() {
 		// didn't actually convert.
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
-			if cfg.GetBool("tracker.signature_validation", false) {
+			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
 					"conversion", "invalid_signature", convType, traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
@@ -317,7 +320,7 @@ func main() {
 			}
 		}
 
-		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+		if keys.Tracker.ExpValidation.Get(cfg) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
 			go publisher.publishRejected(context.WithoutCancel(ctx),
 				"conversion", "expired", q.Get("exp"), traceID, reqLog)
@@ -376,7 +379,7 @@ func main() {
 		// Same HMAC + fraud + dedup gates as the impression handler.
 		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
-			if cfg.GetBool("tracker.signature_validation", false) {
+			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
 					"view", "invalid_signature", "", traceID, reqLog)
 				http.Error(w, "invalid signature", http.StatusForbidden)
@@ -384,7 +387,7 @@ func main() {
 			}
 		}
 
-		if cfg.GetBool("tracker.exp_validation", true) && isExpired(q, time.Now()) {
+		if keys.Tracker.ExpValidation.Get(cfg) && isExpired(q, time.Now()) {
 			reqLog.Warn("expired url", "path", r.URL.Path, "exp", q.Get("exp"))
 			go publisher.publishRejected(context.WithoutCancel(ctx),
 				"view", "expired", q.Get("exp"), traceID, reqLog)
@@ -457,8 +460,8 @@ func main() {
 	// same live-tunable strictness knobs. See mediagate.go.
 	mediaGate := mediaEventGate{
 		signingKey:    signingKey,
-		sigValidation: func() bool { return cfg.GetBool("tracker.signature_validation", false) },
-		expValidation: func() bool { return cfg.GetBool("tracker.exp_validation", true) },
+		sigValidation: func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
+		expValidation: func() bool { return keys.Tracker.ExpValidation.Get(cfg) },
 		fraud:         fraudChecker,
 		dedup:         dedup,
 		publisher:     publisher,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 )
 
@@ -25,10 +26,10 @@ type creativeStat struct {
 // never touches the serve hot path; SeedArm is pure in-memory. A cold bandit is
 // no worse than before this existed.
 func warmStartBandit(cfg *config.Config, bandit *optimise.Bandit, log *slog.Logger) {
-	if !cfg.GetBool("adserver.bandit_warmstart", true) {
+	if !keys.AdServer.BanditWarmstart.Get(cfg) {
 		return
 	}
-	base := cfg.Get("adserver.reporting_url", "http://localhost:8086")
+	base := keys.AdServer.ReportingURL.Get(cfg)
 	url := base + "/debug/creative/stats?since_hours=24"
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
@@ -28,20 +29,8 @@ import (
 
 var log = logger.New("content-packager")
 
-var schema = []config.SchemaEntry{
-	{Key: "packager.source_bucket", Type: "string", Tier: config.TierStatic, Default: "adtech-creatives", Description: "Object-store bucket holding the source content MP4 and receiving the packaged HLS.", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.source_key", Type: "string", Tier: config.TierStatic, Default: "media/bbb-720-10mb.mp4", Description: "Object key of the source content MP4 to package.", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.content_id", Type: "string", Tier: config.TierStatic, Default: "sample", Description: "Content id — the packaged HLS lands at {prefix}/{content_id}/index.m3u8.", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.prefix", Type: "string", Tier: config.TierStatic, Default: "ssai/content", Description: "Object-key prefix for the packaged content HLS.", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.break_at_segment", Type: "int", Tier: config.TierStatic, Default: "2", Description: "Segment index where the mid-roll ad break opens (#EXT-X-CUE-OUT).", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.break_segments", Type: "int", Tier: config.TierStatic, Default: "5", Description: "Number of content segments the ad break spans (replaced by the stitched ad).", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.audio", Type: "bool", Tier: config.TierStatic, Default: "false", Description: "Package a single audio-only rendition ({prefix}/{content_id}/audio/index.m3u8, no master) instead of the video ABR ladder — for audio SSAI origins.", Service: "content-packager", Since: "v1.6"},
-	{Key: "packager.container", Type: "string", Tier: config.TierStatic, Default: "ts", Description: "Segment container: 'ts' (MPEG-TS, HLS-only) or 'cmaf' (fMP4 .m4s + init.mp4, shared by HLS and DASH). Use cmaf for DASH SSAI origins.", Service: "content-packager", Since: "v1.6"},
-	{Key: "transcode.ladder", Type: "string", Tier: config.TierLive, Default: "", Description: "ABR ladder spec: comma-separated WxH@vbitrateKbps rungs (e.g. 640x360@800,1280x720@2800). Empty = built-in 360/480/720p default. Shared with prewarm/stitcher.", Service: "content-packager", Since: "v1.6"},
-}
-
 func main() {
-	sc := config.Setup(constants.ServiceSSAI, schema, log)
+	sc := config.Setup(constants.ServiceSSAI, keys.ContentPackagerSchema(), log)
 	cfg := sc.Cfg
 	ctx := context.Background()
 
@@ -50,15 +39,15 @@ func main() {
 		log.Error("object store unavailable (set s3.endpoint); cannot package content")
 		os.Exit(1)
 	}
-	srcKey := cfg.Get("packager.source_key", "media/bbb-720-10mb.mp4")
-	contentID := cfg.Get("packager.content_id", "sample")
-	prefix := strings.TrimRight(cfg.Get("packager.prefix", "ssai/content"), "/")
-	breakAt := cfg.GetInt("packager.break_at_segment", 2)
-	breakSegs := cfg.GetInt("packager.break_segments", 5)
+	srcKey := keys.ContentPackager.PackagerSourceKey.Get(cfg)
+	contentID := keys.ContentPackager.PackagerContentID.Get(cfg)
+	prefix := strings.TrimRight(keys.ContentPackager.PackagerPrefix.Get(cfg), "/")
+	breakAt := keys.ContentPackager.PackagerBreakAtSegment.Get(cfg)
+	breakSegs := keys.ContentPackager.PackagerBreakSegments.Get(cfg)
 	// Audio mode: package a single audio-only rendition (podcast / streaming
 	// radio) instead of the video ABR ladder, and skip the master playlist —
 	// audio is single-rendition, so the origin is the media playlist directly.
-	audioMode := cfg.GetBool("packager.audio", false)
+	audioMode := keys.ContentPackager.PackagerAudio.Get(cfg)
 
 	runner := transcode.Runner{Timeout: 10 * time.Minute}
 	if !runner.Available() {
@@ -80,12 +69,12 @@ func main() {
 	base := fmt.Sprintf("%s/%s", prefix, contentID)
 	// CMAF mode packages fMP4 (.m4s + init.mp4) so the SAME segments serve both
 	// HLS (with #EXT-X-MAP) and DASH; TS mode is HLS-only.
-	cmaf := strings.EqualFold(cfg.Get("packager.container", "ts"), "cmaf")
+	cmaf := strings.EqualFold(keys.ContentPackager.PackagerContainer.Get(cfg), "cmaf")
 	segCT := "video/mp2t"
 	if cmaf {
 		segCT = "video/mp4"
 	}
-	profiles := transcode.ParseLadder(cfg.Get("transcode.ladder", ""))
+	profiles := transcode.ParseLadder(keys.Transcode.Ladder.Get(cfg))
 	if audioMode {
 		profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
 	}
@@ -196,16 +185,16 @@ func put(ctx context.Context, store objects.Store, bucket, key string, data []by
 }
 
 func connectStore(cfg *config.Config) (objects.Store, string) {
-	endpoint := cfg.Get("s3.endpoint", "")
-	bucket := cfg.Get("packager.source_bucket", "adtech-creatives")
+	endpoint := cfg.Get(keys.S3.Endpoint.Key(), "")
+	bucket := keys.ContentPackager.PackagerSourceBucket.Get(cfg)
 	if endpoint == "" {
 		return nil, bucket
 	}
 	cli, err := objs3.New(objs3.Config{
 		Endpoint:  strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://"),
-		AccessKey: cfg.Get("s3.access_key", "minioadmin"),
-		SecretKey: cfg.Get("s3.secret_key", "minioadmin"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		AccessKey: cfg.Get(keys.S3.AccessKey.Key(), "minioadmin"),
+		SecretKey: cfg.Get(keys.S3.SecretKey.Key(), "minioadmin"),
+		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
 		log.Warn("s3 init failed", "error", err)

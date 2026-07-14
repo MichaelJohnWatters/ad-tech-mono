@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
@@ -29,27 +30,27 @@ import (
 var log = logger.New(constants.ServiceTranscoder)
 
 func main() {
-	sc := config.Setup(constants.ServiceTranscoder, transcoderSchema, log)
+	sc := config.Setup(constants.ServiceTranscoder, keys.TranscoderSchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("transcoder.port", routes.PortTranscoder)
+	port := keys.Transcoder.Port.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceTranscoder,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	store, err := objs3.New(objs3.Config{
-		Endpoint:  strings.TrimPrefix(strings.TrimPrefix(cfg.Get("s3.endpoint", ""), "https://"), "http://"),
-		AccessKey: cfg.Get("s3.access_key", "minioadmin"),
-		SecretKey: cfg.Get("s3.secret_key", "minioadmin"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		Endpoint:  strings.TrimPrefix(strings.TrimPrefix(cfg.Get(keys.S3.Endpoint.Key(), ""), "https://"), "http://"),
+		AccessKey: cfg.Get(keys.S3.AccessKey.Key(), "minioadmin"),
+		SecretKey: cfg.Get(keys.S3.SecretKey.Key(), "minioadmin"),
+		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
 		log.Error("object store init failed; transcoder cannot cache conditioned ads", "error", err)
@@ -57,11 +58,11 @@ func main() {
 
 	cond := &transcode.Conditioner{
 		Store:      store,
-		Runner:     transcode.Runner{Timeout: cfg.GetDuration("transcoder.ffmpeg_timeout", 3*time.Minute)},
+		Runner:     transcode.Runner{Timeout: keys.Transcoder.FfmpegTimeout.Get(cfg)},
 		HTTP:       &http.Client{Timeout: 30 * time.Second},
-		Bucket:     cfg.Get("transcoder.bucket", "adtech-creatives"),
-		Prefix:     cfg.Get("transcoder.prefix", "ssai/cond"),
-		PublicBase: cfg.Get("transcoder.public_base", "http://localhost:8080/v1/creatives"),
+		Bucket:     keys.Transcoder.Bucket.Get(cfg),
+		Prefix:     keys.Transcoder.Prefix.Get(cfg),
+		PublicBase: keys.Transcoder.PublicBase.Get(cfg),
 	}
 
 	hlth.AddReadinessCheck("ffmpeg", func(_ context.Context) error {

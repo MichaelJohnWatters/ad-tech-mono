@@ -10,6 +10,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -24,12 +25,12 @@ import (
 // Returns nil when database.url is unset; enforcement then no-ops (the gate
 // treats an empty cache as unverifiable).
 func startAdsTxtCache(cfg *config.Config, log *slog.Logger, bus events.EventBus, adsTxt *fraud.AdsTxtCache) *warm.Cache[fraud.AdsTxtRecord] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, ads.txt cache disabled (enforcement no-ops)")
 		return nil
 	}
-	pollInterval := cfg.GetDuration("cache.warm.ads_txt.poll_interval", 300*time.Second)
+	pollInterval := keys.Exchange.WarmAdsTxtPollInterval.Get(cfg)
 
 	loader := &warm.RetryingLoader[fraud.AdsTxtRecord]{
 		Log:   log,
@@ -74,13 +75,13 @@ func startAdsTxtCache(cfg *config.Config, log *slog.Logger, bus events.EventBus,
 //   - not_listed:   strict → reject (no-bid); warn → log + allow.
 func adsTxtGateFn(cfg *config.Config, adsTxt *fraud.AdsTxtCache, log *slog.Logger) func(domain string) (bool, string) {
 	return func(domain string) (bool, string) {
-		mode := strings.ToLower(strings.TrimSpace(cfg.Get("exchange.adstxt_enforcement", "off")))
+		mode := strings.ToLower(strings.TrimSpace(keys.Exchange.AdsTxtEnforcement.Get(cfg)))
 		if mode == "" || mode == "off" || domain == "" || adsTxt == nil {
 			return true, ""
 		}
 		res := adsTxt.IsAuthorised(domain,
-			cfg.Get("exchange.adstxt_seller_domain", ""),
-			cfg.Get("exchange.adstxt_seller_id", ""))
+			keys.Exchange.AdsTxtSellerDomain.Get(cfg),
+			keys.Exchange.AdsTxtSellerID.Get(cfg))
 		if res.Authorised || res.Status == "no_ads_txt" {
 			return true, ""
 		}

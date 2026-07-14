@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -34,7 +35,7 @@ func main() {
 	sc := config.Setup(constants.ServiceSeed, nil, log)
 	cfg := sc.Cfg
 
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open db", "error", err)
@@ -82,7 +83,7 @@ func main() {
 	// creative (degraded but functional). Asset base URL is the
 	// browser-facing prefix (gateway proxy) so creatives.html_content
 	// records reference a URL the browser can actually fetch.
-	bucket := cfg.Get("s3.bucket", "adtech-creatives")
+	bucket := keys.S3.Bucket.Get(cfg)
 	objStore := connectObjectStore(ctx, cfg, log)
 	if err := uploadCreativeAssets(ctx, objStore, bucket, log); err != nil {
 		log.Warn("creative asset upload run failed", "error", err)
@@ -90,8 +91,8 @@ func main() {
 	// Pull the sample video/audio into our own object store so the platform
 	// serves its own media instead of proxying a live third party per request.
 	uploadSampleMedia(ctx, objStore, bucket, log)
-	assetBase := cfg.Get("seed.creatives_url_base", "http://localhost:8080"+routes.ProxyCreatives[:len(routes.ProxyCreatives)-1])
-	landingBase := cfg.Get("seed.landing_url_base", "http://localhost:8080/dev/landing")
+	assetBase := cfg.Get(keys.Seed.CreativesURLBase.Key(), "http://localhost:8080"+routes.ProxyCreatives[:len(routes.ProxyCreatives)-1])
+	landingBase := keys.Seed.LandingURLBase.Get(cfg)
 
 	in := &inserter{db: db, log: log, creativeAssetBase: assetBase, landingURLBase: landingBase}
 	if err := in.SeedAll(ctx, profiles); err != nil {
@@ -162,16 +163,16 @@ func main() {
 // the inline-HTML path for every creative. Mirrors the adserver
 // connectObjects helper but inlined here so cmd/seed stays small.
 func connectObjectStore(ctx context.Context, cfg *config.Config, log *slog.Logger) objects.Store {
-	endpoint := cfg.Get("s3.endpoint", "")
+	endpoint := cfg.Get(keys.S3.Endpoint.Key(), "")
 	if endpoint == "" {
 		log.Warn("s3.endpoint not set, creative asset upload skipped (every creative will use inline HTML)")
 		return nil
 	}
 	cli, err := objs3.New(objs3.Config{
 		Endpoint:  trimScheme(endpoint),
-		AccessKey: cfg.Get("s3.access_key", "minioadmin"),
-		SecretKey: cfg.Get("s3.secret_key", "minioadmin"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		AccessKey: cfg.Get(keys.S3.AccessKey.Key(), "minioadmin"),
+		SecretKey: cfg.Get(keys.S3.SecretKey.Key(), "minioadmin"),
+		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
 		log.Warn("s3 init failed; creative asset upload skipped", "error", err)

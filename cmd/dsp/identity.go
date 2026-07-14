@@ -9,6 +9,7 @@ import (
 
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
@@ -32,10 +33,10 @@ type graphLoader interface {
 // same warm-cache pattern the campaign/placement/deal caches use). Returns
 // (nil, no-op) when disabled or Postgres is unreachable at boot.
 func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolver, func()) {
-	if !cfg.GetBool("dsp.identity_resolution_enabled", false) {
+	if !keys.DSP.IdentityResolutionEnabled.Get(cfg) {
 		return nil, func() {}
 	}
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("dsp identity resolution enabled but database.url unset; resolution disabled")
 		return nil, func() {}
@@ -53,9 +54,9 @@ func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolve
 		return nil, func() {}
 	}
 	p := newPreloadIdentityResolver(postgres.NewFromDB(db),
-		cfg.GetDuration("dsp.identity_preload_interval", 5*time.Minute),
-		cfg.GetInt("dsp.identity_max_depth", 3),
-		cfg.GetFloat("dsp.identity_min_confidence", 0),
+		keys.DSP.IdentityPreloadInterval.Get(cfg),
+		keys.DSP.IdentityMaxDepth.Get(cfg),
+		keys.DSP.IdentityMinConfidence.Get(cfg),
 		log)
 	p.Start()
 	log.Info("dsp identity resolution enabled (in-memory preload)", "max_depth", p.maxDepth, "min_confidence", p.minConf)

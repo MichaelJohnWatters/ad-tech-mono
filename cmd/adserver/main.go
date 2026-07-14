@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -49,20 +50,20 @@ type AdCreative struct {
 func main() {
 	clk := clock.Real{}
 	log := logger.New(constants.ServiceAdServer)
-	sc := config.Setup(constants.ServiceAdServer, adserverSchema, log)
+	sc := config.Setup(constants.ServiceAdServer, keys.AdServerSchema(), log)
 	cfg := sc.Cfg
 	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("adserver.port", routes.PortAdServer)
-	trackerURL := cfg.Get("adserver.tracker_url", routes.DefaultTrackerURL)
+	port := keys.AdServer.Port.Get(cfg)
+	trackerURL := keys.AdServer.TrackerURL.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceAdServer,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -79,7 +80,7 @@ func main() {
 
 	// Object store for large creative bodies
 	objStore := objects.Connect(cfg, "/tmp/adtech-creatives", log)
-	bucket := cfg.Get("s3.bucket", "adtech-creatives")
+	bucket := keys.S3.Bucket.Get(cfg)
 
 	// Warm cache of creative metadata from Postgres
 	metaCache := startCreativeMetaCache(cfg, clk, log)
@@ -164,7 +165,7 @@ func main() {
 		json.NewEncoder(w).Encode(out)
 	})
 
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(metaCache, freqCapCache))
 	}
 
@@ -185,8 +186,8 @@ func main() {
 // boots in offline dev environments (it serves a default creative in that case).
 func startCreativeMetaCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[models.Creative] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.creatives.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.AdServer.WarmCreativesPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := pickCreativeLoader(cfg, log)
 	bus := connectNATS(cfg, log)
@@ -212,10 +213,10 @@ func startCreativeMetaCache(cfg *config.Config, clk clock.Clock, log *slog.Logge
 // platform-default cap for every campaign.
 func startFreqCapCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[models.FreqCapRule] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.freq_caps.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.AdServer.WarmFreqCapsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	loader := &warm.RetryingLoader[models.FreqCapRule]{
 		Log:   log,
 		KeyFn: func(r models.FreqCapRule) string { return r.CampaignID },
@@ -249,7 +250,7 @@ func startFreqCapCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *w
 // Postgres on first LoadAll so an adserver that boots before Postgres
 // is reachable picks up creatives automatically on the next poll.
 func pickCreativeLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models.Creative] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	return &warm.RetryingLoader[models.Creative]{
 		Log:   log,
 		KeyFn: func(c models.Creative) string { return c.ID },
@@ -268,9 +269,9 @@ func pickCreativeLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models
 
 // connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
@@ -283,7 +284,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("adserver.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	url := cfg.Get(keys.AdServer.NATSURL.Key(), keys.Exchange.NATSURL.Get(cfg))
 	bus, err := natsbus.New(url, constants.ServiceAdServer, log)
 	if err != nil {
 		log.Warn("nats unavailable, creative cache will poll only", "error", err)

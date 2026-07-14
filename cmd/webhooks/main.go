@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -42,7 +43,7 @@ var eventRoutes = map[string]string{
 
 func main() {
 	log := logger.New(constants.ServiceWebhooks)
-	sc := config.Setup(constants.ServiceWebhooks, webhooksSchema, log)
+	sc := config.Setup(constants.ServiceWebhooks, keys.WebhooksSchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
@@ -52,19 +53,19 @@ func main() {
 	// the traceparent NATS header (natsbus extracts it).
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceWebhooks,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	port := cfg.Get("webhooks.port", routes.PortWebhooks)
+	port := keys.Webhooks.Port.Get(cfg)
 
 	// Postgres — the subscription source + delivery log. Fail-soft on boot: a
 	// pod that starts before Postgres is reachable stays un-ready (readiness
 	// pings the DB) rather than crash-looping.
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open postgres", "error", err)
@@ -79,10 +80,10 @@ func main() {
 
 	dispatcher := &webhooks.Dispatcher{
 		Store:       webhooks.NewPostgresStore(db),
-		HTTP:        &http.Client{Timeout: cfg.GetDuration("webhooks.http_timeout", 5*time.Second)},
-		MaxAttempts: cfg.GetInt("webhooks.max_attempts", 3),
+		HTTP:        &http.Client{Timeout: cfg.GetDuration(keys.Webhooks.HttpTimeout.Key(), 5*time.Second)},
+		MaxAttempts: keys.Webhooks.MaxAttempts.Get(cfg),
 		Backoff: func(attempt int) time.Duration {
-			base := cfg.GetDuration("webhooks.backoff_base", time.Second)
+			base := keys.Webhooks.BackoffBase.Get(cfg)
 			return time.Duration(1<<uint(attempt-1)) * base
 		},
 		Now: time.Now,
@@ -92,7 +93,7 @@ func main() {
 	// NATS — the event source. Without it the dispatcher can't do its job, so
 	// readiness fails when NATS is unavailable (unlike reporting, which has an
 	// HTTP-ingest fallback).
-	natsURL := cfg.Get("webhooks.nats_url", routes.DefaultNATSURL)
+	natsURL := keys.Webhooks.NATSURL.Get(cfg)
 	natsBus, err := natsbus.New(natsURL, constants.ServiceWebhooks, log)
 	if err != nil {
 		log.Error("nats unavailable — no events will be delivered until it recovers", "error", err)

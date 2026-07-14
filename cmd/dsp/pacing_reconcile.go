@@ -9,6 +9,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 )
@@ -29,7 +30,7 @@ func startPacingReconcile(ctx context.Context, bus events.EventBus, campaigns *w
 	if bus == nil || campaigns == nil || budget == nil {
 		return nil // nothing to reconcile against (YAML-only boot / no NATS)
 	}
-	if !cfg.GetBool("dsp.spend_reconcile_enabled", true) {
+	if !keys.DSP.SpendReconcileEnabled.Get(cfg) {
 		log.Info("pacing spend reconcile disabled (dsp.spend_reconcile_enabled=false)")
 		return nil
 	}
