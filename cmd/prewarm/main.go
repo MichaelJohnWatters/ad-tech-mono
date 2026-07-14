@@ -19,6 +19,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -27,18 +28,13 @@ import (
 
 var log = logger.New("prewarm")
 
-var schema = []config.SchemaEntry{
-	{Key: "prewarm.transcoder_url", Type: "string", Tier: config.TierStatic, Default: routes.DefaultTranscoderURL, Description: "Transcoder the prewarm job conditions creatives against.", Service: constants.ServiceTranscoder, Since: "v1.6"},
-	{Key: "transcode.ladder", Type: "string", Tier: config.TierLive, Default: "", Description: "ABR ladder spec: comma-separated WxH@vbitrateKbps rungs. Empty = built-in default. Shared with packager/stitcher — prewarm conditions video creatives across these rungs.", Service: constants.ServiceTranscoder, Since: "v1.6"},
-}
-
 func main() {
-	sc := config.Setup(constants.ServiceTranscoder, schema, log)
+	sc := config.Setup(constants.ServiceTranscoder, keys.PrewarmSchema(), log)
 	cfg := sc.Cfg
 	ctx := context.Background()
 
-	transcoderURL := cfg.Get("prewarm.transcoder_url", routes.DefaultTranscoderURL)
-	dbURL := cfg.Get("database.url", cfg.Get("database_url", ""))
+	transcoderURL := keys.Prewarm.TranscoderURL.Get(cfg)
+	dbURL := cfg.Get(keys.Database.URL.Key(), cfg.Get("database_url", ""))
 	if dbURL == "" {
 		log.Error("database url not set")
 		os.Exit(1)
@@ -61,7 +57,7 @@ func main() {
 	for _, c := range creatives {
 		// Audio creatives condition to a single audio-only profile; video
 		// creatives condition across the whole ABR ladder.
-		profiles := transcode.ParseLadder(cfg.Get("transcode.ladder", ""))
+		profiles := transcode.ParseLadder(keys.Transcode.Ladder.Get(cfg))
 		if c.format == "audio" {
 			profiles = []transcode.Profile{transcode.DefaultAudioProfile()}
 		}

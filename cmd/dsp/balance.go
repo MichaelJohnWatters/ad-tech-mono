@@ -13,6 +13,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
@@ -142,16 +143,16 @@ func (g *BalanceGate) RecordWin(accountID string, amount float64) {
 // returns are nil and the bid handler skips balance enforcement entirely —
 // the same "boot regardless of infra" posture as the opt-out cache.
 func startBalanceGate(cfg *config.Config, clk clock.Clock, log *slog.Logger, bus events.EventBus, l2 cache.L2Cache) (*BalanceGate, *warm.Cache[postgres.AdvertiserBalance]) {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, balance gate disabled (prepay not enforced)")
 		return nil, nil
 	}
-	gate := NewBalanceGate(l2, func() bool { return cfg.GetBool("dsp.balance_gate_enabled", true) }, log)
+	gate := NewBalanceGate(l2, func() bool { return keys.DSP.BalanceGateEnabled.Get(cfg) }, log)
 
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.advertiser_balances.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.DSP.WarmAdvertiserBalancesPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := &warm.RetryingLoader[postgres.AdvertiserBalance]{
 		Log:   log,

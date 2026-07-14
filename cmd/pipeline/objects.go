@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
@@ -14,7 +15,7 @@ import (
 // pipeline still runs offline (matches the ad server's pattern).
 func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
 	const fsRoot = "/tmp/adtech-datalake"
-	endpoint := cfg.Get("s3.endpoint", "")
+	endpoint := cfg.Get(keys.S3.Endpoint.Key(), "")
 	if endpoint == "" {
 		log.Warn("s3.endpoint not set, datalake using local filesystem", "root", fsRoot)
 		store, err := fs.New(fsRoot)
@@ -26,10 +27,10 @@ func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
 	}
 	store, err := objs3.New(objs3.Config{
 		Endpoint:  endpoint,
-		AccessKey: cfg.Get("s3.access_key", "adtech"),
-		SecretKey: cfg.Get("s3.secret_key", "adtech-local-dev"),
-		Region:    cfg.Get("s3.region", "us-east-1"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		AccessKey: keys.S3.AccessKey.Get(cfg),
+		SecretKey: keys.S3.SecretKey.Get(cfg),
+		Region:    keys.S3.Region.Get(cfg),
+		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
 		log.Error("datalake s3 init failed, falling back to filesystem", "error", err)

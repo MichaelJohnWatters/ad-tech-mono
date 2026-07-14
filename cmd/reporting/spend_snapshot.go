@@ -14,10 +14,10 @@ import (
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
@@ -43,11 +43,11 @@ import (
 // settled portion, and boot calls hydrateCommittedSpend before consumption so a
 // restart doesn't reset committed to zero (which would reconcile DSPs down).
 func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, persistStore *lazyCommittedSpendStore, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
-	if !cfg.GetBool("reporting.spend_snapshot_enabled", true) {
+	if !keys.Reporting.SpendSnapshotEnabled.Get(cfg) {
 		log.Info("spend snapshot publisher disabled (reporting.spend_snapshot_enabled=false)")
 		return
 	}
-	interval := cfg.GetDuration("reporting.spend_snapshot_interval", 30*time.Second)
+	interval := keys.Reporting.SpendSnapshotInterval.Get(cfg)
 	pub := events.NewPublisher(bus, log)
 	guard := newPublisherGuard(cfg, interval, log)
 	if guard.rdb != nil {
@@ -70,7 +70,7 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, pe
 			case <-ticker.C:
 				// Re-apply the hold TTL each tick so the TierLive config is
 				// genuinely live (was boot-only). Cheap; sweeps use it below.
-				if ttl := cfg.GetDuration("reporting.pacing_hold_ttl", 15*time.Minute); ttl > 0 {
+				if ttl := keys.Reporting.PacingHoldTTL.Get(cfg); ttl > 0 {
 					engine.SetPacingHoldTTL(ttl)
 				}
 				guard.check()
@@ -135,7 +135,7 @@ type lazyCommittedSpendStore struct {
 // simply off (pacing still works, just not restart-safe), same posture as the
 // balance sink / reservation store.
 func newCommittedSpendStore(cfg *config.Config, log *slog.Logger) *lazyCommittedSpendStore {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("committed-spend persistence disabled: database.url not set — DSP pacing resets on a reporting restart")
 		return nil
@@ -209,9 +209,9 @@ func newPublisherGuard(cfg *config.Config, interval time.Duration, log *slog.Log
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	rdb, err := cacheredis.New(ctx, cacheredis.Config{
-		Addr:     cfg.Get("redis.url", routes.DefaultRedisAddr),
-		Password: cfg.Get("redis.password", ""),
-		DB:       cfg.GetInt("redis.db", 0),
+		Addr:     keys.Redis.URL.Get(cfg),
+		Password: keys.Redis.Password.Get(cfg),
+		DB:       keys.Redis.DB.Get(cfg),
 	})
 	if err != nil {
 		log.Warn("pacing publisher guard disabled: redis unavailable — a multi-replica misconfig won't be detected", "error", err)

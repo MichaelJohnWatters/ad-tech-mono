@@ -9,6 +9,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
@@ -35,7 +36,7 @@ import (
 // unset (the MemoryLedger retains context in-process, so only TB truly needs
 // this — but wiring it for both keeps settle backend-agnostic).
 func startReservationStore(cfg *config.Config, log *slog.Logger, engine *billing.Engine) {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("reservation store disabled: database.url not set — CPC/CPA/vCPM settle relies on the ledger retaining context (ok for memory, broken for tigerbeetle)")
 		return
@@ -95,7 +96,7 @@ func (s *lazyReservationStore) GetReservation(ctx context.Context, traceID strin
 }
 
 func startBalanceSink(cfg *config.Config, log *slog.Logger, engine *billing.Engine, bus events.EventBus) {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("balance sink disabled: database.url not set — advertiser balances will not draw down")
 		return
@@ -105,7 +106,7 @@ func startBalanceSink(cfg *config.Config, log *slog.Logger, engine *billing.Engi
 		log:   log,
 		bus:   bus,
 		minInterval: func() time.Duration {
-			return cfg.GetDuration("billing.balance_invalidate_min_interval", 5*time.Second)
+			return keys.Billing.BalanceInvalidateMinInterval.Get(cfg)
 		},
 		lastInvalidate: map[string]time.Time{},
 		depleted:       map[string]bool{},

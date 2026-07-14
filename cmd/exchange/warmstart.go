@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // sampleTrace deterministically decides whether a trace is in the emit sample
@@ -42,10 +42,10 @@ type dspCallStat struct {
 // goroutine at boot — Seed is mutex-guarded, so it's safe to land after the
 // handler starts serving; a cold router just isn't worse than today.
 func warmStartRouter(cfg *config.Config, router *optimise.SmartRouter, log *slog.Logger) {
-	if !cfg.GetBool("exchange.routing_warmstart", true) {
+	if !keys.Exchange.RoutingWarmstart.Get(cfg) {
 		return
 	}
-	base := cfg.Get("exchange.reporting_url", "http://localhost:"+routes.PortReporting)
+	base := keys.Exchange.ReportingURL.Get(cfg)
 	url := base + "/debug/routing/stats?since_hours=6"
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	_ "github.com/lib/pq"
 )
 
@@ -28,7 +28,7 @@ func main() {
 	sc := config.Setup("appadstxt", nil, log)
 	cfg := sc.Cfg
 
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open postgres", "error", err)

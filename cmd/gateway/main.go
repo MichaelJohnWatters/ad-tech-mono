@@ -18,6 +18,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
@@ -35,7 +36,7 @@ import (
 
 func main() {
 	log := logger.New(constants.ServiceGateway)
-	sc := config.Setup(constants.ServiceGateway, gatewaySchema, log)
+	sc := config.Setup(constants.ServiceGateway, keys.GatewaySchema(), log)
 	cfg := sc.Cfg
 	cfgMgr := sc.Manager
 	hlth := health.New()
@@ -44,7 +45,7 @@ func main() {
 	// The config-manager UI reads the union of every running pod's schema
 	// from service_registry.schema_entries — no separate "load published
 	// schema" step is needed here.
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 
 	// Open a Postgres handle for handlers that need direct DB access
 	// (bootstrap mints a secrets row, reset-and-reseed truncates).
@@ -71,14 +72,14 @@ func main() {
 	// without Jaeger still boot. Same pattern as the auction-path services.
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceGateway,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	port := cfg.Get("gateway.port", routes.PortGateway)
+	port := keys.Gateway.Port.Get(cfg)
 
 	// Secrets warm cache — the source of truth for the JWT signing key (and
 	// the operator API keys the /v1/api handlers validate). Started here (not
@@ -91,13 +92,13 @@ func main() {
 	// JWT signing key precedence: active jwt_signing secret > config key >
 	// empty. Empty means the dev auth-bypass (every request gets admin
 	// claims) — allowed only when gateway.require_auth is false.
-	signingKey := cfg.Get("gateway.jwt_signing_key", "")
+	signingKey := keys.Gateway.JwtSigningKey.Get(cfg)
 	if sec, ok := secretsCache.LookupActiveByPurpose(secrets.PurposeJWTSigning); ok {
 		signingKey = sec.Value
 		log.Info("jwt signing key loaded from secrets store", "name", sec.Name)
 	}
 	if signingKey == "" {
-		if cfg.GetBool("gateway.require_auth", false) {
+		if keys.Gateway.RequireAuth.Get(cfg) {
 			log.Error("gateway.require_auth=true but no JWT signing key is available (no active jwt_signing secret, empty gateway.jwt_signing_key); refusing to boot with auth bypassed")
 			os.Exit(1)
 		}
@@ -105,19 +106,19 @@ func main() {
 	}
 
 	// Internal service URLs (configurable for staging/prod)
-	dspURL := cfg.Get("gateway.dsp_url", routes.DefaultDSPURL)
-	sspURL := cfg.Get("gateway.ssp_url", routes.DefaultSSPURL)
-	adserverURL := cfg.Get("gateway.adserver_url", routes.DefaultAdServerURL)
-	pubadURL := cfg.Get("gateway.publisher_adserver_url", routes.DefaultPublisherAdServerURL)
-	reportingURL := cfg.Get("gateway.reporting_url", routes.DefaultReportingURL)
-	exchangeURL := cfg.Get("gateway.exchange_url", routes.DefaultExchangeURL)
-	trackerURL := cfg.Get("gateway.tracker_url", routes.DefaultTrackerURL)
-	jaegerURL := cfg.Get("gateway.jaeger_url", routes.DefaultJaegerURL)
+	dspURL := keys.Gateway.DSPURL.Get(cfg)
+	sspURL := keys.Gateway.SSPURL.Get(cfg)
+	adserverURL := keys.Gateway.AdserverURL.Get(cfg)
+	pubadURL := keys.Gateway.PublisherAdServerURL.Get(cfg)
+	reportingURL := keys.Gateway.ReportingURL.Get(cfg)
+	exchangeURL := keys.Gateway.ExchangeURL.Get(cfg)
+	trackerURL := keys.Gateway.TrackerURL.Get(cfg)
+	jaegerURL := keys.Gateway.JaegerURL.Get(cfg)
 	// Object-store forwarding target for /v1/creatives/* — the
 	// browser-reachable proxy for SVG / PNG / JPG assets stored in
 	// Minio or S3. Default points at the in-cluster Minio service;
 	// staging/prod overlays override with the real S3 endpoint.
-	creativesStoreURL := cfg.Get("gateway.creatives_store_url", "http://"+routes.DefaultMinioEndpoint+"/"+cfg.Get("s3.bucket", "adtech-creatives")+"/")
+	creativesStoreURL := cfg.Get(keys.Gateway.CreativesStoreURL.Key(), "http://"+routes.DefaultMinioEndpoint+"/"+keys.S3.Bucket.Get(cfg)+"/")
 
 	authMiddleware := middleware.Auth(signingKey, log)
 
@@ -230,12 +231,12 @@ func main() {
 		}
 		templates.Render(w, "brand.html", data)
 	})
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		// Reset+reseed for the pub sim. NATS publisher is opened lazily so
 		// the cache-invalidate fan-out works even though the gateway has
 		// no other reason to talk to NATS.
-		resetBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway, log)
-		redisAddr := cfg.Get("redis.url", routes.DefaultRedisAddr)
+		resetBus, _ := natsbus.New(keys.NATS.URL.Get(cfg), constants.ServiceGateway, log)
+		redisAddr := keys.Redis.URL.Get(cfg)
 		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(dbURL, redisAddr, resetBus, log))
 	}
 	// /dev/console is the canonical command-center URL. /dev/config-manager
@@ -289,7 +290,7 @@ func main() {
 	// Secrets sub-tab of /dev/console. (Cache started earlier, before the
 	// auth middleware, so it can supply the JWT signing key.)
 	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
-	secretsBus, _ := natsbus.New(cfg.Get("nats.url", routes.DefaultNATSURL), constants.ServiceGateway+"-secrets-mgmt", log)
+	secretsBus, _ := natsbus.New(keys.NATS.URL.Get(cfg), constants.ServiceGateway+"-secrets-mgmt", log)
 	secretsAuth := middleware.AuthAPIKey(secretsCache, log)
 	mux.Handle(routes.APISecrets, secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
 	mux.Handle(routes.APISecrets+"/", secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
@@ -396,7 +397,7 @@ func main() {
 	// ops can force a reload after rotation without waiting for the
 	// 30s natural poll. Same shape as every other service's debug
 	// endpoint (routes.DebugCacheRefresh).
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(secretsCache.Cache))
 	}
 
@@ -408,7 +409,7 @@ func main() {
 	// translates one into the other by injecting the gateway's service key
 	// on the upstream request — without it every proxied call 401s at the
 	// internal service. Dev default is the seeded dev key.
-	serviceAPIKey := cfg.Get("gateway.service_api_key", "dev-api-key-do-not-use-in-prod")
+	serviceAPIKey := keys.Gateway.ServiceAPIKey.Get(cfg)
 	withServiceKey := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r.Header.Set("X-API-Key", serviceAPIKey)
@@ -501,7 +502,7 @@ func main() {
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
 	mux.Handle(routes.ProxyDSP, middleware.CORS(middleware.ReverseProxy(dspURL, log)))
 	mux.Handle(routes.ProxyPubAd, middleware.CORS(middleware.ReverseProxy(pubadURL, log)))
-	mux.Handle(routes.ProxySSAI, middleware.CORS(middleware.ReverseProxy(cfg.Get("gateway.ssai_url", routes.DefaultSSAIURL), log)))
+	mux.Handle(routes.ProxySSAI, middleware.CORS(middleware.ReverseProxy(keys.Gateway.SSAIURL.Get(cfg), log)))
 	mux.Handle(routes.ProxyBilling, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	// Jaeger query API (browser → gateway → jaeger; Jaeger v1.58 has no CORS
 	// on the query endpoint, so the pub sim reads spans through here).

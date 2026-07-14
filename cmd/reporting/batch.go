@@ -10,8 +10,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -432,9 +432,9 @@ func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
 // in-memory L2 (fail-open — batching + dedup still work in a dev env without
 // Redis, just without cross-pod dedup). Mirrors cmd/tracker's connectRedis.
 func connectReportingRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})

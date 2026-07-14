@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
 )
 
@@ -21,7 +21,7 @@ import (
 // logs and returns nil (the pipeline still serves health checks). Returns the
 // sink so the caller can expose a snapshot/verification endpoint.
 func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) *datalakeSink {
-	bucket := cfg.Get("pipeline.datalake_bucket", "adtech-datalake")
+	bucket := keys.Pipeline.DatalakeBucket.Get(cfg)
 	objStore := connectObjects(cfg, log)
 	if objStore == nil {
 		log.Warn("datalake sink disabled: no object store")
@@ -30,10 +30,10 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
 		log.Warn("datalake: ensure bucket failed", "bucket", bucket, "error", err)
 	}
-	batchSize := cfg.GetInt("pipeline.datalake_batch_size", 500)
+	batchSize := keys.Pipeline.DatalakeBatchSize.Get(cfg)
 	sink := newDatalakeSink(datalake.NewObjectStore(objStore, bucket, log), batchSize, log)
 
-	bus, err := natsbus.New(cfg.Get("pipeline.nats_url", routes.DefaultNATSURL), constants.ServicePipeline, log)
+	bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
 	if err != nil {
 		log.Warn("datalake sink disabled: nats unavailable", "error", err)
 		return nil
@@ -52,7 +52,7 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	// ack-after-flush, an event stays un-acked until its flush, so a flush
 	// interval >= AckWait lets JetStream redeliver before we ack (a harmless
 	// duplicate, never a loss). 15s default gives margin.
-	flushInterval := cfg.GetDuration("pipeline.datalake_flush_interval", 15*time.Second)
+	flushInterval := keys.Pipeline.DatalakeFlushInterval.Get(cfg)
 	stop := make(chan struct{})
 	lc.OnShutdown("datalake-sink", func(ctx context.Context) error {
 		close(stop)

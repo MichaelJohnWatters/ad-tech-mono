@@ -15,6 +15,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
@@ -61,7 +62,7 @@ import (
 // 503'd. Handlers still defend against a nil handle, but the handle is
 // non-nil whenever the URL parses.
 func openManagementDB(cfg *config.Config, log *slog.Logger) *sql.DB {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, dsp management endpoints disabled")
 		return nil

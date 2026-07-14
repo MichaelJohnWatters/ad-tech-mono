@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
@@ -31,7 +32,7 @@ func main() {
 	sc := config.Setup(constants.ServicePipeline, nil, log)
 	cfg := sc.Cfg
 
-	bucket := cfg.Get("pipeline.datalake_bucket", "adtech-datalake")
+	bucket := keys.Pipeline.DatalakeBucket.Get(cfg)
 	obj := connectObjects(cfg, log)
 	if obj == nil {
 		log.Error("compact: no object store, nothing to do")
@@ -67,7 +68,7 @@ func main() {
 // local filesystem fallback so the job runs offline.
 func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
 	const fsRoot = "/tmp/adtech-datalake"
-	endpoint := cfg.Get("s3.endpoint", "")
+	endpoint := cfg.Get(keys.S3.Endpoint.Key(), "")
 	if endpoint == "" {
 		log.Warn("s3.endpoint not set, compaction using local filesystem", "root", fsRoot)
 		store, err := fs.New(fsRoot)
@@ -79,10 +80,10 @@ func connectObjects(cfg *config.Config, log *slog.Logger) objects.Store {
 	}
 	store, err := objs3.New(objs3.Config{
 		Endpoint:  endpoint,
-		AccessKey: cfg.Get("s3.access_key", "adtech"),
-		SecretKey: cfg.Get("s3.secret_key", "adtech-local-dev"),
-		Region:    cfg.Get("s3.region", "us-east-1"),
-		UseSSL:    cfg.GetBool("s3.use_ssl", false),
+		AccessKey: keys.S3.AccessKey.Get(cfg),
+		SecretKey: keys.S3.SecretKey.Get(cfg),
+		Region:    keys.S3.Region.Get(cfg),
+		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
 		log.Error("compact s3 init failed", "error", err)

@@ -10,9 +10,9 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	_ "github.com/lib/pq"
 )
 
@@ -36,15 +36,15 @@ func Start(ctx context.Context, cfg *config.Config, clk clock.Clock, log *slog.L
 	c := &Cache{}
 
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.secrets.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		keys.CacheWarm.SecretsPollInterval.Get(cfg),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 
 	loader := pickLoader(cfg, log, serviceName)
 
 	// Optional bus — if NATS is reachable, rotations propagate sub-second.
 	// Without it the 30s poll still keeps the cache eventually consistent.
-	natsURL := cfg.Get("nats.url", routes.DefaultNATSURL)
+	natsURL := keys.NATS.URL.Get(cfg)
 	var bus events.EventBus
 	if b, err := natsbus.New(natsURL, serviceName+"-secrets", log); err == nil {
 		bus = b
@@ -146,7 +146,7 @@ func (c *Cache) LookupActiveByPurpose(purpose string) (Secret, bool) {
 // just one whose LoadAll always errors-and-recovers — keeps the cache
 // behaviour uniform across configurations.
 func pickLoader(cfg *config.Config, log *slog.Logger, serviceName string) warm.Loader[Secret] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("secrets cache: database.url not set, cache will stay empty until configured")
 	}

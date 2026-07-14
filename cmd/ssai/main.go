@@ -32,6 +32,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dash"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
@@ -105,21 +106,21 @@ audio_004.ts
 `
 
 func main() {
-	sc := config.Setup(constants.ServiceSSAI, ssaiSchema, log)
+	sc := config.Setup(constants.ServiceSSAI, keys.SSAISchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("ssai.port", routes.PortSSAI)
-	sspURL := cfg.Get("ssai.ssp_url", routes.DefaultSSPURL)
-	trackerURL := cfg.Get("ssai.tracker_url", routes.DefaultTrackerURL)
-	publicURL := cfg.Get("ssai.public_url", routes.DefaultGatewayURL)
+	port := keys.SSAI.Port.Get(cfg)
+	sspURL := keys.SSAI.SSPURL.Get(cfg)
+	trackerURL := keys.SSAI.TrackerURL.Get(cfg)
+	publicURL := keys.SSAI.PublicURL.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceSSAI,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -131,12 +132,12 @@ func main() {
 	// (same pattern as the transcoder's mezzanine fetch). Optional — HTTP-fetched
 	// origins still work when the store is unset.
 	var store objects.Store
-	if ep := cfg.Get("s3.endpoint", ""); ep != "" {
+	if ep := cfg.Get(keys.S3.Endpoint.Key(), ""); ep != "" {
 		s, err := objs3.New(objs3.Config{
 			Endpoint:  strings.TrimPrefix(strings.TrimPrefix(ep, "https://"), "http://"),
-			AccessKey: cfg.Get("s3.access_key", "minioadmin"),
-			SecretKey: cfg.Get("s3.secret_key", "minioadmin"),
-			UseSSL:    cfg.GetBool("s3.use_ssl", false),
+			AccessKey: cfg.Get(keys.S3.AccessKey.Key(), "minioadmin"),
+			SecretKey: cfg.Get(keys.S3.SecretKey.Key(), "minioadmin"),
+			UseSSL:    keys.S3.UseSSL.Get(cfg),
 		})
 		if err != nil {
 			log.Warn("object store init failed; origins will be HTTP-fetched only", "error", err)
@@ -150,21 +151,21 @@ func main() {
 		trackerURL: trackerURL,
 		publicURL:  publicURL,
 		placementFn: func() string {
-			return cfg.Get("ssai.ad_placement_id", "pl-sim-video")
+			return keys.SSAI.AdPlacementID.Get(cfg)
 		},
-		originFn:        func() string { return cfg.Get("ssai.origin_url", "") },
-		ladderFn:        func() []transcode.Profile { return transcode.ParseLadder(cfg.Get("transcode.ladder", "")) },
-		transcoderURL:   cfg.Get("ssai.transcoder_url", routes.DefaultTranscoderURL),
+		originFn:        func() string { return keys.SSAI.OriginURL.Get(cfg) },
+		ladderFn:        func() []transcode.Profile { return transcode.ParseLadder(keys.Transcode.Ladder.Get(cfg)) },
+		transcoderURL:   keys.SSAI.TranscoderURL.Get(cfg),
 		store:           store,
-		bucket:          cfg.Get("ssai.creatives_bucket", "adtech-creatives"),
-		maxPodAdsFn:     func() int { return cfg.GetInt("ssai.max_pod_ads", 4) },
-		slateCreativeFn: func() string { return cfg.Get("ssai.slate_creative_id", "") },
-		slateMediaFn:    func() string { return cfg.Get("ssai.slate_media_url", "") },
-		timedMetadataFn: func() bool { return cfg.GetBool("ssai.timed_metadata", false) },
+		bucket:          keys.SSAI.CreativesBucket.Get(cfg),
+		maxPodAdsFn:     func() int { return keys.SSAI.MaxPodAds.Get(cfg) },
+		slateCreativeFn: func() string { return keys.SSAI.SlateCreativeID.Get(cfg) },
+		slateMediaFn:    func() string { return keys.SSAI.SlateMediaURL.Get(cfg) },
+		timedMetadataFn: func() bool { return keys.SSAI.TimedMetadata.Get(cfg) },
 		omidFn: func() (string, string) {
-			return cfg.Get("ssai.omid_vendor", "adtech-om"), cfg.Get("ssai.omid_verification_url", "")
+			return keys.SSAI.OmidVendor.Get(cfg), keys.SSAI.OmidVerificationURL.Get(cfg)
 		},
-		multiRungFn: func() bool { return cfg.GetBool("ssai.dash_multi_rung", false) },
+		multiRungFn: func() bool { return keys.SSAI.DASHMultiRung.Get(cfg) },
 		metrics:     newStitcherMetrics(metrics.Registry()),
 		client:      &http.Client{Timeout: 4 * time.Second},
 	}

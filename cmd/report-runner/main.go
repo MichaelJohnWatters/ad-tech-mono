@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
@@ -37,25 +38,25 @@ import (
 
 func main() {
 	log := logger.New(constants.ServiceReportRunner)
-	sc := config.Setup(constants.ServiceReportRunner, nil, log)
+	sc := config.Setup(constants.ServiceReportRunner, keys.ReportRunnerSchema(), log)
 	cfg := sc.Cfg
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceReportRunner,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
-	port := cfg.Get("report_runner.port", routes.PortReportRunner)
+	port := keys.ReportRunner.Port.Get(cfg)
 
 	// Postgres — the job queue + schedule source. Fail-soft on boot: readiness
 	// pings the DB rather than crash-looping before it's reachable.
-	dbURL := cfg.Get("database.url", routes.DefaultPostgresURL)
+	dbURL := keys.Database.URL.Get(cfg)
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("open postgres", "error", err)
@@ -71,31 +72,31 @@ func main() {
 	// Artifact store (Minio/S3, FS fallback). The bucket is PRIVATE — downloads
 	// stream through the gateway after auth; never SetPublicRead here.
 	objStore := objects.Connect(cfg, "/tmp/adtech-reports", log)
-	bucket := cfg.Get("report_runner.artifact_bucket", "adtech-reports")
+	bucket := keys.ReportRunner.ArtifactBucket.Get(cfg)
 	if objStore != nil {
 		if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
 			log.Error("ensure artifact bucket", "bucket", bucket, "error", err)
 		}
 	}
 
-	from := cfg.Get("report_runner.email_from", "reports@adtech.local")
+	from := keys.ReportRunner.EmailFrom.Get(cfg)
 	sender := connectEmail(cfg, from, log)
 
 	jobStore := reportjobs.NewPostgresJobStore(db)
 	scope := reportjobs.PostgresScopeLookup{DB: db}
-	retention := cfg.GetDuration("report_runner.retention", 720*time.Hour)
+	retention := keys.ReportRunner.Retention.Get(cfg)
 
 	executor := &reportjobs.Executor{
 		Store: jobStore,
 		Query: reportrunner.HTTPQuery(
-			cfg.Get("report_runner.reporting_url", routes.DefaultReportingURL),
-			&http.Client{Timeout: cfg.GetDuration("report_runner.query_timeout", 10*time.Minute)}),
+			keys.ReportRunner.ReportingURL.Get(cfg),
+			&http.Client{Timeout: keys.ReportRunner.QueryTimeout.Get(cfg)}),
 		Objects:      objStore,
 		Bucket:       bucket,
 		Email:        sender,
 		From:         from,
-		GatewayURL:   cfg.Get("report_runner.public_gateway_url", routes.DefaultGatewayURL),
-		QueryTimeout: cfg.GetDuration("report_runner.query_timeout", 10*time.Minute),
+		GatewayURL:   keys.ReportRunner.PublicGatewayURL.Get(cfg),
+		QueryTimeout: keys.ReportRunner.QueryTimeout.Get(cfg),
 		Now:          time.Now,
 		Log:          log,
 	}
@@ -140,7 +141,7 @@ func main() {
 
 	// Crash recovery: jobs stuck running from a previous worker are requeued.
 	if n, err := jobStore.RequeueStuck(context.Background(),
-		cfg.GetDuration("report_runner.stuck_after", 30*time.Minute)); err != nil {
+		keys.ReportRunner.StuckAfter.Get(cfg)); err != nil {
 		log.Warn("requeue stuck jobs", "error", err)
 	} else if n > 0 {
 		log.Info("requeued stuck report jobs", "count", n)
@@ -148,14 +149,14 @@ func main() {
 
 	loopCtx, stopLoops := context.WithCancel(context.Background())
 	lc.OnShutdown("loops", func(_ context.Context) error { stopLoops(); return nil })
-	go tickLoop(loopCtx, cfg.GetDuration("report_runner.schedule_interval", time.Minute), func(ctx context.Context) {
+	go tickLoop(loopCtx, keys.ReportRunner.ScheduleInterval.Get(cfg), func(ctx context.Context) {
 		if n, err := runner.RunDue(ctx); err != nil {
 			log.Error("scheduler tick failed", "error", err)
 		} else if n > 0 {
 			log.Info("scheduler tick enqueued", "reports", n)
 		}
 	})
-	go tickLoop(loopCtx, cfg.GetDuration("report_runner.poll_interval", 5*time.Second), func(ctx context.Context) {
+	go tickLoop(loopCtx, keys.ReportRunner.PollInterval.Get(cfg), func(ctx context.Context) {
 		for { // drain the queue each tick
 			claimed, err := executor.RunOnce(ctx)
 			if err != nil {
@@ -167,7 +168,7 @@ func main() {
 			}
 		}
 	})
-	go tickLoop(loopCtx, cfg.GetDuration("report_runner.sweep_interval", time.Hour), func(ctx context.Context) {
+	go tickLoop(loopCtx, keys.ReportRunner.SweepInterval.Get(cfg), func(ctx context.Context) {
 		if _, err := sweeper.SweepOnce(ctx); err != nil {
 			log.Error("sweep tick failed", "error", err)
 		}
@@ -204,14 +205,14 @@ func tickLoop(ctx context.Context, interval time.Duration, fn func(context.Conte
 // connectEmail selects SMTP (Mailpit/SES) when configured, else an in-memory
 // sender that only logs deliveries.
 func connectEmail(cfg *config.Config, from string, log *slog.Logger) email.Sender {
-	host := cfg.Get("report_runner.smtp_host", "")
+	host := keys.ReportRunner.SMTPHost.Get(cfg)
 	if host == "" {
 		log.Info("report-runner email via memory sender (no smtp_host set) — deliveries are logged only")
 		return email.NewMemory(log)
 	}
-	if user := cfg.Get("report_runner.smtp_username", ""); user != "" {
+	if user := keys.ReportRunner.SMTPUsername.Get(cfg); user != "" {
 		log.Info("report-runner email via authenticated SMTP", "host", host, "username", user)
-		return email.NewSMTPAuth(host, from, user, cfg.Get("report_runner.smtp_password", ""), log)
+		return email.NewSMTPAuth(host, from, user, keys.ReportRunner.SMTPPassword.Get(cfg), log)
 	}
 	log.Info("report-runner email via SMTP", "host", host)
 	return email.NewSMTP(host, from, log)

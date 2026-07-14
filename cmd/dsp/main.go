@@ -27,6 +27,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
@@ -66,23 +67,23 @@ func main() {
 	}
 	seedOverrides := dspSeedOverrides(profileFromEnv, log)
 
-	sc := config.Setup(constants.ServiceDSP, dspSchema, log,
+	sc := config.Setup(constants.ServiceDSP, keys.DSPSchema(), log,
 		config.WithSeedDefaults(seedOverrides))
 	cfg := sc.Cfg
 	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
 
-	port := cfg.Get("dsp.port", routes.PortDSP)
+	port := keys.DSP.Port.Get(cfg)
 	profile := knobs.Profile()
 
 	// OpenTelemetry: traces inbound from exchange via HTTP middleware,
 	// becomes a child of the exchange.auction span automatically.
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServiceDSP,
-		ServiceVersion: cfg.Get("otel.service_version", "dev"),
-		Endpoint:       cfg.Get("otel.endpoint", "localhost:4318"),
-		SampleRatio:    cfg.GetFloat("otel.sample_ratio", 1.0),
+		ServiceVersion: keys.Otel.ServiceVersion.Get(cfg),
+		Endpoint:       keys.Otel.Endpoint.Get(cfg),
+		SampleRatio:    keys.Otel.SampleRatio.Get(cfg),
 		Log:            log,
 	})
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
@@ -104,13 +105,13 @@ func main() {
 	noisePctFn := func() float64 {
 		// Knobs.NoisePct reads "dsp.noise_pct" from cfg with default 0; we
 		// fall back to the dspRow value if the key is unset (fresh DB).
-		if v := cfg.GetFloat("dsp.noise_pct", -1); v >= 0 {
+		if v := cfg.GetFloat(keys.DSP.NoisePct.Key(), -1); v >= 0 {
 			return v
 		}
 		return float64(dspRow.NoisePct)
 	}
 	noBidRateFn := func() float64 {
-		if v := cfg.GetFloat("dsp.no_bid_rate", -1); v >= 0 {
+		if v := cfg.GetFloat(keys.DSP.NoBidRate.Key(), -1); v >= 0 {
 			return v
 		}
 		return dspRow.NoBidRate
@@ -130,7 +131,7 @@ func main() {
 	// can call EnsureStream (not on the interface) and wrap with Publisher.
 	// Nil-tolerant: depletion events are best-effort observability, not the
 	// hot path.
-	natsURL := cfg.Get("dsp.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	natsURL := cfg.Get(keys.DSP.NATSURL.Key(), keys.Exchange.NATSURL.Get(cfg))
 	var pub *events.Publisher
 	if pubBus, err := natsbus.New(natsURL, constants.ServiceDSP+"-events", log); err == nil {
 		pubBus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects})
@@ -222,7 +223,7 @@ func main() {
 	adCertVerify := adCertVerifierFn(cfg, log, clk.Now, adCertKeyFn)
 	identityResolver, identityStop := openIdentityResolver(cfg, log)
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
-	identityMaxLinked := cfg.GetInt("dsp.identity_max_linked", 10)
+	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked))
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
@@ -267,7 +268,7 @@ func main() {
 
 	// Cache refresh stays debug-gated — it's purely a dev/test helper for
 	// forcing a synchronous reload, not a customer-facing operation.
-	if cfg.GetBool("debug.endpoints_enabled", true) {
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		refreshables := []warm.Refreshable{campaignCache, secretsCache.Cache}
 		if optOutCache != nil {
 			refreshables = append(refreshables, optOutCache)
@@ -305,15 +306,15 @@ func main() {
 func dspSeedOverrides(profileName string, log *slog.Logger) map[string]string {
 	if profile, err := FindProfile(profileName, log); err == nil {
 		return map[string]string{
-			"dsp.noise_pct":   strconv.FormatFloat(float64(profile.NoisePct), 'f', -1, 64),
-			"dsp.no_bid_rate": strconv.FormatFloat(profile.NoBidRate, 'f', -1, 64),
+			keys.DSP.NoisePct.Key():  strconv.FormatFloat(float64(profile.NoisePct), 'f', -1, 64),
+			keys.DSP.NoBidRate.Key(): strconv.FormatFloat(profile.NoBidRate, 'f', -1, 64),
 		}
 	}
 	if row := dspRowFromEnvDB(profileName, log); row != nil {
 		log.Info("profile YAML not found, seeded from postgres dsps row", "profile", profileName, "noise_pct", row.NoisePct, "no_bid_rate", row.NoBidRate)
 		return map[string]string{
-			"dsp.noise_pct":   strconv.Itoa(row.NoisePct),
-			"dsp.no_bid_rate": strconv.FormatFloat(row.NoBidRate, 'f', -1, 64),
+			keys.DSP.NoisePct.Key():  strconv.Itoa(row.NoisePct),
+			keys.DSP.NoBidRate.Key(): strconv.FormatFloat(row.NoBidRate, 'f', -1, 64),
 		}
 	}
 	log.Warn("profile YAML and postgres dsps row both unavailable, skipping seed-default override", "profile", profileName)
@@ -360,7 +361,7 @@ func loadDSPIdentity(cfg *config.Config, profileName string, log *slog.Logger) (
 		dspProfile = &DSPProfile{Name: profileName, NoisePct: 30, NoBidRate: 0.20}
 	}
 
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		return dspProfile, fallbackDSPRow(dspProfile)
 	}
@@ -413,7 +414,7 @@ func fallbackDSPRow(p *DSPProfile) *postgres.DSPRow {
 // without waiting for the 30s tick. Other backends (postgres-direct,
 // lazy cache) need no manual refresh because they always read fresh.
 func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, func()) {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, dsp audience store disabled")
 		return nil, nil, func() {}
@@ -434,8 +435,8 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 		log.Info("dsp audience store connected (postgres-direct, no L2 cache)")
 		return audiencepg.New(db), nil, func() { _ = db.Close() }
 	}
-	interval := cfg.GetDuration("audience.preload_interval", 30*time.Second)
-	ttl := cfg.GetDuration("audience.cache_ttl", 90*time.Second)
+	interval := keys.Audience.PreloadInterval.Get(cfg)
+	ttl := keys.Audience.CacheTTL.Get(cfg)
 	pre := audpreload.New(audpreload.Config{DB: db, L2: l2, Interval: interval, TTL: ttl, Log: log})
 	if err := pre.Start(context.Background()); err != nil {
 		log.Warn("audience preloader start failed, falling back to lazy cache", "error", err)
@@ -451,8 +452,8 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 // here) so other subscribers in the service can share one NATS connection.
 func startCampaignCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, profile *DSPProfile, bus events.EventBus, dspID string, accountIDs []string) *warm.Cache[models.Campaign] {
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.campaigns.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.DSP.WarmCampaignsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 
 	loader := pickCampaignLoader(cfg, log, profile, dspID, accountIDs)
@@ -478,14 +479,14 @@ func startCampaignCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, p
 // caches. An opted-out user is a small minority, so failing open on a
 // missing DB favours availability; the next poll repopulates the cache.
 func startOptOutCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, bus events.EventBus) *warm.Cache[privacy.OptOut] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, opt-out enforcement disabled (no consent cache)")
 		return nil
 	}
 	pollInterval := firstNonZeroDuration(
-		cfg.GetDuration("cache.warm.opt_outs.poll_interval", 0),
-		cfg.GetDuration("cache.warm.poll_interval", 30*time.Second),
+		cfg.GetDuration(keys.DSP.WarmOptOutsPollInterval.Key(), 0),
+		keys.CacheWarm.PollInterval.Get(cfg),
 	)
 	loader := &warm.RetryingLoader[privacy.OptOut]{
 		Log:   log,
@@ -524,7 +525,7 @@ func startOptOutCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, bus
 // kept as a YAML-derived fallback for environments where the dsps row
 // doesn't exist yet or migration 022 hasn't run.
 func pickCampaignLoader(cfg *config.Config, log *slog.Logger, profile *DSPProfile, dspID string, accountIDs []string) warm.Loader[models.Campaign] {
-	dbURL := cfg.Get("database.url", "")
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, using YAML in-memory campaign loader")
 		return &yamlCampaignLoader{profile: profile}
@@ -545,7 +546,7 @@ func pickCampaignLoader(cfg *config.Config, log *slog.Logger, profile *DSPProfil
 // connectNATS returns a JetStream-backed bus if reachable, else nil
 // (warm cache falls back to poll-only mode).
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
-	url := cfg.Get("dsp.nats_url", cfg.Get("exchange.nats_url", routes.DefaultNATSURL))
+	url := cfg.Get(keys.DSP.NATSURL.Key(), keys.Exchange.NATSURL.Get(cfg))
 	bus, err := natsbus.New(url, constants.ServiceDSP, log)
 	if err != nil {
 		log.Warn("nats unavailable, warm cache will poll only", "error", err)
@@ -623,9 +624,9 @@ func (l *yamlCampaignLoader) KeyOf(c models.Campaign) string { return c.ID }
 // connectRedis returns a real Redis L2 cache if reachable, falling back
 // to MemoryL2 with a warning so dev environments without Redis still boot.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
-	pwd := cfg.Get("redis.password", "")
-	db := cfg.GetInt("redis.db", 0)
+	addr := keys.Redis.URL.Get(cfg)
+	pwd := keys.Redis.Password.Get(cfg)
+	db := keys.Redis.DB.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})

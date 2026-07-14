@@ -10,8 +10,8 @@ import (
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -129,12 +129,12 @@ func (r *redisCommittedCounter) Reconcile(ctx context.Context, day string, total
 // When off, or if Redis is unreachable, the engine keeps its in-memory
 // accumulator and single-replica behaviour is completely unchanged.
 func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
-	if !cfg.GetBool("reporting.shared_pacing_counter", false) {
+	if !keys.Reporting.SharedPacingCounter.Get(cfg) {
 		return
 	}
-	addr := cfg.Get("redis.url", routes.DefaultRedisAddr)
+	addr := keys.Redis.URL.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	rdb, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: cfg.Get("redis.password", ""), DB: cfg.GetInt("redis.db", 0)})
+	rdb, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: keys.Redis.Password.Get(cfg), DB: keys.Redis.DB.Get(cfg)})
 	cancel()
 	if err != nil {
 		// Fail-open: without Redis the engine falls back to the in-memory
@@ -143,7 +143,7 @@ func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg
 		log.Error("shared pacing counter enabled but Redis unreachable; falling back to in-memory accumulator (SAFE ONLY AT 1 REPLICA)", "addr", addr, "error", err)
 		return
 	}
-	ttl := cfg.GetDuration("reporting.pacing_counter_ttl", 26*time.Hour)
+	ttl := keys.Reporting.PacingCounterTTL.Get(cfg)
 	counter := newRedisCommittedCounter(rdb, ttl)
 	engine.SetCommittedCounter(counter)
 	log.Info("shared pacing counter enabled (Redis-backed, multi-replica safe)", "addr", addr)
@@ -172,7 +172,7 @@ func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg
 	}
 	reconcile() // boot seed, before the publisher starts broadcasting
 
-	interval := cfg.GetDuration("reporting.pacing_reconcile_interval", 60*time.Second)
+	interval := keys.Reporting.PacingReconcileInterval.Get(cfg)
 	stop := make(chan struct{})
 	lc.OnShutdown("pacing-counter-reconcile", func(_ context.Context) error {
 		close(stop)

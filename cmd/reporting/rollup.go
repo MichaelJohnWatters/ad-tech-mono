@@ -10,6 +10,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
@@ -33,7 +34,7 @@ func newRollupEngine(store analytics.Store, clk clock.Clock, log *slog.Logger) *
 // default so dev/CI/e2e see no background activity unless explicitly
 // enabled (this is the prod-only "rollup ownership lives here" switch).
 func startRollupScheduler(engine *rollup.Engine, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
-	if !cfg.GetBool("reporting.rollup_enabled", false) {
+	if !keys.Reporting.RollupEnabled.Get(cfg) {
 		log.Info("rollup scheduler disabled (reporting.rollup_enabled=false)")
 		return
 	}
