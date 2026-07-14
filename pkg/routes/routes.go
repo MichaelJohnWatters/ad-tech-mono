@@ -34,8 +34,8 @@ const (
 	APIReports    = apiPrefix + "/api/reports/"
 	// APITrace / APIRecentImpressions back the portal trace inspector; the
 	// gateway proxies them to reporting's ReportingTrace / RecentImpressions.
-	APITrace              = apiPrefix + "/api/trace"
-	APIRecentImpressions  = apiPrefix + "/api/impressions/recent"
+	APITrace             = apiPrefix + "/api/trace"
+	APIRecentImpressions = apiPrefix + "/api/impressions/recent"
 
 	// Gateway-local CRUD: secrets management (operator-only). Reads the
 	// secrets table directly and publishes adtech.cache.invalidate.secrets
