@@ -482,11 +482,14 @@ func main() {
 	// advertiser (account_id) work now; publisher requires a validated
 	// ?publisher_id (added with the publisher portal wiring) and safely 403s here
 	// until then. reports:read is the right read permission for both.
+	tracePubs := pgPublisherLookup{db: gwDB}
 	traceProxy := middleware.RequirePermission("reports:read")(
-		middleware.StripPrefix(routes.APITrace, middleware.ReverseProxy(reportingURL+routes.ReportingTrace, log)))
+		injectTraceScope(tracePubs, log)(
+			middleware.StripPrefix(routes.APITrace, middleware.ReverseProxy(reportingURL+routes.ReportingTrace, log))))
 	mux.Handle(routes.APITrace, authMiddleware(traceProxy))
 	recentProxy := middleware.RequirePermission("reports:read")(
-		middleware.StripPrefix(routes.APIRecentImpressions, middleware.ReverseProxy(reportingURL+routes.ReportingRecentImpressions, log)))
+		injectTraceScope(tracePubs, log)(
+			middleware.StripPrefix(routes.APIRecentImpressions, middleware.ReverseProxy(reportingURL+routes.ReportingRecentImpressions, log))))
 	mux.Handle(routes.APIRecentImpressions, authMiddleware(recentProxy))
 
 	// Pass-through proxies (Swagger try-it-out, dev tools)

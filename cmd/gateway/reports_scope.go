@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
 
@@ -114,6 +115,78 @@ func enforceReportTenant(pubs reportTenantPublisherLookup, log *slog.Logger) fun
 			}
 			r.Body = io.NopCloser(bytes.NewReader(rewritten))
 			r.ContentLength = int64(len(rewritten))
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// injectTraceScope is the GET-route twin of enforceReportTenant for the trace
+// inspector (/v1/api/trace, /v1/api/impressions/recent). Advertiser/agency scope
+// rides through on X-Account-ID (the proxy injects it from claims/act-as), so
+// nothing is needed here. For a publisher it validates the requested
+// publisher_id against the account's owned publishers and sets the TRUSTED
+// X-Publisher-ID header reporting reads — after stripping any client-supplied
+// one, so a publisher can't forge another publisher's scope. Staff/admin (not
+// impersonating) pass through unscoped.
+func injectTraceScope(pubs reportTenantPublisherLookup, log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Header.Del(constants.HeaderPublisherID) // never trust a client value
+			claims := middleware.ClaimsFromContext(r.Context())
+			if claims == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			effType, effID := claims.AccountType, claims.AccountID
+			if auth.IsPlatformUser(claims) {
+				target := middleware.ActAsTarget(r)
+				if target == "" {
+					next.ServeHTTP(w, r) // staff/admin, unscoped
+					return
+				}
+				t, id := middleware.ParseActAsTarget(target)
+				if !auth.CanAccessAccount(claims, id) {
+					http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+					return
+				}
+				effType, effID = t, id
+			}
+			switch effType {
+			case auth.AccountAdvertiser, auth.AccountAgency:
+				// Scoped by X-Account-ID downstream; nothing to inject.
+			case auth.AccountPublisher:
+				owned, err := pubs.PublisherIDs(r.Context(), effID)
+				if err != nil {
+					log.Error("trace scope: publisher lookup failed", "error", err, "account_id", effID)
+					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+					return
+				}
+				chosen := ""
+				if want := r.URL.Query().Get("publisher_id"); want != "" {
+					for _, id := range owned {
+						if id == want {
+							chosen = want
+							break
+						}
+					}
+					if chosen == "" {
+						http.Error(w, `{"error":"forbidden: publisher not in your account"}`, http.StatusForbidden)
+						return
+					}
+				} else if len(owned) == 1 {
+					chosen = owned[0]
+				} else if len(owned) == 0 {
+					http.Error(w, `{"error":"no publishers on this account"}`, http.StatusForbidden)
+					return
+				} else {
+					http.Error(w, `{"error":"publisher_id required (your account has multiple publishers)"}`, http.StatusBadRequest)
+					return
+				}
+				r.Header.Set(constants.HeaderPublisherID, chosen)
+			default:
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
