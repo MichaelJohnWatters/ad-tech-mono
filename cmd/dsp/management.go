@@ -209,7 +209,12 @@ type creativeAttach struct {
 type bidModifiersInput struct {
 	Device     map[string]float64  `json:"device,omitempty"`
 	GeoCountry map[string]float64  `json:"geo_country,omitempty"`
-	TimeOfDay  []timeModifierInput `json:"time_of_day,omitempty"`
+	// Audience maps segment id → percentage adjustment, applied when the
+	// bid request's (consent-gated) segment set contains the key. The
+	// profile store's pre-expanded memberships are what make this fire for
+	// every device of an enrolled person.
+	Audience  map[string]float64  `json:"audience,omitempty"`
+	TimeOfDay []timeModifierInput `json:"time_of_day,omitempty"`
 }
 
 // timeModifierInput is one time-window bid adjustment. The hour window is
@@ -228,7 +233,7 @@ func (b *bidModifiersInput) validateAndJSON() (string, error) {
 	if b == nil {
 		return "{}", nil
 	}
-	for _, m := range []map[string]float64{b.Device, b.GeoCountry} {
+	for _, m := range []map[string]float64{b.Device, b.GeoCountry, b.Audience} {
 		for k, v := range m {
 			if v < -100 || v > 1000 {
 				return "", fmt.Errorf("bid modifier %q = %v out of range (-100..1000)", k, v)
