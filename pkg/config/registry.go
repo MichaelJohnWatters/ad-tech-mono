@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -15,15 +16,15 @@ import (
 // platform-shared keys) — the config-manager UI unions these across every
 // running pod to render the key table.
 type PodRegistration struct {
-	PodID          string        `json:"pod_id"`
-	Service        string        `json:"service"`
-	Version        string        `json:"version"`
-	Host           string        `json:"host"`
-	Port           string        `json:"port"`
-	SchemaEntries  []SchemaEntry `json:"schema_entries"`
-	Status         string        `json:"status"` // running, stopped
-	StartedAt      time.Time     `json:"started_at"`
-	LastPingAt     time.Time     `json:"last_ping_at"`
+	PodID         string        `json:"pod_id"`
+	Service       string        `json:"service"`
+	Version       string        `json:"version"`
+	Host          string        `json:"host"`
+	Port          string        `json:"port"`
+	SchemaEntries []SchemaEntry `json:"schema_entries"`
+	Status        string        `json:"status"` // running, stopped
+	StartedAt     time.Time     `json:"started_at"`
+	LastPingAt    time.Time     `json:"last_ping_at"`
 }
 
 // ServiceGroup is a service with all its running pods.
@@ -40,6 +41,15 @@ type Registry struct {
 	db    *sql.DB
 	log   *slog.Logger
 	podID string
+
+	// Registration snapshot so Ping can self-heal: if this pod's row was
+	// pruned during a heartbeat gap (VM suspend, long GC of the whole node),
+	// the next Ping re-registers instead of no-op'ing forever.
+	regMu      sync.Mutex
+	regService string
+	regVersion string
+	regPort    string
+	regSchema  []SchemaEntry
 }
 
 // NewRegistry creates a service registry backed by Postgres.
@@ -135,6 +145,11 @@ func (r *Registry) Register(ctx context.Context, serviceName, version, port stri
 		"schema_keys", len(schema),
 		"live_keys", liveCount,
 	)
+
+	// Snapshot the registration so Ping can re-run it if the row is pruned.
+	r.regMu.Lock()
+	r.regService, r.regVersion, r.regPort, r.regSchema = serviceName, version, port, schema
+	r.regMu.Unlock()
 	return nil
 }
 
@@ -150,16 +165,36 @@ func (r *Registry) Deregister(ctx context.Context, serviceName string) error {
 	return err
 }
 
-// Ping updates the heartbeat timestamp.
+// Ping updates the heartbeat timestamp. Self-healing: if this pod's row is
+// gone — PruneStale (run by every pod's poll loop) deletes rows whose
+// heartbeat gapped >5min, which happens to EVERY pod when the local VM
+// suspends — a bare UPDATE would silently no-op forever and the pod would
+// stay evicted (schema invisible to the config UI, per-pod validation
+// blind, seeded live keys deleted) until its next restart. Re-register
+// instead, which also re-seeds any live-tier keys the prune removed.
 func (r *Registry) Ping(ctx context.Context, serviceName string) error {
 	if r.db == nil {
 		return nil
 	}
-	_, err := r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, `
 		UPDATE service_registry SET last_ping_at = now()
 		WHERE service = $1 AND pod_id = $2
 	`, serviceName, r.podID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	r.regMu.Lock()
+	svc, version, port, schema := r.regService, r.regVersion, r.regPort, r.regSchema
+	r.regMu.Unlock()
+	if svc == "" {
+		return nil // never registered (nil-DB boot path) — nothing to heal
+	}
+	r.log.Warn("registry row missing on heartbeat — re-registering (pruned during a heartbeat gap?)",
+		"pod_id", r.podID, "service", svc)
+	return r.Register(ctx, svc, version, port, schema)
 }
 
 // PruneStale removes registry rows + per-pod config rows for pods
