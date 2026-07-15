@@ -81,6 +81,15 @@ func main() {
 	// Billing engine (unified with reporting - single consumer)
 	clk := clock.Real{}
 	ledger := selectLedger(cfg, log, lc)
+	// The TB client has a wedge failure mode (post clock-regression) where
+	// writes hang/error-storm while the pod stays Ready and billing deltas
+	// silently read zero. Surface it on /readyz (house rule: dep failures →
+	// 503) so the wedge is visible the moment it happens instead of at the
+	// next billing reconciliation. Recovery is still a pod restart. Memory
+	// backend has no Health method and registers nothing.
+	if hl, ok := ledger.(interface{ Health(context.Context) error }); ok {
+		hlth.AddReadinessCheck("billing-ledger", hl.Health)
+	}
 	contracts := billing.NewContractStore()
 	billingEngine := billing.NewEngine(ledger, contracts, clk, log)
 

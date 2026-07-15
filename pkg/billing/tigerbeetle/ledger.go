@@ -75,6 +75,9 @@ type Ledger struct {
 	// per account (see BalanceFor).
 	summaryMu sync.RWMutex
 	summary   billing.LedgerSummary
+
+	// health feeds the /readyz wedge detector (see health.go).
+	health healthState
 }
 
 // New constructs a TigerBeetle-backed ledger over the given client.
@@ -450,6 +453,7 @@ func isBenignTransferResult(r tbtypes.TransferEventResult) bool {
 // chain-mates), all benign — so this returns nil (no-op), preserving idempotency.
 func (l *Ledger) createTransfers(transfers []tbtypes.Transfer) error {
 	results, err := l.client.CreateTransfers(transfers)
+	l.noteTransport(err)
 	if err != nil {
 		return fmt.Errorf("CreateTransfers: %w", err)
 	}
@@ -468,6 +472,7 @@ func (l *Ledger) createTransfers(transfers []tbtypes.Transfer) error {
 // the whole chunk on any failure (that re-hits committed chains as Exists).
 func (l *Ledger) createTransfersResults(transfers []tbtypes.Transfer) (map[int]tbtypes.TransferEventResult, error) {
 	results, err := l.client.CreateTransfers(transfers)
+	l.noteTransport(err)
 	if err != nil {
 		return nil, fmt.Errorf("CreateTransfers: %w", err)
 	}
@@ -496,6 +501,7 @@ func (l *Ledger) ensureAccount(id tbtypes.Uint128, code uint16) error {
 		Ledger: tb.USDLedger,
 		Code:   code,
 	}})
+	l.noteTransport(err)
 	if err != nil {
 		return fmt.Errorf("CreateAccounts: %w", err)
 	}
