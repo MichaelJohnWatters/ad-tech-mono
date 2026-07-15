@@ -4,7 +4,6 @@ package harness
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -36,20 +35,7 @@ import (
 func (h *Harness) SetConfigForPod(t *testing.T, key, value, podID string) {
 	t.Helper()
 
-	body, _ := json.Marshal(map[string]any{
-		"key":    key,
-		"value":  value,
-		"pod_id": podID,
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		h.URLs.Gateway+routes.Config, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build config PUT: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.HTTP.Do(req)
+	resp, err := h.putConfig(key, value, podID)
 	if err != nil {
 		t.Fatalf("PUT %s: %v", routes.Config, err)
 	}
@@ -62,6 +48,39 @@ func (h *Harness) SetConfigForPod(t *testing.T, key, value, podID string) {
 	// NATS round-trip + subscriber re-poll. Local NATS is usually <5ms but
 	// the subscriber also has to do a Postgres FetchAll.
 	time.Sleep(300 * time.Millisecond)
+}
+
+// putConfig issues the config PUT with the same port-forward-flap retry as
+// refreshOne — a transient EOF on the gateway tunnel must not fail a test
+// (or worse, poison a cleanup restore into writing the schema default over
+// a seeded per-pod value). The PUT is idempotent, so re-sending is safe.
+func (h *Harness) putConfig(key, value, podID string) (*http.Response, error) {
+	body, _ := json.Marshal(map[string]any{
+		"key":    key,
+		"value":  value,
+		"pod_id": podID,
+	})
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		var req *http.Request
+		// h.HTTP's own 10s timeout bounds each attempt (a request context
+		// would have to outlive the body read, so we don't use one here).
+		req, err = http.NewRequest(http.MethodPut,
+			h.URLs.Gateway+routes.Config, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = h.HTTP.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+	}
+	return nil, err
 }
 
 // RestoreConfigForPod is the cleanup counterpart of SetConfigForPod. Tests
@@ -83,17 +102,9 @@ func (h *Harness) RestoreConfigForPod(t *testing.T, key, original, schemaDefault
 // test — the restore path uses it to fall back on a rejected original.
 func (h *Harness) tryPutConfig(t *testing.T, key, value, podID string) bool {
 	t.Helper()
-	body, _ := json.Marshal(map[string]any{"key": key, "value": value, "pod_id": podID})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		h.URLs.Gateway+routes.Config, bytes.NewReader(body))
+	resp, err := h.putConfig(key, value, podID)
 	if err != nil {
-		return false
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.HTTP.Do(req)
-	if err != nil {
+		t.Logf("restore of %s=%q failed after retries (%v) — falling back to schema default", key, value, err)
 		return false
 	}
 	io.Copy(io.Discard, resp.Body)
