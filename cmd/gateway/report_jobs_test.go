@@ -24,10 +24,11 @@ const (
 // fakeReportJobStore = the real in-memory queue + the two gateway lookups.
 type fakeReportJobStore struct {
 	*reportjobs.MemoryJobStore
-	savedName   string
-	savedConfig string
-	savedFormat string
-	ownerEmail  string
+	savedName    string
+	savedConfig  string
+	savedFormat  string
+	ownerEmail   string
+	ownedSegment string
 }
 
 func (f *fakeReportJobStore) SavedReportForJob(_ context.Context, accountID, id string) (string, []byte, string, error) {
@@ -38,6 +39,9 @@ func (f *fakeReportJobStore) SavedReportForJob(_ context.Context, accountID, id 
 }
 func (f *fakeReportJobStore) OwnerEmail(context.Context, string) (string, error) {
 	return f.ownerEmail, nil
+}
+func (f *fakeReportJobStore) SegmentOwned(_ context.Context, accountID, segmentID string) (bool, error) {
+	return f.ownedSegment != "" && f.ownedSegment == segmentID, nil
 }
 
 type fakeJobScope struct{ types map[string]string }

@@ -137,6 +137,17 @@ const (
 	// ?account_id=&action=&resource_type=&resource_id=&limit=.
 	APIAuditLog = apiPrefix + "/api/audit"
 
+	// APIProfiles is the staff profile-transparency lookup (GET /{id},
+	// support:read): identity cluster + direct graph links + memberships
+	// with provenance + lake signal summary — "what do we know about this
+	// user", trace-explorer style. Platform-wide by design (operator tool).
+	APIProfiles = apiPrefix + "/api/profiles"
+
+	// APIOnboardingRuns is the staff drop-zone monitor (GET, support:read):
+	// recent onboarding_runs + per-provider rollups (files, rejects, match
+	// rates). Platform-wide operational telemetry.
+	APIOnboardingRuns = apiPrefix + "/api/onboarding/runs"
+
 	// APIRevshare is the staff revenue-share editor (GET list on support:read,
 	// PATCH ?id= on support:update). Platform-wide commercial term; updates
 	// publishers.revshare_config and invalidates the billing-rates cache so
@@ -202,6 +213,10 @@ const (
 	// DatalakeResidual (GET ?user_id=) counts rows still keyed to the user —
 	// the privacy-verify residual check for the lake systems.
 	DatalakeResidual = "/v1/datalake/residual"
+	// DatalakeProfile (GET ?user_id=) returns the user's lake-side profile
+	// summary (onboarding signals + behaviour counts) — feeds the staff
+	// profile API's transparency view.
+	DatalakeProfile = "/v1/datalake/profile"
 )
 
 // ============================================================

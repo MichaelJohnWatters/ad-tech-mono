@@ -9,6 +9,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
@@ -27,6 +28,13 @@ type Executor struct {
 	QueryTimeout time.Duration // per-job bound on the reporting query
 	Now          func() time.Time
 	Log          *slog.Logger
+
+	// SegmentMembers resolves jobs whose QueryConfig.Table is
+	// TableSegmentMembers — the audience segment EXPORT path (profile
+	// store payoff valve). Rides the same queue/artifact/status/download
+	// machinery as analytics reports; only the row source differs (Postgres
+	// memberships instead of the reporting query API). Nil = unsupported.
+	SegmentMembers SegmentMembersFunc
 }
 
 // RunOnce claims and fully processes at most one job. It returns whether a
@@ -48,7 +56,16 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 		qctx, cancel = context.WithTimeout(ctx, e.QueryTimeout)
 		defer cancel()
 	}
-	res, err := e.Query(qctx, j.AccountID, j.QueryConfig)
+	var res analytics.QueryResult
+	if j.QueryConfig.Table == TableSegmentMembers {
+		if e.SegmentMembers == nil {
+			e.fail(ctx, log, j.ID, fmt.Errorf("segment export not supported by this worker"))
+			return true, nil
+		}
+		res, err = e.SegmentMembers(qctx, j.AccountID, j.QueryConfig.Filters["segment_id"])
+	} else {
+		res, err = e.Query(qctx, j.AccountID, j.QueryConfig)
+	}
 	if err != nil {
 		e.fail(ctx, log, j.ID, fmt.Errorf("query: %w", err))
 		return true, nil

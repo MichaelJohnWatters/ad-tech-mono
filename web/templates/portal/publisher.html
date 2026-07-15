@@ -75,7 +75,7 @@
         {{ template "button" (dict "label" "+ New line item" "variant" "secondary" "size" "sm" "onclick" "openNewDirect()") }}
       </div>
       {{ template "table-start" (dict "headers" (slice "Name" "Tier" "Committed" "CPM" "Status" "")) }}
-        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -120,8 +120,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Members" "Match rate" "Updated")) }}
-        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Members" "Match rate" "Updated" "")) }}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -189,7 +189,7 @@
       <p class="mb-3 text-xs text-gray-400">Async runs — results stay downloadable for 30 days.</p>
       <div id="jobsWrap">
       {{ template "table-start" (dict "headers" (slice "Name" "Status" "Format" "Created" "Rows" "")) }}
-        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -653,10 +653,11 @@ async function loadAudiences() {
         <td class="px-3 py-2 font-mono">${fmtInt(a.members)}</td>
         <td class="px-3 py-2 font-mono text-xs">${fmtMatchRate(a.match_rate)}</td>
         <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
+        <td class="px-3 py-2 text-right"><button onclick="exportSegment('${esc(a.id)}', '${esc(a.name)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Export</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
+      : '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 async function sha256Hex(s) {
@@ -713,6 +714,18 @@ async function uploadAudience(ev) {
     toast(`Uploaded — ${res.members_added} new of ${res.members_sent}; match rate ${(res.match_rate * 100).toFixed(0)}%`, 'success');
     loadAudiences();
   } catch (err) { toast('Upload failed: ' + err.message, 'error'); }
+}
+// Export the segment's members as a report job (CSV artifact in Minio,
+// downloadable from Reports → Report jobs).
+async function exportSegment(id, name) {
+  try {
+    await fetchJSON('/v1/api/reports/jobs', {method: 'POST', body: JSON.stringify({
+      name: `segment export — ${name}`,
+      query_config: {table: 'segment_members', filters: {segment_id: id}},
+      format: 'csv',
+    })});
+    toast('Export queued — download from Reports → Report jobs', 'success');
+  } catch (err) { toast('Export failed: ' + err.message, 'error'); }
 }
 
 // ---- Reporting queries ----
@@ -1239,7 +1252,7 @@ async function loadJobs() {
   try {
     jobs = await fetchJSON('/v1/api/reports/jobs') || [];
   } catch (err) {
-    jobsTbody().innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    jobsTbody().innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
     return;
   }
   jobsTbody().innerHTML = jobs.length ? jobs.map(j => `
@@ -1373,7 +1386,7 @@ async function loadDirect() {
       </tr>`).join('')
       : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No direct-sold line items yet — add one with “+ New line item”.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 

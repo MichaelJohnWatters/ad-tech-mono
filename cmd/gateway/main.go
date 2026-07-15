@@ -326,6 +326,16 @@ func main() {
 	if gwDB != nil {
 		idStore = postgres.NewFromDB(gwDB)
 	}
+
+	// Staff profile transparency + onboarding monitor (profile store payoff
+	// valves) — platform-wide reads gated on support:read, audit-log posture.
+	var profileResolver identityResolver
+	if gwDB != nil {
+		profileResolver = postgres.NewFromDB(gwDB)
+	}
+	mux.Handle(routes.APIProfiles+"/", authMiddleware(http.HandlerFunc(
+		profilesHandler(gwDB, profileResolver, keys.Gateway.PipelineURL.Get(cfg), log))))
+	mux.Handle(routes.APIOnboardingRuns, authMiddleware(http.HandlerFunc(onboardingMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
 
 	// Privacy opt-out intake — operator-API-key auth like the others. Records
