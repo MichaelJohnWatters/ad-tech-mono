@@ -2498,6 +2498,22 @@ clusters).** At LiveRamp scale the system of record flips to the lake — the
 escape hatch is designed in: point profile-builder's input at a lake edge
 table and shrink PG to the serving tables; nothing on the bid path changes.
 
+**Pod-direct snapshot loading (open option for `identity_clusters`):** for
+*batch-built, read-only* artifacts, PG is arguably just a loading dock — the
+DSP resolver already consumes the graph as a whole in-memory snapshot, with PG
+as the pickup point. Since `identity_clusters` is rebuilt wholesale each run,
+pods could instead load the Delta snapshot **directly from Minio** (Delta log
+= atomic versioned publishes + rollback via time travel; `pkg/store/datalake`
+already reads this) and poll for new versions — skipping the PG hop entirely.
+Trade-offs vs the PG serving copy: (+) one less copy step, natural versioning;
+(−) Minio becomes a serving-pod boot dependency (needs the same
+degrade-gracefully story warm caches have for PG-down), and GDPR deletes baked
+into a snapshot persist until the next build unless you add tombstone/forced-
+refresh machinery (PG + NATS invalidate purges in seconds today). **Decide at
+build-order step 2.** This option is for clusters only — edges need upserts,
+memberships need interactive writes + point lookups at scale + instant
+deletes; those stay PG/Redis either way.
+
 #### Build order
 
 1. **`profile_signals` Delta table + normalizer** — CRM/audience uploads land in
