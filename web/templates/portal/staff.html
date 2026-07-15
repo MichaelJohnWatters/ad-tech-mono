@@ -139,6 +139,9 @@
       {{ template "card-start" (dict "title" "Batch chain runs" "subtitle" "checkpoint → compact → rollups → profile-builder → privacy — every step, in order, with its outcome") }}
       <div id="batchRuns" class="space-y-6"><p class="text-sm text-gray-400">loading…</p></div>
       {{ template "card-end" . }}
+      {{ template "card-start" (dict "title" "Lake state" "subtitle" "Per-table rows + active Parquet files (live pipeline snapshot) — file counts should drop after a compact step; table names open the Minio console") }}
+      <div id="batchLake"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Tools ============ -->
@@ -728,6 +731,16 @@ async function loadProfile(ev) {
 
 // ---- Onboarding monitor ----
 const fmtPct = (r) => r == null ? '—' : `${(r * 100).toFixed(0)}%`;
+// Minio console (Tilt forwards :9001) object-browser deep link. key may be a
+// full object key; linking its parent prefix, which the console renders as a
+// folder view — the click-through for "show me the actual rejected file".
+const MINIO_CONSOLE = 'http://localhost:9001';
+const fmtInt = (n) => Number(n || 0).toLocaleString();
+function minioLink(bucket, key, label) {
+  const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
+  const href = `${MINIO_CONSOLE}/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(prefix)}`;
+  return `<a class="underline decoration-dotted hover:text-brand" href="${href}" target="_blank" title="open in Minio console">${esc(label)}</a>`;
+}
 async function loadOnboarding() {
   try {
     const data = await fetchJSON('/v1/api/onboarding/runs');
@@ -747,7 +760,7 @@ async function loadOnboarding() {
       <tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 text-xs text-gray-500">${new Date(r.finished_at).toLocaleString()}</td>
         <td class="px-3 py-2 font-mono text-xs">${esc(r.provider)}</td>
-        <td class="px-3 py-2 font-mono text-xs">${esc(r.file_key)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${minioLink('adtech-onboarding', r.file_key, r.file_key)}${r.rejected_key ? ' · ' + minioLink('adtech-onboarding', r.rejected_key, 'rejected') : ''}</td>
         <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${r.status === 'completed' ? 'bg-success/15 text-success' : 'bg-error/15 text-error'}">${esc(r.status)}</span></td>
         <td class="px-3 py-2">${r.valid_rows}</td>
         <td class="px-3 py-2 ${r.rejected_rows ? 'text-warning' : ''}">${r.rejected_rows}</td>
@@ -773,8 +786,31 @@ function startBatchRunsPolling() {
     loadBatchRuns(true);
   }, 5000);
 }
+async function loadBatchLake() {
+  const box = document.getElementById('batchLake');
+  try {
+    const snap = await fetchJSON('/v1/api/batch/lake');
+    const tables = Object.keys(snap).sort();
+    if (!tables.length) { box.innerHTML = '<p class="text-sm text-gray-400">lake empty</p>'; return; }
+    box.innerHTML = `<table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+      <th class="px-2 py-1">Table</th><th class="px-2 py-1">Rows</th><th class="px-2 py-1">Active files</th><th class="px-2 py-1">Bytes</th><th class="px-2 py-1">Version</th>
+    </tr></thead><tbody>${tables.map(t => {
+      const v = snap[t] || {};
+      return `<tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-2 py-1.5 font-mono text-xs">${minioLink('adtech-datalake-hotcold', t + '/', t)}</td>
+        <td class="px-2 py-1.5">${fmtInt(v.total_rows)}</td>
+        <td class="px-2 py-1.5 ${v.active_files > 20 ? 'text-warning' : ''}">${fmtInt(v.active_files)}</td>
+        <td class="px-2 py-1.5 text-xs text-gray-500">${fmtInt(v.total_bytes)}</td>
+        <td class="px-2 py-1.5 text-xs text-gray-500">${v.version ?? '—'}</td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">lake snapshot failed — ${esc(err.message)}</p>`;
+  }
+}
 async function loadBatchRuns(isPoll) {
   const box = document.getElementById('batchRuns');
+  if (!isPoll) loadBatchLake();
   try {
     const data = await fetchJSON('/v1/api/batch/runs');
     const runs = data.runs || [];

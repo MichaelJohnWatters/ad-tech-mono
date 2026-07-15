@@ -148,6 +148,11 @@ const (
 	// what failed, what got skipped.
 	APIBatchRuns = apiPrefix + "/api/batch/runs"
 
+	// APIBatchLake is the staff lake-state view (GET, support:read):
+	// proxies the pipeline's datalake snapshot (per-table rows / active
+	// files) for the Batch runs troubleshooting page.
+	APIBatchLake = apiPrefix + "/api/batch/lake"
+
 	// APIOnboardingRuns is the staff drop-zone monitor (GET, support:read):
 	// recent onboarding_runs + per-provider rollups (files, rejects, match
 	// rates). Platform-wide operational telemetry.
