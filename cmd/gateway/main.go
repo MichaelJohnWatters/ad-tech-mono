@@ -103,6 +103,20 @@ func main() {
 			os.Exit(1)
 		}
 		log.Warn("SECURITY: no JWT signing key configured — auth is BYPASSED, every request receives admin claims. Dev only; set a jwt_signing secret (or gateway.require_auth=true) in staging/prod.")
+		// Self-heal: the key is captured by value in every handler closure, so
+		// a gateway that booted before Postgres (whole-VM boot) latched the
+		// dev-bypass forever even though the secrets cache reconnects and the
+		// secret EXISTS. When the cache later surfaces a jwt_signing secret,
+		// exit — k8s/Tilt restarts the pod, which boots with real auth. A dev
+		// stack with genuinely no secret never trips this (nothing appears).
+		go func() {
+			for range time.Tick(15 * time.Second) {
+				if sec, ok := secretsCache.LookupActiveByPurpose(secrets.PurposeJWTSigning); ok && sec.Value != "" {
+					log.Error("jwt_signing secret appeared after a bypass-mode boot — exiting so the restart boots with real auth", "name", sec.Name)
+					os.Exit(1)
+				}
+			}
+		}()
 	}
 
 	// Internal service URLs (configurable for staging/prod)

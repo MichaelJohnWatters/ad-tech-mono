@@ -99,10 +99,12 @@ type campaignWithSpend struct {
 //	GET  → existing list (read from warm cache) + per-campaign spent counter
 //	POST → create
 //
-// dspID + dspName identify this pod's row in the dsps table. Used by POST
-// to scope the new advertiser account to this DSP (accounts.dsp_id) so it
-// shows up in this pod's filtered campaign list and nowhere else.
-func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, bus events.EventBus, dspID, dspName string, budget *BudgetTracker, log *slog.Logger) http.HandlerFunc {
+// identity resolves this pod's (id, name) row in the dsps table — a func,
+// not captured strings, so a pod that booted before the seed self-heals
+// once the row exists (see newDSPIdentityResolver). Used by POST to scope
+// the new advertiser account to this DSP (accounts.dsp_id) so it shows up
+// in this pod's filtered campaign list and nowhere else.
+func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, bus events.EventBus, identity func() (string, string), budget *BudgetTracker, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -143,6 +145,7 @@ func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, 
 				http.Error(w, "management db unavailable", http.StatusServiceUnavailable)
 				return
 			}
+			dspID, dspName := identity()
 			if dspID == "" {
 				http.Error(w, "this dsp has no dsps row (migration 022 + seed required); cannot create campaigns", http.StatusBadRequest)
 				return
