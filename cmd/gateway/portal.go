@@ -81,6 +81,7 @@ var publisherNav = []NavItem{
 	{Label: "Deals", Href: "#deals", Icon: "◈", Perm: "deals:read"},
 	{Label: "Direct sold", Href: "#directsold", Icon: "◆", Perm: "deals:read"},
 	{Label: "Quality", Href: "#quality", Icon: "◉", Perm: "quality:read"},
+	{Label: "Audiences", Href: "#audiences", Icon: "◍", Perm: "audiences:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Ad tag", Href: "#adtag", Icon: "⧉", Perm: "placements:read"},
 	{Label: "Earnings", Href: "#earnings", Icon: "▦", Perm: "earnings:view"},

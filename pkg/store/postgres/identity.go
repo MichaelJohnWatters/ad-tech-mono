@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+
+	"github.com/lib/pq"
 )
 
 // Identity graph access. The identity_graph table links a user_id to a
@@ -150,6 +152,32 @@ func (b *adjacencyBuilder) build() map[string][]IdentityLink {
 		adj[id] = out
 	}
 	return adj
+}
+
+// CountKnownIdentifiers returns how many of the given ids appear in the
+// identity graph (either edge column, unexpired). Powers the onboarding
+// match rate: matched/uploaded is the number an advertiser sees after a CRM
+// upload — how much of their list the platform can actually resolve.
+func (s *Store) CountKnownIdentifiers(ctx context.Context, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	// The unnest alias is fully qualified (u.v) — an unqualified `id` inside
+	// the EXISTS would resolve to identity_graph.id (a UUID) and blow up
+	// with `text = uuid`.
+	const q = `
+SELECT count(*) FROM (
+    SELECT DISTINCT u.v FROM unnest($1::text[]) AS u(v)
+    WHERE u.v <> '' AND EXISTS (
+        SELECT 1 FROM identity_graph g
+        WHERE (g.user_id = u.v OR g.linked_id = u.v)
+          AND (g.expires_at IS NULL OR g.expires_at > now()))
+) t`
+	var n int
+	if err := s.read.QueryRowContext(ctx, q, pq.Array(ids)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count known identifiers: %w", err)
+	}
+	return n, nil
 }
 
 // ResolveIdentity returns the distinct identifiers linked to id (in either

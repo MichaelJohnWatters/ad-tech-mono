@@ -262,6 +262,34 @@ type DirectWinEvent struct {
 	Timestamp           time.Time `json:"timestamp"`
 }
 
+// ProfileSignalID is one identifier inside a ProfileSignalEvent batch.
+type ProfileSignalID struct {
+	IDType  string `json:"id_type"` // user_id | hashed_email | uid2 | device_id | household
+	IDValue string `json:"id_value"`
+}
+
+// ProfileSignalEvent is a BATCH of normalized audience-onboarding signals —
+// one message per upload chunk, not per id, so a 50k-row CRM upload is ~50
+// JetStream publishes rather than 50k. Published by the gateway on portal /
+// API audience uploads; the pipeline's datalake sink expands each batch into
+// one profile_signals lake row per id. The lake copy is what makes segment
+// memberships recomputable (replay signals → rebuild memberships); the PG
+// membership rows are written synchronously by the uploader.
+type ProfileSignalEvent struct {
+	SchemaVersion int               `json:"schema_version"`
+	TraceID       string            `json:"trace_id"`
+	AccountID     string            `json:"account_id"`
+	Provider      string            `json:"provider,omitempty"` // drop-zone provider; empty = first-party
+	Source        string            `json:"source"`             // crm_upload | portal_csv | dropzone
+	Access        string            `json:"access"`             // first_party | purchased:{provider} | barter:{provider}
+	SegmentID     string            `json:"segment_id"`
+	SegmentName   string            `json:"segment_name"`
+	Visibility    string            `json:"visibility"` // public | dsp_private
+	Consent       bool              `json:"consent"`    // declared consent basis permits personalisation
+	ObservedAt    time.Time         `json:"observed_at"`
+	IDs           []ProfileSignalID `json:"ids"`
+}
+
 // PrebidOutboundWinEvent is published by cmd/publisher-adserver when an
 // external Prebid Server's bid wins the programmatic comparison against
 // our SSP. We don't bill these (the money flows outside our system), but

@@ -18,6 +18,9 @@ var Pipeline = struct {
 	DatalakeBucket        config.StringKey
 	DatalakeBatchSize     config.IntKey
 	DatalakeFlushInterval config.DurationKey
+	OnboardingEnabled     config.BoolKey
+	OnboardingBucket      config.StringKey
+	OnboardingPollEvery   config.DurationKey
 }{
 	Port:                  config.RawString("pipeline.port", routes.PortPipeline),
 	NATSURL:               config.RawString("pipeline.nats_url", routes.DefaultNATSURL),
@@ -25,4 +28,11 @@ var Pipeline = struct {
 	DatalakeBucket:        config.RawString("pipeline.datalake_bucket", "adtech-datalake"),
 	DatalakeBatchSize:     config.RawInt("pipeline.datalake_batch_size", 500),
 	DatalakeFlushInterval: config.RawDuration("pipeline.datalake_flush_interval", 15*time.Second),
+	// Third-party audience drop-zone: providers land CSV files in
+	// {provider}/incoming/ of the onboarding bucket; the poller validates,
+	// normalizes, writes memberships + profile_signals, and quarantines
+	// rejects to {provider}/rejected/. Poll-based — Minio S3 events not assumed.
+	OnboardingEnabled:   config.RawBool("pipeline.onboarding_enabled", true),
+	OnboardingBucket:    config.RawString("pipeline.onboarding_bucket", "adtech-onboarding"),
+	OnboardingPollEvery: config.RawDuration("pipeline.onboarding_poll_interval", 30*time.Second),
 }

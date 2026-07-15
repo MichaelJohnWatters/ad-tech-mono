@@ -157,11 +157,15 @@ var defaultPermissions = map[string][]string{
 		"reports:read",
 	},
 
-	// Publisher roles
+	// Publisher roles. Audiences: publishers onboard their first-party user
+	// lists (subscriber segments, content-affinity cohorts) the same way
+	// advertisers onboard CRM lists — the supply-side half of the profile
+	// store's onboarding surface.
 	"publisher:owner": {
 		"placements:create", "placements:read", "placements:update", "placements:delete",
 		"deals:create", "deals:read", "deals:update", "deals:delete",
 		"quality:read", "quality:update",
+		"audiences:create", "audiences:read", "audiences:update", "audiences:delete", "audiences:upload",
 		"earnings:view",
 		"reports:read", "reports:export", "reports:save",
 		"pipeline:upload", "pipeline:read",
@@ -173,6 +177,7 @@ var defaultPermissions = map[string][]string{
 		"placements:create", "placements:read", "placements:update",
 		"deals:create", "deals:read", "deals:update",
 		"quality:read", "quality:update",
+		"audiences:create", "audiences:read", "audiences:upload",
 		"earnings:view",
 		"reports:read", "reports:export",
 		"pipeline:upload",
@@ -187,6 +192,7 @@ var defaultPermissions = map[string][]string{
 	"publisher:analyst": {
 		"placements:read",
 		"deals:read",
+		"audiences:read",
 		"earnings:view",
 		"reports:read", "reports:export", "reports:save",
 		"pipeline:read",

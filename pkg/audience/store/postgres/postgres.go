@@ -35,6 +35,10 @@ type Segment struct {
 	Visibility string    `json:"visibility"`
 	Members    int       `json:"members"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	// MatchRate is the fraction (0..1) of the last upload's ids resolvable
+	// via identity_graph — nil until a first upload computes it.
+	MatchRate    *float64   `json:"match_rate,omitempty"`
+	LastUploadAt *time.Time `json:"last_upload_at,omitempty"`
 }
 
 // ListSegments returns every segment for an account with its member count,
@@ -45,7 +49,7 @@ func (s *Store) ListSegments(ctx context.Context, accountID string) ([]Segment, 
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
 SELECT s.id::text, s.name, s.type, s.status, s.source, s.visibility,
-       COALESCE(c.n, 0), s.updated_at
+       COALESCE(c.n, 0), s.updated_at, s.match_rate, s.last_upload_at
 FROM audience_segments s
 LEFT JOIN (
     SELECT segment_id, count(*) AS n FROM audience_segment_members GROUP BY segment_id
@@ -60,7 +64,8 @@ ORDER BY s.updated_at DESC`
 		for rows.Next() {
 			var seg Segment
 			if err := rows.Scan(&seg.ID, &seg.Name, &seg.Type, &seg.Status,
-				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt); err != nil {
+				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt,
+				&seg.MatchRate, &seg.LastUploadAt); err != nil {
 				return err
 			}
 			out = append(out, seg)
@@ -169,6 +174,28 @@ ON CONFLICT (id) DO UPDATE SET
 		return "", fmt.Errorf("upsert segment %q: %w", name, err)
 	}
 	return segmentID, nil
+}
+
+// SetSegmentUploadStats persists the match rate of an upload on its segment:
+// matched/uploaded, the fraction of uploaded ids resolvable via
+// identity_graph. Overwritten per upload (latest upload wins) — the number is
+// upload feedback, not a lifetime aggregate.
+func (s *Store) SetSegmentUploadStats(ctx context.Context, accountID, segmentID string, uploaded, matched int) error {
+	if uploaded <= 0 {
+		return nil
+	}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+UPDATE audience_segments
+SET match_rate = $3::float / $4::float, last_upload_at = now(), updated_at = now()
+WHERE id = $1 AND account_id = $2::uuid`
+		_, err := tx.ExecContext(ctx, q, segmentID, accountID, matched, uploaded)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("set upload stats on %s: %w", segmentID, err)
+	}
+	return nil
 }
 
 // AddMembers bulk-inserts user memberships into a segment (idempotent) and

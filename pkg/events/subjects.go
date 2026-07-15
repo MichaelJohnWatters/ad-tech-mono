@@ -90,6 +90,14 @@ const (
 	// probabilistic). Best-effort — dropped observations are re-seen later.
 	SubjectIdentityObserved = "adtech.identity.observed"
 
+	// SubjectProfileSignal (Gateway → pipeline): batches of normalized
+	// audience-onboarding signals (CRM uploads, portal CSVs). The pipeline
+	// lands them in the profile_signals Delta table — the append-only,
+	// replayable record that makes segment memberships recomputable. PG
+	// memberships are written synchronously by the uploader; this is the
+	// lake copy.
+	SubjectProfileSignal = "adtech.profile.signal"
+
 	// Cache invalidation (Any → ALL services, Core NATS pub/sub not JetStream)
 	SubjectCacheInvalidateCampaigns    = "adtech.cache.invalidate.campaigns"
 	SubjectCacheInvalidatePlacements   = "adtech.cache.invalidate.placements"
