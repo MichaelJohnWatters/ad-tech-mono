@@ -21,6 +21,7 @@ sequenceDiagram
   participant AS as Ad Server
   participant TR as Tracker
   participant N as NATS
+  participant IDC as Identity Consumer
   participant REP as Reporting
   participant CH as ClickHouse (hot)
   participant PIPE as Pipeline
@@ -34,10 +35,12 @@ sequenceDiagram
   Note over B,RDS: 1 · Request & auction (sync RTB)
   B->>PA: page ad slot
   PA->>SSP: ad request — trace_id created here
+  SSP->>RDS: audience segments — user + household (25ms budget)
   SSP-)N: adtech.identity.observed
-  SSP->>EX: OpenRTB bid request
+  SSP->>EX: OpenRTB bid request — user.ext.segments + household EID stamped
   EX->>DSP: fan-out (OpenRTB)
   DSP->>RDS: budget + prepay-balance gate
+  DSP->>RDS: private segments (dsp_private) unioned before targeting
   DSP-->>EX: bid
   EX->>EX: first-price auction + deal priority
   EX-)N: adtech.auction.win — single source of truth for cost
@@ -57,6 +60,8 @@ sequenceDiagram
   rect rgb(250,245,255)
   Note over N,LAKE: 3 · Async fan-out — DUAL-WRITE (data), independent NATS groups
   TR-)N: adtech.events.impression
+  N-)IDC: consume identity.observed (own group)
+  IDC->>IDC: batch + dedup → upsert identity_graph edges (PG)
   N-)REP: consume
   N-)PIPE: consume (own group)
   REP->>CH: write impression — HOT store
@@ -99,3 +104,7 @@ sequenceDiagram
 - **Reads route by age (§5)** — recent → ClickHouse, aged → lake via
   `delta_scan`, spanning ranges merged; tenant scope is injected at the gateway
   and rides through every sub-query.
+- **Targeting data is read-only on the hot path (§1)** — segment lookups hit
+  Redis inside a 25ms budget and degrade to "no segments", never blocking the
+  bid; identity-graph *writes* happen off-path via the identity consumer (§3).
+  How that data gets built and loaded: see `targeting-data-flow`.
