@@ -381,6 +381,12 @@ type ServeRequest struct {
 	BehaviourUserID string `json:"behaviour_user_id,omitempty"`
 	Geo           string  `json:"geo,omitempty"`     // request geo (country) — baked into tracker beacons for analytics
 	Device        string  `json:"device,omitempty"`  // request device type — baked into tracker beacons for analytics
+	// HouseholdID is the SSP-derived salted-HMAC household id ("hh:…", see
+	// pkg/identity.HouseholdID). When present the ad server enforces the
+	// frequency cap per household IN ADDITION to per user, so co-viewing
+	// devices (CTV + phones on one IP) share one cap. Not PII: keyed hash,
+	// same legitimate-interest basis as the user-keyed cap.
+	HouseholdID string `json:"household_id,omitempty"`
 }
 
 // ServeResponse contains the rendered ad HTML with all macros substituted.

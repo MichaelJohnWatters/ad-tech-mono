@@ -46,6 +46,33 @@ func TestFreqCap_PerCampaignIndependent(t *testing.T) {
 	}
 }
 
+// Household capping is the same counter keyed by the hh: id — the serve
+// handler calls AllowAndRecord twice (user key, then household key). This
+// exercises the property that matters: two different users sharing one
+// household id exhaust ONE shared cap.
+func TestFreqCap_HouseholdSharedAcrossUsers(t *testing.T) {
+	fc := NewFreqCap(cache.NewMemoryL2(), slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	ctx := context.Background()
+	const hh = "hh:abcd1234efgh5678"
+
+	// Viewer 1 on the CTV: allowed, consumes household slot 1 of 2.
+	if !fc.AllowAndRecord(ctx, hh, "c1", 2, time.Hour) {
+		t.Fatal("household impression 1 should be allowed")
+	}
+	// Viewer 2 on a phone, same household: allowed, consumes slot 2.
+	if !fc.AllowAndRecord(ctx, hh, "c1", 2, time.Hour) {
+		t.Fatal("household impression 2 should be allowed")
+	}
+	// Any device in the household is now capped.
+	if fc.AllowAndRecord(ctx, hh, "c1", 2, time.Hour) {
+		t.Fatal("household impression 3 should be blocked (shared cap)")
+	}
+	// A different household is unaffected.
+	if !fc.AllowAndRecord(ctx, "hh:9999999999999999", "c1", 2, time.Hour) {
+		t.Fatal("other household must have its own counter")
+	}
+}
+
 type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }

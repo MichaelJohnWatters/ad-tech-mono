@@ -50,13 +50,10 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
 	pwd := keys.Redis.Password.Get(cfg)
 	db := keys.Redis.DB.Get(cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
-	if err != nil {
-		log.Warn("redis unreachable, falling back to in-memory L2", "addr", addr, "error", err)
-		return cache.NewMemoryL2()
-	}
-	log.Info("redis connected", "addr", addr)
-	return client
+	// Self-healing: a failed boot dial no longer latches MemoryL2 forever —
+	// the wrapper serves fail-open from memory and swaps to Redis when the
+	// background retry lands (pkg/cache/selfheal.go).
+	return cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
+		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+	}, 10*time.Second, addr, log)
 }

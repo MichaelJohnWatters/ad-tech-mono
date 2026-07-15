@@ -272,15 +272,12 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
 	pwd := keys.Redis.Password.Get(cfg)
 	db := keys.Redis.DB.Get(cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
-	if err != nil {
-		log.Warn("redis unreachable, falling back to in-memory L2", "addr", addr, "error", err)
-		return cache.NewMemoryL2()
-	}
-	log.Info("redis connected", "addr", addr)
-	return client
+	// Self-healing: a failed boot dial no longer latches MemoryL2 forever —
+	// the wrapper serves fail-open from memory and swaps to Redis when the
+	// background retry lands (pkg/cache/selfheal.go).
+	return cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
+		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+	}, 10*time.Second, addr, log)
 }
 
 func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
@@ -317,9 +314,21 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				capLimit, capWindow = rule.Limit, rule.Window
 			}
 		}
-		if !freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID, capLimit, capWindow) {
+		// Per-user cap, then per-household when the SSP derived an hh: id —
+		// co-viewing devices (CTV + phones on one IP) share the household
+		// counter, which is how CTV capping works when user ids differ or are
+		// absent. The hh: prefix keeps the two Redis keyspaces disjoint. A
+		// user-cap increment that the household cap then blocks leaves the
+		// user counter one high for the window — same increment-then-no-render
+		// drift the cap already has on creative-resolve failure; accepted.
+		allowed := freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
+		if allowed && req.HouseholdID != "" {
+			allowed = freqCap.AllowAndRecord(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+		}
+		if !allowed {
 			reqLog.Info("ad blocked by freq cap",
 				"user", req.UserID,
+				"household", req.HouseholdID,
 				"campaign", req.CampaignID,
 				"placement_id", req.PlacementID,
 				"publisher_id", req.PublisherID)

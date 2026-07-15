@@ -10,6 +10,8 @@ import (
 	neturl "net/url"
 	"testing"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // AuctionResult is the parsed response from the SSP /v1/ssp/request endpoint.
@@ -108,6 +110,71 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	var out AuctionResult
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("auction decode: %v\nbody: %s", err, string(body))
+	}
+	return out
+}
+
+// SSPServeResult is the browser-visible slice of the SSP /v1/ssp/serve
+// response: rendered HTML (or NoBid) with no auction internals.
+type SSPServeResult struct {
+	TraceID string `json:"trace_id"`
+	NoBid   bool   `json:"nobid,omitempty"`
+	HTML    string `json:"html,omitempty"`
+}
+
+// ServeViaSSP drives the realistic visitor path (SSP runs the auction AND
+// calls the ad server to render) with the same signal set as RunAuctionWith.
+// Freq-cap blocks surface as NoBid here — the SSP maps the ad server's 429
+// to the standard nobid response.
+func (h *Harness) ServeViaSSP(t *testing.T, p AuctionParams) SSPServeResult {
+	t.Helper()
+
+	vals := neturl.Values{}
+	add := func(k, v string) {
+		if v != "" {
+			vals.Set(k, v)
+		}
+	}
+	add("placement_id", p.Placement)
+	add("geo", p.Geo)
+	add("device", p.Device)
+	add("user_id", p.UserID)
+	add("uid2", p.UID2)
+	add("os", p.OS)
+	add("ip", p.IP)
+	add("keywords", p.Keywords)
+	add("segments", p.Segments)
+	add("gdpr", p.GDPR)
+	add("gdpr_consent", p.Consent)
+	add("us_privacy", p.USPrivacy)
+	add("coppa", p.COPPA)
+	add("gpp", p.GPP)
+	add("gpp_sid", p.GPPSID)
+	add("gpc", p.GPC)
+
+	url := h.URLs.SSP + routes.SSPServe
+	if len(vals) > 0 {
+		url += "?" + vals.Encode()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("ssp serve request: %v", err)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("ssp serve call failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ssp serve status %d: %s", resp.StatusCode, string(body))
+	}
+	var out SSPServeResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("ssp serve decode: %v\nbody: %s", err, string(body))
 	}
 	return out
 }

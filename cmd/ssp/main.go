@@ -307,15 +307,12 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
 	pwd := keys.Redis.Password.Get(cfg)
 	db := keys.Redis.DB.Get(cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	client, err := cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
-	if err != nil {
-		log.Warn("redis unreachable, falling back to in-memory L2", "addr", addr, "error", err)
-		return cache.NewMemoryL2()
-	}
-	log.Info("redis connected", "addr", addr)
-	return client
+	// Self-healing: a failed boot dial no longer latches MemoryL2 forever —
+	// the wrapper serves fail-open from memory and swaps to Redis when the
+	// background retry lands (pkg/cache/selfheal.go).
+	return cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
+		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+	}, 10*time.Second, addr, log)
 }
 
 // auctionContext captures everything we need after the SSP runs the
@@ -325,6 +322,10 @@ type auctionContext struct {
 	TraceID   string
 	Placement postgres.PlacementRow
 	BidResp   openrtb.BidResponse
+	// HouseholdID is the derived hh: id for this request (empty when
+	// household derivation is disabled or no IP was resolvable). Rides to
+	// the ad server on the ServeRequest so freq caps can key per household.
+	HouseholdID string
 }
 
 // uuidPattern matches Postgres's canonical lowercase 8-4-4-4-12 hex UUID
@@ -572,7 +573,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	var bidResp openrtb.BidResponse
 	json.NewDecoder(resp.Body).Decode(&bidResp)
 
-	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp}, true
+	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp, HouseholdID: householdID}, true
 }
 
 // originSChain builds the one-node SupplyChain this platform originates as the
@@ -830,6 +831,8 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			Width:         ac.Placement.Width,
 			Height:        ac.Placement.Height,
 			UserID:        r.URL.Query().Get("user_id"),
+			// Household cap key: co-viewing devices on one IP share a cap.
+			HouseholdID: ac.HouseholdID,
 			// Behavioural capture key: only under personalisation consent —
 			// same gate as the SSP's own request-row capture (behaviour.go).
 			BehaviourUserID: behaviourUserKey(r),
