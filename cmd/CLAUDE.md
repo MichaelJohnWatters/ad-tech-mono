@@ -26,7 +26,8 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `seed/` | Loads seed data profiles into the database. | Manual (Tilt button) |
 | `simulator/` | Generates fake ad traffic for testing. | Manual (Tilt button) |
 | `migrate/` | Runs database migrations (goose). | Before every deploy |
-| `rollup/` | Aggregates event data by time granularity. | Every minute/hour/day/month |
+| `batch-conductor/` | THE data chain, completion-ordered (pkg/batch): checkpoint → compact (via pipeline HTTP — single-writer rule) → rollup tiers → profile-builder → privacy delete → verify. Replaced the time-staggered lattice (standalone compact/rollup/privacy crons); steps recorded in `batch_runs`. | Hourly |
+| `profile-builder/` | Profile store expansion engine (pkg/profilebuilder) — standalone escape hatch; the conductor runs it as a chain step. | Via conductor (or manual) |
 | `optimise/` | Runs optimisation pipelines (bid, placement, creative). | Hourly/daily |
 | `fraud/` | Batch fraud detection and scoring. | Daily |
 | `adstxt/` | Crawls and caches publisher ads.txt files; publishes the ads-txt cache invalidate on change. | Every 24 hours |

@@ -1,0 +1,79 @@
+# Batch-conductor CronJob — the ONE scheduled entry point for the data
+# chain, replacing the time-staggered lattice (compact :05, profile-builder
+# :15, privacy jobs by convention). The chain is explicit, completion-ordered
+# code (pkg/batch.StandardChain):
+#
+#   checkpoint → compact → rollups (minute→monthly) → profile-builder
+#   → privacy-delete → privacy-verify
+#
+# Each step starts when the previous one FINISHES, every step is recorded in
+# batch_runs (staff "Batch runs" page), and adtech.batch.run_completed
+# announces the run. Idempotent; exits non-zero when a critical step failed
+# (or 2 when privacy-verify found residual PII). Pure Go (CGO_ENABLED=0),
+# shared Dockerfile with SERVICE=batch-conductor.
+#
+# Not yet added to an overlay — apply directly, or wire into an overlay when
+# the cron manifests are activated as a group (dayboundary posture).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: batch-conductor
+  labels:
+    app: batch-conductor
+    component: data-chain
+spec:
+  schedule: "10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: batch-conductor
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: batch-conductor
+              image: adtech-batch-conductor
+              env:
+                - name: POD_NAME
+                  value: "batch-conductor"
+                - name: DATABASE_URL
+                  value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+                - name: BATCH_CONDUCTOR_NATS_URL
+                  value: "nats://nats:4222"
+                - name: BATCH_CONDUCTOR_PIPELINE_URL
+                  value: "http://pipeline:8087"
+                - name: BATCH_CONDUCTOR_REPORTING_URL
+                  value: "http://reporting:8086"
+                # Same lake the pipeline writes (see k8s/base/pipeline).
+                - name: BATCH_CONDUCTOR_DATALAKE_BUCKET
+                  value: "adtech-datalake-hotcold"
+                # freq_cap_blocks purge (privacy extras) — in-cluster ClickHouse.
+                - name: REPORTING_CLICKHOUSE_ADDR
+                  value: "clickhouse:9000"
+                - name: PRIVACY_DELETE_PIPELINE_URL
+                  value: "http://pipeline:8087"
+                - name: S3_ENDPOINT
+                  value: "minio:9000"
+                - name: S3_ACCESS_KEY
+                  value: "adtech"
+                - name: S3_SECRET_KEY
+                  value: "adtech-local-dev"
+                - name: S3_REGION
+                  value: "us-east-1"
+                - name: S3_USE_SSL
+                  value: "false"
+                - name: LOKI_URL
+                  value: "http://loki:3100"
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "1"
+                  memory: "512Mi"

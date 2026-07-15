@@ -66,7 +66,7 @@ sink.ackflush -> lake.log: commit add (v0 = protocol + metaData)
 # ============================================================
 # Compaction  (CronJob at :05)
 # ============================================================
-compact: Compaction CronJob (:05) {
+compact: "Compaction - in the pipeline's process (POST /v1/datalake/compact, triggered by batch-conductor)" {
   shape: hexagon
   style.fill: "#f59e0b"
 }
@@ -86,7 +86,7 @@ gdpr -> lake.log: one atomic commit (add survivor file + removes)
 # ============================================================
 # Profile-builder  (CronJob at :15)
 # ============================================================
-builder: Profile-builder CronJob (:15) {
+builder: Profile-builder (batch-conductor chain step) {
   shape: hexagon
   style.fill: "#f59e0b"
 }

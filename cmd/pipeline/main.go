@@ -49,6 +49,7 @@ func main() {
 	if sink != nil {
 		registerPrivacyEndpoints(mux, sink)
 		registerProfileEndpoint(mux, sink)
+		registerCompactEndpoint(mux, sink)
 	}
 
 	// Cold-archive verification: report the Parquet snapshot (active files +

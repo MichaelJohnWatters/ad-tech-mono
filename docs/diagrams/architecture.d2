@@ -140,15 +140,12 @@ events.pipeline  -> data.lake: write Parquet+Delta
 events.reporting -> data.lake: delta_scan (cold) { style.stroke-dash: 2; style.stroke: "#64748b" }
 control.gateway  -> events.reporting: /v1/api/reports (tenant-scoped) { style.stroke-dash: 2; style.stroke: "#64748b" }
 
-compact: Datalake compaction (CronJob :05) { shape: hexagon; style.fill: "#f59e0b" }
-compact -> data.lake: bin-pack + tombstone
-
-# Profile store batch engine: clusters identity_graph into persons (PG serving
-# copy + lake artifact), evaluates behavioural rules over behaviour_signals,
-# expands memberships to every id in each person's cluster, reconciles
-# profile_signals. See targeting-data-flow for the full journey.
-profilebuilder: Profile-builder (CronJob :15) { shape: hexagon; style.fill: "#f59e0b" }
-profilebuilder -> data.lake: read behaviour/profile signals · write identity_clusters { style.stroke-dash: 2; style.stroke: "#64748b" }
+# The data chain, completion-ordered (pkg/batch) — replaced the
+# time-staggered CronJob lattice. Steps recorded in batch_runs (staff portal).
+conductor: "batch-conductor (CronJob :10) - checkpoint → compact → rollups → profile-builder → privacy" { shape: hexagon; style.fill: "#f59e0b" }
+conductor -> events.pipeline: POST /v1/datalake/compact (single-writer rule)
+conductor -> events.reporting: rollup runs, minute → monthly
+conductor -> data.lake: profile-builder step - read signals · write identity_clusters { style.stroke-dash: 2; style.stroke: "#64748b" }
 
 onboardingzone: "Minio adtech-onboarding (drop-zone bucket)" { shape: cylinder; style.fill: "#fef08a" }
 events.pipeline -> onboardingzone: poll incoming/ · quarantine rejected/ { style.stroke-dash: 2; style.stroke: "#64748b" }

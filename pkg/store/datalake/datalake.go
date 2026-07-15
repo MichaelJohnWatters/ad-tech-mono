@@ -45,6 +45,9 @@ type Store interface {
 	// (read-only — the purge-verification counterpart of PurgeRows).
 	CountRows(ctx context.Context, table string, match func(Record) bool) (int, error)
 
+	// Compact bin-packs the table's active files into one (small-files fix).
+	Compact(ctx context.Context, table string) (CompactResult, error)
+
 	// Close releases resources.
 	Close() error
 }
@@ -247,6 +250,17 @@ func (m *MemoryStore) CountRows(_ context.Context, table string, match func(Reco
 		}
 	}
 	return n, nil
+}
+
+// Compact is a no-op for the in-memory store (no files to pack).
+func (m *MemoryStore) Compact(_ context.Context, table string) (CompactResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := CompactResult{Table: table}
+	if t, ok := m.tables[table]; ok {
+		res.Rows = len(t.records)
+	}
+	return res, nil
 }
 
 func (m *MemoryStore) Close() error { return nil }

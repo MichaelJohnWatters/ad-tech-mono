@@ -171,6 +171,7 @@ var staffNav = []NavItem{
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Profiles", Href: "#profiles", Icon: "◔", Perm: "support:read"},
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
+	{Label: "Batch runs", Href: "#batchruns", Icon: "⛓", Perm: "support:read"},
 	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},
 	{Label: "Architecture", Href: "#architecture", Icon: "🗺", Perm: "config:read"},
 	{Label: "Control center", Href: "#tools", Icon: "🎛", Perm: "config:read"},

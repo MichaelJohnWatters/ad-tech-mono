@@ -143,6 +143,11 @@ const (
 	// user", trace-explorer style. Platform-wide by design (operator tool).
 	APIProfiles = apiPrefix + "/api/profiles"
 
+	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
+	// recent chain runs with per-step status — what ran, in what order,
+	// what failed, what got skipped.
+	APIBatchRuns = apiPrefix + "/api/batch/runs"
+
 	// APIOnboardingRuns is the staff drop-zone monitor (GET, support:read):
 	// recent onboarding_runs + per-provider rollups (files, rejects, match
 	// rates). Platform-wide operational telemetry.
@@ -217,6 +222,13 @@ const (
 	// summary (onboarding signals + behaviour counts) — feeds the staff
 	// profile API's transparency view.
 	DatalakeProfile = "/v1/datalake/profile"
+	// DatalakeCompact (POST) bin-packs every sink table's small Parquet
+	// files. Lives on the pipeline for the same single-writer reason as the
+	// purge: a compaction commit from another process would race the sink's
+	// flush on Delta version allocation (which is exactly what the old
+	// standalone cmd/compact CronJob risked). Triggered by the
+	// batch-conductor's chain.
+	DatalakeCompact = "/v1/datalake/compact"
 )
 
 // ============================================================

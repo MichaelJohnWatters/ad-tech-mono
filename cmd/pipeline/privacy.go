@@ -109,6 +109,33 @@ func mustJSON(s string) string {
 	return string(b)
 }
 
+// registerCompactEndpoint mounts POST /v1/datalake/compact: bin-pack every
+// sink table's small Parquet files into one consolidated file each. This
+// REPLACED the standalone cmd/compact CronJob — a compaction commit from a
+// second process races the sink's flush on Delta version allocation (both
+// derive the next version from the log-file count), and only the lake's
+// single writer can serialize them (the shared ObjectStore lock does).
+// Flushes each table first so the freshly-buffered rows join the pack.
+// Triggered by the batch-conductor chain (or ops, manually).
+func registerCompactEndpoint(mux *http.ServeMux, sink *datalakeSink) {
+	mux.HandleFunc("POST "+routes.DatalakeCompact, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		ctx := r.Context()
+		out := map[string]datalake.CompactResult{}
+		for _, table := range sink.Tables() {
+			sink.flushTable(ctx, table)
+			res, err := sink.lake.Compact(ctx, table)
+			if err != nil {
+				// A table that was never written has no log — report, keep going.
+				out[table] = datalake.CompactResult{Table: table}
+				continue
+			}
+			out[table] = res
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}
+
 // lakeProfileSummary is the lake half of the staff profile view: which
 // onboarding signals mention the id, and how much behaviour it has.
 type lakeProfileSummary struct {
