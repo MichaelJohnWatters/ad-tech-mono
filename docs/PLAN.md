@@ -2478,6 +2478,26 @@ one place to answer "what do we know about this user" for both the profile API
 and GDPR. Serving stays PG/Redis because the bid path needs single-digit-ms
 lookups, which a lake never gives you.
 
+**Why not everything in Delta (considered, rejected for now):** moving the
+graph itself to the lake doesn't remove a store — the bid path needs point
+lookups, so a PG/Redis serving copy must exist regardless, and PG is already
+paid for (campaigns, accounts, memberships). Meanwhile the lake makes the
+graph's hardest requirements worse: (a) the identity-consumer writes small
+batches every ~10s — tiny Delta commits mean small-file sprawl + a compaction
+job just to stay readable; (b) no unique constraints — edge dedup is one
+upsert in PG, a MERGE/rewrite downstream in Delta (and `pkg/store/datalake` is
+an append+log writer, not a MERGE engine); (c) GDPR level-3 deletion is a
+transactional DELETE today with immediate `privacy-verify` residual checks —
+in Delta it's a file-rewrite batch with hours-later consistency, on the most
+privacy-sensitive table in the platform; (d) freshness — an observed edge is
+queryable seconds later via PG, vs waiting for the next batch append + cluster
+run. **The dividing rule: the lake holds what must be replayable (raw
+observation log → `profile_signals`); Postgres holds what must be
+point-readable and instantly deletable (current deduped edges + materialized
+clusters).** At LiveRamp scale the system of record flips to the lake — the
+escape hatch is designed in: point profile-builder's input at a lake edge
+table and shrink PG to the serving tables; nothing on the bid path changes.
+
 #### Build order
 
 1. **`profile_signals` Delta table + normalizer** — CRM/audience uploads land in
