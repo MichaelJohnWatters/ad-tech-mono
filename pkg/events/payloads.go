@@ -262,6 +262,30 @@ type DirectWinEvent struct {
 	Timestamp           time.Time `json:"timestamp"`
 }
 
+// BehaviourSignalEvent is one consent-gated behavioural observation — a
+// self-contained row for the behaviour_signals Delta table. Kind "request"
+// rows come from the SSP (content categories stamped at event time from its
+// placement warm cache); impression/click/conversion/view rows come from the
+// tracker. Never published for non-consented users: the SSP checks
+// privacy.Evaluate(...).Personalise, and the tracker only sees a user key
+// when the consented serve path baked one into the pixel URL.
+type BehaviourSignalEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id"`
+	Kind          string    `json:"kind"` // request | impression | click | conversion | view
+	UserID        string    `json:"user_id,omitempty"`
+	HouseholdID   string    `json:"household_id,omitempty"`
+	PlacementID   string    `json:"placement_id,omitempty"`
+	PublisherID   string    `json:"publisher_id,omitempty"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	CreativeID    string    `json:"creative_id,omitempty"`
+	Channel       string    `json:"channel,omitempty"`
+	Categories    string    `json:"categories,omitempty"` // comma-separated content categories
+	Geo           string    `json:"geo,omitempty"`
+	Device        string    `json:"device,omitempty"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
 // ProfileSignalID is one identifier inside a ProfileSignalEvent batch.
 type ProfileSignalID struct {
 	IDType  string `json:"id_type"` // user_id | hashed_email | uid2 | device_id | household

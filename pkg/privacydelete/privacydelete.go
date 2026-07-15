@@ -12,25 +12,53 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 )
 
 // Systems purged for a Level-3 deletion. These are the durable user-data tables
 // keyed by user_id; warm caches downstream refresh on the completion event.
+// The lake systems are the two user-keyed Delta tables, purged via the
+// pipeline (the lake's single writer); freq_cap_blocks is the ClickHouse
+// analytics table keyed by user_id.
 const (
-	SystemIdentityGraph  = "identity_graph"
-	SystemSegmentMembers = "audience_segment_members"
+	SystemIdentityGraph        = "identity_graph"
+	SystemSegmentMembers       = "audience_segment_members"
+	SystemLakeProfileSignals   = "lake:profile_signals"
+	SystemLakeBehaviourSignals = "lake:behaviour_signals"
+	SystemFreqCapBlocks        = "freq_cap_blocks"
 )
 
 // Purge is the per-user outcome: how many rows were removed from each system.
+// Extra carries the counts from ExtraPurgers (lake tables, freq_cap_blocks)
+// keyed by system name.
 type Purge struct {
 	IdentityEdges  int
 	SegmentMembers int
+	Extra          map[string]int
 }
 
-// Systems lists the system names touched (always both — a system with 0 rows
-// removed is still confirmed clean).
+// Systems lists the system names touched (a system with 0 rows removed is
+// still confirmed clean).
 func (p Purge) Systems() []string {
-	return []string{SystemIdentityGraph, SystemSegmentMembers}
+	out := []string{SystemIdentityGraph, SystemSegmentMembers}
+	extras := make([]string, 0, len(p.Extra))
+	for k := range p.Extra {
+		extras = append(extras, k)
+	}
+	sort.Strings(extras)
+	return append(out, extras...)
+}
+
+// ExtraPurger purges + verifies user data held OUTSIDE the Postgres tables —
+// the Delta lake (via the pipeline's purge endpoints) and freq_cap_blocks in
+// ClickHouse. PostgresStore runs each extra after its own transaction commits;
+// an extra's failure fails the whole PurgeUser so the registry row stays
+// pending and the next run retries.
+type ExtraPurger interface {
+	// PurgeExtra removes the user's rows, returning system name → rows removed.
+	PurgeExtra(ctx context.Context, userID string) (map[string]int, error)
+	// ResidualExtra returns the systems still holding rows for the user.
+	ResidualExtra(ctx context.Context, userID string) ([]string, error)
 }
 
 // Store is the persistence seam for the deletion pipeline.
@@ -101,8 +129,12 @@ func (d *Deleter) announce(ctx context.Context, userID string, p Purge) {
 	}
 	// Minimal, PII-light completion signal: the user id is already the subject
 	// of the deletion; systems + counts let ops confirm coverage.
-	payload := fmt.Sprintf(`{"schema_version":1,"user_id":%q,"identity_edges_removed":%d,"segment_members_removed":%d}`,
-		userID, p.IdentityEdges, p.SegmentMembers)
+	extra := 0
+	for _, n := range p.Extra {
+		extra += n
+	}
+	payload := fmt.Sprintf(`{"schema_version":1,"user_id":%q,"identity_edges_removed":%d,"segment_members_removed":%d,"extra_rows_removed":%d}`,
+		userID, p.IdentityEdges, p.SegmentMembers, extra)
 	if err := d.Announce.Publish(ctx, d.Subject, []byte(payload)); err != nil {
 		d.logf().Warn("deletion-completed publish failed", "user_id", userID, "error", err)
 	}

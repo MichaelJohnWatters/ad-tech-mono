@@ -47,7 +47,8 @@ func main() {
 	}
 
 	deleter := &privacydelete.Deleter{
-		Store:    privacydelete.NewPostgresStore(db),
+		Store: privacydelete.NewPostgresStore(db).
+			WithExtras(privacydelete.BuildExtras(cfg, log)...),
 		Announce: announce,
 		Subject:  events.SubjectPrivacyCompleted,
 		Log:      log,

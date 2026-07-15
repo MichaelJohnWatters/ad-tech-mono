@@ -190,6 +190,21 @@ const (
 )
 
 // ============================================================
+// Pipeline (:8087) - data lake
+// ============================================================
+
+const (
+	// DatalakePurge (POST {"user_id":...}) runs the GDPR filtered rewrite
+	// over the user-keyed lake tables (profile_signals, behaviour_signals).
+	// Lives on the pipeline because it is the lake's SINGLE WRITER — a purge
+	// from any other process would race its version allocation.
+	DatalakePurge = "/v1/datalake/purge"
+	// DatalakeResidual (GET ?user_id=) counts rows still keyed to the user —
+	// the privacy-verify residual check for the lake systems.
+	DatalakeResidual = "/v1/datalake/residual"
+)
+
+// ============================================================
 // Exchange (:8081) - auction pipeline
 // ============================================================
 
@@ -478,6 +493,9 @@ const (
 	// 8123; the native protocol is on 9010 locally to avoid Minio's 9000).
 	// Same local-dev credentials convention as DefaultPostgresURL.
 	DefaultClickHouseHTTPURL = "http://adtech:adtech-local-dev@" + DefaultHost + ":" + PortClickHouseHTTP
+	// DefaultClickHouseNativeAddr is ClickHouse's native protocol (Tilt
+	// forwards host 9010 → cluster 9000; 9000 on the host is taken).
+	DefaultClickHouseNativeAddr = DefaultHost + ":" + PortClickHouseNative
 )
 
 // ServiceURL builds a URL from host and port.
@@ -512,6 +530,7 @@ const (
 	PortTranscoder        = "8094"
 	PortReportRunner      = "8095"
 	PortClickHouseHTTP    = "8123"
+	PortClickHouseNative  = "9010"
 	PortGrafana           = "3000"
 	PortPrometheus        = "9090"
 	PortJaeger            = "16686"

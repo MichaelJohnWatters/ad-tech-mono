@@ -290,31 +290,11 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 	if err != nil {
 		return CompactResult{}, err
 	}
-	active := map[string]bool{}
-	var schema Schema
-	haveSchema := false
-	for _, t := range txns {
-		if t.Schema != nil {
-			schema = *t.Schema
-			haveSchema = true
-		}
-		switch t.Action {
-		case "add":
-			active[t.Path] = true
-		case "remove":
-			delete(active, t.Path)
-		}
-	}
-	res := CompactResult{Table: table, FilesBefore: len(active), FilesAfter: len(active)}
-	if len(active) <= 1 || !haveSchema {
+	paths, schema, haveSchema := activeFiles(txns)
+	res := CompactResult{Table: table, FilesBefore: len(paths), FilesAfter: len(paths)}
+	if len(paths) <= 1 || !haveSchema {
 		return res, nil // nothing to compact (or no schema recorded yet)
 	}
-
-	paths := make([]string, 0, len(active))
-	for p := range active {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
 
 	var records []Record
 	for _, p := range paths {
@@ -364,6 +344,142 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 	res.Rows = len(records)
 	o.log.Info("datalake compact", "table", table, "files_before", res.FilesBefore, "files_after", 1, "rows", res.Rows)
 	return res, nil
+}
+
+// PurgeRows is the GDPR filtered rewrite: it drops every row matching match
+// from the table's active file set in ONE atomic Delta commit — the surviving
+// rows are consolidated into a new file and every old file is removed, so a
+// reader never sees a half-purged state. Reuses the Compact mechanics (same
+// lock, same read→encode→commit spine); a table where nothing matches is a
+// no-op with no commit. Returns how many rows were removed.
+//
+// Delta-log semantics note: the removed files' bytes stay in object storage
+// (time travel could still read them) — same as Compact. A retention sweep
+// that physically deletes tombstoned files is the storage-level companion,
+// out of scope here.
+func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Record) bool) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	txns, err := o.Log(ctx, table)
+	if err != nil {
+		return 0, err
+	}
+	paths, schema, haveSchema := activeFiles(txns)
+	if len(paths) == 0 || !haveSchema {
+		return 0, nil // empty (or never-written) table — nothing to purge
+	}
+
+	var keep []Record
+	removed := 0
+	for _, p := range paths {
+		recs, err := o.readParquet(ctx, p)
+		if err != nil {
+			return 0, fmt.Errorf("read %s: %w", p, err)
+		}
+		for _, rec := range recs {
+			if match(rec) {
+				removed++
+			} else {
+				keep = append(keep, rec)
+			}
+		}
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+
+	version := len(txns)
+	now := time.Now().UTC()
+	removes := make([]deltaRemove, 0, len(paths))
+	for _, p := range paths {
+		removes = append(removes, deltaRemove{
+			Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
+		})
+	}
+
+	var commit []byte
+	if len(keep) == 0 {
+		// Every row matched — commit is removes-only, no remainder file.
+		commit, err = buildDeltaCommitRemoves(removes)
+		if err != nil {
+			return 0, fmt.Errorf("build purge commit: %w", err)
+		}
+	} else {
+		parquetBytes, err := o.encodeParquet(keep, schema)
+		if err != nil {
+			return 0, fmt.Errorf("encode purged parquet: %w", err)
+		}
+		pKey := parquetKey(table, version)
+		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+			return 0, fmt.Errorf("put purged parquet: %w", err)
+		}
+		add := deltaAdd{
+			Path:             relTablePath(table, pKey),
+			PartitionValues:  map[string]string{},
+			Size:             int64(len(parquetBytes)),
+			ModificationTime: now.UnixMilli(),
+			DataChange:       true,
+			Stats:            deltaStats(len(keep)),
+		}
+		commit, err = buildDeltaCommitCompact(add, removes)
+		if err != nil {
+			return 0, fmt.Errorf("build purge commit: %w", err)
+		}
+	}
+	if err := o.putLogFile(ctx, table, version, commit); err != nil {
+		return 0, err
+	}
+	o.log.Info("datalake purge", "table", table, "rows_removed", removed, "rows_kept", len(keep))
+	return removed, nil
+}
+
+// CountRows counts rows matching match across the active file set — the
+// read-only verification counterpart of PurgeRows (privacy-verify residual
+// checks).
+func (o *ObjectStore) CountRows(ctx context.Context, table string, match func(Record) bool) (int, error) {
+	txns, err := o.Log(ctx, table)
+	if err != nil {
+		return 0, err
+	}
+	paths, _, _ := activeFiles(txns)
+	n := 0
+	for _, p := range paths {
+		recs, err := o.readParquet(ctx, p)
+		if err != nil {
+			return 0, fmt.Errorf("read %s: %w", p, err)
+		}
+		for _, rec := range recs {
+			if match(rec) {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+// activeFiles replays a transaction list into the sorted active file set plus
+// the latest recorded schema. Shared by Compact / PurgeRows / CountRows.
+func activeFiles(txns []Transaction) (paths []string, schema Schema, haveSchema bool) {
+	active := map[string]bool{}
+	for _, t := range txns {
+		if t.Schema != nil {
+			schema = *t.Schema
+			haveSchema = true
+		}
+		switch t.Action {
+		case "add":
+			active[t.Path] = true
+		case "remove":
+			delete(active, t.Path)
+		}
+	}
+	paths = make([]string, 0, len(active))
+	for p := range active {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths, schema, haveSchema
 }
 
 // putLogFile writes one Delta commit file at the given version.

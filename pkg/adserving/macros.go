@@ -31,6 +31,11 @@ type MacroContext struct {
 	Height       int
 	Geo          string // request geo (country) — baked into tracker beacons for analytics
 	Device       string // request device type — baked into tracker beacons for analytics
+	// UserID is the hashed user id, present ONLY when the serve chain carried
+	// consent (models.ServeRequest.UserID: "empty = no consent"). Baked into
+	// tracker beacons as uid= so interaction events can feed the consent-gated
+	// behaviour_signals table; its presence IS the consent signal downstream.
+	UserID string
 	Channel      string // display|video|native|audio — baked into tracker beacons so analytics label the right channel
 	UserAgent    string
 	IP           string
@@ -131,6 +136,9 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	params.Set("cid", ctx.CampaignID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	if ctx.UserID != "" {
+		params.Set("uid", ctx.UserID)
+	}
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/view?" + params.Encode()
 	return SignURL(rawURL, DefaultSigningKey)
@@ -205,5 +213,10 @@ func setGeoDevice(params url.Values, ctx MacroContext) {
 	}
 	if ctx.Channel != "" {
 		params.Set("ch", ctx.Channel)
+	}
+	// Consent-gated by construction: UserID is only non-empty when the serve
+	// request carried a consented user (see MacroContext.UserID).
+	if ctx.UserID != "" {
+		params.Set("uid", ctx.UserID)
 	}
 }

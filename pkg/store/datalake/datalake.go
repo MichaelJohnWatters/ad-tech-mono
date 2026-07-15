@@ -37,6 +37,14 @@ type Store interface {
 	// Snapshot returns the current state of a table (all active files).
 	Snapshot(ctx context.Context, table string) (*TableSnapshot, error)
 
+	// PurgeRows rewrites the table without the rows matching match, in one
+	// atomic Delta commit (GDPR deletion). Returns how many rows were removed.
+	PurgeRows(ctx context.Context, table string, match func(Record) bool) (int, error)
+
+	// CountRows counts rows matching match across the active file set
+	// (read-only — the purge-verification counterpart of PurgeRows).
+	CountRows(ctx context.Context, table string, match func(Record) bool) (int, error)
+
 	// Close releases resources.
 	Close() error
 }
@@ -203,6 +211,42 @@ func (m *MemoryStore) Snapshot(_ context.Context, table string) (*TableSnapshot,
 		TotalBytes:   totalBytes,
 		LastModified: lastMod,
 	}, nil
+}
+
+func (m *MemoryStore) PurgeRows(_ context.Context, table string, match func(Record) bool) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tables[table]
+	if !ok {
+		return 0, nil
+	}
+	kept := t.records[:0]
+	removed := 0
+	for _, rec := range t.records {
+		if match(rec) {
+			removed++
+		} else {
+			kept = append(kept, rec)
+		}
+	}
+	t.records = kept
+	return removed, nil
+}
+
+func (m *MemoryStore) CountRows(_ context.Context, table string, match func(Record) bool) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.tables[table]
+	if !ok {
+		return 0, nil
+	}
+	n := 0
+	for _, rec := range t.records {
+		if match(rec) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (m *MemoryStore) Close() error { return nil }

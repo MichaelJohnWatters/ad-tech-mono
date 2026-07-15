@@ -44,6 +44,12 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
+	// GDPR purge surface for the user-keyed lake tables — runs here because
+	// the pipeline is the lake's single writer. See privacy.go.
+	if sink != nil {
+		registerPrivacyEndpoints(mux, sink)
+	}
+
 	// Cold-archive verification: report the Parquet snapshot (active files +
 	// total rows/bytes from the Delta log) for a table, or all tables. Used by
 	// ops and e2e to confirm the log→Parquet spine landed every event — the

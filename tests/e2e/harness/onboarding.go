@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"testing"
 	"time"
 
@@ -91,6 +92,31 @@ func (h *Harness) OnboardingBucket(t *testing.T) (objects.Store, string) {
 		t.Fatalf("ensure onboarding bucket: %v", err)
 	}
 	return store, bucket
+}
+
+// LakeResidual returns the pipeline's per-table counts of lake rows keyed to
+// userID (profile_signals / behaviour_signals) — the GDPR residual check,
+// also handy as "have this user's rows landed yet?" polling.
+func (h *Harness) LakeResidual(t *testing.T, userID string) map[string]int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	u := routes.DefaultPipelineURL + routes.DatalakeResidual + "?user_id=" + neturl.QueryEscape(userID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("lake residual: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("lake residual status %d: %s", resp.StatusCode, string(body))
+	}
+	var counts map[string]int
+	if err := json.Unmarshal(body, &counts); err != nil {
+		t.Fatalf("decode lake residual: %v", err)
+	}
+	return counts
 }
 
 // SeedIdentityEdges inserts identity_graph edges for the given ids (each
