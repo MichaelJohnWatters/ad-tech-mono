@@ -29,17 +29,20 @@ func newIdentityPublisher(bus events.EventBus, log *slog.Logger) *identityPublis
 }
 
 // Observe publishes the identifiers (and IP+UA fingerprint) seen on this
-// request. Fire-and-forget; safe on a nil receiver.
-func (p *identityPublisher) Observe(r *http.Request, userID, uid2 string) {
+// request. Fire-and-forget; safe on a nil receiver. householdID (may be "")
+// is the platform household id derived by the caller — including it links
+// user_id/uid2/device ↔ household in the identity graph, which is what
+// makes cross-device household resolution possible.
+func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID string) {
 	if p == nil {
 		return
 	}
-	p.pub.Publish(tracing.TraceIDFromContext(r.Context()), gatherSignals(r, userID, uid2), requestFingerprint(r))
+	p.pub.Publish(tracing.TraceIDFromContext(r.Context()), gatherSignals(r, userID, uid2, householdID), requestFingerprint(r))
 }
 
 // gatherSignals collects the distinct identifiers present on a request, in a
 // fixed order, dropping duplicates and empties.
-func gatherSignals(r *http.Request, userID, uid2 string) []identityobserve.Signal {
+func gatherSignals(r *http.Request, userID, uid2, householdID string) []identityobserve.Signal {
 	q := r.URL.Query()
 	candidates := []identityobserve.Signal{
 		{Value: userID, Source: identity.SourcePublisherUserID},
@@ -47,6 +50,7 @@ func gatherSignals(r *http.Request, userID, uid2 string) []identityobserve.Signa
 		{Value: q.Get("hashed_email"), Source: identity.SourceHashedEmail},
 		{Value: q.Get("ifa"), Source: identity.SourceDeviceID},
 		{Value: q.Get("publisher_user_id"), Source: identity.SourcePublisherUserID},
+		{Value: householdID, Source: identity.SourceHousehold},
 	}
 	seen := make(map[string]struct{}, len(candidates))
 	out := make([]identityobserve.Signal, 0, len(candidates))

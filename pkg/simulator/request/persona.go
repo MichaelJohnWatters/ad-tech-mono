@@ -106,6 +106,11 @@ type Persona struct {
 	// Segments are audience-segment ids the user belongs to (behavioural
 	// targeting, only honoured when the privacy regime permits personalisation).
 	Segments []string
+	// IP is a stable TEST-NET client address for the persona, sent as ?ip= so
+	// the SSP's household derivation is DETERMINISTIC per persona: the same
+	// persona always lands in the same household, and two personas can share
+	// an IP to model one household with multiple viewers. Empty = no ip param.
+	IP string
 	// Weight is the relative sampling frequency in a mix (higher = more common).
 	Weight int
 }
@@ -119,59 +124,67 @@ var Personas = []Persona{
 	{
 		Name: "us-personalised-mobile", Regime: RegimeUSClear, Identity: IdentityUID2,
 		Geo: "USA", Region: "NY", City: "New York", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,3",
-		Segments: []string{"in_market_auto", "sports_enthusiast"}, Weight: 24,
+		Segments: []string{"in_market_auto", "sports_enthusiast"}, IP: "203.0.113.10", Weight: 24,
 	},
 	{
 		Name: "us-personalised-desktop", Regime: RegimeUSClear, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "CA", City: "San Francisco", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "high_income"}, Weight: 18,
+		Segments: []string{"finance_intender", "high_income"}, IP: "203.0.113.11", Weight: 18,
 	},
 	{
 		Name: "us-firstparty-tablet", Regime: RegimeUSClear, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "TX", City: "Austin", Device: "tablet", OS: "Android", Make: "Samsung", Model: "SM-T870",
-		Segments: []string{"parenting", "in_market_auto"}, Weight: 8,
+		Segments: []string{"parenting", "in_market_auto"}, IP: "203.0.113.12", Weight: 8,
 	},
 	{
 		Name: "us-ccpa-optout", Regime: RegimeCCPAOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "CA", City: "Los Angeles", Device: "mobile", OS: "Android", Make: "Google", Model: "Pixel 8",
-		Segments: []string{"sports_enthusiast"}, Weight: 6,
+		Segments: []string{"sports_enthusiast"}, IP: "203.0.113.13", Weight: 6,
 	},
 	{
 		Name: "us-gpc-optout", Regime: RegimeGPC, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "WA", City: "Seattle", Device: "desktop", OS: "Windows",
-		Segments: []string{"tech_early_adopter"}, Weight: 4,
+		Segments: []string{"tech_early_adopter"}, IP: "203.0.113.14", Weight: 4,
 	},
 	{
 		Name: "us-gpp-optout", Regime: RegimeGPPOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "IL", City: "Chicago", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone14,5",
-		Segments: []string{"travel_intender"}, Weight: 3,
+		Segments: []string{"travel_intender"}, IP: "203.0.113.15", Weight: 3,
 	},
 	{
 		Name: "eu-consented-mobile", Regime: RegimeGDPRConsented, Identity: IdentityUID2,
 		Geo: "DEU", Region: "BE", City: "Berlin", Device: "mobile", OS: "Android", Make: "Samsung", Model: "SM-S911B",
-		Segments: []string{"in_market_auto", "luxury_goods"}, Weight: 10,
+		Segments: []string{"in_market_auto", "luxury_goods"}, IP: "203.0.113.16", Weight: 10,
 	},
 	{
 		Name: "eu-noconsent-desktop", Regime: RegimeGDPRNoConsent, Identity: IdentityAnonymous,
-		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", Weight: 8,
+		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", IP: "203.0.113.17", Weight: 8,
 	},
 	{
 		Name: "uk-consented-desktop", Regime: RegimeGDPRConsented, Identity: IdentityHashedEmail,
 		Geo: "GBR", Region: "ENG", City: "London", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "travel_intender"}, Weight: 9,
+		Segments: []string{"finance_intender", "travel_intender"}, IP: "203.0.113.18", Weight: 9,
 	},
 	{
 		Name: "coppa-kids-tablet", Regime: RegimeCOPPA, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", Weight: 2,
+		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", IP: "203.0.113.19", Weight: 2,
 	},
 	{
 		Name: "us-ctv-household", Regime: RegimeUSClear, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "GA", City: "Atlanta", Device: "ctv", OS: "Roku", Make: "Roku", Model: "Ultra",
-		Segments: []string{"sports_enthusiast", "streaming_subscriber"}, Weight: 5,
+		Segments: []string{"sports_enthusiast", "streaming_subscriber"}, IP: "203.0.113.20", Weight: 5,
+	},
+	{
+		// Same IP as us-ctv-household: a second viewer in the SAME household
+		// (mobile in the living room) — exercises household-level targeting
+		// reaching a different device/user through the shared household id.
+		Name: "us-ctv-household-mobile", Regime: RegimeUSClear, Identity: IdentityUID2,
+		Geo: "USA", Region: "GA", City: "Atlanta", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,2",
+		Segments: []string{"streaming_subscriber"}, IP: "203.0.113.20", Weight: 3,
 	},
 	{
 		Name: "anon-mobile-open", Regime: RegimeUSClear, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", Weight: 6,
+		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", IP: "203.0.113.21", Weight: 6,
 	},
 }
 

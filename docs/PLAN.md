@@ -15220,7 +15220,7 @@ targeting, and the three stubbed extended channels.
 87. ✅ SSAI manifest manipulator (`cmd/ssai/` — HLS AND DASH, session manager, server-side beacons, multi-rung ABR)
 88. 🟨 SSAI production - slate ✅, ABR ✅; CDN failover / bumpers / DVR-time-shift NOT built
 89. ⬜ **+ Publisher Simulator:** `live_stream` template (SSAI stitched, session debug) — sim is VOD-only today
-90. 🟨 CTV bid request handling ✅ (device=ctv, pod context end-to-end) + household targeting ⬜ (no household_id anywhere)
+90. ✅ CTV bid request handling (device=ctv, pod context end-to-end) + household targeting (SSP derives hh: id from salted client-IP HMAC — identity.HouseholdID — carried as a user.eids entry [source adtech.household]; household audience segments are ordinary audience members keyed by the hh: id, consent-gated at the DSP; identity graph links user↔household via SourceHousehold). Household FREQUENCY caps = follow-up.
 91. ⬜ **+ Publisher Simulator:** `ctv_player` template (full-screen, household signals)
 92. 🟨 Audio: podcast insertion ✅ (Feed=2, SSAI audio); streaming-radio distinction ⬜ (Feed=3 treated as podcast)
 93. ⬜ **+ Publisher Simulator:** `podcast` template (DAAST + waveform) + `radio_stream` template
