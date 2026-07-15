@@ -86,7 +86,7 @@ onboarded.api -> lake.signals: lake copy of uploads (batched via NATS)
 # ============================================================
 # THE MEETING POINT - profile-builder (batch, CronJob)
 # ============================================================
-builder: profile-builder - hourly CronJob (cmd/profile-builder) {
+builder: profile-builder - batch-conductor chain step (pkg/profilebuilder) {
   style.fill: "#f59e0b"
 
   cluster: 1 - cluster graph -> person_id (union-find)

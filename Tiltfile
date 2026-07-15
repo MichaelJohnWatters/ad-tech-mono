@@ -430,11 +430,18 @@ local_resource('day-boundary',
     cmd='go run ./cmd/dayboundary',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
+local_resource('batch-conductor',
+    # The data chain, completion-ordered (normally an hourly CronJob — see
+    # k8s/cronjobs/batch-conductor): checkpoint → compact → rollups →
+    # profile-builder → privacy delete → verify. Runs on the host against the
+    # port-forwarded services; steps recorded in batch_runs (staff portal →
+    # Batch runs).
+    cmd='BATCH_CONDUCTOR_DATALAKE_BUCKET=adtech-datalake-hotcold REPORTING_CLICKHOUSE_ADDR=localhost:9010 S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev go run ./cmd/batch-conductor',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
+
 local_resource('profile-builder',
-    # Profile store expansion engine (normally an hourly CronJob — see
-    # k8s/cronjobs/profile-builder). Runs on the host against the
-    # port-forwarded postgres/minio/nats: clusters identity_graph, evaluates
-    # behavioural rules over the lake, expands + reconciles memberships.
+    # Standalone escape hatch for the profile store engine (the conductor
+    # runs it as a chain step; this triggers JUST that step).
     cmd='PROFILE_BUILDER_DATALAKE_BUCKET=adtech-datalake-hotcold S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev go run ./cmd/profile-builder',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 

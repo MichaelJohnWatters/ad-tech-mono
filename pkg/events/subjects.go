@@ -141,6 +141,11 @@ const (
 	// propagation enables the "rotate via UI without redeploy" flow.
 	SubjectCacheInvalidateSecrets = "adtech.cache.invalidate.secrets"
 
+	// SubjectBatchRunCompleted announces one batch-conductor chain run
+	// (run_id, aborted, failed step count, duration). Observability for the
+	// completion-chained batch layer; consumable by webhooks/ops dashboards.
+	SubjectBatchRunCompleted = "adtech.batch.run_completed"
+
 	// Webhooks (Any → Webhooks dispatcher)
 	SubjectWebhook = "adtech.webhooks"
 

@@ -134,6 +134,13 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Batch runs (conductor) ============ -->
+    <section id="section-batchruns" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Batch chain runs" "subtitle" "checkpoint → compact → rollups → profile-builder → privacy — every step, in order, with its outcome") }}
+      <div id="batchRuns" class="space-y-6"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Tools ============ -->
     <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Interactive simulator") }}
@@ -322,7 +329,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'batchruns', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
@@ -338,7 +345,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -748,6 +755,66 @@ async function loadOnboarding() {
         <td class="px-3 py-2 text-xs text-error">${esc(r.error || '')}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">no runs yet</td></tr>';
   } catch (err) { toast('Onboarding monitor failed: ' + err.message, 'error'); }
+}
+
+
+// ---- Batch runs (conductor chain) ----
+// Live view: while the section is open, poll every 5s so an in-flight chain
+// shows step-by-step progress (the recorder writes a 'running' row when a
+// step starts and updates it on completion — refreshing IS the progress bar).
+let batchRunsTimer = null;
+function startBatchRunsPolling() {
+  if (batchRunsTimer) return;
+  batchRunsTimer = setInterval(() => {
+    const section = document.getElementById('section-batchruns');
+    if (!section || section.classList.contains('hidden')) {
+      clearInterval(batchRunsTimer); batchRunsTimer = null; return;
+    }
+    loadBatchRuns(true);
+  }, 5000);
+}
+async function loadBatchRuns(isPoll) {
+  const box = document.getElementById('batchRuns');
+  try {
+    const data = await fetchJSON('/v1/api/batch/runs');
+    const runs = data.runs || [];
+    if (!runs.length) {
+      box.innerHTML = '<p class="text-sm text-gray-400">no chain runs yet — trigger the batch-conductor (Tilt) or wait for the hourly CronJob</p>';
+      return;
+    }
+    const badge = (st) => ({
+      done: 'bg-success/15 text-success', failed: 'bg-error/15 text-error',
+      skipped: 'bg-surface-3 text-gray-500', running: 'bg-info/15 text-info',
+    }[st] || 'bg-surface-3 text-gray-500');
+    startBatchRunsPolling();
+    box.innerHTML = runs.map(r => `
+      <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-3">
+        <div class="flex justify-between items-center text-xs text-gray-500 mb-2">
+          <span class="font-mono">${esc(r.run_id)}</span>
+          <span>${(r.steps || []).filter(s => s.status === 'done').length}/${(r.steps || []).length} steps
+            ${(r.steps || []).some(s => s.status === 'running') ? '<span class="text-info">· running…</span>' : ''}
+            ${(r.steps || []).some(s => s.status === 'failed') ? '<span class="text-error">· failures</span>' : ''}
+            · ${new Date(r.started_at).toLocaleString()}</span>
+        </div>
+        <table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+          <th class="px-2 py-1">#</th><th class="px-2 py-1">Step</th><th class="px-2 py-1">Status</th>
+          <th class="px-2 py-1">Detail</th><th class="px-2 py-1">Duration</th>
+        </tr></thead><tbody>
+        ${(r.steps || []).map(st => {
+          const dur = st.finished_at ? ((new Date(st.finished_at) - new Date(st.started_at)) / 1000).toFixed(1) + 's' : '—';
+          return `<tr class="border-t border-gray-100 dark:border-gray-800">
+            <td class="px-2 py-1.5 text-xs text-gray-500">${st.seq + 1}</td>
+            <td class="px-2 py-1.5 font-mono text-xs">${esc(st.step)}${st.critical ? ' <span class="text-[10px] text-warning">critical</span>' : ''}</td>
+            <td class="px-2 py-1.5"><span class="text-xs px-1.5 py-0.5 rounded ${badge(st.status)}">${esc(st.status)}</span></td>
+            <td class="px-2 py-1.5 text-xs">${esc(st.detail || st.error || '')}</td>
+            <td class="px-2 py-1.5 text-xs text-gray-500">${dur}</td>
+          </tr>`;
+        }).join('')}
+        </tbody></table>
+      </div>`).join('');
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">load failed — ${esc(err.message)}</p>`;
+  }
 }
 
 </script>

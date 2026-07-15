@@ -64,7 +64,18 @@ func (c *ColdStore) Query(ctx context.Context, params analytics.QueryParams) (*a
 		return empty, nil
 	}
 
-	fromExpr := fmt.Sprintf("delta_scan('s3://%s/%s')", c.reader.bucket, params.Table)
+	// delta_scan surfaces Parquet timestamps as TIMESTAMP WITH TIME ZONE,
+	// which DuckDB's DATE_TRUNC('hour', …) / CAST(… AS DATE) overloads
+	// reject — so the shared BuildQueryFrom SQL (identical to the hot
+	// store's) blows up on any hour/day dimension. Normalize the column to
+	// plain TIMESTAMP inside the FROM expression (`* REPLACE` keeps every
+	// other column untouched); values are UTC either way, so the aggregate
+	// windows match the hot store exactly. Surfaced by the batch-conductor's
+	// hourly/daily rollup steps — the first callers to route a rollup window
+	// through the cold tier.
+	fromExpr := fmt.Sprintf(
+		"(SELECT * REPLACE (CAST(timestamp AS TIMESTAMP) AS timestamp) FROM delta_scan('s3://%s/%s'))",
+		c.reader.bucket, params.Table)
 	query, args := analytics.BuildQueryFrom(params, fromExpr)
 
 	maps, err := c.reader.Query(ctx, query, args...)
