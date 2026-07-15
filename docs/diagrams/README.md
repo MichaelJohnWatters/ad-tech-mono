@@ -35,6 +35,7 @@ Status: ✅ current · ⚠️ stale (needs a refresh) · 🚧 planned (not built
 | Data lake / batch | `data-pipeline.d2` | flow | D2 | pipeline → Parquet+Delta → compaction → delta_scan | ✅ lake write/compaction/format changes | `cmd/pipeline`, `pkg/store/datalake` |
 | **E2E trace** ★ | `e2e-trace.md` | headline | Mermaid | **one `trace_id`, all planes**: request → auction → win (single source of truth) → serve → impression → {hot CH, cold lake, billing→TB, budget reconcile} → report | ✅ any **new hop** in the request/event lifecycle | everything |
 | End-to-end (subsystems) | `end-to-end-flow.md` | flow | Mermaid | per-subsystem sequences + standards overlays | ✅ a subsystem sequence changes | mixed |
+| Targeting data flow | `targeting-data-flow.d2` | flow | D2 | observed (pixel/auction) + onboarded (1st/3rd party) sources → identity graph + lake → **profile-builder** → memberships → back into auctions + exports; 🚧 = planned Profile Store pieces (PLAN.md → "Profile Store") | ✅ audience/identity/profile-store flow changes (re-render as 🚧 pieces ship) | ssp, tracker, identity-consumer, `cmd/pipeline`, profile-builder 🚧, `pkg/audience` |
 
 `request-flow.txt` is a legacy ASCII sketch — superseded by `e2e-trace`; keep or delete.
 

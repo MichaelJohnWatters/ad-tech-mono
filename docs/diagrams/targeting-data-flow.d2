@@ -1,0 +1,156 @@
+# Targeting data flow - how audience/profile data is collected (observed +
+# onboarded), where the two sides meet (lake + profile-builder), and how the
+# output is loaded back into live auctions and exports.
+# Companion to docs/PLAN.md -> "Profile Store (Normalized Signals -> Expansion
+# -> Memberships -> Export)". Render: make diagrams
+# 🚧 marks planned components (Profile Store phases 1-5); the rest is live.
+
+direction: right
+
+# ============================================================
+# Source side A - OBSERVED (pixel / auction exhaust)
+# ============================================================
+observed: Observed - pixel & auction side {
+  style.fill: "#eff6ff"
+
+  user: Browser / CTV device {shape: person}
+  adtag: Ad tag + pixels (adtech.js)
+  retarget: Retargeting pixel on advertiser sites 🚧
+
+  user -> adtag
+  user -> retarget
+}
+
+ssp: SSP :8084 {style.fill: "#60a5fa"}
+tracker: Tracker :8083 {style.fill: "#60a5fa"}
+
+observed.adtag -> ssp: ad request - user_id, uid2, hashed_email, ifa, IP->household, page context
+observed.adtag -> tracker: impression / click / conversion / view
+observed.retarget -> tracker: advertiser-site visit events 🚧
+
+# ============================================================
+# Source side B - ONBOARDED (first + third party)
+# ============================================================
+onboarded: Onboarded - 1st + 3rd party {
+  style.fill: "#fefce8"
+
+  owner: Advertiser / Publisher {shape: person}
+  upload: Portal CSV upload 🚧 - small files, PII hashed client-side
+  api: Gateway /v1/api/audiences - JSON live, multipart 🚧
+  partner: Data partner {shape: person}
+  dropzone: "Minio drop-zone 🚧 adtech-onboarding/<provider>/" {shape: cylinder}
+
+  owner -> upload -> api
+  partner -> dropzone
+}
+
+# ============================================================
+# Identity spine - who is the same person/household
+# ============================================================
+nats: NATS {
+  shape: hexagon
+  style.fill: "#22c55e"
+  style.font-color: "#fff"
+}
+idc: identity-consumer {style.fill: "#a78bfa"}
+pg_graph: identity_graph - PG edges, dedup upsert {shape: cylinder}
+
+ssp -> nats: identity signals observed {style.stroke-dash: 3}
+ssp -> nats: behaviour.observed 🚧 - consented, category stamped at event time {style.stroke-dash: 3}
+tracker -> nats: event stream {style.stroke-dash: 3}
+nats -> idc {style.stroke-dash: 3}
+idc -> pg_graph
+onboarded.api -> pg_graph: crm_match edges via /v1/api/identity-links
+
+# ============================================================
+# The lake - where both sides land as replayable facts
+# ============================================================
+pipeline: Pipeline sink (cmd/pipeline) {style.fill: "#a78bfa"}
+
+lake: Delta lake (Minio) {
+  style.fill: "#faf5ff"
+
+  events: event tables x7 - live {shape: cylinder}
+  behaviour: behaviour_signals 🚧 - user key + category, consent-gated {shape: cylinder}
+  signals: profile_signals 🚧 - normalized onboarded rows {shape: cylinder}
+  clusters: identity_clusters 🚧 - person_id -> member ids {shape: cylinder}
+}
+
+nats -> pipeline {style.stroke-dash: 3}
+pipeline -> lake.events
+pipeline -> lake.behaviour: 🚧
+pipeline -> lake.signals: normalize 🚧
+onboarded.dropzone <- pipeline: poll for new files 🚧 {style.stroke-dash: 2}
+onboarded.api -> lake.signals: lake copy of uploads 🚧
+
+# ============================================================
+# THE MEETING POINT - profile-builder (batch, CronJob)
+# ============================================================
+builder: profile-builder 🚧 - hourly CronJob {
+  style.fill: "#f59e0b"
+
+  cluster: 1 - cluster graph -> person_id (union-find)
+  rules: 2 - behavioural + onboarded rules (DuckDB over lake)
+  expand: 3 - enroll person, expand to every id in cluster
+
+  cluster -> rules -> expand
+}
+
+pg_graph -> builder.cluster {style.stroke-dash: 2}
+lake.behaviour -> builder.rules {style.stroke-dash: 2}
+lake.signals -> builder.rules {style.stroke-dash: 2}
+builder.cluster -> lake.clusters: versioned artifact
+builder.expand -> pg_members: AddMembers + replace-by-segment prune
+builder.expand -> nats: cache.invalidate.audience {style.stroke-dash: 3}
+
+# ============================================================
+# OUTPUT 1 - loaded back into live auctions
+# ============================================================
+pg_members: audience_segment_members (PG) {shape: cylinder}
+preload: audience preloader - interval bulk push (pkg/audience/store/preload)
+redis: "Redis - audience:user:<id>:<visibility>" {
+  shape: cylinder
+  style.fill: "#fecaca"
+}
+
+onboarded.api -> pg_members: direct path - live today
+pg_members -> preload {style.stroke-dash: 2}
+preload -> redis
+
+serve: Live auction path {
+  style.fill: "#eff6ff"
+
+  stamp: SSP stamps user.ext.segments - public + household
+  exchange: Exchange fan-out
+  dsp: DSP unions dsp_private + applies bid modifiers (fix 🚧)
+  eval: targeting.Evaluate - include / exclude / modifiers
+
+  stamp -> exchange -> dsp -> eval
+}
+
+redis -> serve.stamp: 25ms budget {style.stroke-dash: 2}
+redis -> serve.dsp: 25ms budget {style.stroke-dash: 2}
+pg_graph -> serve.dsp: read-time BFS freshness top-up (opt-in) {style.stroke-dash: 2}
+
+# ============================================================
+# OUTPUT 2 - exports & transparency
+# ============================================================
+exports: Segment exports 🚧 - Parquet/CSV to Minio {shape: page}
+profileapi: "Profile API 🚧 - GET /v1/api/profiles/<id> (staff)"
+
+pg_members -> exports: 🚧
+lake.clusters -> profileapi {style.stroke-dash: 2}
+pg_members -> profileapi {style.stroke-dash: 2}
+
+legend: Legend {
+  near: bottom-right
+  style.fill: "#f8fafc"
+  a: A
+  b: B
+  c: C
+  d: D
+  a -> b: sync call
+  a -> c: async NATS {style.stroke-dash: 3}
+  a -> d: read / query {style.stroke-dash: 2}
+  note: 🚧 = planned (Profile Store plan)
+}
