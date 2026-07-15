@@ -48,8 +48,8 @@ func main() {
 
 	store, err := objs3.New(objs3.Config{
 		Endpoint:  strings.TrimPrefix(strings.TrimPrefix(cfg.Get(keys.S3.Endpoint.Key(), ""), "https://"), "http://"),
-		AccessKey: cfg.Get(keys.S3.AccessKey.Key(), "minioadmin"),
-		SecretKey: cfg.Get(keys.S3.SecretKey.Key(), "minioadmin"),
+		AccessKey: keys.S3.AccessKey.Get(cfg),
+		SecretKey: keys.S3.SecretKey.Get(cfg),
 		UseSSL:    keys.S3.UseSSL.Get(cfg),
 	})
 	if err != nil {
