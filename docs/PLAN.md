@@ -2432,6 +2432,9 @@ WRITE (ingest → normalize)                          lake = Delta on Minio
 SSP observed signals ──NATS──► identity-consumer ──► identity_graph (PG, edges)
 tracker events (impr/click/conv) ──► pipeline ─────► lake: events        (exists)
 CRM uploads (gateway audiences API) ───────────────► lake: profile_signals (new)
+bucket drop-zone (files landed in Minio: CSV/Parquet
+ audience files from advertisers/partners; pipeline
+ detects, validates, normalizes — pkg/pipeline) ───► lake: profile_signals (new)
 publisher 1P / CDP connectors (future) ────────────► lake: profile_signals
 
 EXPAND (batch — cmd/profile-builder, DuckDB over Delta + PG)
@@ -2516,9 +2519,24 @@ deletes; those stay PG/Redis either way.
 
 #### Build order
 
-1. **`profile_signals` Delta table + normalizer** — CRM/audience uploads land in
-   the lake (as well as PG memberships); define the normalized signal schema
-   (id_type, id_value, source, attributes, observed_at, consent).
+1. **Data onboarding flows + `profile_signals` Delta table.** Two flavours,
+   sharing one normalizer (`pkg/pipeline`: detect → validate → normalize →
+   append to lake), differing in trust and access:
+   - **First-party** (the account owns the data): portal file-upload +
+     gateway API for advertiser CRM lists (hashed client-side, per privacy
+     rules) and publisher declared attributes; retargeting via the existing
+     adtech.js tag on advertiser sites. Rows carry `access=owner:{account}`.
+     Onboarding UX must report back the **match rate** (how many uploaded
+     hashes resolved to platform ids via the identity graph) — that number is
+     the product.
+   - **Third-party** (external data partners): per-provider **bucket
+     drop-zone** on Minio (`onboarding/{provider}/...`), watched by the
+     pipeline; manifest + schema contract per provider (which id types they
+     deliver, consent basis, licence); rows carry provenance + marketplace
+     access (`purchased:`/`barter:` per the Unified Audience Store ACLs).
+   - Both land in `profile_signals` with the normalized schema (id_type,
+     id_value, source, access, attributes, consent, observed_at) — the lake
+     copy is what makes memberships recomputable later.
 2. **`cmd/profile-builder`** (or a job inside `cmd/pipeline`): connected-components
    over `identity_graph` → `identity_clusters` Delta table + slim PG serving copy.
    Scheduled like rollups. Respect min-confidence + household grouping.
