@@ -106,6 +106,34 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Profiles (profile store transparency) ============ -->
+    <section id="section-profiles" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Profile lookup" "subtitle" "Everything the platform knows about an identifier — cluster, graph links, memberships, lake signals") }}
+      <form class="flex gap-3 items-end mb-4" onsubmit="loadProfile(event)">
+        <label class="block text-sm grow">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">User / device / household id</span>
+          <input id="profId" placeholder="user-123 · hh:… · uid2 token" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        {{ template "button" (dict "label" "Look up" "type" "submit") }}
+      </form>
+      <div id="profileResult" class="space-y-4 text-sm"><p class="text-gray-400">Enter an identifier above.</p></div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Onboarding monitor ============ -->
+    <section id="section-onboarding" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Providers" "subtitle" "Drop-zone health by data partner") }}
+      <div id="onbProviders">{{ template "table-start" (dict "headers" (slice "Provider" "Files" "Failed" "Valid rows" "Rejected" "Avg match rate" "Last run")) }}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}</div>
+      {{ template "card-end" . }}
+      {{ template "card-start" (dict "title" "Recent runs" "subtitle" "One row per drop-zone file processed") }}
+      <div id="onbRuns">{{ template "table-start" (dict "headers" (slice "When" "Provider" "File" "Status" "Valid" "Rejected" "Match rate" "Error")) }}
+        <tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}</div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Tools ============ -->
     <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Interactive simulator") }}
@@ -294,7 +322,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
@@ -310,7 +338,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -644,6 +672,84 @@ function loadControlCenter() {
 }
 
 showSection(location.hash.slice(1) || 'moderation');
+
+// ---- Profile lookup (profile store transparency) ----
+async function loadProfile(ev) {
+  if (ev) ev.preventDefault();
+  const id = document.getElementById('profId').value.trim();
+  const box = document.getElementById('profileResult');
+  if (!id) { box.innerHTML = '<p class="text-gray-400">Enter an identifier above.</p>'; return; }
+  box.innerHTML = '<p class="text-gray-400">loading…</p>';
+  try {
+    const p = await fetchJSON('/v1/api/profiles/' + encodeURIComponent(id));
+    const chips = (arr) => (arr || []).map(x => `<span class="inline-block m-0.5 px-1.5 py-0.5 rounded bg-surface-3 font-mono text-xs">${esc(x)}</span>`).join('') || '<span class="text-gray-400">none</span>';
+    const memb = (p.memberships || []).map(m => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-1.5">${esc(m.name)}</td>
+        <td class="px-3 py-1.5 font-mono text-xs">${esc(m.member_id)}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(m.visibility)}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(m.source)}</td>
+        <td class="px-3 py-1.5 font-mono text-xs">${esc(m.account_id)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="px-3 py-3 text-center text-gray-400">no memberships</td></tr>';
+    const lake = p.lake || {};
+    const behaviour = Object.entries(lake.behaviour_counts || {}).map(([k, n]) => `${esc(k)}: <b>${n}</b>`).join(' · ') || 'none';
+    const signals = (lake.profile_signals || []).slice(0, 20).map(sg => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-1.5 text-xs">${esc(sg.segment_name || '')}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(sg.source || '')}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(sg.access || '')}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(sg.provider || '')}</td>
+        <td class="px-3 py-1.5 text-xs">${sg.consent ? 'yes' : 'no'}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="px-3 py-3 text-center text-gray-400">no onboarding signals</td></tr>';
+    box.innerHTML = `
+      <div><span class="text-gray-500">Person:</span> <span class="font-mono">${esc(p.person_id || '(singleton — no cluster)')}</span></div>
+      <div><span class="text-gray-500">Cluster members:</span> ${chips(p.cluster_members)}</div>
+      <div><span class="text-gray-500">Direct identity links:</span> ${chips(p.identity_links)}</div>
+      <div><span class="text-gray-500">Behaviour (lake):</span> ${behaviour} ${p.lake_error ? `<span class="text-error">(${esc(p.lake_error)})</span>` : ''}</div>
+      <div class="font-medium mt-2">Segment memberships (across the cluster)</div>
+      <table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+        <th class="px-3 py-1">Segment</th><th class="px-3 py-1">Member id</th><th class="px-3 py-1">Visibility</th><th class="px-3 py-1">Source</th><th class="px-3 py-1">Account</th>
+      </tr></thead><tbody>${memb}</tbody></table>
+      <div class="font-medium mt-2">Onboarding signals (lake, latest 20)</div>
+      <table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+        <th class="px-3 py-1">Segment</th><th class="px-3 py-1">Source</th><th class="px-3 py-1">Access</th><th class="px-3 py-1">Provider</th><th class="px-3 py-1">Consent</th>
+      </tr></thead><tbody>${signals}</tbody></table>`;
+  } catch (err) {
+    box.innerHTML = `<p class="text-error">lookup failed — ${esc(err.message)}</p>`;
+  }
+}
+
+// ---- Onboarding monitor ----
+const fmtPct = (r) => r == null ? '—' : `${(r * 100).toFixed(0)}%`;
+async function loadOnboarding() {
+  try {
+    const data = await fetchJSON('/v1/api/onboarding/runs');
+    const pb = document.querySelector('#onbProviders tbody');
+    pb.innerHTML = (data.providers || []).map(p => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.provider)}</td>
+        <td class="px-3 py-2">${p.files}</td>
+        <td class="px-3 py-2 ${p.failed ? 'text-error font-medium' : ''}">${p.failed}</td>
+        <td class="px-3 py-2">${p.valid_rows}</td>
+        <td class="px-3 py-2 ${p.rejected_rows ? 'text-warning' : ''}">${p.rejected_rows}</td>
+        <td class="px-3 py-2 font-mono text-xs">${fmtPct(p.avg_match_rate)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${new Date(p.last_run_at).toLocaleString()}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">no drop-zone activity yet</td></tr>';
+    const rb = document.querySelector('#onbRuns tbody');
+    rb.innerHTML = (data.runs || []).map(r => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 text-xs text-gray-500">${new Date(r.finished_at).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(r.provider)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(r.file_key)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${r.status === 'completed' ? 'bg-success/15 text-success' : 'bg-error/15 text-error'}">${esc(r.status)}</span></td>
+        <td class="px-3 py-2">${r.valid_rows}</td>
+        <td class="px-3 py-2 ${r.rejected_rows ? 'text-warning' : ''}">${r.rejected_rows}</td>
+        <td class="px-3 py-2 font-mono text-xs">${fmtPct(r.match_rate)}</td>
+        <td class="px-3 py-2 text-xs text-error">${esc(r.error || '')}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">no runs yet</td></tr>';
+  } catch (err) { toast('Onboarding monitor failed: ' + err.message, 'error'); }
+}
+
 </script>
 </body>
 </html>

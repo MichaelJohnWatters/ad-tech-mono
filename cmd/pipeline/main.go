@@ -48,6 +48,7 @@ func main() {
 	// the pipeline is the lake's single writer. See privacy.go.
 	if sink != nil {
 		registerPrivacyEndpoints(mux, sink)
+		registerProfileEndpoint(mux, sink)
 	}
 
 	// Cold-archive verification: report the Parquet snapshot (active files +

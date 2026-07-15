@@ -108,3 +108,55 @@ func mustJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// lakeProfileSummary is the lake half of the staff profile view: which
+// onboarding signals mention the id, and how much behaviour it has.
+type lakeProfileSummary struct {
+	ProfileSignals  []datalake.Record `json:"profile_signals"`  // capped
+	BehaviourCounts map[string]int    `json:"behaviour_counts"` // kind → rows
+}
+
+// registerProfileEndpoint mounts GET /v1/datalake/profile?user_id= — the
+// gateway's staff profile API calls this for the lake-side summary (the
+// gateway can't read Delta itself; the lake reader lives here).
+func registerProfileEndpoint(mux *http.ServeMux, sink *datalakeSink) {
+	const maxSignalRows = 100
+	mux.HandleFunc("GET "+routes.DatalakeProfile, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		userID := r.URL.Query().Get("user_id")
+		if userID == "" {
+			http.Error(w, `{"error":"user_id is required"}`, http.StatusBadRequest)
+			return
+		}
+		ctx := r.Context()
+		out := lakeProfileSummary{ProfileSignals: []datalake.Record{}, BehaviourCounts: map[string]int{}}
+
+		sink.flushTable(ctx, profileSignalsTable)
+		sigs, err := sink.lake.Read(ctx, profileSignalsTable, datalake.Filter{Columns: map[string]interface{}{"id_value": userID}})
+		if err != nil {
+			http.Error(w, `{"error":`+mustJSON(err.Error())+`}`, http.StatusInternalServerError)
+			return
+		}
+		for _, rec := range sigs {
+			if len(out.ProfileSignals) >= maxSignalRows {
+				break
+			}
+			out.ProfileSignals = append(out.ProfileSignals, rec)
+		}
+
+		sink.flushTable(ctx, behaviourSignalsTable)
+		match := lakeUserTables(userID)[behaviourSignalsTable]
+		rows, err := sink.lake.Read(ctx, behaviourSignalsTable, datalake.Filter{})
+		if err != nil {
+			http.Error(w, `{"error":`+mustJSON(err.Error())+`}`, http.StatusInternalServerError)
+			return
+		}
+		for _, rec := range rows {
+			if match(rec) {
+				kind, _ := rec["kind"].(string)
+				out.BehaviourCounts[kind]++
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}

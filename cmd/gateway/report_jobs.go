@@ -42,6 +42,9 @@ type reportJobStore interface {
 	// OwnerEmail resolves the delivery recipient (account owner, same rule as
 	// the scheduler). "" when the account has no active members.
 	OwnerEmail(ctx context.Context, accountID string) (string, error)
+	// SegmentOwned reports whether the segment belongs to the account — the
+	// tenancy check for segment-export jobs.
+	SegmentOwned(ctx context.Context, accountID, segmentID string) (bool, error)
 }
 
 // effectiveReportAccount resolves which account a report-jobs request acts
@@ -180,13 +183,29 @@ func buildJob(ctx context.Context, store reportJobStore, scope reportjobs.ScopeL
 		}
 	}
 
-	filters, err := reportjobs.ResolveTenantFilters(ctx, scope, accountID, params.Filters)
-	if err != nil {
-		// Scope failures are the caller's to fix (e.g. multi-publisher account
-		// with no publisher_id filter) — surface the reason.
-		return nil, err.Error(), nil
+	if params.Table == reportjobs.TableSegmentMembers {
+		// Segment export: ownership IS the tenancy check (the worker's query
+		// re-filters by account) — the analytics scope rules don't apply.
+		segID := strings.TrimSpace(params.Filters["segment_id"])
+		if segID == "" {
+			return nil, "segment_members export requires filters.segment_id", nil
+		}
+		owned, err := store.SegmentOwned(ctx, accountID, segID)
+		if err != nil {
+			return nil, "", err
+		}
+		if !owned {
+			return nil, "segment not found", nil
+		}
+	} else {
+		filters, err := reportjobs.ResolveTenantFilters(ctx, scope, accountID, params.Filters)
+		if err != nil {
+			// Scope failures are the caller's to fix (e.g. multi-publisher account
+			// with no publisher_id filter) — surface the reason.
+			return nil, err.Error(), nil
+		}
+		params.Filters = filters
 	}
-	params.Filters = filters
 
 	delivery := in.Delivery
 	if delivery == "" {
@@ -197,6 +216,7 @@ func buildJob(ctx context.Context, store reportJobStore, scope reportjobs.ScopeL
 	}
 	recipient := ""
 	if delivery == reportjobs.DeliveryEmail {
+		var err error
 		recipient, err = store.OwnerEmail(ctx, accountID)
 		if err != nil {
 			return nil, "", err
@@ -344,6 +364,18 @@ func (s pgReportJobStore) SavedReportForJob(ctx context.Context, accountID, id s
 		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID).
 		Scan(&name, &config, &format)
 	return name, config, format, err
+}
+
+// SegmentOwned is the segment-export tenancy check.
+func (s pgReportJobStore) SegmentOwned(ctx context.Context, accountID, segmentID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM audience_segments WHERE id = $1::uuid AND account_id = $2::uuid`,
+		segmentID, accountID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // OwnerEmail mirrors the scheduler's recipient rule (pkg/reportrunner store):

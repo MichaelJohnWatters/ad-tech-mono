@@ -99,6 +99,9 @@ func main() {
 		QueryTimeout: keys.ReportRunner.QueryTimeout.Get(cfg),
 		Now:          time.Now,
 		Log:          log,
+		// Segment exports (profile store): rows come straight from the
+		// memberships table rather than the reporting query API.
+		SegmentMembers: reportjobs.PGSegmentMembers(db),
 	}
 
 	// Scheduler: due saved reports become schedule-sourced jobs. Tenant scope is

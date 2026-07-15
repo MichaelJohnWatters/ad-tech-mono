@@ -82,3 +82,4 @@ dev/tls/
 # Third-party checkouts for local reference demos (e.g. scripts/asciline-demo.sh).
 # Never vendored — cloned on demand, per-developer.
 third_party/
+report-runner

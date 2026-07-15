@@ -135,10 +135,10 @@ pg_graph -> serve.dsp: read-time BFS freshness top-up (opt-in) {style.stroke-das
 # ============================================================
 # OUTPUT 2 - exports & transparency
 # ============================================================
-exports: Segment exports 🚧 - Parquet/CSV to Minio {shape: page}
-profileapi: "Profile API 🚧 - GET /v1/api/profiles/<id> (staff)"
+exports: Segment exports - CSV/Parquet artifacts via report jobs {shape: page}
+profileapi: "Profile API - GET /v1/api/profiles/<id> (staff, support:read)"
 
-pg_members -> exports: 🚧
+pg_members -> exports
 lake.clusters -> profileapi {style.stroke-dash: 2}
 pg_members -> profileapi {style.stroke-dash: 2}
 
