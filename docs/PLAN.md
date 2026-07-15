@@ -15206,26 +15206,30 @@ Open the Tilt dashboard in your browser - all services are visible with logs and
 79. Audit log dashboard
 80. Stress + burst simulation profiles
 
-### ⬜ Phase 9: Video, Audio, and Extended Channels (each with simulator template)  — not started
-81. OpenRTB `video` and `audio` objects in bid requests
-82. VAST 4.2 XML generation + DAAST for audio
-83. VMAP with pre-roll/mid-roll/post-roll scheduling
-84. Ad pod auction logic (`pkg/auction/pods.go`)
-85. Video transcoder service (`cmd/transcoder/`)
-86. **+ Publisher Simulator:** `video_page` template (HLS.js + VAST, quartile debug)
-87. SSAI manifest manipulator (`cmd/ssai/`) - HLS/DASH rewriting, session manager, server-side beacons
-88. SSAI production - CDN, failover/slate, bumpers, ABR, DVR/time-shift
-89. **+ Publisher Simulator:** `live_stream` template (SSAI stitched, session debug)
-90. CTV bid request handling + household targeting
-91. **+ Publisher Simulator:** `ctv_player` template (full-screen, household signals)
-92. Audio: podcast dynamic insertion, streaming radio SSAI
-93. **+ Publisher Simulator:** `podcast` template (DAAST + waveform) + `radio_stream` template
-94. DOOH: screen management, proof-of-play, time-slot auctions, audience estimation
-95. **+ Publisher Simulator:** `billboard` template (rotation, weather, venue controls)
-96. Retail media: product catalog sync, relevance-weighted auctions, keyword bidding
-97. **+ Publisher Simulator:** `retail_search` template (sponsored products, relevance scores)
-98. In-game: rewarded ad verification, intrinsic billboard viewability, batch auctions
-99. **+ Publisher Simulator:** `game_scene` template (billboards + rewarded prompt)
+### 🟨 Phase 9: Video, Audio, and Extended Channels (each with simulator template)  — core DONE via the simulator/SSAI epic (merged 06e5734); extended channels not started
+Status audited 2026-07-15 against main — the video/audio CORE (81–88) shipped
+with the production-like-simulator epic; the pub-sim has display/video/native/
+audio/ssai tabs. Remaining: channel-specific simulator templates, household
+targeting, and the three stubbed extended channels.
+81. ✅ OpenRTB `video` and `audio` objects in bid requests (pkg/openrtb; SSP builds, DSP evaluates, incl. pod fields)
+82. ✅ VAST 4.2 XML generation + DAAST for audio (pkg/vast; publisher-adserver vast.go/audio.go)
+83. ✅ VMAP with pre-roll/mid-roll/post-roll scheduling (pkg/vmap; /v1/pubad/video/vmap)
+84. ✅ Ad pod auction logic (`pkg/auction/pods.go` — variable + fixed-slot, competitive separation, ShortFill)
+85. ✅ Video transcoder service (`cmd/transcoder/` — real ffmpeg, ABR ladders, S3 cache; integration tests thin)
+86. 🟨 **+ Publisher Simulator:** `video_page` — covered by the generic Video tab (VAST/VMAP/pod); quartile-debug polish open
+87. ✅ SSAI manifest manipulator (`cmd/ssai/` — HLS AND DASH, session manager, server-side beacons, multi-rung ABR)
+88. 🟨 SSAI production - slate ✅, ABR ✅; CDN failover / bumpers / DVR-time-shift NOT built
+89. ⬜ **+ Publisher Simulator:** `live_stream` template (SSAI stitched, session debug) — sim is VOD-only today
+90. 🟨 CTV bid request handling ✅ (device=ctv, pod context end-to-end) + household targeting ⬜ (no household_id anywhere)
+91. ⬜ **+ Publisher Simulator:** `ctv_player` template (full-screen, household signals)
+92. 🟨 Audio: podcast insertion ✅ (Feed=2, SSAI audio); streaming-radio distinction ⬜ (Feed=3 treated as podcast)
+93. ⬜ **+ Publisher Simulator:** `podcast` template (DAAST + waveform) + `radio_stream` template
+94. ⬜ DOOH: screen management, proof-of-play, time-slot auctions, audience estimation (TimeSlotStrategy is a stub)
+95. ⬜ **+ Publisher Simulator:** `billboard` template (rotation, weather, venue controls)
+96. ⬜ Retail media: product catalog sync, relevance-weighted auctions, keyword bidding (RelevanceWeightedStrategy is a stub)
+97. ⬜ **+ Publisher Simulator:** `retail_search` template (sponsored products, relevance scores)
+98. ⬜ In-game: rewarded ad verification, intrinsic billboard viewability, batch auctions (BatchStrategy is a stub)
+99. ⬜ **+ Publisher Simulator:** `game_scene` template (billboards + rewarded prompt)
 
 ### ⬜ Phase 10: Clean Rooms and Data Marketplace  — not started
 100. Clean room computation engine (`pkg/cleanroom/`)
