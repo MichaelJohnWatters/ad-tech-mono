@@ -2517,39 +2517,117 @@ build-order step 2.** This option is for clusters only — edges need upserts,
 memberships need interactive writes + point lookups at scale + instant
 deletes; those stay PG/Redis either way.
 
-#### Build order
+#### Implementation plan (grounded in code, investigated 2026-07-15)
 
-1. **Data onboarding flows + `profile_signals` Delta table.** Two flavours,
-   sharing one normalizer (`pkg/pipeline`: detect → validate → normalize →
-   append to lake), differing in trust and access:
-   - **First-party** (the account owns the data): portal file-upload +
-     gateway API for advertiser CRM lists (hashed client-side, per privacy
-     rules) and publisher declared attributes; retargeting via the existing
-     adtech.js tag on advertiser sites. Rows carry `access=owner:{account}`.
-     Onboarding UX must report back the **match rate** (how many uploaded
-     hashes resolved to platform ids via the identity graph) — that number is
-     the product.
-   - **Third-party** (external data partners): per-provider **bucket
-     drop-zone** on Minio (`onboarding/{provider}/...`), watched by the
-     pipeline; manifest + schema contract per provider (which id types they
-     deliver, consent basis, licence); rows carry provenance + marketplace
-     access (`purchased:`/`barter:` per the Unified Audience Store ACLs).
-   - Both land in `profile_signals` with the normalized schema (id_type,
-     id_value, source, access, attributes, consent, observed_at) — the lake
-     copy is what makes memberships recomputable later.
-2. **`cmd/profile-builder`** (or a job inside `cmd/pipeline`): connected-components
-   over `identity_graph` → `identity_clusters` Delta table + slim PG serving copy.
-   Scheduled like rollups. Respect min-confidence + household grouping.
-3. **Behavioural membership rules** over lake events, enrolled at person level,
-   expanded to all cluster ids on write to `audience_segment_members`. This also
-   closes the "Membership write pipeline" wishlist row above.
-4. **SSP person-level stamping** — resolve to person_id (PG clusters table)
-   before `SegmentsForUser`; closes the "Identity graph integration" wishlist row.
-5. **Exports** — per-account Parquet segment export to Minio.
-6. **Profile API** — `GET /v1/api/profiles/{id}` (staff/debug).
+**Machinery that already exists (verified seams — reuse, don't rebuild):**
 
-Update `docs/diagrams/` (identity/data-flow diagram) in the same PR as step 2 —
-that's the step that changes how services connect.
+| Piece | Where | State |
+|---|---|---|
+| Delta lake writer (Parquet + Delta commit, Snapshot, Compact; single-writer) | `pkg/store/datalake/objstore.go:93-367` | ✅ production-grade; no partitioning yet |
+| Always-on lake ingest: NATS → buffered batches → Delta tables in `adtech-datalake` (ack-after-flush, 500 rows / 15s) | `cmd/pipeline/datalake_sink.go` (7 event tables) | ✅ — `profile_signals` is "one more table schema + a new source", not new machinery |
+| Audience upload API (JWT-bound account, UpsertSegment + idempotent AddMembers + `adtech.cache.invalidate.audience`) | `cmd/gateway/audiences.go:47-147` | ✅ JSON body only — no file upload, no lake copy, no match rate |
+| Serving loaders: Redis read-through (`audience:user:{id}:{visibility}`) + interval bulk-preloader (negative caching, TTL 3×interval) | `pkg/audience/store/cached`, `pkg/audience/store/preload` | ✅ SSP wires preload today — **the "load into auctions" story mostly exists** |
+| DSP read-time graph expansion (in-mem preload, BFS depth/conf caps, 25ms budget) | `cmd/dsp/identity.go` | ✅ behind `dsp.identity_resolution_enabled` |
+| Batch-job patterns to copy | CronJob `cmd/dayboundary`; replace-by-window rollups `cmd/reporting/rollup.go`; SKIP-LOCKED queue `pkg/reportjobs` | ✅ pick per job |
+| GDPR purge + verify (identity_graph, audience_segment_members) | `pkg/privacydelete` | ✅ — new stores must register in its Systems |
+
+**Two discoveries this plan must fix:**
+
+1. **Analytics events carry no user key and no page context — behavioural
+   segmentation cannot be computed from today's lake.** impressions / clicks /
+   conversions / views have NO `user_id` and NO category/page URL (only
+   `placement_id`) — deliberate, it's why privacy-delete never touches
+   analytics. Do NOT add identity to the money tables; Phase 2 adds a
+   dedicated consent-gated `behaviour_signals` table instead.
+2. **Audience bid modifiers are dead code.** The DSP builds `ModifierContext`
+   without `Segments` (`cmd/dsp/main.go` ~977), so `Modifiers.Audience` never
+   applies to any bid. Fix folded into Phase 4.
+
+**Phase 1 — Onboarding (first-party + third-party) → `profile_signals`**
+
+- **Portal UI (advertiser + publisher):** an Audiences page — segment list
+  (`ListSegments` exists), **CSV file upload for small files** (≤ ~5 MB,
+  multipart → gateway; hash PII client-side before transmission per privacy
+  rules), visibility picker (public / dsp_private), member counts, and the
+  **match rate** per upload (fraction of uploaded ids resolvable via
+  `identity_graph` — that number is the onboarding product). Larger files go
+  via the drop-zone, and the UI says so.
+- **Gateway:** extend `/v1/api/audiences` with a multipart CSV variant
+  (JWT-bound account as today); compute + persist match rate on the segment.
+- **Third-party drop-zone:** new `adtech-onboarding` bucket,
+  `{provider}/incoming/` prefix, per-provider manifest + schema contract (id
+  types delivered, consent basis, licence, access = `purchased:`/`barter:`).
+  `cmd/pipeline` gains a bucket **poller** (List on interval — Minio S3-event
+  support isn't assumed) reusing `pkg/pipeline` CSV validate/normalize;
+  rejected rows persist to `{provider}/rejected/` (today's quarantine is
+  in-memory only — fix that here).
+- **Both paths:** append normalized rows to the **`profile_signals`** Delta
+  table (id_type, id_value, source, access, account_id, provider, attributes,
+  consent, observed_at) AND write PG memberships as today. The lake copy is
+  what makes memberships recomputable.
+
+**Phase 2 — Behavioural signal capture (`behaviour_signals` lake table)**
+
+- New NATS subject (e.g. `adtech.behaviour.observed`), published **only when
+  consent permits personalisation** (`pkg/privacy` decision): SSP emits
+  request-level rows (user key, household, placement, publisher, channel,
+  **content category stamped at event time** from its placement warm cache —
+  rows must be self-contained); tracker emits interaction rows (impression /
+  click / conversion / view with campaign + creative).
+- `cmd/pipeline` sinks it to `behaviour_signals` exactly like the 7 existing
+  tables.
+- **GDPR:** these lake rows carry user keys, so build the lake purge —
+  filtered file rewrite (reuse the Compact machinery) — and register both
+  lake tables in `pkg/privacydelete` Systems + Residual. Close the
+  `freq_cap_blocks` purge gap (it has user_id and isn't purged today) in the
+  same change.
+
+**Phase 3 — `cmd/profile-builder` (the expansion engine)**
+
+- New one-shot binary on a k8s CronJob (dayboundary pattern), hourly to start.
+  Three jobs per run, replace-by-window idempotency like rollups:
+  1. **Clustering:** `LoadIdentityGraph` (exists, interned adjacency) →
+     union-find connected components (min-confidence, hop cap; households as a
+     sub-grouping) → `identity_clusters` Delta artifact + slim PG serving copy.
+  2. **Behavioural rules:** rule definition lives on the segment row (add
+     `rule JSONB` to `audience_segments`); evaluate via DuckDB over
+     `behaviour_signals` (fallback join: events → placements → categories);
+     enroll at person level → **expand to every member id in the cluster** →
+     `AddMembers`, prune members that no longer qualify (replace-by-segment
+     semantics), publish `adtech.cache.invalidate.audience`.
+  3. **Reconcile:** replay `profile_signals` rows not yet reflected in PG
+     memberships (crash/replay safety).
+- Composite + lookalike rules: later, same seam.
+
+**Phase 4 — Serving: "loading it into the auctions" (last mile only)**
+
+- Because memberships are **pre-expanded at write time**, the bid path needs
+  no graph walk: the existing preloader/Redis read-through already delivers
+  them to SSP stamping and DSP private union unchanged. Keep DSP read-time
+  BFS as the freshness top-up for edges observed since the last batch.
+- **Fix the dead audience modifiers** (populate `modCtx.Segments` in the DSP
+  bid handler) so segment bid modifiers actually price bids.
+- `identity_clusters` serving copy (PG warm cache vs pod-direct Delta
+  snapshot — open option above) is needed only for the profile API and
+  optional SSP person-level stamping, not the hot path. Decide here.
+
+**Phase 5 — Payoff valves**
+
+- **Exports:** per-account segment export as Parquet/CSV to Minio (reuse the
+  `reportjobs` queue + artifact pattern).
+- **Profile API:** `GET /v1/api/profiles/{id}` (staff-scoped) — cluster
+  members, signal summary, memberships with provenance; portal page in the
+  trace-explorer style.
+- **Staff onboarding monitor:** drop-zone job status, rejected-row counts,
+  per-provider match rates.
+
+**E2E gates:** upload → match rate reported → segments targetable in auction;
+drop-zone file → memberships → auction; behavioural rule flips a targeting
+decision; level-3 deletion purges PG + both lake tables (verifier green);
+audience bid modifier changes a winning price.
+
+Update `docs/diagrams/` (identity/data-flow D2) in the Phase 3 PR — that's
+where service connections change (new binary, new bucket, new subject).
 
 ---
 
