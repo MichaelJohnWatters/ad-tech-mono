@@ -337,6 +337,7 @@ func main() {
 		profilesHandler(gwDB, profileResolver, keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIOnboardingRuns, authMiddleware(http.HandlerFunc(onboardingMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
+	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
 
 	// Privacy opt-out intake — operator-API-key auth like the others. Records

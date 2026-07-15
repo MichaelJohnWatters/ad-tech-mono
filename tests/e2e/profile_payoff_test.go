@@ -115,6 +115,11 @@ VALUES ($1, $2, $3::uuid, 'completed', 10, 9, 1, 5, 0.55, now())`,
 		t.Errorf("monitor rollup missing provider %s", provider)
 	}
 
+	// Lake-state view (Batch runs page): staff sees per-table snapshot.
+	if code := h.APIStatus(t, staff, http.MethodGet, "/v1/api/batch/lake", ""); code != http.StatusOK {
+		t.Errorf("staff lake snapshot status = %d, want 200", code)
+	}
+
 	// Both surfaces are staff-only: an advertiser session gets 403.
 	advEmail := fmt.Sprintf("papi-adv-%d@login.test", uniq)
 	h.CreateLoginUser(t, w.AdvAcc.ID, advEmail, "pw-e2e-1", "owner")
@@ -124,5 +129,8 @@ VALUES ($1, $2, $3::uuid, 'completed', 10, 9, 1, 5, 0.55, now())`,
 	}
 	if code := h.APIStatus(t, adv, http.MethodGet, "/v1/api/onboarding/runs", ""); code != http.StatusForbidden {
 		t.Errorf("advertiser onboarding monitor status = %d, want 403", code)
+	}
+	if code := h.APIStatus(t, adv, http.MethodGet, "/v1/api/batch/lake", ""); code != http.StatusForbidden {
+		t.Errorf("advertiser lake snapshot status = %d, want 403", code)
 	}
 }

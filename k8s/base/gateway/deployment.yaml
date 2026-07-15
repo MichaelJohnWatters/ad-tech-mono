@@ -40,6 +40,9 @@ spec:
             - { name: GATEWAY_EXCHANGE_URL, value: "http://exchange:8081" }
             - { name: GATEWAY_TRACKER_URL, value: "http://tracker:8083" }
             - { name: GATEWAY_REPORTING_URL, value: "http://reporting:8086" }
+            # Pipeline hosts the lake profile summary + snapshot the staff
+            # profile API / Batch-runs lake view proxy.
+            - { name: GATEWAY_PIPELINE_URL, value: "http://pipeline:8087" }
             - { name: GATEWAY_ADSERVER_URL, value: "http://adserver:8085" }
             - { name: GATEWAY_PUBLISHER_ADSERVER_URL, value: "http://publisher-adserver:8088" }
             - { name: GATEWAY_SSAI_URL, value: "http://ssai:8093" }
