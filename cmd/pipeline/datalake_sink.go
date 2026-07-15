@@ -165,6 +165,32 @@ var eventTables = map[string]struct {
 	}}},
 }
 
+// profileSignalsTable is the normalized onboarding-signal table — the
+// append-only record of "id X was declared a member of segment S by account A
+// via source Z". Unlike the event tables above, its NATS messages are BATCHES
+// (one ProfileSignalEvent per upload chunk), expanded here into one row per
+// id, so it gets a dedicated handler rather than the generic 1-msg-1-row one.
+// The drop-zone poller (onboarding.go) writes the same rows directly via
+// record() — same table, same schema, no NATS hop.
+const profileSignalsTable = "profile_signals"
+
+var profileSignalsSchema = datalake.Schema{Version: 1, Columns: []datalake.Column{
+	str("trace_id"), str("id_type"), str("id_value"), str("source"), str("access"),
+	str("account_id"), str("provider"), str("segment_id"), str("segment_name"),
+	str("visibility"), boolC("consent"), ts("observed_at"),
+}}
+
+// profileSignalRecord builds one profile_signals lake row. Shared by the NATS
+// batch expander and the drop-zone poller so both write the same shape.
+func profileSignalRecord(ev events.ProfileSignalEvent, id events.ProfileSignalID) datalake.Record {
+	return datalake.Record{
+		"trace_id": ev.TraceID, "id_type": id.IDType, "id_value": id.IDValue,
+		"source": ev.Source, "access": ev.Access, "account_id": ev.AccountID,
+		"provider": ev.Provider, "segment_id": ev.SegmentID, "segment_name": ev.SegmentName,
+		"visibility": ev.Visibility, "consent": ev.Consent, "observed_at": ev.ObservedAt,
+	}
+}
+
 // bufferedEvent is a decoded record awaiting flush, paired with its NATS
 // ack/nak. The ack is deferred until the record is DURABLY written (ack-after-
 // flush): on a successful flush we ack, on a failed flush we nak so JetStream
@@ -202,6 +228,7 @@ func newDatalakeSink(lake datalake.Store, batchSize int, log *slog.Logger) *data
 	for _, t := range eventTables {
 		s.schemas[t.table] = t.schema
 	}
+	s.schemas[profileSignalsTable] = profileSignalsSchema
 	return s
 }
 
@@ -215,7 +242,39 @@ func (s *datalakeSink) Subscribe(bus events.EventBus) error {
 		}
 		s.log.Info("datalake sink subscribed", "subject", subject, "table", t.table)
 	}
+	if err := bus.Subscribe(context.Background(), events.SubjectProfileSignal, constants.ServicePipeline, s.profileSignalHandler()); err != nil {
+		return err
+	}
+	s.log.Info("datalake sink subscribed", "subject", events.SubjectProfileSignal, "table", profileSignalsTable)
 	return nil
+}
+
+// profileSignalHandler expands a ProfileSignalEvent batch into one lake row
+// per id. The message's ack/nak rides on the LAST row of the batch: the ack
+// only fires once that row's flush durably lands, and a failed flush naks the
+// whole message for redelivery. A batch split across two flushes where the
+// first succeeds and the second fails therefore redelivers the entire batch —
+// duplicate appended rows, never lost ones (memberships are idempotent and
+// the profile-builder reconcile pass dedupes on read).
+func (s *datalakeSink) profileSignalHandler() events.Handler {
+	return func(_ context.Context, msg *events.Message) error {
+		var ev events.ProfileSignalEvent
+		if err := json.Unmarshal(msg.Data, &ev); err != nil {
+			s.log.Error("datalake sink: profile signal decode failed", "error", err)
+			return msg.Ack() // bad data — don't redeliver forever
+		}
+		if len(ev.IDs) == 0 {
+			return msg.Ack()
+		}
+		for i, id := range ev.IDs {
+			be := bufferedEvent{rec: profileSignalRecord(ev, id)}
+			if i == len(ev.IDs)-1 {
+				be.ack, be.nak = msg.Ack, msg.Nak
+			}
+			s.bufferEvent(profileSignalsTable, be)
+		}
+		return nil
+	}
 }
 
 func (s *datalakeSink) handlerFor(table string) events.Handler {

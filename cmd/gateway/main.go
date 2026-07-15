@@ -311,11 +311,14 @@ func main() {
 
 	// Audience CRM-upload endpoint — same operator-API-key auth as secrets.
 	// gwDB may be nil if Postgres was unreachable at boot; the handler 503s.
+	// The identity matcher powers the per-upload match rate (nil-safe).
 	var audStore *audiencepg.Store
+	var audMatcher identityMatcher
 	if gwDB != nil {
 		audStore = audiencepg.New(gwDB)
+		audMatcher = postgres.NewFromDB(gwDB)
 	}
-	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audStore, secretsBus, log))))
+	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audStore, audMatcher, secretsBus, log))))
 
 	// Identity-graph ingestion (link UID2 / hashed-email / device ids). gwDB may
 	// be nil if Postgres was unreachable at boot; the handler 503s.

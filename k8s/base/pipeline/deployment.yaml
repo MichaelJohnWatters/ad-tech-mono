@@ -58,6 +58,10 @@ spec:
             # Flush fast so the lake is visible quickly during the test.
             - name: PIPELINE_DATALAKE_FLUSH_INTERVAL
               value: "10s"
+            # Poll the onboarding drop-zone fast enough for e2e to observe
+            # ingestion without a minute-long wait.
+            - name: PIPELINE_ONBOARDING_POLL_INTERVAL
+              value: "10s"
             - name: LOKI_URL
               value: "http://loki:3100"
             - name: OTEL_ENDPOINT

@@ -35,6 +35,11 @@ func main() {
 		sink = startDatalakeSink(cfg, log, lc)
 	}
 
+	// Third-party audience drop-zone: poll the adtech-onboarding bucket for
+	// provider CSV files, validate/normalize, write memberships +
+	// profile_signals, quarantine rejects. See onboarding.go.
+	startOnboarding(cfg, log, lc, sink)
+
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
