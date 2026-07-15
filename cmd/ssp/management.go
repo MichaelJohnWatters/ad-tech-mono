@@ -35,8 +35,12 @@ import (
 //   DELETE /v1/ssp/placements/{id}       → archive (status='archived')
 
 // openManagementDB returns a writable Postgres connection for placement mgmt.
-// Same pattern as cmd/dsp/management.openManagementDB — returns nil if
-// Postgres is unreachable; callers return 503 in the nil case.
+// Same pattern as cmd/dsp/management.openManagementDB — nil only when there's
+// no URL or sql.Open itself fails (config errors). A failed boot-time ping
+// does NOT discard the handle: database/sql pools reconnect on the next
+// query, so a pod that boots before Postgres self-heals instead of latching
+// "503 management db unavailable" until a restart (which is exactly what
+// happened after whole-VM boots).
 func openManagementDB(dbURL string, log *slog.Logger) *sql.DB {
 	if dbURL == "" {
 		log.Warn("database.url not set, ssp management endpoints disabled")
@@ -50,9 +54,9 @@ func openManagementDB(dbURL string, log *slog.Logger) *sql.DB {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		log.Warn("ssp management db ping failed", "error", err)
-		_ = db.Close()
-		return nil
+		log.Warn("ssp management db ping failed at boot; handlers will retry on demand", "error", err)
+		// Don't close — leave the handle for on-demand reconnects.
+		return db
 	}
 	log.Info("ssp management db connected")
 	return db

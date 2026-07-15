@@ -264,7 +264,7 @@ func main() {
 	// gate to the bid endpoint via service_s2s shared secrets.
 	auth := middleware.AuthAPIKey(secretsCache, log)
 	mux.Handle(routes.DSPCampaigns+"/", auth(http.HandlerFunc(campaignByIDHandler(mgmtDB, bus, accountIDs, log))))
-	mux.Handle(routes.DSPCampaigns, auth(http.HandlerFunc(campaignsCollectionHandler(campaignCache, mgmtDB, bus, dspRow.ID, dspRow.Name, budget, log))))
+	mux.Handle(routes.DSPCampaigns, auth(http.HandlerFunc(campaignsCollectionHandler(campaignCache, mgmtDB, bus, newDSPIdentityResolver(cfg, profile, dspRow, log), budget, log))))
 
 	// Cache refresh stays debug-gated — it's purely a dev/test helper for
 	// forcing a synchronous reload, not a customer-facing operation.
@@ -380,6 +380,46 @@ func loadDSPIdentity(cfg *config.Config, profileName string, log *slog.Logger) (
 	}
 	log.Info("dsp identity loaded from postgres", "name", row.Name, "id", row.ID, "type", row.ProfileType, "noise_pct", row.NoisePct, "no_bid_rate", row.NoBidRate)
 	return dspProfile, row
+}
+
+// newDSPIdentityResolver returns a func that reports this pod's dsps-row
+// identity (id, name), re-querying Postgres when the boot-time resolution
+// came back empty. Without this, a pod that booted before Postgres (or
+// before the seed) latched ID="" in the campaign-create handler forever —
+// "this dsp has no dsps row" 400s until a manual restart. Re-resolution is
+// throttled to one attempt per 10s; once an ID is found it's cached for the
+// pod's lifetime (a dsps row's ID never changes).
+func newDSPIdentityResolver(cfg *config.Config, profileName string, boot *postgres.DSPRow, log *slog.Logger) func() (string, string) {
+	var mu sync.Mutex
+	id, name := boot.ID, boot.Name
+	var lastAttempt time.Time
+	return func() (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if id != "" || time.Since(lastAttempt) < 10*time.Second {
+			return id, name
+		}
+		lastAttempt = time.Now()
+		dbURL := cfg.Get(keys.Database.URL.Key(), "")
+		if dbURL == "" {
+			return id, name
+		}
+		db, err := sql.Open("postgres", dbURL)
+		if err != nil {
+			return id, name
+		}
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		row, err := postgres.DSPByName(ctx, db, profileName)
+		if err != nil {
+			log.Warn("dsps row still unresolved; will retry on demand", "profile", profileName, "error", err)
+			return id, name
+		}
+		id, name = row.ID, row.Name
+		log.Info("dsps row resolved after boot (self-heal)", "name", name, "id", id)
+		return id, name
+	}
 }
 
 // fallbackDSPRow synthesises a DSPRow from the YAML profile when the DB

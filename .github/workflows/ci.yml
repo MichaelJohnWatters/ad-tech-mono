@@ -29,3 +29,16 @@ jobs:
           go-version-file: go.mod
       - run: go build ./...
       - run: go test ./...
+
+  # The duckdb-tagged reporting build is invisible to `go build ./...`
+  # (build-tag-gated, CGO) — it once broke silently and every reporting
+  # image rebuild failed for hours while the cluster kept serving a stale
+  # binary. Compile it on every push so a broken tag fails CI, not Tilt.
+  build-duckdb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: CGO_ENABLED=1 go build -tags duckdb ./cmd/reporting/ ./pkg/store/analytics/
