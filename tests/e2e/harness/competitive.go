@@ -134,20 +134,26 @@ func (h *Harness) RunAuctionWithSlowDSPs(t *testing.T, placementExternalID, geo,
 // Caller is responsible for refreshing caches afterwards.
 func (h *Harness) SeedStandard(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 	url := h.URLs.Gateway + routes.DevResetReseed
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		t.Fatalf("build reseed: %v", err)
+	// h.HTTP's 10s Timeout caps requests regardless of context deadline, and
+	// a full truncate+reseed takes ~6s idle — over 10s under suite load — so
+	// use a dedicated client with a longer cap. Retry transport errors like
+	// refreshOne does: the gateway port-forward flaps (EOF) under load, and
+	// the reseed is idempotent so re-POSTing is safe.
+	client := &http.Client{Timeout: 60 * time.Second}
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		resp, err = client.Post(url, "application/json", nil)
+		if err == nil {
+			break
+		}
 	}
-	// h.HTTP's 10s Timeout caps the request regardless of the context
-	// deadline, and a full truncate+reseed takes ~6s idle — over 10s under
-	// suite load. Use a client without the cap so the context governs.
-	client := &http.Client{Timeout: 0}
-	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("reseed call: %v", err)
+		t.Fatalf("reseed call after retries: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
