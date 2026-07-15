@@ -540,8 +540,16 @@ func (o *ObjectStore) readParquet(ctx context.Context, key string) ([]Record, er
 	if err != nil {
 		return nil, err
 	}
+	return ParquetRecords(ctx, raw)
+}
+
+// ParquetRecords decodes a raw Parquet file (any schema) into Records.
+// Exported for callers outside the Delta log flow — e.g. the onboarding
+// drop-zone ingesting provider-delivered Parquet audience files.
+func ParquetRecords(ctx context.Context, raw []byte) ([]Record, error) {
+	mem := memory.NewGoAllocator()
 	tbl, err := pqarrow.ReadTable(ctx, bytes.NewReader(raw),
-		parquet.NewReaderProperties(o.mem), pqarrow.ArrowReadProperties{}, o.mem)
+		parquet.NewReaderProperties(mem), pqarrow.ArrowReadProperties{}, mem)
 	if err != nil {
 		return nil, err
 	}

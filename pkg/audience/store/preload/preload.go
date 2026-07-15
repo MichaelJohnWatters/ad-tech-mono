@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +54,12 @@ type Preloader struct {
 	lastLoad atomic.Int64
 	stop     chan struct{}
 	stopped  chan struct{}
+
+	// mu serializes preload cycles (the interval loop and the debug
+	// /refresh handler can overlap); prevKeys is the key set written by the
+	// previous cycle, diffed to tombstone users whose memberships vanished.
+	mu       sync.Mutex
+	prevKeys map[string]bool
 }
 
 // Config tunes the preloader. Interval defaults to 30s, TTL to 90s
@@ -190,6 +197,8 @@ func (p *Preloader) loop() {
 // optimisation; for current local-dev volumes the per-key Set is fine
 // (a few hundred keys per cycle).
 func (p *Preloader) preloadOnce(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	start := time.Now()
 	// Single query joining members + segments so we can group by visibility
 	// in-process rather than running two queries.
@@ -224,10 +233,13 @@ JOIN audience_segments s ON s.id = m.segment_id`
 	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	written := 0
+	current := make(map[string]bool, len(grouped))
 	for userID, byVis := range grouped {
 		for visibility, segs := range byVis {
+			key := redisKey(userID, visibility)
+			current[key] = true
 			payload, _ := json.Marshal(segs)
-			if err := p.l2.Set(writeCtx, redisKey(userID, visibility), string(payload), p.ttl); err != nil {
+			if err := p.l2.Set(writeCtx, key, string(payload), p.ttl); err != nil {
 				p.log.Debug("audience preload set failed", "user", userID, "visibility", visibility, "error", err)
 				continue
 			}
@@ -235,8 +247,28 @@ JOIN audience_segments s ON s.id = m.segment_id`
 		}
 	}
 
+	// Tombstone keys that existed last cycle but have no memberships now —
+	// a pruned user (replace-by-segment, GDPR purge) must stop matching at
+	// the NEXT preload, not when the TTL runs out. Overwrite with the empty
+	// array (the standard negative-cache value) rather than deleting, so the
+	// read path still short-circuits without Postgres. Restart caveat: a
+	// fresh process has no previous key set, so keys pruned across a restart
+	// fall back to the TTL ceiling.
+	tombstoned := 0
+	for key := range p.prevKeys {
+		if current[key] {
+			continue
+		}
+		if err := p.l2.Set(writeCtx, key, "[]", p.ttl); err != nil {
+			p.log.Debug("audience preload tombstone failed", "key", key, "error", err)
+			continue
+		}
+		tombstoned++
+	}
+	p.prevKeys = current
+
 	p.lastLoad.Store(time.Now().UnixMilli())
-	p.log.Info("audience preload complete", "users", len(grouped), "keys_written", written, "duration_ms", time.Since(start).Milliseconds())
+	p.log.Info("audience preload complete", "users", len(grouped), "keys_written", written, "keys_tombstoned", tombstoned, "duration_ms", time.Since(start).Milliseconds())
 	return nil
 }
 

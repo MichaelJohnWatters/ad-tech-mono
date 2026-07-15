@@ -1,0 +1,367 @@
+// Package profilebuilder is the profile store's batch expansion engine —
+// the write-time half of the two-expansion-strategies design (the DSP's
+// read-time BFS is the freshness top-up). One Run executes three jobs:
+//
+//  1. CLUSTERING — union-find connected components over identity_graph
+//     (min-confidence gate, households excluded, mega-cluster guard) →
+//     identity_clusters, rebuilt wholesale in Postgres (serving copy) and
+//     as a Delta artifact in the lake (replayable record).
+//  2. SEGMENTATION — behavioural rules (audience_segments.rule JSONB)
+//     evaluated over the behaviour_signals lake table; enrollment is at
+//     PERSON level, then expanded to every id in the person's cluster;
+//     replace-by-segment prune drops users who no longer qualify. Plain
+//     (onboarded) segments get the expansion pass only — every member's
+//     cluster siblings join, nothing is pruned.
+//  3. RECONCILE — replay profile_signals lake rows into PG memberships
+//     (crash/replay safety: the lake row is the durable record; a
+//     membership lost between upload and crash is restored here).
+//
+// cmd/profile-builder wires this to a K8s CronJob (dayboundary pattern);
+// e2e runs it in-process against the live stack.
+package profilebuilder
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"time"
+
+	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
+	pgstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+)
+
+// ClustersLakeTable is the Delta artifact the builder publishes each run.
+const ClustersLakeTable = "identity_clusters"
+
+var clustersLakeSchema = datalake.Schema{Version: 1, Columns: []datalake.Column{
+	{Name: "person_id", Type: "string", Nullable: true},
+	{Name: "member_id", Type: "string", Nullable: true},
+	{Name: "computed_at", Type: "timestamp", Nullable: true},
+}}
+
+// Config wires a Run. Lake and Bus are optional (nil = skip the lake
+// artifact / the cache invalidates); DB is required.
+type Config struct {
+	DB   *sql.DB
+	Lake datalake.Store  // behaviour_signals + profile_signals reads, identity_clusters writes
+	Bus  events.EventBus // audience cache invalidates
+	Log  *slog.Logger
+
+	MinConfidence  float64 // identity edges below this don't link (default 0.5)
+	MaxClusterSize int     // clusters above this are dropped as pathological (default 100)
+	Now            time.Time
+}
+
+// Result is the per-run outcome, logged and returned for e2e assertions.
+type Result struct {
+	Clusters        int // multi-member clusters materialized
+	ClusterMembers  int
+	DroppedClusters int // over MaxClusterSize — linking pathology guard
+	RuleSegments    int
+	Enrolled        int // memberships added by rule evaluation (post-expansion)
+	Pruned          int // memberships removed by replace-by-segment
+	Expanded        int // memberships added to plain segments via cluster expansion
+	Reconciled      int // memberships restored from profile_signals replay
+}
+
+// Run executes the three jobs in order. Clustering failure aborts (jobs 2/3
+// depend on the cluster map); a per-segment failure in jobs 2/3 is logged
+// and skipped so one bad rule can't wedge the whole run (replace-by-window
+// idempotency: the next run recomputes everything anyway).
+func Run(ctx context.Context, cfg Config) (Result, error) {
+	log := cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	if cfg.MinConfidence <= 0 {
+		cfg.MinConfidence = 0.5
+	}
+	if cfg.MaxClusterSize <= 0 {
+		cfg.MaxClusterSize = 100
+	}
+	now := cfg.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var res Result
+
+	// --- Job 1: clustering ---
+	adj, err := pgstore.NewFromDB(cfg.DB).LoadIdentityGraph(ctx)
+	if err != nil {
+		return res, fmt.Errorf("load identity graph: %w", err)
+	}
+	clusters, dropped := buildClusters(adj, cfg.MinConfidence, cfg.MaxClusterSize)
+	res.Clusters = len(clusters.Members)
+	res.ClusterMembers = len(clusters.PersonOf)
+	res.DroppedClusters = dropped
+	if dropped > 0 {
+		log.Warn("profile-builder: oversized clusters dropped (linking pathology guard)",
+			"dropped", dropped, "max_cluster_size", cfg.MaxClusterSize)
+	}
+	if err := persistClustersPG(ctx, cfg.DB, clusters, now); err != nil {
+		return res, fmt.Errorf("persist clusters: %w", err)
+	}
+	if cfg.Lake != nil {
+		if err := persistClustersLake(ctx, cfg.Lake, clusters, now); err != nil {
+			// The PG serving copy is written; the lake artifact is the
+			// replayable record — fail loudly but don't abort segmentation.
+			log.Error("profile-builder: lake clusters artifact write failed", "error", err)
+		}
+	}
+
+	aud := audiencepg.New(cfg.DB)
+	changed := map[string]string{} // segment id → account id, for invalidates
+
+	// --- Job 2a: behavioural rules ---
+	// A failed lake read FAILS the run rather than silently skipping rule
+	// evaluation: skipping would leave stale members (users who no longer
+	// qualify keep being targeted) with nothing but a log line to notice.
+	// The CronJob retries; memberships are recomputed wholesale anyway.
+	if cfg.Lake != nil {
+		rows, err := cfg.Lake.Read(ctx, "behaviour_signals", datalake.Filter{})
+		if err != nil {
+			return res, fmt.Errorf("read behaviour_signals: %w", err)
+		}
+		if err := runRuleSegments(ctx, cfg.DB, aud, clusters, rows, now, log, &res, changed); err != nil {
+			return res, err
+		}
+	}
+
+	// --- Job 2b: cluster expansion for plain (onboarded) segments ---
+	if err := expandPlainSegments(ctx, cfg.DB, aud, clusters, log, &res, changed); err != nil {
+		return res, err
+	}
+
+	// --- Job 3: reconcile profile_signals → PG memberships ---
+	if cfg.Lake != nil {
+		if err := reconcileProfileSignals(ctx, cfg.Lake, aud, log, &res, changed); err != nil {
+			log.Error("profile-builder: reconcile failed", "error", err)
+		}
+	}
+
+	if cfg.Bus != nil {
+		for segID, accountID := range changed {
+			payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + accountID + `"}`)
+			if err := cfg.Bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
+				log.Warn("profile-builder: invalidate publish failed", "segment", segID, "error", err)
+			}
+		}
+	}
+
+	log.Info("profile-builder run complete",
+		"clusters", res.Clusters, "cluster_members", res.ClusterMembers, "dropped_clusters", res.DroppedClusters,
+		"rule_segments", res.RuleSegments, "enrolled", res.Enrolled, "pruned", res.Pruned,
+		"expanded", res.Expanded, "reconciled", res.Reconciled)
+	return res, nil
+}
+
+// persistClustersPG rebuilds the identity_clusters serving copy wholesale in
+// one transaction — readers never see a half-built state.
+func persistClustersPG(ctx context.Context, db *sql.DB, c Clusters, now time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `TRUNCATE identity_clusters`); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO identity_clusters (person_id, member_id, computed_at) VALUES ($1, $2, $3)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for pid, members := range c.Members {
+		for _, m := range members {
+			if _, err := stmt.ExecContext(ctx, pid, m, now); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// persistClustersLake publishes the run's cluster artifact: purge the prior
+// snapshot, append the new one. The builder is this table's ONLY writer
+// (the pipeline never touches it), so the Delta versions can't race.
+func persistClustersLake(ctx context.Context, lake datalake.Store, c Clusters, now time.Time) error {
+	if _, err := lake.PurgeRows(ctx, ClustersLakeTable, func(datalake.Record) bool { return true }); err != nil {
+		return fmt.Errorf("clear prior artifact: %w", err)
+	}
+	var recs []datalake.Record
+	for pid, members := range c.Members {
+		for _, m := range members {
+			recs = append(recs, datalake.Record{"person_id": pid, "member_id": m, "computed_at": now})
+		}
+	}
+	if len(recs) == 0 {
+		return nil
+	}
+	return lake.Write(ctx, ClustersLakeTable, recs, clustersLakeSchema)
+}
+
+// expandKeys maps enrolled user keys to the full member set: each key's
+// person expands to every id in the cluster; keys outside any cluster stay
+// as themselves.
+func expandKeys(c Clusters, keys []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, k := range keys {
+		if pid, ok := c.PersonOf[k]; ok {
+			for _, m := range c.Members[pid] {
+				add(m)
+			}
+		} else {
+			add(k)
+		}
+	}
+	return out
+}
+
+func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clusters Clusters,
+	rows []datalake.Record, now time.Time, log *slog.Logger, res *Result, changed map[string]string,
+) error {
+	segs, err := db.QueryContext(ctx,
+		`SELECT id::text, account_id::text, name, rule FROM audience_segments
+		  WHERE rule IS NOT NULL AND status = 'active'`)
+	if err != nil {
+		return fmt.Errorf("list rule segments: %w", err)
+	}
+	defer segs.Close()
+	type ruleSeg struct{ id, accountID, name, raw string }
+	var list []ruleSeg
+	for segs.Next() {
+		var s ruleSeg
+		if err := segs.Scan(&s.id, &s.accountID, &s.name, &s.raw); err != nil {
+			return fmt.Errorf("scan rule segment: %w", err)
+		}
+		list = append(list, s)
+	}
+	if err := segs.Err(); err != nil {
+		return err
+	}
+
+	for _, s := range list {
+		res.RuleSegments++
+		rule, err := ParseRule([]byte(s.raw))
+		if err != nil {
+			log.Error("profile-builder: invalid rule — segment skipped", "segment", s.id, "name", s.name, "error", err)
+			continue
+		}
+		members := expandKeys(clusters, evaluateRule(rows, rule, now))
+		added, err := aud.AddMembers(ctx, s.accountID, s.id, members)
+		if err != nil {
+			log.Error("profile-builder: enroll failed — segment skipped", "segment", s.id, "error", err)
+			continue
+		}
+		pruned, err := aud.RemoveMembersNotIn(ctx, s.accountID, s.id, members)
+		if err != nil {
+			log.Error("profile-builder: prune failed", "segment", s.id, "error", err)
+			continue
+		}
+		res.Enrolled += added
+		res.Pruned += pruned
+		if added > 0 || pruned > 0 {
+			changed[s.id] = s.accountID
+		}
+	}
+	return nil
+}
+
+// expandPlainSegments adds cluster siblings to every onboarded (rule-less)
+// segment's memberships — the write-time pre-expansion that gives SSP
+// stamping cross-device coverage without a bid-path graph walk. Additive
+// only: onboarded member rows are ground truth, never pruned here.
+func expandPlainSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clusters Clusters,
+	log *slog.Logger, res *Result, changed map[string]string,
+) error {
+	if len(clusters.PersonOf) == 0 {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `
+SELECT s.id::text, s.account_id::text, m.user_id
+FROM audience_segments s
+JOIN audience_segment_members m ON m.segment_id = s.id
+WHERE s.rule IS NULL AND s.status = 'active'`)
+	if err != nil {
+		return fmt.Errorf("list plain memberships: %w", err)
+	}
+	defer rows.Close()
+	type segKey struct{ id, accountID string }
+	members := map[segKey][]string{}
+	for rows.Next() {
+		var k segKey
+		var uid string
+		if err := rows.Scan(&k.id, &k.accountID, &uid); err != nil {
+			return fmt.Errorf("scan membership: %w", err)
+		}
+		members[k] = append(members[k], uid)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for k, uids := range members {
+		expanded := expandKeys(clusters, uids)
+		if len(expanded) == len(uids) {
+			continue // no cluster brought new ids
+		}
+		added, err := aud.AddMembers(ctx, k.accountID, k.id, expanded)
+		if err != nil {
+			log.Error("profile-builder: expansion failed", "segment", k.id, "error", err)
+			continue
+		}
+		if added > 0 {
+			res.Expanded += added
+			changed[k.id] = k.accountID
+		}
+	}
+	return nil
+}
+
+// reconcileProfileSignals replays the onboarding lake rows into PG
+// memberships. AddMembers is idempotent, so the common case is a no-op;
+// after a crash between upload and membership write (or a PG restore from
+// backup), this is what heals the gap.
+func reconcileProfileSignals(ctx context.Context, lake datalake.Store, aud *audiencepg.Store,
+	log *slog.Logger, res *Result, changed map[string]string,
+) error {
+	rows, err := lake.Read(ctx, "profile_signals", datalake.Filter{})
+	if err != nil {
+		return fmt.Errorf("read profile_signals: %w", err)
+	}
+	type segKey struct{ segID, accountID string }
+	ids := map[segKey][]string{}
+	for _, rec := range rows {
+		k := segKey{segID: str(rec["segment_id"]), accountID: str(rec["account_id"])}
+		v := str(rec["id_value"])
+		if k.segID == "" || k.accountID == "" || v == "" {
+			continue
+		}
+		ids[k] = append(ids[k], v)
+	}
+	for k, values := range ids {
+		added, err := aud.AddMembers(ctx, k.accountID, k.segID, values)
+		if err != nil {
+			// Segment may have been deleted since the signal landed — the lake
+			// keeps the record; nothing to reconcile into.
+			log.Warn("profile-builder: reconcile skipped segment", "segment", k.segID, "error", err)
+			continue
+		}
+		if added > 0 {
+			res.Reconciled += added
+			changed[k.segID] = k.accountID
+		}
+	}
+	return nil
+}

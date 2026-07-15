@@ -430,6 +430,14 @@ local_resource('day-boundary',
     cmd='go run ./cmd/dayboundary',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
+local_resource('profile-builder',
+    # Profile store expansion engine (normally an hourly CronJob — see
+    # k8s/cronjobs/profile-builder). Runs on the host against the
+    # port-forwarded postgres/minio/nats: clusters identity_graph, evaluates
+    # behavioural rules over the lake, expands + reconciles memberships.
+    cmd='PROFILE_BUILDER_DATALAKE_BUCKET=adtech-datalake-hotcold S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev go run ./cmd/profile-builder',
+    trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
+
 local_resource('adstxt-crawl',
     # ads.txt crawler (normally a daily CronJob). Runs on the host against the
     # port-forwarded postgres + nats: fetches each publisher's ads.txt into

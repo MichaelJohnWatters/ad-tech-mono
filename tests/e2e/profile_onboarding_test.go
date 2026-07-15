@@ -11,6 +11,8 @@
 package e2e
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"strings"
@@ -119,6 +121,19 @@ func TestProfileOnboardingDropZone(t *testing.T) {
 	csv := "user_id,geo\n" + users[0] + ",US\n" + users[1] + ",GB\n" + users[2] + ",US\n,US\n"
 	put(provider+"/incoming/"+segName+".csv", csv)
 
+	// Second file: gzip-compressed TSV — exercises the multi-format
+	// auto-detect (magic-byte sniff + decompress + delimiter sniff).
+	gzUsers := []string{provider + "-gz1", provider + "-gz2"}
+	gzSegName := segName + "-gz"
+	var gzBuf bytes.Buffer
+	zw := gzip.NewWriter(&gzBuf)
+	_, _ = zw.Write([]byte("user_id\tgeo\n" + gzUsers[0] + "\tUS\n" + gzUsers[1] + "\tGB\n"))
+	_ = zw.Close()
+	if err := obj.Put(ctx, bucket, provider+"/incoming/"+gzSegName+".tsv.gz",
+		bytes.NewReader(gzBuf.Bytes()), int64(gzBuf.Len()), "application/gzip"); err != nil {
+		t.Fatalf("put gz file: %v", err)
+	}
+
 	// The poller runs on an interval (10s in the local stack); wait for the
 	// segment + memberships to appear.
 	var segID string
@@ -149,11 +164,24 @@ func TestProfileOnboardingDropZone(t *testing.T) {
 	// Run recorded for the staff monitor.
 	var status string
 	var rejected int
-	if err := h.DB.QueryRow(`SELECT status, rejected_rows FROM onboarding_runs WHERE provider = $1 ORDER BY finished_at DESC LIMIT 1`,
-		provider).Scan(&status, &rejected); err != nil {
+	if err := h.DB.QueryRow(`SELECT status, rejected_rows FROM onboarding_runs WHERE provider = $1 AND file_key = $2 ORDER BY finished_at DESC LIMIT 1`,
+		provider, provider+"/incoming/"+segName+".csv").Scan(&status, &rejected); err != nil {
 		t.Errorf("onboarding_runs row missing: %v", err)
 	} else if status != "completed" || rejected != 1 {
 		t.Errorf("run status=%s rejected=%d, want completed/1", status, rejected)
+	}
+
+	// The gzipped TSV materialized its own segment (stacked extensions
+	// stripped from the name).
+	var gzSegID string
+	gzDeadline := time.Now().Add(60 * time.Second)
+	for gzSegID == "" || h.SegmentMemberCount(t, gzSegID) < len(gzUsers) {
+		_ = h.DB.QueryRow(`SELECT id::text FROM audience_segments WHERE account_id = $1::uuid AND name = $2`,
+			w.AdvAcc.ID, gzSegName).Scan(&gzSegID)
+		if time.Now().After(gzDeadline) {
+			t.Fatalf("gz drop-zone segment %q never materialised (segID=%q)", gzSegName, gzSegID)
+		}
+		time.Sleep(3 * time.Second)
 	}
 
 	// Onboarded segment is targetable in a real auction.

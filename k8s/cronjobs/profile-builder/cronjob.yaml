@@ -1,0 +1,65 @@
+# Profile-builder CronJob. Hourly: clusters identity_graph into persons
+# (union-find, min-confidence, household edges excluded), rebuilds the
+# identity_clusters serving copy (PG) + Delta artifact (lake), evaluates
+# behavioural segmentation rules over behaviour_signals, expands memberships
+# to every id in each person's cluster (replace-by-segment prune for rule
+# segments), and reconciles profile_signals into PG memberships. Idempotent —
+# every run recomputes wholesale. Pure Go (CGO_ENABLED=0), shared Dockerfile
+# with SERVICE=profile-builder.
+#
+# Not yet added to an overlay — apply directly, or wire into an overlay when
+# the cron manifests are activated as a group (same posture as dayboundary).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: profile-builder
+  labels:
+    app: profile-builder
+    component: profile-store
+spec:
+  schedule: "15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app: profile-builder
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: profile-builder
+              image: adtech-profile-builder
+              env:
+                - name: POD_NAME
+                  value: "profile-builder"
+                - name: DATABASE_URL
+                  value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+                - name: PROFILE_BUILDER_NATS_URL
+                  value: "nats://nats:4222"
+                # Same lake the pipeline writes (see k8s/base/pipeline).
+                - name: PROFILE_BUILDER_DATALAKE_BUCKET
+                  value: "adtech-datalake-hotcold"
+                - name: S3_ENDPOINT
+                  value: "minio:9000"
+                - name: S3_ACCESS_KEY
+                  value: "adtech"
+                - name: S3_SECRET_KEY
+                  value: "adtech-local-dev"
+                - name: S3_REGION
+                  value: "us-east-1"
+                - name: S3_USE_SSL
+                  value: "false"
+                - name: LOKI_URL
+                  value: "http://loki:3100"
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "1"
+                  memory: "512Mi"

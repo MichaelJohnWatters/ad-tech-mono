@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 )
 
@@ -174,6 +176,36 @@ ON CONFLICT (id) DO UPDATE SET
 		return "", fmt.Errorf("upsert segment %q: %w", name, err)
 	}
 	return segmentID, nil
+}
+
+// RemoveMembersNotIn deletes the segment's members whose user_id is NOT in
+// keep — the replace-by-segment prune for rule-derived (behavioural)
+// segments, where each profile-builder run recomputes the full member set
+// and users who no longer qualify must drop out. Returns rows removed.
+func (s *Store) RemoveMembersNotIn(ctx context.Context, accountID, segmentID string, keep []string) (int, error) {
+	if keep == nil {
+		// pq.Array(nil) encodes SQL NULL, and `NOT (user_id = ANY(NULL))` is
+		// NULL — which deletes NOTHING. A nil keep must mean "prune everyone",
+		// so force the empty array.
+		keep = []string{}
+	}
+	removed := 0
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+DELETE FROM audience_segment_members
+WHERE segment_id = $1 AND account_id = $2::uuid AND NOT (user_id = ANY($3))`
+		res, err := tx.ExecContext(ctx, q, segmentID, accountID, pq.Array(keep))
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		removed = int(n)
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune members of %s: %w", segmentID, err)
+	}
+	return removed, nil
 }
 
 // SetSegmentUploadStats persists the match rate of an upload on its segment:
