@@ -40,7 +40,10 @@ func TestConfigLiveChangePropagates(t *testing.T) {
 
 	h.SetConfigForPod(t, key, want, pod)
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, key, before.Value, pod)
+		// Restore hygiene: `before` can be empty (row not yet re-seeded) or a
+		// leftover invalid value from an aborted run — fall back to the
+		// schema default rather than failing teardown on a rejected PUT.
+		h.RestoreConfigForPod(t, key, before.Value, "1000", pod)
 	})
 
 	after := resolveConfig(t, h, key, pod)
@@ -69,8 +72,8 @@ func TestConfigPerPodOverrideApplied(t *testing.T) {
 	h.SetConfigForPod(t, key, wantA, podA)
 	h.SetConfigForPod(t, key, wantB, podB)
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, key, beforeA.Value, podA)
-		h.SetConfigForPod(t, key, beforeB.Value, podB)
+		h.RestoreConfigForPod(t, key, beforeA.Value, "1000", podA)
+		h.RestoreConfigForPod(t, key, beforeB.Value, "1000", podB)
 	})
 
 	afterA := resolveConfig(t, h, key, podA)
