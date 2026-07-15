@@ -13,7 +13,7 @@ nats: NATS JetStream {
   style.fill: "#22c55e"
   style.font-color: "#fff"
 }
-files: Publisher files (CSV / TSV / Parquet) {
+files: "Drop-zone files (csv/tsv/parquet, zip+gzip auto-detected) - adtech-onboarding/<provider>/incoming/" {
   shape: page
   style.fill: "#e2e8f0"
 }
@@ -31,15 +31,16 @@ sink: Pipeline - datalake sink :8087 {
   handler -> buffer -> ackflush
 }
 
-# secondary input path: publisher file ingestion
-ingest: File ingest {
+# secondary input path: provider drop-zone ingestion (interval poller)
+ingest: Drop-zone poller {
   style.fill: "#c4b5fd"
-  stages: validate - normalise (field map) - enrich (geo/device)
+  stages: decode (magic-byte sniff) - validate - normalise (manifest field map)
+  quarantine: "rejected rows persist to <provider>/rejected/ + onboarding_runs row"
 }
 
-nats -> sink.handler: events (impression / click / conv / view / auction)
-files -> ingest
-ingest -> lake.parts: normalised rows
+nats -> sink.handler: "events x7 + profile.signal (batched) + behaviour.observed"
+files -> ingest: poll incoming/
+ingest -> lake.parts: profile_signals rows (+ PG memberships, match rate)
 
 # ============================================================
 # The lake  (Minio / S3)  -  a REAL Delta table
@@ -71,6 +72,26 @@ compact: Compaction CronJob (:05) {
 }
 compact -> lake.parts: bin-pack small files
 compact -> lake.log: one atomic commit (add + N removes)
+
+# ============================================================
+# GDPR purge + profile summary  (pipeline = the lake's single writer)
+# ============================================================
+gdpr: "GDPR purge - POST /v1/datalake/purge (privacy-delete calls in)" {
+  style.fill: "#581c87"
+  style.font-color: "#fff"
+}
+gdpr -> lake.parts: filtered rewrite (drop user rows)
+gdpr -> lake.log: one atomic commit (add survivor file + removes)
+
+# ============================================================
+# Profile-builder  (CronJob at :15)
+# ============================================================
+builder: Profile-builder CronJob (:15) {
+  shape: hexagon
+  style.fill: "#f59e0b"
+}
+lake -> builder: read behaviour_signals + profile_signals { style.stroke-dash: 2 }
+builder -> lake.parts: identity_clusters artifact (purge + rewrite per run)
 
 # ============================================================
 # Read  ->  reporting cold path

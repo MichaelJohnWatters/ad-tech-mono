@@ -21,6 +21,11 @@ publishers: Publishers {
     style.font-color: "#000"
   }
 
+  ssp: SSP :8084 {
+    style.fill: "#60a5fa"
+    style.font-color: "#000"
+  }
+
   exchange: Exchange :8081 {
     style.fill: "#818cf8"
     style.font-color: "#fff"
@@ -107,6 +112,14 @@ subjects: Subjects {
     style.fill: "#374151"
     style.font-color: "#fff"
   }
+  profilesig: adtech.profile.signal {
+    style.fill: "#9a3412"
+    style.font-color: "#fff"
+  }
+  behaviour: adtech.behaviour.observed {
+    style.fill: "#9a3412"
+    style.font-color: "#fff"
+  }
 }
 
 # ============================================================
@@ -150,6 +163,16 @@ consumers: Consumers {
     style.font-color: "#fff"
     what: Purge user data from all systems
   }
+
+  pipeline_consumer: Pipeline :8087 {
+    style.fill: "#a78bfa"
+    style.font-color: "#000"
+    what: |md
+      Delta lake sink (own group):
+      events ×7 + profile_signals
+      + behaviour_signals
+    |
+  }
 }
 
 # ============================================================
@@ -170,6 +193,10 @@ publishers.dsp -> subjects.state: live/paused/ended
 publishers.gateway -> subjects.optout: user opt-out
 publishers.gateway -> subjects.deletion: GDPR deletion
 publishers.gateway -> subjects.cache: config changed
+publishers.gateway -> subjects.profilesig: audience upload (batched ids)
+
+publishers.ssp -> subjects.behaviour: consented request row (categories stamped)
+publishers.tracker -> subjects.behaviour: consented interaction row (uid= on beacon)
 
 # ============================================================
 # Consume arrows
@@ -188,6 +215,10 @@ subjects.state -> consumers.webhooks
 subjects.optout -> consumers.all_services
 subjects.deletion -> consumers.privacy_job
 subjects.cache -> consumers.all_services
+
+subjects.imp -> consumers.pipeline_consumer
+subjects.profilesig -> consumers.pipeline_consumer
+subjects.behaviour -> consumers.pipeline_consumer
 
 # ============================================================
 # NATS sits between publishers and subjects
