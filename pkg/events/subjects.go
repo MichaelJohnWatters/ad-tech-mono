@@ -90,6 +90,18 @@ const (
 	// probabilistic). Best-effort — dropped observations are re-seen later.
 	SubjectIdentityObserved = "adtech.identity.observed"
 
+	// SubjectBehaviourObserved (SSP + Tracker → pipeline): consent-gated
+	// behavioural signals for the profile store. The SSP publishes one
+	// request-level row per consented ad request (user/household key +
+	// placement + publisher + channel + content categories stamped at event
+	// time — rows are self-contained); the tracker publishes interaction
+	// rows (impression/click/conversion/view with campaign + creative) when
+	// the serve chain carried a consented user key. Publishers MUST check
+	// privacy.Evaluate(...).Personalise first — this subject never carries
+	// non-consented users. Landed in the behaviour_signals Delta table,
+	// which behavioural segmentation rules (cmd/profile-builder) evaluate.
+	SubjectBehaviourObserved = "adtech.behaviour.observed"
+
 	// SubjectProfileSignal (Gateway → pipeline): batches of normalized
 	// audience-onboarding signals (CRM uploads, portal CSVs). The pipeline
 	// lands them in the profile_signals Delta table — the append-only,

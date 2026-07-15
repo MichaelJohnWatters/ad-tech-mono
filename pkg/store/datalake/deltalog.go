@@ -151,6 +151,17 @@ func buildDeltaCommitCompact(add deltaAdd, removed []deltaRemove) ([]byte, error
 	return encodeDeltaActions(actions)
 }
 
+// buildDeltaCommitRemoves builds a commit that only removes files — the purge
+// case where every remaining row of a table matched the deletion predicate,
+// so there is no consolidated remainder file to add.
+func buildDeltaCommitRemoves(removed []deltaRemove) ([]byte, error) {
+	actions := make([]interface{}, 0, len(removed))
+	for _, r := range removed {
+		actions = append(actions, map[string]deltaRemove{"remove": r})
+	}
+	return encodeDeltaActions(actions)
+}
+
 // encodeDeltaActions serialises actions as newline-delimited JSON (the Delta
 // commit-file wire format).
 func encodeDeltaActions(actions []interface{}) ([]byte, error) {

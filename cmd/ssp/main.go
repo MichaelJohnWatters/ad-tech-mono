@@ -175,6 +175,17 @@ func main() {
 		}
 	}
 
+	// Behavioural signal capture: one consent-gated request row per ad
+	// request, landed in the behaviour_signals Delta table by the pipeline.
+	// See behaviour.go for the capture-time consent gate.
+	var bhPublisher *behaviourPublisher
+	if keys.SSP.BehaviourObserveEnabled.Get(cfg) {
+		bhPublisher = newBehaviourPublisher(bus, log)
+		if bhPublisher != nil {
+			log.Info("ssp behaviour observation enabled (publishing to behaviour_signals)")
+		}
+	}
+
 	debugEnabledFn := func() bool { return keys.Debug.EndpointsEnabled.Get(cfg) }
 	// Household id derivation (CTV): salted-HMAC of the client IP, config-
 	// gated. Reads the knobs per call so a live disable takes effect without
@@ -186,9 +197,9 @@ func main() {
 		}
 		return identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), ip)
 	}
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -325,7 +336,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -516,6 +527,15 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// this request. No-op when observation is disabled (nil observer).
 	idPublisher.Observe(r, userID, uid2, householdID)
 
+	// Behavioural signal: one consent-gated request row (self-contained —
+	// content categories stamped now from the placement warm cache). The
+	// user key mirrors the segment lookup precedence: user_id, else UID2.
+	userKey := userID
+	if userKey == "" {
+		userKey = uid2
+	}
+	bhPublisher.Observe(r, traceID, userKey, householdID, p, channel, geo, device)
+
 	reqLog.Info("bid request generated",
 		"placement", p.ID,
 		"publisher", p.PublisherID,
@@ -643,9 +663,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -713,9 +733,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -810,6 +830,9 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			Width:         ac.Placement.Width,
 			Height:        ac.Placement.Height,
 			UserID:        r.URL.Query().Get("user_id"),
+			// Behavioural capture key: only under personalisation consent —
+			// same gate as the SSP's own request-row capture (behaviour.go).
+			BehaviourUserID: behaviourUserKey(r),
 			// geo/device ride the same serve request the SSP received; bake
 			// them into the tracker beacons so impression analytics carry them.
 			Geo:    r.URL.Query().Get("geo"),

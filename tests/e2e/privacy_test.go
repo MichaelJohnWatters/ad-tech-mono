@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacydelete"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -78,19 +80,64 @@ func TestPrivacyDeletionPropagation(t *testing.T) {
 	h.AddIdentityEdge(t, userID, "device-"+userID, "cross_device")
 	seg := h.CreateSegment(t, w.AdvAcc, "e2e-seg-privacy-del")
 	h.AddUserToSegment(t, seg, userID)
+
+	// Lake systems: a profile signal (audience upload) + a behaviour row (a
+	// consented ad request) — both land async via NATS → pipeline flush.
+	h.UploadAudience(t, w.AdvAcc.ID, "e2e-privacy-lake-"+userID, "public", []string{userID})
+	h.RunAuctionWith(t, harness.AuctionParams{
+		Placement: w.Placement.ExternalID, Geo: "GBR", Device: "mobile", UserID: userID,
+	})
+
+	// freq_cap_blocks (ClickHouse) — the operational-signal table that
+	// carries user_id; the purge gap this phase closes.
+	ch, err := analytics.NewClickHouse(analytics.ClickHouseConfig{
+		Addrs: []string{routes.DefaultClickHouseNativeAddr}, Database: "adtech",
+		Username: "adtech", Password: "adtech-local-dev", Log: quiet,
+	})
+	if err != nil {
+		t.Fatalf("clickhouse connect (is the stack up?): %v", err)
+	}
+	ch.InsertFreqCapBlock(analytics.FreqCapBlock{
+		TraceID: "trace-" + userID, UserID: userID, CampaignID: w.Campaign.ID,
+		PlacementID: w.Placement.ID, PublisherID: w.Publisher.ID, Timestamp: time.Now().UTC(),
+	})
+
 	h.SetOptOut(t, userID, 3) // level 3 = full deletion
 
-	// Precondition: the data is actually there.
+	// Precondition: the data is actually there — including the async lake
+	// rows, which must have LANDED before the purge runs or the rewrite
+	// no-ops and the rows arrive afterwards as residuals.
 	if h.IdentityEdgeCount(t, userID) == 0 {
 		t.Fatal("precondition: expected a seeded identity edge")
 	}
 	if h.UserSegmentMembershipCount(t, userID) == 0 {
 		t.Fatal("precondition: expected a seeded segment membership")
 	}
+	lakeDeadline := time.Now().Add(60 * time.Second)
+	for {
+		counts := h.LakeResidual(t, userID)
+		if counts["profile_signals"] > 0 && counts["behaviour_signals"] > 0 {
+			break
+		}
+		if time.Now().After(lakeDeadline) {
+			t.Fatalf("precondition: lake rows never landed (counts=%v)", counts)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if n, err := ch.CountFreqCapBlocks(context.Background(), userID); err != nil || n == 0 {
+		t.Fatalf("precondition: freq_cap_blocks row missing (n=%d err=%v)", n, err)
+	}
 
-	// Run the deletion pipeline against the live DB, exactly as the
-	// cmd/privacy-delete CronJob does.
-	deleter := &privacydelete.Deleter{Store: privacydelete.NewPostgresStore(h.DB), Log: quiet}
+	// Run the deletion pipeline against the live DB with the full extra set,
+	// exactly as the cmd/privacy-delete CronJob wires it.
+	extras := []privacydelete.ExtraPurger{
+		&privacydelete.LakePurger{BaseURL: routes.DefaultPipelineURL},
+		&privacydelete.FreqCapPurger{Store: ch},
+	}
+	deleter := &privacydelete.Deleter{
+		Store: privacydelete.NewPostgresStore(h.DB).WithExtras(extras...),
+		Log:   quiet,
+	}
 	n, err := deleter.RunPending(context.Background())
 	if err != nil {
 		t.Fatalf("RunPending: %v", err)
@@ -109,9 +156,20 @@ func TestPrivacyDeletionPropagation(t *testing.T) {
 	if !h.OptOutCompleted(t, userID) {
 		t.Error("opt_out_registry.completed_at not set after deletion")
 	}
+	for table, n := range h.LakeResidual(t, userID) {
+		if n != 0 {
+			t.Errorf("lake table %s not purged: %d rows remain", table, n)
+		}
+	}
+	if n, _ := ch.CountFreqCapBlocks(context.Background(), userID); n != 0 {
+		t.Errorf("freq_cap_blocks not purged: %d rows remain", n)
+	}
 
-	// Verifier: no residual data → stamps verified_at.
-	verifier := &privacydelete.Verifier{Store: privacydelete.NewPostgresStore(h.DB), Log: quiet}
+	// Verifier: no residual data (Postgres + lake + freq caps) → verified_at.
+	verifier := &privacydelete.Verifier{
+		Store: privacydelete.NewPostgresStore(h.DB).WithExtras(extras...),
+		Log:   quiet,
+	}
 	verified, incomplete, err := verifier.RunUnverified(context.Background())
 	if err != nil {
 		t.Fatalf("RunUnverified: %v", err)

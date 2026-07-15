@@ -331,6 +331,28 @@ func (c *ClickHouse) InsertFreqCapBlock(b FreqCapBlock) {
 	c.signal("freq_cap_block", `INSERT INTO freq_cap_blocks (trace_id, user_id, campaign_id, placement_id, publisher_id, timestamp) VALUES (?,?,?,?,?,?)`,
 		b.TraceID, b.UserID, b.CampaignID, b.PlacementID, b.PublisherID, sig(b.Timestamp))
 }
+// PurgeFreqCapBlocks removes every freq-cap block row for the user — the
+// Level-3 privacy deletion for the one operational-signal table that carries
+// user_id. Lightweight DELETE (same as the rollups replace-by-window path):
+// rows are masked from SELECTs immediately, physical removal is async.
+func (c *ClickHouse) PurgeFreqCapBlocks(ctx context.Context, userID string) error {
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM freq_cap_blocks WHERE user_id = ?`, userID); err != nil {
+		return fmt.Errorf("purge freq_cap_blocks: %w", err)
+	}
+	return nil
+}
+
+// CountFreqCapBlocks counts the user's freq-cap block rows (privacy-verify
+// residual check, and the purge's before-count — lightweight DELETE doesn't
+// report affected rows).
+func (c *ClickHouse) CountFreqCapBlocks(ctx context.Context, userID string) (int, error) {
+	var n uint64
+	if err := c.db.QueryRowContext(ctx, `SELECT count() FROM freq_cap_blocks WHERE user_id = ?`, userID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count freq_cap_blocks: %w", err)
+	}
+	return int(n), nil
+}
+
 func (c *ClickHouse) InsertRenderFailure(r RenderFailure) {
 	c.signal("render_failure", `INSERT INTO render_failures (trace_id, campaign_id, creative_id, placement_id, publisher_id, reason, detail, timestamp) VALUES (?,?,?,?,?,?,?,?)`,
 		r.TraceID, r.CampaignID, r.CreativeID, r.PlacementID, r.PublisherID, r.Reason, r.Detail, sig(r.Timestamp))

@@ -13,10 +13,23 @@ import (
 // platform-wide (cross-tenant) write — like pkg/store/postgres.ContractLoader's
 // cross-tenant read, it relies on the app role owning the tables (RLS is not
 // enforced for the owner). opt_out_registry is a global, un-scoped table.
-type PostgresStore struct{ db *sql.DB }
+type PostgresStore struct {
+	db *sql.DB
+	// extras purge + verify user data held outside Postgres (Delta lake via
+	// the pipeline, freq_cap_blocks in ClickHouse). Run after the Postgres
+	// transaction commits; any failure fails PurgeUser so the registry row
+	// stays pending and the next run retries.
+	extras []ExtraPurger
+}
 
 // NewPostgresStore wraps an open *sql.DB.
 func NewPostgresStore(db *sql.DB) *PostgresStore { return &PostgresStore{db: db} }
+
+// WithExtras attaches non-Postgres purgers (chainable).
+func (s *PostgresStore) WithExtras(extras ...ExtraPurger) *PostgresStore {
+	s.extras = append(s.extras, extras...)
+	return s
+}
 
 func (s *PostgresStore) PendingDeletions(ctx context.Context) ([]string, error) {
 	return s.queryUserIDs(ctx,
@@ -75,17 +88,36 @@ func (s *PostgresStore) PurgeUser(ctx context.Context, userID string) (Purge, er
 	if err := tx.Commit(); err != nil {
 		return Purge{}, err
 	}
-	return Purge{IdentityEdges: edges, SegmentMembers: members}, nil
+	p := Purge{IdentityEdges: edges, SegmentMembers: members}
+	for _, e := range s.extras {
+		counts, err := e.PurgeExtra(ctx, userID)
+		if err != nil {
+			// The PG rows are already gone (idempotent deletes) — failing here
+			// keeps the registry row pending so the whole purge re-runs.
+			return Purge{}, fmt.Errorf("extra purge: %w", err)
+		}
+		if p.Extra == nil {
+			p.Extra = map[string]int{}
+		}
+		for sys, n := range counts {
+			p.Extra[sys] += n
+		}
+	}
+	return p, nil
 }
 
 func (s *PostgresStore) MarkCompleted(ctx context.Context, userID string, p Purge) error {
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	systems, _ := json.Marshal(map[string]int{
+	counts := map[string]int{
 		SystemIdentityGraph:  p.IdentityEdges,
 		SystemSegmentMembers: p.SegmentMembers,
-	})
+	}
+	for sys, n := range p.Extra {
+		counts[sys] = n
+	}
+	systems, _ := json.Marshal(counts)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE opt_out_registry
 		    SET completed_at = now(), systems_completed = $2::jsonb
@@ -118,6 +150,13 @@ func (s *PostgresStore) Residual(ctx context.Context, userID string) ([]string, 
 		default:
 			residual = append(residual, c.system)
 		}
+	}
+	for _, e := range s.extras {
+		systems, err := e.ResidualExtra(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("extra residual check: %w", err)
+		}
+		residual = append(residual, systems...)
 	}
 	return residual, nil
 }

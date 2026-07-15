@@ -225,6 +225,7 @@ func main() {
 			SchemaVersion:    1,
 			Timestamp:        time.Now().UTC(),
 		}, reqLog)
+		go publisher.publishBehaviour(context.WithoutCancel(ctx), "impression", q, reqLog)
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
@@ -287,6 +288,7 @@ func main() {
 			LandingURL:  redir,
 			Timestamp:   time.Now().UTC(),
 		}, reqLog)
+		go publisher.publishBehaviour(context.WithoutCancel(ctx), "click", q, reqLog)
 
 		if redir == "" {
 			http.Error(w, "missing redirect URL", http.StatusBadRequest)
@@ -350,6 +352,7 @@ func main() {
 			RevenueUSD:     revenue,
 			Timestamp:      time.Now().UTC(),
 		}, reqLog)
+		go publisher.publishBehaviour(context.WithoutCancel(ctx), "conversion", q, reqLog)
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
@@ -445,6 +448,7 @@ func main() {
 			SchemaVersion:  1,
 			Timestamp:      time.Now().UTC(),
 		}, reqLog)
+		go publisher.publishBehaviour(context.WithoutCancel(ctx), "view", q, reqLog)
 
 		// Echo the server's verdict back to the client (the simulator reads
 		// this so it can show "IAB viewable (server-verified)" vs the JS-only
@@ -598,6 +602,35 @@ func (p *eventPublisher) publishRejected(ctx context.Context, eventType, reason,
 		Timestamp: time.Now().UTC(),
 	}); err != nil {
 		log.Warn("publish rejected failed", "error", err)
+	}
+}
+
+// publishBehaviour emits one consent-gated interaction row for the profile
+// store's behaviour_signals lake table. The uid param is ONLY baked into
+// beacon URLs for consented serves (models.ServeRequest.BehaviourUserID), so
+// its presence is the consent signal — no uid, no row. NATS-only,
+// fire-and-forget: behaviour capture is profile enrichment, not billing.
+func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q url.Values, log *slog.Logger) {
+	uid := q.Get("uid")
+	if uid == "" {
+		return
+	}
+	ev := events.BehaviourSignalEvent{
+		SchemaVersion: events.CurrentSchemaVersion,
+		TraceID:       q.Get("tid"),
+		Kind:          kind,
+		UserID:        uid,
+		PlacementID:   q.Get("pid"),
+		PublisherID:   q.Get("pubid"),
+		CampaignID:    q.Get("cid"),
+		CreativeID:    q.Get("crid"),
+		Channel:       channelOrDefault(q.Get("ch")),
+		Geo:           q.Get("geo"),
+		Device:        q.Get("dev"),
+		ObservedAt:    time.Now().UTC(),
+	}
+	if err := p.typed.PublishJSON(ctx, events.SubjectBehaviourObserved, ev); err != nil {
+		log.Warn("publish behaviour failed", "kind", kind, "error", err)
 	}
 }
 

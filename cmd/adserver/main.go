@@ -377,6 +377,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			Height:       req.Height,
 			Geo:          req.Geo,
 			Device:       req.Device,
+			UserID:       req.BehaviourUserID, // consent-gated upstream (empty = no personalisation consent)
 			TrackerURL:   trackerURL,
 			LandingURL:   creative.LandingURL,
 			URLTTL:       urlTTLFn(),

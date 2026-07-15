@@ -372,6 +372,13 @@ type ServeRequest struct {
 	Width         int     `json:"width"`
 	Height        int     `json:"height"`
 	UserID        string  `json:"user_id,omitempty"` // hashed user id; empty = no consent, skip freq cap
+	// BehaviourUserID is the user key for consent-gated behavioural capture:
+	// set ONLY when the request's regulatory signals permit personalisation
+	// (privacy.Evaluate). Distinct from UserID because freq capping runs on
+	// contextual-only traffic too (legitimate interest), while a behaviour
+	// row is retained profile data. The ad server bakes it into tracker
+	// beacons as uid=; the tracker publishes behaviour rows only when present.
+	BehaviourUserID string `json:"behaviour_user_id,omitempty"`
 	Geo           string  `json:"geo,omitempty"`     // request geo (country) — baked into tracker beacons for analytics
 	Device        string  `json:"device,omitempty"`  // request device type — baked into tracker beacons for analytics
 }

@@ -35,8 +35,9 @@ func main() {
 	defer db.Close()
 
 	verifier := &privacydelete.Verifier{
-		Store: privacydelete.NewPostgresStore(db),
-		Log:   log,
+		Store: privacydelete.NewPostgresStore(db).
+			WithExtras(privacydelete.BuildExtras(cfg, log)...),
+		Log: log,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

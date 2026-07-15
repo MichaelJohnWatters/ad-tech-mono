@@ -163,7 +163,18 @@ var eventTables = map[string]struct {
 		str("trace_id"), str("auction_id"), str("channel"), str("dsp_endpoint"), boolC("bid_received"),
 		f64("bid_price_usd"), i64("latency_ms"), boolC("timed_out"), ts("timestamp"),
 	}}},
+	// Consent-gated behavioural signals (SSP request rows + tracker
+	// interaction rows) — the input to behavioural segmentation rules. The
+	// ONLY lake table besides profile_signals that carries user keys, so both
+	// are covered by the GDPR purge (privacy.go).
+	events.SubjectBehaviourObserved: {behaviourSignalsTable, datalake.Schema{Version: 1, Columns: []datalake.Column{
+		str("trace_id"), str("kind"), str("user_id"), str("household_id"),
+		str("placement_id"), str("publisher_id"), str("campaign_id"), str("creative_id"),
+		str("channel"), str("categories"), str("geo"), str("device"), ts("observed_at"),
+	}}},
 }
+
+const behaviourSignalsTable = "behaviour_signals"
 
 // profileSignalsTable is the normalized onboarding-signal table — the
 // append-only record of "id X was declared a member of segment S by account A
