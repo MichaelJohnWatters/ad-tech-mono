@@ -37,9 +37,12 @@ test-duckdb: ## Run the CGO DuckDB analytics tests (requires a C toolchain)
 test-clickhouse: ## Run the ClickHouse analytics integration tests (needs a live CH; tilt forwards :9010)
 	CLICKHOUSE_ADDR=$${CLICKHOUSE_ADDR:-127.0.0.1:9010} go test -tags=clickhouse_integration ./pkg/store/analytics/... -count=1 -run ClickHouse
 
-test-e2e: ## Run end-to-end tests against the live stack (real ClickHouse backend; preflight only fail-fasts)
+test-e2e: ## Run end-to-end tests against the live stack (real ClickHouse backend; preflight only fail-fasts; chaos tests excluded — see test-e2e-chaos)
 	./scripts/e2e-preflight.sh
 	go test ./tests/... -tags=e2e -count=1 -timeout=10m
+
+test-e2e-chaos: ## Chaos e2e: kills infra pods (nats/postgres/redis/minio) to prove fail-open behaviour. Run SEPARATELY — the pod churn flaps port-forwards and destabilises unrelated tests, so these are opt-in (E2E_CHAOS=1) and excluded from test-e2e.
+	E2E_CHAOS=1 go test ./tests/e2e -tags=e2e -count=1 -timeout=15m -run 'TestChaos'
 
 test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs the hot/cold stack (duckdb reporting + pipeline). Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden.
 	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=90s
