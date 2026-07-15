@@ -63,3 +63,45 @@ func (h *Harness) SetConfigForPod(t *testing.T, key, value, podID string) {
 	// the subscriber also has to do a Postgres FetchAll.
 	time.Sleep(300 * time.Millisecond)
 }
+
+// RestoreConfigForPod is the cleanup counterpart of SetConfigForPod. Tests
+// capture a key's resolved value BEFORE mutating it and write it back in
+// t.Cleanup — but the captured value can be empty (row absent / pod not yet
+// re-seeded) or even a leftover invalid value from an aborted run, and the
+// gateway now schema-validates PUTs, so restoring it verbatim 400s and fails
+// the test at teardown. Try the original when non-empty; on rejection (or
+// empty) fall back to the schema default the caller provides.
+func (h *Harness) RestoreConfigForPod(t *testing.T, key, original, schemaDefault, podID string) {
+	t.Helper()
+	if original != "" && h.tryPutConfig(t, key, original, podID) {
+		return
+	}
+	h.SetConfigForPod(t, key, schemaDefault, podID)
+}
+
+// tryPutConfig issues one config PUT and reports success without failing the
+// test — the restore path uses it to fall back on a rejected original.
+func (h *Harness) tryPutConfig(t *testing.T, key, value, podID string) bool {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"key": key, "value": value, "pod_id": podID})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		h.URLs.Gateway+routes.Config, bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		time.Sleep(300 * time.Millisecond) // same propagation beat as SetConfigForPod
+		return true
+	}
+	t.Logf("restore of %s=%q rejected (status %d) — falling back to schema default", key, value, resp.StatusCode)
+	return false
+}

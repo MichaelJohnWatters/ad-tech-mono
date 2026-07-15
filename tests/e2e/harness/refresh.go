@@ -80,15 +80,19 @@ func (h *Harness) RefreshAudiencePreloader(t *testing.T) {
 // uses the standard fixture gets a clean ledger automatically.
 func (h *Harness) ResetBillingLedger(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Reporting+routes.DebugBillingReset, nil)
-	if err != nil {
-		t.Fatalf("build billing reset request: %v", err)
+	// Same port-forward-flap retry as refreshOne: a transient EOF on the
+	// first POST must not fail the test.
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = h.HTTP.Post(h.URLs.Reporting+routes.DebugBillingReset, "application/json", nil)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
 	}
-	resp, err := h.HTTP.Do(req)
 	if err != nil {
-		t.Fatalf("billing reset call: %v", err)
+		t.Fatalf("billing reset call after retries: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

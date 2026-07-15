@@ -158,7 +158,9 @@ func TestFreqCapWindowExpiry(t *testing.T) {
 	before := resolveConfig(t, h, key, pod)
 	h.SetConfigForPod(t, key, "2s", pod)
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, key, before.Value, pod)
+		// Fall back to the schema default (24h) when `before` was empty or
+		// invalid — a verbatim restore would 400 under schema validation.
+		h.RestoreConfigForPod(t, key, before.Value, "24h", pod)
 	})
 
 	user := "fc-expiry-user"
