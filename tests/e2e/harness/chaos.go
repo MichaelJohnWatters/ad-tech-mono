@@ -11,6 +11,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -27,11 +28,17 @@ func kubectlReachable() bool {
 	return exec.Command("kubectl", "-n", chaosNamespace, "get", "pods", "--no-headers").Run() == nil
 }
 
-// RequireKubectl skips the test unless kubectl can reach the adtech namespace.
-// Chaos tests need pod-level control the plain HTTP harness can't provide, so
-// against a non-k8s deployment they self-skip rather than hard-fail.
+// RequireKubectl skips the test unless kubectl can reach the adtech namespace
+// AND chaos runs are explicitly opted into (E2E_CHAOS=1). Chaos tests kill
+// infra pods (nats/postgres/redis/minio) mid-suite; even when they pass, the
+// pod churn flaps Tilt port-forwards and repeatedly failed UNRELATED tests
+// that ran after them (uniform 10s client timeouts). They get their own run:
+// `make test-e2e-chaos`.
 func RequireKubectl(t *testing.T) {
 	t.Helper()
+	if os.Getenv("E2E_CHAOS") != "1" {
+		t.Skip("chaos tests kill infra pods and destabilise the rest of the suite — run via `make test-e2e-chaos` (E2E_CHAOS=1)")
+	}
 	if !kubectlReachable() {
 		t.Skip("chaos test requires kubectl access to the adtech namespace; skipping")
 	}
