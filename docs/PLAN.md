@@ -2366,6 +2366,137 @@ The recommended build order when this work is picked up:
 | Ad tag SDK | `web/static/adtech.js` - publisher-facing JavaScript tag |
 | First-party data API | Gateway: `/v1/api/audiences/*` |
 
+### Profile Store (Normalized Signals → Expansion → Memberships → Export)
+
+The answer to "do we have a profile store — many sources in, expand, memberships
+out?" is: **we have all the organs but the profile itself is virtual**, assembled
+at read time. This section documents what exists, the decision on graph
+databases, and the target architecture for making the profile a real, batch-built
+artifact on the existing Delta lake.
+
+#### Current state (as-built, 2026-07)
+
+```
+Sources (ingest)                                  Storage
+────────────────                                  ───────
+SSP observed signals            ──NATS──►  cmd/identity-consumer  ──►  identity_graph (PG)
+ (user_id, uid2, hashed_email,             (batch/dedup; deterministic
+  ifa, publisher_user_id,                   co-occurrence conf 1.0 +
+  household)                                probabilistic IP+UA opt-in)
+Gateway POST /v1/api/identity-links ─────────────────────────────►  identity_graph (PG)
+ (UID2-centric or generic edges — the CRM-match path)
+Seed / harness / gateway audiences API ──────────────────────────►  audience_segment_members (PG)
+
+Expansion (read time)
+─────────────────────
+DSP  (dsp.identity_resolution_enabled): in-memory graph preload, BFS with
+     IdentityMaxDepth + IdentityMinConfidence → union DSPSegmentsForUser
+     across the resolved cluster (cmd/dsp/identity.go)
+SSP  SegmentsForUser on user key + household id (no graph walk)
+```
+
+The **effective profile** of a user = `resolve(any identifier)` → cluster of
+device_ids / uid2 / hashed_emails / household → union of memberships across the
+cluster. Nothing materializes that; it's recomputed per lookup. Consequences:
+no place to hang non-segment attributes (declared demographics, derived
+interests, recency/frequency counters), no reprocessing story (change a rule,
+can't rebuild memberships from history), and the SSP side never expands at all.
+
+#### Decision: no dedicated graph database
+
+Considered: Neo4j / Memgraph / dgraph as the identity-graph store. **Rejected.**
+
+| Consideration | Verdict |
+|---|---|
+| Query shape | Shallow BFS (1–3 hops) + offline clustering. Not deep traversals, not pathfinding. A recursive CTE or an in-memory adjacency walk covers it — and the DSP preload resolver already does. |
+| Scale | The whole graph fits in one pod's memory (proven by the preload resolver). Graph DBs earn their keep at billions of edges with online mutation + traversal; we batch. |
+| Industry pattern | Real identity vendors (LiveRamp-style) don't serve from a graph DB either — they run **batch clustering over a data lake** and serve materialized clusters from a KV store. The graph DB is the wrong layer. |
+| Stack ethos | Go everywhere, one code path, minimal services. A JVM graph DB + query language for one table is the opposite. |
+
+**So:** `identity_graph` in Postgres stays the system of record for edges
+(write path unchanged). The upgrade that matters is not a better graph store —
+it's **materializing the clusters** so expansion happens at write time, not
+per-bid.
+
+#### Target architecture: lake-based profile store (Delta tables on Minio)
+
+The normalized store is **Delta tables on Minio** — not more Postgres. We
+already run this exact pattern (pkg/store/datalake, the hot/cold analytics
+store, DuckDB-over-Delta reads), so it's zero new infra. The lake is
+append-only truth for signals; Postgres/Redis stay the serving layer; the lake
+is **never on the bid path**.
+
+```
+WRITE (ingest → normalize)                          lake = Delta on Minio
+──────────────────────────
+SSP observed signals ──NATS──► identity-consumer ──► identity_graph (PG, edges)
+tracker events (impr/click/conv) ──► pipeline ─────► lake: events        (exists)
+CRM uploads (gateway audiences API) ───────────────► lake: profile_signals (new)
+publisher 1P / CDP connectors (future) ────────────► lake: profile_signals
+
+EXPAND (batch — cmd/profile-builder, DuckDB over Delta + PG)
+────────────────────────────────────────────────────────────
+1. Identity resolution: connected components over identity_graph edges
+   (min-confidence threshold, hop cap, household edges kept as their own
+   grouping level) → lake: identity_clusters (person_id → member ids)
+   + slim PG copy for serving lookups
+2. Segmentation: behavioural rules + composite/lookalike evaluation over
+   lake events ⋈ profile_signals ⋈ identity_clusters. Enrollment is at
+   person level, then **expanded to every id in the cluster** on write
+3. Materialize: write audience_segment_members (PG) + warm the Redis
+   hot-path cache
+
+EXPORT / SERVE
+──────────────
+SSP/DSP bid path: membership lookup (PG/Redis) — unchanged shape, now hits
+   pre-expanded rows; DSP read-time BFS stays as the freshness top-up
+Exports: per-account Parquet/CSV segment exports to Minio (external delivery)
+GDPR: access requests + deletion audits answered from the lake in one place
+Profile API: GET /v1/api/profiles/{id} (staff) — cluster + signals +
+   memberships, trace-explorer-grade transparency
+```
+
+**Two expansion strategies, deliberately both:**
+
+| | Read-time BFS (built, DSP) | Write-time clustering (to build) |
+|---|---|---|
+| Freshness | Live — sees edges from seconds ago | Stale up to one batch interval |
+| Bid-path cost | BFS walk per request (in-memory, cheap but real) | Zero — plain key lookup on pre-expanded rows |
+| Coverage | Only where enabled (DSP) | Everywhere, including SSP stamping |
+| Role going forward | Freshness top-up / private-edge nuance | The default expansion mechanism |
+
+(The graph **is** the expansion mechanism in both — the alternative of
+promoting one deterministic key (hashed_email/UID2) to be *the* join key was
+rejected: it silently drops device-only and probabilistic-only users, and the
+graph subsumes it anyway.)
+
+**Why the lake and not Postgres for the normalized store:** reprocessing
+(change a behavioural rule → rebuild all memberships from historical events —
+impossible once you've only kept the latest PG rows), signal-history volume
+(O(events), not O(users)), schema evolution + time travel via Delta Log, and
+one place to answer "what do we know about this user" for both the profile API
+and GDPR. Serving stays PG/Redis because the bid path needs single-digit-ms
+lookups, which a lake never gives you.
+
+#### Build order
+
+1. **`profile_signals` Delta table + normalizer** — CRM/audience uploads land in
+   the lake (as well as PG memberships); define the normalized signal schema
+   (id_type, id_value, source, attributes, observed_at, consent).
+2. **`cmd/profile-builder`** (or a job inside `cmd/pipeline`): connected-components
+   over `identity_graph` → `identity_clusters` Delta table + slim PG serving copy.
+   Scheduled like rollups. Respect min-confidence + household grouping.
+3. **Behavioural membership rules** over lake events, enrolled at person level,
+   expanded to all cluster ids on write to `audience_segment_members`. This also
+   closes the "Membership write pipeline" wishlist row above.
+4. **SSP person-level stamping** — resolve to person_id (PG clusters table)
+   before `SegmentsForUser`; closes the "Identity graph integration" wishlist row.
+5. **Exports** — per-account Parquet segment export to Minio.
+6. **Profile API** — `GET /v1/api/profiles/{id}` (staff/debug).
+
+Update `docs/diagrams/` (identity/data-flow diagram) in the same PR as step 2 —
+that's the step that changes how services connect.
+
 ---
 
 ## Platform Workflows
@@ -15282,7 +15413,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 
 | Step | Item | State | Where / seam | Done when |
 |---|---|---|---|---|
-| 45 | Identity graph wired into serving | ⚠️ in-memory, tests only | `pkg/identity/*.go`; add `identity_edges` table + warm cache in DSP/exchange | e2e asserts cross-device resolve affects targeting |
+| 45 | Identity graph wired into serving | ⚠️ partial — edges + DSP resolve SHIPPED; profile store not built | Shipped: `identity_graph` PG writes via `cmd/identity-consumer` (observed signals over NATS) + gateway `/v1/api/identity-links`; DSP read-time BFS expansion behind `dsp.identity_resolution_enabled`. Remaining: batch clustering + person-level memberships + SSP expansion — see "Profile Store (Normalized Signals → Expansion → Memberships → Export)" | e2e asserts cross-device resolve affects targeting on BOTH sides (SSP stamp + DSP private) |
 | 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ✅ SHIPPED (2026-07-05) | `pkg/privacydelete` (Deleter purges identity_graph + audience_segment_members for pending level-3 users, marks completed, announces `deletion_completed`; Verifier residual-checks + stamps verified_at) + both one-shot binaries + Tilt resources | ✅ `TestPrivacyDeletionPropagation` flipped |
 | 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary; **blocked on data** | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven. **NOTE (2026-07-06):** a velocity/IP sweep can't be built yet — the analytics `impressions`/`clicks` tables have **no IP column** (only geo/device), so there's nothing to aggregate suspicious IPs from. First add IP capture to the event schema, THEN the batch job scores + writes `fraud_blocklists` (tracker warm cache already consumes them). Detection logic lives in `pkg/fraud` (was under active app-ads.txt work — coordinate). | F-series batch-sweep assertion |
 | 61 | `sellers.json` from DB | ✅ SHIPPED (2026-07-05) | `cmd/gateway/sellers.go` — `pgSellerStore` reads active `publishers` (seller_id = UUID); adding a publisher changes the output with no code change. DB-down → valid file with empty seller list, not stale hardcodes | ✅ done (handler unit tests: from-DB + empty-on-error) |
