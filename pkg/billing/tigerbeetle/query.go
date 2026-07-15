@@ -33,6 +33,7 @@ func (l *Ledger) EntriesForTrace(traceID string) []billing.LedgerEntry {
 		Ledger:      tb.USDLedger,
 		Limit:       queryLimit,
 	})
+	l.noteTransport(err)
 	if err != nil {
 		l.log.Error("tigerbeetle QueryTransfers failed",
 			"trace_id", traceID, "error", err)
@@ -69,6 +70,7 @@ func (l *Ledger) ReservationByTrace(traceID string) (billing.LedgerEntry, bool) 
 		Limit:       queryLimit,
 		Flags:       tbtypes.QueryFilterFlags{Reversed: true}.ToUint32(),
 	})
+	l.noteTransport(err)
 	if err != nil {
 		l.log.Error("tigerbeetle ReservationByTrace QueryTransfers failed",
 			"trace_id", traceID, "error", err)
@@ -89,6 +91,7 @@ func (l *Ledger) HasSettlement(traceID string) bool {
 		Code:        tb.CodeSettlement,
 		Limit:       1,
 	})
+	l.noteTransport(err)
 	if err != nil {
 		l.log.Error("tigerbeetle HasSettlement QueryTransfers failed",
 			"trace_id", traceID, "error", err)
@@ -115,6 +118,7 @@ func (l *Ledger) BalanceFor(accountID string) billing.BalanceSummary {
 		return billing.BalanceSummary{AccountID: accountID}
 	}
 	accs, err := l.client.LookupAccounts([]tbtypes.Uint128{tbID})
+	l.noteTransport(err)
 	if err != nil {
 		l.log.Error("tigerbeetle BalanceFor LookupAccounts failed",
 			"account_id", accountID, "error", err)
@@ -158,6 +162,7 @@ func (l *Ledger) entriesForAccountID(tbID tbtypes.Uint128, label string) []billi
 		Limit:     queryLimit,
 		Flags:     tbtypes.AccountFilterFlags{Debits: true, Credits: true}.ToUint32(),
 	})
+	l.noteTransport(err)
 	if err != nil {
 		l.log.Error("tigerbeetle GetAccountTransfers failed",
 			"account_label", label, "error", err)

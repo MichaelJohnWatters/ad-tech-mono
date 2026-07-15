@@ -28,6 +28,10 @@ type fakeClient struct {
 	lookupAccount     map[tbtypes.Uint128]tbtypes.Account
 	queryByCode       map[uint16][]tbtypes.Transfer
 	closed            bool
+
+	// health-test hooks
+	lookupAccountsErr   error
+	lookupAccountsBlock chan struct{} // non-nil: LookupAccounts blocks until closed
 }
 
 func newFakeClient() *fakeClient {
@@ -73,6 +77,12 @@ func (f *fakeClient) CreateTransfers(transfers []tbtypes.Transfer) ([]tbtypes.Tr
 }
 
 func (f *fakeClient) LookupAccounts(ids []tbtypes.Uint128) ([]tbtypes.Account, error) {
+	if f.lookupAccountsBlock != nil {
+		<-f.lookupAccountsBlock
+	}
+	if f.lookupAccountsErr != nil {
+		return nil, f.lookupAccountsErr
+	}
 	var out []tbtypes.Account
 	for _, id := range ids {
 		if a, ok := f.lookupAccount[id]; ok {
