@@ -198,19 +198,19 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		o.quarantineFile(ctx, provider, key, started, fmt.Sprintf("manifest: %v", err))
 		return
 	}
-	if !strings.HasSuffix(strings.ToLower(key), ".csv") {
-		o.quarantineFile(ctx, provider, key, started, "unsupported format (only .csv)")
-		return
-	}
 
 	body, err := o.readObject(ctx, key)
 	if err != nil {
 		log.Error("onboarding: read file failed (will retry)", "error", err)
 		return
 	}
-	records, err := pipeline.IngestCSV(bytes.NewReader(body), ',')
-	if err != nil || len(records) == 0 {
-		o.quarantineFile(ctx, provider, key, started, fmt.Sprintf("csv parse: %v (rows=%d)", err, len(records)))
+	records, err := decodeOnboardingFile(ctx, path.Base(key), body)
+	if err != nil {
+		o.quarantineFile(ctx, provider, key, started, fmt.Sprintf("decode: %v", err))
+		return
+	}
+	if len(records) == 0 {
+		o.quarantineFile(ctx, provider, key, started, "no data rows")
 		return
 	}
 
@@ -279,7 +279,7 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		values = append(values, v)
 	}
 
-	segName := strings.TrimSuffix(path.Base(key), path.Ext(key))
+	segName := segmentNameFromFile(path.Base(key))
 	segType := manifest.SegmentType
 	if segType == "" {
 		segType = "cdp_imported"

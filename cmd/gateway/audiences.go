@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -288,9 +290,28 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request) (audienceUploa
 		return req, nil, "missing file field"
 	}
 	defer file.Close()
-	records, err := pipeline.IngestCSV(file, ',')
+	body, err := io.ReadAll(file)
 	if err != nil {
-		return req, nil, "invalid CSV: " + err.Error()
+		return req, nil, "read file: " + err.Error()
+	}
+	// The portal path is delimiter-separated text only (the browser hashes
+	// PII cell-by-cell before upload, which it can't do inside binary
+	// formats). Parquet / compressed files belong in the partner drop-zone,
+	// which decodes them server-side.
+	switch {
+	case bytes.HasPrefix(body, []byte{0x50, 0x4b, 0x03, 0x04}),
+		bytes.HasPrefix(body, []byte{0x1f, 0x8b}):
+		return req, nil, "compressed uploads are not supported here — use the partner drop-zone"
+	case bytes.HasPrefix(body, []byte("PAR1")):
+		return req, nil, "parquet uploads are not supported here — use the partner drop-zone"
+	}
+	delimiter := ','
+	if header, _, _ := bytes.Cut(body, []byte{'\n'}); bytes.Count(header, []byte{'\t'}) > bytes.Count(header, []byte{','}) {
+		delimiter = '\t'
+	}
+	records, err := pipeline.IngestCSV(bytes.NewReader(body), delimiter)
+	if err != nil {
+		return req, nil, "invalid CSV/TSV: " + err.Error()
 	}
 	ids, errMsg := extractMemberIDs(records)
 	return req, ids, errMsg

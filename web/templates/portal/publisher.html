@@ -514,8 +514,8 @@
       </label>
     </div>
     <label class="block text-sm mb-3">
-      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV file (≤5 MB)</span>
-      <input type="file" id="au_file" accept=".csv,text/csv" class="w-full text-xs" />
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV / TSV file (≤5 MB)</span>
+      <input type="file" id="au_file" accept=".csv,.tsv,text/csv,text/tab-separated-values" class="w-full text-xs" />
       <span class="block mt-1 text-[11px] text-gray-400">Email columns are SHA-256 hashed in your browser before upload — raw PII never leaves the page. Larger files go via the partner drop-zone.</span>
     </label>
     <p class="mb-2 text-xs text-gray-400 text-center">— or paste ids —</p>
@@ -667,17 +667,19 @@ async function sha256Hex(s) {
 async function hashCSVForUpload(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return '';
-  const header = lines[0].split(',').map(h => {
+  // Delimiter-aware: TSV files hash the same way (the server sniffs tabs).
+  const sep = (lines[0].split('\t').length > lines[0].split(',').length) ? '\t' : ',';
+  const header = lines[0].split(sep).map(h => {
     const t = h.trim().toLowerCase();
     return (t.includes('email') && !t.includes('hash')) ? 'hashed_email' : t;
-  }).join(',');
+  }).join(sep);
   const out = [header];
   for (let i = 1; i < lines.length; i++) {
-    const cells = lines[i].split(',');
+    const cells = lines[i].split(sep);
     for (let j = 0; j < cells.length; j++) {
       if (cells[j].includes('@')) cells[j] = await sha256Hex(cells[j]);
     }
-    out.push(cells.join(','));
+    out.push(cells.join(sep));
   }
   return out.join('\n');
 }

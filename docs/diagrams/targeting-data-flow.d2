@@ -35,10 +35,10 @@ onboarded: Onboarded - 1st + 3rd party {
   style.fill: "#fefce8"
 
   owner: Advertiser / Publisher {shape: person}
-  upload: Portal CSV upload 🚧 - small files, PII hashed client-side
-  api: Gateway /v1/api/audiences - JSON live, multipart 🚧
+  upload: Portal CSV/TSV upload - small files, PII hashed client-side
+  api: Gateway /v1/api/audiences - JSON + multipart CSV/TSV, match rate per upload
   partner: Data partner {shape: person}
-  dropzone: "Minio drop-zone 🚧 adtech-onboarding/<provider>/" {shape: cylinder}
+  dropzone: "Minio drop-zone adtech-onboarding/<provider>/ - csv/tsv/parquet, zip/gzip auto-detected" {shape: cylinder}
 
   owner -> upload -> api
   partner -> dropzone
@@ -56,7 +56,7 @@ idc: identity-consumer {style.fill: "#a78bfa"}
 pg_graph: identity_graph - PG edges, dedup upsert {shape: cylinder}
 
 ssp -> nats: identity signals observed {style.stroke-dash: 3}
-ssp -> nats: behaviour.observed 🚧 - consented, category stamped at event time {style.stroke-dash: 3}
+ssp -> nats: behaviour.observed - consented at capture, category stamped at event time {style.stroke-dash: 3}
 tracker -> nats: event stream {style.stroke-dash: 3}
 nats -> idc {style.stroke-dash: 3}
 idc -> pg_graph
@@ -71,26 +71,26 @@ lake: Delta lake (Minio) {
   style.fill: "#faf5ff"
 
   events: event tables x7 - live {shape: cylinder}
-  behaviour: behaviour_signals 🚧 - user key + category, consent-gated {shape: cylinder}
-  signals: profile_signals 🚧 - normalized onboarded rows {shape: cylinder}
-  clusters: identity_clusters 🚧 - person_id -> member ids {shape: cylinder}
+  behaviour: behaviour_signals - user key + category, consent-gated {shape: cylinder}
+  signals: profile_signals - normalized onboarded rows {shape: cylinder}
+  clusters: identity_clusters - person_id -> member ids {shape: cylinder}
 }
 
 nats -> pipeline {style.stroke-dash: 3}
 pipeline -> lake.events
-pipeline -> lake.behaviour: 🚧
-pipeline -> lake.signals: normalize 🚧
-onboarded.dropzone <- pipeline: poll for new files 🚧 {style.stroke-dash: 2}
-onboarded.api -> lake.signals: lake copy of uploads 🚧
+pipeline -> lake.behaviour
+pipeline -> lake.signals: normalize
+onboarded.dropzone <- pipeline: poll, validate, quarantine rejects {style.stroke-dash: 2}
+onboarded.api -> lake.signals: lake copy of uploads (batched via NATS)
 
 # ============================================================
 # THE MEETING POINT - profile-builder (batch, CronJob)
 # ============================================================
-builder: profile-builder 🚧 - hourly CronJob {
+builder: profile-builder - hourly CronJob (cmd/profile-builder) {
   style.fill: "#f59e0b"
 
   cluster: 1 - cluster graph -> person_id (union-find)
-  rules: 2 - behavioural + onboarded rules (DuckDB over lake)
+  rules: 2 - behavioural rules (pure-Go over the Delta reader) + reconcile
   expand: 3 - enroll person, expand to every id in cluster
 
   cluster -> rules -> expand
