@@ -456,24 +456,36 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		}
 		lookupKey := openrtb.UserKey(user) // user_id, else the UID2 token
 		var segs []string
-		if audienceStore != nil && lookupKey != "" {
-			looked, err := audienceStore.SegmentsForUser(ctx, lookupKey)
-			if err != nil {
-				reqLog.Warn("segment lookup failed", "user_key", lookupKey, "error", err)
-			} else {
-				segs = looked
+		// Segment enrichment is a nice-to-have, not load-bearing for the bid
+		// request — same rationale as the DSP's private-segment lookup: under
+		// pool contention a queued Postgres query must degrade to "no
+		// segments", never stall the auction. One shared 25ms budget covers
+		// both lookups (user + household; household runs on EVERY request,
+		// anonymous included, so an unbounded query here would be a hot-path
+		// latency risk).
+		if audienceStore != nil && (lookupKey != "" || householdID != "") {
+			segCtx, cancelSeg := context.WithTimeout(ctx, 25*time.Millisecond)
+			if lookupKey != "" {
+				looked, err := audienceStore.SegmentsForUser(segCtx, lookupKey)
+				if err != nil {
+					reqLog.Warn("segment lookup failed (degrading to none)", "user_key", lookupKey, "error", err)
+				} else {
+					segs = looked
+				}
 			}
-		}
-		// Public household segments: same lookup, keyed by the household id
-		// (audience members carry the hh: prefix). Private household segments
-		// are the DSP's own lookup — mirrors the user public/private split.
-		if audienceStore != nil && householdID != "" {
-			looked, err := audienceStore.SegmentsForUser(ctx, householdID)
-			if err != nil {
-				reqLog.Warn("household segment lookup failed", "household", householdID, "error", err)
-			} else {
-				segs = append(segs, looked...)
+			// Public household segments: same lookup, keyed by the household
+			// id (audience members carry the hh: prefix). Private household
+			// segments are the DSP's own lookup — mirrors the user
+			// public/private split.
+			if householdID != "" {
+				looked, err := audienceStore.SegmentsForUser(segCtx, householdID)
+				if err != nil {
+					reqLog.Warn("household segment lookup failed (degrading to none)", "household", householdID, "error", err)
+				} else {
+					segs = append(segs, looked...)
+				}
 			}
+			cancelSeg()
 		}
 		// Explicit ?segments= (comma-separated) lets a publisher/test pass the
 		// user's public audience segments directly; unioned with any looked up.
