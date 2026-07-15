@@ -122,7 +122,7 @@ serve: Live auction path {
 
   stamp: SSP stamps user.ext.segments - public + household
   exchange: Exchange fan-out
-  dsp: DSP unions dsp_private + applies bid modifiers (fix 🚧)
+  dsp: DSP unions dsp_private + audience bid modifiers price bids
   eval: targeting.Evaluate - include / exclude / modifiers
 
   stamp -> exchange -> dsp -> eval

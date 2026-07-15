@@ -2512,8 +2512,15 @@ Trade-offs vs the PG serving copy: (+) one less copy step, natural versioning;
 (−) Minio becomes a serving-pod boot dependency (needs the same
 degrade-gracefully story warm caches have for PG-down), and GDPR deletes baked
 into a snapshot persist until the next build unless you add tombstone/forced-
-refresh machinery (PG + NATS invalidate purges in seconds today). **Decide at
-build-order step 2.** This option is for clusters only — edges need upserts,
+refresh machinery (PG + NATS invalidate purges in seconds today). **DECIDED
+(Phase 4, 2026-07-15): PG serving copy.** The profile-builder rebuilds
+`identity_clusters` wholesale in one PG transaction per run; GDPR deletes
+propagate at PG speed rather than waiting out a baked snapshot; serving pods
+gain no Minio boot dependency; and the table stays small (multi-member
+clusters only — singletons aren't materialized). The Delta artifact the
+builder also publishes each run keeps this reversible: pod-direct snapshot
+loading remains the documented escape hatch at scale. This option was for
+clusters only — edges need upserts,
 memberships need interactive writes + point lookups at scale + instant
 deletes; those stay PG/Redis either way.
 
@@ -2607,9 +2614,9 @@ deletes; those stay PG/Redis either way.
   BFS as the freshness top-up for edges observed since the last batch.
 - **Fix the dead audience modifiers** (populate `modCtx.Segments` in the DSP
   bid handler) so segment bid modifiers actually price bids.
-- `identity_clusters` serving copy (PG warm cache vs pod-direct Delta
-  snapshot — open option above) is needed only for the profile API and
-  optional SSP person-level stamping, not the hot path. Decide here.
+- `identity_clusters` serving copy: **decided — PG** (see the decision note
+  above). Needed only for the profile API and optional SSP person-level
+  stamping, not the hot path; the builder already writes it (Phase 3).
 
 **Phase 5 — Payoff valves**
 

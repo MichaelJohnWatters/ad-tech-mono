@@ -221,7 +221,11 @@ func parseModifiers(raw string) targeting.Modifiers {
 	var m struct {
 		Device     map[string]float64 `json:"device"`
 		GeoCountry map[string]float64 `json:"geo_country"`
-		TimeOfDay  []struct {
+		// Audience maps segment id → modifier %. The other half of the
+		// "dead audience modifiers" fix: the evaluator always supported it,
+		// but this parser dropped the key so no campaign ever carried one.
+		Audience  map[string]float64 `json:"audience"`
+		TimeOfDay []struct {
 			StartHour int     `json:"start_hour"`
 			EndHour   int     `json:"end_hour"`
 			Modifier  float64 `json:"modifier"`
@@ -230,7 +234,7 @@ func parseModifiers(raw string) targeting.Modifiers {
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return targeting.Modifiers{}
 	}
-	mods := targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry}
+	mods := targeting.Modifiers{Device: m.Device, GeoCountry: m.GeoCountry, Audience: m.Audience}
 	for _, tm := range m.TimeOfDay {
 		mods.TimeOfDay = append(mods.TimeOfDay, targeting.TimeModifier{
 			StartHour: tm.StartHour, EndHour: tm.EndHour, Modifier: tm.Modifier,

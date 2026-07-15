@@ -974,9 +974,16 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			if c.Location != nil {
 				campaignNow = reqNow.In(c.Location)
 			}
+			// Segments ride along so Modifiers.Audience actually prices bids —
+			// tReq.Segments is the consent-gated union (public stamp + DSP
+			// private + household), so an opted-out user simply has none and
+			// no audience modifier applies. (This was the "dead audience
+			// modifiers" gap: ModifierContext was built without Segments, so
+			// segment bid modifiers never fired on any bid.)
 			modCtx := targeting.ModifierContext{
 				Device: tReq.Device, GeoCountry: tReq.Geo,
 				HourOfDay: campaignNow.Hour(),
+				Segments:  tReq.Segments,
 			}
 			adjustedBid, _ := targeting.ApplyModifiers(c.BaseBid, c.Modifiers, modCtx)
 
