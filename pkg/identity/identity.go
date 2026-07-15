@@ -31,6 +31,10 @@ const (
 	SourcePublisherUserID = "publisher_user_id"
 	SourceDeviceID        = "device_id"
 	SourceProbabilistic   = "probabilistic" // IP + UA heuristic
+	// SourceHousehold is the platform household id (CTV): a salted IP hash
+	// derived at the SSP (see HouseholdID). Edges user↔household cluster the
+	// devices/viewers sharing a home.
+	SourceHousehold = "household"
 
 	// Link types (identity_graph.link_type): the relationship the edge asserts.
 	LinkCrossPublisher = "cross_publisher"
@@ -40,7 +44,14 @@ const (
 	// co-occurring on the same inbound request (deterministic — they belong to
 	// the same request/user), as opposed to an explicit upload.
 	LinkObserved = "co_observed"
+	// LinkHousehold marks a user/device ↔ household membership edge.
+	LinkHousehold = "household_member"
 )
+
+// HouseholdConfidence is the edge confidence for household membership:
+// IP-derived, so deterministic-ish but below hashed_email (VPNs, carrier NAT
+// and cafés share IPs across real households).
+const HouseholdConfidence = 0.90
 
 // Signal is a piece of identifying information linked to a platform ID.
 type Signal struct {

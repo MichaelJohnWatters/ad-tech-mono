@@ -33,6 +33,7 @@ type AuctionParams struct {
 	UserID    string // User.id (drives segment lookup)
 	UID2      string // Unified ID 2.0 token → User.eids (cookieless identity)
 	OS        string // Device.os — for OS targeting
+	IP        string // client IP (?ip=) — drives the SSP's household derivation
 	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
 	Segments  string // User.ext.segments (comma-separated) — for segment targeting
 	// Privacy signals the SSP stamps into Regs / User.ext.consent. Let privacy
@@ -73,6 +74,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("user_id", p.UserID)
 	add("uid2", p.UID2)
 	add("os", p.OS)
+	add("ip", p.IP)
 	add("keywords", p.Keywords)
 	add("segments", p.Segments)
 	add("gdpr", p.GDPR)

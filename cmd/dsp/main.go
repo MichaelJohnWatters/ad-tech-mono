@@ -817,6 +817,23 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
+		// Household segments (CTV): the SSP carries a household id as an EID
+		// (salted IP hash — the household proxy). Household-scoped audience
+		// segments are ordinary audience_segment_members rows keyed by the
+		// hh: id, so this is the same lookup as user segments, just under the
+		// household key. Consent-gated identically — no consent, no household
+		// personalisation. Same 25ms degrade-gracefully budget as above.
+		if consent.Personalise && audienceStore != nil {
+			if hhID := openrtb.HouseholdFrom(bidReq.User); hhID != "" {
+				lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
+				hhSegs := dspPrivateSegments(lookupCtx, audienceStore, nil, hhID, 0, log)
+				cancel()
+				if len(hhSegs) > 0 {
+					tReq.Segments = append(tReq.Segments, hhSegs...)
+				}
+			}
+		}
+
 		floor := 0.0
 		var reqW, reqH, reqMinDur, reqMaxDur int
 		reqFormat := "display"

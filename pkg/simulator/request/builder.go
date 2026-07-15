@@ -223,11 +223,17 @@ func buildImp(ch Channel, pl Placement, rng *rand.Rand) openrtb.Imp {
 }
 
 // buildDevice sets device type, OS, make/model, a residential-looking IP, and a
-// browser-shaped UA (identity fingerprinting + fraud read these).
+// browser-shaped UA (identity fingerprinting + fraud read these). A persona
+// with a stable IP uses it (household determinism); otherwise a random
+// residential address keeps fingerprints high-cardinality.
 func buildDevice(p Persona, rng *rand.Rand) *openrtb.Device {
+	ip := p.IP
+	if ip == "" {
+		ip = residentialIP(rng)
+	}
 	return &openrtb.Device{
 		UA:             userAgent(p),
-		IP:             residentialIP(rng),
+		IP:             ip,
 		DeviceType:     deviceTypeInt(p.Device),
 		Make:           p.Make,
 		Model:          p.Model,

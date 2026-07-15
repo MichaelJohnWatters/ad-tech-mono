@@ -39,7 +39,7 @@ func (b *capBus) published(subject string) [][]byte {
 
 func TestGatherSignals(t *testing.T) {
 	r := httptest.NewRequest("GET", "/serve?hashed_email=E&ifa=D", nil)
-	ids := gatherSignals(r, "USER", "U")
+	ids := gatherSignals(r, "USER", "U", "")
 	want := []string{"USER", "U", "E", "D"} // fixed order
 	if len(ids) != len(want) {
 		t.Fatalf("got %d ids, want %d: %+v", len(ids), len(want), ids)
@@ -50,7 +50,7 @@ func TestGatherSignals(t *testing.T) {
 		}
 	}
 	// dedupe + skip empty
-	if got := gatherSignals(httptest.NewRequest("GET", "/serve?hashed_email=SAME", nil), "SAME", ""); len(got) != 1 {
+	if got := gatherSignals(httptest.NewRequest("GET", "/serve?hashed_email=SAME", nil), "SAME", "", ""); len(got) != 1 {
 		t.Errorf("deduped: got %d, want 1", len(got))
 	}
 }
@@ -80,7 +80,7 @@ func TestIdentityPublisher(t *testing.T) {
 
 	t.Run("publishes an event with ids + fingerprint", func(t *testing.T) {
 		r := httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1.2.3.4&ua=Moz", nil)
-		p.Observe(r, "USER", "U")
+		p.Observe(r, "USER", "U", "")
 		msgs := bus.published(events.SubjectIdentityObserved)
 		if len(msgs) != 1 {
 			t.Fatalf("published %d messages, want 1", len(msgs))
@@ -97,7 +97,7 @@ func TestIdentityPublisher(t *testing.T) {
 	t.Run("nothing to link → no publish", func(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
-		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "") // one id, no fp
+		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "", "") // one id, no fp
 		if n := len(bus.published(events.SubjectIdentityObserved)); n != 0 {
 			t.Errorf("published %d, want 0", n)
 		}
@@ -106,7 +106,7 @@ func TestIdentityPublisher(t *testing.T) {
 	t.Run("single id + fingerprint still publishes (for probabilistic)", func(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
-		p.Observe(httptest.NewRequest("GET", "/serve?ip=1.2.3.4&ua=Moz", nil), "solo", "")
+		p.Observe(httptest.NewRequest("GET", "/serve?ip=1.2.3.4&ua=Moz", nil), "solo", "", "")
 		if n := len(bus.published(events.SubjectIdentityObserved)); n != 1 {
 			t.Errorf("published %d, want 1", n)
 		}
@@ -114,6 +114,6 @@ func TestIdentityPublisher(t *testing.T) {
 
 	t.Run("nil publisher is a no-op", func(t *testing.T) {
 		var np *identityPublisher
-		np.Observe(httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1&ua=x", nil), "USER", "U")
+		np.Observe(httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1&ua=x", nil), "USER", "U", "")
 	})
 }

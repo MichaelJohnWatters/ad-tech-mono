@@ -28,6 +28,7 @@ const (
 	ParamRegion      = "region"
 	ParamDevice      = "device"
 	ParamOS          = "os"
+	ParamIP          = "ip" // stable persona client IP → SSP household derivation
 	ParamUserID      = "user_id"
 	ParamUID2        = "uid2"
 	ParamHashedEmail = "hashed_email"
@@ -65,6 +66,9 @@ func (p Persona) QueryParams(placementID string, ch Channel) url.Values {
 	}
 	if p.OS != "" {
 		v.Set(ParamOS, p.OS)
+	}
+	if p.IP != "" {
+		v.Set(ParamIP, p.IP)
 	}
 	if len(p.Segments) > 0 {
 		v.Set(ParamSegments, p.SegmentsCSV())

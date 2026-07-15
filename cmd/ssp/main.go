@@ -31,6 +31,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/floors"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -175,9 +176,19 @@ func main() {
 	}
 
 	debugEnabledFn := func() bool { return keys.Debug.EndpointsEnabled.Get(cfg) }
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn))
+	// Household id derivation (CTV): salted-HMAC of the client IP, config-
+	// gated. Reads the knobs per call so a live disable takes effect without
+	// a restart; the salt is secret-tier (env-sourced) and must match every
+	// other deriver (seed, tests) — see identity.HouseholdID.
+	householdFn := func(ip string) string {
+		if !keys.SSP.HouseholdEnabled.Get(cfg) {
+			return ""
+		}
+		return identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), ip)
+	}
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, debugEnabledFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, debugEnabledFn, householdFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -314,7 +325,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -420,10 +431,28 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// make the user addressable. The segment lookup falls back to the UID2
 	// token when there's no first-party user_id.
 	uid2 := r.URL.Query().Get("uid2")
-	if userID != "" || uid2 != "" {
+	// Household (CTV): derive the platform household id from the end user's
+	// IP and carry it as an EID. Same IP precedence as the identity
+	// fingerprint: explicit ?ip= first (the ad tag forwards the device IP —
+	// the SSP otherwise sees the publisher server or LB address), then the
+	// connection-derived client IP. Stamped like segments — the DSP enforces
+	// the consent gate before USING it. A fully anonymous viewer still has a
+	// household, so this creates the User object even without user_id/uid2.
+	householdID := ""
+	if householdFn != nil {
+		endUserIP := r.URL.Query().Get("ip")
+		if endUserIP == "" {
+			endUserIP = clientIP(r)
+		}
+		householdID = householdFn(endUserIP)
+	}
+	if userID != "" || uid2 != "" || householdID != "" {
 		user := &openrtb.User{ID: userID}
 		if uid2 != "" {
 			user.EIDs = []openrtb.EID{openrtb.UID2EID(uid2)}
+		}
+		if householdID != "" {
+			user.EIDs = append(user.EIDs, openrtb.HouseholdEID(householdID))
 		}
 		lookupKey := openrtb.UserKey(user) // user_id, else the UID2 token
 		var segs []string
@@ -433,6 +462,17 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 				reqLog.Warn("segment lookup failed", "user_key", lookupKey, "error", err)
 			} else {
 				segs = looked
+			}
+		}
+		// Public household segments: same lookup, keyed by the household id
+		// (audience members carry the hh: prefix). Private household segments
+		// are the DSP's own lookup — mirrors the user public/private split.
+		if audienceStore != nil && householdID != "" {
+			looked, err := audienceStore.SegmentsForUser(ctx, householdID)
+			if err != nil {
+				reqLog.Warn("household segment lookup failed", "household", householdID, "error", err)
+			} else {
+				segs = append(segs, looked...)
 			}
 		}
 		// Explicit ?segments= (comma-separated) lets a publisher/test pass the
@@ -462,7 +502,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 
 	// Auto-build the identity graph: link any identifiers that co-occurred on
 	// this request. No-op when observation is disabled (nil observer).
-	idPublisher.Observe(r, userID, uid2)
+	idPublisher.Observe(r, userID, uid2, householdID)
 
 	reqLog.Info("bid request generated",
 		"placement", p.ID,
@@ -591,9 +631,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -661,9 +701,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
