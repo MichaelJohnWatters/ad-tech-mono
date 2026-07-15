@@ -134,14 +134,18 @@ func (h *Harness) RunAuctionWithSlowDSPs(t *testing.T, placementExternalID, geo,
 // Caller is responsible for refreshing caches afterwards.
 func (h *Harness) SeedStandard(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	url := h.URLs.Gateway + routes.DevResetReseed
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		t.Fatalf("build reseed: %v", err)
 	}
-	resp, err := h.HTTP.Do(req)
+	// h.HTTP's 10s Timeout caps the request regardless of the context
+	// deadline, and a full truncate+reseed takes ~6s idle — over 10s under
+	// suite load. Use a client without the cap so the context governs.
+	client := &http.Client{Timeout: 0}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("reseed call: %v", err)
 	}
