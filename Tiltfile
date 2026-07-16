@@ -426,16 +426,43 @@ local_resource('reset',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False,
     resource_deps=['postgres'])
 
+# ---- Scheduled CronJobs (real in-cluster schedules, not just manual) ----
+# The batch-conductor runs the data chain hourly at :10; dayboundary flips
+# campaign flights daily at 00:05. Images are the standard fast-path build
+# (host go build → Dockerfile.dev); a CronJob pod runs /app once and exits,
+# so no live_update — the next scheduled run picks up the newest image.
+local_resource('batch-conductor-build',
+    cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/batch-conductor ./cmd/batch-conductor',
+    deps=['cmd/batch-conductor', 'pkg/'], labels=['build'])
+docker_build('adtech-batch-conductor', '.',
+    dockerfile='build/Dockerfile.dev',
+    build_args={'SERVICE': 'batch-conductor'},
+    only=['bin/batch-conductor', 'web'])
+k8s_yaml('k8s/cronjobs/batch-conductor/cronjob.yaml')
+k8s_resource('batch-conductor', resource_deps=['batch-conductor-build', 'postgres', 'nats', 'minio'],
+    labels=['data'])
+
+local_resource('dayboundary-build',
+    cmd='GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./bin/dayboundary ./cmd/dayboundary',
+    deps=['cmd/dayboundary', 'pkg/'], labels=['build'])
+docker_build('adtech-dayboundary', '.',
+    dockerfile='build/Dockerfile.dev',
+    build_args={'SERVICE': 'dayboundary'},
+    only=['bin/dayboundary', 'web'])
+k8s_yaml('k8s/cronjobs/dayboundary/cronjob.yaml')
+k8s_resource('dayboundary', resource_deps=['dayboundary-build', 'postgres', 'nats'],
+    labels=['data'])
+
+# Manual instant-trigger escape hatch (host-run, same code the CronJob runs).
 local_resource('day-boundary',
     cmd='go run ./cmd/dayboundary',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
-local_resource('batch-conductor',
-    # The data chain, completion-ordered (normally an hourly CronJob — see
-    # k8s/cronjobs/batch-conductor): checkpoint → compact → rollups →
-    # profile-builder → privacy delete → verify. Runs on the host against the
-    # port-forwarded services; steps recorded in batch_runs (staff portal →
-    # Batch runs).
+local_resource('batch-conductor-run',
+    # Manual instant trigger for the data chain (the scheduled path is the
+    # batch-conductor CronJob above): checkpoint → compact → vacuum →
+    # rollups → profile-builder → privacy delete → verify. Runs on the host
+    # against the port-forwarded services; steps recorded in batch_runs.
     cmd='BATCH_CONDUCTOR_DATALAKE_BUCKET=adtech-datalake-hotcold REPORTING_CLICKHOUSE_ADDR=localhost:9010 S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev go run ./cmd/batch-conductor',
     trigger_mode=TRIGGER_MODE_MANUAL, labels=['data'], auto_init=False)
 
