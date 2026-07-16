@@ -276,6 +276,11 @@ const (
 	TrackerImpression = "/v1/t/imp"
 	TrackerClick      = "/v1/t/click"
 	TrackerConversion = "/v1/t/conv"
+	// TrackerRetarget is the retargeting pixel advertisers embed on THEIR OWN
+	// sites (?aid=<account>&tag=<label>&uid=<hashed id> + consent params).
+	// Consent-gated at capture; publishes a site_visit behaviour row the
+	// profile-builder turns into retargeting-segment memberships.
+	TrackerRetarget = "/v1/t/rt"
 	TrackerView       = "/v1/t/view"
 	TrackerVideo      = "/v1/t/video"
 	TrackerAudio      = "/v1/t/audio"

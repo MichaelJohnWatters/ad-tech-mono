@@ -288,6 +288,11 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clu
 				log.Error("profile-builder: invalid rule — segment skipped", "segment", s.id, "name", s.name, "error", err)
 				continue
 			}
+			if rule.Event == "site_visit" {
+				// Retargeting rows carry the pixel owner's account — scope
+				// so another tenant's identically-named tag can't enroll.
+				rule.accountID = s.accountID
+			}
 			apply(s, expandKeys(clusters, evaluateRule(rows, rule, now)))
 		case "composite", "lookalike":
 			derived = append(derived, s)

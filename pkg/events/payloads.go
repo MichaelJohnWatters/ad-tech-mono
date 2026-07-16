@@ -283,7 +283,13 @@ type BehaviourSignalEvent struct {
 	Categories    string    `json:"categories,omitempty"` // comma-separated content categories
 	Geo           string    `json:"geo,omitempty"`
 	Device        string    `json:"device,omitempty"`
-	ObservedAt    time.Time `json:"observed_at"`
+	// AccountID + Tag carry retargeting-pixel attribution (kind
+	// "site_visit"): the advertiser account whose site fired the pixel and
+	// its self-chosen tag ("product-page"). Rules scope site_visit rows to
+	// the segment's own account so tag names can't collide across tenants.
+	AccountID  string    `json:"account_id,omitempty"`
+	Tag        string    `json:"tag,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 // ReportCompletedEvent announces a finished report job. Published by the

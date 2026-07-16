@@ -66,6 +66,34 @@ type Signals struct {
 	GPPSID string
 }
 
+// SignalsFromQuery builds Signals from the regulatory query params an ad
+// tag / pixel carries (gdpr, gdpr_consent|consent, us_privacy, gpp,
+// gpp_sid, coppa, gpc) plus the Sec-GPC header value. Shared by the SSP's
+// behaviour capture and the tracker's retargeting pixel so the two
+// capture-time consent gates can't drift.
+func SignalsFromQuery(get func(string) string, secGPCHeader string) Signals {
+	consent := get("gdpr_consent")
+	if consent == "" {
+		consent = get("consent")
+	}
+	var gdpr, coppa int
+	if get("gdpr") == "1" {
+		gdpr = 1
+	}
+	if get("coppa") == "1" {
+		coppa = 1
+	}
+	return Signals{
+		GDPR:       gdpr,
+		TCFConsent: consent,
+		USPrivacy:  get("us_privacy"),
+		COPPA:      coppa,
+		GPC:        secGPCHeader == "1" || get("gpc") == "1",
+		GPP:        get("gpp"),
+		GPPSID:     get("gpp_sid"),
+	}
+}
+
 // Evaluate combines the platform opt-out registry level with the inbound
 // OpenRTB regulatory signals into a single verdict. Precedence:
 //
