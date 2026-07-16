@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -129,6 +130,39 @@ func registerCompactEndpoint(mux *http.ServeMux, sink *datalakeSink) {
 				// A table that was never written has no log — report, keep going.
 				out[table] = datalake.CompactResult{Table: table}
 				continue
+			}
+			out[table] = res
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}
+
+// registerVacuumEndpoint mounts POST /v1/datalake/vacuum: physically delete
+// tombstoned Parquet files older than the grace window (default 10m —
+// covers in-flight readers). The GDPR tail of PurgeRows: the filtered
+// rewrite tombstones the pre-purge files, this reclaims their bytes. Runs
+// here for the same single-writer reason as compact; triggered by the
+// batch-conductor chain right after compact (which itself tombstones the
+// packed files).
+func registerVacuumEndpoint(mux *http.ServeMux, sink *datalakeSink) {
+	mux.HandleFunc("POST "+routes.DatalakeVacuum, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		grace := 10 * time.Minute
+		if g := r.URL.Query().Get("grace"); g != "" {
+			parsed, err := time.ParseDuration(g)
+			if err != nil {
+				http.Error(w, `{"error":"invalid grace duration"}`, http.StatusBadRequest)
+				return
+			}
+			grace = parsed
+		}
+		ctx := r.Context()
+		out := map[string]datalake.VacuumResult{}
+		for _, table := range sink.Tables() {
+			res, err := sink.lake.Vacuum(ctx, table, grace)
+			if err != nil {
+				http.Error(w, `{"error":`+mustJSON(table+": "+err.Error())+`}`, http.StatusInternalServerError)
+				return
 			}
 			out[table] = res
 		}

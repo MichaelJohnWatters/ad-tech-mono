@@ -48,6 +48,10 @@ type Store interface {
 	// Compact bin-packs the table's active files into one (small-files fix).
 	Compact(ctx context.Context, table string) (CompactResult, error)
 
+	// Vacuum physically deletes tombstoned files older than grace — without
+	// it, PurgeRows-removed (GDPR) bytes persist in the bucket forever.
+	Vacuum(ctx context.Context, table string, grace time.Duration) (VacuumResult, error)
+
 	// Close releases resources.
 	Close() error
 }
@@ -250,6 +254,11 @@ func (m *MemoryStore) CountRows(_ context.Context, table string, match func(Reco
 		}
 	}
 	return n, nil
+}
+
+// Vacuum is a no-op for the in-memory store (rows are gone when purged).
+func (m *MemoryStore) Vacuum(_ context.Context, table string, _ time.Duration) (VacuumResult, error) {
+	return VacuumResult{Table: table}, nil
 }
 
 // Compact is a no-op for the in-memory store (no files to pack).

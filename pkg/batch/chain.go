@@ -4,8 +4,9 @@ package batch
 // existing job seams. Order IS the dependency graph:
 //
 //	1. checkpoint        (CRITICAL) — ingestion layer up? pipeline+reporting /readyz
-//	2. compact                      — pipeline POST /v1/datalake/compact
-//	                                  (in the pipeline's process: single-writer rule)
+//	2. compact → vacuum             — pipeline POST /v1/datalake/{compact,vacuum}
+//	                                  (in the pipeline's process: single-writer rule;
+//	                                  vacuum reclaims tombstoned bytes — the GDPR tail)
 //	3. rollup:minute…monthly        — reporting /debug/rollup/run?level=X, finest first
 //	4. profile-builder              — pkg/profilebuilder.Run in-process
 //	5. privacy-delete    → verify   — pkg/privacydelete in-process, verify AFTER delete
@@ -99,6 +100,29 @@ func StandardChain(d Deps) []Step {
 					}
 				}
 				return fmt.Sprintf("%d/%d tables packed (%d files removed)", packed, len(results), files), nil
+			},
+		},
+		{
+			Name: "vacuum",
+			Run: func(ctx context.Context) (string, error) {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.PipelineURL+routes.DatalakeVacuum, nil)
+				if err != nil {
+					return "", err
+				}
+				body, err := d.do(req)
+				if err != nil {
+					return "", err
+				}
+				var results map[string]datalake.VacuumResult
+				if err := json.Unmarshal(body, &results); err != nil {
+					return "", fmt.Errorf("decode vacuum results: %w", err)
+				}
+				files, bytes := 0, int64(0)
+				for _, r := range results {
+					files += r.FilesDeleted
+					bytes += r.BytesFreed
+				}
+				return fmt.Sprintf("%d tombstoned files deleted (%d bytes freed)", files, bytes), nil
 			},
 		},
 	}

@@ -89,7 +89,7 @@ FROM batch_runs WHERE run_id = $1::uuid ORDER BY seq`, res.RunID)
 		prevFinished = finished
 		steps = append(steps, step)
 	}
-	want := []string{"checkpoint", "compact", "rollup:minute", "rollup:hourly",
+	want := []string{"checkpoint", "compact", "vacuum", "rollup:minute", "rollup:hourly",
 		"rollup:daily", "rollup:monthly", "profile-builder", "privacy-delete", "privacy-verify"}
 	if strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Errorf("recorded steps = %v, want %v", steps, want)
