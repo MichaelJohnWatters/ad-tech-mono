@@ -1,0 +1,105 @@
+# Cache freshness & feedback loops - how serving memory stays fresh, and the
+# ONLY places analytics output flows back into the bid path.
+#
+# The design rule this diagram exists to show: there are two circulatory
+# systems. Serving caches feed from POSTGRES (+ NATS invalidates) — never
+# from the analytics spine — so a lagging/compacting/vacuuming pipeline can
+# never stale-out an auction. Analytics is read-side only, EXCEPT four
+# deliberate, numbered feedback loops.
+# Render: make diagrams
+
+direction: right
+
+# ============================================================
+# Source of truth
+# ============================================================
+pg: Postgres - system of record {
+  shape: cylinder
+  style.fill: "#dbeafe"
+  d: campaigns · placements · memberships · identity_graph · identity_clusters
+}
+
+nats: NATS {
+  shape: hexagon
+  style.fill: "#22c55e"
+  style.font-color: "#fff"
+}
+
+# ============================================================
+# SERVING PLANE - the bid path reads ONLY memory / Redis
+# ============================================================
+serving: Serving plane (hot path reads memory only) {
+  style.fill: "#eff6ff"
+
+  warm: In-process warm caches {
+    d: campaigns · placements · creatives · deals · publishers · secrets
+  }
+  redis: Redis {
+    shape: cylinder
+    style.fill: "#fecaca"
+    d: "audience:user:* memberships · dsp:budget:* pacing · balances · freq caps"
+  }
+  idsnap: DSP identity resolver (in-memory graph snapshot)
+}
+
+pg -> serving.warm: poll ~30s {style.stroke-dash: 2}
+nats -> serving.warm: "cache.invalidate.* (sub-second on writes)" {style.stroke-dash: 3}
+pg -> serving.redis: audience preloader 30s - bulk push + TOMBSTONE vanished members {style.stroke-dash: 2}
+pg -> serving.idsnap: interval preload (whole graph) {style.stroke-dash: 2}
+
+# ============================================================
+# ANALYTICS SPINE - read-side only, one-way
+# ============================================================
+analytics: Analytics spine (READ-SIDE - never feeds the bid path) {
+  style.fill: "#faf5ff"
+
+  ch: "ClickHouse hot (~1-2s behind live)" {
+    shape: cylinder
+    style.fill: "#faff69"
+    d: raw events + always-fresh hourly/daily MVs
+  }
+  lake: "Delta lake (10-15s micro-batches, no daily ETL)" {
+    shape: cylinder
+    style.fill: "#c72e49"
+    style.font-color: "#fff"
+  }
+}
+
+events: SSP · Exchange · Tracker (live traffic)
+events -> nats: events + behaviour + profile signals {style.stroke-dash: 3}
+nats -> analytics.ch: reporting consumer {style.stroke-dash: 3}
+nats -> analytics.lake: pipeline sink (ack-after-flush) {style.stroke-dash: 3}
+
+readers: Portals · reports · exports · profile API
+analytics.ch -> readers: hot window {style.stroke-dash: 2}
+analytics.lake -> readers: cold history (identical SQL) {style.stroke-dash: 2}
+
+# ============================================================
+# THE FOUR FEEDBACK LOOPS - analytics → serving, all deliberate
+# ============================================================
+loops: Feedback loops (the only analytics → serving paths) {
+  style.fill: "#fffbeb"
+
+  l1: "1 · MEMBERSHIPS - profile-builder (hourly chain) recomputes segments over the lake → PG → Redis ≤30s later. A behavioural rule reaches live auctions within one preload cycle."
+  l2: "2 · MONEY - billing engine computes committed spend from ingested events → NATS spend snapshot → DSP overwrites its Redis pacing counters to billed reality."
+  l3: "3 · WARM-STARTS (boot) - adserver bandit seeds from historical CTR; exchange SmartRouter from dsp_calls. Then live signals take over."
+  l4: "4 · IDENTITY - identity-consumer streams graph edges → PG → DSP in-memory snapshot; profile-builder pre-expands memberships across clusters so loop 1 covers every device of a person."
+}
+
+analytics.lake -> loops.l1 {style.stroke-dash: 2}
+loops.l1 -> pg: audience_segment_members (replace-by-segment)
+loops.l2 -> serving.redis: pacing reconcile {style.stroke-dash: 3}
+analytics.ch -> loops.l2 {style.stroke-dash: 2}
+loops.l4 -> pg: identity_graph edges
+
+legend: Legend {
+  near: bottom-right
+  style.fill: "#f8fafc"
+  a: A
+  b: B
+  c: C
+  d: D
+  a -> b: sync call
+  a -> c: async NATS {style.stroke-dash: 3}
+  a -> d: read / poll {style.stroke-dash: 2}
+}
