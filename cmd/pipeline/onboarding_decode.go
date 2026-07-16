@@ -25,6 +25,20 @@ import (
 // maxDecompressedBytes bounds a decompressed drop-zone file (zip-bomb guard).
 const maxDecompressedBytes = 256 << 20
 
+// readAllBounded reads up to the decompression bound and ERRORS past it —
+// a plain LimitReader would silently truncate an oversized file, ingesting
+// a partial audience list as if it were complete.
+func readAllBounded(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxDecompressedBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDecompressedBytes {
+		return nil, fmt.Errorf("decompressed size exceeds %d bytes", maxDecompressedBytes)
+	}
+	return data, nil
+}
+
 // decodeOnboardingFile turns a raw drop-zone file into pipeline records,
 // auto-detecting compression and format. A zip archive's supported entries
 // are concatenated — a provider shipping one segment as N part-files inside
@@ -38,7 +52,7 @@ func decodeOnboardingFile(ctx context.Context, name string, body []byte) ([]pipe
 		if err != nil {
 			return nil, fmt.Errorf("gzip: %w", err)
 		}
-		inner, err := io.ReadAll(io.LimitReader(zr, maxDecompressedBytes))
+		inner, err := readAllBounded(zr)
 		if err != nil {
 			return nil, fmt.Errorf("gunzip: %w", err)
 		}
@@ -63,7 +77,7 @@ func decodeZip(ctx context.Context, body []byte) ([]pipeline.Record, error) {
 		if err != nil {
 			return nil, fmt.Errorf("zip entry %s: %w", f.Name, err)
 		}
-		inner, err := io.ReadAll(io.LimitReader(rc, maxDecompressedBytes))
+		inner, err := readAllBounded(rc)
 		rc.Close()
 		if err != nil {
 			return nil, fmt.Errorf("zip entry %s: %w", f.Name, err)

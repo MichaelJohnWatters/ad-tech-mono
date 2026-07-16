@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 )
@@ -74,6 +75,91 @@ func TestPurgeRowsFilteredRewrite(t *testing.T) {
 	if len(txnsAfter) != len(txnsBefore) {
 		t.Errorf("no-op purge wrote a commit (%d → %d)", len(txnsBefore), len(txnsAfter))
 	}
+}
+
+// TestVacuumReclaimsPurgedBytes proves the GDPR tail: PurgeRows tombstones
+// the pre-purge files but their BYTES remain in the bucket until Vacuum
+// physically deletes them. Grace-window semantics: recent tombstones
+// survive, expired ones go, active files are never touched.
+func TestVacuumReclaimsPurgedBytes(t *testing.T) {
+	ctx := context.Background()
+	o := newTestStore(t)
+	schema := Schema{Version: 1, Columns: []Column{{Name: "user_id", Type: "string", Nullable: true}}}
+	if err := o.Write(ctx, "t", []Record{{"user_id": "victim"}, {"user_id": "keeper"}}, schema); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := o.PurgeRows(ctx, "t", func(r Record) bool { return r["user_id"] == "victim" }); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	// The tombstoned pre-purge file still physically exists.
+	tombstoned := tombstonedPaths(t, o, "t")
+	if len(tombstoned) == 0 {
+		t.Fatal("purge left no tombstoned files (test premise broken)")
+	}
+	for _, p := range tombstoned {
+		if ok, _ := o.obj.Exists(ctx, o.bucket, p); !ok {
+			t.Fatalf("tombstoned file %s already gone before vacuum", p)
+		}
+	}
+
+	// A wide grace window deletes nothing.
+	res, err := o.Vacuum(ctx, "t", time.Hour)
+	if err != nil {
+		t.Fatalf("vacuum(1h): %v", err)
+	}
+	if res.FilesDeleted != 0 {
+		t.Errorf("vacuum inside grace deleted %d files, want 0", res.FilesDeleted)
+	}
+
+	// Grace 0 physically deletes the tombstoned bytes...
+	res, err = o.Vacuum(ctx, "t", 0)
+	if err != nil {
+		t.Fatalf("vacuum(0): %v", err)
+	}
+	if res.FilesDeleted != len(tombstoned) {
+		t.Errorf("vacuum deleted %d files, want %d", res.FilesDeleted, len(tombstoned))
+	}
+	for _, p := range tombstoned {
+		if ok, _ := o.obj.Exists(ctx, o.bucket, p); ok {
+			t.Errorf("tombstoned file %s still exists after vacuum — purged bytes persist", p)
+		}
+	}
+	// ...while the survivor's data stays fully readable.
+	rows, err := o.Read(ctx, "t", Filter{})
+	if err != nil {
+		t.Fatalf("read after vacuum: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["user_id"] != "keeper" {
+		t.Errorf("post-vacuum rows = %v, want just keeper", rows)
+	}
+}
+
+// tombstonedPaths lists files with a remove action and no active add.
+func tombstonedPaths(t *testing.T, o *ObjectStore, table string) []string {
+	t.Helper()
+	txns, err := o.Log(context.Background(), table)
+	if err != nil {
+		t.Fatalf("log: %v", err)
+	}
+	active := map[string]bool{}
+	removed := map[string]bool{}
+	for _, tx := range txns {
+		switch tx.Action {
+		case "add":
+			active[tx.Path] = true
+		case "remove":
+			delete(active, tx.Path)
+			removed[tx.Path] = true
+		}
+	}
+	var out []string
+	for p := range removed {
+		if !active[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func TestPurgeRowsRemovesWholeTable(t *testing.T) {

@@ -434,6 +434,66 @@ func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Re
 	return removed, nil
 }
 
+// VacuumResult reports what a Vacuum pass physically deleted.
+type VacuumResult struct {
+	Table        string
+	FilesDeleted int
+	BytesFreed   int64
+}
+
+// Vacuum PHYSICALLY deletes tombstoned Parquet files — the storage-level
+// companion to PurgeRows and Compact. A Delta remove action only drops a
+// file from the active set; its bytes stay in the bucket (time-travel
+// semantics), which for a GDPR purge means the user's data still exists on
+// disk even though every reader sees it gone. Vacuum deletes files whose
+// remove action is older than grace; the grace window covers in-flight
+// readers that replayed the log just before the tombstone (all our readers
+// — Read, Compact, DuckDB delta_scan — resolve the active set from the log,
+// so only a reader mid-flight at tombstone time can still want the bytes).
+// Time travel to pre-vacuum versions is deliberately given up, matching
+// Delta's own VACUUM contract.
+func (o *ObjectStore) Vacuum(ctx context.Context, table string, grace time.Duration) (VacuumResult, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	res := VacuumResult{Table: table}
+	txns, err := o.Log(ctx, table)
+	if err != nil {
+		return res, err
+	}
+	active := map[string]bool{}
+	size := map[string]int64{}
+	removedAt := map[string]time.Time{}
+	for _, t := range txns {
+		switch t.Action {
+		case "add":
+			active[t.Path] = true
+			size[t.Path] = t.ByteSize
+			delete(removedAt, t.Path) // re-add (never happens with our writer, but be safe)
+		case "remove":
+			delete(active, t.Path)
+			if t.Timestamp.After(removedAt[t.Path]) {
+				removedAt[t.Path] = t.Timestamp
+			}
+		}
+	}
+	cutoff := time.Now().UTC().Add(-grace)
+	for path, ts := range removedAt {
+		if active[path] || ts.After(cutoff) {
+			continue
+		}
+		if err := o.obj.Delete(ctx, o.bucket, path); err != nil {
+			return res, fmt.Errorf("vacuum delete %s: %w", path, err)
+		}
+		res.FilesDeleted++
+		res.BytesFreed += size[path]
+	}
+	if res.FilesDeleted > 0 {
+		o.log.Info("datalake vacuum", "table", table, "files_deleted", res.FilesDeleted, "bytes_freed", res.BytesFreed)
+	}
+	return res, nil
+}
+
 // CountRows counts rows matching match across the active file set — the
 // read-only verification counterpart of PurgeRows (privacy-verify residual
 // checks).

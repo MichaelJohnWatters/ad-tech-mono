@@ -234,6 +234,10 @@ const (
 	// standalone cmd/compact CronJob risked). Triggered by the
 	// batch-conductor's chain.
 	DatalakeCompact = "/v1/datalake/compact"
+	// DatalakeVacuum (POST ?grace=10m) physically deletes tombstoned Parquet
+	// files older than grace — the storage-level tail of the GDPR purge and
+	// of compaction. Same single-writer placement as compact.
+	DatalakeVacuum = "/v1/datalake/vacuum"
 )
 
 // ============================================================
