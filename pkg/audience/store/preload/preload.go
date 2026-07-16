@@ -32,11 +32,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
 
 // Preloader periodically pumps audience_segment_members into Redis and
@@ -60,6 +62,11 @@ type Preloader struct {
 	// previous cycle, diffed to tombstone users whose memberships vanished.
 	mu       sync.Mutex
 	prevKeys map[string]bool
+
+	// refreshQueued coalesces invalidate bursts (the profile-builder
+	// publishes one message per changed segment) into a single debounced
+	// refresh.
+	refreshQueued atomic.Bool
 }
 
 // Config tunes the preloader. Interval defaults to 30s, TTL to 90s
@@ -172,6 +179,52 @@ func (p *Preloader) lookup(ctx context.Context, userID, visibility string) ([]st
 		return nil, nil
 	}
 	return out, nil
+}
+
+// SubscribeInvalidate wires adtech.cache.invalidate.audience to a debounced
+// refresh, closing the gap between a membership write (upload, drop-zone,
+// profile-builder) and the bid path seeing it: seconds instead of the poll
+// interval. Per-POD consumer group for broadcast semantics — same rationale
+// as pkg/cache/warm: a shared group would load-balance invalidates so only
+// one pod refreshed per message. Failure degrades to poll-only (the 30s
+// interval remains the staleness ceiling either way).
+func (p *Preloader) SubscribeInvalidate(ctx context.Context, bus events.EventBus, service string) {
+	if bus == nil {
+		return
+	}
+	podID := os.Getenv("POD_NAME")
+	if podID == "" {
+		podID = fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	group := service + "-audience-" + podID
+	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateAudience, group, func(_ context.Context, msg *events.Message) error {
+		p.requestRefresh()
+		_ = msg.Ack()
+		return nil
+	})
+	if err != nil {
+		p.log.Warn("audience invalidate subscribe failed (poll-only)", "error", err)
+		return
+	}
+	p.log.Info("audience preloader subscribed to invalidates", "group", group)
+}
+
+// requestRefresh schedules one debounced preload (~1s) — a burst of
+// invalidates becomes a single refresh; preloadOnce's mutex serializes it
+// against the interval loop.
+func (p *Preloader) requestRefresh() {
+	if !p.refreshQueued.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		time.Sleep(time.Second)
+		p.refreshQueued.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := p.preloadOnce(ctx); err != nil {
+			p.log.Warn("audience preload (invalidate-triggered) failed", "error", err)
+		}
+	}()
 }
 
 func (p *Preloader) loop() {

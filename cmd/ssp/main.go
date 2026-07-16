@@ -118,6 +118,13 @@ func main() {
 		lc.OnShutdown("ssp-mgmt-db", func(ctx context.Context) error { return mgmtDB.Close() })
 	}
 	bus, _ := natsbus.New(keys.NATS.URL.Get(cfg), constants.ServiceSSP, log)
+	// Membership invalidates → near-immediate preloader refresh, so an
+	// upload / drop-zone file / profile-builder run reaches SSP stamping in
+	// seconds instead of the 30s poll. (This subject previously had three
+	// publishers and ZERO subscribers — a dead letter.)
+	if bus != nil && audiencePreloader != nil {
+		audiencePreloader.SubscribeInvalidate(context.Background(), bus, constants.ServiceSSP)
+	}
 	if bus != nil {
 		lc.OnShutdown("ssp-mgmt-bus", func(ctx context.Context) error { return bus.Close() })
 	}

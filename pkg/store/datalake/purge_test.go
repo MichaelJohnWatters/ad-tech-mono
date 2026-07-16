@@ -162,6 +162,89 @@ func tombstonedPaths(t *testing.T, o *ObjectStore, table string) []string {
 	return out
 }
 
+// TestVersionAllocationSurvivesInterleaving locks in the max+1 version fix:
+// the original allocator counted log TRANSACTIONS in Compact/PurgeRows but
+// log FILES in Write, so interleaved writes/compactions eventually
+// OVERWROTE a commit — resurrecting tombstoned files as active, whose bytes
+// Vacuum had already deleted (observed live as "read part-00044: key does
+// not exist"). This interleaves every mutation and proves the log stays
+// coherent and every active file physically exists.
+func TestVersionAllocationSurvivesInterleaving(t *testing.T) {
+	ctx := context.Background()
+	o := newTestStore(t)
+	schema := Schema{Version: 1, Columns: []Column{{Name: "user_id", Type: "string", Nullable: true}}}
+	write := func(ids ...string) {
+		t.Helper()
+		recs := make([]Record, len(ids))
+		for i, id := range ids {
+			recs[i] = Record{"user_id": id}
+		}
+		if err := o.Write(ctx, "t", recs, schema); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	write("a1", "a2")
+	write("b1")
+	write("c1")
+	if _, err := o.Compact(ctx, "t"); err != nil {
+		t.Fatalf("compact 1: %v", err)
+	}
+	write("d1") // the old allocator collided right here eventually
+	if _, err := o.PurgeRows(ctx, "t", func(r Record) bool { return r["user_id"] == "b1" }); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	write("e1")
+	if _, err := o.Compact(ctx, "t"); err != nil {
+		t.Fatalf("compact 2: %v", err)
+	}
+	if _, err := o.Vacuum(ctx, "t", 0); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	write("f1")
+
+	// Every active file must physically exist, and the surviving row set is
+	// exactly what the mutations imply — nothing resurrected, nothing lost.
+	txns, err := o.Log(ctx, "t")
+	if err != nil {
+		t.Fatalf("log: %v", err)
+	}
+	active := map[string]bool{}
+	for _, tx := range txns {
+		switch tx.Action {
+		case "add":
+			active[tx.Path] = true
+		case "remove":
+			delete(active, tx.Path)
+		}
+	}
+	for p := range active {
+		if ok, _ := o.obj.Exists(ctx, o.bucket, p); !ok {
+			t.Errorf("active file %s does not exist — log corrupted", p)
+		}
+	}
+	rows, err := o.Read(ctx, "t", Filter{})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r["user_id"].(string)]++
+	}
+	want := []string{"a1", "a2", "c1", "d1", "e1", "f1"}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v, want exactly %v", got, want)
+	}
+	for _, id := range want {
+		if got[id] != 1 {
+			t.Errorf("row %s count = %d, want 1", id, got[id])
+		}
+	}
+	if got["b1"] != 0 {
+		t.Error("purged row b1 resurrected")
+	}
+}
+
 func TestPurgeRowsRemovesWholeTable(t *testing.T) {
 	ctx := context.Background()
 	o := newTestStore(t)
