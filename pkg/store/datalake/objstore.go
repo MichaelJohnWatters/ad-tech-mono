@@ -94,13 +94,10 @@ func (o *ObjectStore) Write(ctx context.Context, table string, records []Record,
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// Next version = number of existing commit files (0-based, contiguous — Delta
-	// requires a gap-free version sequence).
-	existing, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
+	version, err := o.nextVersionLocked(ctx, table)
 	if err != nil {
-		return fmt.Errorf("list delta log: %w", err)
+		return err
 	}
-	version := len(existing)
 
 	// Encode the records as Parquet.
 	parquetBytes, err := o.encodeParquet(records, schema)
@@ -308,7 +305,10 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 	// Write the consolidated file, then commit ONE atomic Delta transaction that
 	// adds it and removes every superseded file. (A single commit means a reader
 	// never sees the new file alongside the old ones — no double-count window.)
-	version := len(txns)
+	version, err := o.nextVersionLocked(ctx, table)
+	if err != nil {
+		return res, err
+	}
 	parquetBytes, err := o.encodeParquet(records, schema)
 	if err != nil {
 		return res, fmt.Errorf("encode parquet: %w", err)
@@ -389,7 +389,10 @@ func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Re
 		return 0, nil
 	}
 
-	version := len(txns)
+	version, err := o.nextVersionLocked(ctx, table)
+	if err != nil {
+		return 0, err
+	}
 	now := time.Now().UTC()
 	removes := make([]deltaRemove, 0, len(paths))
 	for _, p := range paths {
@@ -542,9 +545,37 @@ func activeFiles(txns []Transaction) (paths []string, schema Schema, haveSchema 
 	return paths, schema, haveSchema
 }
 
-// putLogFile writes one Delta commit file at the given version.
+// nextVersionLocked allocates the next Delta version: HIGHEST existing
+// version + 1, never a count. Counting diverges the moment anything is
+// non-uniform — the original bug counted log TRANSACTIONS in Compact but
+// log FILES in Write, so a later flush eventually overwrote a compaction
+// commit, silently resurrecting its tombstoned files as active… whose bytes
+// Vacuum had by then legitimately deleted. Max+1 is also immune to
+// historical gaps that the old allocator left behind. Caller must hold mu.
+func (o *ObjectStore) nextVersionLocked(ctx context.Context, table string) (int, error) {
+	keys, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
+	if err != nil {
+		return 0, fmt.Errorf("list delta log: %w", err)
+	}
+	next := 0
+	for _, k := range keys {
+		if v, ok := versionFromLogKey(k); ok && v >= next {
+			next = v + 1
+		}
+	}
+	return next, nil
+}
+
+// putLogFile writes one Delta commit file at the given version. Overwriting
+// an existing commit would silently drop its adds/removes from the log
+// (corrupting the active set), so an existing key fails loudly — under the
+// single-writer lock it can only mean a version-allocation bug.
 func (o *ObjectStore) putLogFile(ctx context.Context, table string, version int, body []byte) error {
-	if err := o.obj.Put(ctx, o.bucket, deltaLogKey(table, version), bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
+	key := deltaLogKey(table, version)
+	if exists, err := o.obj.Exists(ctx, o.bucket, key); err == nil && exists {
+		return fmt.Errorf("delta log v%d already exists for %s — version allocation bug, refusing to overwrite", version, table)
+	}
+	if err := o.obj.Put(ctx, o.bucket, key, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
 		return fmt.Errorf("put delta log v%d: %w", version, err)
 	}
 	return nil
