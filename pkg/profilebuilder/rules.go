@@ -29,6 +29,74 @@ type Rule struct {
 	WindowDays  int    `json:"window_days,omitempty"` // default 30
 }
 
+// RuleKind extracts the rule's kind for dispatch: "" or "behaviour" →
+// behavioural (the original rule shape); "composite" and "lookalike" are
+// the derived-segment kinds evaluated AFTER behavioural rules in a run.
+func RuleKind(raw []byte) string {
+	var probe struct {
+		Kind string `json:"kind"`
+	}
+	_ = json.Unmarshal(raw, &probe)
+	return probe.Kind
+}
+
+// CompositeRule derives a segment from OTHER segments with boolean set
+// logic, evaluated at PERSON level: a person qualifies when it has a member
+// in every all_of segment, at least one any_of segment (when set), and no
+// none_of segment. Referenced segments must belong to the same account.
+// Composite-of-composite sees the PREVIOUS run's members (single pass).
+type CompositeRule struct {
+	AllOf  []string `json:"all_of,omitempty"`
+	AnyOf  []string `json:"any_of,omitempty"`
+	NoneOf []string `json:"none_of,omitempty"`
+}
+
+// ParseCompositeRule decodes + validates a composite rule.
+func ParseCompositeRule(raw []byte) (CompositeRule, error) {
+	var r CompositeRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return r, fmt.Errorf("parse composite rule: %w", err)
+	}
+	if len(r.AllOf)+len(r.AnyOf) == 0 {
+		return r, fmt.Errorf("composite rule needs all_of or any_of")
+	}
+	return r, nil
+}
+
+// LookalikeRule derives a segment of persons whose behavioural category
+// profile resembles a seed segment's. Heuristic MVP (deliberately simple +
+// deterministic, the rule shape leaves room for a model later): take the
+// seed persons' TOP-K categories, score every other person by the fraction
+// of those categories they share, enroll score ≥ min_similarity up to
+// max_members.
+type LookalikeRule struct {
+	SeedSegment   string  `json:"seed_segment"`
+	TopCategories int     `json:"top_categories,omitempty"` // default 10
+	MinSimilarity float64 `json:"min_similarity,omitempty"` // default 0.5
+	MaxMembers    int     `json:"max_members,omitempty"`    // default 1000
+}
+
+// ParseLookalikeRule decodes + defaults a lookalike rule.
+func ParseLookalikeRule(raw []byte) (LookalikeRule, error) {
+	var r LookalikeRule
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return r, fmt.Errorf("parse lookalike rule: %w", err)
+	}
+	if r.SeedSegment == "" {
+		return r, fmt.Errorf("lookalike rule needs seed_segment")
+	}
+	if r.TopCategories < 1 {
+		r.TopCategories = 10
+	}
+	if r.MinSimilarity <= 0 {
+		r.MinSimilarity = 0.5
+	}
+	if r.MaxMembers < 1 {
+		r.MaxMembers = 1000
+	}
+	return r, nil
+}
+
 // ParseRule decodes + defaults a segment's rule JSONB.
 func ParseRule(raw []byte) (Rule, error) {
 	var r Rule

@@ -26,8 +26,8 @@ func TestBuildClusters(t *testing.T) {
 		adj := adjacency(
 			[3]any{"u1", "em:a", 1.0},
 			[3]any{"em:a", "dev1", 1.0},
-			[3]any{"u2", "dev2", 1.0},   // separate cluster
-			[3]any{"u1", "u2", 0.3},     // weak probabilistic edge — must NOT merge
+			[3]any{"u2", "dev2", 1.0}, // separate cluster
+			[3]any{"u1", "u2", 0.3},   // weak probabilistic edge — must NOT merge
 			[3]any{"solo", "solo2", 1.0},
 		)
 		c, dropped := buildClusters(adj, 0.5, 100)
