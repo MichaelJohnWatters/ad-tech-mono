@@ -94,6 +94,55 @@ func TestProfileOnboardingCSVUpload(t *testing.T) {
 	}
 }
 
+// TestOnboardingRetentionSweep — processed/rejected artifact bytes are
+// deleted once their run ages past pipeline.onboarding_retention (30d
+// default): a backdated run row makes the live poller sweep on its next
+// tick, the objects disappear, and the run row survives stamped swept_at.
+func TestOnboardingRetentionSweep(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	obj, bucket := h.OnboardingBucket(t)
+	ctx := context.Background()
+	provider := fmt.Sprintf("sweep-%d", time.Now().UnixNano())
+
+	put := func(key, body string) {
+		t.Helper()
+		if err := obj.Put(ctx, bucket, key, strings.NewReader(body), int64(len(body)), "text/csv"); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+	put(provider+"/processed/old.csv", "user_id\nu1\n")
+	put(provider+"/rejected/old.csv", "user_id,_errors\n,missing\n")
+	put(provider+"/rejected/old.csv.error.txt", "reason")
+
+	var runID string
+	if err := h.DB.QueryRow(`
+INSERT INTO onboarding_runs (provider, file_key, rejected_key, status, started_at, finished_at)
+VALUES ($1, $2, $3, 'completed', now() - interval '31 days', now() - interval '31 days')
+RETURNING id::text`, provider, provider+"/incoming/old.csv", provider+"/rejected/old.csv").Scan(&runID); err != nil {
+		t.Fatalf("seed old run: %v", err)
+	}
+
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		var sweptAt *time.Time
+		if err := h.DB.QueryRow(`SELECT swept_at FROM onboarding_runs WHERE id = $1::uuid`, runID).Scan(&sweptAt); err != nil {
+			t.Fatalf("read swept_at: %v", err)
+		}
+		if sweptAt != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("poller never swept the aged run")
+		}
+		time.Sleep(3 * time.Second)
+	}
+	for _, key := range []string{provider + "/processed/old.csv", provider + "/rejected/old.csv", provider + "/rejected/old.csv.error.txt"} {
+		if ok, _ := obj.Exists(ctx, bucket, key); ok {
+			t.Errorf("%s survived the retention sweep", key)
+		}
+	}
+}
+
 func TestProfileOnboardingDropZone(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "profile-dz")

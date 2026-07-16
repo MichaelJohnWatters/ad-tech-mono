@@ -19,7 +19,7 @@ import (
 
 func main() {
 	log := logger.New(constants.ServicePipeline)
-	sc := config.Setup(constants.ServicePipeline, nil, log)
+	sc := config.Setup(constants.ServicePipeline, keys.PipelineSchema(), log)
 	cfg := sc.Cfg
 	_ = sc
 	hlth := health.New()

@@ -98,6 +98,7 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		lc.OnShutdown("onboarding-nats", func(_ context.Context) error { return bus.Close() })
 	}
 
+	o.retention = func() time.Duration { return keys.Pipeline.OnboardingRetention.Get(cfg) }
 	interval := keys.Pipeline.OnboardingPollEvery.Get(cfg)
 	stop := make(chan struct{})
 	lc.OnShutdown("onboarding-poller", func(_ context.Context) error { close(stop); return nil })
@@ -156,6 +157,11 @@ type onboarder struct {
 	bus     events.EventBus
 	pipe    *pipeline.Pipeline
 	log     *slog.Logger
+	// retention bounds how long processed/rejected artifact BYTES live in
+	// the bucket after ingestion; the onboarding_runs row survives the
+	// sweep. A func so the TierLive config key applies on the next tick
+	// without a restart.
+	retention func() time.Duration
 }
 
 // defaultIDMappings normalize the common id column names to id_value so a
@@ -187,6 +193,76 @@ func (o *onboarder) tick(ctx context.Context) {
 		}
 		o.processFile(ctx, parts[0], key)
 	}
+	o.sweep(ctx)
+}
+
+// sweep deletes processed/rejected artifact bytes for runs older than the
+// retention window and stamps swept_at — the run's stats stay queryable in
+// the monitor forever, only the object copies go. Without this, processed/
+// and rejected/ grow unbounded (the original file is only ever MOVED there,
+// never deleted; decompression happens in memory so there is no separate
+// unzipped copy to worry about).
+func (o *onboarder) sweep(ctx context.Context) {
+	if o.db == nil || o.retention == nil {
+		return
+	}
+	retention := o.retention()
+	if retention <= 0 {
+		return // 0/negative = retention disabled, keep artifacts forever
+	}
+	rows, err := o.db.QueryContext(ctx, `
+SELECT id::text, provider, file_key, COALESCE(rejected_key, '')
+FROM onboarding_runs
+WHERE swept_at IS NULL AND finished_at < now() - $1::interval
+LIMIT 200`, fmt.Sprintf("%f seconds", retention.Seconds()))
+	if err != nil {
+		o.log.Error("onboarding sweep: query failed", "error", err)
+		return
+	}
+	type target struct{ id, provider, fileKey, rejectedKey string }
+	var targets []target
+	for rows.Next() {
+		var t target
+		if err := rows.Scan(&t.id, &t.provider, &t.fileKey, &t.rejectedKey); err == nil {
+			targets = append(targets, t)
+		}
+	}
+	rows.Close()
+
+	swept := 0
+	for _, t := range targets {
+		if err := o.deleteArtifacts(ctx, t.provider, t.fileKey, t.rejectedKey); err != nil {
+			// Transient object-store failure — retry next tick (swept_at
+			// stays NULL).
+			o.log.Error("onboarding sweep: delete failed (will retry)", "file", t.fileKey, "error", err)
+			continue
+		}
+		if _, err := o.db.ExecContext(ctx, `UPDATE onboarding_runs SET swept_at = now() WHERE id = $1::uuid`, t.id); err != nil {
+			o.log.Error("onboarding sweep: mark failed", "run", t.id, "error", err)
+			continue
+		}
+		swept++
+	}
+	if swept > 0 {
+		o.log.Info("onboarding sweep: artifacts deleted", "runs", swept, "retention", retention.String())
+	}
+}
+
+// deleteArtifacts removes every bucket copy a run can have left behind:
+// the processed/ copy of the source file, the rejected-rows CSV, and the
+// quarantine error marker. Delete is a no-op on missing keys, so the
+// quarantined-whole-file case (no processed copy) needs no branching.
+func (o *onboarder) deleteArtifacts(ctx context.Context, provider, fileKey, rejectedKey string) error {
+	targets := []string{provider + "/processed/" + path.Base(fileKey)}
+	if rejectedKey != "" {
+		targets = append(targets, rejectedKey, rejectedKey+".error.txt")
+	}
+	for _, key := range targets {
+		if err := o.obj.Delete(ctx, o.bucket, key); err != nil {
+			return fmt.Errorf("delete %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func (o *onboarder) processFile(ctx context.Context, provider, key string) {

@@ -39,6 +39,41 @@ func TestRenderRejectedCSV(t *testing.T) {
 	}
 }
 
+// TestDeleteArtifacts — the retention sweep's object-deletion half removes
+// every copy a run leaves behind and tolerates the quarantined-whole-file
+// case (no processed/ copy).
+func TestDeleteArtifacts(t *testing.T) {
+	obj, err := fs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("fs.New: %v", err)
+	}
+	ctx := context.Background()
+	const bucket = "adtech-onboarding"
+	_ = obj.EnsureBucket(ctx, bucket)
+	put := func(key string) {
+		if err := obj.Put(ctx, bucket, key, strings.NewReader("x"), 1, "text/csv"); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+	put("acme/processed/list.csv.gz")
+	put("acme/rejected/list.csv.gz")
+	put("acme/rejected/list.csv.gz.error.txt")
+
+	o := &onboarder{obj: obj, bucket: bucket, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := o.deleteArtifacts(ctx, "acme", "acme/incoming/list.csv.gz", "acme/rejected/list.csv.gz"); err != nil {
+		t.Fatalf("deleteArtifacts: %v", err)
+	}
+	for _, key := range []string{"acme/processed/list.csv.gz", "acme/rejected/list.csv.gz", "acme/rejected/list.csv.gz.error.txt"} {
+		if ok, _ := obj.Exists(ctx, bucket, key); ok {
+			t.Errorf("%s survived the sweep", key)
+		}
+	}
+	// Quarantine-only run (no processed copy, no rejected key) is a no-op.
+	if err := o.deleteArtifacts(ctx, "acme", "acme/incoming/ghost.csv", ""); err != nil {
+		t.Errorf("no-op sweep errored: %v", err)
+	}
+}
+
 // TestOnboarderQuarantinesFileWithoutManifest exercises the poller's content-
 // failure path against a real (filesystem) object store: a CSV landing in a
 // provider zone with no manifest.json moves to rejected/ with an error
