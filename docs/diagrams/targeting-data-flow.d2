@@ -15,7 +15,7 @@ observed: Observed - pixel & auction side {
 
   user: Browser / CTV device {shape: person}
   adtag: Ad tag + pixels (adtech.js)
-  retarget: Retargeting pixel on advertiser sites 🚧
+  retarget: Retargeting pixel on advertiser sites (/v1/t/rt)
 
   user -> adtag
   user -> retarget
@@ -26,7 +26,7 @@ tracker: Tracker :8083 {style.fill: "#60a5fa"}
 
 observed.adtag -> ssp: ad request - user_id, uid2, hashed_email, ifa, IP->household, page context
 observed.adtag -> tracker: impression / click / conversion / view
-observed.retarget -> tracker: advertiser-site visit events 🚧
+observed.retarget -> tracker: site_visit rows - consent-gated at capture, account+tag attributed
 
 # ============================================================
 # Source side B - ONBOARDED (first + third party)

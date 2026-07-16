@@ -170,7 +170,8 @@ var eventTables = map[string]struct {
 	events.SubjectBehaviourObserved: {behaviourSignalsTable, datalake.Schema{Version: 1, Columns: []datalake.Column{
 		str("trace_id"), str("kind"), str("user_id"), str("household_id"),
 		str("placement_id"), str("publisher_id"), str("campaign_id"), str("creative_id"),
-		str("channel"), str("categories"), str("geo"), str("device"), ts("observed_at"),
+		str("channel"), str("categories"), str("geo"), str("device"),
+		str("account_id"), str("tag"), ts("observed_at"),
 	}}},
 }
 

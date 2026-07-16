@@ -26,6 +26,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -298,6 +299,28 @@ func main() {
 	})
 
 	// Conversion pixel
+	// Retargeting pixel — embedded on ADVERTISER sites (not our serving
+	// chain), so there is no HMAC (a third-party page can't sign) and no
+	// serve context. Consent is evaluated HERE from the pixel's regulatory
+	// params (unlike serve beacons, where the consented uid was baked in by
+	// the ad server). The pixel always renders regardless of capture, so
+	// the page can't observe the consent decision. Worst-case abuse is an
+	// advertiser polluting its OWN retargeting pool (rows are scoped to the
+	// aid account at rule evaluation).
+	mux.HandleFunc(routes.TrackerRetarget, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		ctx := logger.WithTraceID(r.Context(), q.Get("tid"))
+		reqLog := logger.WithContext(log, ctx)
+		uid, aid := q.Get("uid"), q.Get("aid")
+		if uid != "" && aid != "" &&
+			privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC"))).Personalise {
+			go publisher.publishBehaviour(context.WithoutCancel(ctx), "site_visit", q, reqLog)
+		}
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
+		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
+		w.Write(pixel)
+	})
+
 	mux.HandleFunc(routes.TrackerConversion, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		traceID := q.Get("tid")
@@ -627,7 +650,11 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 		Channel:       channelOrDefault(q.Get("ch")),
 		Geo:           q.Get("geo"),
 		Device:        q.Get("dev"),
-		ObservedAt:    time.Now().UTC(),
+		// Retargeting-pixel attribution (kind site_visit): the advertiser
+		// account whose site fired the pixel + its self-chosen tag.
+		AccountID:  q.Get("aid"),
+		Tag:        q.Get("tag"),
+		ObservedAt: time.Now().UTC(),
 	}
 	if err := p.typed.PublishJSON(ctx, events.SubjectBehaviourObserved, ev); err != nil {
 		log.Warn("publish behaviour failed", "kind", kind, "error", err)

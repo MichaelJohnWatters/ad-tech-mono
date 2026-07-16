@@ -25,8 +25,16 @@ type Rule struct {
 	Channel     string `json:"channel,omitempty"`
 	CampaignID  string `json:"campaign_id,omitempty"`
 	PublisherID string `json:"publisher_id,omitempty"`
-	MinCount    int    `json:"min_count,omitempty"`   // default 1
-	WindowDays  int    `json:"window_days,omitempty"` // default 30
+	// Tag filters retargeting-pixel rows (event "site_visit") by the
+	// advertiser's self-chosen pixel tag.
+	Tag        string `json:"tag,omitempty"`
+	MinCount   int    `json:"min_count,omitempty"`   // default 1
+	WindowDays int    `json:"window_days,omitempty"` // default 30
+
+	// accountID is set by the builder, never from JSONB: site_visit rows
+	// are scoped to the segment's own account so pixel tags can't collide
+	// across tenants.
+	accountID string
 }
 
 // RuleKind extracts the rule's kind for dispatch: "" or "behaviour" →
@@ -131,6 +139,12 @@ func (r Rule) matches(rec datalake.Record) bool {
 		return false
 	}
 	if r.Category != "" && !hasCategory(str(rec["categories"]), r.Category) {
+		return false
+	}
+	if r.Tag != "" && str(rec["tag"]) != r.Tag {
+		return false
+	}
+	if r.accountID != "" && str(rec["account_id"]) != r.accountID {
 		return false
 	}
 	return true

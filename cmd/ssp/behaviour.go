@@ -93,24 +93,5 @@ func behaviourUserKey(r *http.Request) string {
 // purges the lake.
 func requestConsent(r *http.Request) privacy.Decision {
 	q := r.URL.Query()
-	consent := q.Get("gdpr_consent")
-	if consent == "" {
-		consent = q.Get("consent")
-	}
-	var gdpr, coppa int
-	if q.Get("gdpr") == "1" {
-		gdpr = 1
-	}
-	if q.Get("coppa") == "1" {
-		coppa = 1
-	}
-	return privacy.Evaluate(privacy.Signals{
-		GDPR:       gdpr,
-		TCFConsent: consent,
-		USPrivacy:  q.Get("us_privacy"),
-		COPPA:      coppa,
-		GPC:        r.Header.Get("Sec-GPC") == "1" || q.Get("gpc") == "1",
-		GPP:        q.Get("gpp"),
-		GPPSID:     q.Get("gpp_sid"),
-	})
+	return privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC")))
 }
