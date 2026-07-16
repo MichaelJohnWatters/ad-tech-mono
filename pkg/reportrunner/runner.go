@@ -6,9 +6,12 @@
 // stored as a downloadable artifact, and emailed as a link when the report's
 // delivery is email. The report-runner service ticks RunDue periodically.
 //
-// The schedule model is interval-based (not full cron) to avoid a parser
-// dependency: "due" means now − last_run ≥ the schedule's interval. last_run
-// is stamped at enqueue time, so the cadence is enqueue-to-enqueue.
+// Schedules come in two flavours:
+//   - interval keywords (@hourly/@daily/@weekly/@monthly): "due" means
+//     now − last_run ≥ the interval (enqueue-to-enqueue cadence — the
+//     original model, semantics unchanged);
+//   - full 5-field cron expressions ("30 6 * * 1"): "due" means a cron
+//     activation has passed since last_run (calendar-aligned).
 package reportrunner
 
 import (
@@ -17,6 +20,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/robfig/cron/v3"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
@@ -108,16 +113,44 @@ func (r *Runner) runOne(ctx context.Context, rep ScheduledReport, now time.Time)
 
 // Due reports whether a report on the given schedule is due to run now. An
 // unrecognised schedule is never auto-run (returns false); a never-run report
-// on a known schedule is due immediately.
+// on a known schedule is due immediately. Interval keywords keep their
+// original enqueue-to-enqueue semantics; 5-field cron expressions are
+// calendar-aligned (due when an activation time has passed since last_run).
 func Due(schedule string, lastRun *time.Time, now time.Time) bool {
-	interval, ok := scheduleInterval(schedule)
-	if !ok {
+	if interval, ok := scheduleInterval(schedule); ok {
+		if lastRun == nil {
+			return true
+		}
+		return now.Sub(*lastRun) >= interval
+	}
+	sched, err := cronParser.Parse(strings.TrimSpace(schedule))
+	if err != nil {
 		return false
 	}
 	if lastRun == nil {
 		return true
 	}
-	return now.Sub(*lastRun) >= interval
+	return !sched.Next(*lastRun).After(now)
+}
+
+// cronParser accepts standard 5-field expressions (minute precision). The
+// @-macros are handled by scheduleInterval FIRST so their historical
+// interval semantics don't silently change to cron's calendar alignment.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// ValidSchedule reports whether s is an accepted schedule — an interval
+// keyword or a parseable 5-field cron expression. The gateway validates
+// saved-report schedules with this so junk gets a 400 instead of a report
+// that silently never runs.
+func ValidSchedule(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	if _, ok := scheduleInterval(s); ok {
+		return true
+	}
+	_, err := cronParser.Parse(strings.TrimSpace(s))
+	return err == nil
 }
 
 // scheduleInterval maps an interval keyword (with or without the "@" cron-macro

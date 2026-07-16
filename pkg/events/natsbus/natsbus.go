@@ -57,8 +57,15 @@ func streamReplicasFromEnv() int {
 func New(url, service string, log *slog.Logger) (*Bus, error) {
 	nc, err := nats.Connect(url,
 		nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(30),
-		nats.ReconnectWait(time.Second),
+		// Reconnect FOREVER. The old cap (30 × 1s) permanently closed the
+		// connection after a ~30s NATS outage — every later publish failed
+		// "nats: connection closed" until the pod was bounced. Observed
+		// live: a laptop-sleep VM suspension outlasted the budget and the
+		// report-runner silently stopped announcing completions. Outage
+		// behaviour is unchanged (publishes fail while disconnected); the
+		// difference is the client recovers when NATS does.
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2*time.Second),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			if err != nil {
 				log.Warn("nats disconnected", "error", err)

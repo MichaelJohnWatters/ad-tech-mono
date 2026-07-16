@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -28,6 +29,12 @@ type Executor struct {
 	QueryTimeout time.Duration // per-job bound on the reporting query
 	Now          func() time.Time
 	Log          *slog.Logger
+
+	// Events publishes report.completed after the artifact is durable —
+	// the webhooks dispatcher turns it into subscription deliveries
+	// (delivery=webhook, and any account that subscribed regardless of the
+	// job's own delivery mode). Nil = no announcements.
+	Events *events.Publisher
 
 	// SegmentMembers resolves jobs whose QueryConfig.Table is
 	// TableSegmentMembers — the audience segment EXPORT path (profile
@@ -96,7 +103,34 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 			log.Error("report job email delivery failed", "recipient", j.Recipient, "error", err)
 		}
 	}
+	// Announce completion regardless of delivery mode — the dispatcher only
+	// delivers to accounts holding a report.completed subscription, so this
+	// is subscription-gated fan-out, not a broadcast.
+	if e.Events != nil {
+		ev := events.ReportCompletedEvent{
+			SchemaVersion: events.CurrentSchemaVersion,
+			AccountID:     j.AccountID,
+			JobID:         j.ID,
+			Name:          j.Name,
+			Format:        j.Format,
+			RowCount:      art.Rows,
+			ArtifactBytes: art.Bytes,
+			DownloadURL:   e.GatewayURL + routes.APIReportJobs + "/" + j.ID + "/download",
+			ExpiresAt:     j.ExpiresAt,
+			Timestamp:     e.now(),
+		}
+		if err := e.Events.PublishJSON(ctx, events.SubjectReportCompleted, ev); err != nil {
+			log.Error("report job completion publish failed", "error", err)
+		}
+	}
 	return true, nil
+}
+
+func (e *Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now().UTC()
 }
 
 func (e *Executor) fail(ctx context.Context, log *slog.Logger, id string, cause error) {

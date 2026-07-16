@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
 )
 
 // savedReportView is one saved_reports row as the reports console sees it.
@@ -91,6 +92,14 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 			}
 			if !validDeliveries[in.Delivery] {
 				http.Error(w, `{"error":"delivery must be email, webhook or none"}`, http.StatusBadRequest)
+				return
+			}
+			// A junk schedule would save fine and then silently never run —
+			// validate here so the caller learns immediately. Accepted:
+			// interval keywords (@hourly/@daily/@weekly/@monthly) or 5-field
+			// cron expressions ("30 6 * * 1").
+			if strings.TrimSpace(in.Schedule) != "" && !reportrunner.ValidSchedule(in.Schedule) {
+				http.Error(w, `{"error":"schedule must be @hourly/@daily/@weekly/@monthly or a 5-field cron expression"}`, http.StatusBadRequest)
 				return
 			}
 			id, err := store.CreateSavedReport(r.Context(), claims.AccountID, in)

@@ -15,6 +15,7 @@ func ReportRunnerSchema() []config.SchemaEntry { return reportRunnerSet.Entries(
 
 // ReportRunner holds the scheduled-report runner's config keys.
 var ReportRunner = struct {
+	NATSURL          config.StringKey
 	ReportingURL     config.StringKey
 	EmailFrom        config.StringKey
 	SMTPHost         config.StringKey
@@ -32,6 +33,7 @@ var ReportRunner = struct {
 	// Port is env/manifest territory by design — Raw, not in the schema.
 	Port config.StringKey
 }{
+	NATSURL:          reportRunnerSet.String("report_runner.nats_url", routes.DefaultNATSURL, config.TierStatic, "NATS URL for report.completed announcements (webhooks delivery). Empty/unreachable = announcements skipped.", config.Since("v1.9")),
 	ReportingURL:     reportRunnerSet.String("report_runner.reporting_url", "http://localhost:8086", config.TierStatic, "Reporting service base URL the report runner posts queries to.", config.Since("v1.3")),
 	EmailFrom:        reportRunnerSet.String("report_runner.email_from", "reports@adtech.local", config.TierStatic, "From address on delivered scheduled-report emails.", config.Since("v1.3")),
 	SMTPHost:         reportRunnerSet.String("report_runner.smtp_host", "", config.TierStatic, "SMTP host:port for scheduled-report delivery (Mailpit/SES). Empty → in-memory sender that only logs deliveries.", config.Since("v1.3")),

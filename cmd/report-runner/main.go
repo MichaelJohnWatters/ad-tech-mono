@@ -24,6 +24,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -102,6 +104,16 @@ func main() {
 		// Segment exports (profile store): rows come straight from the
 		// memberships table rather than the reporting query API.
 		SegmentMembers: reportjobs.PGSegmentMembers(db),
+	}
+	// report.completed announcements → webhooks dispatcher (delivery=webhook
+	// and any subscribed account). Optional: NATS down = no announcements,
+	// jobs still complete and download links still work.
+	if bus, err := natsbus.New(keys.ReportRunner.NATSURL.Get(cfg), constants.ServiceReportRunner+"-events", log); err != nil {
+		log.Warn("nats unavailable — report.completed announcements disabled", "error", err)
+	} else {
+		bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects})
+		executor.Events = events.NewPublisher(bus, log)
+		lc.OnShutdown("report-events", func(_ context.Context) error { return bus.Close() })
 	}
 
 	// Scheduler: due saved reports become schedule-sourced jobs. Tenant scope is

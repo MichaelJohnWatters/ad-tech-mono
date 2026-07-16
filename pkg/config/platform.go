@@ -42,7 +42,7 @@ var NATS = struct {
 	// Raw: registering it would change the env-override seeding path.
 	URL StringKey
 }{
-	MaxReconnects: platformSet.Int("nats.max_reconnects", "30", TierStatic, "Maximum times the NATS client retries connecting after losing the link before giving up.", Since("v1.0")),
+	MaxReconnects: platformSet.Int("nats.max_reconnects", "-1", TierStatic, "Historic knob — pkg/events/natsbus now reconnects FOREVER (a capped budget permanently closed the connection after a ~30s outage and silently killed publishers until a pod bounce). Kept for schema stability; not consulted.", Since("v1.0")),
 	ReconnectWait: platformSet.Duration("nats.reconnect_wait", "1s", TierStatic, "Backoff between NATS reconnect attempts.", Since("v1.0")),
 	StreamMaxAge:  platformSet.Duration("nats.stream_max_age", "24h", TierStatic, "How long JetStream keeps messages on a stream before discarding them.", Since("v1.0")),
 
