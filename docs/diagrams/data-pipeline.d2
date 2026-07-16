@@ -66,10 +66,16 @@ sink.ackflush -> lake.log: commit add (v0 = protocol + metaData)
 # ============================================================
 # Compaction  (CronJob at :05)
 # ============================================================
-compact: "Compaction - in the pipeline's process (POST /v1/datalake/compact, triggered by batch-conductor)" {
+conductor: "batch-conductor (hourly CronJob) - the chain: checkpoint → compact → rollups → profile-builder → privacy" {
   shape: hexagon
   style.fill: "#f59e0b"
 }
+
+compact: "Compaction - runs IN the pipeline's process (single-writer rule)" {
+  style.fill: "#fde68a"
+}
+conductor -> compact: POST /v1/datalake/compact
+conductor -> builder: chain step (in-process)
 compact -> lake.parts: bin-pack small files
 compact -> lake.log: one atomic commit (add + N removes)
 
@@ -86,9 +92,8 @@ gdpr -> lake.log: one atomic commit (add survivor file + removes)
 # ============================================================
 # Profile-builder  (CronJob at :15)
 # ============================================================
-builder: Profile-builder (batch-conductor chain step) {
-  shape: hexagon
-  style.fill: "#f59e0b"
+builder: Profile-builder (pkg/profilebuilder) {
+  style.fill: "#fde68a"
 }
 lake -> builder: read behaviour_signals + profile_signals { style.stroke-dash: 2 }
 builder -> lake.parts: identity_clusters artifact (purge + rewrite per run)

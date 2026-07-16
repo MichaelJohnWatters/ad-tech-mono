@@ -163,6 +163,7 @@ data.reports: Reports bucket (Minio/S3) {
   d: PRIVATE · adtech-reports · 30d retention
 }
 control.gateway -> data.reportrunner: report_jobs queue (Postgres) { style.stroke-dash: 2; style.stroke: "#64748b" }
+control.gateway -> events.pipeline: "staff profile lake summary + Batch-runs lake snapshot (/v1/datalake/profile, /debug snapshot proxy)" { style.stroke-dash: 2; style.stroke: "#64748b" }
 data.reportrunner -> events.reporting: /v1/reporting/query (per-job deadline)
 data.reportrunner -> data.reports: write artifact
 control.gateway -> data.reports: stream download (auth'd) { style.stroke-dash: 2; style.stroke: "#64748b" }

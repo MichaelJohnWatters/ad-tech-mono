@@ -36,6 +36,11 @@ publishers: Publishers {
     style.font-color: "#000"
   }
 
+  conductor: batch-conductor (CronJob) {
+    style.fill: "#f59e0b"
+    style.font-color: "#000"
+  }
+
   gateway: Gateway :8080 {
     style.fill: "#4361ee"
     style.font-color: "#fff"
@@ -120,6 +125,10 @@ subjects: Subjects {
     style.fill: "#9a3412"
     style.font-color: "#fff"
   }
+  batchrun: adtech.batch.run_completed {
+    style.fill: "#7c2d12"
+    style.font-color: "#fff"
+  }
 }
 
 # ============================================================
@@ -198,6 +207,8 @@ publishers.gateway -> subjects.profilesig: audience upload (batched ids)
 publishers.ssp -> subjects.behaviour: consented request row (categories stamped)
 publishers.tracker -> subjects.behaviour: consented interaction row (uid= on beacon)
 
+publishers.conductor -> subjects.batchrun: one event per chain run (run_id, aborted, failed steps)
+
 # ============================================================
 # Consume arrows
 # ============================================================
@@ -219,6 +230,7 @@ subjects.cache -> consumers.all_services
 subjects.imp -> consumers.pipeline_consumer
 subjects.profilesig -> consumers.pipeline_consumer
 subjects.behaviour -> consumers.pipeline_consumer
+subjects.batchrun -> consumers.webhooks
 
 # ============================================================
 # NATS sits between publishers and subjects
