@@ -117,30 +117,45 @@ func (e *Engine) Register(cfg Config) {
 
 // RunLevel executes all registered rollups at the given level.
 func (e *Engine) RunLevel(ctx context.Context, level Level) ([]Result, error) {
+	return e.RunLevelLookback(ctx, level, 1)
+}
+
+// RunLevelLookback recomputes the last `lookback` COMPLETED windows at the
+// given level (replace-by-window idempotent, so overlapping runs converge).
+// This exists for interval-driven callers coarser than the level itself:
+// the hourly batch-conductor passes lookback=60 for the minute tier so the
+// whole previous hour is covered, where a single last-completed-minute run
+// would sample one minute per hour.
+func (e *Engine) RunLevelLookback(ctx context.Context, level Level, lookback int) ([]Result, error) {
+	if lookback < 1 {
+		lookback = 1
+	}
+	now := e.clk.Now()
 	var results []Result
-	for _, cfg := range e.configs {
-		result, err := e.runOne(ctx, cfg, level)
-		if err != nil {
-			e.log.Error("rollup failed", "config", cfg.Name, "level", level, "error", err)
-			return results, fmt.Errorf("rollup %s at %s: %w", cfg.Name, level, err)
+	for i := 0; i < lookback; i++ {
+		from, to := windowForLevelOffset(level, now, i)
+		for _, cfg := range e.configs {
+			result, err := e.runOne(ctx, cfg, level, from, to)
+			if err != nil {
+				e.log.Error("rollup failed", "config", cfg.Name, "level", level, "window_from", from, "error", err)
+				return results, fmt.Errorf("rollup %s at %s: %w", cfg.Name, level, err)
+			}
+			results = append(results, result)
+			e.log.Info("rollup complete",
+				"config", cfg.Name,
+				"level", string(level),
+				"window_from", from.Format(time.RFC3339),
+				"rows_read", result.RowsRead,
+				"rows_written", result.RowsWritten,
+				"duration_ms", result.Duration.Milliseconds(),
+			)
 		}
-		results = append(results, result)
-		e.log.Info("rollup complete",
-			"config", cfg.Name,
-			"level", string(level),
-			"rows_read", result.RowsRead,
-			"rows_written", result.RowsWritten,
-			"duration_ms", result.Duration.Milliseconds(),
-		)
 	}
 	return results, nil
 }
 
-func (e *Engine) runOne(ctx context.Context, cfg Config, level Level) (Result, error) {
+func (e *Engine) runOne(ctx context.Context, cfg Config, level Level, from, to time.Time) (Result, error) {
 	start := e.clk.Now()
-	now := e.clk.Now()
-
-	from, to := windowForLevel(level, now)
 
 	// Query source data for the window
 	timeDim := timeDimensionForLevel(level)
@@ -234,6 +249,22 @@ func toFloat(v interface{}) float64 {
 	default:
 		return 0
 	}
+}
+
+// windowForLevelOffset returns the window `offset` completed units before
+// the latest completed one (offset 0 = windowForLevel).
+func windowForLevelOffset(level Level, now time.Time, offset int) (from, to time.Time) {
+	switch level {
+	case Minute:
+		now = now.Add(-time.Duration(offset) * time.Minute)
+	case Hourly:
+		now = now.Add(-time.Duration(offset) * time.Hour)
+	case Daily:
+		now = now.AddDate(0, 0, -offset)
+	case Monthly:
+		now = now.AddDate(0, -offset, 0)
+	}
+	return windowForLevel(level, now)
 }
 
 // windowForLevel returns the time window to aggregate.

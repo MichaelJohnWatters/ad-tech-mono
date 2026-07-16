@@ -1186,6 +1186,77 @@ paths:
         - { name: resource_id, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } }
       responses: { "200": { description: List of audit entries } }
+  /v1/api/audiences:
+    get:
+      tags: [Audiences]
+      summary: List the account's audience segments (member counts + match rate)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at }]" } }
+    post:
+      tags: [Audiences]
+      summary: Upload a segment + members (JSON ids, or multipart CSV/TSV ≤5MB)
+      description: >-
+        Binds to the authenticated account. Every upload computes and persists
+        the segment match rate (fraction of ids resolvable via the identity
+        graph) and lands the normalized rows in the profile_signals lake
+        table. Raw emails are rejected — hash PII client-side (the portal
+        does). Parquet/compressed files go via the partner drop-zone bucket.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, user_ids]
+              properties:
+                name: { type: string }
+                type: { type: string, enum: [first_party, behavioral, lookalike, suppression, retargeting, composite, predictive, cdp_imported], default: first_party }
+                visibility: { type: string, enum: [public, dsp_private], default: dsp_private }
+                user_ids: { type: array, items: { type: string }, maxItems: 50000 }
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, file]
+              properties:
+                name: { type: string }
+                type: { type: string }
+                visibility: { type: string }
+                file: { type: string, format: binary, description: "CSV/TSV with an id column (id_value/user_id/id/hashed_email/uid2/device_id; optional id_type column)" }
+      responses: { "200": { description: "{ segment_id, members_added, members_sent, matched, match_rate }" } }
+  /v1/api/profiles/{id}:
+    get:
+      tags: [Profiles]
+      summary: Staff profile transparency lookup (support:read)
+      description: >-
+        Everything the platform knows about an identifier — identity cluster
+        (person + members), direct graph links, segment memberships with
+        provenance across the cluster, and the lake signal summary. Also the
+        GDPR access-request answer surface. Platform-wide (staff only).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: "{ id, person_id?, cluster_members, identity_links, memberships, lake? }" } }
+  /v1/api/onboarding/runs:
+    get:
+      tags: [Profiles]
+      summary: Staff drop-zone monitor (support:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: provider, in: query, schema: { type: string } }
+      responses: { "200": { description: "{ runs: [...], providers: [rollups] } — recent onboarding_runs + per-provider health" } }
+  /v1/api/batch/runs:
+    get:
+      tags: [Batch]
+      summary: Staff batch-conductor monitor (support:read)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ runs: [{ run_id, started_at, steps: [{ seq, step, status, critical, detail?, error?, started_at, finished_at? }] }] } — last 20 chain runs" } }
+  /v1/api/batch/lake:
+    get:
+      tags: [Batch]
+      summary: Staff lake-state snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "per-table { version, total_rows, total_bytes, active_files } — proxied live from the pipeline" } }
   /v1/api/moderation:
     get:
       tags: [Moderation]
