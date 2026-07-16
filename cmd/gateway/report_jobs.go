@@ -211,8 +211,8 @@ func buildJob(ctx context.Context, store reportJobStore, scope reportjobs.ScopeL
 	if delivery == "" {
 		delivery = reportjobs.DeliveryNone
 	}
-	if delivery != reportjobs.DeliveryNone && delivery != reportjobs.DeliveryEmail {
-		return nil, "delivery must be email or none", nil
+	if delivery != reportjobs.DeliveryNone && delivery != reportjobs.DeliveryEmail && delivery != reportjobs.DeliveryWebhook {
+		return nil, "delivery must be email, webhook or none", nil
 	}
 	recipient := ""
 	if delivery == reportjobs.DeliveryEmail {

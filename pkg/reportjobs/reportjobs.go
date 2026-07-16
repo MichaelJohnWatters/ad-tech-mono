@@ -40,6 +40,9 @@ const (
 // Deliveries.
 const (
 	DeliveryEmail = "email"
+	// DeliveryWebhook delivers via the account's webhook subscriptions (the
+	// executor publishes report.completed; the dispatcher does the POSTs).
+	DeliveryWebhook = "webhook"
 	DeliveryNone  = "none"
 )
 

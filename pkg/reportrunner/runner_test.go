@@ -28,7 +28,12 @@ func TestDue(t *testing.T) {
 		{"weekly 8d ago", "@weekly", ago(8 * 24 * time.Hour), true},
 		{"weekly 3d ago", "weekly", ago(3 * 24 * time.Hour), false},
 		{"monthly never", "@monthly", nil, true},
-		{"unknown schedule never auto-runs", "0 9 * * 1", nil, false},
+		// 5-field cron (calendar-aligned; now = a Wednesday-noon fixture):
+		// due when an activation passed since last_run.
+		{"cron never run is due", "0 9 * * 1", nil, true},
+		{"cron activation passed since last run", "0 9 * * *", ago(26 * time.Hour), true},
+		{"cron no activation yet", "0 9 * * *", ago(time.Hour), false},
+		{"garbage schedule never auto-runs", "every-fortnight", nil, false},
 		{"empty schedule never runs", "", nil, false},
 	}
 	for _, tc := range cases {
@@ -71,8 +76,8 @@ func TestRunDue_EnqueuesAndMarksDueReports(t *testing.T) {
 		// not due (daily but only 30m ago)
 		{ID: "r2", AccountID: "acc-2", Name: "Recent", Schedule: "@daily", Delivery: "email",
 			LastRun: &hourAgo, Recipient: "b@x.test"},
-		// unknown schedule → skipped
-		{ID: "r3", AccountID: "acc-3", Name: "Cron", Schedule: "0 9 * * 1", Delivery: "email", Recipient: "c@x.test"},
+		// garbage schedule → skipped (cron expressions are VALID now)
+		{ID: "r3", AccountID: "acc-3", Name: "Junk", Schedule: "every-fortnight", Delivery: "email", Recipient: "c@x.test"},
 	}}
 
 	var enqueued []ScheduledReport

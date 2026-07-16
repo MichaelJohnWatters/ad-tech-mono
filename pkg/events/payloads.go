@@ -286,6 +286,24 @@ type BehaviourSignalEvent struct {
 	ObservedAt    time.Time `json:"observed_at"`
 }
 
+// ReportCompletedEvent announces a finished report job. Published by the
+// report-job executor after the artifact is durable; the webhooks
+// dispatcher delivers it to the account's subscriptions (event type
+// "report.completed"). DownloadURL requires an authenticated session — the
+// artifact bucket is private and only streams through the gateway.
+type ReportCompletedEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	AccountID     string    `json:"account_id"`
+	JobID         string    `json:"job_id"`
+	Name          string    `json:"name"`
+	Format        string    `json:"format"`
+	RowCount      int64     `json:"row_count"`
+	ArtifactBytes int64     `json:"artifact_bytes"`
+	DownloadURL   string    `json:"download_url"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
 // ProfileSignalID is one identifier inside a ProfileSignalEvent batch.
 type ProfileSignalID struct {
 	IDType  string `json:"id_type"` // user_id | hashed_email | uid2 | device_id | household

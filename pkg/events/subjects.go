@@ -141,6 +141,13 @@ const (
 	// propagation enables the "rotate via UI without redeploy" flow.
 	SubjectCacheInvalidateSecrets = "adtech.cache.invalidate.secrets"
 
+	// SubjectReportCompleted announces a finished async report job
+	// (report_jobs). Carries account_id so the webhooks dispatcher can
+	// deliver it to the owning account's subscriptions as the
+	// "report.completed" event — the delivery=webhook counterpart of the
+	// emailed download link.
+	SubjectReportCompleted = "adtech.report.completed"
+
 	// SubjectBatchRunCompleted announces one batch-conductor chain run
 	// (run_id, aborted, failed step count, duration). Observability for the
 	// completion-chained batch layer; consumable by webhooks/ops dashboards.

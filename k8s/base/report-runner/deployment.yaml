@@ -45,6 +45,9 @@ spec:
               value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
             - name: REPORT_RUNNER_REPORTING_URL
               value: "http://reporting:8086"
+            # report.completed announcements → webhooks dispatcher.
+            - name: REPORT_RUNNER_NATS_URL
+              value: "nats://nats:4222"
             # Mailpit in-cluster SMTP; prod overlays swap in SES/Sendgrid.
             - name: REPORT_RUNNER_SMTP_HOST
               value: "mailpit:1025"
