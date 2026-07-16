@@ -256,29 +256,70 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clu
 		return err
 	}
 
-	for _, s := range list {
-		res.RuleSegments++
-		rule, err := ParseRule([]byte(s.raw))
-		if err != nil {
-			log.Error("profile-builder: invalid rule — segment skipped", "segment", s.id, "name", s.name, "error", err)
-			continue
-		}
-		members := expandKeys(clusters, evaluateRule(rows, rule, now))
+	// Two passes: behavioural rules first, then DERIVED kinds (composite +
+	// lookalike) so they see this run's behavioural output. A derived rule
+	// referencing another derived segment sees the previous run's members
+	// (single derived pass — documented on CompositeRule).
+	apply := func(s ruleSeg, members []string) {
 		added, err := aud.AddMembers(ctx, s.accountID, s.id, members)
 		if err != nil {
 			log.Error("profile-builder: enroll failed — segment skipped", "segment", s.id, "error", err)
-			continue
+			return
 		}
 		pruned, err := aud.RemoveMembersNotIn(ctx, s.accountID, s.id, members)
 		if err != nil {
 			log.Error("profile-builder: prune failed", "segment", s.id, "error", err)
-			continue
+			return
 		}
 		res.Enrolled += added
 		res.Pruned += pruned
 		if added > 0 || pruned > 0 {
 			changed[s.id] = s.accountID
 		}
+	}
+
+	var derived []ruleSeg
+	for _, s := range list {
+		res.RuleSegments++
+		switch RuleKind([]byte(s.raw)) {
+		case "", "behaviour":
+			rule, err := ParseRule([]byte(s.raw))
+			if err != nil {
+				log.Error("profile-builder: invalid rule — segment skipped", "segment", s.id, "name", s.name, "error", err)
+				continue
+			}
+			apply(s, expandKeys(clusters, evaluateRule(rows, rule, now)))
+		case "composite", "lookalike":
+			derived = append(derived, s)
+		default:
+			log.Error("profile-builder: unknown rule kind — segment skipped", "segment", s.id, "name", s.name)
+		}
+	}
+
+	for _, s := range derived {
+		var members []string
+		var err error
+		switch RuleKind([]byte(s.raw)) {
+		case "composite":
+			rule, perr := ParseCompositeRule([]byte(s.raw))
+			if perr != nil {
+				log.Error("profile-builder: invalid composite rule — segment skipped", "segment", s.id, "error", perr)
+				continue
+			}
+			members, err = evaluateComposite(ctx, db, s.accountID, rule, clusters)
+		case "lookalike":
+			rule, perr := ParseLookalikeRule([]byte(s.raw))
+			if perr != nil {
+				log.Error("profile-builder: invalid lookalike rule — segment skipped", "segment", s.id, "error", perr)
+				continue
+			}
+			members, err = evaluateLookalike(ctx, db, s.accountID, rule, clusters, rows)
+		}
+		if err != nil {
+			log.Error("profile-builder: derived rule evaluation failed — segment skipped", "segment", s.id, "error", err)
+			continue
+		}
+		apply(s, members)
 	}
 	return nil
 }
