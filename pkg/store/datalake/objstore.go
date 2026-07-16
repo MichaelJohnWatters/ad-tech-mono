@@ -455,6 +455,12 @@ type VacuumResult struct {
 // so only a reader mid-flight at tombstone time can still want the bytes).
 // Time travel to pre-vacuum versions is deliberately given up, matching
 // Delta's own VACUUM contract.
+//
+// Crashed-write orphans (parquet PUT succeeded, log PUT didn't) are NOT
+// vacuum's problem: max+1 version allocation means the next write reuses
+// the same version number and overwrites the orphan before referencing it —
+// self-healing. Only a table whose FINAL write crashed retains one orphan
+// file, which is negligible.
 func (o *ObjectStore) Vacuum(ctx context.Context, table string, grace time.Duration) (VacuumResult, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

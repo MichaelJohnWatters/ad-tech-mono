@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,9 +92,20 @@ func rollupRunHandler(engine *rollup.Engine, log *slog.Logger) http.HandlerFunc 
 			http.Error(w, `{"error":"level must be minute|hourly|daily|monthly"}`, http.StatusBadRequest)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		lookback := 1
+		if lb := r.URL.Query().Get("lookback"); lb != "" {
+			parsed, err := strconv.Atoi(lb)
+			if err != nil || parsed < 1 || parsed > 1440 {
+				http.Error(w, `{"error":"lookback must be 1..1440"}`, http.StatusBadRequest)
+				return
+			}
+			lookback = parsed
+		}
+		// Budget scales with the window count (a lookback=60 minute run is
+		// 60 windows × configs).
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(30+lookback)*time.Second)
 		defer cancel()
-		results, err := engine.RunLevel(ctx, level)
+		results, err := engine.RunLevelLookback(ctx, level, lookback)
 		if err != nil {
 			log.Error("debug rollup run failed", "level", string(level), "error", err)
 			w.WriteHeader(http.StatusInternalServerError)

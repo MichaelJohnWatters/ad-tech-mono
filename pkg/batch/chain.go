@@ -63,6 +63,12 @@ func (d Deps) client() *http.Client {
 func StandardChain(d Deps) []Step {
 	steps := []Step{
 		{
+			// Approximates "ingestion caught up" via service READINESS, not
+			// NATS consumer lag (the bus doesn't expose per-consumer lag).
+			// Good enough because every downstream step is an idempotent
+			// wholesale-recompute: events that land mid-chain are simply
+			// picked up by the next run. Revisit if a step ever becomes
+			// lag-sensitive.
 			Name:     "checkpoint",
 			Critical: true,
 			Run: func(ctx context.Context) (string, error) {
@@ -129,13 +135,20 @@ func StandardChain(d Deps) []Step {
 
 	// Rollup tiers, finest first — each tier's inputs are fresher because
 	// the previous one just ran, which is the ordering the cron offsets
-	// only ever approximated.
-	for _, level := range []string{"minute", "hourly", "daily", "monthly"} {
+	// only ever approximated. The minute tier looks back the whole hour the
+	// chain covers (an hourly caller running only the last completed minute
+	// would sample 1/60th of the tier); coarser tiers recompute their last
+	// completed window, which the hourly cadence already covers.
+	for _, tier := range []struct {
+		level    string
+		lookback string
+	}{{"minute", "60"}, {"hourly", "1"}, {"daily", "1"}, {"monthly", "1"}} {
+		level := tier.level
 		steps = append(steps, Step{
 			Name: "rollup:" + level,
 			Run: func(ctx context.Context) (string, error) {
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-					d.ReportingURL+routes.DebugRollupRun+"?level="+level, nil)
+					d.ReportingURL+routes.ReportingRollupRun+"?level="+level+"&lookback="+tier.lookback, nil)
 				if err != nil {
 					return "", err
 				}

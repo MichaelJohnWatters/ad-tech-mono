@@ -415,6 +415,12 @@ const (
 const (
 	ReportingQuery  = "/v1/reporting/query"
 	ReportingEvents = "/v1/reporting/events"
+	// ReportingRollupRun triggers a synchronous rollup for
+	// ?level=minute|hourly|daily|monthly (&lookback=N completed windows,
+	// default 1). First-class internal route — the batch-conductor's chain
+	// step drives it, so it must not depend on debug.endpoints_enabled the
+	// way its /debug alias does.
+	ReportingRollupRun = "/v1/reporting/rollup/run"
 	// ReportingTrace reconstructs a single request's flow (scoped + redacted per
 	// caller). ReportingRecentImpressions lists recent impressions to inspect.
 	ReportingTrace             = "/v1/reporting/trace"

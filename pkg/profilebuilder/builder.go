@@ -187,7 +187,12 @@ func persistClustersPG(ctx context.Context, db *sql.DB, c Clusters, now time.Tim
 
 // persistClustersLake publishes the run's cluster artifact: purge the prior
 // snapshot, append the new one. The builder is this table's ONLY writer
-// (the pipeline never touches it), so the Delta versions can't race.
+// (the pipeline never touches it), so the Delta versions can't race —
+// with one caveat: a MANUAL run (Tilt escape hatch) concurrent with the
+// conductor's chain step is two processes on one table. The lake writer's
+// refuse-to-overwrite commit guard downgrades that from silent corruption
+// to one loudly-failed run (retry next chain interval); the CronJob's
+// concurrencyPolicy: Forbid covers the scheduled path.
 func persistClustersLake(ctx context.Context, lake datalake.Store, c Clusters, now time.Time) error {
 	if _, err := lake.PurgeRows(ctx, ClustersLakeTable, func(datalake.Record) bool { return true }); err != nil {
 		return fmt.Errorf("clear prior artifact: %w", err)

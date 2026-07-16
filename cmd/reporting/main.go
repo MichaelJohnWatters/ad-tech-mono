@@ -182,6 +182,9 @@ func main() {
 	metrics := middleware.NewMetrics(constants.ServiceReporting)
 
 	mux := http.NewServeMux()
+	// First-class rollup trigger (the batch-conductor chain step drives
+	// this) — registered unconditionally, unlike the /debug alias below.
+	mux.HandleFunc(routes.ReportingRollupRun, rollupRunHandler(rollupEngine, log))
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
@@ -339,7 +342,7 @@ func main() {
 
 		// Trigger a rollup run on demand (ops + e2e). Works on any backend
 		// since it goes through the analytics.Store / RollupWriter interfaces.
-		mux.HandleFunc(routes.DebugRollupRun, rollupRunHandler(rollupEngine, log))
+		mux.HandleFunc(routes.DebugRollupRun, rollupRunHandler(rollupEngine, log)) // legacy alias
 
 		// Routing warm-start source (ADR 0003): per-(channel, DSP) dsp_calls
 		// aggregate the exchange fetches on boot to seed its SmartRouter.
