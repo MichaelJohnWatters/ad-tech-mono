@@ -12,12 +12,13 @@
 # (or 2 when privacy-verify found residual PII). Pure Go (CGO_ENABLED=0),
 # shared Dockerfile with SERVICE=batch-conductor.
 #
-# Not yet added to an overlay — apply directly, or wire into an overlay when
-# the cron manifests are activated as a group (dayboundary posture).
+# Applied locally by the Tiltfile (real in-cluster schedule); staging/prod
+# overlays should include it alongside the service manifests.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: batch-conductor
+  namespace: adtech
   labels:
     app: batch-conductor
     component: data-chain

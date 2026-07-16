@@ -5,12 +5,13 @@
 # campaign cache-invalidate. Idempotent; pure Go (CGO_ENABLED=0), shared
 # Dockerfile with SERVICE=dayboundary. See docs/adr/0005-deferred-followups.md §2.
 #
-# Not yet added to an overlay — apply directly, or wire into an overlay when the
-# cron manifests are activated as a group.
+# Applied locally by the Tiltfile (real in-cluster schedule); staging/prod
+# overlays should include it alongside the service manifests.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: dayboundary
+  namespace: adtech
   labels:
     app: dayboundary
     component: lifecycle
