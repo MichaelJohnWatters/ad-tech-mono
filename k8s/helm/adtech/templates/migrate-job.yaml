@@ -1,0 +1,35 @@
+{{- /*
+Migration hook — CHART-ONLY addition (deviation from the kustomize source):
+there is no migrate Job manifest in k8s/ today; Tilt runs `go run ./cmd/migrate`
+on the host. As a helm-managed stack the migrations must run in-cluster before
+each install/upgrade, so this Job wraps cmd/migrate (goose) as a
+pre-install/pre-upgrade hook. Excluded from parity (`helm template --no-hooks`).
+*/ -}}
+{{- if .Values.migrate.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: adtech-migrate
+  namespace: {{ include "adtech.namespace" . }}
+  labels:
+    app: migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: {{ .Values.migrate.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            {{- toYaml .Values.migrate.env | nindent 12 }}
+{{- end }}

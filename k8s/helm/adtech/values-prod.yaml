@@ -1,0 +1,62 @@
+# Production overrides.
+#
+# NOTE: k8s/overlays/prod does NOT exist in the repo (k8s/CLAUDE.md describes
+# it, but it was never created). This file therefore translates the DOCUMENTED
+# prod deltas — k8s/CLAUDE.md "Environment Differences" table ("HPA min 2,
+# higher max", prod S3, SES/Sendgrid email, SOPS secrets, per-service Redis)
+# and the "prod overlays..." comments in the base manifests. Deltas applied:
+#   - NATS 3-node JetStream cluster (base topology)
+#   - serving-path services at higher replica counts
+#   - registry-mirror off (local-only), Mailpit off (prod uses SES/Sendgrid —
+#     override REPORT_RUNNER_SMTP_HOST accordingly)
+#   - TigerBeetle grid cache back toward its default (base shrinks it for the
+#     local VM; see k8s/base/tigerbeetle/statefulset.yaml)
+#
+# Still required out-of-band for a real prod environment:
+#   - CI-built image tags (values here keep the local names — override per
+#     service, e.g. services.tracker.image: registry.example.com/adtech-tracker:vX)
+#   - SOPS-managed postgres/clickhouse/minio credentials and real S3 endpoints
+#   - public browser-facing URLs (ADSERVER_TRACKER_URL,
+#     PUBLISHER_ADSERVER_TRACKER_URL, SSAI_PUBLIC_URL, TRANSCODER_PUBLIC_BASE,
+#     REPORT_RUNNER_PUBLIC_GATEWAY_URL, REPORT_RUNNER_SMTP_HOST) — the env
+#     lists replace wholesale, so restate the full list per service
+#   - per-service Redis (docs) — the chart currently models the single shared
+#     Redis the base ships; splitting it is future work
+
+infra:
+  nats:
+    replicas: 3
+    cluster:
+      enabled: true
+  registryMirror:
+    enabled: false
+  mailpit:
+    enabled: false
+  tigerbeetle:
+    cacheGrid: 1GiB
+    resources:
+      requests: { cpu: "500m", memory: "2Gi" }
+      limits: { cpu: "2", memory: "6Gi" }
+
+services:
+  dsp-internal:
+    replicas: 3
+  dsp-competitor1:
+    replicas: 2
+  dsp-competitor2:
+    replicas: 2
+  ssp:
+    replicas: 3
+  exchange:
+    replicas: 3
+  adserver:
+    replicas: 3
+  publisher-adserver:
+    replicas: 2
+  tracker:
+    replicas: 4
+  gateway:
+    replicas: 2
+  # Single-replica BY DESIGN (do not scale without code changes):
+  # reporting, identity-consumer, report-runner — see the deployment comments
+  # in k8s/base/*/deployment.yaml.

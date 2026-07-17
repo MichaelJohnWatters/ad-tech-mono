@@ -1,0 +1,116 @@
+{{- /*
+Generic app-service template: one Deployment + Service (+ optional Ingress)
+per entry in .Values.services. Mirrors the per-service manifests in k8s/base/.
+Probes default to /healthz (liveness) + /readyz (readiness) on the first
+port; per-service values override them verbatim.
+*/ -}}
+{{- $ns := include "adtech.namespace" . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if ne ($svc.enabled | default true) false }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      # K8s service-link env injection collides with pkg/config's env-var
+      # fallback (see k8s/base/tracker/deployment.yaml) — off platform-wide.
+      enableServiceLinks: false
+      containers:
+        - name: {{ $svc.containerName | default $name }}
+          image: {{ $svc.image }}
+          imagePullPolicy: {{ $svc.imagePullPolicy | default "IfNotPresent" }}
+          ports:
+            {{- range $svc.ports }}
+            - containerPort: {{ .port }}
+              name: {{ .name }}
+            {{- end }}
+          {{- with $svc.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- toYaml $svc.env | nindent 12 }}
+          {{- with $svc.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            {{- if $svc.livenessProbe }}
+            {{- toYaml $svc.livenessProbe | nindent 12 }}
+            {{- else }}
+            httpGet:
+              path: /healthz
+              port: {{ (first $svc.ports).port }}
+            initialDelaySeconds: 5
+            {{- end }}
+          readinessProbe:
+            {{- if $svc.readinessProbe }}
+            {{- toYaml $svc.readinessProbe | nindent 12 }}
+            {{- else }}
+            httpGet:
+              path: /readyz
+              port: {{ (first $svc.ports).port }}
+            periodSeconds: 2
+            failureThreshold: 5
+            {{- end }}
+      {{- with $svc.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    {{- range $svc.ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .port }}
+    {{- end }}
+{{- if $svc.ingress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    {{- range $svc.ingress.hosts }}
+    - host: {{ . }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  number: {{ (first $svc.ports).port }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

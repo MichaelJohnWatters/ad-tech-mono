@@ -1,0 +1,10 @@
+{{- /*
+Traefik ingress controller — rendered VERBATIM from a copy of
+k8s/base/traefik/install.yaml (which the Tiltfile applies directly).
+That file is itself pre-rendered output of the upstream traefik chart, pinned
+in-repo; re-templating it would drift, so we .Files.Get it as-is. It carries
+its own `traefik` namespace and is not affected by .Values.namespace.
+*/ -}}
+{{- if .Values.traefik.enabled }}
+{{ .Files.Get "files/traefik-install.yaml" }}
+{{- end }}

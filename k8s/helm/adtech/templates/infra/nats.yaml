@@ -1,0 +1,131 @@
+{{- /*
+NATS JetStream. Default values = the LOCAL topology: a single standalone node
+with no cluster{} block (k8s/overlays/local/nats-single.yaml — a 3-node raft
+can't hold a stable leader on one OrbStack host). infra.nats.cluster.enabled
+restores the base 3-node cluster config for staging/prod.
+*/ -}}
+{{- $ns := include "adtech.namespace" . -}}
+{{- $nats := .Values.infra.nats }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: {{ $ns }}
+data:
+  nats.conf: |
+    server_name: $SERVER_NAME
+    listen: 0.0.0.0:4222
+    http_port: 8222
+
+    jetstream {
+      store_dir: /data/jetstream
+      max_mem: {{ $nats.jetstream.maxMem }}
+      max_file: {{ $nats.jetstream.maxFile }}
+    }
+{{- if $nats.cluster.enabled }}
+
+    cluster {
+      name: {{ $nats.cluster.name }}
+      listen: 0.0.0.0:6222
+      routes: [
+        {{- range $i := until (int $nats.replicas) }}
+        nats-route://nats-{{ $i }}.nats.{{ $ns }}.svc.cluster.local:6222
+        {{- end }}
+      ]
+      connect_retries: {{ $nats.cluster.connectRetries }}
+    }
+{{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: {{ $ns }}
+  labels:
+    app: nats
+spec:
+  serviceName: nats
+  replicas: {{ $nats.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      containers:
+        - name: nats
+          image: {{ $nats.image }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - nats-server
+            - --config
+            - /etc/nats/nats.conf
+          env:
+            - name: SERVER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 4222
+              name: client
+            - containerPort: 6222
+              name: cluster
+            - containerPort: 8222
+              name: monitor
+          volumeMounts:
+            - name: nats-config
+              mountPath: /etc/nats
+            - name: nats-data
+              mountPath: /data/jetstream
+          resources:
+            {{- toYaml $nats.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 10
+      volumes:
+        - name: nats-config
+          configMap:
+            name: nats-config
+  volumeClaimTemplates:
+    - metadata:
+        name: nats-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $nats.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app: nats
+  ports:
+    - port: 4222
+      targetPort: 4222
+      name: client
+    - port: 6222
+      targetPort: 6222
+      name: cluster
+    - port: 8222
+      targetPort: 8222
+      name: monitor
+  clusterIP: None
+  publishNotReadyAddresses: true  # DNS must work before pods are ready (cluster bootstrap)

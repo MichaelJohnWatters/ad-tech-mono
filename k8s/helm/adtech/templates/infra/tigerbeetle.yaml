@@ -1,0 +1,96 @@
+{{- /*
+TigerBeetle billing ledger. Keeps the base's format init-container semantics:
+`tigerbeetle format` must run ONCE to create the data file before `start` can
+open it; the init container is idempotent because it skips when the file
+already exists on the PVC. replica-count follows infra.tigerbeetle.replicas.
+*/ -}}
+{{- $ns := include "adtech.namespace" . -}}
+{{- $tb := .Values.infra.tigerbeetle }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tigerbeetle
+  namespace: {{ $ns }}
+  labels:
+    app: tigerbeetle
+spec:
+  serviceName: tigerbeetle
+  replicas: {{ $tb.replicas }}
+  selector:
+    matchLabels:
+      app: tigerbeetle
+  template:
+    metadata:
+      labels:
+        app: tigerbeetle
+    spec:
+      initContainers:
+        - name: format
+          image: {{ $tb.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ ! -f /data/0_0.tigerbeetle ]; then
+                /tigerbeetle format \
+                  --cluster=0 \
+                  --replica=0 \
+                  --replica-count={{ $tb.replicas }} \
+                  /data/0_0.tigerbeetle
+              else
+                echo "data file already exists, skipping format"
+              fi
+          volumeMounts:
+            - name: tigerbeetle-data
+              mountPath: /data
+      containers:
+        - name: tigerbeetle
+          image: {{ $tb.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/tigerbeetle"]
+          args:
+            - "start"
+            - "--addresses=0.0.0.0:3000"
+            - "--cache-grid={{ $tb.cacheGrid }}"
+            - "/data/0_0.tigerbeetle"
+          ports:
+            - containerPort: 3000
+              name: tb
+          volumeMounts:
+            - name: tigerbeetle-data
+              mountPath: /data
+          resources:
+            {{- toYaml $tb.resources | nindent 12 }}
+          # TB has no HTTP health endpoint — TCP probes on the listening port.
+          livenessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 2
+            periodSeconds: 2
+  volumeClaimTemplates:
+    - metadata:
+        name: tigerbeetle-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $tb.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tigerbeetle
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app: tigerbeetle
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: tb
+  clusterIP: None # headless for StatefulSet
