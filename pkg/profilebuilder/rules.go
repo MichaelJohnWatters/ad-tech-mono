@@ -1,6 +1,8 @@
 package profilebuilder
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -148,6 +150,25 @@ func (r Rule) matches(rec datalake.Record) bool {
 		return false
 	}
 	return true
+}
+
+// MaxRuleWindowDays returns the largest window_days any active rule-driven
+// segment declares (floor: the 30-day default), across ALL accounts — the
+// builder is the cross-tenant expansion engine, and this bounds how far back
+// its behaviour_signals lake read must reach. Daily partition pruning then
+// skips every older file, so keep-forever cold storage costs the builder
+// nothing. +1 day of slack absorbs the partition-granularity edge (a row
+// late on the cutoff day lives in a partition that starts before it).
+func MaxRuleWindowDays(ctx context.Context, db *sql.DB) (int, error) {
+	var maxDays int
+	err := db.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(GREATEST(COALESCE((rule->>'window_days')::int, 30), 30)), 30)
+FROM audience_segments
+WHERE rule IS NOT NULL AND status = 'active'`).Scan(&maxDays)
+	if err != nil {
+		return 0, err
+	}
+	return maxDays + 1, nil
 }
 
 // evaluateRule counts matching rows per user key within the window and

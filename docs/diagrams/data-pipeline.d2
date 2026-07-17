@@ -48,7 +48,7 @@ ingest -> lake.parts: profile_signals rows (+ PG memberships, match rate)
 lake: Delta lake (Minio / S3) {
   style.fill: "#faf5ff"
 
-  parts: part-NNNNN.parquet {
+  parts: "event_date=YYYY-MM-DD/part-NNNNN.parquet (daily hive partitions)" {
     shape: cylinder
     style.fill: "#c72e49"
     style.font-color: "#fff"
@@ -60,7 +60,7 @@ lake: Delta lake (Minio / S3) {
     info: NDJSON actions - protocol / metaData / add / remove
   }
 }
-sink.ackflush -> lake.parts: write Parquet
+sink.ackflush -> lake.parts: write Parquet (one file per day spanned)
 sink.ackflush -> lake.log: commit add (v0 = protocol + metaData)
 
 # ============================================================
@@ -76,7 +76,7 @@ compact: "Compaction - runs IN the pipeline's process (single-writer rule)" {
 }
 conductor -> compact: POST /v1/datalake/compact
 conductor -> builder: chain step (in-process)
-compact -> lake.parts: bin-pack small files
+compact -> lake.parts: bin-pack per partition (old days stay immutable)
 compact -> lake.log: one atomic commit (add + N removes)
 
 # ============================================================
