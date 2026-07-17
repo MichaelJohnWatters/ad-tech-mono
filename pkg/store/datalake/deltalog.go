@@ -3,7 +3,9 @@ package datalake
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 )
 
 // Real Delta Lake transaction-log encoding/decoding (protocol / metaData / add /
@@ -48,9 +50,42 @@ type deltaAdd struct {
 	Stats string `json:"stats,omitempty"`
 }
 
-// deltaStats renders the minimal Delta per-file stats string (row count only).
-func deltaStats(numRecords int) string {
-	return fmt.Sprintf(`{"numRecords":%d}`, numRecords)
+// partitionSourceConfigKey stores, in the Delta metaData configuration map,
+// which record column the event_date partition value derives from (e.g.
+// "timestamp", "observed_at"). Configuration is Delta's free-form table
+// property bag, so standard readers ignore it while our own log replay can
+// fully reconstruct Schema.PartitionBy without out-of-band knowledge.
+const partitionSourceConfigKey = "adtech.partition_source"
+
+// deltaStats renders the Delta per-file stats string: numRecords always,
+// plus min/max of the partition-source column when the file is partitioned —
+// the data-skipping stats standard planners (and our own pruning, as a
+// secondary signal to the partition dir) use.
+func deltaStats(records []Record, sourceCol string) string {
+	if sourceCol == "" || len(records) == 0 {
+		return fmt.Sprintf(`{"numRecords":%d}`, len(records))
+	}
+	var minT, maxT time.Time
+	seen := false
+	for _, r := range records {
+		t := toTime(r[sourceCol])
+		if t.IsZero() {
+			continue
+		}
+		if !seen || t.Before(minT) {
+			minT = t
+		}
+		if !seen || t.After(maxT) {
+			maxT = t
+		}
+		seen = true
+	}
+	if !seen {
+		return fmt.Sprintf(`{"numRecords":%d}`, len(records))
+	}
+	const layout = "2006-01-02T15:04:05.000Z"
+	return fmt.Sprintf(`{"numRecords":%d,"minValues":{%q:%q},"maxValues":{%q:%q}}`,
+		len(records), sourceCol, minT.UTC().Format(layout), sourceCol, maxT.UTC().Format(layout))
 }
 
 // numRecordsFromStats extracts numRecords from a Delta add-stats string (0 if
@@ -91,7 +126,9 @@ func deltaType(t string) string {
 
 // deltaSchemaString renders our Schema as a Delta schemaString — itself a
 // JSON-encoded Spark struct type, embedded as a string inside the metaData
-// action.
+// action. A partitioned table's schema includes the event_date partition
+// column (Delta requires partition columns in the table schema even though
+// their values live in file paths/partitionValues, never in the Parquet).
 func deltaSchemaString(schema Schema) (string, error) {
 	type field struct {
 		Name     string                 `json:"name"`
@@ -103,60 +140,58 @@ func deltaSchemaString(schema Schema) (string, error) {
 		Type   string  `json:"type"`
 		Fields []field `json:"fields"`
 	}
-	st := structType{Type: "struct", Fields: make([]field, 0, len(schema.Columns))}
+	st := structType{Type: "struct", Fields: make([]field, 0, len(schema.Columns)+1)}
 	for _, c := range schema.Columns {
 		st.Fields = append(st.Fields, field{
 			Name: c.Name, Type: deltaType(c.Type), Nullable: c.Nullable, Metadata: map[string]interface{}{},
+		})
+	}
+	if schema.PartitionBy != "" {
+		st.Fields = append(st.Fields, field{
+			Name: partitionColumn, Type: "date", Nullable: true, Metadata: map[string]interface{}{},
 		})
 	}
 	b, err := json.Marshal(st)
 	return string(b), err
 }
 
-// buildDeltaCommit0 builds the version-0 commit: protocol + metaData + the
-// table's first add. tableID is a stable UUID; createdMs/modMs are epoch millis.
-func buildDeltaCommit0(tableID string, schema Schema, add deltaAdd, createdMs int64) ([]byte, error) {
+// deltaMetaDataFor builds the metaData action for a table: partitionColumns
+// and the partition-source configuration entry when the schema is partitioned.
+func deltaMetaDataFor(tableID string, schema Schema, createdMs int64) (deltaMetaData, error) {
 	schemaStr, err := deltaSchemaString(schema)
 	if err != nil {
-		return nil, err
+		return deltaMetaData{}, err
 	}
-	return encodeDeltaActions([]interface{}{
-		map[string]deltaProtocol{"protocol": {MinReaderVersion: 1, MinWriterVersion: 2}},
-		map[string]deltaMetaData{"metaData": {
-			ID:               tableID,
-			Format:           deltaFormat{Provider: "parquet", Options: map[string]string{}},
-			SchemaString:     schemaStr,
-			PartitionColumns: []string{},
-			Configuration:    map[string]string{},
-			CreatedTime:      createdMs,
-		}},
-		map[string]deltaAdd{"add": add},
-	})
-}
-
-// buildDeltaCommitAdd builds a single-add commit (a normal append).
-func buildDeltaCommitAdd(add deltaAdd) ([]byte, error) {
-	return encodeDeltaActions([]interface{}{map[string]deltaAdd{"add": add}})
-}
-
-// buildDeltaCommitCompact builds ONE atomic compaction commit: the consolidated
-// add plus a remove for every superseded file. (Our current Compact spreads
-// these across N+1 versions — the real Delta single commit is atomic.)
-func buildDeltaCommitCompact(add deltaAdd, removed []deltaRemove) ([]byte, error) {
-	actions := make([]interface{}, 0, 1+len(removed))
-	actions = append(actions, map[string]deltaAdd{"add": add})
-	for _, r := range removed {
-		actions = append(actions, map[string]deltaRemove{"remove": r})
+	md := deltaMetaData{
+		ID:               tableID,
+		Format:           deltaFormat{Provider: "parquet", Options: map[string]string{}},
+		SchemaString:     schemaStr,
+		PartitionColumns: []string{},
+		Configuration:    map[string]string{},
+		CreatedTime:      createdMs,
 	}
-	return encodeDeltaActions(actions)
+	if schema.PartitionBy != "" {
+		md.PartitionColumns = []string{partitionColumn}
+		md.Configuration[partitionSourceConfigKey] = schema.PartitionBy
+	}
+	return md, nil
 }
 
-// buildDeltaCommitRemoves builds a commit that only removes files — the purge
-// case where every remaining row of a table matched the deletion predicate,
-// so there is no consolidated remainder file to add.
-func buildDeltaCommitRemoves(removed []deltaRemove) ([]byte, error) {
-	actions := make([]interface{}, 0, len(removed))
-	for _, r := range removed {
+// buildDeltaCommit is the one commit encoder: optional protocol (version 0
+// only), optional metaData (version 0 and partition-layout migrations),
+// then adds and removes in that order — all in ONE atomic commit file.
+func buildDeltaCommit(protocol bool, meta *deltaMetaData, adds []deltaAdd, removes []deltaRemove) ([]byte, error) {
+	actions := make([]interface{}, 0, 2+len(adds)+len(removes))
+	if protocol {
+		actions = append(actions, map[string]deltaProtocol{"protocol": {MinReaderVersion: 1, MinWriterVersion: 2}})
+	}
+	if meta != nil {
+		actions = append(actions, map[string]deltaMetaData{"metaData": *meta})
+	}
+	for _, a := range adds {
+		actions = append(actions, map[string]deltaAdd{"add": a})
+	}
+	for _, r := range removes {
 		actions = append(actions, map[string]deltaRemove{"remove": r})
 	}
 	return encodeDeltaActions(actions)
@@ -205,6 +240,20 @@ func parseDeltaCommit(body []byte) (deltaCommit, error) {
 			s, err := parseDeltaSchemaString(md.SchemaString)
 			if err != nil {
 				return c, err
+			}
+			// Partition columns live in file paths, never in Parquet, so they
+			// are excluded from the Go schema (which drives Parquet encode on
+			// compact/purge rewrites); PartitionBy carries the source column
+			// back out of the configuration bag instead.
+			if len(md.PartitionColumns) > 0 {
+				cols := s.Columns[:0]
+				for _, col := range s.Columns {
+					if !slices.Contains(md.PartitionColumns, col.Name) {
+						cols = append(cols, col)
+					}
+				}
+				s.Columns = cols
+				s.PartitionBy = md.Configuration[partitionSourceConfigKey]
 			}
 			c.schema = &s
 		}

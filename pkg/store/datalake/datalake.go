@@ -52,6 +52,13 @@ type Store interface {
 	// it, PurgeRows-removed (GDPR) bytes persist in the bucket forever.
 	Vacuum(ctx context.Context, table string, grace time.Duration) (VacuumResult, error)
 
+	// EnsurePartitioned migrates an existing flat-layout table to the
+	// partitioned layout schema.PartitionBy describes, in one atomic Delta
+	// commit (new metaData + partitioned adds + removes of the flat files).
+	// No-op when the table is empty, already partitioned, or the schema is
+	// unpartitioned. Old bytes are reclaimed by the next Vacuum.
+	EnsurePartitioned(ctx context.Context, table string, schema Schema) error
+
 	// Close releases resources.
 	Close() error
 }
@@ -63,7 +70,19 @@ type Record map[string]interface{}
 type Schema struct {
 	Version int
 	Columns []Column
+
+	// PartitionBy names the timestamp column daily hive partitions derive
+	// from (e.g. "timestamp", "observed_at"); empty = unpartitioned. The
+	// partition column in the Delta metadata is always event_date — its
+	// values live in file paths and partitionValues, never in the Parquet,
+	// so PartitionBy must name a column already in Columns.
+	PartitionBy string
 }
+
+// partitionColumn is the Delta partition column name for every partitioned
+// table: the UTC date of the PartitionBy column, hive-encoded in file paths
+// as event_date=2006-01-02.
+const partitionColumn = "event_date"
 
 // Column defines a single column in a schema.
 type Column struct {
@@ -261,6 +280,9 @@ func (m *MemoryStore) Vacuum(_ context.Context, table string, _ time.Duration) (
 	return VacuumResult{Table: table}, nil
 }
 
+// EnsurePartitioned is a no-op for the in-memory store (no file layout).
+func (m *MemoryStore) EnsurePartitioned(_ context.Context, _ string, _ Schema) error { return nil }
+
 // Compact is a no-op for the in-memory store (no files to pack).
 func (m *MemoryStore) Compact(_ context.Context, table string) (CompactResult, error) {
 	m.mu.RLock()
@@ -286,9 +308,15 @@ func (m *MemoryStore) Tables() []string {
 }
 
 func matchRecord(rec Record, filter Filter) bool {
-	// Time filter
+	// Time filter — against the record's event-time column: "timestamp"
+	// for the event tables, falling back to "observed_at" (the signal
+	// tables' event time, and their partition source).
 	if !filter.TimeFrom.IsZero() || !filter.TimeTo.IsZero() {
-		if ts, ok := rec["timestamp"]; ok {
+		ts, ok := rec["timestamp"]
+		if !ok {
+			ts, ok = rec["observed_at"]
+		}
+		if ok {
 			var t time.Time
 			switch v := ts.(type) {
 			case time.Time:

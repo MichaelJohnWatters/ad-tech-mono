@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeltaSchemaString_TypeMapping(t *testing.T) {
@@ -47,10 +48,30 @@ func TestDeltaSchemaString_TypeMapping(t *testing.T) {
 	}
 }
 
-func TestBuildDeltaCommit0_Shape(t *testing.T) {
+func TestDeltaSchemaString_PartitionedAddsEventDate(t *testing.T) {
+	s := Schema{
+		Columns:     []Column{{Name: "observed_at", Type: "timestamp", Nullable: true}},
+		PartitionBy: "observed_at",
+	}
+	got, err := deltaSchemaString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Delta requires partition columns in the table schema even though their
+	// values live in file paths, not in the Parquet.
+	if !strings.Contains(got, `"name":"event_date"`) || !strings.Contains(got, `"type":"date"`) {
+		t.Errorf("partitioned schemaString should carry event_date:date, got %s", got)
+	}
+}
+
+func TestBuildDeltaCommit_Version0Shape(t *testing.T) {
 	schema := Schema{Columns: []Column{{Name: "publisher_id", Type: "string", Nullable: true}}}
-	add := deltaAdd{Path: "part-00000.parquet", PartitionValues: map[string]string{}, Size: 1234, ModificationTime: 1000, DataChange: true}
-	b, err := buildDeltaCommit0("table-uuid", schema, add, 900)
+	md, err := deltaMetaDataFor("table-uuid", schema, 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := deltaAdd{Path: "part-00000-000.parquet", PartitionValues: map[string]string{}, Size: 1234, ModificationTime: 1000, DataChange: true}
+	b, err := buildDeltaCommit(true, &md, []deltaAdd{add}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,13 +91,13 @@ func TestBuildDeltaCommit0_Shape(t *testing.T) {
 	}
 }
 
-func TestBuildDeltaCommitCompact_AddThenRemoves(t *testing.T) {
-	add := deltaAdd{Path: "part-00003.parquet", PartitionValues: map[string]string{}, Size: 10, DataChange: true}
+func TestBuildDeltaCommit_AddsThenRemoves(t *testing.T) {
+	adds := []deltaAdd{{Path: "event_date=2026-07-17/part-00003-000.parquet", PartitionValues: map[string]string{"event_date": "2026-07-17"}, Size: 10, DataChange: true}}
 	removed := []deltaRemove{
-		{Path: "part-00000.parquet", DeletionTimestamp: 1, DataChange: true},
-		{Path: "part-00001.parquet", DeletionTimestamp: 1, DataChange: true},
+		{Path: "part-00000-000.parquet", DeletionTimestamp: 1, DataChange: true},
+		{Path: "part-00001-000.parquet", DeletionTimestamp: 1, DataChange: true},
 	}
-	b, err := buildDeltaCommitCompact(add, removed)
+	b, err := buildDeltaCommit(false, nil, adds, removed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,5 +110,69 @@ func TestBuildDeltaCommitCompact_AddThenRemoves(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], `"remove"`) || !strings.Contains(lines[2], `"remove"`) {
 		t.Errorf("lines 2-3 should be removes, got %s / %s", lines[1], lines[2])
+	}
+}
+
+func TestPartitionMetadata_RoundTrip(t *testing.T) {
+	schema := Schema{
+		Columns: []Column{
+			{Name: "user_id", Type: "string", Nullable: true},
+			{Name: "observed_at", Type: "timestamp", Nullable: true},
+		},
+		PartitionBy: "observed_at",
+	}
+	md, err := deltaMetaDataFor("table-uuid", schema, 900)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md.PartitionColumns) != 1 || md.PartitionColumns[0] != "event_date" {
+		t.Fatalf("partitionColumns = %v, want [event_date]", md.PartitionColumns)
+	}
+	add := deltaAdd{Path: "event_date=2026-07-17/part-00000-000.parquet", PartitionValues: map[string]string{"event_date": "2026-07-17"}, DataChange: true}
+	b, err := buildDeltaCommit(true, &md, []deltaAdd{add}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseDeltaCommit(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The recovered Go schema must exclude event_date (never in the Parquet)
+	// and carry the partition source back out of the configuration bag.
+	if c.schema == nil {
+		t.Fatal("no schema recovered")
+	}
+	if c.schema.PartitionBy != "observed_at" {
+		t.Errorf("recovered PartitionBy = %q, want observed_at", c.schema.PartitionBy)
+	}
+	for _, col := range c.schema.Columns {
+		if col.Name == "event_date" {
+			t.Error("event_date leaked into the recovered Go schema")
+		}
+	}
+	if len(c.schema.Columns) != 2 {
+		t.Errorf("recovered %d columns, want 2", len(c.schema.Columns))
+	}
+}
+
+func TestDeltaStats_MinMax(t *testing.T) {
+	t1 := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 7, 17, 12, 30, 0, 0, time.UTC)
+	s := deltaStats([]Record{{"observed_at": t2}, {"observed_at": t1}}, "observed_at")
+	if !strings.Contains(s, `"numRecords":2`) {
+		t.Errorf("stats missing numRecords: %s", s)
+	}
+	if !strings.Contains(s, `"minValues":{"observed_at":"2026-07-17T10:00:00.000Z"}`) {
+		t.Errorf("stats missing minValues: %s", s)
+	}
+	if !strings.Contains(s, `"maxValues":{"observed_at":"2026-07-17T12:30:00.000Z"}`) {
+		t.Errorf("stats missing maxValues: %s", s)
+	}
+	// Unpartitioned / no usable values → row count only.
+	if got := deltaStats([]Record{{"x": 1}}, ""); got != `{"numRecords":1}` {
+		t.Errorf("plain stats = %s", got)
+	}
+	if got := deltaStats([]Record{{"x": 1}}, "observed_at"); got != `{"numRecords":1}` {
+		t.Errorf("no-value stats = %s", got)
 	}
 }

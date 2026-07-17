@@ -33,6 +33,19 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	batchSize := keys.Pipeline.DatalakeBatchSize.Get(cfg)
 	sink := newDatalakeSink(datalake.NewObjectStore(objStore, bucket, log), batchSize, log)
 
+	// One-time layout migration: tables written before daily partitioning
+	// existed are rewritten into the hive layout (one atomic commit each,
+	// old bytes reclaimed by the conductor's next vacuum). Runs BEFORE the
+	// NATS subscription so no flush interleaves with the rewrite. Idempotent
+	// and cheap once migrated (a log replay per table). A failure degrades
+	// to the flat layout (reads stay correct, just unpruned) and is retried
+	// next boot.
+	for table, schema := range sink.schemas {
+		if err := sink.lake.EnsurePartitioned(context.Background(), table, schema); err != nil {
+			log.Error("datalake: partition migration failed", "table", table, "error", err)
+		}
+	}
+
 	bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
 	if err != nil {
 		log.Warn("datalake sink disabled: nats unavailable", "error", err)
@@ -127,25 +140,25 @@ var eventTables = map[string]struct {
 	table  string
 	schema datalake.Schema
 }{
-	events.SubjectImpression: {"impressions", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectImpression: {"impressions", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("insertion_order_id"), str("campaign_id"), str("creative_id"),
 		str("placement_id"), str("publisher_id"), str("account_id"), str("geo"), str("device"),
 		str("channel"), str("format"), f64("clearing_price"), str("clearing_currency"),
 		f64("clearing_price_usd"), str("bid_model"), str("deal_id"), ts("timestamp"),
 	}}},
-	events.SubjectClick: {"clicks", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectClick: {"clicks", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("campaign_id"), str("creative_id"), str("placement_id"),
 		str("publisher_id"), str("account_id"), str("landing_url"), str("geo"), str("device"), ts("timestamp"),
 	}}},
-	events.SubjectConversion: {"conversions", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectConversion: {"conversions", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("campaign_id"), str("creative_id"), str("placement_id"), str("account_id"),
 		str("conversion_type"), f64("revenue"), str("currency"), f64("revenue_usd"), ts("timestamp"),
 	}}},
-	events.SubjectView: {"views", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectView: {"views", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("campaign_id"), str("creative_id"), str("placement_id"), str("publisher_id"),
 		str("account_id"), i64("duration_ms"), i64("percent_visible"), i64("area_px"), boolC("iab_viewable"), ts("timestamp"),
 	}}},
-	events.SubjectAuctionWin: {"auction_wins", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectAuctionWin: {"auction_wins", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("auction_id"), str("winner_dsp"), str("campaign_id"), str("creative_id"),
 		str("placement_id"), str("publisher_id"), str("advertiser_id"), f64("clearing_price"),
 		str("currency"), str("bid_model"), str("deal_id"), str("channel"), ts("timestamp"),
@@ -154,12 +167,12 @@ var eventTables = map[string]struct {
 	// Reporting lands the same event in its `auctions` table; mirroring it into
 	// the lake lets the cold tier serve fill_rate (impressions/auctions) for deep
 	// history, not just the hot window.
-	events.SubjectAuctionComplete: {"auctions", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectAuctionComplete: {"auctions", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("placement_id"), str("publisher_id"), str("channel"),
 		i64("num_bids"), f64("winning_bid"), f64("clearing_price"), str("currency"),
 		f64("clearing_price_usd"), str("winner_dsp"), i64("duration_ms"), str("deal_id"), ts("timestamp"),
 	}}},
-	events.SubjectDSPCall: {"dsp_calls", datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectDSPCall: {"dsp_calls", datalake.Schema{Version: 1, PartitionBy: "timestamp", Columns: []datalake.Column{
 		str("trace_id"), str("auction_id"), str("channel"), str("dsp_endpoint"), boolC("bid_received"),
 		f64("bid_price_usd"), i64("latency_ms"), boolC("timed_out"), ts("timestamp"),
 	}}},
@@ -167,7 +180,7 @@ var eventTables = map[string]struct {
 	// interaction rows) — the input to behavioural segmentation rules. The
 	// ONLY lake table besides profile_signals that carries user keys, so both
 	// are covered by the GDPR purge (privacy.go).
-	events.SubjectBehaviourObserved: {behaviourSignalsTable, datalake.Schema{Version: 1, Columns: []datalake.Column{
+	events.SubjectBehaviourObserved: {behaviourSignalsTable, datalake.Schema{Version: 1, PartitionBy: "observed_at", Columns: []datalake.Column{
 		str("trace_id"), str("kind"), str("user_id"), str("household_id"),
 		str("placement_id"), str("publisher_id"), str("campaign_id"), str("creative_id"),
 		str("channel"), str("categories"), str("geo"), str("device"),
@@ -186,7 +199,7 @@ const behaviourSignalsTable = "behaviour_signals"
 // record() — same table, same schema, no NATS hop.
 const profileSignalsTable = "profile_signals"
 
-var profileSignalsSchema = datalake.Schema{Version: 1, Columns: []datalake.Column{
+var profileSignalsSchema = datalake.Schema{Version: 1, PartitionBy: "observed_at", Columns: []datalake.Column{
 	str("trace_id"), str("id_type"), str("id_value"), str("source"), str("access"),
 	str("account_id"), str("provider"), str("segment_id"), str("segment_name"),
 	str("visibility"), boolC("consent"), ts("observed_at"),

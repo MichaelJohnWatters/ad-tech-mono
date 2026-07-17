@@ -62,8 +62,108 @@ func deltaLogPrefix(table string) string { return table + "/_delta_log/" }
 func deltaLogKey(table string, v int) string {
 	return fmt.Sprintf("%s%020d.json", deltaLogPrefix(table), v)
 }
-func parquetKey(table string, v int) string {
-	return fmt.Sprintf("%s/part-%05d.parquet", table, v)
+
+// hiveNullPartition is Hive/Delta's directory name for a null partition value
+// (a record whose partition-source column is missing/zero). Standard readers
+// surface it as event_date NULL; pruning never skips it.
+const hiveNullPartition = "__HIVE_DEFAULT_PARTITION__"
+
+// parquetKey names a data file. partition is the event_date value ("" for an
+// unpartitioned table); seq disambiguates multiple files committed in one
+// version (multi-day write, per-partition compaction, per-file purge rewrite).
+func parquetKey(table string, v, seq int, partition string) string {
+	name := fmt.Sprintf("part-%05d-%03d.parquet", v, seq)
+	if partition == "" {
+		return fmt.Sprintf("%s/%s", table, name)
+	}
+	return fmt.Sprintf("%s/%s=%s/%s", table, partitionColumn, partition, name)
+}
+
+// partitionValueFor derives a record's event_date partition value from the
+// schema's partition-source column: the UTC date, or the hive null dir when
+// the column is missing/unparseable.
+func partitionValueFor(rec Record, sourceCol string) string {
+	t := toTime(rec[sourceCol])
+	if t.IsZero() {
+		return hiveNullPartition
+	}
+	return t.UTC().Format("2006-01-02")
+}
+
+// groupByPartition splits records into per-partition groups with a stable
+// (sorted) key order. Unpartitioned schemas yield a single ""-keyed group.
+// Empty input still yields one empty group so a first Write always creates
+// the table (version-0 metadata), matching the flat-layout behaviour.
+func groupByPartition(records []Record, sourceCol string) (keys []string, groups map[string][]Record) {
+	groups = map[string][]Record{}
+	if sourceCol == "" {
+		groups[""] = records
+		return []string{""}, groups
+	}
+	for _, rec := range records {
+		v := partitionValueFor(rec, sourceCol)
+		groups[v] = append(groups[v], rec)
+	}
+	if len(groups) == 0 {
+		groups[hiveNullPartition] = nil
+	}
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, groups
+}
+
+// partitionValues renders the Delta add-action partitionValues map for a
+// partition key. The hive null dir maps to the empty string (Delta's null
+// partition-value serialisation).
+func partitionValues(partition string) map[string]string {
+	if partition == "" {
+		return map[string]string{}
+	}
+	v := partition
+	if v == hiveNullPartition {
+		v = ""
+	}
+	return map[string]string{partitionColumn: v}
+}
+
+// partitionOfPath extracts the event_date value from a data-file path
+// ("" , false when the path has no partition directory).
+func partitionOfPath(path string) (string, bool) {
+	for _, seg := range strings.Split(path, "/") {
+		if v, ok := strings.CutPrefix(seg, partitionColumn+"="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// prunedByTime reports whether a data file can be skipped entirely for a
+// time-bounded read: its partition date lies wholly outside [from, to].
+// Files without a parseable partition date (unpartitioned tables, the hive
+// null dir) are never pruned — pruning is an optimisation, row-level
+// filtering still applies.
+func prunedByTime(path string, from, to time.Time) bool {
+	if from.IsZero() && to.IsZero() {
+		return false
+	}
+	v, ok := partitionOfPath(path)
+	if !ok {
+		return false
+	}
+	day, err := time.Parse("2006-01-02", v)
+	if err != nil {
+		return false
+	}
+	dayEnd := day.AddDate(0, 0, 1)
+	if !from.IsZero() && !dayEnd.After(from) {
+		return true
+	}
+	if !to.IsZero() && day.After(to) {
+		return true
+	}
+	return false
 }
 
 // deltaTableID is a stable table identifier for the Delta metaData action.
@@ -99,34 +199,45 @@ func (o *ObjectStore) Write(ctx context.Context, table string, records []Record,
 		return err
 	}
 
-	// Encode the records as Parquet.
-	parquetBytes, err := o.encodeParquet(records, schema)
-	if err != nil {
-		return fmt.Errorf("encode parquet: %w", err)
-	}
-	pKey := parquetKey(table, version)
-	if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
-		return fmt.Errorf("put parquet: %w", err)
+	// One Parquet file per partition the records span (usually one — the
+	// sink flushes minutely), all committed in ONE Delta transaction.
+	// Version 0 carries protocol + metaData (schema, partitionColumns) so
+	// standard Delta readers (Spark/Trino/DuckDB delta_scan) can open the
+	// table; later versions are adds only.
+	now := time.Now().UTC()
+	keys, groups := groupByPartition(records, schema.PartitionBy)
+	adds := make([]deltaAdd, 0, len(keys))
+	totalBytes := 0
+	for seq, part := range keys {
+		group := groups[part]
+		parquetBytes, err := o.encodeParquet(group, schema)
+		if err != nil {
+			return fmt.Errorf("encode parquet: %w", err)
+		}
+		pKey := parquetKey(table, version, seq, part)
+		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+			return fmt.Errorf("put parquet: %w", err)
+		}
+		totalBytes += len(parquetBytes)
+		adds = append(adds, deltaAdd{
+			Path:             relTablePath(table, pKey),
+			PartitionValues:  partitionValues(part),
+			Size:             int64(len(parquetBytes)),
+			ModificationTime: now.UnixMilli(),
+			DataChange:       true,
+			Stats:            deltaStats(group, schema.PartitionBy),
+		})
 	}
 
-	// Commit a real Delta transaction. Version 0 carries protocol + metaData
-	// (the schema) so standard Delta readers (Spark/Trino/DuckDB delta_scan) can
-	// open the table; later versions are a single add.
-	now := time.Now().UTC()
-	add := deltaAdd{
-		Path:             relTablePath(table, pKey),
-		PartitionValues:  map[string]string{},
-		Size:             int64(len(parquetBytes)),
-		ModificationTime: now.UnixMilli(),
-		DataChange:       true,
-		Stats:            deltaStats(len(records)),
-	}
-	var commit []byte
+	var meta *deltaMetaData
 	if version == 0 {
-		commit, err = buildDeltaCommit0(deltaTableID(table), schema, add, now.UnixMilli())
-	} else {
-		commit, err = buildDeltaCommitAdd(add)
+		md, err := deltaMetaDataFor(deltaTableID(table), schema, now.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("build delta metadata: %w", err)
+		}
+		meta = &md
 	}
+	commit, err := buildDeltaCommit(version == 0, meta, adds, nil)
 	if err != nil {
 		return fmt.Errorf("build delta commit: %w", err)
 	}
@@ -134,7 +245,7 @@ func (o *ObjectStore) Write(ctx context.Context, table string, records []Record,
 		return err
 	}
 
-	o.log.Debug("datalake write", "table", table, "records", len(records), "version", version, "bytes", len(parquetBytes))
+	o.log.Debug("datalake write", "table", table, "records", len(records), "version", version, "files", len(adds), "bytes", totalBytes)
 	return nil
 }
 
@@ -160,7 +271,14 @@ func (o *ObjectStore) Read(ctx context.Context, table string, filter Filter) ([]
 	sort.Strings(paths)
 
 	var out []Record
+	pruned := 0
 	for _, p := range paths {
+		// Partition pruning: a time-bounded read never fetches a byte of a
+		// day outside the window — the point of the hive layout.
+		if prunedByTime(p, filter.TimeFrom, filter.TimeTo) {
+			pruned++
+			continue
+		}
 		recs, err := o.readParquet(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
@@ -170,6 +288,9 @@ func (o *ObjectStore) Read(ctx context.Context, table string, filter Filter) ([]
 				out = append(out, rec)
 			}
 		}
+	}
+	if pruned > 0 {
+		o.log.Debug("datalake read pruned partitions", "table", table, "files_pruned", pruned, "files_read", len(paths)-pruned)
 	}
 	return out, nil
 }
@@ -273,12 +394,15 @@ type CompactResult struct {
 	Rows        int
 }
 
-// Compact bin-packs a table's active Parquet files into a single consolidated
-// file, marking the old files removed in the Delta log — fixing the small-files
-// problem that minutely flushes create. Row content is unchanged (this is
-// file-level compaction, not aggregation): a Read before and after returns the
-// same records. Idempotent: with ≤1 active file it's a no-op. Holds the write
-// lock so it's atomic w.r.t. concurrent writes (single-writer model).
+// Compact bin-packs a table's active Parquet files PER PARTITION, marking the
+// superseded files removed in the Delta log — fixing the small-files problem
+// that minutely flushes create. Only partitions holding 2+ files are touched,
+// so with daily partitioning an old day compacts once and is then immutable
+// forever: the hourly compactor only ever rewrites "today". Row content is
+// unchanged (file-level compaction, not aggregation): a Read before and after
+// returns the same records. Idempotent: with every partition already at ≤1
+// file it's a no-op with no commit. Holds the write lock so it's atomic
+// w.r.t. concurrent writes (single-writer model).
 func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -293,46 +417,67 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 		return res, nil // nothing to compact (or no schema recorded yet)
 	}
 
-	var records []Record
+	// Group the active set by partition value ("" = unpartitioned/flat files,
+	// which all share one group — the old whole-table behaviour).
+	byPart := map[string][]string{}
 	for _, p := range paths {
-		recs, err := o.readParquet(ctx, p)
-		if err != nil {
-			return res, fmt.Errorf("read %s: %w", p, err)
-		}
-		records = append(records, recs...)
+		v, _ := partitionOfPath(p)
+		byPart[v] = append(byPart[v], p)
 	}
+	parts := make([]string, 0, len(byPart))
+	for v, files := range byPart {
+		if len(files) > 1 {
+			parts = append(parts, v)
+		}
+	}
+	if len(parts) == 0 {
+		return res, nil // every partition already consolidated
+	}
+	sort.Strings(parts)
 
-	// Write the consolidated file, then commit ONE atomic Delta transaction that
-	// adds it and removes every superseded file. (A single commit means a reader
-	// never sees the new file alongside the old ones — no double-count window.)
+	// Consolidate each multi-file partition, then commit ONE atomic Delta
+	// transaction covering all of them. (A single commit means a reader never
+	// sees a new file alongside the old ones — no double-count window.)
 	version, err := o.nextVersionLocked(ctx, table)
 	if err != nil {
 		return res, err
 	}
-	parquetBytes, err := o.encodeParquet(records, schema)
-	if err != nil {
-		return res, fmt.Errorf("encode parquet: %w", err)
-	}
-	pKey := parquetKey(table, version)
-	if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
-		return res, fmt.Errorf("put compacted parquet: %w", err)
-	}
 	now := time.Now().UTC()
-	add := deltaAdd{
-		Path:             relTablePath(table, pKey),
-		PartitionValues:  map[string]string{},
-		Size:             int64(len(parquetBytes)),
-		ModificationTime: now.UnixMilli(),
-		DataChange:       true,
-		Stats:            deltaStats(len(records)),
-	}
-	removes := make([]deltaRemove, 0, len(paths))
-	for _, p := range paths {
-		removes = append(removes, deltaRemove{
-			Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
+	var adds []deltaAdd
+	var removes []deltaRemove
+	for seq, part := range parts {
+		var records []Record
+		for _, p := range byPart[part] {
+			recs, err := o.readParquet(ctx, p)
+			if err != nil {
+				return res, fmt.Errorf("read %s: %w", p, err)
+			}
+			records = append(records, recs...)
+		}
+		parquetBytes, err := o.encodeParquet(records, schema)
+		if err != nil {
+			return res, fmt.Errorf("encode parquet: %w", err)
+		}
+		pKey := parquetKey(table, version, seq, part)
+		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+			return res, fmt.Errorf("put compacted parquet: %w", err)
+		}
+		adds = append(adds, deltaAdd{
+			Path:             relTablePath(table, pKey),
+			PartitionValues:  partitionValues(part),
+			Size:             int64(len(parquetBytes)),
+			ModificationTime: now.UnixMilli(),
+			DataChange:       true,
+			Stats:            deltaStats(records, schema.PartitionBy),
 		})
+		for _, p := range byPart[part] {
+			removes = append(removes, deltaRemove{
+				Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
+			})
+		}
+		res.Rows += len(records)
 	}
-	commit, err := buildDeltaCommitCompact(add, removes)
+	commit, err := buildDeltaCommit(false, nil, adds, removes)
 	if err != nil {
 		return res, fmt.Errorf("build compact commit: %w", err)
 	}
@@ -340,23 +485,26 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 		return res, err
 	}
 
-	res.FilesAfter = 1
-	res.Rows = len(records)
-	o.log.Info("datalake compact", "table", table, "files_before", res.FilesBefore, "files_after", 1, "rows", res.Rows)
+	res.FilesAfter = len(paths) - len(removes) + len(adds)
+	o.log.Info("datalake compact", "table", table,
+		"files_before", res.FilesBefore, "files_after", res.FilesAfter,
+		"partitions_compacted", len(parts), "rows", res.Rows)
 	return res, nil
 }
 
 // PurgeRows is the GDPR filtered rewrite: it drops every row matching match
-// from the table's active file set in ONE atomic Delta commit — the surviving
-// rows are consolidated into a new file and every old file is removed, so a
-// reader never sees a half-purged state. Reuses the Compact mechanics (same
-// lock, same read→encode→commit spine); a table where nothing matches is a
-// no-op with no commit. Returns how many rows were removed.
+// from the table's active file set in ONE atomic Delta commit, so a reader
+// never sees a half-purged state. Each file CONTAINING matches is rewritten
+// in place (same partition directory, minus the matching rows) and the old
+// file removed; untouched files stay untouched — with daily partitioning a
+// purge rewrites only the days the user actually appears in, preserving the
+// layout and the immutability of every other partition. A table where
+// nothing matches is a no-op with no commit. Returns how many rows were
+// removed.
 //
 // Delta-log semantics note: the removed files' bytes stay in object storage
-// (time travel could still read them) — same as Compact. A retention sweep
-// that physically deletes tombstoned files is the storage-level companion,
-// out of scope here.
+// (time travel could still read them). Vacuum is the storage-level companion
+// that physically deletes them after the grace window.
 func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Record) bool) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -370,71 +518,174 @@ func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Re
 		return 0, nil // empty (or never-written) table — nothing to purge
 	}
 
-	var keep []Record
-	removed := 0
-	for _, p := range paths {
-		recs, err := o.readParquet(ctx, p)
-		if err != nil {
-			return 0, fmt.Errorf("read %s: %w", p, err)
-		}
-		for _, rec := range recs {
-			if match(rec) {
-				removed++
-			} else {
-				keep = append(keep, rec)
-			}
-		}
-	}
-	if removed == 0 {
-		return 0, nil
-	}
-
 	version, err := o.nextVersionLocked(ctx, table)
 	if err != nil {
 		return 0, err
 	}
 	now := time.Now().UTC()
+	var adds []deltaAdd
+	var removes []deltaRemove
+	removed, kept, seq := 0, 0, 0
+	for _, p := range paths {
+		recs, err := o.readParquet(ctx, p)
+		if err != nil {
+			return 0, fmt.Errorf("read %s: %w", p, err)
+		}
+		var keep []Record
+		dropped := 0
+		for _, rec := range recs {
+			if match(rec) {
+				dropped++
+			} else {
+				keep = append(keep, rec)
+			}
+		}
+		if dropped == 0 {
+			continue // file untouched — stays active, no rewrite
+		}
+		removed += dropped
+		kept += len(keep)
+		removes = append(removes, deltaRemove{
+			Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
+		})
+		if len(keep) == 0 {
+			continue // every row matched — remove-only, no remainder file
+		}
+		parquetBytes, err := o.encodeParquet(keep, schema)
+		if err != nil {
+			return 0, fmt.Errorf("encode purged parquet: %w", err)
+		}
+		part, _ := partitionOfPath(p)
+		pKey := parquetKey(table, version, seq, part)
+		seq++
+		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+			return 0, fmt.Errorf("put purged parquet: %w", err)
+		}
+		adds = append(adds, deltaAdd{
+			Path:             relTablePath(table, pKey),
+			PartitionValues:  partitionValues(part),
+			Size:             int64(len(parquetBytes)),
+			ModificationTime: now.UnixMilli(),
+			DataChange:       true,
+			Stats:            deltaStats(keep, schema.PartitionBy),
+		})
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	commit, err := buildDeltaCommit(false, nil, adds, removes)
+	if err != nil {
+		return 0, fmt.Errorf("build purge commit: %w", err)
+	}
+	if err := o.putLogFile(ctx, table, version, commit); err != nil {
+		return 0, err
+	}
+	o.log.Info("datalake purge", "table", table,
+		"rows_removed", removed, "rows_kept_in_rewrites", kept,
+		"files_rewritten", len(adds), "files_untouched", len(paths)-len(removes))
+	return removed, nil
+}
+
+// EnsurePartitioned migrates a flat-layout table to the daily-partitioned
+// layout schema.PartitionBy describes: every active file is read, rows are
+// regrouped by event_date, and ONE atomic commit writes the new metaData
+// (partitionColumns + partition-source configuration), adds the partitioned
+// files, and removes every flat file — a reader sees the old layout or the
+// new, never a mix. Re-encoding uses the CALLER's schema, so rows gain any
+// columns added since they were written (as nulls). No-op when the schema is
+// unpartitioned, the table doesn't exist yet (the first Write creates it
+// partitioned), or the table is already partitioned. Old bytes are reclaimed
+// by the next Vacuum. Called by the pipeline at boot for each sink table.
+func (o *ObjectStore) EnsurePartitioned(ctx context.Context, table string, schema Schema) error {
+	if schema.PartitionBy == "" {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	txns, err := o.Log(ctx, table)
+	if err != nil {
+		return err
+	}
+	if len(txns) == 0 {
+		return nil // no table yet — Write will create it partitioned
+	}
+	paths, recovered, haveSchema := activeFiles(txns)
+	if haveSchema && recovered.PartitionBy != "" {
+		// Already partitioned — but sweep STRAY flat files: a rolled-back
+		// old writer (pre-partitioning binary) appends root-level files a
+		// partitioned table should no longer have. Rewrite just those into
+		// their partitions; properly-partitioned files stay untouched.
+		var strays []string
+		for _, p := range paths {
+			if _, ok := partitionOfPath(p); !ok {
+				strays = append(strays, p)
+			}
+		}
+		if len(strays) == 0 {
+			return nil
+		}
+		paths = strays
+	}
+
+	var records []Record
+	for _, p := range paths {
+		recs, err := o.readParquet(ctx, p)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		records = append(records, recs...)
+	}
+
+	version, err := o.nextVersionLocked(ctx, table)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	md, err := deltaMetaDataFor(deltaTableID(table), schema, now.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("build delta metadata: %w", err)
+	}
+	var adds []deltaAdd
+	if len(records) > 0 {
+		keys, groups := groupByPartition(records, schema.PartitionBy)
+		for seq, part := range keys {
+			group := groups[part]
+			parquetBytes, err := o.encodeParquet(group, schema)
+			if err != nil {
+				return fmt.Errorf("encode parquet: %w", err)
+			}
+			pKey := parquetKey(table, version, seq, part)
+			if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+				return fmt.Errorf("put parquet: %w", err)
+			}
+			adds = append(adds, deltaAdd{
+				Path:             relTablePath(table, pKey),
+				PartitionValues:  partitionValues(part),
+				Size:             int64(len(parquetBytes)),
+				ModificationTime: now.UnixMilli(),
+				DataChange:       true,
+				Stats:            deltaStats(group, schema.PartitionBy),
+			})
+		}
+	}
 	removes := make([]deltaRemove, 0, len(paths))
 	for _, p := range paths {
 		removes = append(removes, deltaRemove{
 			Path: relTablePath(table, p), DeletionTimestamp: now.UnixMilli(), DataChange: true,
 		})
 	}
-
-	var commit []byte
-	if len(keep) == 0 {
-		// Every row matched — commit is removes-only, no remainder file.
-		commit, err = buildDeltaCommitRemoves(removes)
-		if err != nil {
-			return 0, fmt.Errorf("build purge commit: %w", err)
-		}
-	} else {
-		parquetBytes, err := o.encodeParquet(keep, schema)
-		if err != nil {
-			return 0, fmt.Errorf("encode purged parquet: %w", err)
-		}
-		pKey := parquetKey(table, version)
-		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
-			return 0, fmt.Errorf("put purged parquet: %w", err)
-		}
-		add := deltaAdd{
-			Path:             relTablePath(table, pKey),
-			PartitionValues:  map[string]string{},
-			Size:             int64(len(parquetBytes)),
-			ModificationTime: now.UnixMilli(),
-			DataChange:       true,
-			Stats:            deltaStats(len(keep)),
-		}
-		commit, err = buildDeltaCommitCompact(add, removes)
-		if err != nil {
-			return 0, fmt.Errorf("build purge commit: %w", err)
-		}
+	commit, err := buildDeltaCommit(false, &md, adds, removes)
+	if err != nil {
+		return fmt.Errorf("build repartition commit: %w", err)
 	}
 	if err := o.putLogFile(ctx, table, version, commit); err != nil {
-		return 0, err
+		return err
 	}
-	o.log.Info("datalake purge", "table", table, "rows_removed", removed, "rows_kept", len(keep))
-	return removed, nil
+	o.log.Info("datalake repartitioned", "table", table,
+		"partition_by", schema.PartitionBy, "rows", len(records),
+		"files_before", len(paths), "files_after", len(adds))
+	return nil
 }
 
 // VacuumResult reports what a Vacuum pass physically deleted.

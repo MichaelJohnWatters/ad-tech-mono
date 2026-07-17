@@ -65,6 +65,7 @@ type Result struct {
 	Pruned          int // memberships removed by replace-by-segment
 	Expanded        int // memberships added to plain segments via cluster expansion
 	Reconciled      int // memberships restored from profile_signals replay
+	WindowDays      int // behaviour-lake read window (max rule window + slack)
 }
 
 // Run executes the three jobs in order. Clustering failure aborts (jobs 2/3
@@ -121,7 +122,19 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// qualify keep being targeted) with nothing but a log line to notice.
 	// The CronJob retries; memberships are recomputed wholesale anyway.
 	if cfg.Lake != nil {
-		rows, err := cfg.Lake.Read(ctx, "behaviour_signals", datalake.Filter{})
+		// Windowed read: only partitions inside the widest rule window are
+		// fetched (the lake keeps history forever; rules never look past
+		// their window, so the builder shouldn't read past it either). A
+		// failed window query falls back to an unbounded read — correct,
+		// just unpruned.
+		filter := datalake.Filter{}
+		if window, werr := MaxRuleWindowDays(ctx, cfg.DB); werr != nil {
+			log.Error("profile-builder: max rule window query failed; reading unwindowed", "error", werr)
+		} else {
+			filter.TimeFrom = now.AddDate(0, 0, -window)
+			res.WindowDays = window
+		}
+		rows, err := cfg.Lake.Read(ctx, "behaviour_signals", filter)
 		if err != nil {
 			return res, fmt.Errorf("read behaviour_signals: %w", err)
 		}
