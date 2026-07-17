@@ -1,0 +1,54 @@
+# Staging overrides.
+#
+# NOTE: k8s/overlays/staging does NOT exist in the repo (k8s/CLAUDE.md
+# describes it, but it was never created). This file therefore translates the
+# DOCUMENTED staging deltas — k8s/CLAUDE.md "Environment Differences" table and
+# the "staging/prod overlays override..." comments in the base manifests —
+# rather than a real overlay. Deltas applied:
+#   - NATS back to the base 3-node JetStream cluster (local-only single node)
+#   - serving-path services at 2 replicas ("HPA min 2")
+#   - registry-mirror off (local pull-through cache for OrbStack/k3s only)
+#   - Mailpit kept (staging uses "Mailpit or SES sandbox")
+#
+# Still required out-of-band for a real staging environment (values in the
+# default values.yaml are LOCAL dev values):
+#   - image tags from CI (build/Dockerfile with SERVICE=<name>) instead of the
+#     Tilt-built local names
+#   - real S3 endpoint/credentials + SOPS-managed postgres/clickhouse secrets
+#     (override infra.*.credentials / the S3_* env entries per service — the
+#     env lists replace wholesale)
+#   - browser-facing URLs (ADSERVER_TRACKER_URL, PUBLISHER_ADSERVER_TRACKER_URL,
+#     SSAI_PUBLIC_URL, TRANSCODER_PUBLIC_BASE, REPORT_RUNNER_PUBLIC_GATEWAY_URL)
+#     pointed at the public staging gateway, not http://localhost:8080
+
+infra:
+  nats:
+    replicas: 3
+    cluster:
+      enabled: true
+  registryMirror:
+    enabled: false
+
+services:
+  dsp-internal:
+    replicas: 2
+  dsp-competitor1:
+    replicas: 2
+  dsp-competitor2:
+    replicas: 2
+  ssp:
+    replicas: 2
+  exchange:
+    replicas: 2
+  adserver:
+    replicas: 2
+  publisher-adserver:
+    replicas: 2
+  tracker:
+    replicas: 3
+  gateway:
+    replicas: 2
+  # Single-replica BY DESIGN (do not scale without code changes):
+  # reporting (in-process billing Summary + spend-snapshot publisher),
+  # identity-consumer (in-memory fingerprint buckets),
+  # report-runner (boot-time stuck-job requeue).

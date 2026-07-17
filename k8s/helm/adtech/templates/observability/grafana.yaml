@@ -1,0 +1,164 @@
+{{- $ns := include "adtech.namespace" . -}}
+{{- $graf := .Values.observability.grafana }}
+{{- if $graf.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: {{ $ns }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.{{ $ns }}.svc.cluster.local:9090
+        uid: prometheus
+        isDefault: true
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.{{ $ns }}.svc.cluster.local:3100
+        uid: loki
+        jsonData:
+          # Logs-to-trace pivot: when a log line surfaces a trace_id (32 hex
+          # chars — the OTel W3C format pkg/tracing emits), render it as a
+          # clickable link that opens the Jaeger datasource with that trace.
+          derivedFields:
+            - name: TraceID
+              matcherRegex: '"trace_id":"([a-f0-9]{32})"'
+              url: '$${__value.raw}'
+              datasourceUid: jaeger
+      - name: Jaeger
+        type: jaeger
+        access: proxy
+        url: http://jaeger.{{ $ns }}.svc.cluster.local:16686
+        uid: jaeger
+        jsonData:
+          # Trace-to-logs pivot: every span in a Jaeger trace gets a
+          # "View logs" button that opens Loki filtered to {service=...,
+          # trace_id=...}. Same trace_id flows through both stores after
+          # the OTel W3C unification in pkg/tracing.
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: -1m
+            spanEndTimeShift: 1m
+            tags:
+              - key: service.name
+                value: service
+            filterByTraceID: true
+            customQuery: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: {{ $ns }}
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'adtech'
+        orgId: 1
+        folder: 'Ad Tech Platform'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+{{- /*
+Dashboards ConfigMap rendered VERBATIM from a copy of
+k8s/base/grafana/dashboards.yaml: the dashboard JSON contains `{{service}}`
+legendFormat sequences that would be eaten by the template engine, so the
+whole manifest is .Files.Get'd instead of inlined. Only the namespace is
+rewritten for .Values.namespace overrides.
+*/}}
+{{ .Files.Get "files/grafana-dashboards-configmap.yaml" | replace "namespace: adtech" (printf "namespace: %s" $ns) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ $ns }}
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: {{ $graf.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ $graf.adminUser }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ $graf.adminPassword }}
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            # Allow the staff-console Control Center to embed Grafana in an iframe
+            # (drops X-Frame-Options; cookie SameSite=none so it works cross-port).
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: none
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            {{- toYaml $graf.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+{{- end }}

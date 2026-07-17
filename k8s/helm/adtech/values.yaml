@@ -1,0 +1,857 @@
+# Default values == the LOCAL dev environment (k8s/overlays/local + the
+# Tiltfile's k8s_yaml set). Staging/prod override via values-staging.yaml /
+# values-prod.yaml. Env vars, probes, resources, schedules are carried over
+# verbatim from k8s/base + k8s/cronjobs — if you change one side, change the
+# other (scripts/helm-parity.sh checks).
+
+namespace: adtech
+createNamespace: true
+
+# Traefik ingress controller (own `traefik` namespace). Rendered verbatim from
+# files/traefik-install.yaml (a copy of k8s/base/traefik/install.yaml) because
+# it is itself pre-rendered helm output pinned by the repo.
+traefik:
+  enabled: true
+
+# Migration job — helm pre-install/pre-upgrade hook. NOTE: there is no k8s
+# migrate manifest today (Tilt runs `go run ./cmd/migrate` on the host), so
+# this is chart-only. Build the image via build/Dockerfile with SERVICE=migrate.
+migrate:
+  enabled: true
+  image: adtech-migrate
+  env:
+    - name: DATABASE_URL
+      value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+
+# ============================================================
+# App services — one Deployment + Service (+ optional Ingress) each,
+# rendered by templates/services.yaml. Fields:
+#   image, containerName (defaults to key), replicas (default 1),
+#   ports [{name, port}], env (verbatim list), resources,
+#   livenessProbe/readinessProbe (default /healthz + /readyz on first port),
+#   volumes/volumeMounts, ingress.hosts.
+# ============================================================
+services:
+  dsp-internal:
+    image: adtech-dsp
+    containerName: dsp
+    ports: [{ name: http, port: 8082 }]
+    env:
+      - name: POD_NAME
+        value: "dsp-internal-0"
+      - name: DSP_PROFILE
+        value: "internal"
+      - name: DSP_PORT
+        value: "8082"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8082 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8082 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [dsp.adtech.local, dsp-int.adtech.local]
+
+  dsp-competitor1:
+    image: adtech-dsp
+    containerName: dsp
+    ports: [{ name: http, port: 8089 }]
+    env:
+      - name: POD_NAME
+        value: "dsp-competitor1-0"
+      - name: DSP_PROFILE
+        value: "competitor1"
+      - name: DSP_PORT
+        value: "8089"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8089 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8089 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [dsp-comp1.adtech.local]
+
+  dsp-competitor2:
+    image: adtech-dsp
+    containerName: dsp
+    ports: [{ name: http, port: 8090 }]
+    env:
+      - name: POD_NAME
+        value: "dsp-competitor2-0"
+      - name: DSP_PROFILE
+        value: "competitor2"
+      - name: DSP_PORT
+        value: "8090"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8090 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8090 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [dsp-comp2.adtech.local]
+
+  ssp:
+    image: adtech-ssp
+    ports: [{ name: http, port: 8084 }]
+    env:
+      - name: POD_NAME
+        value: "ssp-0"
+      - name: SSP_EXCHANGE_URL
+        value: "http://exchange:8081"
+      - name: SSP_ADSERVER_URL
+        value: "http://adserver:8085"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8084 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8084 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [ssp.adtech.local]
+
+  exchange:
+    image: adtech-exchange
+    ports: [{ name: http, port: 8081 }]
+    env:
+      - name: POD_NAME
+        value: "exchange-0"
+      - name: EXCHANGE_DSP_ENDPOINTS
+        value: "http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
+      - name: EXCHANGE_ADSERVER_URL
+        value: "http://adserver:8085"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 100m, memory: 96Mi }
+      limits: { cpu: 3000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8081 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8081 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [exchange.adtech.local]
+
+  adserver:
+    image: adtech-adserver
+    ports: [{ name: http, port: 8085 }]
+    env:
+      - name: POD_NAME
+        value: "adserver-0"
+      - name: ADSERVER_TRACKER_URL
+        value: "http://localhost:8080"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+      - name: S3_ENDPOINT
+        value: "http://minio:9000"
+      - name: S3_BUCKET
+        value: "adtech-creatives"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8085 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8085 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [adserver.adtech.local]
+
+  publisher-adserver:
+    image: adtech-publisher-adserver
+    ports: [{ name: http, port: 8088 }]
+    env:
+      - name: POD_NAME
+        value: "publisher-adserver-0"
+      - name: PUBLISHER_ADSERVER_SSP_URL
+        value: "http://ssp:8084"
+      - name: PUBLISHER_ADSERVER_ADSERVER_URL
+        value: "http://adserver:8085"
+      - name: PUBLISHER_ADSERVER_TRACKER_URL
+        value: "http://localhost:8080"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8088 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8088 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [pubad.adtech.local]
+
+  tracker:
+    image: adtech-tracker
+    replicas: 3
+    ports: [{ name: http, port: 8083 }]
+    env:
+      - name: POD_NAME
+        value: "tracker-0"
+      - name: TRACKER_NATS_URL
+        value: "nats://nats:4222"
+      - name: TRACKER_REPORTING_URL
+        value: "http://reporting:8086"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8083 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8083 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      hosts: [tracker.adtech.local]
+
+  gateway:
+    image: adtech-gateway
+    ports:
+      - { name: http, port: 8080 }
+      - { name: https, port: 8443 }
+    volumeMounts:
+      - { name: tls, mountPath: /tls, readOnly: true }
+    volumes:
+      - name: tls
+        secret:
+          secretName: gateway-tls
+          optional: true
+    env:
+      - name: TLS_CERT_FILE
+        value: "/tls/cert.pem"
+      - name: TLS_KEY_FILE
+        value: "/tls/key.pem"
+      - name: POD_NAME
+        value: "gateway-0"
+      - name: PLATFORM_ROOT_PASSWORD
+        value: "dev-root-password"
+      - name: GATEWAY_DSP_URL
+        value: "http://dsp-internal:8082"
+      - name: GATEWAY_SSP_URL
+        value: "http://ssp:8084"
+      - name: GATEWAY_EXCHANGE_URL
+        value: "http://exchange:8081"
+      - name: GATEWAY_TRACKER_URL
+        value: "http://tracker:8083"
+      - name: GATEWAY_REPORTING_URL
+        value: "http://reporting:8086"
+      - name: GATEWAY_PIPELINE_URL
+        value: "http://pipeline:8087"
+      - name: GATEWAY_ADSERVER_URL
+        value: "http://adserver:8085"
+      - name: GATEWAY_PUBLISHER_ADSERVER_URL
+        value: "http://publisher-adserver:8088"
+      - name: GATEWAY_SSAI_URL
+        value: "http://ssai:8093"
+      - name: GATEWAY_JAEGER_URL
+        value: "http://jaeger:16686"
+      - name: GATEWAY_CREATIVES_STORE_URL
+        value: "http://minio:9000/adtech-creatives/"
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8080 }
+      initialDelaySeconds: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8080 }
+      periodSeconds: 2
+      failureThreshold: 5
+    ingress:
+      hosts: [gateway.adtech.local, adtech.local]
+
+  pipeline:
+    image: adtech-pipeline
+    ports: [{ name: http, port: 8087 }]
+    env:
+      - name: POD_NAME
+        value: "pipeline-0"
+      - name: PIPELINE_NATS_URL
+        value: "nats://nats:4222"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
+        value: "adtech-local-dev"
+      - name: S3_REGION
+        value: "us-east-1"
+      - name: S3_USE_SSL
+        value: "false"
+      - name: PIPELINE_DATALAKE_BUCKET
+        value: "adtech-datalake-hotcold"
+      - name: PIPELINE_DATALAKE_FLUSH_INTERVAL
+        value: "10s"
+      - name: PIPELINE_ONBOARDING_POLL_INTERVAL
+        value: "10s"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8087 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8087 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  webhooks:
+    image: adtech-webhooks
+    ports: [{ name: http, port: 8091 }]
+    env:
+      - name: POD_NAME
+        value: "webhooks-0"
+      - name: WEBHOOKS_NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8091 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8091 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  identity-consumer:
+    image: adtech-identity-consumer
+    ports: [{ name: http, port: 8092 }]
+    env:
+      - name: POD_NAME
+        value: "identity-consumer-0"
+      - name: IDENTITY_CONSUMER_NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8092 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8092 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  report-runner:
+    image: adtech-report-runner
+    ports: [{ name: http, port: 8095 }]
+    env:
+      - name: POD_NAME
+        value: "report-runner-0"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: REPORT_RUNNER_REPORTING_URL
+        value: "http://reporting:8086"
+      - name: REPORT_RUNNER_NATS_URL
+        value: "nats://nats:4222"
+      - name: REPORT_RUNNER_SMTP_HOST
+        value: "mailpit:1025"
+      - name: REPORT_RUNNER_PUBLIC_GATEWAY_URL
+        value: "http://localhost:8080"
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8095 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8095 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  ssai:
+    image: adtech-ssai
+    ports: [{ name: http, port: 8093 }]
+    env:
+      - name: POD_NAME
+        value: "ssai-0"
+      - name: SSAI_SSP_URL
+        value: "http://ssp:8084"
+      - name: SSAI_TRACKER_URL
+        value: "http://tracker:8083"
+      - name: SSAI_PUBLIC_URL
+        value: "http://localhost:8080"
+      - name: SSAI_TRANSCODER_URL
+        value: "http://transcoder:8094"
+      - name: S3_ENDPOINT
+        value: "http://minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
+        value: "adtech-local-dev"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 32Mi }
+      limits: { cpu: 500m, memory: 128Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8093 }
+      initialDelaySeconds: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8093 }
+      periodSeconds: 2
+      failureThreshold: 5
+
+  transcoder:
+    image: adtech-transcoder
+    ports: [{ name: http, port: 8094 }]
+    env:
+      - name: POD_NAME
+        value: "transcoder-0"
+      - name: S3_ENDPOINT
+        value: "http://minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
+        value: "adtech-local-dev"
+      - name: TRANSCODER_BUCKET
+        value: "adtech-creatives"
+      - name: TRANSCODER_PUBLIC_BASE
+        value: "http://localhost:8080/v1/creatives"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 200m, memory: 128Mi }
+      limits: { cpu: "2", memory: 1Gi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8094 }
+      initialDelaySeconds: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8094 }
+      periodSeconds: 5
+      failureThreshold: 5
+
+  reporting:
+    image: adtech-reporting
+    ports: [{ name: http, port: 8086 }]
+    env:
+      - name: POD_NAME
+        valueFrom: { fieldRef: { fieldPath: metadata.name } }
+      - name: REPORTING_NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: REPORTING_ANALYTICS_BACKEND
+        value: "clickhouse"
+      - name: REPORTING_CLICKHOUSE_ADDR
+        value: "clickhouse:9000"
+      - name: REPORTING_CLICKHOUSE_BATCH_CONSUMER
+        value: "true"
+      - name: REPORTING_SHARED_PACING_COUNTER
+        value: "true"
+      - name: REPORTING_ROLLUP_ENABLED
+        value: "true"
+      - name: REPORTING_COLD_STORE_ENABLED
+        value: "true"
+      - name: REPORTING_HOT_WINDOW
+        value: "15m"
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
+        value: "adtech-local-dev"
+      - name: S3_REGION
+        value: "us-east-1"
+      - name: S3_USE_SSL
+        value: "false"
+      - name: PIPELINE_DATALAKE_BUCKET
+        value: "adtech-datalake-hotcold"
+      - name: BILLING_LEDGER_BACKEND
+        value: "tigerbeetle"
+      - name: BILLING_TIGERBEETLE_ADDRESSES
+        value: "tigerbeetle:3000"
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 2000m, memory: 768Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8086 }
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8086 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    # No ingress: k8s/base/reporting/ingress.yaml exists but the Tiltfile
+    # never applies it, so the deployed local stack has none. Add
+    # `ingress: {hosts: [reporting.adtech.local]}` to restore it.
+
+# ============================================================
+# Infrastructure
+# ============================================================
+infra:
+  postgres:
+    image: postgres:16-alpine
+    replicas: 1
+    storage: 20Gi
+    # Dev credentials, plaintext — same mechanism as the kustomize base
+    # (k8s/base/postgres/statefulset.yaml ships this Secret with the same
+    # values). Staging/prod must supply real secrets out-of-band (SOPS).
+    credentials:
+      username: adtech
+      password: adtech-local-dev
+    resources:
+      requests: { cpu: "500m", memory: "1Gi" }
+      limits: { cpu: "2000m", memory: "4Gi" }
+
+  nats:
+    image: nats:2.10-alpine
+    # Local runs a SINGLE standalone JetStream node (see
+    # k8s/overlays/local/nats-single.yaml for the raft-on-one-host rationale).
+    # Staging/prod flip cluster.enabled=true + replicas=3 (the base topology).
+    replicas: 1
+    cluster:
+      enabled: false
+      name: adtech-nats
+      connectRetries: 30
+    jetstream:
+      maxMem: 256MB
+      maxFile: 4GB
+    storage: 5Gi
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits: { cpu: "500m", memory: "1Gi" }
+
+  redis:
+    image: redis:7-alpine
+    maxmemory: 1gb
+    maxmemoryPolicy: allkeys-lru
+    resources:
+      requests: { cpu: "250m", memory: "512Mi" }
+      limits: { cpu: "1000m", memory: "2Gi" }
+
+  minio:
+    # Pinned by digest — see k8s/base/minio/deployment.yaml for rationale.
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    rootUser: adtech
+    rootPassword: adtech-local-dev
+    storage: 20Gi
+    resources:
+      requests: { cpu: "250m", memory: "512Mi" }
+      limits: { cpu: "1000m", memory: "2Gi" }
+
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43
+    replicas: 1
+    cacheGrid: 256MiB
+    storage: 1Gi
+    resources:
+      requests: { cpu: "100m", memory: "512Mi" }
+      limits: { cpu: "1000m", memory: "4Gi" }
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    db: adtech
+    user: adtech
+    password: adtech-local-dev
+    storage: 10Gi
+    resources:
+      requests: { cpu: "200m", memory: "512Mi" }
+      limits: { cpu: "1", memory: "2Gi" }
+
+  registryMirror:
+    # Docker Hub pull-through cache at NodePort 30500 — local-only concern.
+    enabled: true
+    image: registry:2
+    remoteURL: https://registry-1.docker.io
+    storage: 20Gi
+    nodePort: 30500
+    resources:
+      requests: { cpu: "50m", memory: "128Mi" }
+      limits: { cpu: "500m", memory: "512Mi" }
+
+  mailpit:
+    enabled: true
+    image: axllent/mailpit:v1.20
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "200m", memory: "128Mi" }
+
+# ============================================================
+# Observability
+# ============================================================
+observability:
+  prometheus:
+    enabled: true
+    image: prom/prometheus:v2.53.0
+    retention: 7d
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits: { cpu: "500m", memory: "1Gi" }
+
+  grafana:
+    enabled: true
+    image: grafana/grafana:11.6.0
+    adminUser: admin
+    adminPassword: admin
+    resources:
+      requests: { cpu: "100m", memory: "128Mi" }
+      limits: { cpu: "500m", memory: "512Mi" }
+
+  loki:
+    enabled: true
+    image: grafana/loki:3.1.0
+    resources:
+      requests: { cpu: "100m", memory: "128Mi" }
+      limits: { cpu: "500m", memory: "512Mi" }
+
+  promtail:
+    enabled: true
+    image: grafana/promtail:3.1.0
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "200m", memory: "256Mi" }
+
+  jaeger:
+    enabled: true
+    image: jaegertracing/all-in-one:1.58
+    resources:
+      requests: { cpu: "100m", memory: "128Mi" }
+      # See k8s/base/jaeger/deployment.yaml for the 1536Mi rationale.
+      limits: { cpu: "500m", memory: "1536Mi" }
+
+# ============================================================
+# CronJobs (schedules verbatim from k8s/cronjobs/*)
+# ============================================================
+cronjobs:
+  batch-conductor:
+    image: adtech-batch-conductor
+    schedule: "10 * * * *"
+    component: data-chain
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    backoffLimit: 1
+    activeDeadlineSeconds: 1800
+    restartPolicy: OnFailure
+    env:
+      - name: POD_NAME
+        value: "batch-conductor"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: BATCH_CONDUCTOR_NATS_URL
+        value: "nats://nats:4222"
+      - name: BATCH_CONDUCTOR_PIPELINE_URL
+        value: "http://pipeline:8087"
+      - name: BATCH_CONDUCTOR_REPORTING_URL
+        value: "http://reporting:8086"
+      - name: BATCH_CONDUCTOR_DATALAKE_BUCKET
+        value: "adtech-datalake-hotcold"
+      - name: REPORTING_CLICKHOUSE_ADDR
+        value: "clickhouse:9000"
+      - name: PRIVACY_DELETE_PIPELINE_URL
+        value: "http://pipeline:8087"
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
+        value: "adtech-local-dev"
+      - name: S3_REGION
+        value: "us-east-1"
+      - name: S3_USE_SSL
+        value: "false"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+    resources:
+      requests: { cpu: "50m", memory: "128Mi" }
+      limits: { cpu: "1", memory: "512Mi" }
+
+  dayboundary:
+    image: adtech-dayboundary
+    schedule: "5 0 * * *"
+    component: lifecycle
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+    restartPolicy: OnFailure
+    env:
+      - name: POD_NAME
+        value: "dayboundary"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: LOKI_URL
+        value: "http://loki:3100"
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "500m", memory: "256Mi" }

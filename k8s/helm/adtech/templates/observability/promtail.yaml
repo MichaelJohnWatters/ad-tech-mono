@@ -1,0 +1,118 @@
+{{- $ns := include "adtech.namespace" . -}}
+{{- $pt := .Values.observability.promtail }}
+{{- if $pt.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: {{ $ns }}
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+    positions:
+      filename: /tmp/positions.yaml
+    clients:
+      - url: http://loki.{{ $ns }}.svc.cluster.local:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ['{{ $ns }}']
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: service
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+        pipeline_stages:
+          - json:
+              expressions:
+                trace_id: trace_id
+                level: level
+                msg: msg
+          - labels:
+              trace_id:
+              level:
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: {{ $ns }}
+---
+# Promtail uses kubernetes_sd_configs to attach pod metadata to log lines.
+# Without this Role, every reconcile logs a noisy
+# `pods is forbidden: User "system:serviceaccount:adtech:default" cannot
+# list resource "pods"` warning.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: promtail
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: promtail
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: {{ $ns }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: {{ $ns }}
+  labels:
+    app: promtail
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  template:
+    metadata:
+      labels:
+        app: promtail
+    spec:
+      serviceAccountName: promtail
+      containers:
+        - name: promtail
+          image: {{ $pt.image }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/promtail/promtail.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: containers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+          resources:
+            {{- toYaml $pt.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: containers
+          hostPath:
+            path: /var/lib/docker/containers
+{{- end }}

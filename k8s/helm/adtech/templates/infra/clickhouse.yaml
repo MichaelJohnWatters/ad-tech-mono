@@ -1,0 +1,83 @@
+{{- $ns := include "adtech.namespace" . -}}
+{{- $ch := .Values.infra.clickhouse }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: {{ $ns }}
+  labels:
+    app: clickhouse
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: {{ $ch.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CLICKHOUSE_DB
+              value: {{ $ch.db | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ $ch.user | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ $ch.password | quote }}
+            # Let the created user run DDL (CREATE TABLE) — the reporting
+            # service ensures its schema at boot.
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          ports:
+            - containerPort: 9000
+              name: native
+            - containerPort: 8123
+              name: http
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+          resources:
+            {{- toYaml $ch.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: clickhouse-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $ch.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: native
+    - port: 8123
+      targetPort: 8123
+      name: http

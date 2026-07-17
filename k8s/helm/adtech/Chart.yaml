@@ -1,0 +1,12 @@
+apiVersion: v2
+name: adtech
+description: >-
+  Full-stack programmatic advertising platform (ad-tech-mono). Helm rendering of
+  the local k8s stack that kustomize (k8s/base + k8s/overlays/local) and the
+  Tiltfile deploy: app services, infra (Postgres/NATS/Redis/Minio/TigerBeetle/
+  ClickHouse), observability (Prometheus/Grafana/Loki/Promtail/Jaeger), and
+  scheduled CronJobs. Default values == the local dev environment.
+type: application
+version: 0.1.0
+# appVersion tracks the repo commit the chart was authored against.
+appVersion: "3f97dc6"

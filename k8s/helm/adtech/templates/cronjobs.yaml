@@ -1,0 +1,41 @@
+{{- /* CronJobs — mirrors k8s/cronjobs/<name>/cronjob.yaml. Schedules verbatim. */ -}}
+{{- $ns := include "adtech.namespace" . -}}
+{{- range $name, $job := .Values.cronjobs }}
+{{- if ne ($job.enabled | default true) false }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+    {{- with $job.component }}
+    component: {{ . }}
+    {{- end }}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  concurrencyPolicy: {{ $job.concurrencyPolicy | default "Forbid" }}
+  successfulJobsHistoryLimit: {{ $job.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ $job.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ $job.backoffLimit | default 1 }}
+      activeDeadlineSeconds: {{ $job.activeDeadlineSeconds | default 1800 }}
+      template:
+        metadata:
+          labels:
+            app: {{ $name }}
+        spec:
+          restartPolicy: {{ $job.restartPolicy | default "OnFailure" }}
+          containers:
+            - name: {{ $name }}
+              image: {{ $job.image }}
+              env:
+                {{- toYaml $job.env | nindent 16 }}
+              {{- with $job.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+{{- end }}
+{{- end }}

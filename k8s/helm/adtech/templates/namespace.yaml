@@ -1,0 +1,9 @@
+{{- /* Matches k8s/base/namespace.yaml (kustomize renders it too). */ -}}
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "adtech.namespace" . }}
+  labels:
+    app.kubernetes.io/part-of: adtech-mono
+{{- end }}
