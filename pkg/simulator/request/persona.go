@@ -19,7 +19,10 @@
 // signals through as request parameters.
 package request
 
-import "math/rand"
+import (
+	"fmt"
+	"math/rand"
+)
 
 // Channel is the ad format/channel a simulated request targets. It selects
 // which impression object Build attaches (banner/video/audio/native) and the
@@ -111,8 +114,38 @@ type Persona struct {
 	// persona always lands in the same household, and two personas can share
 	// an IP to model one household with multiple viewers. Empty = no ip param.
 	IP string
+	// HouseholdPool > 1 makes the persona represent a POPULATION: each
+	// request draws its IP from a pool of this many addresses derived from
+	// IP's prefix, so household frequency caps see many households sharing
+	// one profile. 0/1 keeps the single deterministic household (the CTV
+	// co-viewing personas depend on that). Without a pool, 13 personas = 13
+	// households: at load-run rates the serve layer freq-capped ~half of
+	// all EXCHANGE-CLEARED wins (2026-07-19 run #2 — 100k cleared, 52k
+	// served), which no real population would.
+	HouseholdPool int
 	// Weight is the relative sampling frequency in a mix (higher = more common).
 	Weight int
+}
+
+// RequestIP returns the client IP for ONE request: the persona's fixed
+// address, or — with a HouseholdPool — one of pool-many addresses spread
+// across the persona's prefix (last two octets vary), each a distinct
+// household to the SSP's hh:HMAC(salt,IP) derivation.
+func (p Persona) RequestIP(rng *rand.Rand) string {
+	if p.IP == "" || p.HouseholdPool <= 1 {
+		return p.IP
+	}
+	var a, b, c, d int
+	if _, err := fmt.Sscanf(p.IP, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
+		return p.IP
+	}
+	n := 0
+	if rng != nil {
+		n = rng.Intn(p.HouseholdPool)
+	} else {
+		n = rand.Intn(p.HouseholdPool) // query-param path has no seeded rng
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", a, b, (c+n/254)%256, 1+(d+n)%254)
 }
 
 // Personas is the default registry: a realistic spread across regions, devices,
@@ -124,50 +157,50 @@ var Personas = []Persona{
 	{
 		Name: "us-personalised-mobile", Regime: RegimeUSClear, Identity: IdentityUID2,
 		Geo: "USA", Region: "NY", City: "New York", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,3",
-		Segments: []string{"in_market_auto", "sports_enthusiast"}, IP: "203.0.113.10", Weight: 24,
+		Segments: []string{"in_market_auto", "sports_enthusiast"}, HouseholdPool: 4096, IP: "203.0.113.10", Weight: 24,
 	},
 	{
 		Name: "us-personalised-desktop", Regime: RegimeUSClear, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "CA", City: "San Francisco", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "high_income"}, IP: "203.0.113.11", Weight: 18,
+		Segments: []string{"finance_intender", "high_income"}, HouseholdPool: 4096, IP: "203.0.113.11", Weight: 18,
 	},
 	{
 		Name: "us-firstparty-tablet", Regime: RegimeUSClear, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "TX", City: "Austin", Device: "tablet", OS: "Android", Make: "Samsung", Model: "SM-T870",
-		Segments: []string{"parenting", "in_market_auto"}, IP: "203.0.113.12", Weight: 8,
+		Segments: []string{"parenting", "in_market_auto"}, HouseholdPool: 4096, IP: "203.0.113.12", Weight: 8,
 	},
 	{
 		Name: "us-ccpa-optout", Regime: RegimeCCPAOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "CA", City: "Los Angeles", Device: "mobile", OS: "Android", Make: "Google", Model: "Pixel 8",
-		Segments: []string{"sports_enthusiast"}, IP: "203.0.113.13", Weight: 6,
+		Segments: []string{"sports_enthusiast"}, HouseholdPool: 4096, IP: "203.0.113.13", Weight: 6,
 	},
 	{
 		Name: "us-gpc-optout", Regime: RegimeGPC, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "WA", City: "Seattle", Device: "desktop", OS: "Windows",
-		Segments: []string{"tech_early_adopter"}, IP: "203.0.113.14", Weight: 4,
+		Segments: []string{"tech_early_adopter"}, HouseholdPool: 4096, IP: "203.0.113.14", Weight: 4,
 	},
 	{
 		Name: "us-gpp-optout", Regime: RegimeGPPOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "IL", City: "Chicago", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone14,5",
-		Segments: []string{"travel_intender"}, IP: "203.0.113.15", Weight: 3,
+		Segments: []string{"travel_intender"}, HouseholdPool: 4096, IP: "203.0.113.15", Weight: 3,
 	},
 	{
 		Name: "eu-consented-mobile", Regime: RegimeGDPRConsented, Identity: IdentityUID2,
 		Geo: "DEU", Region: "BE", City: "Berlin", Device: "mobile", OS: "Android", Make: "Samsung", Model: "SM-S911B",
-		Segments: []string{"in_market_auto", "luxury_goods"}, IP: "203.0.113.16", Weight: 10,
+		Segments: []string{"in_market_auto", "luxury_goods"}, HouseholdPool: 4096, IP: "203.0.113.16", Weight: 10,
 	},
 	{
 		Name: "eu-noconsent-desktop", Regime: RegimeGDPRNoConsent, Identity: IdentityAnonymous,
-		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", IP: "203.0.113.17", Weight: 8,
+		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", HouseholdPool: 4096, IP: "203.0.113.17", Weight: 8,
 	},
 	{
 		Name: "uk-consented-desktop", Regime: RegimeGDPRConsented, Identity: IdentityHashedEmail,
 		Geo: "GBR", Region: "ENG", City: "London", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "travel_intender"}, IP: "203.0.113.18", Weight: 9,
+		Segments: []string{"finance_intender", "travel_intender"}, HouseholdPool: 4096, IP: "203.0.113.18", Weight: 9,
 	},
 	{
 		Name: "coppa-kids-tablet", Regime: RegimeCOPPA, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", IP: "203.0.113.19", Weight: 2,
+		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", HouseholdPool: 4096, IP: "203.0.113.19", Weight: 2,
 	},
 	{
 		Name: "us-ctv-household", Regime: RegimeUSClear, Identity: IdentityPublisherID,
@@ -184,7 +217,7 @@ var Personas = []Persona{
 	},
 	{
 		Name: "anon-mobile-open", Regime: RegimeUSClear, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", IP: "203.0.113.21", Weight: 6,
+		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", HouseholdPool: 4096, IP: "203.0.113.21", Weight: 6,
 	},
 }
 

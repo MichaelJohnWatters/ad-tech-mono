@@ -67,8 +67,8 @@ func (p Persona) QueryParams(placementID string, ch Channel) url.Values {
 	if p.OS != "" {
 		v.Set(ParamOS, p.OS)
 	}
-	if p.IP != "" {
-		v.Set(ParamIP, p.IP)
+	if ip := p.RequestIP(nil); ip != "" {
+		v.Set(ParamIP, ip)
 	}
 	if len(p.Segments) > 0 {
 		v.Set(ParamSegments, p.SegmentsCSV())
