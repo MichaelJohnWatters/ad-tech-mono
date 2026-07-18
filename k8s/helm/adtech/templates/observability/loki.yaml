@@ -1,6 +1,46 @@
 {{- $ns := include "adtech.namespace" . -}}
 {{- $loki := .Values.observability.loki }}
 {{- if $loki.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: {{ $ns }}
+data:
+  # The image's local-config.yaml verbatim (same schema/storage — stored
+  # chunks stay readable) PLUS limits_config: the fleet's real log volume
+  # 429-throttled the defaults once promtail actually shipped, and the
+  # throttle cascaded into promtail restarts.
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2020-10-24
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    limits_config:
+      ingestion_rate_mb: 16
+      ingestion_burst_size_mb: 32
+      per_stream_rate_limit: 8MB
+      per_stream_rate_limit_burst: 16MB
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,10 +63,13 @@ spec:
           image: {{ $loki.image }}
           imagePullPolicy: IfNotPresent
           args:
-            - -config.file=/etc/loki/local-config.yaml
+            - -config.file=/etc/loki-config/loki.yaml
           ports:
             - containerPort: 3100
               name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki-config
           resources:
             {{- toYaml $loki.resources | nindent 12 }}
           livenessProbe:
@@ -39,6 +82,10 @@ spec:
               path: /ready
               port: 3100
             initialDelaySeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
 ---
 apiVersion: v1
 kind: Service

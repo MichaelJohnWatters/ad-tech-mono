@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -41,6 +42,11 @@ func main() {
 	startOnboarding(cfg, log, lc, sink)
 
 	mux := http.NewServeMux()
+	// pprof: the 2026-07-18 wedge was undiagnosable post-mortem because
+	// nothing could dump goroutines. Debug surface only (cluster network).
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 
@@ -51,6 +57,7 @@ func main() {
 		registerProfileEndpoint(mux, sink)
 		registerCompactEndpoint(mux, sink)
 		registerVacuumEndpoint(mux, sink)
+		registerResetEndpoint(mux, sink)
 	}
 
 	// Cold-archive verification: report the Parquet snapshot (active files +

@@ -32,22 +32,30 @@ import (
 // nothing. Per-message dedup (Redis SetNX on the stream sequence) makes
 // redelivery safe — duplicates are skipped, not double-counted or double-billed.
 
-// batchKeep pairs a surviving message with its decoded event and dedup key.
+// batchKeep pairs a surviving message with its decoded event and dedup keys.
 type batchKeep[T any] struct {
 	msg      *events.Message
 	event    *T
 	dedupKey string // "" when the message had no stable id (dedup skipped)
+	bizKey   string // "" when the subject has no one-per-trace business key
 }
 
 // batchProcess is the shared pipeline for every core subject. decode turns a
 // payload into a typed event (returns false to drop poison data); insert bulk-
 // writes the survivors; after runs a per-event side-effect (billing) that must
 // happen only once the rows are durable and before ack. after may be nil.
+// bizKey (nil = skip) derives a BUSINESS identity for the second dedup
+// layer: the message-id layer catches JetStream REdeliveries (same stream
+// sequence), but a publisher republish after an ambiguous ack is a NEW
+// sequence carrying the same logical event — only a content-derived key
+// (trace id + within-trace disambiguator) can catch it. Belt to the
+// publish-side Nats-Msg-Id suspenders (the server window is finite).
 func batchProcess[T any](
 	ctx context.Context,
 	c *EventConsumer,
 	msgs []*events.Message,
 	decode func(data []byte) (*T, bool),
+	bizKey func(*T) string,
 	insert func(ctx context.Context, es []*T) error,
 	afterBatch func(ctx context.Context, es []*T),
 ) error {
@@ -77,7 +85,25 @@ func batchProcess[T any](
 			m.Ack() // poison payload — drop, never redeliver
 			continue
 		}
-		keep = append(keep, batchKeep[T]{msg: m, event: e, dedupKey: key})
+		var bkey string
+		if bizKey != nil {
+			if k := bizKey(e); k != "" {
+				bkey = "dedup:biz:" + m.Subject + ":" + k
+				isNew, err := c.dedup.MarkProcessed(ctx, bkey, c.dedupTTL)
+				if err != nil {
+					if key != "" {
+						_ = c.dedup.UnmarkProcessed(ctx, key)
+					}
+					m.Nak() // Redis blip — fail closed, same as above
+					continue
+				}
+				if !isNew {
+					m.Ack() // publisher republish (new sequence, same event) — drop
+					continue
+				}
+			}
+		}
+		keep = append(keep, batchKeep[T]{msg: m, event: e, dedupKey: key, bizKey: bkey})
 	}
 	if len(keep) == 0 {
 		return nil
@@ -95,6 +121,9 @@ func batchProcess[T any](
 		for _, k := range keep {
 			if k.dedupKey != "" {
 				_ = c.dedup.UnmarkProcessed(ctx, k.dedupKey)
+			}
+			if k.bizKey != "" {
+				_ = c.dedup.UnmarkProcessed(ctx, k.bizKey)
 			}
 			k.msg.Nak()
 		}
@@ -129,6 +158,7 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 			}
 			return &e, true
 		},
+		func(e *analytics.ImpressionEvent) string { return e.TraceID },
 		c.batch.InsertImpressions,
 		func(ctx context.Context, es []*analytics.ImpressionEvent) {
 			if c.billing == nil {
@@ -165,6 +195,7 @@ func (c *EventConsumer) handleClickBatch(ctx context.Context, msgs []*events.Mes
 			}
 			return &e, true
 		},
+		func(e *analytics.ClickEvent) string { return e.TraceID },
 		c.batch.InsertClicks,
 		func(ctx context.Context, es []*analytics.ClickEvent) {
 			if c.billing == nil {
@@ -199,6 +230,7 @@ func (c *EventConsumer) handleConversionBatch(ctx context.Context, msgs []*event
 			}
 			return &e, true
 		},
+		func(e *analytics.ConversionEvent) string { return e.TraceID + ":" + e.ConversionType },
 		c.batch.InsertConversions,
 		func(ctx context.Context, es []*analytics.ConversionEvent) {
 			if c.billing == nil {
@@ -231,6 +263,7 @@ func (c *EventConsumer) handleViewBatch(ctx context.Context, msgs []*events.Mess
 			}
 			return &e, true
 		},
+		func(e *analytics.ViewEvent) string { return e.TraceID },
 		c.batch.InsertViews,
 		func(ctx context.Context, es []*analytics.ViewEvent) {
 			if c.billing == nil {
@@ -270,6 +303,7 @@ func (c *EventConsumer) handleAuctionBatch(ctx context.Context, msgs []*events.M
 			}
 			return &e, true
 		},
+		func(e *analytics.AuctionEvent) string { return e.TraceID },
 		c.batch.InsertAuctions,
 		nil,
 	)
@@ -294,6 +328,7 @@ func (c *EventConsumer) handleAuctionWinBatch(ctx context.Context, msgs []*event
 				SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
+		func(e *analytics.AuctionWinEvent) string { return e.TraceID },
 		c.batch.InsertAuctionWins,
 		nil,
 	)
@@ -318,6 +353,7 @@ func (c *EventConsumer) handleDirectWinBatch(ctx context.Context, msgs []*events
 				SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
+		func(e *analytics.AuctionWinEvent) string { return e.TraceID },
 		c.batch.InsertAuctionWins,
 		nil,
 	)
@@ -341,6 +377,7 @@ func (c *EventConsumer) handlePrebidOutboundWinBatch(ctx context.Context, msgs [
 				DealID: src.DealID, Channel: "display", SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
+		func(e *analytics.AuctionWinEvent) string { return e.TraceID },
 		c.batch.InsertAuctionWins,
 		nil,
 	)
@@ -362,6 +399,7 @@ func (c *EventConsumer) handleVideoBatch(ctx context.Context, msgs []*events.Mes
 				PositionMs: src.PositionMs, Timestamp: src.Timestamp,
 			}, true
 		},
+		nil, // audio quartiles: several legitimate events per trace
 		c.batch.InsertMediaEvents,
 		nil,
 	)
@@ -384,6 +422,7 @@ func (c *EventConsumer) handleDSPCallBatch(ctx context.Context, msgs []*events.M
 				LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
+		nil, // one call per DSP per trace: multiple legitimate rows
 		c.batch.InsertDSPCalls,
 		nil,
 	)
@@ -405,6 +444,7 @@ func (c *EventConsumer) handleAudioBatch(ctx context.Context, msgs []*events.Mes
 				PositionMs: src.PositionMs, Timestamp: src.Timestamp,
 			}, true
 		},
+		nil, // media quartiles: several legitimate events per trace
 		c.batch.InsertMediaEvents,
 		nil,
 	)

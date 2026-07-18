@@ -191,8 +191,11 @@ func TestBatch_InsertFailure_NaksAll_NoBill(t *testing.T) {
 	if st.naks != n {
 		t.Errorf("naks=%d, want %d (whole batch redelivered)", st.naks, n)
 	}
-	if fd.unmarks != n {
-		t.Errorf("dedup unmarks=%d, want %d (marks rolled back for retry)", fd.unmarks, n)
+	// TWO dedup layers roll back per message: the message-id key and the
+	// business (trace) key — both must clear or the retry would be dropped
+	// as a duplicate.
+	if fd.unmarks != 2*n {
+		t.Errorf("dedup unmarks=%d, want %d (both dedup layers rolled back for retry)", fd.unmarks, 2*n)
 	}
 	if got := len(ledger.Entries()); got != 0 {
 		t.Errorf("ledger entries=%d, want 0 (must not bill before durable write)", got)
@@ -301,5 +304,40 @@ func TestBatch_DedupError_Naks(t *testing.T) {
 	}
 	if st.naks != 2 || st.acks != 0 {
 		t.Errorf("acks=%d naks=%d, want 0/2", st.acks, st.naks)
+	}
+}
+
+// A publisher republish after an ambiguous ack is a NEW stream sequence
+// carrying the SAME logical event — message-id dedup cannot see it (the ids
+// differ). The business-key layer must drop it: one insert, both messages
+// acked, no double row. This is the 2026-07-18 hour-run failure mode (251
+// duplicate impressions in one NATS-reconnect minute).
+func TestBatch_PublisherRepublish_DedupedByTraceKey(t *testing.T) {
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, newFakeDedup(), nil)
+	st := &ackState{}
+	// Same trace, different stream sequences (s1 vs s2) — a republish.
+	msgs := []*events.Message{impMsg("s1", "trace-dup", st), impMsg("s2", "trace-dup", st)}
+	if err := c.handleImpressionBatch(context.Background(), msgs); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if fi.rows != 1 {
+		t.Errorf("inserted rows=%d, want 1 (republish dropped by trace key)", fi.rows)
+	}
+	if st.acks != 2 || st.naks != 0 {
+		t.Errorf("acks=%d naks=%d, want 2/0 (duplicate acked away, not redelivered)", st.acks, st.naks)
+	}
+	// Split across batches (redelivery arrives later): still one row.
+	fi2 := &fakeBatchInserter{}
+	c2 := newBatchConsumer(fi2, newFakeDedup(), nil)
+	st2 := &ackState{}
+	if err := c2.handleImpressionBatch(context.Background(), []*events.Message{impMsg("s1", "trace-dup2", st2)}); err != nil {
+		t.Fatalf("first batch: %v", err)
+	}
+	if err := c2.handleImpressionBatch(context.Background(), []*events.Message{impMsg("s2", "trace-dup2", st2)}); err != nil {
+		t.Fatalf("second batch: %v", err)
+	}
+	if fi2.rows != 1 {
+		t.Errorf("cross-batch rows=%d, want 1", fi2.rows)
 	}
 }

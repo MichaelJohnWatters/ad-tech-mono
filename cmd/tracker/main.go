@@ -567,27 +567,27 @@ func channelOrDefault(ch string) string {
 }
 
 func (p *eventPublisher) publishImpression(ctx context.Context, e analytics.ImpressionEvent, log *slog.Logger) {
-	if p.publish(ctx, events.SubjectImpression, e, log) {
+	if p.publish(ctx, events.SubjectImpression, "imp:"+e.TraceID, e, log) {
 		return
 	}
 	p.httpFallback(analytics.Event{Type: analytics.EventImpression, Impression: &e}, log)
 }
 
 func (p *eventPublisher) publishClick(ctx context.Context, e analytics.ClickEvent, log *slog.Logger) {
-	if p.publish(ctx, events.SubjectClick, e, log) {
+	if p.publish(ctx, events.SubjectClick, "click:"+e.TraceID, e, log) {
 		return
 	}
 	p.httpFallback(analytics.Event{Type: analytics.EventClick, Click: &e}, log)
 }
 
 func (p *eventPublisher) publishView(ctx context.Context, e analytics.ViewEvent, log *slog.Logger) {
-	if p.publish(ctx, events.SubjectView, e, log) {
+	if p.publish(ctx, events.SubjectView, "view:"+e.TraceID, e, log) {
 		return
 	}
 }
 
 func (p *eventPublisher) publishConversion(ctx context.Context, e analytics.ConversionEvent, log *slog.Logger) {
-	if p.publish(ctx, events.SubjectConversion, e, log) {
+	if p.publish(ctx, events.SubjectConversion, "conv:"+e.TraceID+":"+e.ConversionType, e, log) {
 		return
 	}
 	p.httpFallback(analytics.Event{Type: analytics.EventConversion, Conversion: &e}, log)
@@ -661,8 +661,13 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 	}
 }
 
-// publish marshals and publishes to NATS. Returns true if successful.
-func (p *eventPublisher) publish(ctx context.Context, subject string, payload interface{}, log *slog.Logger) bool {
+// publish marshals and publishes to NATS with a stable message ID so
+// JetStream drops republishes server-side (a publish-ack timeout makes the
+// client resend; without the ID that's a SECOND stream entry and a
+// double-counted, double-billed event — 251 of them in the 2026-07-18 hour
+// run). msgID must be stable per logical event: subject + trace (+ any
+// within-trace disambiguator). Returns true if successful.
+func (p *eventPublisher) publish(ctx context.Context, subject, msgID string, payload interface{}, log *slog.Logger) bool {
 	if p.bus == nil {
 		return false
 	}
@@ -671,7 +676,7 @@ func (p *eventPublisher) publish(ctx context.Context, subject string, payload in
 		log.Warn("marshal failed", "subject", subject, "error", err)
 		return false
 	}
-	if err := p.bus.Publish(ctx, subject, data); err != nil {
+	if err := events.PublishDedup(ctx, p.bus, subject, msgID, data); err != nil {
 		log.Warn("nats publish failed, falling back to HTTP", "subject", subject, "error", err)
 		return false
 	}

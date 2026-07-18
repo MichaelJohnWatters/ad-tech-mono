@@ -86,8 +86,6 @@ services:
         value: "nats://nats:4222"
       - name: REDIS_URL
         value: "redis:6379"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -123,8 +121,6 @@ services:
         value: "nats://nats:4222"
       - name: REDIS_URL
         value: "redis:6379"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -160,8 +156,6 @@ services:
         value: "nats://nats:4222"
       - name: REDIS_URL
         value: "redis:6379"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -196,8 +190,6 @@ services:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -230,8 +222,6 @@ services:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -264,8 +254,6 @@ services:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
       - name: S3_ENDPOINT
@@ -305,8 +293,6 @@ services:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -340,8 +326,6 @@ services:
         value: "redis:6379"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -412,8 +396,6 @@ services:
         value: "nats://nats:4222"
       - name: REDIS_URL
         value: "redis:6379"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -457,8 +439,6 @@ services:
         value: "10s"
       - name: PIPELINE_ONBOARDING_POLL_INTERVAL
         value: "10s"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -483,8 +463,6 @@ services:
         value: "nats://nats:4222"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -509,8 +487,6 @@ services:
         value: "nats://nats:4222"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -543,8 +519,6 @@ services:
         value: "http://localhost:8080"
       - name: S3_ENDPOINT
         value: "minio:9000"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -581,8 +555,6 @@ services:
         value: "adtech-local-dev"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -637,8 +609,6 @@ services:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
       - name: REDIS_URL
@@ -869,8 +839,6 @@ cronjobs:
         value: "us-east-1"
       - name: S3_USE_SSL
         value: "false"
-      - name: LOKI_URL
-        value: "http://loki:3100"
     resources:
       requests: { cpu: "50m", memory: "128Mi" }
       limits: { cpu: "1", memory: "512Mi" }
@@ -892,8 +860,6 @@ cronjobs:
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
-      - name: LOKI_URL
-        value: "http://loki:3100"
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }
