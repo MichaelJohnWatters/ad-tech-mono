@@ -15343,7 +15343,7 @@ Multi-tenancy isolation is tested explicitly:
 | Go 1.23+ | Language runtime |
 | Colima | Runs K8s locally via k3s |
 | kubectl | K8s CLI |
-| Tilt | Dev orchestration |
+| Helm + Rancher Desktop | Dev orchestration (Tilt retired 2026-07-18) |
 | Buf | Protobuf toolchain |
 
 ### Getting Started
@@ -15352,10 +15352,10 @@ Multi-tenancy isolation is tested explicitly:
 git clone <repo>
 cd ad-tech-mono
 make setup       # installs prerequisites via brew, starts Colima + k3s
-tilt up          # builds all services, runs migrations, deploys to local k3s
+make stack-up    # builds all images, helm-installs the stack, runs migrations
 ```
 
-Open the Tilt dashboard in your browser - all services are visible with logs and health status.
+Watch pods with `kubectl get pods -n adtech -w`; per-service redeploy is `make deploy SVC=<name>`. (An ops console UI is planned — see the outstanding-work ledger.)
 
 ### First Run
 
@@ -15564,6 +15564,7 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 | 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
 | 72 | Chaos framework (`harness.ChaosKill*`) | ✅ SHIPPED (2026-07-05) | `tests/e2e/harness/chaos.go` — `WithChaos`/`ChaosKill{Redis,NATS,Postgres,Minio}`/`ChaosWaitReady` wrap `kubectl -n adtech delete pod` + recovery wait; the 4 `chaos_test.go` cases now assert graceful degradation (self-skip w/o kubectl) | ✅ 4 chaos e2e cases flipped |
 | 70–71 | `pkg/simulator` / `tests/k6` | ⚠️ 1 file each (thin) | flesh out the sim library + k6 scripts | perf e2e cases flip |
+| — | Ops console + `devops` role (in-cluster) and host dev console (Tilt-UI replacement) | 🔜 QUEUED (decided 2026-07-17, after the Helm cutover) | Part 1: staff portal section gated by a new `devops` role — pod matrix / rollout-restart / log tail / manual CronJob triggers / NATS lag / PVC usage / readyz grid, via a namespace-scoped ServiceAccount from the gateway; same console serves as the prod monitoring+actions surface (Grafana/Jaeger remain for metrics/traces — this is for ACTING on the stack). House rules apply: toast+undo not confirm dialogs, per-pod granularity, audit every action. Part 2: `cmd/devconsole` host binary (`make devconsole`) for build/deploy-per-service buttons + build output stream — host-only because builds need the Go toolchain + docker socket; deliberately thin (a face on `make deploy SVC=x`), not a Tilt rebuild. | devops-role user can restart a pod + trigger the conductor from the portal (audited); local `make devconsole` builds+deploys a service from the browser |
 | — | Dev-orchestration migration: Tilt+OrbStack → Helm charts on Rancher Desktop (k3s) | 🚧 IN PROGRESS (activated 2026-07-17; runtime = Rancher Desktop, dev loop = make + helm upgrade — no watcher daemon) | Replace the Tiltfile's docker_build/k8s_resource graph with Helm charts (one umbrella chart, per-service subcharts, values per env — the kustomize overlays fold in); pick the local distro (k3s in a VM, minikube, or Rancher Desktop) to de-couple from OrbStack's VM lifecycle (its suspend/resume churn corrupts NATS PVCs — see E2E RUN GOTCHAS). Charts double as the staging/prod deploy artifact. | `helm install adtech` brings up the full local stack; e2e suite green on it; Tiltfile deleted or reduced to a thin `helm upgrade` watcher |
 
 **Sub-items still open on things marked ✅** (not blockers): analytics `/debug`
