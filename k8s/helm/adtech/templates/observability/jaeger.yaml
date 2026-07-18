@@ -25,6 +25,11 @@ spec:
           env:
             - name: COLLECTOR_OTLP_ENABLED
               value: "true"
+            # In-memory storage is unbounded by default; with sample_ratio=1
+            # a 200rps load run OOMKilled the pod in ~15min. Ring-buffer cap:
+            # oldest traces evict, memory stays flat.
+            - name: MEMORY_MAX_TRACES
+              value: "20000"
           ports:
             - containerPort: 16686
               name: ui
