@@ -60,3 +60,7 @@ services:
   # Single-replica BY DESIGN (do not scale without code changes):
   # reporting, identity-consumer, report-runner — see the deployment comments
   # in k8s/base/*/deployment.yaml.
+
+# No localhost klipper-lb exposure outside local dev.
+localExpose:
+  enabled: false

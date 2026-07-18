@@ -584,7 +584,27 @@ func pickCampaignLoader(cfg *config.Config, log *slog.Logger, profile *DSPProfil
 			if err != nil {
 				return nil, fmt.Errorf("postgres connect: %w", err)
 			}
-			return &postgres.CampaignLoader{Store: store, DSPID: dspID, AccountIDs: accountIDs}, nil
+			id := dspID
+			if id == "" && len(accountIDs) == 0 {
+				// Boot raced the seed (no dsps row yet, no YAML allowlist).
+				// CampaignLoader's neither-filter mode loads ALL campaigns —
+				// an admin affordance a BIDDER must never fall into: at the
+				// Helm cutover an unscoped competitor pod bid (and won)
+				// other DSPs' campaigns. Re-resolve here instead; an error
+				// keeps the cache EMPTY (no bids) and RetryingLoader retries
+				// next poll, so the pod self-heals the moment the seed lands.
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				row, rerr := postgres.DSPByName(ctx, store.Read(), profile.Name)
+				if rerr != nil {
+					store.Close()
+					log.Error("dsp identity unresolved; refusing unscoped campaign load (no bids until the dsps row exists)",
+						"profile", profile.Name, "error", rerr)
+					return nil, fmt.Errorf("dsp identity unresolved for %q: %w", profile.Name, rerr)
+				}
+				id = row.ID
+			}
+			return &postgres.CampaignLoader{Store: store, DSPID: id, AccountIDs: accountIDs}, nil
 		},
 	}
 }

@@ -1,0 +1,17 @@
+# Dockerfile.migrate — the goose migration runner for the Helm hook.
+#
+# cmd/migrate reads the migrations DIRECTORY at runtime (MIGRATIONS_DIR,
+# default "migrations") — it does not embed the SQL. The generic
+# build/Dockerfile ships only the binary, which is why it can't be used
+# here: the container needs the .sql files too.
+#
+# Same pre-built-binary pattern as Dockerfile.dev:
+#   go build -o ./bin/migrate ./cmd/migrate
+#   docker build -f build/Dockerfile.migrate -t adtech-migrate .
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY bin/migrate /app
+COPY migrations /migrations
+ENV MIGRATIONS_DIR=/migrations
+ENTRYPOINT ["/app"]

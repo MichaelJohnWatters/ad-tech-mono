@@ -31,6 +31,7 @@ spec:
           containers:
             - name: {{ $name }}
               image: {{ $job.image }}
+              imagePullPolicy: {{ $job.imagePullPolicy | default "IfNotPresent" }}
               env:
                 {{- toYaml $job.env | nindent 16 }}
               {{- with $job.resources }}
