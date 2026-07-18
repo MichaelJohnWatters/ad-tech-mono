@@ -1,0 +1,38 @@
+{{- /*
+Localhost exposure — the Helm-world replacement for Tilt's port_forwards.
+
+k3s's bundled klipper-lb (svclb) binds every LoadBalancer Service port on
+the node, which under Rancher Desktop means localhost — so the dev-loop,
+the e2e harness, and the portals keep their existing localhost:PORT
+contract with NO forwarder daemon to babysit (the thing that flapped
+under Tilt every time the VM hiccuped).
+
+These are EXTRA `<name>-lb` Services selecting the same pods; the
+parity-verified ClusterIP Services are untouched. Off in staging/prod.
+`port` is the host-visible port, `targetPort` the container port —
+mirroring Tilt's `host:container` forwards (e.g. clickhouse 9010:9000).
+*/ -}}
+{{- if .Values.localExpose.enabled }}
+{{- $ns := .Values.namespace }}
+{{- range $name, $exp := .Values.localExpose.services }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-lb
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+    adtech.dev/localhost-expose: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: {{ $name }}
+  ports:
+    {{- range $exp.ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .targetPort | default .port }}
+    {{- end }}
+{{- end }}
+{{- end }}

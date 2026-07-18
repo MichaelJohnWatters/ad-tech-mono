@@ -52,3 +52,7 @@ services:
   # reporting (in-process billing Summary + spend-snapshot publisher),
   # identity-consumer (in-memory fingerprint buckets),
   # report-runner (boot-time stuck-job requeue).
+
+# No localhost klipper-lb exposure outside local dev.
+localExpose:
+  enabled: false

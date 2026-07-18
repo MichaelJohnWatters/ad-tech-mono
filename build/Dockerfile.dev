@@ -28,5 +28,9 @@ COPY bin/${SERVICE} /app
 # We always COPY web/ if present so the same dev image works for
 # gateway too. Other services ignore it.
 COPY web /web
+# Profile YAMLs (DSP identity fallback when the dsps row doesn't exist yet;
+# also publisher configs). Small, and their absence caused silent
+# defaults-only behaviour in pod mode.
+COPY profiles /profiles
 WORKDIR /
 ENTRYPOINT ["/app"]

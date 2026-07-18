@@ -1,8 +1,11 @@
-# Default values == the LOCAL dev environment (k8s/overlays/local + the
-# Tiltfile's k8s_yaml set). Staging/prod override via values-staging.yaml /
-# values-prod.yaml. Env vars, probes, resources, schedules are carried over
-# verbatim from k8s/base + k8s/cronjobs — if you change one side, change the
-# other (scripts/helm-parity.sh checks).
+# Default values == the LOCAL dev environment. Staging/prod override via
+# values-staging.yaml / values-prod.yaml.
+#
+# Provenance: derived from k8s/base + the Tiltfile's k8s_yaml set, with
+# field-level parity proven at the cutover (scripts/helm-parity.sh, 91/91).
+# The chart is now the SOURCE OF TRUTH and has deliberately diverged since
+# (localExpose LB services, postgres max_connections, migrate hook);
+# k8s/base is frozen history.
 
 namespace: adtech
 createNamespace: true
@@ -31,6 +34,40 @@ migrate:
 #   livenessProbe/readinessProbe (default /healthz + /readyz on first port),
 #   volumes/volumeMounts, ingress.hosts.
 # ============================================================
+# Localhost exposure (templates/localhost-lb.yaml) — replaces Tilt's
+# port_forwards via klipper-lb LoadBalancer services. port = host port,
+# targetPort = container port (defaults to port). Off in staging/prod.
+localExpose:
+  enabled: true
+  services:
+    postgres: { ports: [{ name: pg, port: 5432 }] }
+    nats: { ports: [{ name: client, port: 4222 }, { name: monitor, port: 8222 }] }
+    redis: { ports: [{ name: redis, port: 6379 }] }
+    minio: { ports: [{ name: s3, port: 9000 }, { name: console, port: 9001 }] }
+    clickhouse: { ports: [{ name: native, port: 9010, targetPort: 9000 }, { name: http, port: 8123 }] }
+    tigerbeetle: { ports: [{ name: tb, port: 3033, targetPort: 3000 }] }
+    grafana: { ports: [{ name: http, port: 3000 }] }
+    prometheus: { ports: [{ name: http, port: 9090 }] }
+    loki: { ports: [{ name: http, port: 3100 }] }
+    jaeger: { ports: [{ name: ui, port: 16686 }, { name: otlp-grpc, port: 4317 }, { name: otlp-http, port: 4318 }] }
+    mailpit: { ports: [{ name: smtp, port: 1025 }, { name: ui, port: 8025 }] }
+    gateway: { ports: [{ name: http, port: 8080 }, { name: https, port: 8443 }] }
+    exchange: { ports: [{ name: http, port: 8081 }] }
+    dsp-internal: { ports: [{ name: http, port: 8082 }] }
+    tracker: { ports: [{ name: http, port: 8083 }] }
+    ssp: { ports: [{ name: http, port: 8084 }] }
+    adserver: { ports: [{ name: http, port: 8085 }] }
+    reporting: { ports: [{ name: http, port: 8086 }] }
+    pipeline: { ports: [{ name: http, port: 8087 }] }
+    publisher-adserver: { ports: [{ name: http, port: 8088 }] }
+    dsp-competitor1: { ports: [{ name: http, port: 8089 }] }
+    dsp-competitor2: { ports: [{ name: http, port: 8090 }] }
+    webhooks: { ports: [{ name: http, port: 8091 }] }
+    identity-consumer: { ports: [{ name: http, port: 8092 }] }
+    ssai: { ports: [{ name: http, port: 8093 }] }
+    transcoder: { ports: [{ name: http, port: 8094 }] }
+    report-runner: { ports: [{ name: http, port: 8095 }] }
+
 services:
   dsp-internal:
     image: adtech-dsp
@@ -147,6 +184,8 @@ services:
     image: adtech-ssp
     ports: [{ name: http, port: 8084 }]
     env:
+      - name: REDIS_URL
+        value: "redis:6379"
       - name: POD_NAME
         value: "ssp-0"
       - name: SSP_EXCHANGE_URL

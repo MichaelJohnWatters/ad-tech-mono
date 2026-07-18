@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -150,6 +150,38 @@ ab-test-chaos: ## Run A/B test with chaos (usage: make ab-test-chaos service=dsp
 	kubectl apply -f k8s/base/$(service)/deployment-canary.yaml
 	go run ./cmd/simulator --profile steady --duration 5m --chaos $(chaos)
 	go run ./cmd/reporting --mode=ab-compare --service=$(service)
+
+# --- Helm dev loop (Rancher Desktop / k3s) ---
+# The Tilt replacement: build images with scripts/stack-images.sh, deploy
+# with helm. kubectl/docker context must be rancher-desktop (stack-up checks).
+
+stack-images: ## Build all adtech-* service images (host cross-compile + tiny images)
+	scripts/stack-images.sh
+
+stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
+	@[ "$$(kubectl config current-context)" = "rancher-desktop" ] || { echo "kubectl context is not rancher-desktop (run: kubectl config use-context rancher-desktop)"; exit 1; }
+	scripts/stack-images.sh
+	helm upgrade --install adtech k8s/helm/adtech --timeout 10m
+	@echo "waiting for migrations + core services…"
+	kubectl -n adtech wait --for=condition=complete job/adtech-migrate --timeout=300s
+	kubectl -n adtech rollout status deploy/gateway deploy/reporting --timeout=300s
+	@if [ -f dev/tls/localhost.pem ]; then \
+	  kubectl create secret generic gateway-tls -n adtech \
+	    --from-file=cert.pem=dev/tls/localhost.pem \
+	    --from-file=key.pem=dev/tls/localhost-key.pem \
+	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "gateway-tls secret applied"; \
+	fi
+
+deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
+	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }
+	scripts/stack-images.sh $(SVC)
+	@if [ "$(SVC)" = dsp ]; then kubectl -n adtech rollout restart deploy/dsp-internal deploy/dsp-competitor1 deploy/dsp-competitor2; \
+	else kubectl -n adtech rollout restart deploy/$(SVC); fi
+	kubectl -n adtech rollout status deploy/$(if $(filter dsp,$(SVC)),dsp-internal,$(SVC)) --timeout=180s
+
+stack-down: ## Tear the local helm stack down (keeps PVCs; add PURGE=1 to wipe data)
+	helm uninstall adtech || true
+	@if [ "$(PURGE)" = "1" ]; then kubectl -n adtech delete pvc --all; fi
 
 # --- Utilities ---
 clean: ## Clean build artifacts

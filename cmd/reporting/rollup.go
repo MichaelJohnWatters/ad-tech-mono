@@ -102,8 +102,17 @@ func rollupRunHandler(engine *rollup.Engine, log *slog.Logger) http.HandlerFunc 
 			lookback = parsed
 		}
 		// Budget scales with the window count (a lookback=60 minute run is
-		// 60 windows × configs).
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(30+lookback)*time.Second)
+		// 60 windows × configs). Windows older than the hot window roll up
+		// FROM THE COLD LAKE at ~1-2s of DuckDB per window, so a deep
+		// lookback legitimately outlives the server-wide 30s WriteTimeout —
+		// same situation as the deep-history query handler. Extend the
+		// write deadline for THIS response only (without it, the conductor's
+		// lookback=60 healing pass died with a connection EOF at ~60s).
+		budget := time.Duration(30+2*lookback) * time.Second
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget)); err != nil {
+			log.Warn("rollup write-deadline extension unsupported", "error", err)
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), budget)
 		defer cancel()
 		results, err := engine.RunLevelLookback(ctx, level, lookback)
 		if err != nil {
