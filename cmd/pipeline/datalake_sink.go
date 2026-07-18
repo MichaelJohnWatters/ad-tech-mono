@@ -33,33 +33,37 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	batchSize := keys.Pipeline.DatalakeBatchSize.Get(cfg)
 	sink := newDatalakeSink(datalake.NewObjectStore(objStore, bucket, log), batchSize, log)
 
-	// One-time layout migration: tables written before daily partitioning
-	// existed are rewritten into the hive layout (one atomic commit each,
-	// old bytes reclaimed by the conductor's next vacuum). Runs BEFORE the
-	// NATS subscription so no flush interleaves with the rewrite. Idempotent
-	// and cheap once migrated (a log replay per table). A failure degrades
-	// to the flat layout (reads stay correct, just unpruned) and is retried
-	// next boot.
-	for table, schema := range sink.schemas {
-		if err := sink.lake.EnsurePartitioned(context.Background(), table, schema); err != nil {
-			log.Error("datalake: partition migration failed", "table", table, "error", err)
+	// One-time layout migration + NATS wiring run ASYNC: the migration
+	// replays each table's delta log (an S3 GET per commit), which is
+	// O(commits-since-last-compaction) — after an hour of 200rps load that
+	// exceeded the liveness budget and crash-looped the pod at boot
+	// (killed mid-migration at ~35s, forever). main() must reach the HTTP
+	// server fast; the sink comes up when it comes up. Ordering INSIDE the
+	// goroutine is preserved: migration strictly before the subscription,
+	// so no flush interleaves with a rewrite (single-writer rule), and
+	// JetStream holds the backlog until the subscription lands.
+	go func() {
+		for table, schema := range sink.schemas {
+			if err := sink.lake.EnsurePartitioned(context.Background(), table, schema); err != nil {
+				log.Error("datalake: partition migration failed", "table", table, "error", err)
+			}
 		}
-	}
-
-	bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
-	if err != nil {
-		log.Warn("datalake sink disabled: nats unavailable", "error", err)
-		return nil
-	}
-	if err := bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects}); err != nil {
-		log.Warn("datalake: ensure stream failed", "error", err)
-	}
-	if err := sink.Subscribe(bus); err != nil {
-		log.Error("datalake sink subscribe failed", "error", err)
-		_ = bus.Close()
-		return nil
-	}
-	lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
+		bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
+		if err != nil {
+			log.Error("datalake sink disabled: nats unavailable", "error", err)
+			return
+		}
+		if err := bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects}); err != nil {
+			log.Warn("datalake: ensure stream failed", "error", err)
+		}
+		if err := sink.Subscribe(bus); err != nil {
+			log.Error("datalake sink subscribe failed", "error", err)
+			_ = bus.Close()
+			return
+		}
+		lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
+		log.Info("datalake sink subscribed (post-migration)")
+	}()
 
 	// Keep this comfortably UNDER the NATS consumer AckWait (30s): with
 	// ack-after-flush, an event stays un-acked until its flush, so a flush
