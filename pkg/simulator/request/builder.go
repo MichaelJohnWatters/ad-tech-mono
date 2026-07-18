@@ -227,7 +227,7 @@ func buildImp(ch Channel, pl Placement, rng *rand.Rand) openrtb.Imp {
 // with a stable IP uses it (household determinism); otherwise a random
 // residential address keeps fingerprints high-cardinality.
 func buildDevice(p Persona, rng *rand.Rand) *openrtb.Device {
-	ip := p.IP
+	ip := p.RequestIP(rng)
 	if ip == "" {
 		ip = residentialIP(rng)
 	}
