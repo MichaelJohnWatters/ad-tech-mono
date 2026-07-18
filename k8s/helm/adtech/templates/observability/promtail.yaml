@@ -15,25 +15,35 @@ data:
     clients:
       - url: http://loki.{{ $ns }}.svc.cluster.local:3100/loki/api/v1/push
     scrape_configs:
-      - job_name: kubernetes-pods
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: ['{{ $ns }}']
-        relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_label_app]
-            target_label: service
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
+      # Static file glob over the kubelet pod-log layout
+      # (/var/log/pods/<ns>_<pod>_<uid>/<container>/N.log — symlinks into
+      # /var/lib/docker/containers, hence both volume mounts below).
+      # Deliberately NOT kubernetes_sd: our slog lines already carry the
+      # service name in their JSON, so the Grafana Loki↔Jaeger pivots
+      # ({service, trace_id}) come straight from the log body — no k8s
+      # metadata, RBAC, or discovery edge cases needed. Pod identity is
+      # recovered from the file path.
+      - job_name: pod-logs
+        static_configs:
+          - targets: [localhost]
+            labels:
+              namespace: {{ $ns }}
+              __path__: /var/log/pods/{{ $ns }}_*/*/*.log
         pipeline_stages:
+          # moby runtime writes docker-JSON envelopes; unwrap, then parse
+          # the app's slog JSON.
+          - docker: {}
+          - regex:
+              source: filename
+              expression: '/var/log/pods/[^_]+_(?P<pod>[^_]+)_[^/]+/'
           - json:
               expressions:
+                service: service
                 trace_id: trace_id
                 level: level
-                msg: msg
           - labels:
+              service:
+              pod:
               trace_id:
               level:
 ---
@@ -94,6 +104,16 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - -config.file=/etc/promtail/promtail.yaml
+          # /ready on the http_listen_port (9080, config above): reports 200
+          # once the Loki client + file targets are up. Without probes a
+          # wedged shipper stays "Running" while logs silently stop flowing.
+          livenessProbe:
+            httpGet: { path: /ready, port: 9080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /ready, port: 9080 }
+            periodSeconds: 5
           volumeMounts:
             - name: config
               mountPath: /etc/promtail
