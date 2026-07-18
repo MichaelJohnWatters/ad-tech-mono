@@ -9,7 +9,7 @@ asked to commit or push, do it on `main`.
 
 ## What This Is
 
-A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking - runs locally on K8s (Colima + k3s). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
+A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking - runs locally on K8s (Rancher Desktop k3s, deployed via the Helm chart). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
 
 See `docs/PLAN.md` for the comprehensive project plan.
 
@@ -21,7 +21,7 @@ See `docs/PLAN.md` for the comprehensive project plan.
 - **Databases:** PostgreSQL (transactional), DuckDB/ClickHouse (analytics), Parquet + Delta Log (data pipeline)
 - **Object storage:** S3 everywhere - Minio locally, real S3 in staging/prod. One code path.
 - **Caching:** L1 in-process (Go maps) + L2 Redis + L3 Postgres
-- **Infrastructure:** K8s everywhere (Colima + k3s local, k3s prod), Kustomize overlays (local/staging/prod), Tilt for dev orchestration
+- **Infrastructure:** K8s everywhere (Rancher Desktop k3s local, k3s prod), Helm chart `k8s/helm/adtech` (per-env values files), `make stack-up` / `make deploy SVC=x` dev loop (Tilt + kustomize retired 2026-07-18 — see k8s/CLAUDE.md)
 - **Observability:** slog (logging), Prometheus + Grafana (metrics), Loki (log aggregation), Jaeger (tracing)
 
 ## Monorepo Layout
@@ -29,7 +29,7 @@ See `docs/PLAN.md` for the comprehensive project plan.
 - `cmd/` - service entrypoints (one per service/job)
 - `pkg/` - shared packages (all reusable libraries, nothing external)
 - `web/` - HTML templates, static assets, adtech.js SDK
-- `k8s/` - K8s manifests (base + overlays per environment)
+- `k8s/` - Helm chart (`helm/adtech`, per-env values) + frozen pre-Helm manifests (`base/`, parity reference)
 - `build/` - Dockerfiles
 - `migrations/` - goose SQL migration files
 - `profiles/` - seed data, simulation, publisher configs, fraud rules
