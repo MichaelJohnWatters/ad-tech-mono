@@ -110,6 +110,28 @@ func mustJSON(s string) string {
 	return string(b)
 }
 
+// registerResetEndpoint mounts POST /v1/datalake/reset: drop every sink
+// table (objects + delta log) and clear buffered rows — the lake leg of a
+// full harness reset. Without it, e2e-era lake data accumulates forever and
+// full-scan endpoints (residual) grow arbitrarily slow (35s+ after the
+// 2026-07-18 hour run). Internal service surface, like purge/compact.
+func registerResetEndpoint(mux *http.ServeMux, sink *datalakeSink) {
+	mux.HandleFunc("POST "+routes.DatalakeReset, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		ctx := r.Context()
+		out := map[string]string{}
+		for _, table := range sink.Tables() {
+			sink.dropBuffered(table)
+			if err := sink.lake.TruncateTable(ctx, table); err != nil {
+				out[table] = err.Error()
+				continue
+			}
+			out[table] = "reset"
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+}
+
 // registerCompactEndpoint mounts POST /v1/datalake/compact: bin-pack every
 // sink table's small Parquet files into one consolidated file each. This
 // REPLACED the standalone cmd/compact CronJob — a compaction commit from a

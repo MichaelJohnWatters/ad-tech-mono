@@ -11,7 +11,9 @@ data:
     server:
       http_listen_port: 9080
     positions:
-      filename: /tmp/positions.yaml
+      # hostPath (volume below): survives container restarts, so a bounced
+      # promtail RESUMES tailing instead of re-shipping every file.
+      filename: /run/promtail/positions.yaml
     clients:
       - url: http://loki.{{ $ns }}.svc.cluster.local:3100/loki/api/v1/push
     scrape_configs:
@@ -107,8 +109,13 @@ spec:
           # /ready on the http_listen_port (9080, config above): reports 200
           # once the Loki client + file targets are up. Without probes a
           # wedged shipper stays "Running" while logs silently stop flowing.
+          # Liveness must NOT use /ready: it reflects Loki-push backpressure,
+          # so a throttled Loki got promtail KILLED, which (with pod-local
+          # positions) made it re-ship everything and throttle harder — a
+          # self-amplifying crashloop. /metrics answers while the process
+          # lives; /ready stays on the readiness probe only.
           livenessProbe:
-            httpGet: { path: /ready, port: 9080 }
+            httpGet: { path: /metrics, port: 9080 }
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
@@ -120,6 +127,8 @@ spec:
             - name: varlog
               mountPath: /var/log
               readOnly: true
+            - name: positions
+              mountPath: /run/promtail
             - name: containers
               mountPath: /var/lib/docker/containers
               readOnly: true
@@ -132,6 +141,10 @@ spec:
         - name: varlog
           hostPath:
             path: /var/log
+        - name: positions
+          hostPath:
+            path: /run/promtail
+            type: DirectoryOrCreate
         - name: containers
           hostPath:
             path: /var/lib/docker/containers

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -81,8 +82,31 @@ func (h *Harness) Reset(t *testing.T) {
 	}
 
 	h.resetClickHouse(t, ctx)
+	h.resetLake(t)
 
 	t.Log("harness reset complete")
+}
+
+// resetLake wipes the pipeline's Delta-lake tables (objects + buffered
+// rows) via POST /v1/datalake/reset. Without this, lake rows accumulate
+// across runs — a 1h load run left ~1M behaviour/impression rows that made
+// the residual full-scan take 35s+ and time out every lake-polling test.
+// Best-effort: a stack without the pipeline (or an old build) just logs.
+func (h *Harness) resetLake(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
+		routes.DefaultPipelineURL+routes.DatalakeReset, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Logf("Reset: lake reset skipped (%v)", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("Reset: lake reset status %d", resp.StatusCode)
+	}
 }
 
 // resetClickHouse truncates every adtech.* table via the ClickHouse HTTP

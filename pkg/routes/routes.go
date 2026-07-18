@@ -234,6 +234,12 @@ const (
 	// standalone cmd/compact CronJob risked). Triggered by the
 	// batch-conductor's chain.
 	DatalakeCompact = "/v1/datalake/compact"
+	// DatalakeReset (POST) wipes every sink table's objects AND buffered
+	// rows — the lake leg of a full test-harness reset. Dev/e2e affordance:
+	// without it, lake data accumulates across runs and full-scan endpoints
+	// (residual) grow arbitrarily slow. Internal service surface.
+	DatalakeReset = "/v1/datalake/reset"
+
 	// DatalakeVacuum (POST ?grace=10m) physically deletes tombstoned Parquet
 	// files older than grace — the storage-level tail of the GDPR purge and
 	// of compaction. Same single-writer placement as compact.

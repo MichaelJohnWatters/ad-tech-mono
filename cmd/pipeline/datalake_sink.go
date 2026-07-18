@@ -321,6 +321,20 @@ func (s *datalakeSink) handlerFor(table string) events.Handler {
 	}
 }
 
+// dropBuffered discards a table's buffered-but-unflushed rows (harness
+// reset: the rows' source events are being wiped wholesale; acking them
+// away is fine because the reset destroys their destination too).
+func (s *datalakeSink) dropBuffered(table string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ev := range s.buffers[table] {
+		if ev.ack != nil {
+			_ = ev.ack()
+		}
+	}
+	delete(s.buffers, table)
+}
+
 // record buffers a bare record with no ack/nak — the direct path used by tests.
 func (s *datalakeSink) record(table string, rec datalake.Record) {
 	s.bufferEvent(table, bufferedEvent{rec: rec})

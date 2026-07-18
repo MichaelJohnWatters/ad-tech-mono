@@ -99,6 +99,10 @@ func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) 
 		MaxAge:    24 * time.Hour,
 		Storage:   jetstream.FileStorage,
 		Replicas:  b.streamReplicas, // 1 local (standalone), 3 in a prod cluster (NATS_STREAM_REPLICAS)
+		// Server-side dedup window for Nats-Msg-Id (PublishWithID): a client
+		// republish after an ambiguous ack lands within seconds, so 2m is
+		// generous while keeping the server's ID-tracking memory small.
+		Duplicates: 2 * time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("create stream %s: %w", name, err)
@@ -115,6 +119,19 @@ func (b *Bus) Publish(ctx context.Context, subject string, data []byte) error {
 	msg := &nats.Msg{Subject: subject, Data: data, Header: nats.Header{}}
 	otel.GetTextMapPropagator().Inject(ctx, natsHeaderCarrier(msg.Header))
 
+	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
+		return fmt.Errorf("publish %s: %w", subject, err)
+	}
+	return nil
+}
+
+// PublishWithID is Publish with a Nats-Msg-Id header: JetStream drops a
+// second entry with the same ID inside the stream's Duplicates window, so a
+// client republish after an ambiguous ack can't double-enter the stream.
+func (b *Bus) PublishWithID(ctx context.Context, subject, msgID string, data []byte) error {
+	msg := &nats.Msg{Subject: subject, Data: data, Header: nats.Header{}}
+	otel.GetTextMapPropagator().Inject(ctx, natsHeaderCarrier(msg.Header))
+	msg.Header.Set("Nats-Msg-Id", msgID)
 	if _, err := b.js.PublishMsg(ctx, msg); err != nil {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}

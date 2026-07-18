@@ -20,12 +20,21 @@ func NewPublisher(bus EventBus, log *slog.Logger) *Publisher {
 
 // PublishJSON marshals the payload and publishes to the given subject.
 func (p *Publisher) PublishJSON(ctx context.Context, subject string, payload interface{}) error {
+	return p.publishJSONID(ctx, subject, "", payload)
+}
+
+// publishJSONID publishes with an optional stable message ID: JetStream
+// drops republishes with the same ID inside the stream's Duplicates window,
+// so a client resend after an ambiguous publish ack cannot double-enter the
+// stream (the source of the hour-run's 251 duplicate impressions). Empty ID
+// = plain publish (events with no one-per-trace identity).
+func (p *Publisher) publishJSONID(ctx context.Context, subject, msgID string, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		p.log.Error("failed to marshal event", "subject", subject, "error", err)
 		return err
 	}
-	if err := p.bus.Publish(ctx, subject, data); err != nil {
+	if err := PublishDedup(ctx, p.bus, subject, msgID, data); err != nil {
 		p.log.Error("failed to publish event", "subject", subject, "error", err)
 		return err
 	}
@@ -45,14 +54,14 @@ func (p *Publisher) AuctionWin(ctx context.Context, event AuctionWinEvent) error
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion
 	}
-	return p.PublishJSON(ctx, SubjectAuctionWin, event)
+	return p.publishJSONID(ctx, SubjectAuctionWin, "win:"+event.TraceID, event)
 }
 
 func (p *Publisher) AuctionComplete(ctx context.Context, event AuctionCompleteEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion
 	}
-	return p.PublishJSON(ctx, SubjectAuctionComplete, event)
+	return p.publishJSONID(ctx, SubjectAuctionComplete, "auction:"+event.TraceID, event)
 }
 
 func (p *Publisher) DSPCall(ctx context.Context, event DSPCallEvent) error {
@@ -108,14 +117,14 @@ func (p *Publisher) DirectWin(ctx context.Context, event DirectWinEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion
 	}
-	return p.PublishJSON(ctx, SubjectDirectWin, event)
+	return p.publishJSONID(ctx, SubjectDirectWin, "directwin:"+event.TraceID, event)
 }
 
 func (p *Publisher) PrebidOutboundWin(ctx context.Context, event PrebidOutboundWinEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion
 	}
-	return p.PublishJSON(ctx, SubjectPrebidOutboundWin, event)
+	return p.publishJSONID(ctx, SubjectPrebidOutboundWin, "preout:"+event.TraceID, event)
 }
 
 func (p *Publisher) Video(ctx context.Context, event VideoEvent) error {

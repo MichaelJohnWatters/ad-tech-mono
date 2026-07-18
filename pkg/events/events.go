@@ -34,6 +34,29 @@ type EventBus interface {
 	Close() error
 }
 
+// PublisherWithID is an optional capability: buses that support
+// publisher-side exactly-once semantics (server-side dedup by message ID
+// within the stream's duplicate window) implement it. JetStream republishes
+// after an ambiguous publish ack (client retry on timeout) create a SECOND
+// stream entry with a new sequence — consumer-side sequence dedup cannot
+// see it, which double-counted 251 impressions in the 2026-07-18 hour run.
+// A stable business ID lets the SERVER drop the republish instead.
+type PublisherWithID interface {
+	PublishWithID(ctx context.Context, subject, msgID string, data []byte) error
+}
+
+// PublishDedup publishes with a stable message ID when the bus supports it,
+// falling back to plain Publish (memory bus, fakes) otherwise. msgID must be
+// stable across retries of the SAME logical event and unique across distinct
+// events — derive it from the trace ID plus whatever disambiguates the event
+// within a trace (subject, endpoint, conversion type…).
+func PublishDedup(ctx context.Context, bus EventBus, subject, msgID string, data []byte) error {
+	if p, ok := bus.(PublisherWithID); ok && msgID != "" {
+		return p.PublishWithID(ctx, subject, msgID, data)
+	}
+	return bus.Publish(ctx, subject, data)
+}
+
 // Handler processes a single event message.
 type Handler func(ctx context.Context, msg *Message) error
 

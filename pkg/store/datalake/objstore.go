@@ -215,7 +215,7 @@ func (o *ObjectStore) Write(ctx context.Context, table string, records []Record,
 			return fmt.Errorf("encode parquet: %w", err)
 		}
 		pKey := parquetKey(table, version, seq, part)
-		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+		if err := o.put(ctx, pKey, parquetBytes, "application/vnd.apache.parquet"); err != nil {
 			return fmt.Errorf("put parquet: %w", err)
 		}
 		totalBytes += len(parquetBytes)
@@ -300,7 +300,9 @@ func (o *ObjectStore) Read(ctx context.Context, table string, filter Filter) ([]
 // back to full object keys so Read/Compact can fetch the Parquet directly. The
 // schema (recorded once, in version 0's metaData) rides on that commit's add.
 func (o *ObjectStore) Log(ctx context.Context, table string) ([]Transaction, error) {
-	keys, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
+	lctx, lcancel := opCtx(ctx)
+	keys, err := o.obj.List(lctx, o.bucket, deltaLogPrefix(table))
+	lcancel()
 	if err != nil {
 		return nil, fmt.Errorf("list delta log: %w", err)
 	}
@@ -459,7 +461,7 @@ func (o *ObjectStore) Compact(ctx context.Context, table string) (CompactResult,
 			return res, fmt.Errorf("encode parquet: %w", err)
 		}
 		pKey := parquetKey(table, version, seq, part)
-		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+		if err := o.put(ctx, pKey, parquetBytes, "application/vnd.apache.parquet"); err != nil {
 			return res, fmt.Errorf("put compacted parquet: %w", err)
 		}
 		adds = append(adds, deltaAdd{
@@ -558,7 +560,7 @@ func (o *ObjectStore) PurgeRows(ctx context.Context, table string, match func(Re
 		part, _ := partitionOfPath(p)
 		pKey := parquetKey(table, version, seq, part)
 		seq++
-		if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+		if err := o.put(ctx, pKey, parquetBytes, "application/vnd.apache.parquet"); err != nil {
 			return 0, fmt.Errorf("put purged parquet: %w", err)
 		}
 		adds = append(adds, deltaAdd{
@@ -656,7 +658,7 @@ func (o *ObjectStore) EnsurePartitioned(ctx context.Context, table string, schem
 				return fmt.Errorf("encode parquet: %w", err)
 			}
 			pKey := parquetKey(table, version, seq, part)
-			if err := o.obj.Put(ctx, o.bucket, pKey, bytes.NewReader(parquetBytes), int64(len(parquetBytes)), "application/vnd.apache.parquet"); err != nil {
+			if err := o.put(ctx, pKey, parquetBytes, "application/vnd.apache.parquet"); err != nil {
 				return fmt.Errorf("put parquet: %w", err)
 			}
 			adds = append(adds, deltaAdd{
@@ -742,7 +744,10 @@ func (o *ObjectStore) Vacuum(ctx context.Context, table string, grace time.Durat
 		if active[path] || ts.After(cutoff) {
 			continue
 		}
-		if err := o.obj.Delete(ctx, o.bucket, path); err != nil {
+		dctx, dcancel := opCtx(ctx)
+		err := o.obj.Delete(dctx, o.bucket, path)
+		dcancel()
+		if err != nil {
 			return res, fmt.Errorf("vacuum delete %s: %w", path, err)
 		}
 		res.FilesDeleted++
@@ -810,6 +815,8 @@ func activeFiles(txns []Transaction) (paths []string, schema Schema, haveSchema 
 // Vacuum had by then legitimately deleted. Max+1 is also immune to
 // historical gaps that the old allocator left behind. Caller must hold mu.
 func (o *ObjectStore) nextVersionLocked(ctx context.Context, table string) (int, error) {
+	ctx, cancel := opCtx(ctx)
+	defer cancel()
 	keys, err := o.obj.List(ctx, o.bucket, deltaLogPrefix(table))
 	if err != nil {
 		return 0, fmt.Errorf("list delta log: %w", err)
@@ -829,24 +836,72 @@ func (o *ObjectStore) nextVersionLocked(ctx context.Context, table string) (int,
 // single-writer lock it can only mean a version-allocation bug.
 func (o *ObjectStore) putLogFile(ctx context.Context, table string, version int, body []byte) error {
 	key := deltaLogKey(table, version)
-	if exists, err := o.obj.Exists(ctx, o.bucket, key); err == nil && exists {
+	ectx, ecancel := opCtx(ctx)
+	exists, eerr := o.obj.Exists(ectx, o.bucket, key)
+	ecancel()
+	if eerr == nil && exists {
 		return fmt.Errorf("delta log v%d already exists for %s — version allocation bug, refusing to overwrite", version, table)
 	}
-	if err := o.obj.Put(ctx, o.bucket, key, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
+	if err := o.put(ctx, key, body, "application/json"); err != nil {
 		return fmt.Errorf("put delta log v%d: %w", version, err)
 	}
 	return nil
 }
 
+// TruncateTable deletes every object under the table prefix — data files,
+// tombstoned bytes, and the delta log. The table ceases to exist; the next
+// Write recreates it at version 0. Harness/dev reset only.
+func (o *ObjectStore) TruncateTable(ctx context.Context, table string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	lctx, lcancel := opCtx(ctx)
+	keys, err := o.obj.List(lctx, o.bucket, table+"/")
+	lcancel()
+	if err != nil {
+		return fmt.Errorf("list %s: %w", table, err)
+	}
+	for _, k := range keys {
+		dctx, dcancel := opCtx(ctx)
+		err := o.obj.Delete(dctx, o.bucket, k)
+		dcancel()
+		if err != nil {
+			return fmt.Errorf("delete %s: %w", k, err)
+		}
+	}
+	o.log.Info("datalake table truncated", "table", table, "objects_deleted", len(keys))
+	return nil
+}
+
 func (o *ObjectStore) Close() error { return nil }
 
+// opTimeout bounds every individual object-storage call made while holding
+// the write mutex. The 2026-07-18 hour-run wedged the whole pipeline: one
+// S3 op hung during a vacuum (network churn window), the mutex never
+// released, and every lake operation — sink flushes included — queued
+// behind it until the process died. A single op has no business taking
+// longer than this; the CALLER's deadline still applies on top.
+const opTimeout = 2 * time.Minute
+
+func opCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, opTimeout)
+}
+
 func (o *ObjectStore) getAll(ctx context.Context, key string) ([]byte, error) {
+	ctx, cancel := opCtx(ctx)
+	defer cancel()
 	rc, err := o.obj.Get(ctx, o.bucket, key)
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)
+}
+
+// put wraps obj.Put with the per-op timeout (see opTimeout).
+func (o *ObjectStore) put(ctx context.Context, key string, body []byte, contentType string) error {
+	ctx, cancel := opCtx(ctx)
+	defer cancel()
+	return o.obj.Put(ctx, o.bucket, key, bytes.NewReader(body), int64(len(body)), contentType)
 }
 
 // --- Parquet encode/decode ---

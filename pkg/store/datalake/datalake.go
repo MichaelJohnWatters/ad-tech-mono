@@ -52,6 +52,11 @@ type Store interface {
 	// it, PurgeRows-removed (GDPR) bytes persist in the bucket forever.
 	Vacuum(ctx context.Context, table string, grace time.Duration) (VacuumResult, error)
 
+	// TruncateTable deletes EVERY object under the table (data + delta log)
+	// — the table ceases to exist. Test-harness / dev-reset affordance;
+	// nothing in a serving path calls it.
+	TruncateTable(ctx context.Context, table string) error
+
 	// EnsurePartitioned migrates an existing flat-layout table to the
 	// partitioned layout schema.PartitionBy describes, in one atomic Delta
 	// commit (new metaData + partitioned adds + removes of the flat files).
@@ -282,6 +287,14 @@ func (m *MemoryStore) Vacuum(_ context.Context, table string, _ time.Duration) (
 
 // EnsurePartitioned is a no-op for the in-memory store (no file layout).
 func (m *MemoryStore) EnsurePartitioned(_ context.Context, _ string, _ Schema) error { return nil }
+
+// TruncateTable drops the table outright (harness reset).
+func (m *MemoryStore) TruncateTable(_ context.Context, table string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.tables, table)
+	return nil
+}
 
 // Compact is a no-op for the in-memory store (no files to pack).
 func (m *MemoryStore) Compact(_ context.Context, table string) (CompactResult, error) {
