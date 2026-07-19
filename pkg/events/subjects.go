@@ -131,6 +131,11 @@ const (
 	SubjectCacheInvalidateSigningKeys  = "adtech.cache.invalidate.signing-keys"
 	// Publisher-side direct-sold line items consumed by cmd/publisher-adserver.
 	SubjectCacheInvalidatePublisherLineItems = "adtech.cache.invalidate.publisher-line-items"
+	// House ads (the platform's own fallback creatives) consumed by
+	// cmd/publisher-adserver's house-ad warm cache. Published by the gateway on
+	// every staff create/update/delete so the ad server picks the change up
+	// sub-second instead of waiting for the poll tick.
+	SubjectCacheInvalidateHouseAds = "adtech.cache.invalidate.house-ads"
 	// Live config table — published by pkg/config.Manager.Set whenever a
 	// value is written via PUT /v1/config, so every other pod re-polls
 	// immediately instead of waiting for its 30s tick.

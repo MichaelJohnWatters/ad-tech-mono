@@ -5,7 +5,51 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 )
+
+// noHouseAds is a houseAdLookup that never finds a configured house ad — so a
+// no-bid with the fallback on still yields an honest no-fill. Used by tests
+// that either fill from a real auction or assert the no-content path.
+func noHouseAds(string, uint64) (houseads.HouseAd, bool) { return houseads.HouseAd{}, false }
+
+// houseAdFrom builds a houseAdLookup backed by a fixed set of house ads (via the
+// same weighted Pick the ad server uses). Lets a no-bid test seed an ops-defined
+// house ad and assert the ad server serves ITS markup.
+func houseAdFrom(ads ...houseads.HouseAd) houseAdLookup {
+	return func(format string, seed uint64) (houseads.HouseAd, bool) {
+		return houseads.Pick(ads, format, seed)
+	}
+}
+
+// houseVideoVAST / houseAudioVAST / houseNativeHTML are valid markup fixtures a
+// staff member could paste into a house ad for each format. The video/audio
+// markup is inline VAST XML (served verbatim); the native markup is an HTML card.
+const houseVideoVAST = `<?xml version="1.0" encoding="UTF-8"?>
+<VAST version="4.2"><Ad id="house-video"><InLine><AdSystem>ad-tech-mono</AdSystem><AdTitle>House Video</AdTitle>` +
+	`<Impression><![CDATA[http://tracker:8083/v1/t/imp?house=1]]></Impression>` +
+	`<Creatives><Creative><Linear><Duration>00:00:15</Duration>` +
+	`<MediaFiles><MediaFile delivery="progressive" type="video/mp4" width="640" height="360"><![CDATA[http://cdn/house.mp4]]></MediaFile></MediaFiles>` +
+	`</Linear></Creative></Creatives></InLine></Ad></VAST>`
+
+const houseAudioVAST = `<?xml version="1.0" encoding="UTF-8"?>
+<VAST version="4.2"><Ad id="house-audio"><InLine><AdSystem>ad-tech-mono</AdSystem><AdTitle>House Audio</AdTitle>` +
+	`<Impression><![CDATA[http://tracker:8083/v1/t/imp?house=1]]></Impression>` +
+	`<Creatives><Creative><Linear><Duration>00:00:30</Duration>` +
+	`<MediaFiles><MediaFile delivery="progressive" type="audio/mpeg"><![CDATA[http://cdn/house.mp3]]></MediaFile></MediaFiles>` +
+	`</Linear></Creative></Creatives></InLine></Ad></VAST>`
+
+const houseNativeHTML = `<div class="house-native">Try AdTech Mono — the transparent ad platform</div>`
+
+// houseVideoFn is a houseAdLookup with a single enabled video house ad — for
+// tests that assert a no-bid serves the configured house ad's VAST markup.
+func houseVideoFn() houseAdLookup {
+	return houseAdFrom(houseads.HouseAd{
+		ID: "22222222-2222-4222-8222-222222222222", Format: houseads.FormatVideo,
+		Name: "House Video", Markup: houseVideoVAST, Enabled: true, Weight: 1,
+	})
+}
 
 func TestDeviceFromUserAgent(t *testing.T) {
 	cases := map[string]string{

@@ -216,6 +216,15 @@ const (
 	// (post-fee) earnings and the fee split without the staff-only editor.
 	APIMyRevshare = apiPrefix + "/api/my-revshare"
 
+	// APIHouseAds is the staff house-ad editor (GET list on support:read;
+	// POST create / PUT ?id= update / DELETE ?id= on support:update). House
+	// ads are the platform's OWN fallback creatives served on a no-bid when
+	// publisher_adserver.stub_on_nobid is on. Platform-global (no tenant
+	// scope); mutations publish the house-ads cache invalidate so the
+	// publisher ad server reloads sub-second. APIHouseAds+"/" serves by-id
+	// PUT/DELETE via a trailing-slash path.
+	APIHouseAds = apiPrefix + "/api/house-ads"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"

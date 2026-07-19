@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -65,7 +66,7 @@ type sspVideoWinner struct {
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken
 // player. The failure reason gets logged but the response stays valid.
-func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string), stubFn func() bool) http.HandlerFunc {
+func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string), stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -91,13 +92,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 				w.Write(xmlBytes)
 				return
 			}
-			if stubFn() {
-				reqLog.Info("video pod: no fills, serving demo VAST (stub_on_nobid)")
-				writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
-			} else {
-				reqLog.Info("video pod: no fills, empty VAST")
-				writeNoFillVAST(w)
-			}
+			serveVideoNoBid(w, reqLog, stubFn, houseAdFn, traceID)
 			return
 		}
 
@@ -111,11 +106,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 			default:
 				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
 			}
-			if stubFn() {
-				writeStubVAST(w, reqLog, trackerURL, traceID, placementID)
-			} else {
-				writeNoFillVAST(w)
-			}
+			serveVideoNoBid(w, reqLog, stubFn, houseAdFn, traceID)
 			return
 		}
 
@@ -400,50 +391,26 @@ func writeNoFillVAST(w http.ResponseWriter) {
 	w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<VAST version="4.2"></VAST>`))
 }
 
-// writeStubVAST is the OPT-IN demo fallback (publisher_adserver.stub_on_nobid):
-// a canned house ad so a fully-empty dev environment still renders something.
-// Off by default — production serves only real auctioned demand.
-func writeStubVAST(w http.ResponseWriter, reqLog *slog.Logger, trackerURL, traceID, placementID string) {
-	macroCtx := adserving.MacroContext{
-		AuctionID:    traceID,
-		AuctionPrice: 14.50,
-		Currency:     "USD",
-		CampaignID:   "demo-video-li",
-		CreativeID:   "demo-video-cr",
-		PlacementID:  placementID,
-		PublisherID:  "demo-pub",
-		AdvertiserID: "demo-luxauto",
-		BidModel:     "cpm",
-		Width:        640,
-		Height:       360,
-		TrackerURL:   trackerURL,
-		LandingURL:   "http://localhost:8080/dev/landing/luxauto",
-		URLTTL:       time.Hour,
+// serveVideoNoBid is the no-bid response for the video path. If the house-ad
+// fallback is OFF (stub_on_nobid=false) → honest empty VAST (no fake data). If
+// ON, look up an ops-configured video house ad and serve ITS markup verbatim
+// (the markup is stored as inline VAST XML by staff). If ON but NO video house
+// ad is configured, still serve the honest empty VAST — we never invent canned
+// content. Seed is trace-derived so weighted rotation is deterministic.
+func serveVideoNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() bool, houseAdFn houseAdLookup, traceID string) {
+	if stubFn() && houseAdFn != nil {
+		if ad, ok := houseAdFn(houseads.FormatVideo, seedFromTrace(traceID)); ok {
+			reqLog.Info("video no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+			w.Header().Set("Content-Type", "text/xml")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write([]byte(ad.Markup))
+			return
+		}
+		reqLog.Info("video no-bid: house ads on but none configured for video, empty VAST")
+	} else {
+		reqLog.Info("video no-bid: empty VAST")
 	}
-	spec := buildVASTSpec(&sspVideoWinner{
-		TraceID:          traceID,
-		Channel:          "video",
-		CreativeID:       "demo-video-cr",
-		CampaignID:       "demo-video-li",
-		PlacementID:      placementID,
-		AdvertiserDomain: "luxauto.com",
-		BidModel:         "cpm",
-		Currency:         "USD",
-		ClearingPrice:    14.50,
-		Width:            640,
-		Height:           360,
-		DurationSeconds:  15,
-		MediaURL:         "http://localhost:8080/v1/media/bigbuckbunny/mp4/h264/360/Big_Buck_Bunny_360_10s_2MB.mp4",
-	}, macroCtx)
-	xmlBytes, err := vast.BuildLinearAd(spec)
-	if err != nil {
-		reqLog.Error("stub vast build failed", "error", err)
-		http.Error(w, "vast build failed", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/xml")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Write(xmlBytes)
+	writeNoFillVAST(w)
 }
 
 // landingForDomain maps an advertiser domain to the corresponding

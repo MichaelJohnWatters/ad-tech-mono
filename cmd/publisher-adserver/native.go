@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -33,7 +34,7 @@ import (
 //
 // On any failure (SSP unreachable, no bid, unparseable markup) we render a
 // demo native ad so the simulator never sees a broken slot.
-func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool) http.HandlerFunc {
+func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -50,8 +51,10 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bo
 		winner, err := fetchNativeWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
 		var resp native.Response
 		var macroCtx adserving.MacroContext
-		// noFill: genuine no-bid/unparseable and the stub fallback is off →
-		// return an honest 204 (no ad), not fake data.
+		// noFill: genuine no-bid/unparseable and no house-ad fallback → return
+		// an honest 204 (no ad), not fake data. On a no-bid with house ads on,
+		// serveNativeNoBid writes the configured native house-ad HTML and
+		// returns handled=true.
 		noFill := false
 		if err != nil || winner == nil || winner.NoBid || winner.AdM == "" {
 			if err != nil {
@@ -59,20 +62,18 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bo
 			} else {
 				reqLog.Info("native auction: no bid / no markup")
 			}
-			if stubFn() {
-				resp, macroCtx = stubNative(trackerURL, traceID, placementID)
-			} else {
-				noFill = true
+			if serveNativeNoBid(w, reqLog, stubFn, houseAdFn, traceID) {
+				return
 			}
+			noFill = true
 		} else {
 			parsed, perr := native.ParseResponse(winner.AdM)
 			if perr != nil {
 				reqLog.Warn("native markup unparseable", "error", perr)
-				if stubFn() {
-					resp, macroCtx = stubNative(trackerURL, traceID, placementID)
-				} else {
-					noFill = true
+				if serveNativeNoBid(w, reqLog, stubFn, houseAdFn, traceID) {
+					return
 				}
+				noFill = true
 			} else {
 				resp = parsed
 				macroCtx = nativeMacroCtx(winner, trackerURL, resp.Native.Link.URL)
@@ -228,30 +229,23 @@ func renderNativeHTML(resp native.Response, macroCtx adserving.MacroContext) (st
 	return b.String(), nil
 }
 
-// stubNative is the demo fallback: a fixed native ad + macro context so the
-// simulator always sees a rendered slot even with no live bid.
-func stubNative(trackerURL, traceID, placementID string) (native.Response, adserving.MacroContext) {
-	macroCtx := adserving.MacroContext{
-		AuctionID:    traceID,
-		AuctionPrice: 3.50,
-		Currency:     "USD",
-		CampaignID:   "demo-native-li",
-		CreativeID:   "demo-native-cr",
-		PlacementID:  placementID,
-		PublisherID:  "demo-pub",
-		AdvertiserID: "demo-acme",
-		BidModel:     "cpm",
-		TrackerURL:   trackerURL,
-		LandingURL:   "http://localhost:8080/dev/landing/acme-shoes",
-		URLTTL:       time.Hour,
+// serveNativeNoBid writes the ops-configured native house ad on a no-bid when
+// the fallback is on, returning true (handled). The native house-ad markup is
+// HTML (the same shape renderNativeHTML produces), served verbatim as
+// text/html. Returns false when the fallback is off OR no native house ad is
+// configured — the caller then emits an honest 204 (no fake content invented).
+func serveNativeNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() bool, houseAdFn houseAdLookup, traceID string) bool {
+	if !stubFn() || houseAdFn == nil {
+		return false
 	}
-	resp := native.BuildResponse(native.AssetSet{
-		Title:      "Acme Running Shoes — 20% Off",
-		MainImage:  "http://localhost:8080/v1/creatives/themes/retail-1200x627.svg",
-		Sponsored:  "Acme",
-		Body:       "Lightweight, all-day comfort. Free returns on every pair.",
-		CTA:        "Shop now",
-		LandingURL: macroCtx.LandingURL,
-	}, nil, nil)
-	return resp, macroCtx
+	ad, ok := houseAdFn(houseads.FormatNative, seedFromTrace(traceID))
+	if !ok {
+		reqLog.Info("native no-bid: house ads on but none configured for native, 204")
+		return false
+	}
+	reqLog.Info("native no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write([]byte(ad.Markup))
+	return true
 }

@@ -108,6 +108,62 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ House ads ============ -->
+    <section id="section-houseads" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Serve house ads on no-bid" "subtitle" "The master switch. When ON, a no-bid serves a configured house ad for the format instead of an empty no-fill. When no house ad is configured for a format, the ad server still returns an honest no-fill.") }}
+      <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+        <input id="haMaster" type="checkbox" onchange="saveHouseAdMaster(this.checked)" class="h-4 w-4">
+        <span class="text-gray-600 dark:text-gray-300">Serve house ads on no-bid (publisher_adserver.stub_on_nobid)</span>
+      </label>
+      <p class="mt-2 text-xs text-gray-400">The publisher ad server picks the change up within a second.</p>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Add / edit a house ad" "subtitle" "Markup is HTML for display/native, or inline VAST XML for video/audio.") }}
+      <form class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end" onsubmit="saveHouseAd(event)">
+        <input id="haId" type="hidden">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Format</span>
+          <select id="haFormat" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="display">Display</option>
+            <option value="video">Video</option>
+            <option value="native">Native</option>
+            <option value="audio">Audio</option>
+          </select>
+        </label>
+        <label class="block text-sm md:col-span-2">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Name</span>
+          <input id="haName" placeholder="AdTech Mono house promo" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" required>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Weight</span>
+          <input id="haWeight" type="number" min="1" step="1" value="1" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm md:col-span-3">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Landing URL</span>
+          <input id="haLanding" placeholder="https://adtech.example/" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm cursor-pointer md:pb-1.5">
+          <input id="haEnabled" type="checkbox" checked class="h-4 w-4">
+          <span class="text-gray-600 dark:text-gray-300">Enabled</span>
+        </label>
+        <label class="block text-sm md:col-span-4">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Markup (HTML or inline VAST XML)</span>
+          <textarea id="haMarkup" rows="6" placeholder="<VAST version=&quot;4.2&quot;>…</VAST>" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" required></textarea>
+        </label>
+        <div class="md:col-span-4">
+          {{ template "button" (dict "label" "Save house ad" "type" "submit") }}
+          <button type="button" onclick="resetHouseAdForm()" class="ml-2 text-xs px-2 py-1 rounded bg-surface-3 text-gray-400 hover:text-gray-200">Clear</button>
+        </div>
+      </form>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "House ads") }}
+      {{ template "table-start" (dict "headers" (slice "Format" "Name" "Enabled" "Weight" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Audit log ============ -->
     <section id="section-audit" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Audit log") }}
@@ -419,12 +475,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -435,7 +491,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -699,6 +755,104 @@ async function saveRevTerms(ev) {
     toast('Revenue terms updated — new spend uses them within a second', 'success');
     loadRevshare();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- House ads (platform's own fallback creatives served on a no-bid) ----
+const HOUSE_STUB_KEY = 'publisher_adserver.stub_on_nobid';
+let houseAdsCache = [];
+
+async function loadHouseAds() {
+  // Master switch reflects the live config key — reuses the existing config
+  // API rather than a second toggle. resolved=true gives the effective value.
+  try {
+    const r = await fetchJSON('/v1/config?resolved=true&key=' + encodeURIComponent(HOUSE_STUB_KEY));
+    $('haMaster').checked = String(r?.value).toLowerCase() === 'true';
+  } catch (_) { /* leave unchecked on error */ }
+
+  const tbody = tbodyOf('houseads');
+  try {
+    houseAdsCache = await fetchJSON('/v1/api/house-ads') || [];
+    tbody.innerHTML = houseAdsCache.length ? houseAdsCache.map(a => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(a.format)}</td>
+        <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
+        <td class="px-3 py-2">${a.enabled ? '<span class="text-success">on</span>' : '<span class="text-gray-400">off</span>'}</td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${a.weight}</td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="editHouseAd('${esc(a.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+          <button onclick="deleteHouseAd('${esc(a.id)}')" class="text-xs px-2 py-1 rounded bg-error/15 text-error hover:bg-error/25">Delete</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No house ads yet.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// saveHouseAdMaster flips publisher_adserver.stub_on_nobid via the config API
+// (global write; the ad server picks it up within a second). No second toggle.
+async function saveHouseAdMaster(on) {
+  try {
+    await fetchJSON('/v1/config', {method: 'PUT', body: JSON.stringify({key: HOUSE_STUB_KEY, value: on ? 'true' : 'false', pod_id: ''})});
+    toast(`House ads on no-bid ${on ? 'ENABLED' : 'disabled'} — ad server picks it up within a second`, 'success');
+  } catch (err) {
+    $('haMaster').checked = !on; // revert the visual on failure
+    toast('Toggle failed: ' + err.message, 'error');
+  }
+}
+
+function resetHouseAdForm() {
+  $('haId').value = '';
+  $('haName').value = '';
+  $('haMarkup').value = '';
+  $('haLanding').value = '';
+  $('haWeight').value = '1';
+  $('haEnabled').checked = true;
+  $('haFormat').value = 'display';
+}
+
+function editHouseAd(id) {
+  const a = houseAdsCache.find(x => x.id === id);
+  if (!a) return;
+  $('haId').value = a.id;
+  $('haFormat').value = a.format;
+  $('haName').value = a.name;
+  $('haMarkup').value = a.markup;
+  $('haLanding').value = a.landing_url || '';
+  $('haWeight').value = a.weight || 1;
+  $('haEnabled').checked = !!a.enabled;
+  $('section-houseads').scrollIntoView({behavior: 'smooth'});
+}
+
+async function saveHouseAd(ev) {
+  ev.preventDefault();
+  const id = $('haId').value;
+  const body = {
+    format: $('haFormat').value,
+    name: $('haName').value.trim(),
+    markup: $('haMarkup').value,
+    landing_url: $('haLanding').value.trim(),
+    enabled: $('haEnabled').checked,
+    weight: parseInt($('haWeight').value, 10) || 1,
+  };
+  try {
+    if (id) {
+      await fetchJSON('/v1/api/house-ads/' + encodeURIComponent(id), {method: 'PUT', body: JSON.stringify(body)});
+    } else {
+      await fetchJSON('/v1/api/house-ads', {method: 'POST', body: JSON.stringify(body)});
+    }
+    toast('House ad saved — ad server reloads within a second', 'success');
+    resetHouseAdForm();
+    loadHouseAds();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+async function deleteHouseAd(id) {
+  try {
+    await fetchJSON('/v1/api/house-ads/' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('House ad deleted', 'success');
+    loadHouseAds();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // ---- Audit log ----

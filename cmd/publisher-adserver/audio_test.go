@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/vast"
 )
 
@@ -47,7 +48,7 @@ func TestAudioHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
 
 	// Visitor is an EU GDPR-consented listener — signals must reach the SSP.
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio&geo=DEU&gdpr=1&consent=abc&device=mobile", nil)
@@ -94,16 +95,21 @@ func TestAudioHandler(t *testing.T) {
 	}
 }
 
-// TestAudioHandlerNoBidStub asserts the no-fill path still returns a valid
-// audio VAST (house ad) so a player never sees a 500 / empty response.
-func TestAudioHandlerNoBidStub(t *testing.T) {
+// TestAudioHandlerNoBidHouseAd asserts that on a no-bid with the fallback on AND
+// an audio house ad configured, the handler serves the house ad's own markup
+// (valid VAST) — not a hardcoded canned stub.
+func TestAudioHandlerNoBidHouseAd(t *testing.T) {
 	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = encodeJSON(w, sspVideoWinner{NoBid: true})
 	}))
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub)
+	houseFn := houseAdFrom(houseads.HouseAd{
+		ID: "11111111-1111-4111-8111-111111111111", Format: houseads.FormatAudio,
+		Name: "House Audio", Markup: houseAudioVAST, Enabled: true, Weight: 1,
+	})
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, houseFn)
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -113,9 +119,33 @@ func TestAudioHandlerNoBidStub(t *testing.T) {
 	}
 	var doc vast.VAST
 	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("no-bid stub is not valid VAST: %v", err)
+		t.Fatalf("house-ad audio markup is not valid VAST: %v", err)
 	}
-	if len(doc.Ads) != 1 {
-		t.Errorf("stub audio VAST should carry 1 house Ad, got %d", len(doc.Ads))
+	if len(doc.Ads) != 1 || doc.Ads[0].ID != "house-audio" {
+		t.Errorf("expected the configured house ad's VAST (Ad id house-audio), got %+v", doc.Ads)
+	}
+}
+
+// TestAudioHandlerNoBidNoHouseAd: fallback on but NO audio house ad configured →
+// honest empty VAST (no fake/canned content invented).
+func TestAudioHandlerNoBidNoHouseAd(t *testing.T) {
+	ssp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = encodeJSON(w, sspVideoWinner{NoBid: true})
+	}))
+	defer ssp.Close()
+
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200 (empty VAST)", rec.Code)
+	}
+	var doc vast.VAST
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("empty VAST must still parse: %v", err)
+	}
+	if len(doc.Ads) != 0 {
+		t.Errorf("no configured audio house ad → 0 Ads (honest no-fill), got %d", len(doc.Ads))
 	}
 }

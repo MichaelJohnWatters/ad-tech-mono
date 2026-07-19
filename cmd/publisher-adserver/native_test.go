@@ -1,11 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 )
 
@@ -88,14 +91,51 @@ func TestRenderNativeHTMLOmitsEmptyAssets(t *testing.T) {
 	}
 }
 
-func TestStubNativeRenders(t *testing.T) {
-	// The demo fallback must always produce a valid, non-empty card.
-	resp, ctx := stubNative("http://tracker:8083", "trace-x", "pl-demo")
-	html, err := renderNativeHTML(resp, ctx)
-	if err != nil {
-		t.Fatalf("render stub: %v", err)
+// nobidNativeSSP returns a no-bid for the native channel.
+func nobidNativeSSP(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = encodeJSON(w, sspVideoWinner{NoBid: true})
+	}))
+}
+
+// TestNativeHandlerNoBidHouseAd: on a no-bid with the fallback on AND a native
+// house ad configured, the handler serves the house ad's own HTML markup
+// verbatim (200 text/html) — not a hardcoded canned card.
+func TestNativeHandlerNoBidHouseAd(t *testing.T) {
+	ssp := nobidNativeSSP(t)
+	defer ssp.Close()
+
+	houseFn := houseAdFrom(houseads.HouseAd{
+		ID: "33333333-3333-4333-8333-333333333333", Format: houseads.FormatNative,
+		Name: "House Native", Markup: houseNativeHTML, Enabled: true, Weight: 1,
+	})
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, houseFn)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (house ad served): %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(html, "Acme Running Shoes") {
-		t.Errorf("stub native missing expected title:\n%s", html)
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "Try AdTech Mono") {
+		t.Errorf("expected the configured native house ad markup, got:\n%s", rec.Body.String())
+	}
+}
+
+// TestNativeHandlerNoBidNoHouseAd: fallback on but NO native house ad configured
+// → honest 204 (no fake/canned content invented).
+func TestNativeHandlerNoBidNoHouseAd(t *testing.T) {
+	ssp := nobidNativeSSP(t)
+	defer ssp.Close()
+
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("no native house ad → status = %d, want 204: %s", rec.Code, rec.Body.String())
 	}
 }
