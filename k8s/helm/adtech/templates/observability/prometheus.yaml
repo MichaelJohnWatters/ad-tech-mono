@@ -80,32 +80,7 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
 
-      # Host-network scrape — for Tilt fast mode, where every Go service
-      # runs as a local_resource on the developer's machine. Prometheus
-      # (in K8s) reaches the host via host.docker.internal (Colima sets
-      # this up; Docker Desktop / Rancher Desktop also support it).
-      # Production overlays should remove this whole job.
-      - job_name: 'adtech-host-services'
-        scrape_interval: 10s
-        static_configs:
-          - targets: ['host.docker.internal:8080']
-            labels: {service: gateway}
-          - targets: ['host.docker.internal:8081']
-            labels: {service: exchange}
-          - targets: ['host.docker.internal:8082']
-            labels: {service: dsp, pod: dsp-internal-0}
-          - targets: ['host.docker.internal:8083']
-            labels: {service: tracker}
-          - targets: ['host.docker.internal:8084']
-            labels: {service: ssp}
-          - targets: ['host.docker.internal:8085']
-            labels: {service: adserver}
-          - targets: ['host.docker.internal:8086']
-            labels: {service: reporting}
-          - targets: ['host.docker.internal:8089']
-            labels: {service: dsp, pod: dsp-competitor1}
-          - targets: ['host.docker.internal:8090']
-            labels: {service: dsp, pod: dsp-competitor2}
+
 ---
 apiVersion: apps/v1
 kind: Deployment
