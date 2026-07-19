@@ -67,14 +67,13 @@ of these locally buys nothing and complicates recovery.
   adserver bandit). Each replica explores/converges on its own, warm-started
   from shared analytics. This is accepted: they're optimisers, and their
   input signal is shared even though their state is not.
-- **`/debug/cache/refresh` is load-balanced** — a refresh call through the
-  Service reaches ONE replica; the others keep polling on their own clock.
-  Observed live: after the scale-out, one adserver replica served ~340
-  default-HTML fallbacks ("unknown creative") until its next poll, while
-  the other replica was fresh. Fail-open (clients saw ads, zero errors),
-  but the fix is structural: the refresh endpoint publishes the NATS cache
-  invalidate so ALL replicas refresh (per-POD consumer groups already make
-  every replica hear it).
+- **`/debug/cache/refresh` is load-balanced — FIXED by broadcast.** A
+  refresh call reaches one replica; that replica now also publishes the
+  cache's NATS invalidate, so every OTHER replica reloads within seconds
+  (per-POD consumer groups; verified live: refresh on pod A → pod B logs
+  "warm cache invalidate received, reloading"). Before the fix, one
+  adserver replica served ~340 default-HTML fallbacks from a stale cache
+  while its freshly-refreshed sibling was fine.
 - **Graceful shutdown order matters more.** A draining pod that closes its
   NATS bus before the HTTP server finishes draining loses whatever its last
   in-flight requests try to publish (observed: 3 behaviour events on an ssp
