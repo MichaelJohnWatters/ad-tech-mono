@@ -93,6 +93,12 @@ const (
 	// publish the webhook-subs cache invalidate so the dispatcher reloads.
 	APIWebhooks = apiPrefix + "/api/webhooks"
 
+	// APINotifications is the per-account in-app notification feed for the
+	// portals. GET lists recent notifications + the unread count; POST
+	// /v1/api/notifications/read {id} | {"all":true} marks read. JWT-gated;
+	// tenant-scoped — every read/mutation is bound to the session account.
+	APINotifications = apiPrefix + "/api/notifications"
+
 	// APISavedReports is saved/scheduled report management (GET list, POST
 	// create, DELETE remove). JWT-gated on reports:read/reports:save;
 	// tenant-scoped.
@@ -601,6 +607,7 @@ const (
 	PortSSAI              = "8093"
 	PortTranscoder        = "8094"
 	PortReportRunner      = "8095"
+	PortNotifications     = "8096"
 	PortClickHouseHTTP    = "8123"
 	PortClickHouseNative  = "9010"
 	PortGrafana           = "3000"
