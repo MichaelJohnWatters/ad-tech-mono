@@ -73,8 +73,11 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, pe
 				if ttl := keys.Reporting.PacingHoldTTL.Get(cfg); ttl > 0 {
 					engine.SetPacingHoldTTL(ttl)
 				}
-				guard.check()
-				publishSpendSnapshot(engine, pub, clk, log)
+				if guard.acquire() {
+					publishSpendSnapshot(engine, pub, clk, log)
+				}
+				// Persistence is idempotent and replica-local state must not
+				// go stale on standbys — every replica persists.
 				persistCommittedSpend(persistStore, engine, log)
 			}
 		}
@@ -196,6 +199,7 @@ type publisherGuard struct {
 	podID string
 	ttl   time.Duration
 	log   *slog.Logger
+	leading bool // last-known election state, for edge-transition logs
 }
 
 const publisherOwnerKey = "reporting:pacing:publisher_owner"
@@ -221,20 +225,46 @@ func newPublisherGuard(cfg *config.Config, interval time.Duration, log *slog.Log
 	return g
 }
 
-// check claims the owner key; if another pod already holds it, warn loudly.
-func (g *publisherGuard) check() {
+// acquire ELECTS the snapshot publisher: SetNX on the owner key wins the
+// lease; the incumbent renews; everyone else stands by (returns false) and
+// re-runs for election next tick. This replaced the detect-and-scream guard
+// the moment reporting scaled past one replica (2026-07-19 multi-pod run:
+// both replicas published conflicting snapshots and the old guard could only
+// ERROR about it). Lease TTL = 3 ticks, so a dead leader is succeeded within
+// ~3 intervals; a standby missing a few snapshots is harmless (snapshots are
+// wholesale recomputes). Redis down = fail-open single-publisher-UNSAFE, so
+// publish anyway and log — pacing degradation beats no pacing signal at all.
+func (g *publisherGuard) acquire() bool {
 	if g.rdb == nil {
-		return
+		return true // no redis, no election possible — publish (single-replica assumption)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if owner, ok, err := g.rdb.Get(ctx, publisherOwnerKey); err == nil && ok && owner != g.podID {
-		g.log.Error("MULTIPLE reporting replicas are publishing pacing snapshots — pacing WILL be wrong; pin replicas:1 or elect one publisher (see docs/PLAN.md 'Restart-safety + single-replica')",
-			"this_pod", g.podID, "other_pod", owner)
+	ok, err := g.rdb.SetNX(ctx, publisherOwnerKey, g.podID, g.ttl)
+	if err != nil {
+		g.log.Warn("pacing publisher election: redis error — publishing anyway (fail-open)", "error", err)
+		return true
 	}
-	if err := g.rdb.Set(ctx, publisherOwnerKey, g.podID, g.ttl); err != nil {
-		g.log.Warn("pacing publisher guard: owner claim failed", "error", err)
+	if ok {
+		if !g.leading {
+			g.leading = true
+			g.log.Info("pacing snapshot publisher: elected leader", "pod", g.podID)
+		}
+		return true
 	}
+	owner, found, err := g.rdb.Get(ctx, publisherOwnerKey)
+	if err == nil && found && owner == g.podID {
+		// Incumbent: renew the lease.
+		if err := g.rdb.Set(ctx, publisherOwnerKey, g.podID, g.ttl); err != nil {
+			g.log.Warn("pacing publisher election: lease renew failed", "error", err)
+		}
+		return true
+	}
+	if g.leading {
+		g.leading = false
+		g.log.Info("pacing snapshot publisher: standing by (another replica leads)", "pod", g.podID, "leader", owner)
+	}
+	return false
 }
 
 func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clock.Clock, log *slog.Logger) {

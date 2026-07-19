@@ -49,16 +49,27 @@ spec:
               mountPath: /var/lib/postgresql/data
           resources:
             {{- toYaml $pg.resources | nindent 12 }}
+          # Probe budgets sized for sustained load: the defaults
+          # (timeoutSeconds=1, failureThreshold=3) let a busy-but-healthy
+          # postgres fail 3 slow pg_isready execs in 30s — kubelet then
+          # gracefully KILLED the database mid-load-run (2026-07-19 10:39,
+          # "the database system is shutting down" across the fleet, ~90s
+          # client-error burst). Liveness now needs ~a minute of sustained
+          # unresponsiveness before restarting the primary datastore.
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "adtech"]
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "adtech"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
