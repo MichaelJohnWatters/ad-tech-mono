@@ -766,7 +766,7 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 
 	if err := updateLineItem(ctx, db, accountID, id, req); err != nil {
-		if errors.Is(err, errCreativeNotAttachable) {
+		if errors.Is(err, errCreativeNotAttachable) || errors.Is(err, errNoEligibleCreative) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -862,7 +862,41 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 			}
 		}
 	}
+	// A campaign must not be activated with nothing to serve: setting status
+	// to 'live' (un-pausing, or promoting a draft directly) requires at least
+	// one ATTACHED, APPROVED creative — otherwise the DSP silently skips it at
+	// bid time. Counts creatives attached earlier in THIS tx, so a
+	// status=live + creatives=[...] patch that attaches an approved creative is
+	// allowed. Only fires on the transition to live; unrelated edits to an
+	// already-live campaign are untouched.
+	if req.Status != nil && *req.Status == "live" {
+		eligible, err := countEligibleCreatives(ctx, tx, accountID, lineItemID)
+		if err != nil {
+			return err
+		}
+		if eligible == 0 {
+			return errNoEligibleCreative
+		}
+	}
 	return tx.Commit()
+}
+
+// errNoEligibleCreative → 400: a campaign was asked to go live but has no
+// attached, approved creative to serve.
+var errNoEligibleCreative = errors.New("cannot activate campaign: attach at least one approved creative first")
+
+// countEligibleCreatives returns how many of a campaign's attached creatives
+// are approved — the exact eligibility the bid path serves on (only approved,
+// format-matching creatives serve). Runs in updateLineItem's tx so it sees
+// creatives attached earlier in the same request.
+func countEligibleCreatives(ctx context.Context, tx *sql.Tx, accountID, lineItemID string) (int, error) {
+	var n int
+	err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM line_item_creatives lic
+		 JOIN creatives c ON c.id = lic.creative_id
+		 WHERE lic.line_item_id = $1::uuid AND c.account_id = $2::uuid AND c.review_status = 'approved'`,
+		lineItemID, accountID).Scan(&n)
+	return n, err
 }
 
 // errCreativeNotAttachable → 400: an attached creative isn't owned by the
