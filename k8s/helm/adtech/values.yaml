@@ -321,6 +321,8 @@ services:
     replicas: 3
     ports: [{ name: http, port: 8083 }]
     env:
+      - name: TRACKER_SIGNATURE_VALIDATION
+        value: "true"
       - name: POD_NAME
         value: "tracker-0"
       - name: TRACKER_NATS_URL

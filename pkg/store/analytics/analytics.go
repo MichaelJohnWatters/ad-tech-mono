@@ -483,4 +483,10 @@ type QueryParams struct {
 type QueryResult struct {
 	Columns []string        `json:"columns"`
 	Rows    [][]interface{} `json:"rows"`
+	// Approximate is non-empty when the answer is knowingly PARTIAL —
+	// e.g. the cold store failed and only the hot window was served. The
+	// clean-slate cold boot (2026-07-19) proved why this must ride the
+	// RESPONSE: a missing lake bucket degraded deep-history queries to
+	// confidently wrong numbers while only a server-side WARN knew.
+	Approximate string `json:"approximate,omitempty"`
 }

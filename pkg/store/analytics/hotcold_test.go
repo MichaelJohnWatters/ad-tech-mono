@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"fmt"
 	"context"
 	"testing"
 	"time"
@@ -186,5 +187,25 @@ func TestHotCold_NilCold_PassesThrough(t *testing.T) {
 	}
 	if got := floatCol(t, res, "", "count"); got != 7 {
 		t.Errorf("hot-only count = %v, want 7", got)
+	}
+}
+
+// A failing cold store must not fail the query — but the degradation must
+// ride the RESPONSE (Approximate), not just a server log: a missing lake
+// once turned deep-history queries into confidently wrong numbers.
+func TestHotCold_ColdFailureIsFlaggedApproximate(t *testing.T) {
+	now := time.Now()
+	cold := &fakeCold{err: fmt.Errorf("bucket does not exist")}
+	hc, _ := newHotCold(cold, 15*time.Minute, now)
+	res, err := hc.Query(context.Background(), QueryParams{
+		Table:    "impressions",
+		Metrics:  []string{"count"},
+		TimeFrom: now.Add(-24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("query should degrade, not fail: %v", err)
+	}
+	if res.Approximate == "" {
+		t.Fatal("degraded answer not flagged: Approximate is empty")
 	}
 }
