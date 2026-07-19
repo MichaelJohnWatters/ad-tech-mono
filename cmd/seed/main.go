@@ -29,6 +29,10 @@ func main() {
 	pubDir := flag.String("publishers-dir", "profiles/publishers", "directory containing publisher YAML profiles")
 	dealsDir := flag.String("deals-dir", "profiles/deals", "directory containing deal YAML profiles")
 	directSoldDir := flag.String("direct-sold-dir", "profiles/direct-sold", "directory containing publisher direct-sold line item profiles")
+	bigAdv := flag.Int("big-world-advertisers", 0, "additive big-world advertiser accounts (each funded + loginable + serving campaigns); 0 = small world only")
+	bigPub := flag.Int("big-world-publishers", 0, "additive big-world publisher accounts (each loginable + placements)")
+	bigCampaigns := flag.Int("big-world-campaigns-per", 3, "campaigns per big-world advertiser")
+	bigPlacements := flag.Int("big-world-placements-per", 3, "placements per big-world publisher")
 	flag.Parse()
 
 	log := logger.New(constants.ServiceSeed)
@@ -118,6 +122,15 @@ func main() {
 	if err := in.SeedDevJWTSigningKey(ctx); err != nil {
 		log.Error("seed dev jwt signing key failed", "error", err)
 		os.Exit(1)
+	}
+	// Big world (additive) — runs BEFORE SeedDevUsers so its advertiser/
+	// publisher accounts pick up dev logins, and before SeedAdvertiserBalances
+	// so they get starting funds. Never truncates the small world.
+	if *bigAdv > 0 || *bigPub > 0 {
+		if err := in.SeedBigWorld(ctx, *bigAdv, *bigPub, *bigCampaigns, *bigPlacements); err != nil {
+			log.Error("seed big world failed", "error", err)
+			os.Exit(1)
+		}
 	}
 	if err := in.SeedDevUsers(ctx); err != nil {
 		log.Error("seed dev users failed", "error", err)
