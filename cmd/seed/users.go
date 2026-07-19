@@ -44,6 +44,26 @@ ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, status = 
 
 	in.log.Info("seeded dev admin user", "email", DevAdminEmail, "password", "(dev only)")
 
+	// Dev DEVOPS login — a staff account whose team member carries the
+	// 'devops' role, so login mints staff:devops claims (ops console: ops:read
+	// + ops:deploy, no moderation/fraud/config mutation). Same shape as the
+	// admin above: dedicated account + team member, deterministic IDs.
+	devopsAccountID := idgen.Derive("account", "dev-devops")
+	if _, err := in.db.ExecContext(ctx, `
+INSERT INTO accounts (id, name, email, type, status, created_at, updated_at)
+VALUES ($1, 'Platform DevOps (dev)', 'devops@adtech.local', 'staff', 'active', now(), now())
+ON CONFLICT (id) DO NOTHING`, devopsAccountID); err != nil {
+		return fmt.Errorf("seed dev devops account: %w", err)
+	}
+	if _, err := in.db.ExecContext(ctx, `
+INSERT INTO team_members (id, account_id, email, name, role, password_hash, status, created_at, updated_at)
+VALUES ($1, $2, 'devops@adtech.local', 'Dev DevOps', 'devops', $3, 'active', now(), now())
+ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = 'devops', status = 'active', updated_at = now()`,
+		idgen.Derive("user", "dev-devops"), devopsAccountID, string(hash)); err != nil {
+		return fmt.Errorf("seed dev devops user: %w", err)
+	}
+	in.log.Info("seeded dev devops user", "email", "devops@adtech.local", "password", "(dev only)")
+
 	// Dev CUSTOMER logins, attached to the standard-profile accounts so the
 	// portals are full of real data on first login (campaigns for the
 	// advertiser, placements/deals for the publisher). Skipped with a warn

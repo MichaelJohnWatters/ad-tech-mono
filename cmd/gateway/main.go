@@ -14,6 +14,7 @@ import (
 	"time"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
@@ -22,6 +23,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/kubeops"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -421,6 +423,47 @@ func main() {
 	// Revshare — staff editor for publisher revenue-share splits (support:read
 	// list / support:update edit); invalidates the billing-rates cache.
 	mux.Handle(routes.APIRevshare, authMiddleware(http.HandlerFunc(revshareHandler(pgRevshareStore{db: gwDB}, secretsBus, log))))
+
+	// Staff ops console (/v1/api/ops/*) — monitor + act on the k8s stack from
+	// the staff portal. The kubeops client only exists in-cluster; off-cluster
+	// (bare `go run`) the k8s-backed handlers 503 with an ERROR log. Reads are
+	// gated ops:read, mutations ops:deploy + an audit entry per action.
+	kubeClient, kubeErr := kubeops.New()
+	if kubeErr != nil {
+		log.Warn("ops console: kubernetes client unavailable at boot (off-cluster?); /v1/api/ops k8s endpoints will 503", "error", kubeErr)
+	}
+	opsTargets := []opsTarget{
+		{Name: constants.ServiceDSP, URL: dspURL},
+		{Name: constants.ServiceSSP, URL: sspURL},
+		{Name: constants.ServiceExchange, URL: exchangeURL},
+		{Name: constants.ServiceTracker, URL: trackerURL},
+		{Name: constants.ServiceAdServer, URL: adserverURL},
+		{Name: constants.ServiceReporting, URL: reportingURL},
+		{Name: constants.ServicePipeline, URL: keys.Gateway.PipelineURL.Get(cfg)},
+		{Name: constants.ServicePublisherAdServer, URL: pubadURL},
+		{Name: constants.ServiceSSAI, URL: keys.Gateway.SSAIURL.Get(cfg)},
+	}
+	opsAudit := func(ctx context.Context, e audit.Entry) {
+		if err := audit.Log(ctx, gwDB, e); err != nil {
+			log.Error("ops: audit write failed", "action", e.Action, "resource", e.ResourceID, "error", err)
+		}
+	}
+	ops := newOpsAPI(kubeClient, opsTargets, natsMonitorURLFrom(keys.NATS.URL.Get(cfg)), opsAudit, log)
+	opsRead := func(h http.HandlerFunc) http.Handler {
+		return authMiddleware(middleware.RequirePermission("ops:read")(h))
+	}
+	opsDeploy := func(h http.HandlerFunc) http.Handler {
+		return authMiddleware(middleware.RequirePermission("ops:deploy")(h))
+	}
+	mux.Handle(routes.APIOpsPods, opsRead(ops.podsHandler))
+	mux.Handle(routes.APIOpsReadyzGrid, opsRead(ops.readyzGridHandler))
+	mux.Handle(routes.APIOpsNATS, opsRead(ops.natsHandler))
+	mux.Handle(routes.APIOpsCronJobs, opsRead(ops.cronJobsHandler))
+	mux.Handle(routes.APIOpsJobs, opsRead(ops.jobsHandler))
+	mux.Handle(routes.APIOpsPVCs, opsRead(ops.pvcsHandler))
+	mux.Handle(routes.APIOpsLogs, opsRead(ops.logsHandler))
+	mux.Handle(routes.APIOpsRestart, opsDeploy(ops.restartHandler))
+	mux.Handle(routes.APIOpsCronJobTrigger, opsDeploy(ops.cronJobTriggerHandler))
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the

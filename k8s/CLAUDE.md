@@ -37,6 +37,7 @@ staging/prod (values files per env).
 | `make deploy SVC=pipeline` | Rebuild ONE image + rollout restart (SVC=dsp restarts all three DSP pods) |
 | `make stack-down` | `helm uninstall` (add `PURGE=1` to also drop PVCs) |
 | `make stack-images` | Just build the images |
+| `make devconsole` | Host dev-loop UI (localhost:8099) — buttons over the targets above |
 
 Requirements: Rancher Desktop running (moby engine, k8s enabled, built-in
 traefik DISABLED — the chart ships its own), kubectl context

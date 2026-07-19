@@ -158,6 +158,20 @@ const (
 	// rates). Platform-wide operational telemetry.
 	APIOnboardingRuns = apiPrefix + "/api/onboarding/runs"
 
+	// Staff ops console (/v1/api/ops/*) — monitor AND act on the k8s stack
+	// from the staff portal. Reads gated ops:read; mutations ops:deploy, every
+	// one audit-logged. Served by the gateway's in-cluster kubeops client
+	// (503 off-cluster).
+	APIOpsPods           = apiPrefix + "/api/ops/pods"             // GET pod matrix
+	APIOpsReadyzGrid     = apiPrefix + "/api/ops/readyz-grid"      // GET per-service /readyz fan-out
+	APIOpsNATS           = apiPrefix + "/api/ops/nats"             // GET JetStream stream/consumer lag summary
+	APIOpsCronJobs       = apiPrefix + "/api/ops/cronjobs"         // GET cronjob list
+	APIOpsCronJobTrigger = apiPrefix + "/api/ops/cronjobs/trigger" // POST {name} — run a cronjob now
+	APIOpsJobs           = apiPrefix + "/api/ops/jobs"             // GET jobs (?label_selector=)
+	APIOpsPVCs           = apiPrefix + "/api/ops/pvcs"             // GET persistent volume claims
+	APIOpsLogs           = apiPrefix + "/api/ops/logs"             // GET ?pod=&container=&tail= log tail
+	APIOpsRestart        = apiPrefix + "/api/ops/restart"          // POST {deployment} — rollout restart
+
 	// APIRevshare is the staff revenue-share editor (GET list on support:read,
 	// PATCH ?id= on support:update). Platform-wide commercial term; updates
 	// publishers.revshare_config and invalidates the billing-rates cache so
@@ -287,9 +301,9 @@ const (
 	// Consent-gated at capture; publishes a site_visit behaviour row the
 	// profile-builder turns into retargeting-segment memberships.
 	TrackerRetarget = "/v1/t/rt"
-	TrackerView       = "/v1/t/view"
-	TrackerVideo      = "/v1/t/video"
-	TrackerAudio      = "/v1/t/audio"
+	TrackerView     = "/v1/t/view"
+	TrackerVideo    = "/v1/t/video"
+	TrackerAudio    = "/v1/t/audio"
 )
 
 // ============================================================

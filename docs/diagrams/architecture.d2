@@ -40,8 +40,16 @@ control: Control plane {
     portals: Portals (advertiser / publisher / staff)
     api: REST API + JWT/RBAC · proxy
     scope: enforceReportTenant (tenant scoping)
+    ops: Staff ops console (/v1/api/ops · ops:read/deploy)
   }
 }
+
+# Staff ops console: the gateway's in-cluster kubeops client (SA "gateway",
+# namespace Role) drives pod matrix / rollout restarts / cron triggers / log
+# tails; NATS lag comes from the monitor port.
+k8sapi: k8s API server { shape: cylinder; style.fill: "#326ce5"; style.font-color: "#fff"; d: pods · deployments · cronjobs/jobs · pvcs }
+control.gateway -> k8sapi: kubeops (list/patch/create · RBAC) { style.stroke-dash: 2; style.stroke: "#64748b" }
+control.gateway -> events.nats: jsz lag summary (:8222 monitor) { style.stroke-dash: 2; style.stroke: "#64748b" }
 
 browser    -> control.gateway: HTTP/HTMX
 advertiser -> control.gateway: REST + JWT

@@ -225,7 +225,7 @@ func TestStaffPortalRenders(t *testing.T) {
 		t.Fatalf("render status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Staff", `href="#moderation"`, `href="#fraud"`, `href="#audit"`, `href="#tools"`, "Moderation queue", "Audit log", "blocklist"} {
+	for _, want := range []string{"Staff", `href="#moderation"`, `href="#fraud"`, `href="#audit"`, `href="#tools"`, `href="#ops"`, "Moderation queue", "Audit log", "blocklist", "Service health", "CAN_OPS_DEPLOY = true"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered staff portal missing %q", want)
 		}
@@ -247,10 +247,37 @@ func TestStaffPortalRenders(t *testing.T) {
 	if !strings.Contains(body, `href="#moderation"`) {
 		t.Error("moderation role should see the Moderation nav link")
 	}
-	for _, deny := range []string{`href="#fraud"`, `href="#audit"`, `href="#tools"`} {
+	for _, deny := range []string{`href="#fraud"`, `href="#audit"`, `href="#tools"`, `href="#ops"`} {
 		if strings.Contains(body, deny) {
 			t.Errorf("moderation-only role should not see %s", deny)
 		}
+	}
+	// No ops:deploy → action buttons hidden client-side (API re-checks anyway).
+	if !strings.Contains(body, "CAN_OPS_DEPLOY = false") {
+		t.Error("moderation-only role should render CAN_OPS_DEPLOY = false")
+	}
+
+	// staff:devops role: sees Ops (+ its read-only staff surfaces), can deploy.
+	devops := &auth.Claims{
+		AccountID:   "staff-acct",
+		AccountType: auth.AccountStaff,
+		Role:        auth.RoleDevOps,
+		Permissions: auth.RolePermissions(auth.AccountStaff, auth.RoleDevOps),
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, _ = middleware.CreateToken(devops, "key")
+	req = httptest.NewRequest("GET", "/portal/staff", nil)
+	req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: token})
+	rec = httptest.NewRecorder()
+	staffPortalHandler(mgr, "key")(rec, req)
+	body = rec.Body.String()
+	for _, want := range []string{`href="#ops"`, `href="#audit"`, "CAN_OPS_DEPLOY = true"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("devops role missing %q", want)
+		}
+	}
+	if strings.Contains(body, `href="#moderation"`) {
+		t.Error("devops role should not see the Moderation nav link")
 	}
 }
 

@@ -144,6 +144,38 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Ops (stack console) ============ -->
+    <section id="section-ops" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Service health" "subtitle" "Live /readyz from every service, probed in-cluster by the gateway") }}
+      <div id="opsReadyz" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Pods" "subtitle" "One row per pod — Restart rolls the pod's Deployment (kubectl rollout restart), Logs opens a tail") }}
+      <div id="opsPods">{{ template "table-start" (dict "headers" (slice "Pod" "App" "Phase" "Ready" "Restarts" "Age" "")) }}
+        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}</div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "CronJobs" "subtitle" "Run now creates a one-off Job from the cronjob's template — manual runs appear below") }}
+      <div id="opsCronjobs">{{ template "table-start" (dict "headers" (slice "CronJob" "Schedule" "State" "Last scheduled" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}</div>
+      <div class="mt-4 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Manual runs</div>
+      <div id="opsJobs">{{ template "table-start" (dict "headers" (slice "Job" "Status" "Started")) }}
+        <tr><td colspan="3" class="px-3 py-4 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}</div>
+      {{ template "card-end" . }}
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div>{{ template "card-start" (dict "title" "NATS JetStream" "subtitle" "Streams + consumers with unprocessed messages (lag)") }}
+        <div id="opsNats"><p class="text-sm text-gray-400">loading…</p></div>
+        {{ template "card-end" . }}</div>
+        <div>{{ template "card-start" (dict "title" "Storage (PVCs)" "subtitle" "Persistent volume claims in the namespace") }}
+        <div id="opsPvcs"><p class="text-sm text-gray-400">loading…</p></div>
+        {{ template "card-end" . }}</div>
+      </div>
+    </section>
+
     <!-- ============ Tools ============ -->
     <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Interactive simulator") }}
@@ -291,6 +323,31 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- Ops log-tail drawer. Same structure/classes as the shared drawer
+     component but max-w-3xl — log lines need the width the max-w-md slot
+     doesn't offer. -->
+<div id="opsLogDrawer" class="hidden fixed inset-0 z-50" style="background: rgba(0,0,0,0.4)"
+     onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="absolute right-0 top-0 h-full w-full max-w-3xl bg-white dark:bg-surface-dark border-l border-gray-200 dark:border-gray-800 shadow-xl overflow-y-auto">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+      <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">Logs · <span id="opsLogPod" class="font-mono"></span></h3>
+      <div class="flex items-center gap-2">
+        <select id="opsLogTail" onchange="refreshOpsLogs()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs">
+          <option value="200">last 200</option>
+          <option value="500">last 500</option>
+          <option value="2000">last 2000</option>
+        </select>
+        {{ template "button" (dict "label" "Refresh" "variant" "secondary" "size" "sm" "onclick" "refreshOpsLogs()") }}
+        <button onclick="document.getElementById('opsLogDrawer').classList.add('hidden')"
+                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div class="p-4">
+      <pre id="opsLogPre" class="text-xs font-mono whitespace-pre-wrap break-all text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-surface-3 rounded-lg p-3 overflow-x-auto" style="min-height:70vh">loading…</pre>
+    </div>
+  </div>
+</div>
+
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
 <script src="/static/trace-render.js"></script>
@@ -332,12 +389,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'batchruns', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -348,7 +405,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -853,6 +910,199 @@ async function loadBatchRuns(isPoll) {
   }
 }
 
+// ---- Ops (stack console) ----
+// Same live-view pattern as batch runs: while the section is open, poll every
+// 5s so pod phases / readyz / lag stay current. Actions (restart, run-now)
+// fire immediately — no confirmation dialogs — and surface a toast; the next
+// poll shows the effect (pods cycling, a new manual job).
+const CAN_OPS_DEPLOY = {{ if .HasOpsDeploy }}true{{ else }}false{{ end }};
+let opsTimer = null;
+function startOpsPolling() {
+  if (opsTimer) return;
+  opsTimer = setInterval(() => {
+    const section = document.getElementById('section-ops');
+    if (!section || section.classList.contains('hidden')) {
+      clearInterval(opsTimer); opsTimer = null; return;
+    }
+    loadOps(true);
+  }, 5000);
+}
+function loadOps(isPoll) {
+  startOpsPolling();
+  loadOpsReadyz(); loadOpsPods(); loadOpsCronjobs(); loadOpsJobs(); loadOpsNats();
+  if (!isPoll) loadOpsPvcs(); // PVCs don't move — fetch once per visit
+}
+
+async function loadOpsReadyz() {
+  const box = $('opsReadyz');
+  try {
+    const data = await fetchJSON('/v1/api/ops/readyz-grid');
+    box.innerHTML = (data.services || []).map(s => `
+      <div class="rounded-lg border ${s.ok ? 'border-gray-200 dark:border-gray-800' : 'border-error/50 bg-error/5'} p-3">
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2 h-2 rounded-full ${s.ok ? 'bg-success' : 'bg-error'}"></span>
+          <span class="font-medium text-sm">${esc(s.service)}</span>
+        </div>
+        <div class="mt-1 text-xs text-gray-400 font-mono">${s.ok ? 'ready · ' + s.latency_ms + 'ms' : esc(s.error || 'HTTP ' + s.status)}</div>
+        ${!s.ok && s.body ? `<div class="mt-1 text-xs text-error break-all">${esc(s.body.slice(0, 120))}</div>` : ''}
+      </div>`).join('') || '<p class="text-sm text-gray-400">no services configured</p>';
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">readyz probe failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function loadOpsPods() {
+  const tbody = document.querySelector('#opsPods tbody');
+  try {
+    const data = await fetchJSON('/v1/api/ops/pods');
+    const pods = (data.pods || []).sort((a, b) => (a.app || a.name).localeCompare(b.app || b.name));
+    tbody.innerHTML = pods.length ? pods.map(p => `
+      <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.name)}</td>
+        <td class="px-3 py-2 text-xs">${esc(p.app || '—')}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${p.phase === 'Running' ? 'bg-success/15 text-success' : p.phase === 'Pending' ? 'bg-warning/15 text-warning' : 'bg-error/15 text-error'}">${esc(p.phase)}</span></td>
+        <td class="px-3 py-2">${p.ready ? '<span class="text-success">●</span>' : '<span class="text-error">○</span>'}</td>
+        <td class="px-3 py-2 ${p.restart_count > 0 ? 'text-warning font-medium' : ''}">${p.restart_count}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${p.start_time ? ago(p.start_time) : '—'}</td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="openOpsLogs('${esc(p.name)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Logs</button>
+          ${CAN_OPS_DEPLOY && p.app ? `<button onclick="opsRestart('${esc(p.app)}')" class="text-xs px-2 py-1 rounded bg-warning/15 text-warning hover:bg-warning/25">Restart</button>` : ''}
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">no pods visible</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function opsRestart(deployment) {
+  try {
+    await fetchJSON('/v1/api/ops/restart', {method: 'POST', body: JSON.stringify({deployment})});
+    toast('Rollout restart requested for ' + deployment, 'success');
+    loadOpsPods();
+  } catch (err) { toast('Restart failed: ' + err.message, 'error'); }
+}
+
+async function loadOpsCronjobs() {
+  const tbody = document.querySelector('#opsCronjobs tbody');
+  try {
+    const data = await fetchJSON('/v1/api/ops/cronjobs');
+    const cjs = data.cronjobs || [];
+    tbody.innerHTML = cjs.length ? cjs.map(c => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(c.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(c.schedule)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${c.suspend ? 'bg-warning/15 text-warning' : 'bg-success/15 text-success'}">${c.suspend ? 'suspended' : 'active'}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${c.last_schedule_time ? ago(c.last_schedule_time) : 'never'}</td>
+        <td class="px-3 py-2 text-right">
+          ${CAN_OPS_DEPLOY ? `<button onclick="opsTriggerCron('${esc(c.name)}')" class="text-xs px-2 py-1 rounded bg-brand/15 text-brand hover:bg-brand/25">Run now</button>` : ''}
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">no cronjobs in the namespace</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function opsTriggerCron(name) {
+  try {
+    const res = await fetchJSON('/v1/api/ops/cronjobs/trigger', {method: 'POST', body: JSON.stringify({name})});
+    toast('Started ' + (res.job || name), 'success');
+    loadOpsJobs();
+  } catch (err) { toast('Trigger failed: ' + err.message, 'error'); }
+}
+
+async function loadOpsJobs() {
+  const tbody = document.querySelector('#opsJobs tbody');
+  try {
+    const data = await fetchJSON('/v1/api/ops/jobs');
+    const jobs = (data.jobs || []).sort((a, b) => (b.start_time || '').localeCompare(a.start_time || ''));
+    tbody.innerHTML = jobs.length ? jobs.map(j => {
+      const st = j.active ? ['running', 'bg-info/15 text-info'] : j.failed ? ['failed', 'bg-error/15 text-error'] : j.succeeded ? ['succeeded', 'bg-success/15 text-success'] : ['pending', 'bg-surface-3 text-gray-500'];
+      return `<tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(j.name)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${st[1]}">${st[0]}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${j.start_time ? ago(j.start_time) : '—'}</td>
+      </tr>`;
+    }).join('')
+      : '<tr><td colspan="3" class="px-3 py-4 text-center text-sm text-gray-400">no manual runs yet</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-4 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function loadOpsNats() {
+  const box = $('opsNats');
+  try {
+    const data = await fetchJSON('/v1/api/ops/nats');
+    const streams = data.streams || [], lagging = data.lagging || [];
+    box.innerHTML = `
+      <table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+        <th class="px-2 py-1">Stream</th><th class="px-2 py-1">Messages</th><th class="px-2 py-1">Consumers</th>
+      </tr></thead><tbody>${streams.map(s => `
+        <tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-2 py-1.5 font-mono text-xs">${esc(s.name)}</td>
+          <td class="px-2 py-1.5">${fmtInt(s.messages)}</td>
+          <td class="px-2 py-1.5">${s.consumers}</td>
+        </tr>`).join('') || '<tr><td colspan="3" class="px-2 py-3 text-center text-gray-400">no streams</td></tr>'}
+      </tbody></table>
+      <div class="mt-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Consumer lag</div>
+      ${lagging.length ? `<table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+        <th class="px-2 py-1">Consumer</th><th class="px-2 py-1">Pending</th><th class="px-2 py-1">Ack pending</th><th class="px-2 py-1">Redelivered</th>
+      </tr></thead><tbody>${lagging.map(c => `
+        <tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-2 py-1.5 font-mono text-xs">${esc(c.stream)}/${esc(c.name)}</td>
+          <td class="px-2 py-1.5 text-warning font-medium">${fmtInt(c.num_pending)}</td>
+          <td class="px-2 py-1.5">${fmtInt(c.num_ack_pending)}</td>
+          <td class="px-2 py-1.5 ${c.num_redelivered ? 'text-error' : ''}">${fmtInt(c.num_redelivered)}</td>
+        </tr>`).join('')}</tbody></table>`
+      : '<p class="mt-1 text-sm text-success">all consumers caught up</p>'}`;
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">NATS summary failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function loadOpsPvcs() {
+  const box = $('opsPvcs');
+  try {
+    const data = await fetchJSON('/v1/api/ops/pvcs');
+    const pvcs = data.pvcs || [];
+    box.innerHTML = pvcs.length ? `<table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+      <th class="px-2 py-1">Claim</th><th class="px-2 py-1">Phase</th><th class="px-2 py-1">Requested</th>
+    </tr></thead><tbody>${pvcs.map(p => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-2 py-1.5 font-mono text-xs">${esc(p.name)}</td>
+        <td class="px-2 py-1.5"><span class="text-xs px-1.5 py-0.5 rounded ${p.phase === 'Bound' ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning'}">${esc(p.phase)}</span></td>
+        <td class="px-2 py-1.5 font-mono text-xs">${esc(p.requested)}</td>
+      </tr>`).join('')}</tbody></table>`
+      : '<p class="text-sm text-gray-400">no PVCs in the namespace</p>';
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">PVC list failed — ${esc(err.message)}</p>`;
+  }
+}
+
+// Log drawer — click a pod row's Logs button → tail into the <pre>.
+let opsLogTarget = '';
+function openOpsLogs(pod) {
+  opsLogTarget = pod;
+  $('opsLogPod').textContent = pod;
+  $('opsLogDrawer').classList.remove('hidden');
+  refreshOpsLogs();
+}
+async function refreshOpsLogs() {
+  if (!opsLogTarget) return;
+  const pre = $('opsLogPre');
+  pre.textContent = 'loading…';
+  try {
+    const resp = await fetch('/v1/api/ops/logs?pod=' + encodeURIComponent(opsLogTarget) + '&tail=' + $('opsLogTail').value);
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(resp.status + ': ' + text);
+    pre.textContent = text || '(no log output)';
+    pre.scrollTop = pre.scrollHeight;
+  } catch (err) {
+    pre.textContent = 'log fetch failed — ' + err.message;
+  }
+}
 </script>
 </body>
 </html>
