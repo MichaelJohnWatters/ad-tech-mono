@@ -446,7 +446,7 @@ services:
         value: "jaeger:4318"
     resources:
       requests: { cpu: 50m, memory: 64Mi }
-      limits: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: 500m, memory: 1Gi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8087 }
       initialDelaySeconds: 5

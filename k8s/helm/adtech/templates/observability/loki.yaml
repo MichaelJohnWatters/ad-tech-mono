@@ -40,6 +40,12 @@ data:
       ingestion_burst_size_mb: 32
       per_stream_rate_limit: 8MB
       per_stream_rate_limit_burst: 16MB
+      # Stream count safety margin: legitimate cardinality is
+      # service × pod × level × stream(+file) ≈ hundreds. The default
+      # (10k) only trips if a high-cardinality label sneaks back into
+      # promtail's pipeline — which then FAILS FAST here rather than
+      # silently killing ingestion for everything.
+      max_global_streams_per_user: 50000
 ---
 apiVersion: apps/v1
 kind: Deployment
