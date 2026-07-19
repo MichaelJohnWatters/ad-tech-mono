@@ -21,6 +21,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/lib/pq"
 )
 
@@ -109,18 +110,26 @@ func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, 
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			all := cache.All()
-			// Tenant read filter: a customer session (advertiser/agency via
-			// the gateway) sees only its own campaigns; platform callers
-			// (operator key without forwarded identity, staff/admin) see all.
-			if scope := middleware.CallerScope(r); scope.Resolved && !scope.Platform {
-				scoped := all[:0:0]
-				for _, c := range all {
-					if c.AccountID == scope.AccountID || c.AdvertiserID == scope.AccountID {
-						scoped = append(scoped, c)
-					}
+			// The management list must show EVERY status (incl. draft +
+			// paused + ended), so it reads from Postgres directly rather than
+			// the bid cache — which now holds only LIVE campaigns (see the
+			// loader's IncludeInactive note). This also means any DSP pod can
+			// answer for any account (PG is shared), not just the pod whose
+			// cache owns that account's DSP.
+			scope := middleware.CallerScope(r)
+			var all []models.Campaign
+			if scope.Resolved && !scope.Platform && db != nil {
+				loader := &postgres.CampaignLoader{Store: postgres.NewFromDB(db), AccountIDs: []string{scope.AccountID}, IncludeInactive: true}
+				loaded, err := loader.LoadAll(r.Context())
+				if err != nil {
+					log.Error("management campaign list query failed", "error", err)
+					http.Error(w, `{"error":"campaign list unavailable"}`, http.StatusServiceUnavailable)
+					return
 				}
-				all = scoped
+				all = loaded
+			} else {
+				// Platform/admin caller (or no DB): the live bid cache is fine.
+				all = cache.All()
 			}
 			out := make([]campaignWithSpend, len(all))
 			for i, c := range all {

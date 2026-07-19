@@ -31,6 +31,13 @@ type CampaignLoader struct {
 	Store      *Store
 	DSPID      string
 	AccountIDs []string
+	// IncludeInactive loads EVERY status except archived (draft/live/
+	// paused/ended) — for the management/portal list, which must show a
+	// campaign the moment it's created (incl. draft) regardless of whether
+	// it's bidding. The BID cache leaves this false so it holds ONLY live
+	// campaigns: paused/draft/ended earn nothing, so keeping them in the
+	// hot in-memory bid set is wasted memory (matters at scale).
+	IncludeInactive bool
 }
 
 // LoadAll returns the full bid-eligible campaign set.
@@ -105,7 +112,12 @@ LEFT JOIN LATERAL (
     JOIN creatives c ON c.id = lic.creative_id
     WHERE lic.line_item_id = li.id
 ) cv ON true
-WHERE li.status IN ('live', 'paused')`
+WHERE 1=1`
+	if l.IncludeInactive {
+		q += ` AND li.status != 'archived'`
+	} else {
+		q += ` AND li.status = 'live'`
+	}
 
 	var args []any
 	switch {
