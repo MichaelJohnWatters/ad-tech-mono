@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.."
 GOFLAGS_BUILD=(env GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build)
 
 # Generic services: host build + Dockerfile.dev.
-GENERIC=(dsp ssp exchange adserver publisher-adserver tracker pipeline webhooks notifications identity-consumer report-runner ssai batch-conductor dayboundary)
+GENERIC=(dsp ssp exchange adserver publisher-adserver tracker pipeline webhooks notifications identity-consumer report-runner ssai batch-conductor dayboundary invoice-runner)
 
 build_generic() {
   local svc=$1

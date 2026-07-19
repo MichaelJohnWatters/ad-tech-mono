@@ -140,6 +140,14 @@ const (
 	// dev/fake instant-approve path until a real provider is integrated.
 	APIBillingTopup = apiPrefix + "/api/billing/topup"
 
+	// APIInvoices is the advertiser invoice history (GET list only). JWT-gated
+	// on billing:view; tenant-scoped; read-only — invoices are written by the
+	// invoice-runner CronJob from billed committed spend. APIInvoiceDetail
+	// serves GET /v1/api/invoices/{id}: the invoice header + its per-campaign
+	// line items; a cross-tenant id 404s.
+	APIInvoices      = apiPrefix + "/api/invoices"
+	APIInvoiceDetail = apiPrefix + "/api/invoices/"
+
 	// APIPublishers proxies to the SSP publishers list (GET only,
 	// placements:read). Tenant-scoped SSP-side via the forwarded identity —
 	// a publisher session gets only its own publishers; platform users all.

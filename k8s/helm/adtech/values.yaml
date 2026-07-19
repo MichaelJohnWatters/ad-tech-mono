@@ -919,3 +919,27 @@ cronjobs:
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }
+
+  # invoice-runner bills the calendar month that just closed: sums billed
+  # committed spend per campaign into one invoice + per-campaign line items per
+  # advertiser account. Idempotent (keyed on account + period), so a re-run is
+  # safe. 02:00 on the 1st gives the day-boundary/rollup chain time to settle
+  # the final day of the month before it's billed.
+  invoice-runner:
+    image: adtech-invoice-runner
+    schedule: "0 2 1 * *"
+    component: billing
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+    restartPolicy: OnFailure
+    env:
+      - name: POD_NAME
+        value: "invoice-runner"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "500m", memory: "256Mi" }

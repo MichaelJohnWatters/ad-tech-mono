@@ -438,6 +438,13 @@ func main() {
 	// transaction; payment approval is the dev/fake path for now.
 	mux.Handle(routes.APIBillingTopup, authMiddleware(http.HandlerFunc(topupHandler(pgTopupStore{db: gwDB}, secretsBus, log))))
 
+	// Invoices — advertiser invoice history (read-only, tenant-scoped,
+	// billing:view gated). List + detail share one handler; invoices are
+	// written by the invoice-runner CronJob from billed committed spend.
+	invoiceHandler := authMiddleware(http.HandlerFunc(invoicesHandler(pgInvoiceStore{db: gwDB}, log)))
+	mux.Handle(routes.APIInvoices, invoiceHandler)
+	mux.Handle(routes.APIInvoiceDetail, invoiceHandler)
+
 	// Audit log — staff viewer over audit_log (read-only, audit:read gated,
 	// platform-wide by design).
 	mux.Handle(routes.APIAuditLog, authMiddleware(http.HandlerFunc(auditLogHandler(pgAuditLogStore{db: gwDB}, log))))

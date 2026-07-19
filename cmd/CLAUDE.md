@@ -38,6 +38,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `optimise/` | Runs optimisation pipelines (bid, placement, creative). | Hourly/daily |
 | `fraud/` | Batch fraud detection and scoring. | Daily |
 | `adstxt/` | Crawls and caches publisher ads.txt files; publishes the ads-txt cache invalidate on change. | Every 24 hours |
+| `invoice-runner/` | Generates advertiser invoices from billed spend (pkg/invoicing): sums `campaign_committed_spend.settled_micros` per campaign over a period, converts micros→dollars, writes one `invoices` row + per-campaign `invoice_line_items` per account. Idempotent (keyed on account+period). Host-runnable one-off (`go run ./cmd/invoice-runner`; `--account`, `--month`, `--period-start/--period-end` overrides; defaults to last calendar month, all accounts). | Monthly (02:00 on the 1st) |
 
 ## Conventions
 
