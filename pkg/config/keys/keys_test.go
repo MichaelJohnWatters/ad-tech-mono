@@ -17,7 +17,7 @@ func TestSchemaSizes(t *testing.T) {
 		want    int
 	}{
 		{"reporting", ReportingSchema(), 24},
-		{"report-runner", ReportRunnerSchema(), 14},
+		{"report-runner", ReportRunnerSchema(), 13},
 		{"dsp", DSPSchema(), 21},
 		{"exchange", ExchangeSchema(), 21},
 		{"gateway", GatewaySchema(), 10},

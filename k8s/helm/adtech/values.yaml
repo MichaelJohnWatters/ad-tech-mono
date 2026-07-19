@@ -518,6 +518,7 @@ services:
 
   report-runner:
     image: adtech-report-runner
+    replicas: 3
     ports: [{ name: http, port: 8095 }]
     env:
       - name: POD_NAME

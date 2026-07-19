@@ -27,7 +27,6 @@ var ReportRunner = struct {
 	QueryTimeout     config.DurationKey
 	ArtifactBucket   config.StringKey
 	Retention        config.DurationKey
-	StuckAfter       config.DurationKey
 	PublicGatewayURL config.StringKey
 
 	// Port is env/manifest territory by design — Raw, not in the schema.
@@ -45,7 +44,6 @@ var ReportRunner = struct {
 	QueryTimeout:     reportRunnerSet.Duration("report_runner.query_timeout", "10m", config.TierLive, "Per-job bound on the reporting query (async jobs may span the cold store; pair with reporting.query_timeout).", config.Since("v1.5")),
 	ArtifactBucket:   reportRunnerSet.String("report_runner.artifact_bucket", "adtech-reports", config.TierStatic, "Object-store bucket for report artifacts. Private — downloads stream through the gateway after auth; never make this bucket public-read.", config.Since("v1.5")),
 	Retention:        reportRunnerSet.Duration("report_runner.retention", "720h", config.TierLive, "How long completed report artifacts (and their job rows) are kept before the sweep removes them.", config.Since("v1.5")),
-	StuckAfter:       reportRunnerSet.Duration("report_runner.stuck_after", "30m", config.TierLive, "Running jobs older than this are requeued on worker boot (crash recovery; safe with a single worker replica).", config.Since("v1.5")),
 	PublicGatewayURL: reportRunnerSet.String("report_runner.public_gateway_url", "http://localhost:8080", config.TierStatic, "Public gateway base URL used to build download links in report-ready emails.", config.Since("v1.5")),
 
 	Port: config.RawString("report_runner.port", routes.PortReportRunner),

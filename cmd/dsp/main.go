@@ -467,16 +467,18 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 	}
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
+		// sql.Open only validates the DSN; it does not connect. A real
+		// error here means a malformed URL — genuinely unusable.
 		log.Warn("dsp audience store open failed", "error", err)
 		return nil, nil, func() {}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("dsp audience store ping failed", "error", err)
-		_ = db.Close()
-		return nil, nil, func() {}
-	}
+	// NO boot-time ping gate: sql.Open is lazy, and a cold boot races
+	// Postgres DNS/readiness (observed 2026-07-19 clean-slate — the ping
+	// failed with "lookup postgres: no such host" and DISABLED audience
+	// segments for the pod's entire life; every segment-targeted campaign
+	// silently no-bid). The pool connects on first use and the preloader's
+	// loop retries forever, so construct unconditionally and degrade
+	// gracefully until Postgres answers.
 	if l2 == nil {
 		log.Info("dsp audience store connected (postgres-direct, no L2 cache)")
 		return audiencepg.New(db), nil, func() { _ = db.Close() }

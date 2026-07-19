@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"io"
 	"net/http"
 	"testing"
@@ -70,6 +71,7 @@ func (h *Harness) FireImpressionFromIP(t *testing.T, traceID, campaignID, ip str
 	t.Helper()
 	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&price=1.0000&cur=USD",
 		h.URLs.Tracker, traceID, campaignID)
+	url = adserving.SignURL(url, adserving.DefaultSigningKey) // enforcement is on
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -95,6 +97,7 @@ func (h *Harness) FireImpressionUA(t *testing.T, traceID, campaignID, userAgent 
 	t.Helper()
 	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&price=1.0000&cur=USD",
 		h.URLs.Tracker, traceID, campaignID)
+	url = adserving.SignURL(url, adserving.DefaultSigningKey) // enforcement is on
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

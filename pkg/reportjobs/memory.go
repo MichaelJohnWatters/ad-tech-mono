@@ -176,16 +176,18 @@ func (m *MemoryJobStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// RequeueStuck flips running jobs older than olderThan back to queued.
-func (m *MemoryJobStore) RequeueStuck(_ context.Context, olderThan time.Duration) (int, error) {
+// ExtendLease is a no-op for the in-memory store (single-process tests).
+func (m *MemoryJobStore) ExtendLease(_ context.Context, _ string) error { return nil }
+
+// ReclaimExpired flips running jobs back to queued (memory store treats any
+// running job as expired — tests drive timing explicitly).
+func (m *MemoryJobStore) ReclaimExpired(_ context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cutoff := m.now().Add(-olderThan)
 	n := 0
 	for _, j := range m.jobs {
-		if j.Status == StatusRunning && j.StartedAt != nil && j.StartedAt.Before(cutoff) {
+		if j.Status == StatusRunning {
 			j.Status = StatusQueued
-			j.StartedAt = nil
 			n++
 		}
 	}

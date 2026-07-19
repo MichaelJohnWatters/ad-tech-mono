@@ -10,8 +10,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
 
@@ -56,6 +56,26 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	log := e.Log.With("job", j.ID, "account_id", j.AccountID, "name", j.Name, "format", j.Format)
+
+	// Heartbeat the lease while working: a live worker's job is never
+	// reclaimable, however long the query/render takes; a dead worker's
+	// lease lapses within LeaseTTL and a peer picks the job up.
+	hbCtx, stopHB := context.WithCancel(ctx)
+	defer stopHB()
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-t.C:
+				if err := e.Store.ExtendLease(hbCtx, j.ID); err != nil {
+					log.Warn("lease heartbeat failed", "error", err)
+				}
+			}
+		}
+	}()
 
 	qctx := ctx
 	if e.QueryTimeout > 0 {

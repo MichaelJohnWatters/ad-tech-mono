@@ -13,7 +13,13 @@ import (
 // context; worker-facing reads span all tenants (a platform job, like the
 // scheduled-report loader). The dev Postgres role bypasses RLS; a prod
 // deployment needs a service role permitted to read every report_jobs row.
-type PostgresJobStore struct{ DB *sql.DB }
+type PostgresJobStore struct {
+	DB *sql.DB
+	// WorkerID identifies this worker in claimed_by (observability: which
+	// replica ran a job). Empty is fine — the lease, not the identity, is
+	// what protects against double-execution.
+	WorkerID string
+}
 
 // NewPostgresJobStore returns a JobStore backed by db.
 func NewPostgresJobStore(db *sql.DB) PostgresJobStore { return PostgresJobStore{DB: db} }
@@ -108,23 +114,46 @@ func (s PostgresJobStore) Enqueue(ctx context.Context, j Job) (string, error) {
 	return id, tx.Commit()
 }
 
+// LeaseTTL is how long a claim is valid without a heartbeat. Executing
+// workers extend it (ExtendLease) every ~third of this; a lapsed lease means
+// the claiming worker is genuinely gone and ANY worker may reclaim the job.
+// This is what makes the runner safe at N replicas — the old model requeued
+// every 'running' job at boot, which assumed a single worker.
+const LeaseTTL = 2 * time.Minute
+
 // ClaimOne claims the oldest queued job in a single statement — the subselect's
-// FOR UPDATE SKIP LOCKED means concurrent claimers take distinct rows.
+// FOR UPDATE SKIP LOCKED means concurrent claimers take distinct rows. The
+// claim carries a lease + claimant identity.
 func (s PostgresJobStore) ClaimOne(ctx context.Context) (*Job, error) {
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
 	row := s.DB.QueryRowContext(ctx, `
 UPDATE report_jobs
-SET status = 'running', started_at = now(), attempts = attempts + 1
+SET status = 'running', started_at = now(), attempts = attempts + 1,
+    lease_expires_at = now() + $1::interval, claimed_by = $2
 WHERE id = (SELECT id FROM report_jobs WHERE status = 'queued'
             ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-RETURNING `+jobColumns)
+RETURNING `+jobColumns,
+		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), s.WorkerID)
 	j, err := scanJob(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return j, err
+}
+
+// ExtendLease heartbeats a running job's lease. A worker that dies stops
+// extending; the lease lapses; ReclaimExpired hands the job to a peer.
+func (s PostgresJobStore) ExtendLease(ctx context.Context, id string) error {
+	if s.DB == nil {
+		return sql.ErrConnDone
+	}
+	_, err := s.DB.ExecContext(ctx, `
+UPDATE report_jobs SET lease_expires_at = now() + $1::interval
+WHERE id = $2::uuid AND status = 'running'`,
+		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), id)
+	return err
 }
 
 // MarkDone records a successful run and its artifact.
@@ -229,16 +258,18 @@ func (s PostgresJobStore) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-// RequeueStuck flips running jobs older than olderThan back to queued — crash
-// recovery on worker boot (safe: single-replica worker).
-func (s PostgresJobStore) RequeueStuck(ctx context.Context, olderThan time.Duration) (int, error) {
+// ReclaimExpired flips running jobs whose LEASE lapsed back to queued.
+// Replaces the boot-time started_at requeue: lease expiry proves the claimant
+// is dead (it stopped heartbeating), so this is safe to run from ANY replica
+// at ANY time — boot and periodically. Jobs with live leases are never
+// touched, however long they run.
+func (s PostgresJobStore) ReclaimExpired(ctx context.Context) (int, error) {
 	if s.DB == nil {
 		return 0, sql.ErrConnDone
 	}
 	res, err := s.DB.ExecContext(ctx, `
-UPDATE report_jobs SET status = 'queued', started_at = NULL
-WHERE status = 'running' AND started_at < now() - $1::interval`,
-		fmt.Sprintf("%f seconds", olderThan.Seconds()))
+UPDATE report_jobs SET status = 'queued', started_at = NULL, lease_expires_at = NULL, claimed_by = NULL
+WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now()`)
 	if err != nil {
 		return 0, err
 	}
