@@ -167,7 +167,7 @@ var defaultPermissions = map[string][]string{
 		"deals:create", "deals:read", "deals:update", "deals:delete",
 		"quality:read", "quality:update",
 		"audiences:create", "audiences:read", "audiences:update", "audiences:delete", "audiences:upload",
-		"earnings:view",
+		"earnings:view", "earnings:manage",
 		"reports:read", "reports:export", "reports:save",
 		"pipeline:upload", "pipeline:read",
 		"team:read", "team:invite", "team:update", "team:remove",
@@ -199,7 +199,7 @@ var defaultPermissions = map[string][]string{
 		"pipeline:read",
 	},
 	"publisher:finance": {
-		"earnings:view",
+		"earnings:view", "earnings:manage",
 		"reports:read",
 	},
 	"publisher:viewer": {

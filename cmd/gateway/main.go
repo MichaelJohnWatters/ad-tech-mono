@@ -420,6 +420,10 @@ func main() {
 	// earnings:view gated).
 	mux.Handle(routes.APIPayouts, authMiddleware(http.HandlerFunc(payoutsHandler(pgPayoutStore{db: gwDB}, log))))
 	mux.Handle(routes.APIMyRevshare, authMiddleware(http.HandlerFunc(myRevshareHandler(pgMyRevshareStore{db: gwDB}, log))))
+	// Payout method — publisher payout destination + minimum-payout threshold
+	// (GET reads earnings:view, PUT upserts on earnings:manage; raw details never
+	// returned, tenant-scoped).
+	mux.Handle(routes.APIPayoutMethod, authMiddleware(http.HandlerFunc(payoutMethodHandler(pgPayoutMethodStore{db: gwDB}, log))))
 
 	// Quality controls — publisher allow/block lists (tenant-scoped, quality:*
 	// gated); create verifies publisher ownership.

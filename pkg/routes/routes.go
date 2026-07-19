@@ -116,6 +116,12 @@ const (
 	// billing settlement job).
 	APIPayouts = apiPrefix + "/api/payouts"
 
+	// APIPayoutMethod is the publisher's payout destination + minimum-payout
+	// threshold config (GET reads earnings:view, PUT upserts on earnings:manage).
+	// Tenant-scoped; the raw destination fields are stored but never returned —
+	// reads expose only a masked tail.
+	APIPayoutMethod = apiPrefix + "/api/payout-method"
+
 	// APIQualityControls is publisher inventory quality-control management (GET
 	// list, POST upsert, DELETE remove). JWT-gated on quality:read/quality:update;
 	// tenant-scoped; a create must reference a publisher the caller owns.
