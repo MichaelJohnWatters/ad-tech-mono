@@ -78,7 +78,7 @@ func TestVASTHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub, noHouseAds)
 
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo-video-mpu", nil)
 	rec := httptest.NewRecorder()
@@ -195,7 +195,7 @@ func TestVASTHandler_OMIDVerifications(t *testing.T) {
 	// OMID configured → served VAST must carry AdVerifications with the vendor
 	// + OM SDK script and a signed verificationNotExecuted beacon.
 	omid := func() (string, string) { return "measure.example", "https://measure.example/omweb-v1.js" }
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, omid, alwaysStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, omid, alwaysStub, noHouseAds)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
@@ -250,7 +250,7 @@ func urlIsHMACValid(t *testing.T, raw string) bool {
 // fallback). Asserts the demo player never sees a 500 even if the
 // auction backend is down.
 func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
-	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1", noOMID, alwaysStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1", noOMID, alwaysStub, houseVideoFn())
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -263,13 +263,13 @@ func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
 	}
 }
 
-// SSP returns a no-bid → handler falls back to the stub VAST so the
-// player has something to render. (Real publishers would route to a
-// house ad / next SSP instead — out of scope for the demo.)
+// SSP returns a no-bid → with the fallback on AND a video house ad configured,
+// the handler serves the house ad's own VAST markup (the player has something to
+// render). Real publishers configure the house ad via the staff UI.
 func TestVASTHandler_FallsBackOnNoBid(t *testing.T) {
 	ssp := stubSSP(t, sspVideoWinner{NoBid: true})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub, houseVideoFn())
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -298,7 +298,7 @@ func TestVASTHandler_FreshTraceIDPerRequest(t *testing.T) {
 		MediaURL: "https://cdn/x.mp4",
 	})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, alwaysStub, noHouseAds)
 
 	get := func() string {
 		req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=p", nil)
@@ -339,7 +339,7 @@ func TestVASTHandler_NoFillWhenStubOff(t *testing.T) {
 	ssp := nobidSSP(t)
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, noStub)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, noOMID, noStub, noHouseAds)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
 
@@ -361,7 +361,7 @@ func TestNativeHandler_NoFillWhenStubOff(t *testing.T) {
 	ssp := nobidSSP(t)
 	defer ssp.Close()
 
-	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, noStub)
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, noStub, noHouseAds)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
 

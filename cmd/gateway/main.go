@@ -464,6 +464,16 @@ func main() {
 	// new terms within NATS RTT.
 	mux.Handle(routes.APIBillingTerms, authMiddleware(http.HandlerFunc(billingTermsHandler(pgBillingTermsStore{db: gwDB}, secretsBus, log))))
 
+	// House ads — staff editor for the platform's own fallback creatives served
+	// on a no-bid (support:read list / support:update mutate). Platform-global
+	// (no tenant scope); every mutation is audited + publishes the house-ads
+	// cache invalidate so the publisher ad server reloads sub-second. The
+	// master on/off is the publisher_adserver.stub_on_nobid live config key
+	// (flipped via the config UI), not a second toggle here.
+	houseAdStore := newPGHouseAdStore(gwDB)
+	mux.Handle(routes.APIHouseAds, authMiddleware(http.HandlerFunc(houseAdsHandler(houseAdStore, secretsBus, log))))
+	mux.Handle(routes.APIHouseAds+"/", authMiddleware(http.HandlerFunc(houseAdByIDHandler(houseAdStore, secretsBus, log))))
+
 	// Staff ops console (/v1/api/ops/*) — monitor + act on the k8s stack from
 	// the staff portal. The kubeops client only exists in-cluster; off-cluster
 	// (bare `go run`) the k8s-backed handlers 503 with an ERROR log. Reads are

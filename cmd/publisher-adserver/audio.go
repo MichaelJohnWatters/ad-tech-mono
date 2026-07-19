@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -32,7 +33,7 @@ import (
 // Modern audio ad serving uses VAST 4.x audio MediaFiles rather than the
 // deprecated DAAST document, so we reuse pkg/vast — the only difference from
 // video is the MediaFile MIME type and the beacon endpoint.
-func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool) http.HandlerFunc {
+func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -56,11 +57,7 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() boo
 			default:
 				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
 			}
-			if stubFn() {
-				writeStubAudioVAST(w, reqLog, trackerURL, traceID, placementID)
-			} else {
-				writeNoFillVAST(w)
-			}
+			serveAudioNoBid(w, reqLog, stubFn, houseAdFn, traceID)
 			return
 		}
 
@@ -200,32 +197,21 @@ func buildAudioVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext)
 	}
 }
 
-// writeStubAudioVAST emits a minimal but valid audio VAST when the auction
-// yields no fill, so a player still has something to render in the demo.
-func writeStubAudioVAST(w http.ResponseWriter, log *slog.Logger, trackerURL, traceID, placementID string) {
-	macroCtx := adserving.MacroContext{
-		AuctionID:   traceID,
-		PlacementID: placementID,
-		CampaignID:  "house-audio",
-		CreativeID:  "house-audio-30s",
-		TrackerURL:  trackerURL,
-		Currency:    "USD",
-		URLTTL:      time.Hour,
+// serveAudioNoBid is the audio-path no-bid response. Mirrors serveVideoNoBid:
+// honest empty VAST unless the house-ad fallback is on AND an audio house ad is
+// configured, in which case its markup (inline VAST XML) is served verbatim.
+func serveAudioNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() bool, houseAdFn houseAdLookup, traceID string) {
+	if stubFn() && houseAdFn != nil {
+		if ad, ok := houseAdFn(houseads.FormatAudio, seedFromTrace(traceID)); ok {
+			reqLog.Info("audio no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+			w.Header().Set("Content-Type", "text/xml")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write([]byte(ad.Markup))
+			return
+		}
+		reqLog.Info("audio no-bid: house ads on but none configured for audio, empty VAST")
+	} else {
+		reqLog.Info("audio no-bid: empty VAST")
 	}
-	spec := buildAudioVASTSpec(&sspVideoWinner{
-		TraceID:          traceID,
-		AdvertiserDomain: "house",
-		DurationSeconds:  30,
-		MediaURL:         "http://localhost:8080/v1/creatives/media/audio-1.mp3",
-		PlacementID:      placementID,
-	}, macroCtx)
-	xmlBytes, err := vast.BuildLinearAd(spec)
-	if err != nil {
-		log.Error("stub audio vast build failed", "error", err)
-		http.Error(w, "audio vast build failed", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/xml")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Write(xmlBytes)
+	writeNoFillVAST(w)
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
@@ -79,6 +80,15 @@ func main() {
 	if placementCache != nil {
 		lc.OnShutdown("placement-cache", func(_ context.Context) error { placementCache.Stop(); return nil })
 	}
+	// House-ad cache: the platform's own fallback creatives, served on a no-bid
+	// when stub_on_nobid is on. Same warm-cache shape as placements/line items
+	// (poll + NATS invalidate). Not gated by a readiness check — an empty
+	// house-ad set is a valid state (no configured house ads → honest no-fill),
+	// so the cache never blocks readiness.
+	houseAdCache := startHouseAdCache(cfg, clk, log)
+	if houseAdCache != nil {
+		lc.OnShutdown("house-ad-cache", func(_ context.Context) error { houseAdCache.Stop(); return nil })
+	}
 
 	// Pacing tracker: Redis-backed actuals counter for guaranteed line items.
 	// Falls back to in-memory L2 if Redis is unreachable (matches the rest
@@ -115,7 +125,7 @@ func main() {
 	mux.Handle(routes.Metrics, metrics.Handler())
 
 	if keys.Debug.EndpointsEnabled.Get(cfg) {
-		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(lineItemCache, placementCache))
+		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(lineItemCache, placementCache, houseAdCache))
 		mux.HandleFunc(routes.DebugPubAdLineItems, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(lineItemCache.All())
@@ -161,19 +171,23 @@ func main() {
 		return keys.PublisherAdServer.OmidVendor.Get(cfg),
 			keys.PublisherAdServer.OmidVerificationURL.Get(cfg)
 	}
-	// stubFn gates the demo-house-ad fallback on a no-bid. OFF by default:
-	// the platform serves only real auctioned demand, so a no-bid returns an
-	// honest empty no-fill rather than fake data (per the real-data-only rule).
+	// stubFn is the master on/off for the house-ad fallback on a no-bid. OFF by
+	// default: the platform serves only real auctioned demand, so a no-bid
+	// returns an honest empty no-fill rather than fake data (the real-data-only
+	// rule). When ON, houseAdFn supplies the ops-configured house ad to serve
+	// for the format — if none is configured the handler still falls back to
+	// the honest no-fill (we never invent canned content).
 	stubFn := func() bool { return keys.PublisherAdServer.StubOnNobid.Get(cfg) }
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn))
+	houseAdFn := houseAdPicker(houseAdCache)
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn, houseAdFn))
 	// publisher_adserver.public_url is the browser-reachable origin
 	// the VMAP schedule will tell the player to call back into for
 	// each break's VAST. Defaults to the gateway's local origin since
 	// every demo path runs through it.
 	publicBase := keys.PublisherAdServer.PublicURL.Get(cfg)
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
-	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, stubFn))
-	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, stubFn))
+	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, stubFn, houseAdFn))
+	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, stubFn, houseAdFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
@@ -822,6 +836,82 @@ func startPlacementCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) 
 		log.Error("placement cache initial load failed", "error", err)
 	}
 	return c
+}
+
+// startHouseAdCache is the warm cache of the platform's own fallback creatives
+// (house_ads). Mirrors the placement cache: poll + NATS invalidate on
+// adtech.cache.invalidate.house-ads. Refreshes near-real-time when staff edit a
+// house ad via the gateway.
+func startHouseAdCache(cfg *config.Config, clk clock.Clock, log *slog.Logger) *warm.Cache[houseads.HouseAd] {
+	loader := pickHouseAdLoader(cfg, log)
+	bus := connectNATS(cfg, log)
+	c := warm.New(warm.Config[houseads.HouseAd]{
+		Name:              "house_ads",
+		Loader:            loader,
+		Clock:             clk,
+		Bus:               bus,
+		InvalidateSubject: events.SubjectCacheInvalidateHouseAds,
+		PollInterval:      keys.CacheWarm.PollInterval.Get(cfg),
+		Log:               log,
+	})
+	if err := c.Start(context.Background()); err != nil {
+		log.Error("house ad cache initial load failed", "error", err)
+	}
+	return c
+}
+
+func pickHouseAdLoader(cfg *config.Config, log *slog.Logger) warm.Loader[houseads.HouseAd] {
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
+	return &warm.RetryingLoader[houseads.HouseAd]{
+		Log:   log,
+		KeyFn: func(h houseads.HouseAd) string { return h.ID },
+		Construct: func() (warm.Loader[houseads.HouseAd], error) {
+			if dbURL == "" {
+				return nil, fmt.Errorf("database.url not set")
+			}
+			store, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 5, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute})
+			if err != nil {
+				return nil, fmt.Errorf("postgres connect: %w", err)
+			}
+			return &postgres.HouseAdLoader{Store: store}, nil
+		},
+	}
+}
+
+// houseAdLookup is the format→house-ad selector the no-bid serving paths call.
+// Returns (ad, true) for a configured+enabled house ad of the format, or
+// (_, false) → the handler serves an honest no-fill.
+type houseAdLookup func(format string, seed uint64) (houseads.HouseAd, bool)
+
+// seedFromTrace derives a deterministic picker seed from a trace ID (FNV-1a).
+// Same trace → same house ad; distinct traces spread selection by weight. Never
+// uses time / rand, which are banned for reproducibility.
+func seedFromTrace(traceID string) uint64 {
+	const (
+		offset64 = 1469598103934665603
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(traceID); i++ {
+		h ^= uint64(traceID[i])
+		h *= prime64
+	}
+	return h
+}
+
+// houseAdPicker returns the format→house-ad lookup the serve handlers call on a
+// no-bid. The seed makes selection deterministic (Math.random / time-based RNG
+// is banned): the caller passes a trace-derived value so weighted rotation is
+// reproducible in tests and spreads serving across eligible ads per weight. A
+// nil cache (Postgres unreachable at boot) always returns not-found → honest
+// no-fill.
+func houseAdPicker(cache *warm.Cache[houseads.HouseAd]) func(format string, seed uint64) (houseads.HouseAd, bool) {
+	return func(format string, seed uint64) (houseads.HouseAd, bool) {
+		if cache == nil {
+			return houseads.HouseAd{}, false
+		}
+		return houseads.Pick(cache.All(), format, seed)
+	}
 }
 
 // pickLineItemLoader / pickPlacementLoader return self-healing
