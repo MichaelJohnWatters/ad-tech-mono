@@ -46,8 +46,9 @@ type CampaignLoader struct {
 // can see paused campaigns; the bid handler is responsible for skipping
 // non-live ones. Keeping the filter loose here means cache invalidation
 // after a pause/resume doesn't need any extra logic on the read path.
-func (l *CampaignLoader) LoadAll(ctx context.Context) ([]models.Campaign, error) {
-	q := `
+// campaignBaseQuery selects a campaign row with targeting + creatives,
+// ending at WHERE 1=1 so callers append their own scope/status/id filters.
+const campaignBaseQuery = `
 SELECT
     li.id::text,
     li.account_id::text,
@@ -113,6 +114,9 @@ LEFT JOIN LATERAL (
     WHERE lic.line_item_id = li.id
 ) cv ON true
 WHERE 1=1`
+
+func (l *CampaignLoader) LoadAll(ctx context.Context) ([]models.Campaign, error) {
+	q := campaignBaseQuery
 	if l.IncludeInactive {
 		q += ` AND li.status != 'archived'`
 	} else {
@@ -137,52 +141,93 @@ WHERE 1=1`
 
 	var out []models.Campaign
 	for rows.Next() {
-		var c models.Campaign
-		var incGeo, excGeo, incDev, excDev, incSeg, excSeg, incDom, excDom, incCat, excCat pq.StringArray
-		var incOS, incKw, excKw, incInv pq.StringArray
-		var modifiersJSON string
-		var viewTarget sql.NullInt32
-		var creativesJSON string
-		if err := rows.Scan(
-			&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
-			&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
-			&c.Format, &c.BidModel, &c.PacingMode, &c.Status, &c.Timezone, &c.CreativeRotation,
-			&incGeo, &excGeo, &incDev, &excDev,
-			&incSeg, &excSeg, &incDom, &excDom,
-			&incCat, &excCat,
-			&incOS, &incKw, &excKw, &incInv,
-			&modifiersJSON,
-			&c.CreativeID, &c.CreativeDomain,
-			&viewTarget,
-			&creativesJSON,
-		); err != nil {
-			return nil, fmt.Errorf("scan campaign: %w", err)
+		c, err := scanCampaign(rows.Scan)
+		if err != nil {
+			return nil, err
 		}
-		c.Creatives = parseCreativesJSON(creativesJSON)
-		if viewTarget.Valid {
-			pct := int(viewTarget.Int32)
-			c.ViewabilityTargetPct = &pct
-		}
-		c.Targeting = targeting.Rules{
-			Include: targeting.TargetingSet{
-				Geo: incGeo, Device: incDev, Segments: incSeg,
-				Domains: incDom, Categories: incCat,
-				OS: incOS, Keywords: incKw, InventoryType: incInv,
-			},
-			Exclude: targeting.TargetingSet{
-				Geo: excGeo, Device: excDev, Segments: excSeg,
-				Domains: excDom, Categories: excCat,
-				Keywords: excKw,
-			},
-		}
-		c.Modifiers = parseModifiers(modifiersJSON)
-		c.Location = models.ResolveLocation(c.Timezone) // pre-resolve off the bid hot path
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// scanCampaign decodes one campaign row (shared by LoadAll + LoadOne). scan
+// is rows.Scan or row.Scan — same column order as the query's SELECT.
+func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
+	var c models.Campaign
+	var incGeo, excGeo, incDev, excDev, incSeg, excSeg, incDom, excDom, incCat, excCat pq.StringArray
+	var incOS, incKw, excKw, incInv pq.StringArray
+	var modifiersJSON string
+	var viewTarget sql.NullInt32
+	var creativesJSON string
+	if err := scan(
+		&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
+		&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
+		&c.Format, &c.BidModel, &c.PacingMode, &c.Status, &c.Timezone, &c.CreativeRotation,
+		&incGeo, &excGeo, &incDev, &excDev,
+		&incSeg, &excSeg, &incDom, &excDom,
+		&incCat, &excCat,
+		&incOS, &incKw, &excKw, &incInv,
+		&modifiersJSON,
+		&c.CreativeID, &c.CreativeDomain,
+		&viewTarget,
+		&creativesJSON,
+	); err != nil {
+		return models.Campaign{}, fmt.Errorf("scan campaign: %w", err)
+	}
+	c.Creatives = parseCreativesJSON(creativesJSON)
+	if viewTarget.Valid {
+		pct := int(viewTarget.Int32)
+		c.ViewabilityTargetPct = &pct
+	}
+	c.Targeting = targeting.Rules{
+		Include: targeting.TargetingSet{
+			Geo: incGeo, Device: incDev, Segments: incSeg,
+			Domains: incDom, Categories: incCat,
+			OS: incOS, Keywords: incKw, InventoryType: incInv,
+		},
+		Exclude: targeting.TargetingSet{
+			Geo: excGeo, Device: excDev, Segments: excSeg,
+			Domains: excDom, Categories: excCat,
+			Keywords: excKw,
+		},
+	}
+	c.Modifiers = parseModifiers(modifiersJSON)
+	c.Location = models.ResolveLocation(c.Timezone) // pre-resolve off the bid hot path
+	return c, nil
+}
+
+// LoadOne fetches a SINGLE campaign by line-item id, applying the SAME
+// DSP/status scope as LoadAll — so a targeted invalidate for a campaign
+// that left 'live' (paused/ended) returns found=false and the cache evicts
+// it, exactly as a full reload would have. One row, no full scan.
+func (l *CampaignLoader) LoadOne(ctx context.Context, id string) (models.Campaign, bool, error) {
+	q := campaignBaseQuery
+	args := []any{id}
+	switch {
+	case l.DSPID != "":
+		q += ` AND acc.dsp_id = $2::uuid`
+		args = append(args, l.DSPID)
+	case len(l.AccountIDs) > 0:
+		q += ` AND li.account_id = ANY($2::uuid[])`
+		args = append(args, pq.StringArray(l.AccountIDs))
+	}
+	if l.IncludeInactive {
+		q += ` AND li.status != 'archived'`
+	} else {
+		q += ` AND li.status = 'live'`
+	}
+	q += ` AND li.id = $1::uuid`
+	c, err := scanCampaign(l.Store.read.QueryRowContext(ctx, q, args...).Scan)
+	if err == sql.ErrNoRows {
+		return models.Campaign{}, false, nil
+	}
+	if err != nil {
+		return models.Campaign{}, false, err
+	}
+	return c, true, nil
 }
 
 // KeyOf satisfies warm.Loader[models.Campaign].
