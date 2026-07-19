@@ -558,10 +558,20 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 	if req.ViewabilityTargetPct != nil {
 		viewTarget = *req.ViewabilityTargetPct
 	}
+	// A campaign must not go LIVE with nothing to serve — the DSP would
+	// silently skip it at bid time (no matching creative). Display gets an
+	// auto-placeholder below so it can serve immediately; non-display
+	// (video/native/audio) starts creative-less, so it opens as 'draft'
+	// (excluded from bidding) until the advertiser attaches a real creative,
+	// which auto-promotes it to live (see replaceLineItemCreatives).
+	initialStatus := "live"
+	if req.Format != "display" {
+		initialStatus = "draft"
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget); err != nil {
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget, initialStatus); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
@@ -830,6 +840,17 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if req.Creatives != nil {
 		if err := replaceLineItemCreatives(ctx, tx, accountID, lineItemID, *req.Creatives); err != nil {
 			return err
+		}
+		// A campaign parked as 'draft' for want of a creative goes live the
+		// moment it has one — the counterpart to the create-time guard. Only
+		// touches 'draft' (never resurrects a paused/ended campaign), and
+		// only when at least one creative is now attached.
+		if len(*req.Creatives) > 0 {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE line_items SET status='live', updated_at=now() WHERE id=$1 AND account_id=$2 AND status='draft'`,
+				lineItemID, accountID); err != nil {
+				return fmt.Errorf("promote draft campaign: %w", err)
+			}
 		}
 	}
 	return tx.Commit()

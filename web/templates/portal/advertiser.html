@@ -714,6 +714,7 @@ function renderTrend(res) {
 // ---- Campaigns ----
 const BADGE = {
   live: 'bg-success/15 text-success', paused: 'bg-warn/15 text-warn',
+  draft: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
   ended: 'bg-gray-200 dark:bg-gray-800 text-gray-500', archived: 'bg-gray-200 dark:bg-gray-800 text-gray-500',
 };
 // rowsByKey turns a grouped report result ({columns, rows}) into a map keyed by
@@ -748,10 +749,14 @@ function spendUsed(c) {
 // advertiser would otherwise see a live campaign that never spends. Empty
 // string when it can serve or isn't live.
 function servingWarning(c) {
-  if (c.Status !== 'live' && c.Status !== 'active') return '';
   const creatives = c.Creatives || [];
-  if (creatives.length === 0) {
-    return ' <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title="Live but no creative attached — this campaign will not serve until you add one.">⚠ no creative</span>';
+  // Draft = held back at creation because it had no creative (non-display).
+  // It won't serve until a creative is attached, which auto-promotes it.
+  if (c.Status === 'draft' && creatives.length === 0) {
+    return ' <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title="Draft — attach a creative and this campaign goes live automatically.">needs creative</span>';
+  }
+  if ((c.Status === 'live' || c.Status === 'active') && creatives.length === 0) {
+    return ' <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title="Live but no creative attached — will not serve until you add one.">⚠ no creative</span>';
   }
   return '';
 }
