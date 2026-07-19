@@ -52,11 +52,16 @@ type topupView struct {
 	CreatedAt     string  `json:"created_at"`
 }
 
-// topupBalanceResponse is the GET payload: current balance + topup history.
+// topupBalanceResponse is the GET payload: current balance + topup history +
+// the account's billing mode (read-only for the advertiser — only staff change
+// it, via the billing-terms editor). PaymentTerms is 'prepay' or 'invoiced';
+// CreditLimit is the invoiced bidding headroom in dollars (0 for prepay).
 type topupBalanceResponse struct {
-	Balance  float64     `json:"balance"`
-	Currency string      `json:"currency"`
-	Topups   []topupView `json:"topups"`
+	Balance      float64     `json:"balance"`
+	Currency     string      `json:"currency"`
+	PaymentTerms string      `json:"payment_terms"`
+	CreditLimit  float64     `json:"credit_limit"`
+	Topups       []topupView `json:"topups"`
 }
 
 type topupStore interface {
@@ -85,7 +90,7 @@ func topupHandler(store topupStore, bus events.EventBus, log *slog.Logger) http.
 		}
 		w.Header().Set("Content-Type", "application/json")
 
-		if devTenantGuard(w, r, claims, topupBalanceResponse{Currency: "USD", Topups: []topupView{}}) {
+		if devTenantGuard(w, r, claims, topupBalanceResponse{Currency: "USD", PaymentTerms: "prepay", Topups: []topupView{}}) {
 			return
 		}
 
@@ -247,13 +252,15 @@ func (s pgTopupStore) Topup(ctx context.Context, accountID, createdBy string, in
 }
 
 func (s pgTopupStore) TopupHistory(ctx context.Context, accountID string) (topupBalanceResponse, error) {
-	out := topupBalanceResponse{Currency: "USD", Topups: []topupView{}}
+	// Default posture for an account with no balance row yet: prepay, no credit.
+	out := topupBalanceResponse{Currency: "USD", PaymentTerms: "prepay", Topups: []topupView{}}
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT balance, currency FROM advertiser_balances WHERE account_id = $1::uuid`,
-		accountID).Scan(&out.Balance, &out.Currency)
+		`SELECT balance, currency, COALESCE(payment_terms, 'prepay'), COALESCE(credit_limit, 0)::float8
+		 FROM advertiser_balances WHERE account_id = $1::uuid`,
+		accountID).Scan(&out.Balance, &out.Currency, &out.PaymentTerms, &out.CreditLimit)
 	if err != nil && err != sql.ErrNoRows {
 		return out, err
 	}

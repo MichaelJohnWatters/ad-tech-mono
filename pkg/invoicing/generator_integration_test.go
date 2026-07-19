@@ -67,12 +67,23 @@ func TestGenerator(t *testing.T) {
 	// Spend outside the period must not be billed.
 	insertCommittedSpend(t, db, dayOut, c1, 9_000_000)
 
-	// Advertiser B: one campaign, $3.00.
+	// Advertiser B: one campaign, $3.00. B is INVOICED, so the all-accounts run
+	// bills it.
 	cB := createLineItem(t, db, accB, "B Campaign", "cpm")
 	insertCommittedSpend(t, db, dayIn, cB, 3_000_000)
+	setInvoiced(t, db, accB, 0)
+
+	// Advertiser D: PREPAY with spend. The all-accounts run must NOT bill it —
+	// prepay accounts already paid up front via topup.
+	accD := createAccount(t, db, fmt.Sprintf("invtest-d-%d", suffix))
+	cD := createLineItem(t, db, accD, "D Campaign", "cpm")
+	insertCommittedSpend(t, db, dayIn, cD, 4_000_000)
+	setPrepay(t, db, accD)
 
 	t.Cleanup(func() {
-		db.Exec(`DELETE FROM campaign_committed_spend WHERE campaign_id IN ($1,$2,$3)`, c1, c2, cB)
+		db.Exec(`DELETE FROM campaign_committed_spend WHERE campaign_id IN ($1,$2,$3,$4)`, c1, c2, cB, cD)
+		db.Exec(`DELETE FROM advertiser_balances WHERE account_id IN ($1::uuid, $2::uuid)`, accB, accD)
+		db.Exec(`DELETE FROM accounts WHERE id = $1::uuid`, accD)
 	})
 
 	gen := New(db)
@@ -116,18 +127,49 @@ func TestGenerator(t *testing.T) {
 		t.Fatalf("expected no invoice for spend-free account, got %q", emptyID)
 	}
 
-	// GenerateForAllAccounts: hits A (already has its invoice) + B.
+	// GenerateForAllAccounts bills only INVOICED accounts with spend: B (invoiced)
+	// is billed; D (prepay) is skipped even though it has spend. A is prepay too
+	// (no balance row), so the all-accounts run does not touch it — its invoice
+	// above came from the explicit GenerateForAccount staff-override call.
 	ids, err := gen.GenerateForAllAccounts(ctx, periodStart, periodEnd)
 	if err != nil {
 		t.Fatalf("generate all: %v", err)
 	}
-	if len(ids) < 2 {
-		t.Fatalf("generate all wrote %d invoices, want >= 2 (A and B)", len(ids))
-	}
 	if n := invoiceCount(t, db, accB); n != 1 {
-		t.Fatalf("account B invoice count = %d, want 1", n)
+		t.Fatalf("invoiced account B invoice count = %d, want 1", n)
 	}
 	assertAccountInvoiceTotal(t, db, accB, 3.00)
+	if n := invoiceCount(t, db, accD); n != 0 {
+		t.Fatalf("prepay account D invoice count = %d, want 0 (prepay must not be invoiced)", n)
+	}
+	if invoiceCount(t, db, accB) == 0 {
+		t.Fatal("expected the all-accounts run to bill invoiced account B")
+	}
+}
+
+// setInvoiced upserts an advertiser_balances row marking the account invoiced
+// with the given credit limit (dollars).
+func setInvoiced(t *testing.T, db *sql.DB, accountID string, creditLimit float64) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO advertiser_balances (account_id, balance, currency, credit_limit, payment_terms)
+		 VALUES ($1::uuid, 0, 'USD', $2, 'invoiced')
+		 ON CONFLICT (account_id) DO UPDATE SET credit_limit = EXCLUDED.credit_limit, payment_terms = 'invoiced'`,
+		accountID, creditLimit); err != nil {
+		t.Fatalf("set invoiced: %v", err)
+	}
+}
+
+// setPrepay upserts an advertiser_balances row marking the account prepay.
+func setPrepay(t *testing.T, db *sql.DB, accountID string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO advertiser_balances (account_id, balance, currency, payment_terms)
+		 VALUES ($1::uuid, 0, 'USD', 'prepay')
+		 ON CONFLICT (account_id) DO UPDATE SET payment_terms = 'prepay'`,
+		accountID); err != nil {
+		t.Fatalf("set prepay: %v", err)
+	}
 }
 
 func createAccount(t *testing.T, db *sql.DB, name string) string {

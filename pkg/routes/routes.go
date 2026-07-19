@@ -157,6 +157,15 @@ const (
 	// impersonation picker (GET only, support:read). Platform-wide, read-only.
 	APIAccounts = apiPrefix + "/api/accounts"
 
+	// APIBillingTerms is the staff advertiser-billing-terms editor
+	// (GET ?account_id= on support:read, PUT on support:update). Sets an
+	// advertiser account's payment_terms ('prepay'|'invoiced') + credit_limit;
+	// invoiced accounts may bid on credit up to the limit. UPSERTs
+	// advertiser_balances and publishes the balance cache-invalidate so the DSP
+	// gate re-reads the new terms within NATS RTT. Staff-only — advertisers
+	// see their mode read-only (via APIBillingTopup) but cannot change it.
+	APIBillingTerms = apiPrefix + "/api/billing/terms"
+
 	// APIAuditLog is the staff audit-log viewer (GET only, audit:read).
 	// Platform-wide by design (operator tool) with exact-match filters:
 	// ?account_id=&action=&resource_type=&resource_id=&limit=.

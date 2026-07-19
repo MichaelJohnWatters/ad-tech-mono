@@ -50,7 +50,11 @@ type BalanceGate struct {
 
 type balanceBaseline struct {
 	balanceMicros int64
-	counterAt     int64
+	// creditLimitMicros is the invoiced-account bidding headroom. Prepay rows
+	// carry credit_limit 0, so this is 0 and the gate reduces to prepay: an
+	// account bids while balanceMicros + creditLimitMicros − spend > 0.
+	creditLimitMicros int64
+	counterAt         int64
 }
 
 func balanceKey(accountID string) string {
@@ -80,8 +84,9 @@ func (g *BalanceGate) rebase(ctx context.Context, rows []postgres.AdvertiserBala
 			counter, _ = strconv.ParseInt(v, 10, 64)
 		}
 		next[b.AccountID] = balanceBaseline{
-			balanceMicros: int64(math.Round(b.Balance * microsPerUSD)),
-			counterAt:     counter,
+			balanceMicros:     int64(math.Round(b.Balance * microsPerUSD)),
+			creditLimitMicros: int64(math.Round(b.CreditLimit * microsPerUSD)),
+			counterAt:         counter,
 		}
 	}
 	g.mu.Lock()
@@ -116,7 +121,10 @@ func (g *BalanceGate) HasFunds(accountID string) (bool, float64) {
 		}
 	}
 
-	remainingMicros := base.balanceMicros - delta
+	// Invoiced accounts bid on credit: creditLimitMicros extends the headroom.
+	// Prepay rows have creditLimitMicros == 0, so this is the old prepay gate
+	// (balance − spend > 0) byte-for-byte.
+	remainingMicros := base.balanceMicros + base.creditLimitMicros - delta
 	return remainingMicros > 0, float64(remainingMicros) / microsPerUSD
 }
 

@@ -78,6 +78,36 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Billing terms ============ -->
+    <section id="section-billingterms" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Advertiser billing terms" "subtitle" "Set an advertiser to prepay or invoiced (credit). Invoiced accounts bid on credit up to the limit and are billed monthly.") }}
+      <form class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end" onsubmit="saveBillingTerms(event)">
+        <label class="block text-sm md:col-span-2">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Advertiser</span>
+          <select id="btAccount" onchange="loadBillingTermsFor(this.value)" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">Select an advertiser…</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Mode</span>
+          <select id="btMode" onchange="btToggleCredit()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="prepay">Prepay</option>
+            <option value="invoiced">Invoiced (credit)</option>
+          </select>
+        </label>
+        <label class="block text-sm" id="btCreditWrap">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Credit limit (USD)</span>
+          <input id="btCredit" type="number" min="0" step="0.01" placeholder="5000"
+                 class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <div class="md:col-span-4">
+          {{ template "button" (dict "label" "Save terms" "type" "submit") }}
+          <span class="ml-2 text-xs text-gray-400">The DSP picks the change up within a second.</span>
+        </div>
+      </form>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Audit log ============ -->
     <section id="section-audit" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Audit log") }}
@@ -389,12 +419,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -405,7 +435,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -440,6 +470,48 @@ async function loadImpersonate() {
 function viewAs(type, id) {
   document.cookie = 'act_as_account=' + type + ':' + id + '; path=/; max-age=43200; samesite=lax';
   location.href = type === 'publisher' ? '/portal/publisher' : '/portal/advertiser';
+}
+
+// ---- Billing terms (staff: prepay vs invoiced + credit limit) ----
+// Populates the advertiser picker from the accounts list, then GET/PUT the
+// per-account terms. PUT is support:update — advertisers can never reach it.
+async function loadBillingTerms() {
+  const sel = $('btAccount');
+  if (!sel) return;
+  let list;
+  try { list = await fetchJSON('/v1/api/accounts') || []; }
+  catch (err) { toast('Load accounts failed: ' + err.message, 'error'); return; }
+  const advertisers = list.filter(a => a.type === 'advertiser');
+  sel.innerHTML = '<option value="">Select an advertiser…</option>' +
+    advertisers.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+  btToggleCredit();
+}
+function btToggleCredit() {
+  const invoiced = $('btMode')?.value === 'invoiced';
+  $('btCreditWrap')?.classList.toggle('opacity-40', !invoiced);
+  if ($('btCredit')) $('btCredit').disabled = !invoiced;
+}
+async function loadBillingTermsFor(id) {
+  if (!id) return;
+  try {
+    const t = await fetchJSON('/v1/api/billing/terms?account_id=' + encodeURIComponent(id));
+    $('btMode').value = t.payment_terms || 'prepay';
+    $('btCredit').value = t.credit_limit || '';
+    btToggleCredit();
+  } catch (err) { toast('Load terms failed: ' + err.message, 'error'); }
+}
+async function saveBillingTerms(ev) {
+  ev.preventDefault();
+  const id = $('btAccount').value;
+  if (!id) { toast('Pick an advertiser first', 'info'); return; }
+  const mode = $('btMode').value;
+  const credit = mode === 'invoiced' ? (parseFloat($('btCredit').value) || 0) : 0;
+  try {
+    await fetchJSON('/v1/api/billing/terms', {method: 'PUT', body: JSON.stringify({
+      account_id: id, payment_terms: mode, credit_limit: credit,
+    })});
+    toast(`Billing terms saved — ${mode}${mode === 'invoiced' ? ' (' + fmtUSD(credit) + ' credit)' : ''}. DSP picks it up within a second.`, 'success');
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 
 // ---- Moderation ----
@@ -793,6 +865,7 @@ const fmtPct = (r) => r == null ? '—' : `${(r * 100).toFixed(0)}%`;
 // folder view — the click-through for "show me the actual rejected file".
 const MINIO_CONSOLE = 'http://localhost:9001';
 const fmtInt = (n) => Number(n || 0).toLocaleString();
+const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 function minioLink(bucket, key, label) {
   const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
   const href = `${MINIO_CONSOLE}/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(prefix)}`;

@@ -133,10 +133,16 @@ func (g *Generator) GenerateForAccount(ctx context.Context, accountID string, pe
 	return invoiceID, nil
 }
 
-// GenerateForAllAccounts generates an invoice for every account that had
-// settled spend in the period. It returns the invoice ids written (accounts
-// with no spend are skipped). A single account's failure aborts and is
-// returned so the job surfaces it rather than silently under-billing.
+// GenerateForAllAccounts generates an invoice for every INVOICED account that
+// had settled spend in the period. Prepay accounts already paid up front via
+// topup, so the monthly run skips them (accountsWithSpend filters to
+// payment_terms='invoiced'). It returns the invoice ids written (accounts with
+// no spend, or prepay accounts, are skipped). A single account's failure aborts
+// and is returned so the job surfaces it rather than silently under-billing.
+//
+// Staff can still invoice a specific account regardless of terms via
+// GenerateForAccount (a deliberate override) — only this all-accounts monthly
+// run is limited to invoiced accounts.
 func (g *Generator) GenerateForAllAccounts(ctx context.Context, periodStart, periodEnd time.Time) ([]string, error) {
 	accounts, err := g.accountsWithSpend(ctx, periodStart, periodEnd)
 	if err != nil {
@@ -188,13 +194,19 @@ func (g *Generator) linesForAccount(ctx context.Context, accountID string, perio
 	return out, rows.Err()
 }
 
-// accountsWithSpend returns every advertiser account with positive settled
-// spend in the period (via the campaign → line_items → account_id join).
+// accountsWithSpend returns every INVOICED advertiser account with positive
+// settled spend in the period (via the campaign → line_items → account_id
+// join). The join to advertiser_balances with payment_terms='invoiced' excludes
+// prepay accounts — they already paid up front via topup, so the monthly run
+// must not bill them again. An account with spend but no advertiser_balances
+// row (never topped up, default prepay) is likewise excluded.
 func (g *Generator) accountsWithSpend(ctx context.Context, periodStart, periodEnd time.Time) ([]string, error) {
 	rows, err := g.db.QueryContext(ctx,
 		`SELECT DISTINCT li.account_id::text
 		 FROM campaign_committed_spend ccs
 		 JOIN line_items li ON li.id::text = ccs.campaign_id
+		 JOIN advertiser_balances ab ON ab.account_id = li.account_id
+		                            AND ab.payment_terms = 'invoiced'
 		 WHERE ccs.day >= $1 AND ccs.day < $2 AND ccs.settled_micros > 0`,
 		periodStart, periodEnd)
 	if err != nil {
