@@ -39,6 +39,7 @@ const (
 	RoleFinance Role = "finance"
 	RoleViewer  Role = "viewer"
 	RoleAdOps   Role = "ad_ops"
+	RoleDevOps  Role = "devops"
 )
 
 // Claims represents the decoded JWT payload.
@@ -245,6 +246,16 @@ var defaultPermissions = map[string][]string{
 		"config:read", "config:update",
 		"ops:read", "ops:deploy", "ops:ab_test",
 		"reports:read", "reports:export",
+		"audit:read",
+	},
+	// DevOps — the stack-operations console (pod matrix, rollout restarts,
+	// cron triggers, log tails) plus the read-only surfaces needed to
+	// investigate: support/config views and the audit trail. No moderation,
+	// fraud, or config mutation.
+	"staff:devops": {
+		"ops:read", "ops:deploy",
+		"support:read",
+		"config:read",
 		"audit:read",
 	},
 }

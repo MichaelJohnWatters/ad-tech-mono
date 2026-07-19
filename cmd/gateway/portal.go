@@ -102,7 +102,11 @@ type portalData struct {
 	// banner; ImpersonatingID is the account being viewed.
 	Impersonating   bool
 	ImpersonatingID string
-	Nav             []map[string]any
+	// HasOpsDeploy gates the staff Ops section's action buttons (restart /
+	// run-now) client-side; the API re-checks ops:deploy server-side so this
+	// is presentation only. True under the dev bypass (admin view).
+	HasOpsDeploy bool
+	Nav          []map[string]any
 }
 
 // portalHandler renders a persona portal page with session claims driving the
@@ -115,11 +119,12 @@ func portalHandler(templates *templateManager, signingKey, page string, nav []Na
 		if signingKey != "" {
 			claims, _ = middleware.ParseSession(r, signingKey)
 		}
-		data := portalData{}
+		data := portalData{HasOpsDeploy: true}
 		// Dev bypass (nil claims) = admin view: full nav. With a real
 		// session, trim to the claims' permissions.
 		items := nav
 		if claims != nil {
+			data.HasOpsDeploy = auth.HasPermission(claims, "ops:deploy") || auth.HasPermission(claims, "*")
 			data.AccountID = claims.AccountID
 			data.IsCustomer = claims.AccountType == customerType
 			data.IsAgency = claims.AccountType == auth.AccountAgency
@@ -172,6 +177,7 @@ var staffNav = []NavItem{
 	{Label: "Profiles", Href: "#profiles", Icon: "◔", Perm: "support:read"},
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
 	{Label: "Batch runs", Href: "#batchruns", Icon: "⛓", Perm: "support:read"},
+	{Label: "Ops", Href: "#ops", Icon: "⎈", Perm: "ops:read"},
 	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},
 	{Label: "Architecture", Href: "#architecture", Icon: "🗺", Perm: "config:read"},
 	{Label: "Control center", Href: "#tools", Icon: "🎛", Perm: "config:read"},

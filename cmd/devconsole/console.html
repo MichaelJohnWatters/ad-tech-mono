@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adtech devconsole</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background:#0b1020; color:#d7dce8; margin:0; padding:24px; }
+  h1 { font-size:16px; margin:0 0 4px; } .sub { color:#7d879c; margin:0 0 20px; }
+  .grid { display:grid; grid-template-columns: 340px 1fr; gap:20px; }
+  .card { background:#121a30; border:1px solid #1f2a48; border-radius:8px; padding:14px 16px; margin-bottom:16px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:#7d879c; margin:0 0 10px; }
+  button { background:#1d2b50; color:#d7dce8; border:1px solid #2c3d6d; border-radius:6px;
+           padding:5px 10px; font:inherit; cursor:pointer; margin:2px; }
+  button:hover { background:#27396b; } button:disabled { opacity:.4; cursor:default; }
+  .svc { display:flex; justify-content:space-between; align-items:center; padding:2px 0; }
+  #out { background:#080d1a; border:1px solid #1f2a48; border-radius:8px; padding:14px;
+         white-space:pre-wrap; min-height:70vh; max-height:80vh; overflow:auto; font-size:12.5px; }
+  .links a { color:#7fb2ff; margin-right:14px; text-decoration:none; }
+  .running { color:#ffd479; }
+</style>
+</head>
+<body>
+<h1>adtech devconsole</h1>
+<p class="sub">host dev loop — builds need the local toolchain + docker; cluster-side ops live in the staff portal → Ops</p>
+<div class="grid">
+  <div>
+    <div class="card links">
+      <h2>Open</h2>
+      <a href="http://localhost:8080" target="_blank">gateway</a>
+      <a href="http://localhost:3000" target="_blank">grafana</a>
+      <a href="http://localhost:16686" target="_blank">jaeger</a>
+      <a href="http://localhost:9001" target="_blank">minio</a>
+      <a href="http://localhost:8025" target="_blank">mailpit</a>
+    </div>
+    <div class="card">
+      <h2>Stack</h2>
+      <button onclick="run('/run/action/stack-up', this)">stack-up</button>
+      <button onclick="run('/run/action/stack-images', this)">build all images</button>
+      <button onclick="run('/run/action/seed', this)">seed</button>
+      <button onclick="run('/run/action/demo', this)">demo</button>
+    </div>
+    <div class="card">
+      <h2>Build + deploy one service</h2>
+      {{range .Services}}
+      <div class="svc"><span>{{.}}</span>
+        <button onclick="run('/run/deploy/{{.}}', this)">deploy</button></div>
+      {{end}}
+    </div>
+  </div>
+  <div>
+    <div id="status"></div>
+    <div id="out">idle — output streams here</div>
+  </div>
+</div>
+<script>
+async function run(path, btn) {
+  const out = document.getElementById('out');
+  const status = document.getElementById('status');
+  const buttons = document.querySelectorAll('button');
+  buttons.forEach(b => b.disabled = true);
+  status.innerHTML = '<p class="running">running: ' + path + '</p>';
+  out.textContent = '';
+  try {
+    const resp = await fetch(path, {method: 'POST'});
+    if (resp.status === 409) { out.textContent = await resp.text(); return; }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      out.textContent += dec.decode(value);
+      out.scrollTop = out.scrollHeight;
+    }
+  } catch (e) {
+    out.textContent += '\nstream error: ' + e;
+  } finally {
+    status.textContent = '';
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+</script>
+</body>
+</html>

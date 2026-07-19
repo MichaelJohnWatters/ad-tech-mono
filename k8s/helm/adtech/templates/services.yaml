@@ -28,6 +28,9 @@ spec:
       # K8s service-link env injection collides with pkg/config's env-var
       # fallback (see k8s/base/tracker/deployment.yaml) — off platform-wide.
       enableServiceLinks: false
+      {{- with $svc.serviceAccountName }}
+      serviceAccountName: {{ . }}
+      {{- end }}
       containers:
         - name: {{ $svc.containerName | default $name }}
           image: {{ $svc.image }}

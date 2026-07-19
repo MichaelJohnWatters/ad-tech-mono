@@ -77,6 +77,8 @@ tags:
     description: "[Operator] Identity-graph edge ingestion"
   - name: SSAI
     description: "[Public] Server-side ad insertion (HLS/DASH stitching)"
+  - name: Ops
+    description: "[Staff] Stack ops console — pod matrix, restarts, cron triggers, log tails (ops:read / ops:deploy)"
 
 paths:
   # ============================================================
@@ -1257,6 +1259,82 @@ paths:
       summary: Staff lake-state snapshot (support:read)
       security: [{ bearerAuth: [] }]
       responses: { "200": { description: "per-table { version, total_rows, total_bytes, active_files } — proxied live from the pipeline" } }
+  /v1/api/ops/pods:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — pod matrix (ops:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ namespace, pods: [{ name, app, phase, ready, restart_count, start_time?, image }] }" }
+        "503": { description: Gateway is not running in-cluster (no serviceaccount) or the k8s API is unreachable }
+  /v1/api/ops/readyz-grid:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — per-service /readyz fan-out (ops:read)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ services: [{ service, url, ok, status?, body?, latency_ms, error? }] } — each service probed in-cluster with a 2s timeout" } }
+  /v1/api/ops/nats:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — NATS JetStream lag summary (ops:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ streams: [{ name, messages, bytes, consumers }], lagging: [{ stream, name, num_pending, num_ack_pending, num_redelivered }], totals } — proxied summary of the NATS monitor's /jsz" }
+        "503": { description: NATS monitoring endpoint unreachable }
+  /v1/api/ops/cronjobs:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — cronjob list (ops:read)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ cronjobs: [{ name, schedule, suspend, last_schedule_time? }] }" } }
+  /v1/api/ops/cronjobs/trigger:
+    post:
+      tags: [Ops]
+      summary: Staff ops console — run a cronjob now (ops:deploy, audit-logged)
+      description: Creates a one-off Job from the cronjob's jobTemplate, named <cronjob>-manual-<unixts> and labelled adtech.dev/manual-trigger.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses: { "200": { description: "{ cronjob, job } — the created Job's name" } }
+  /v1/api/ops/jobs:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — job list (ops:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: label_selector, in: query, schema: { type: string }, description: "defaults to adtech.dev/manual-trigger (manual cron runs)" }
+      responses: { "200": { description: "{ jobs: [{ name, succeeded, failed, active, start_time? }] }" } }
+  /v1/api/ops/pvcs:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — persistent volume claims (ops:read)
+      security: [{ bearerAuth: [] }]
+      responses: { "200": { description: "{ pvcs: [{ name, phase, requested }] }" } }
+  /v1/api/ops/logs:
+    get:
+      tags: [Ops]
+      summary: Staff ops console — pod log tail (ops:read)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: pod, in: query, required: true, schema: { type: string } }
+        - { name: container, in: query, schema: { type: string } }
+        - { name: tail, in: query, schema: { type: integer, default: 200, maximum: 5000 } }
+      responses: { "200": { description: Plain-text log tail } }
+  /v1/api/ops/restart:
+    post:
+      tags: [Ops]
+      summary: Staff ops console — rollout-restart a deployment (ops:deploy, audit-logged)
+      description: The kubectl rollout-restart mechanism — patches the pod template's restartedAt annotation so the Deployment rolls new pods.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [deployment], properties: { deployment: { type: string } } }
+      responses: { "200": { description: "{ deployment, restarted: true }" } }
   /v1/api/my-revshare:
     get:
       tags: [Billing]

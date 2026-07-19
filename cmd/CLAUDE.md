@@ -19,6 +19,12 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `identity-consumer/` | Builds the identity graph. Consumes `adtech.identity.observed` from the SSP, batches/dedupes, writes edges (deterministic + probabilistic). Run 1 replica (in-memory fingerprint buckets). | NATS, Postgres |
 | `report-runner/` | Async report worker (:8095). Enqueues due saved-report schedules as report jobs, drains the `report_jobs` Postgres queue (SKIP LOCKED), renders CSV/JSON/Parquet artifacts into the private `adtech-reports` bucket, emails download links. Run 1 replica (boot-time stuck-job requeue). Core in `pkg/reportjobs` + `pkg/reportrunner`. | Postgres, Reporting (HTTP), Minio/S3, SMTP |
 
+## Host tools (never deployed)
+
+| Tool | What it does |
+|---|---|
+| `devconsole/` | Host dev-loop UI at localhost:8099 (`make devconsole`): build/deploy buttons streaming `make deploy SVC=x` output, stack-up/seed/demo shortcuts, links to portals/observability. Host-only because builds need the local toolchain + docker socket; cluster-side ops live in the staff portal's Ops section. |
+
 ## Jobs (short-lived, K8s CronJobs or one-off)
 
 | Job | What it does | Schedule |

@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -154,6 +154,9 @@ ab-test-chaos: ## Run A/B test with chaos (usage: make ab-test-chaos service=dsp
 # --- Helm dev loop (Rancher Desktop / k3s) ---
 # The Tilt replacement: build images with scripts/stack-images.sh, deploy
 # with helm. kubectl/docker context must be rancher-desktop (stack-up checks).
+
+devconsole: ## Host dev-loop UI (build/deploy buttons) at http://localhost:8099
+	go run ./cmd/devconsole
 
 stack-images: ## Build all adtech-* service images (host cross-compile + tiny images)
 	scripts/stack-images.sh
