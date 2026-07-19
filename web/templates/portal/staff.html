@@ -758,15 +758,14 @@ async function saveRevTerms(ev) {
 }
 
 // ---- House ads (platform's own fallback creatives served on a no-bid) ----
-const HOUSE_STUB_KEY = 'publisher_adserver.stub_on_nobid';
 let houseAdsCache = [];
 
 async function loadHouseAds() {
-  // Master switch reflects the live config key — reuses the existing config
-  // API rather than a second toggle. resolved=true gives the effective value.
+  // Master switch reflects the effective on/off. The dedicated fill endpoint
+  // reports the global value (per-pod overrides are cleared when it's set).
   try {
-    const r = await fetchJSON('/v1/config?resolved=true&key=' + encodeURIComponent(HOUSE_STUB_KEY));
-    $('haMaster').checked = String(r?.value).toLowerCase() === 'true';
+    const r = await fetchJSON('/v1/api/house-ads/fill');
+    $('haMaster').checked = r?.enabled === true;
   } catch (_) { /* leave unchecked on error */ }
 
   const tbody = tbodyOf('houseads');
@@ -789,11 +788,13 @@ async function loadHouseAds() {
   }
 }
 
-// saveHouseAdMaster flips publisher_adserver.stub_on_nobid via the config API
-// (global write; the ad server picks it up within a second). No second toggle.
+// saveHouseAdMaster flips the house-ad fill on/off. The endpoint sets the
+// global publisher_adserver.stub_on_nobid AND clears per-pod overrides (a
+// per-pod row would otherwise shadow the global value), so the switch takes
+// effect platform-wide. The ad server re-polls within a second.
 async function saveHouseAdMaster(on) {
   try {
-    await fetchJSON('/v1/config', {method: 'PUT', body: JSON.stringify({key: HOUSE_STUB_KEY, value: on ? 'true' : 'false', pod_id: ''})});
+    await fetchJSON('/v1/api/house-ads/fill', {method: 'PUT', body: JSON.stringify({enabled: on})});
     toast(`House ads on no-bid ${on ? 'ENABLED' : 'disabled'} — ad server picks it up within a second`, 'success');
   } catch (err) {
     $('haMaster').checked = !on; // revert the visual on failure
