@@ -24,6 +24,13 @@ spec:
     metadata:
       labels:
         app: {{ $name }}
+      annotations:
+        # Auto-registration with Prometheus (the 'adtech-pods' job keeps
+        # only annotated pods) — every REPLICA becomes a scrape target, so
+        # per-service "up" counts reflect real pod counts, not the retired
+        # static host list (which showed 1 per service under multi-pod).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ (first $svc.ports).port }}"
     spec:
       # K8s service-link env injection collides with pkg/config's env-var
       # fallback (see k8s/base/tracker/deployment.yaml) — off platform-wide.
