@@ -32,13 +32,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
 
 // Preloader periodically pumps audience_segment_members into Redis and
@@ -192,11 +192,9 @@ func (p *Preloader) SubscribeInvalidate(ctx context.Context, bus events.EventBus
 	if bus == nil {
 		return
 	}
-	podID := os.Getenv("POD_NAME")
-	if podID == "" {
-		podID = fmt.Sprintf("pid-%d", os.Getpid())
-	}
-	group := service + "-audience-" + podID
+	// Per-REPLICA group (hostname), NOT POD_NAME: POD_NAME is shared across a
+	// service's replicas, which would queue-group them so only one refreshed.
+	group := service + "-audience-" + podid.Replica()
 	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateAudience, group, func(_ context.Context, msg *events.Message) error {
 		p.requestRefresh()
 		_ = msg.Ack()
