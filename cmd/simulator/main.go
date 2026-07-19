@@ -43,6 +43,10 @@ import (
 
 var log = logger.New("simulator")
 
+// beaconLost64 counts wins whose impression beacon never delivered after 3
+// attempts — the reconciliation term for client-side beacon loss.
+var beaconLost64 int64
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -439,7 +443,9 @@ func runOne(client *http.Client, eps endpoints, exchangeURL, trackerURL string, 
 	if winner == nil {
 		return false, nil
 	}
-	fireEvents(client, trackerURL, traceID, traceparent, ch, winner, placement, p, rng)
+	if !fireEvents(client, trackerURL, traceID, traceparent, ch, winner, placement, p, rng) {
+		atomic.AddInt64(&beaconLost64, 1)
+	}
 	return true, nil
 }
 
@@ -583,7 +589,10 @@ func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequ
 // tracker.signature_validation, identical to a real render. The only synthetic
 // part is the browser-shaped User-Agent (a headless client) and that quartiles
 // are fired in sequence rather than from real playback timing.
-func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, winner *openrtb.BidObj, pl request.Placement, p profile, rng *rand.Rand) {
+// fireEvents fires the win's tracker beacons; returns whether the IMPRESSION
+// beacon was delivered (the money event — everything else is best-effort,
+// mirroring real browser beacon semantics).
+func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, winner *openrtb.BidObj, pl request.Placement, p profile, rng *rand.Rand) bool {
 	mc := adserving.MacroContext{
 		AuctionID:    traceID, // the auction trace — ties beacons to the auction
 		AuctionPrice: winner.Price,
@@ -597,7 +606,18 @@ func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch
 		URLTTL:       time.Hour,
 	}
 
-	fireGet(client, adserving.BuildImpressionURL(mc), traceparent)
+	// The impression beacon is the MONEY event — deliver it reliably (3
+	// attempts) and report failure so reconciliation can account for it.
+	// Fire-and-forget silently lost ~1.1% of impressions at 109rps
+	// (2026-07-19 clean-slate run): wins said 169,536, the tracker only
+	// ever RECEIVED 167,691 — the platform recorded every one it got.
+	impDelivered := false
+	for attempt := 0; attempt < 3 && !impDelivered; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(100*attempt) * time.Millisecond)
+		}
+		impDelivered = fireGet(client, adserving.BuildImpressionURL(mc), traceparent)
+	}
 
 	switch ch {
 	case request.Video:
@@ -619,23 +639,27 @@ func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch
 			fireGet(client, adserving.BuildClickURL(mc), traceparent)
 		}
 	}
+	return impDelivered
 }
 
 // fireGet sends a tracker beacon GET with the same traceparent used for the
 // auction (so the tracker span joins the auction trace) plus a browser-shaped
 // User-Agent + Referer so the tracker's fraud check doesn't drop the headless
 // client as a bot.
-func fireGet(client *http.Client, url, traceparent string) {
+func fireGet(client *http.Client, url, traceparent string) bool {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("traceparent", traceparent)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-simulator)")
 	req.Header.Set("Referer", "https://simulator.dev/")
-	if resp, err := client.Do(req); err == nil {
-		resp.Body.Close()
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
 	}
+	resp.Body.Close()
+	return resp.StatusCode < 300
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -654,6 +678,9 @@ func printResults(sent, wins, errors int, elapsed time.Duration) {
 	fmt.Printf("  Requests:   %d\n", sent)
 	fmt.Printf("  Wins:       %d (%.1f%%)\n", wins, pct(wins, sent))
 	fmt.Printf("  No-fill:    %d\n", sent-wins-errors)
+	if bl := atomic.LoadInt64(&beaconLost64); bl > 0 {
+		fmt.Printf("  Beacon-lost: %d (wins with undelivered impression beacon — expect analytics = wins - this)\n", bl)
+	}
 	fmt.Printf("  Errors:     %d\n", errors)
 	if elapsed.Seconds() > 0 {
 		fmt.Printf("  Avg RPS:    %.1f\n", float64(sent)/elapsed.Seconds())
