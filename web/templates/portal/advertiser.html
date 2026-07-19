@@ -690,6 +690,19 @@ function rowsByKey(res, keyCol) {
 }
 
 let campaignsCache = [];
+// servingWarning flags a campaign that is LIVE but cannot actually serve —
+// the DSP silently skips it at bid time (no matching creative), so the
+// advertiser would otherwise see a live campaign that never spends. Empty
+// string when it can serve or isn't live.
+function servingWarning(c) {
+  if (c.Status !== 'live' && c.Status !== 'active') return '';
+  const creatives = c.Creatives || [];
+  if (creatives.length === 0) {
+    return ' <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" title="Live but no creative attached — this campaign will not serve until you add one.">⚠ no creative</span>';
+  }
+  return '';
+}
+
 async function loadCampaigns() {
   const tbody = tbodyOf('campaigns');
   let perf = {};
@@ -726,7 +739,10 @@ async function loadCampaigns() {
     <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-medium">${esc(c.Name)}</td>
       <td class="px-3 py-2 text-gray-500">${esc(c.AdvertiserName || (c.AdvertiserID || '').slice(0, 8))}</td>
-      <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${BADGE[c.Status] || BADGE.ended}">${esc(c.Status)}</span></td>
+      <td class="px-3 py-2">
+        <span class="text-xs px-1.5 py-0.5 rounded ${BADGE[c.Status] || BADGE.ended}">${esc(c.Status)}</span>
+        ${servingWarning(c)}
+      </td>
       <td class="px-3 py-2 font-mono text-xs">${esc(c.BidModel || 'cpm')}</td>
       <td class="px-3 py-2 font-mono">${fmtUSD(c.DailyBudget)}</td>
       <td class="px-3 py-2 font-mono">${fmtUSD(c.SpentToday)}</td>
