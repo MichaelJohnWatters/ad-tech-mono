@@ -2,6 +2,7 @@ package warm
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 )
@@ -27,6 +28,8 @@ import (
 //
 // KeyOf must be supplied separately because we may not have an inner
 // loader yet to delegate to.
+var errNoSingleLoader = errors.New("inner loader has no LoadOne")
+
 type RetryingLoader[T any] struct {
 	Construct func() (Loader[T], error)
 	KeyFn     func(T) string
@@ -72,4 +75,37 @@ func (r *RetryingLoader[T]) KeyOf(t T) string {
 		return r.KeyFn(t)
 	}
 	return ""
+}
+
+// LoadOne forwards to the inner loader's single-fetch when it has one, so a
+// RetryingLoader-wrapped SingleLoader (e.g. the DSP campaign cache) keeps its
+// targeted-invalidation fast path instead of falling back to a full reload.
+// Constructs the inner on demand like LoadAll; a construct/inner failure
+// returns an error so the caller reloads fully (the safe default).
+func (r *RetryingLoader[T]) LoadOne(ctx context.Context, key string) (T, bool, error) {
+	var zero T
+	r.mu.Lock()
+	if r.inner == nil {
+		inner, err := r.Construct()
+		if err != nil {
+			r.mu.Unlock()
+			return zero, false, err
+		}
+		r.inner = inner
+	}
+	inner := r.inner
+	r.mu.Unlock()
+
+	sl, ok := inner.(SingleLoader[T])
+	if !ok {
+		return zero, false, errNoSingleLoader
+	}
+	v, found, err := sl.LoadOne(ctx, key)
+	if err != nil {
+		// Same drop-and-reconstruct posture as LoadAll on a dead connection.
+		r.mu.Lock()
+		r.inner = nil
+		r.mu.Unlock()
+	}
+	return v, found, err
 }

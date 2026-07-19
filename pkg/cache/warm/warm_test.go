@@ -330,3 +330,62 @@ func TestCache_LastLoadedReportsState(t *testing.T) {
 		t.Error("LastLoaded ts is zero")
 	}
 }
+
+// singleFakeLoader adds LoadOne so it satisfies SingleLoader — lets us drive
+// applyOne directly and assert the targeted path does NOT call LoadAll.
+type singleFakeLoader struct {
+	fakeLoader
+	loadOneCalls atomic.Int32
+	one          map[string]widget // key -> value; absent => found=false (evict)
+}
+
+func (f *singleFakeLoader) LoadOne(_ context.Context, key string) (widget, bool, error) {
+	f.loadOneCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.one[key]
+	return w, ok, nil
+}
+
+func TestCache_TargetedInvalidate_UpsertsAndEvicts_NoFullReload(t *testing.T) {
+	loader := &singleFakeLoader{one: map[string]widget{}}
+	loader.set([]widget{{ID: "a", Name: "a1"}, {ID: "b", Name: "b2"}})
+	c := New(Config[widget]{Name: "w", Loader: loader, Clock: clock.Real{}, PollInterval: time.Hour, Log: newTestLogger()})
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	loadsAfterStart := loader.calls.Load()
+
+	// Upsert "a" via a targeted invalidate (id in payload) — must use LoadOne,
+	// not a full LoadAll.
+	loader.one["a"] = widget{ID: "a", Name: "a99"}
+	_ = c.onInvalidate(context.Background(), events.NewMessage("s", []byte(`{"id":"a"}`), "", "m1", func() error { return nil }, func() error { return nil }))
+	if got, _ := c.ByID("a"); got.Name != "a99" {
+		t.Errorf("targeted upsert: a.Name=%q, want a99", got.Name)
+	}
+	if b, ok := c.ByID("b"); !ok || b.Name != "b2" {
+		t.Errorf("untouched entry b changed: %+v", b)
+	}
+	if loader.calls.Load() != loadsAfterStart {
+		t.Errorf("targeted update triggered a full LoadAll (calls %d -> %d)", loadsAfterStart, loader.calls.Load())
+	}
+	if loader.loadOneCalls.Load() != 1 {
+		t.Errorf("LoadOne calls=%d, want 1", loader.loadOneCalls.Load())
+	}
+
+	// Evict: "a" no longer present (e.g. left 'live') → found=false.
+	delete(loader.one, "a")
+	_ = c.onInvalidate(context.Background(), events.NewMessage("s", []byte(`{"id":"a"}`), "", "m2", func() error { return nil }, func() error { return nil }))
+	if _, ok := c.ByID("a"); ok {
+		t.Error("targeted evict: a should be gone")
+	}
+
+	// No id in payload → full reload (Trigger path).
+	_ = c.onInvalidate(context.Background(), events.NewMessage("s", []byte(`{"op":"refresh"}`), "", "m3", func() error { return nil }, func() error { return nil }))
+	// Trigger is async; give the poll goroutine a moment.
+	time.Sleep(50 * time.Millisecond)
+	if loader.calls.Load() == loadsAfterStart {
+		t.Error("id-less invalidate should have triggered a full LoadAll")
+	}
+}

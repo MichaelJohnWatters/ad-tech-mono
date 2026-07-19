@@ -38,6 +38,21 @@ type Loader[T any] interface {
 	KeyOf(T) string
 }
 
+// SingleLoader is an OPTIONAL capability: a loader that can fetch ONE entity
+// by key. When present, a targeted invalidate (an event carrying the changed
+// entity's id) updates just that one cache entry instead of reloading the
+// entire set from the source of truth. That turns the per-edit cost from
+// O(all rows) — a full DB scan on every campaign edit, the model's main
+// scale wall — into O(1 row). Loaders that can't do single lookups simply
+// don't implement it and fall back to a full reload.
+type SingleLoader[T any] interface {
+	// LoadOne returns the entity for key. found=false means it no longer
+	// belongs in the cache (deleted, or filtered out — e.g. a campaign that
+	// left 'live'), so the cache evicts it. A non-nil error falls back to a
+	// full reload rather than risk a stale/partial single update.
+	LoadOne(ctx context.Context, key string) (value T, found bool, err error)
+}
+
 // Config wires a warm cache to its dependencies. All fields are required
 // except Bus, which may be nil to disable NATS-driven invalidation
 // (polling alone still keeps the cache fresh).
@@ -298,13 +313,66 @@ func (c *Cache[T]) PublishInvalidate(ctx context.Context) error {
 	return c.cfg.Bus.Publish(ctx, c.cfg.InvalidateSubject, payload)
 }
 
-func (c *Cache[T]) onInvalidate(_ context.Context, msg *events.Message) error {
-	// INFO, not Debug: invalidates are rare (writes + refresh broadcasts)
-	// and this line is the only visible proof that cross-replica refresh
-	// propagation works — without it, verifying the broadcast path meant
-	// reading tea leaves.
+func (c *Cache[T]) onInvalidate(ctx context.Context, msg *events.Message) error {
+	// Targeted path: if the event names a single changed id AND the loader
+	// can fetch one AND there's no OnRefresh hook (which needs the full set),
+	// update just that entry — no DB full-scan. Otherwise reload everything.
+	if id := invalidateID(msg.Data); id != "" && c.cfg.OnRefresh == nil {
+		if sl, ok := c.cfg.Loader.(SingleLoader[T]); ok {
+			if err := c.applyOne(ctx, sl, id); err == nil {
+				c.cfg.Log.Info("warm cache targeted update", "cache", c.cfg.Name, "id", id)
+				_ = msg.Ack()
+				return nil
+			}
+			// applyOne failed → fall through to a full reload (safe default).
+			c.cfg.Log.Warn("warm cache targeted update failed, full reload", "cache", c.cfg.Name, "id", id)
+		}
+	}
 	c.cfg.Log.Info("warm cache invalidate received, reloading", "cache", c.cfg.Name, "subject", msg.Subject)
 	c.Trigger()
 	_ = msg.Ack()
+	return nil
+}
+
+// invalidateID extracts a single-entity id from an invalidate payload
+// ({"id":"..."} — the dsp-mgmt shape) if present. Empty => "reload all"
+// (the refresh-broadcast / poll shapes carry no id).
+func invalidateID(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var m struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	return m.ID
+}
+
+// applyOne upserts (or evicts) a single entry into a fresh snapshot,
+// preserving the lock-free copy-on-write model. The DB cost is one row
+// (LoadOne), not the whole set; the snapshot rebuild is in-process.
+func (c *Cache[T]) applyOne(ctx context.Context, sl SingleLoader[T], id string) error {
+	val, found, err := sl.LoadOne(ctx, id)
+	if err != nil {
+		return err
+	}
+	cur := c.snapshot.Load()
+	next := &snapshot[T]{byID: make(map[string]T, len(cur.byID)+1)}
+	for k, v := range cur.byID {
+		if k == id {
+			continue // drop the old copy; re-added below if still present
+		}
+		next.byID[k] = v
+	}
+	if found {
+		next.byID[id] = val
+	}
+	next.all = make([]T, 0, len(next.byID))
+	for _, v := range next.byID {
+		next.all = append(next.all, v)
+	}
+	c.snapshot.Store(next)
 	return nil
 }
