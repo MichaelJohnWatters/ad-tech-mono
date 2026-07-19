@@ -56,7 +56,7 @@
     <!-- ============ Campaigns ============ -->
     <section id="section-campaigns" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Campaigns" "subtitle" "Performance is last 7 days") }}
-      {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Daily budget" "Spend today" "Impr. 7d" "Clicks 7d" "CTR" "Spend 7d" "")) }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Daily budget" "Spend / used" "Impr. 7d" "Clicks 7d" "CTR" "Spend 7d" "")) }}
         <tr><td colspan="11" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
@@ -690,6 +690,21 @@ function rowsByKey(res, keyCol) {
 }
 
 let campaignsCache = [];
+// spendUsed renders today's spend with a budget-utilisation bar so the
+// advertiser sees at a glance how much of the daily budget is consumed
+// (both fields already come back on the campaign row — no extra query).
+function spendUsed(c) {
+  const spent = Number(c.SpentToday || 0), budget = Number(c.DailyBudget || 0);
+  const amt = fmtUSD(spent);
+  if (budget <= 0) return amt;
+  const pct = Math.min(100, Math.round((spent / budget) * 100));
+  const bar = pct >= 90 ? 'bg-error' : pct >= 70 ? 'bg-amber-500' : 'bg-brand';
+  return `${amt}
+    <div class="mt-0.5 h-1 w-16 rounded bg-gray-200 dark:bg-gray-700 overflow-hidden" title="${pct}% of daily budget">
+      <div class="h-full ${bar}" style="width:${pct}%"></div>
+    </div>`;
+}
+
 // servingWarning flags a campaign that is LIVE but cannot actually serve —
 // the DSP silently skips it at bid time (no matching creative), so the
 // advertiser would otherwise see a live campaign that never spends. Empty
@@ -745,7 +760,7 @@ async function loadCampaigns() {
       </td>
       <td class="px-3 py-2 font-mono text-xs">${esc(c.BidModel || 'cpm')}</td>
       <td class="px-3 py-2 font-mono">${fmtUSD(c.DailyBudget)}</td>
-      <td class="px-3 py-2 font-mono">${fmtUSD(c.SpentToday)}</td>
+      <td class="px-3 py-2 font-mono">${spendUsed(c)}</td>
       <td class="px-3 py-2 font-mono">${p.imps ? fmtInt(p.imps) : dash}</td>
       <td class="px-3 py-2 font-mono">${p.clicks ? fmtInt(p.clicks) : dash}</td>
       <td class="px-3 py-2 font-mono">${p.ctr != null ? p.ctr.toFixed(2) + '%' : dash}</td>
