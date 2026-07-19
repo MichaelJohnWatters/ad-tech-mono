@@ -300,6 +300,7 @@ const (
 	ServiceSSAI              = "ssai"
 	ServiceTranscoder        = "transcoder"
 	ServiceReportRunner      = "report-runner"
+	ServiceNotifications     = "notifications"
 )
 
 // ============================================================
@@ -338,6 +339,11 @@ const (
 	// buckets stay a coherent global view (queue-group load-balancing would
 	// split them across replicas).
 	NATSGroupIdentityConsumer = "identity-consumer"
+	// NATSGroupNotifications — notifications consumer's consumers of
+	// account-scoped business events (budget/balance depleted, campaign state
+	// changed, report completed) that it persists as per-account in-app
+	// notifications.
+	NATSGroupNotifications = "notifications"
 )
 
 // ============================================================

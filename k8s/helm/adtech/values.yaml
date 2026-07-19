@@ -67,6 +67,7 @@ localExpose:
     ssai: { ports: [{ name: http, port: 8093 }] }
     transcoder: { ports: [{ name: http, port: 8094 }] }
     report-runner: { ports: [{ name: http, port: 8095 }] }
+    notifications: { ports: [{ name: http, port: 8096 }] }
 
 services:
   dsp-internal:
@@ -546,6 +547,35 @@ services:
       periodSeconds: 10
     readinessProbe:
       httpGet: { path: /readyz, port: 8095 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  # In-app notification builder: consumes account-scoped business events from
+  # NATS and writes per-account rows for the portal bell. Single replica — the
+  # consumer is queue-grouped so extra replicas would only load-balance, and one
+  # is plenty for this write volume.
+  notifications:
+    image: adtech-notifications
+    replicas: 1
+    ports: [{ name: http, port: 8096 }]
+    env:
+      - name: POD_NAME
+        value: "notifications-0"
+      - name: NOTIFICATIONS_NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8096 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8096 }
       periodSeconds: 2
       failureThreshold: 3
 

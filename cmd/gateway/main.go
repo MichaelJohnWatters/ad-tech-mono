@@ -27,6 +27,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/notifications"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
@@ -389,6 +390,17 @@ func main() {
 	// Webhooks — account subscription management (tenant-scoped, webhooks:*
 	// gated); mutations invalidate the dispatcher's webhook-subs warm cache.
 	mux.Handle(routes.APIWebhooks, authMiddleware(http.HandlerFunc(webhooksHandler(pgWebhookStore{db: gwDB}, secretsBus, log))))
+
+	// In-app notifications — the portal bell feed (list + unread count, mark
+	// read). Rows are written by cmd/notifications from NATS business events;
+	// this is the read/mark-read side. Tenant-scoped; gwDB may be nil at boot
+	// (handler 503s). Register the /read sub-path on the same handler.
+	var notifStore notifications.Store
+	if gwDB != nil {
+		notifStore = notifications.NewPostgresStore(gwDB)
+	}
+	mux.Handle(routes.APINotifications, authMiddleware(http.HandlerFunc(notificationsHandler(notifStore, log))))
+	mux.Handle(routes.APINotifications+"/read", authMiddleware(http.HandlerFunc(notificationsHandler(notifStore, log))))
 
 	// Saved reports — account saved/scheduled reports (tenant-scoped,
 	// reports:read/reports:save gated).

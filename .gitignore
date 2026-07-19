@@ -83,3 +83,4 @@ dev/tls/
 # Never vendored — cloned on demand, per-developer.
 third_party/
 /report-runner
+.claude/worktrees/

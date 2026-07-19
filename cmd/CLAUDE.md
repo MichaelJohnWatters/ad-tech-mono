@@ -16,6 +16,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `pipeline/` | Data pipeline. Ingests publisher files, validates, normalises, enriches. | Object storage, Postgres, DuckDB |
 | `billing/` | Billing service. Consumes AuctionWinEvents, accrues spend, generates invoices. | NATS, Postgres |
 | `webhooks/` | Webhook dispatcher. Consumes NATS events, delivers HTTP POST to registered URLs. | NATS, Postgres |
+| `notifications/` | In-app notification builder (:8096). Consumes the same account-scoped business events as webhooks (budget/balance depleted, campaign state changed, report completed) and writes one per-account row to `notifications` for the portal bell. Gateway serves list/unread/mark-read. Run 1 replica (queue-grouped). Core in `pkg/notifications`. | NATS, Postgres |
 | `identity-consumer/` | Builds the identity graph. Consumes `adtech.identity.observed` from the SSP, batches/dedupes, writes edges (deterministic + probabilistic). Run 1 replica (in-memory fingerprint buckets). | NATS, Postgres |
 | `report-runner/` | Async report worker (:8095). Enqueues due saved-report schedules as report jobs, drains the `report_jobs` Postgres queue (SKIP LOCKED), renders CSV/JSON/Parquet artifacts into the private `adtech-reports` bucket, emails download links. Run 1 replica (boot-time stuck-job requeue). Core in `pkg/reportjobs` + `pkg/reportrunner`. | Postgres, Reporting (HTTP), Minio/S3, SMTP |
 
