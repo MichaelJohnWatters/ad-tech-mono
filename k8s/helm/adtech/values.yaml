@@ -647,8 +647,12 @@ services:
         # How far back ClickHouse (the HOT store) is authoritative; older
         # reads fall to the keep-forever Delta lake and are merged. NOT a
         # data cap — a 30d query returns 30d (hot slice + cold history).
-        # 7d keeps the common dashboards fast; the lake serves deep history.
-        value: "168h"
+        # 14d: the portal dashboards query 'today' + 'last 7d', so a 14d
+        # hot window keeps ALL of them wholly on the fast hot tier with a
+        # week of margin (a 7d window put them exactly on the boundary,
+        # risking a slower hot+cold split). TTL (30d) still leaves 16d of
+        # slack before ClickHouse deletes.
+        value: "336h"
       - name: S3_ENDPOINT
         value: "minio:9000"
       - name: S3_ACCESS_KEY
