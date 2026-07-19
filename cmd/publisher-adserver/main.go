@@ -154,6 +154,14 @@ func main() {
 		log.Warn("pubad event publisher unavailable, DirectWin / PrebidOutboundWin events will be skipped", "error", err)
 	}
 
+	// stubFn is the master on/off for the house-ad fallback on a no-bid. OFF by
+	// default: the platform serves only real auctioned demand, so a no-bid
+	// returns an honest empty no-fill rather than fake data (the real-data-only
+	// rule). When ON, houseAdFn supplies the ops-configured house ad to serve
+	// for the format — if none is configured the handler still falls back to
+	// the honest no-fill (we never invent canned content).
+	stubFn := func() bool { return keys.PublisherAdServer.StubOnNobid.Get(cfg) }
+	houseAdFn := houseAdPicker(houseAdCache)
 	mux.HandleFunc(routes.PublisherAdServe, serveHandler(serveDeps{
 		log:             log,
 		clk:             clk,
@@ -166,19 +174,13 @@ func main() {
 		prebidClient:    prebidCli,
 		prebidServersFn: prebidServersFn,
 		pub:             pub,
+		stubFn:          stubFn,
+		houseAdFn:       houseAdFn,
 	}))
 	omidFn := func() (string, string) {
 		return keys.PublisherAdServer.OmidVendor.Get(cfg),
 			keys.PublisherAdServer.OmidVerificationURL.Get(cfg)
 	}
-	// stubFn is the master on/off for the house-ad fallback on a no-bid. OFF by
-	// default: the platform serves only real auctioned demand, so a no-bid
-	// returns an honest empty no-fill rather than fake data (the real-data-only
-	// rule). When ON, houseAdFn supplies the ops-configured house ad to serve
-	// for the format — if none is configured the handler still falls back to
-	// the honest no-fill (we never invent canned content).
-	stubFn := func() bool { return keys.PublisherAdServer.StubOnNobid.Get(cfg) }
-	houseAdFn := houseAdPicker(houseAdCache)
 	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn, houseAdFn))
 	// publisher_adserver.public_url is the browser-reachable origin
 	// the VMAP schedule will tell the player to call back into for
@@ -218,6 +220,8 @@ type serveDeps struct {
 	prebidClient    *prebidclient.Client
 	prebidServersFn func() string     // CSV; re-read per request for live-tunable demand-source list
 	pub             *events.Publisher // nil-tolerant; emits DirectWin + PrebidOutboundWin events
+	stubFn          func() bool       // house-ad fallback master on/off (publisher_adserver.stub_on_nobid)
+	houseAdFn       houseAdLookup     // format→configured house ad; nil-tolerant
 }
 
 // uuidPattern matches Postgres's canonical lowercase 8-4-4-4-12 hex UUID.
@@ -287,10 +291,16 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 			if d.serveProgrammatic(ctx, w, r, reqLog, placement, placementExt, traceID, geo, device, userID) {
 				return
 			}
-			// Programmatic returned no-bid — fall through to house.
+			// Programmatic returned no-bid — fall through to house. First the
+			// PUBLISHER's own house line item (a direct-sold house campaign);
+			// then, if the master switch is on, the PLATFORM's ops-configured
+			// display house ad (the platform advertising its own business).
 			house := arbitration.DecideHouse(req, d.lineItemCache.All())
 			if house.Type == arbitration.DecisionDirect && house.LineItem != nil {
 				d.serveDirect(ctx, w, reqLog, house.LineItem, placement, traceID)
+				return
+			}
+			if d.serveDisplayHouseAd(w, reqLog, placement, traceID) {
 				return
 			}
 			d.publishNoFill(ctx, traceID, placement, "programmatic-nobid-and-no-house")
@@ -412,6 +422,35 @@ func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqL
 	}
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(out)
+}
+
+// serveDisplayHouseAd renders the platform's ops-configured DISPLAY house ad
+// as the no-bid fill, when the master switch (stubFn) is on and one is
+// configured. Returns true when it served. The response mirrors a display
+// fill (source "house") so the JS SDK renders the markup verbatim; house ads
+// are platform content, not auctioned demand, so there are no impression /
+// click / billing URLs. If the fallback is off or none is configured, returns
+// false and the caller writes the honest no-fill.
+func (d *serveDeps) serveDisplayHouseAd(w http.ResponseWriter, reqLog *slog.Logger, placement postgres.PlacementRow, traceID string) bool {
+	if d.stubFn == nil || !d.stubFn() || d.houseAdFn == nil {
+		return false
+	}
+	ad, ok := d.houseAdFn(houseads.FormatDisplay, seedFromTrace(traceID))
+	if !ok {
+		reqLog.Info("display no-bid: house ads on but none configured for display")
+		return false
+	}
+	reqLog.Info("display no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+	out := struct {
+		TraceID string `json:"trace_id"`
+		Source  string `json:"source"`
+		HTML    string `json:"html"`
+		Width   int    `json:"width"`
+		Height  int    `json:"height"`
+	}{TraceID: traceID, Source: "house", HTML: ad.Markup, Width: placement.Width, Height: placement.Height}
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	json.NewEncoder(w).Encode(out)
+	return true
 }
 
 // sspProgrammaticResult is what serveProgrammatic gets from the SSP. The
