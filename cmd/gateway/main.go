@@ -129,6 +129,7 @@ func main() {
 	reportingURL := keys.Gateway.ReportingURL.Get(cfg)
 	exchangeURL := keys.Gateway.ExchangeURL.Get(cfg)
 	trackerURL := keys.Gateway.TrackerURL.Get(cfg)
+	publicTrackerURL := keys.Gateway.PublicTrackerURL.Get(cfg) // browser-reachable, for embedded pixels
 	jaegerURL := keys.Gateway.JaegerURL.Get(cfg)
 	// Object-store forwarding target for /v1/creatives/* — the
 	// browser-reachable proxy for SVG / PNG / JPG assets stored in
@@ -321,6 +322,15 @@ func main() {
 		audMatcher = postgres.NewFromDB(gwDB)
 	}
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audStore, audMatcher, secretsBus, log))))
+
+	// Advertiser conversion-event setup (define named conversions + embed pixel).
+	// trackerURL is the browser-reachable tracker base baked into the pixel; a nil
+	// store (Postgres down at boot) 503s.
+	var convStore conversionStore
+	if gwDB != nil {
+		convStore = pgConversionStore{db: gwDB}
+	}
+	mux.Handle(routes.APIConversions, authMiddleware(http.HandlerFunc(conversionsHandler(convStore, publicTrackerURL, log))))
 
 	// Identity-graph ingestion (link UID2 / hashed-email / device ids). gwDB may
 	// be nil if Postgres was unreachable at boot; the handler 503s.

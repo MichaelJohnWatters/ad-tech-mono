@@ -46,6 +46,11 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIConversions is advertiser conversion-event setup: define named
+	// conversion types (GET list, POST create, DELETE ?id=) and get an
+	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read
+	// (read) / campaigns:write (mutate); tenant-scoped to the caller's account.
+	APIConversions = apiPrefix + "/api/conversions"
 	// APIIdentityLinks ingests identity-graph edges (link a UID2 token / hashed
 	// email / device id to other identifiers). Operator-API-key auth.
 	APIIdentityLinks = apiPrefix + "/api/identity-links"

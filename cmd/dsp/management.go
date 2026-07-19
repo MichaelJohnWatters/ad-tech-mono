@@ -588,16 +588,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		return fmt.Errorf("targeting insert: %w", err)
 	}
 	// Auto-generate a placeholder banner only for DISPLAY campaigns so the
-	// campaign can serve immediately. Non-display (video/native/audio) campaigns
-	// start creative-less — the advertiser attaches a real, format-matching
-	// creative via PATCH `creatives` (an auto-generated video/native asset isn't
-	// something we can synthesise).
+	// campaign can serve immediately. This is SYSTEM content (a gradient +
+	// the campaign name, hardcoded below — never advertiser-supplied), so
+	// auto-approving it is not a review bypass: real advertiser creatives
+	// always go through pending_review via the creative-upload path. The
+	// name is suffixed "(auto placeholder)" so it's obvious in the creative
+	// list this is a stand-in to replace with a real, reviewed creative.
 	if req.Format == "display" {
 		html := fmt.Sprintf(`<div style="width:${WIDTH}px;height:${HEIGHT}px;background:linear-gradient(135deg,#4ECDC4,#556270);color:white;display:flex;align-items:center;justify-content:center;font-family:sans-serif;text-align:center;padding:8px;box-sizing:border-box;border-radius:4px;"><div><strong>%s</strong><br><small>via mgmt</small></div></div>`, req.Name)
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO creatives (id, account_id, name, format, width, height, landing_url, html_content, review_status, created_at, updated_at)
 VALUES ($1, $2, $3, 'display', 300, 250, $4, $5, 'approved', now(), now())`,
-			creativeID, accountID, req.Name, "https://"+strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))+".test", html); err != nil {
+			creativeID, accountID, req.Name+" (auto placeholder)", "https://"+strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))+".test", html); err != nil {
 			return fmt.Errorf("creative insert: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `

@@ -60,6 +60,7 @@ var advertiserNav = []NavItem{
 	{Label: "Campaigns", Href: "#campaigns", Icon: "◎", Perm: "campaigns:read"},
 	{Label: "Creatives", Href: "#creatives", Icon: "▣", Perm: "creatives:read"},
 	{Label: "Audiences", Href: "#audiences", Icon: "◍", Perm: "audiences:read"},
+	{Label: "Conversions", Href: "#conversions", Icon: "◈", Perm: "campaigns:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
 	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
