@@ -41,12 +41,15 @@ data:
           - json:
               expressions:
                 service: service
-                trace_id: trace_id
                 level: level
+          # trace_id is deliberately NOT a label: labels define STREAMS, and
+          # a per-request id means a stream per request — the 2026-07-19 load
+          # runs minted ~340k streams, hit Loki's stream limit, and ALL
+          # ingestion 429'd. Grafana's Loki→Jaeger pivot regexes trace_id out
+          # of the log CONTENT (derivedFields), which still works.
           - labels:
               service:
               pod:
-              trace_id:
               level:
 ---
 apiVersion: v1
