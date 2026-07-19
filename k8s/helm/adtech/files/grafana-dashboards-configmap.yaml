@@ -4,6 +4,107 @@ metadata:
   name: grafana-dashboards
   namespace: adtech
 data:
+  nats-event-bus.json: |
+    {
+      "title": "NATS / Event Bus",
+      "uid": "adtech-nats",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "title": "Consumer lag (num_pending) \u2014 events building up",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "targets": [
+            {
+              "expr": "jetstream_consumer_num_pending > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10
+              }
+            }
+          }
+        },
+        {
+          "title": "Ack pending (delivered, unacked)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 9
+          },
+          "targets": [
+            {
+              "expr": "jetstream_consumer_num_ack_pending > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Redeliveries/s (at-least-once retries firing)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 9
+          },
+          "targets": [
+            {
+              "expr": "rate(jetstream_consumer_num_redelivered[5m]) > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Stream messages held",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 17
+          },
+          "targets": [
+            {
+              "expr": "jetstream_stream_total_messages",
+              "legendFormat": "{{stream_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Stream bytes held",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 17
+          },
+          "targets": [
+            {
+              "expr": "jetstream_stream_total_bytes",
+              "legendFormat": "{{stream_name}}"
+            }
+          ]
+        }
+      ]
+    }
   pipeline-health.json: |
     {
         "title": "Ad Tech Pipeline Health",

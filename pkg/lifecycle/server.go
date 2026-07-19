@@ -59,7 +59,9 @@ func ListenAndServeWithRetry(server *http.Server, log *slog.Logger, maxRetries i
 // ServeHTTP is a helper that starts an HTTP server with retry and registers
 // shutdown with the lifecycle manager. Blocks until shutdown signal.
 func ServeHTTP(lc *Lifecycle, server *http.Server, log *slog.Logger, gracePeriod time.Duration) error {
-	lc.OnShutdown("http-server", func(ctx context.Context) error {
+	// FIRST: no dependency teardown may run until in-flight requests drain
+	// (see OnShutdownFirst).
+	lc.OnShutdownFirst("http-server", func(ctx context.Context) error {
 		return server.Shutdown(ctx)
 	})
 

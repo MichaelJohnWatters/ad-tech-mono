@@ -88,3 +88,24 @@ func TestShutdown_NoHooks(t *testing.T) {
 		t.Errorf("unexpected error with no hooks: %v", err)
 	}
 }
+
+// The HTTP drain must run BEFORE dependency closes regardless of when
+// ServeHTTP was called — a draining pod that has already closed its NATS
+// bus loses every event its in-flight requests try to publish.
+func TestOnShutdownFirst_RunsBeforeEarlierHooks(t *testing.T) {
+	var buf bytes.Buffer
+	lc := lifecycle.New(logger.NewWithWriter("test", &buf))
+	var order []string
+	lc.OnShutdown("nats-close", func(context.Context) error { order = append(order, "nats"); return nil })
+	lc.OnShutdown("db-close", func(context.Context) error { order = append(order, "db"); return nil })
+	lc.OnShutdownFirst("http-server", func(context.Context) error { order = append(order, "http"); return nil })
+	if err := lc.Shutdown(time.Second); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	want := []string{"http", "nats", "db"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("shutdown order = %v, want %v", order, want)
+		}
+	}
+}

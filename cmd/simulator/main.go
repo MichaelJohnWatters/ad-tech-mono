@@ -300,11 +300,13 @@ func runSimulation() {
 				channel := pickChannel(wrng, p.Channels)
 
 				served, err := runOne(client, eps, exchangeURL, trackerURL, persona, channel, podSize, p, wrng, traceID, traceparent, directMode)
-				n := atomic.AddInt64(&completed, 1)
+				atomic.AddInt64(&completed, 1)
 				if err != nil {
-					atomic.AddInt64(&errors64, 1)
-					if n <= 3 {
-						log.Error("request failed", "error", err, "trace_id", traceID)
+					e := atomic.AddInt64(&errors64, 1)
+					// First few ERRORS (not requests) — a mid-run failure
+					// burst was undiagnosable when only requests 1-3 logged.
+					if e <= 5 || e%1000 == 0 {
+						log.Error("request failed", "error", err, "trace_id", traceID, "errors_so_far", e)
 					}
 					continue
 				}

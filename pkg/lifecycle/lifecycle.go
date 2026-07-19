@@ -59,6 +59,19 @@ func (lc *Lifecycle) OnShutdown(name string, fn ShutdownFunc) {
 	lc.hooks = append(lc.hooks, hook{name: name, fn: fn})
 }
 
+// OnShutdownFirst PREPENDS a hook so it runs before everything registered so
+// far. Exists for the HTTP drain: services wire their dependencies (NATS,
+// DB) and register those closes BEFORE lifecycle.ServeHTTP registers the
+// server shutdown — so in registration order, a draining pod closed its bus
+// while in-flight requests were still publishing (observed live 2026-07-19:
+// an SSP replica lost 3 behaviour events during a mid-load rolling restart,
+// "nats: connection closed"). Drain-then-teardown is the only correct order.
+func (lc *Lifecycle) OnShutdownFirst(name string, fn ShutdownFunc) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.hooks = append([]hook{{name: name, fn: fn}}, lc.hooks...)
+}
+
 // Wait blocks until SIGTERM or SIGINT is received, then runs all
 // shutdown hooks within the given grace period.
 // Returns an error if any hook fails.

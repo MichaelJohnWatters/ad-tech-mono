@@ -54,6 +54,9 @@ spec:
     metadata:
       labels:
         app: nats
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7777"
     spec:
       containers:
         - name: nats
@@ -96,6 +99,18 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 10
+        # Prometheus sidecar: nats-server's :8222 monitor is JSON-only, so
+        # the exporter translates it (varz + jsz=all → per-consumer
+        # num_pending / redeliveries — the "events building up" signal that
+        # was invisible during the freq-cap backlog and stream-limit
+        # incidents; Grafana's "NATS / Event Bus" dashboard reads these).
+        - name: metrics
+          image: natsio/prometheus-nats-exporter:0.15.0
+          imagePullPolicy: IfNotPresent
+          args: ["-varz", "-jsz=all", "-port=7777", "http://localhost:8222"]
+          ports:
+            - containerPort: 7777
+              name: metrics
       volumes:
         - name: nats-config
           configMap:
