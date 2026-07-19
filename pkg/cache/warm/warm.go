@@ -17,6 +17,7 @@ package warm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -278,8 +279,31 @@ func (c *Cache[T]) refreshNow(ctx context.Context) error {
 // onInvalidate is the NATS subscribe handler. Any message on the invalidate
 // subject triggers a refresh — payload is ignored (we always reload the
 // full set, not partial; partial updates would race with concurrent writes).
+// PublishInvalidate broadcasts this cache's invalidate subject so every
+// replica (per-pod consumer groups) refreshes — the debug refresh endpoint
+// uses it to escape its own load-balanced single-pod reach. No-op without a
+// bus or subject (poll-only caches).
+func (c *Cache[T]) PublishInvalidate(ctx context.Context) error {
+	if c.cfg.Bus == nil || c.cfg.InvalidateSubject == "" {
+		return nil
+	}
+	payload, err := json.Marshal(events.CacheInvalidateEvent{
+		SchemaVersion: events.CurrentSchemaVersion,
+		ResourceType:  c.cfg.Name,
+		Action:        "refresh-broadcast",
+	})
+	if err != nil {
+		return err
+	}
+	return c.cfg.Bus.Publish(ctx, c.cfg.InvalidateSubject, payload)
+}
+
 func (c *Cache[T]) onInvalidate(_ context.Context, msg *events.Message) error {
-	c.cfg.Log.Debug("warm cache invalidate received", "cache", c.cfg.Name, "subject", msg.Subject)
+	// INFO, not Debug: invalidates are rare (writes + refresh broadcasts)
+	// and this line is the only visible proof that cross-replica refresh
+	// propagation works — without it, verifying the broadcast path meant
+	// reading tea leaves.
+	c.cfg.Log.Info("warm cache invalidate received, reloading", "cache", c.cfg.Name, "subject", msg.Subject)
 	c.Trigger()
 	_ = msg.Ack()
 	return nil

@@ -15,6 +15,16 @@ type Refreshable interface {
 	Refresh(ctx context.Context) (int, error)
 }
 
+// invalidatable is the optional broadcast capability: caches wired to a NATS
+// invalidate subject can tell EVERY replica to refresh. The debug refresh
+// endpoint is load-balanced, so without this a refresh call reached exactly
+// one pod and the other replicas kept polling on their own clock (observed
+// 2026-07-19: an adserver replica served ~340 stale-cache fallbacks after a
+// refresh that had only hit its sibling).
+type invalidatable interface {
+	PublishInvalidate(ctx context.Context) error
+}
+
 // Name returns the cache name from its Config — used by the debug handler
 // when reporting which caches were refreshed.
 func (c *Cache[T]) Name() string { return c.cfg.Name }
@@ -54,6 +64,14 @@ func RefreshHandler(caches ...Refreshable) http.HandlerFunc {
 			start := time.Now()
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 			n, err := c.Refresh(ctx)
+			if err == nil {
+				// Broadcast so the OTHER replicas refresh too (per-pod
+				// consumer groups: every replica hears it). Best-effort —
+				// the local refresh already succeeded.
+				if inv, ok := c.(invalidatable); ok {
+					_ = inv.PublishInvalidate(ctx)
+				}
+			}
 			cancel()
 			res := result{
 				Cache:      c.Name(),
