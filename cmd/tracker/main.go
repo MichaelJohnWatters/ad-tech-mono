@@ -4,6 +4,7 @@
 package main
 
 import (
+	"os"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -43,7 +44,19 @@ var pixel = []byte{
 
 func main() {
 	log := logger.New(constants.ServiceTracker)
-	sc := config.Setup(constants.ServiceTracker, keys.TrackerSchema(), log)
+	// Seed override: signature validation defaults OFF in the schema
+	// (phase-in affordance), but the local/prod deployments set
+	// TRACKER_SIGNATURE_VALIDATION=true and that must reach the PER-POD
+	// CONFIG ROW (TierLive rows outrank env at read time — without this
+	// override the seeded 'false' row silently kept warn-mode forever,
+	// which is how invalidly-signed VAST click URLs went unnoticed).
+	setupOpts := []config.SetupOption{}
+	if v := os.Getenv("TRACKER_SIGNATURE_VALIDATION"); v != "" {
+		setupOpts = append(setupOpts, config.WithSeedDefaults(map[string]string{
+			keys.Tracker.SignatureValidation.Key(): v,
+		}))
+	}
+	sc := config.Setup(constants.ServiceTracker, keys.TrackerSchema(), log, setupOpts...)
 	cfg := sc.Cfg
 	// Live-tunable dedup knobs, consumed inside the Dedup constructor.
 	dedupTTL := config.NewLiveDuration(sc.Manager, cfg, keys.Tracker.DedupTTL.Key(), keys.Tracker.DedupTTL.Default())

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/simulator/request"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/vast"
@@ -120,9 +121,9 @@ func serveDisplay(client *http.Client, url, traceparent string, p profile, rng *
 // (p.ConvRate) of the clicks. Real conversions happen off-platform — a human
 // completes an action on the advertiser's own site — so with no user in the
 // loop we synthesise one: derive the trace (and campaign) from the impression
-// beacon the server issued, then POST /v1/t/conv. Unsigned is fine by default
-// (exp absent → isExpired=false, signature validation off); billing attributes
-// the CPA settle by trace_id.
+// beacon the server issued, then fire /v1/t/conv — SIGNED like every other
+// beacon (243 unsigned conversions were flagged invalid in the 2026-07-19
+// run; only warn-mode validation let them through).
 func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile, rng *rand.Rand) {
 	if p.ConvRate <= 0 || rng.Float64() >= p.ConvRate {
 		return
@@ -148,7 +149,7 @@ func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile,
 	nq.Set("cur", "USD")
 	u.Path = routes.TrackerConversion
 	u.RawQuery = nq.Encode()
-	fireGet(client, u.String(), traceparent)
+	fireGet(client, adserving.SignURL(u.String(), adserving.DefaultSigningKey), traceparent)
 }
 
 // serveVAST mirrors the web video/audio tabs: GET the VAST, then fire the

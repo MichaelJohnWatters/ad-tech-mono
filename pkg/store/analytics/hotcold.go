@@ -69,7 +69,11 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 	if hasNonAdditive(params.Metrics) {
 		t.log.Warn("hotcold: non-additive metric over a hot/cold span — serving hot only (approximate)",
 			"table", params.Table, "metrics", params.Metrics)
-		return t.hot.Query(ctx, params)
+		res, err := t.hot.Query(ctx, params)
+		if res != nil {
+			res.Approximate = "non-additive metrics over a hot/cold span: hot window only"
+		}
+		return res, err
 	}
 
 	// Split: hot owns [boundary, to], cold owns [from, boundary). Cold's upper
@@ -88,16 +92,20 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 	if err != nil {
 		return nil, err
 	}
+	degraded := ""
 	coldRes, err := t.cold.Query(ctx, coldParams)
 	if err != nil {
 		// Cold is best-effort (S3/DuckDB may be down): degrade to the hot half
-		// rather than fail the whole query. Logged so staleness is visible.
+		// rather than fail the whole query — but SAY SO on the wire, not just
+		// in a log nobody reads at query time.
 		t.log.Warn("hotcold: cold query failed, serving hot window only", "table", params.Table, "error", err)
 		coldRes = &QueryResult{}
+		degraded = "cold store unavailable: hot window only (history missing from this answer)"
 	}
 
 	merged := mergeAdditive(params.Dimensions, params.Metrics, hotRes, coldRes)
 	applyHotColdOrderLimit(merged, params.OrderBy, params.OrderDir, params.Limit)
+	merged.Approximate = degraded
 	return merged, nil
 }
 
