@@ -225,6 +225,15 @@ const (
 	// PUT/DELETE via a trailing-slash path.
 	APIHouseAds = apiPrefix + "/api/house-ads"
 
+	// APIHouseAdsFill is the master on/off for serving house ads on a no-bid
+	// (GET current state on support:read; PUT {enabled} on support:update). It
+	// sets the GLOBAL publisher_adserver.stub_on_nobid config row AND clears any
+	// per-pod override rows for that key, so the switch actually takes effect
+	// platform-wide (a per-pod row would otherwise shadow the global value).
+	// Registered as an exact path so it wins over the APIHouseAds+"/" by-id
+	// handler.
+	APIHouseAdsFill = apiPrefix + "/api/house-ads/fill"
+
 	// Pass-through proxy prefixes (gateway -> internal, for Swagger try-it-out)
 	ProxyReporting = apiPrefix + "/reporting/"
 	ProxyOpenRTB   = apiPrefix + "/openrtb/"

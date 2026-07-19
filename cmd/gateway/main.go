@@ -468,9 +468,10 @@ func main() {
 	// on a no-bid (support:read list / support:update mutate). Platform-global
 	// (no tenant scope); every mutation is audited + publishes the house-ads
 	// cache invalidate so the publisher ad server reloads sub-second. The
-	// master on/off is the publisher_adserver.stub_on_nobid live config key
-	// (flipped via the config UI), not a second toggle here.
+	// master on/off (APIHouseAdsFill) sets the global stub_on_nobid config AND
+	// clears per-pod overrides so the switch actually takes effect platform-wide.
 	houseAdStore := newPGHouseAdStore(gwDB)
+	mux.Handle(routes.APIHouseAdsFill, authMiddleware(http.HandlerFunc(houseAdsFillHandler(pgFillConfig{src: config.NewPostgresSource(gwDB)}, gwDB, secretsBus, keys.PublisherAdServer.StubOnNobid.Key(), log))))
 	mux.Handle(routes.APIHouseAds, authMiddleware(http.HandlerFunc(houseAdsHandler(houseAdStore, secretsBus, log))))
 	mux.Handle(routes.APIHouseAds+"/", authMiddleware(http.HandlerFunc(houseAdByIDHandler(houseAdStore, secretsBus, log))))
 

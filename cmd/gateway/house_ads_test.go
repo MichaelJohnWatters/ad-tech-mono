@@ -117,6 +117,67 @@ func TestHouseAdsHandler(t *testing.T) {
 	}
 }
 
+// fakeFillConfig records the last SetGlobalClearPerPod call and serves a
+// canned current value.
+type fakeFillConfig struct {
+	value     string
+	setKey    string
+	setValue  string
+	setCalled bool
+}
+
+func (f *fakeFillConfig) Value(context.Context, string) (string, error) { return f.value, nil }
+func (f *fakeFillConfig) SetGlobalClearPerPod(_ context.Context, key, value string) error {
+	f.setCalled, f.setKey, f.setValue = true, key, value
+	return nil
+}
+
+func TestHouseAdsFillHandler(t *testing.T) {
+	staff := &auth.Claims{UserID: "u1", AccountType: auth.AccountStaff, Permissions: []string{"support:read", "support:update"}}
+	const key = "publisher_adserver.stub_on_nobid"
+
+	// GET reports the current enabled state.
+	cfg := &fakeFillConfig{value: "true"}
+	rec := httptest.NewRecorder()
+	houseAdsFillHandler(cfg, nil, nil, key, quietLog())(rec, haReq(http.MethodGet, routes.APIHouseAdsFill, "", staff))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatalf("get code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// PUT enabled=true sets the global + clears per-pod and publishes the config
+	// invalidate.
+	cfg = &fakeFillConfig{}
+	bus := &countingBus{}
+	rec = httptest.NewRecorder()
+	houseAdsFillHandler(cfg, nil, bus, key, quietLog())(rec, haReq(http.MethodPut, routes.APIHouseAdsFill, `{"enabled":true}`, staff))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !cfg.setCalled || cfg.setKey != key || cfg.setValue != "true" {
+		t.Errorf("set: called=%v key=%q value=%q", cfg.setCalled, cfg.setKey, cfg.setValue)
+	}
+	if bus.published != 1 || bus.subject != events.SubjectCacheInvalidateConfig {
+		t.Errorf("invalidate: published=%d subject=%q", bus.published, bus.subject)
+	}
+
+	// PUT enabled=false writes "false".
+	cfg = &fakeFillConfig{}
+	rec = httptest.NewRecorder()
+	houseAdsFillHandler(cfg, nil, nil, key, quietLog())(rec, haReq(http.MethodPut, routes.APIHouseAdsFill, `{"enabled":false}`, staff))
+	if rec.Code != http.StatusOK || cfg.setValue != "false" {
+		t.Errorf("disable: code=%d value=%q", rec.Code, cfg.setValue)
+	}
+
+	// Read-only staff cannot flip it → 403 (no config write).
+	readOnly := &auth.Claims{AccountType: auth.AccountStaff, Permissions: []string{"support:read"}}
+	cfg = &fakeFillConfig{}
+	rec = httptest.NewRecorder()
+	houseAdsFillHandler(cfg, nil, nil, key, quietLog())(rec, haReq(http.MethodPut, routes.APIHouseAdsFill, `{"enabled":true}`, readOnly))
+	if rec.Code != http.StatusForbidden || cfg.setCalled {
+		t.Errorf("read-only PUT code=%d setCalled=%v, want 403 + no write", rec.Code, cfg.setCalled)
+	}
+}
+
 func TestHouseAdByIDHandler(t *testing.T) {
 	staff := &auth.Claims{UserID: "u1", AccountType: auth.AccountStaff, Permissions: []string{"support:read", "support:update"}}
 	adID := "44444444-4444-4444-8444-444444444444"

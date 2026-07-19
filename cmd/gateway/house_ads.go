@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/houseads"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -103,6 +104,108 @@ func houseAdsHandler(store houseAdStore, bus events.EventBus, log *slog.Logger) 
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}
 	}
+}
+
+// fillConfig is the minimal config surface the master on/off toggle needs.
+// pgFillConfig implements it over the platform config store; a fake stands in
+// for the handler unit test.
+type fillConfig interface {
+	// Value returns the current global value for key ("" if unset).
+	Value(ctx context.Context, key string) (string, error)
+	// SetGlobalClearPerPod sets the GLOBAL row for key and removes any per-pod
+	// override rows, so the value actually takes effect platform-wide.
+	SetGlobalClearPerPod(ctx context.Context, key, value string) error
+}
+
+// houseAdsFillHandler is the master switch for serving house ads on a no-bid.
+// GET (support:read) returns the current enabled state; PUT {enabled}
+// (support:update) sets the global publisher_adserver.stub_on_nobid AND clears
+// per-pod overrides for that key (a per-pod row would otherwise shadow the
+// global value, so a plain global write looks like it does nothing). It then
+// publishes the config cache-invalidate so every pod re-polls within NATS RTT.
+func houseAdsFillHandler(cfg fillConfig, db *sql.DB, bus events.EventBus, key string, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.Method {
+		case http.MethodGet:
+			if !can(claims, "support:read") {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			v, err := cfg.Value(r.Context(), key)
+			if err != nil {
+				log.Error("house ad fill read failed", "error", err)
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": strings.EqualFold(v, "true")})
+
+		case http.MethodPut:
+			if !can(claims, "support:update") {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			var body struct {
+				Enabled bool `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+				return
+			}
+			value := "false"
+			if body.Enabled {
+				value = "true"
+			}
+			if err := cfg.SetGlobalClearPerPod(r.Context(), key, value); err != nil {
+				log.Error("house ad fill toggle failed", "error", err)
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			// Nudge every pod to re-poll immediately (config manager subscribes
+			// to this subject); the 30s poll is the fallback.
+			if bus != nil {
+				_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateConfig, []byte(key))
+			}
+			if db != nil {
+				_ = audit.Log(r.Context(), db, audit.Entry{
+					ActorID: claims.UserID, Action: "house_ad:fill_toggle",
+					ResourceType: "config", ResourceID: key,
+					Changes: map[string]bool{"enabled": body.Enabled},
+				})
+			}
+			log.Info("house ad fill toggled", "enabled", body.Enabled, "actor", claims.UserID)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"enabled": body.Enabled})
+
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+// pgFillConfig adapts the platform config store to fillConfig.
+type pgFillConfig struct{ src *config.PostgresSource }
+
+func (c pgFillConfig) Value(ctx context.Context, key string) (string, error) {
+	all, err := c.src.FetchAll(ctx)
+	if err != nil {
+		return "", err
+	}
+	return all[key], nil
+}
+
+func (c pgFillConfig) SetGlobalClearPerPod(ctx context.Context, key, value string) error {
+	// Delete removes ALL rows for the key (per-pod + global); Update then writes
+	// the fresh global row. Net result: one global row, no per-pod shadows.
+	if err := c.src.Delete(ctx, key); err != nil {
+		return err
+	}
+	return c.src.Update(ctx, key, value)
 }
 
 // houseAdByIDHandler serves PUT /v1/api/house-ads/{id} (update) and
