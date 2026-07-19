@@ -27,9 +27,6 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 		log.Warn("datalake sink disabled: no object store")
 		return nil
 	}
-	if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
-		log.Warn("datalake: ensure bucket failed", "bucket", bucket, "error", err)
-	}
 	batchSize := keys.Pipeline.DatalakeBatchSize.Get(cfg)
 	sink := newDatalakeSink(datalake.NewObjectStore(objStore, bucket, log), batchSize, log)
 
@@ -43,26 +40,51 @@ func startDatalakeSink(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifec
 	// so no flush interleaves with a rewrite (single-writer rule), and
 	// JetStream holds the backlog until the subscription lands.
 	go func() {
-		for table, schema := range sink.schemas {
-			if err := sink.lake.EnsurePartitioned(context.Background(), table, schema); err != nil {
-				log.Error("datalake: partition migration failed", "table", table, "error", err)
+		// RETRY UNTIL SUBSCRIBED — never give up. On the clean-slate cold
+		// boot (2026-07-19) the pipeline raced Minio: EnsureBucket failed
+		// once, every migration failed on the missing bucket, the give-up
+		// path left the sink unsubscribed — and with interest-based stream
+		// retention, an entire run's lake events were dropped UNRETAINED
+		// (no backlog to replay; ClickHouse kept its own copy). A missing
+		// dependency at boot must mean "later", not "never".
+		for attempt := 1; ; attempt++ {
+			ctx := context.Background()
+			if err := objStore.EnsureBucket(ctx, bucket); err != nil {
+				log.Error("datalake sink: ensure bucket failed; retrying", "bucket", bucket, "attempt", attempt, "error", err)
+				time.Sleep(15 * time.Second)
+				continue
 			}
-		}
-		bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
-		if err != nil {
-			log.Error("datalake sink disabled: nats unavailable", "error", err)
+			migrated := true
+			for table, schema := range sink.schemas {
+				if err := sink.lake.EnsurePartitioned(ctx, table, schema); err != nil {
+					log.Error("datalake sink: partition migration failed; retrying", "table", table, "attempt", attempt, "error", err)
+					migrated = false
+					break
+				}
+			}
+			if !migrated {
+				time.Sleep(15 * time.Second)
+				continue
+			}
+			bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline, log)
+			if err != nil {
+				log.Error("datalake sink: nats unavailable; retrying", "attempt", attempt, "error", err)
+				time.Sleep(15 * time.Second)
+				continue
+			}
+			if err := bus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); err != nil {
+				log.Warn("datalake: ensure stream failed", "error", err)
+			}
+			if err := sink.Subscribe(bus); err != nil {
+				log.Error("datalake sink: subscribe failed; retrying", "attempt", attempt, "error", err)
+				_ = bus.Close()
+				time.Sleep(15 * time.Second)
+				continue
+			}
+			lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
+			log.Info("datalake sink subscribed (post-migration)", "attempts", attempt)
 			return
 		}
-		if err := bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects}); err != nil {
-			log.Warn("datalake: ensure stream failed", "error", err)
-		}
-		if err := sink.Subscribe(bus); err != nil {
-			log.Error("datalake sink subscribe failed", "error", err)
-			_ = bus.Close()
-			return
-		}
-		lc.OnShutdown("pipeline-nats", func(_ context.Context) error { return bus.Close() })
-		log.Info("datalake sink subscribed (post-migration)")
 	}()
 
 	// Keep this comfortably UNDER the NATS consumer AckWait (30s): with

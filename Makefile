@@ -166,7 +166,12 @@ stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
 	scripts/stack-images.sh
 	helm upgrade --install adtech k8s/helm/adtech --timeout 10m
 	@echo "waiting for migrations + core services…"
-	kubectl -n adtech wait --for=condition=complete job/adtech-migrate --timeout=300s
+	@# The migrate hook job deletes itself on success (and is created after
+	@# helm returns), so wait on the REAL condition: the goose schema exists.
+	@for i in $$(seq 1 90); do \
+	  kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tAc "SELECT 1 FROM goose_db_version LIMIT 1" >/dev/null 2>&1 && break; \
+	  sleep 5; \
+	done
 	kubectl -n adtech rollout status deploy/gateway deploy/reporting --timeout=300s
 	@if [ -f dev/tls/localhost.pem ]; then \
 	  kubectl create secret generic gateway-tls -n adtech \

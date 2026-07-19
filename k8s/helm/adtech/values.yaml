@@ -71,7 +71,7 @@ localExpose:
 services:
   dsp-internal:
     image: adtech-dsp
-    replicas: 2
+    replicas: 3
     containerName: dsp
     ports: [{ name: http, port: 8082 }]
     env:
@@ -177,7 +177,7 @@ services:
 
   ssp:
     image: adtech-ssp
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8084 }]
     env:
       - name: REDIS_URL
@@ -212,7 +212,7 @@ services:
 
   exchange:
     image: adtech-exchange
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8081 }]
     env:
       - name: POD_NAME
@@ -245,7 +245,7 @@ services:
 
   adserver:
     image: adtech-adserver
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8085 }]
     env:
       - name: POD_NAME
@@ -283,7 +283,7 @@ services:
 
   publisher-adserver:
     image: adtech-publisher-adserver
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8088 }]
     env:
       - name: POD_NAME
@@ -352,7 +352,7 @@ services:
 
   gateway:
     image: adtech-gateway
-    replicas: 2
+    replicas: 3
     # Named service account (gateway-rbac.yaml) so the staff ops console can
     # list pods / restart deployments / trigger cronjobs in-namespace.
     serviceAccountName: gateway
@@ -464,7 +464,7 @@ services:
 
   webhooks:
     image: adtech-webhooks
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8091 }]
     env:
       - name: POD_NAME
@@ -489,7 +489,7 @@ services:
 
   identity-consumer:
     image: adtech-identity-consumer
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8092 }]
     env:
       - name: IDENTITY_CONSUMER_REDIS_URL
@@ -548,7 +548,7 @@ services:
 
   ssai:
     image: adtech-ssai
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8093 }]
     env:
       - name: POD_NAME
@@ -613,7 +613,7 @@ services:
 
   reporting:
     image: adtech-reporting
-    replicas: 2
+    replicas: 3
     ports: [{ name: http, port: 8086 }]
     env:
       - name: POD_NAME

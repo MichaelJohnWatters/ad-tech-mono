@@ -103,6 +103,17 @@ spec:
         app: promtail
     spec:
       serviceAccountName: promtail
+      initContainers:
+        # The node's default inotify budget (128 instances) can't cover a
+        # full multi-replica fleet's log dirs — promtail died at boot with
+        # "too many open files" the moment the pod count hit ~50 (3-replica
+        # cold boot, 2026-07-19). Privileged init raises the node sysctls;
+        # chart-contained so it survives VM rebuilds.
+        - name: inotify-sysctls
+          image: busybox:1.36
+          securityContext:
+            privileged: true
+          command: ["sh", "-c", "sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=1048576"]
       containers:
         - name: promtail
           image: {{ $pt.image }}
