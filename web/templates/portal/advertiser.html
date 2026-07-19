@@ -23,7 +23,7 @@
           </select>
         </label>
         {{ end }}
-        {{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}
+        <span id="newCampaignBtn" class="hidden">{{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}</span>
       </div>
     </div>
 
@@ -531,6 +531,9 @@ const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
+  // The New-campaign action belongs to the Campaigns tab only (it was in
+  // the global header, so it showed on every section).
+  $('newCampaignBtn')?.classList.toggle('hidden', name !== 'campaigns');
   $('crumbSection').textContent = name[0].toUpperCase() + name.slice(1);
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
