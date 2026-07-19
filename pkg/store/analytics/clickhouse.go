@@ -21,9 +21,10 @@ import (
 // with the memory and DuckDB backends. All tables are MergeTree ordered by
 // timestamp — the dominant filter/group dimension for reporting.
 type ClickHouse struct {
-	db   *sql.DB
-	conn clickhouse.Conn // native protocol — hot bulk-insert path (PrepareBatch)
-	log  *slog.Logger
+	db      *sql.DB
+	conn    clickhouse.Conn // native protocol — hot bulk-insert path (PrepareBatch)
+	log     *slog.Logger
+	ttlDays int
 }
 
 // ClickHouseConfig configures the connection. Addrs is host:port pairs.
@@ -33,6 +34,10 @@ type ClickHouseConfig struct {
 	Username string
 	Password string
 	Log      *slog.Logger
+	// TTLDays bounds the raw-event tables: rows older than this are dropped
+	// by ClickHouse's own TTL (the hot tier stays small; the Delta lake is
+	// the durable record). 0 = no TTL (unbounded). Rollup tables are exempt.
+	TTLDays int
 }
 
 // NewClickHouse opens a connection, pings it, and ensures the schema.
@@ -85,7 +90,7 @@ func NewClickHouse(cfg ClickHouseConfig) (*ClickHouse, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	ch := &ClickHouse{db: db, conn: conn, log: log}
+	ch := &ClickHouse{db: db, conn: conn, log: log, ttlDays: cfg.TTLDays}
 	if err := ch.createTables(); err != nil {
 		db.Close()
 		conn.Close()
@@ -203,6 +208,28 @@ func (c *ClickHouse) createTables() error {
 			return fmt.Errorf("exec %.40s: %w", stmt, err)
 		}
 	}
+	// Bound the raw-event tables: TTL drops rows older than ttlDays so the
+	// HOT tier stays small (the Delta lake keeps everything; cold reads
+	// serve older history). Applied to CREATE-time tables via ALTER so
+	// existing deployments pick it up too. Rollup tables (ORDER BY (config
+	// ...)) are exempt — small, long-lived aggregates. 0 = leave unbounded.
+	if c.ttlDays > 0 {
+		rawEventTables := []string{
+			"impressions", "clicks", "conversions", "views", "auctions",
+			"auction_wins", "media_events", "serve_no_fills", "freq_cap_blocks",
+			"render_failures", "campaign_state_changes", "budget_depletions", "dsp_calls",
+		}
+		for _, t := range rawEventTables {
+			ddl := fmt.Sprintf("ALTER TABLE %s MODIFY TTL toDateTime(timestamp) + INTERVAL %d DAY", t, c.ttlDays)
+			if _, err := c.db.Exec(ddl); err != nil {
+				// Non-fatal: a TTL that can't apply (older CH, permissions)
+				// shouldn't stop the service booting — log and continue.
+				c.log.Warn("clickhouse: could not apply TTL", "table", t, "days", c.ttlDays, "error", err)
+			}
+		}
+		c.log.Info("clickhouse raw-event TTL applied", "days", c.ttlDays)
+	}
+
 	return nil
 }
 

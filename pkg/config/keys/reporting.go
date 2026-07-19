@@ -35,6 +35,7 @@ var Reporting = struct {
 	PacingCounterTTL             config.DurationKey
 	ColdStoreEnabled             config.BoolKey
 	HotWindow                    config.DurationKey
+	ClickHouseTTLDays            config.IntKey
 	QueryTimeout                 config.DurationKey
 
 	// URL is the reporting service's base URL, bridged from REPORTING_URL
@@ -63,6 +64,7 @@ var Reporting = struct {
 	PacingCounterTTL:             reportingSet.Duration("reporting.pacing_counter_ttl", "26h", config.TierStatic, "TTL on the shared pacing counter's Redis keys, so yesterday's per-campaign counters self-expire (mirrors the DSP budget key's daily rollover). A little over a day to tolerate clock skew. Only consulted when reporting.shared_pacing_counter=true.", config.Since("v1.7")),
 	ColdStoreEnabled:             reportingSet.Bool("reporting.cold_store_enabled", "false", config.TierStatic, "Route deep-history reads to the Parquet lake (DuckDB read_parquet over the active file set) below reporting.hot_window; recent reads stay on ClickHouse. Requires the clickhouse backend and a binary built with the duckdb tag (build/Dockerfile.reporting); otherwise degrades to hot-only.", config.Since("v1.4")),
 	HotWindow:                    reportingSet.Duration("reporting.hot_window", "168h", config.TierStatic, "How far back the hot store (ClickHouse) is authoritative. Reads older than this fall to the cold Parquet lake; queries spanning the boundary are split and merged additively. Only used when reporting.cold_store_enabled.", config.Since("v1.4")),
+	ClickHouseTTLDays:            reportingSet.Int("reporting.clickhouse_ttl_days", "30", config.TierStatic, "Raw-event ClickHouse tables (impressions/clicks/…) drop rows older than this many days — the HOT tier stays bounded; the Delta lake is the keep-forever record and cold reads serve older history. Must exceed reporting.hot_window. Rollup tables are exempt (small, long-lived aggregates). 0 = no TTL (unbounded — pre-2026-07 behaviour).", config.Since("v1.10")),
 	QueryTimeout:                 reportingSet.Duration("reporting.query_timeout", "2m", config.TierLive, "Per-request deadline on /v1/reporting/query (write deadline + query context). Lets deep-history cold-store reads outlive the server-wide 30s WriteTimeout, which still bounds every other route.", config.Since("v1.5")),
 
 	URL:  config.RawString("reporting.url", routes.DefaultReportingURL),

@@ -49,12 +49,27 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 		return store
 	case "clickhouse":
 		addrs := splitAndTrim(keys.Reporting.ClickHouseAddr.Get(cfg))
+		// Bound the hot tier: TTL must comfortably EXCEED the cold-read
+		// boundary (hot_window) so ClickHouse always covers what the cold
+		// store hands off to it. If misconfigured smaller, clamp up to
+		// hot_window + 1 day and warn — never let a TTL delete data the
+		// hot path still owns.
+		ttlDays := keys.Reporting.ClickHouseTTLDays.Get(cfg)
+		if ttlDays > 0 {
+			hotDays := int(keys.Reporting.HotWindow.Get(cfg).Hours()/24) + 1
+			if ttlDays < hotDays {
+				log.Warn("clickhouse TTL below hot_window; clamping up to keep the hot tier whole",
+					"ttl_days", ttlDays, "hot_window_days", hotDays)
+				ttlDays = hotDays
+			}
+		}
 		store, err := analytics.NewClickHouse(analytics.ClickHouseConfig{
 			Addrs:    addrs,
 			Database: keys.Reporting.ClickHouseDatabase.Get(cfg),
 			Username: keys.Reporting.ClickHouseUser.Get(cfg),
 			Password: keys.Reporting.ClickHousePassword.Get(cfg),
 			Log:      log,
+			TTLDays:  ttlDays,
 		})
 		if err != nil {
 			// The ledger's posture: a requested durable backend that's
