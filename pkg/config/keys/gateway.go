@@ -21,6 +21,7 @@ var Gateway = struct {
 	ReportingURL       config.StringKey
 	ExchangeURL        config.StringKey
 	TrackerURL         config.StringKey
+	PublicTrackerURL   config.StringKey
 	JaegerURL          config.StringKey
 	ConfigPollInterval config.DurationKey
 
@@ -42,6 +43,7 @@ var Gateway = struct {
 	ReportingURL:         gatewaySet.String("gateway.reporting_url", "http://localhost:8086", config.TierStatic, "Internal reporting service URL the gateway proxies to for /v1/api/reports/* and /v1/api/billing/*.", config.Since("v1.0")),
 	ExchangeURL:          gatewaySet.String("gateway.exchange_url", "http://localhost:8081", config.TierStatic, "Internal exchange URL the gateway proxies to for the OpenRTB try-it-out endpoints.", config.Since("v1.0")),
 	TrackerURL:           gatewaySet.String("gateway.tracker_url", "http://localhost:8083", config.TierStatic, "Internal tracker URL the gateway proxies to for the developer pixel-trigger tools.", config.Since("v1.0")),
+	PublicTrackerURL:     gatewaySet.String("gateway.public_tracker_url", "http://localhost:8083", config.TierStatic, "BROWSER-reachable tracker base baked into advertiser-embedded conversion pixels. Differs from tracker_url (which is the in-cluster proxy target); this one must resolve from the advertiser's own website. Dev: localhost:8083; prod: the public tracker domain.", config.Since("v1.11")),
 	JaegerURL:            gatewaySet.String("gateway.jaeger_url", "http://localhost:16686", config.TierStatic, "Jaeger query API URL proxied for the browser. Needed because Jaeger v1.58 doesn't set CORS headers on its query endpoint.", config.Since("v1.0")),
 	ConfigPollInterval:   gatewaySet.Duration("gateway.config_poll_interval", "30s", config.TierStatic, "How often the gateway polls Postgres for live-config changes. Same semantics as config.poll_interval but lets the gateway tune independently of the platform default.", config.Since("v1.0")),
 	URL:                  config.RawString("gateway.url", routes.DefaultGatewayURL),

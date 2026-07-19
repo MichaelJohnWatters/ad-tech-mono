@@ -86,6 +86,19 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Conversions ============ -->
+    <section id="section-conversions" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Conversion events" "subtitle" "Define named conversions and embed the pixel on your site's confirmation pages") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New conversion" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newConversion').classList.remove('hidden')") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Event type" "Default value" "Status" "Pixel" "")) }}
+        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      <p class="mt-3 text-xs text-gray-400">Embed a pixel on your order-confirmation / thank-you page. Substitute the trace id you captured from the click for <code>__TRACE_ID__</code> so the conversion attributes back to the ad that drove it.</p>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
@@ -406,6 +419,31 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- New conversion modal -->
+{{ template "modal-start" (dict "id" "newConversion" "title" "New conversion") }}
+  <form onsubmit="createConversion(event)">
+    {{ template "form-field" (dict "label" "Name" "name" "cv_name" "placeholder" "Checkout purchase" "required" true) }}
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Event type</span>
+        <select id="cv_type" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="purchase">Purchase</option>
+          <option value="signup">Signup</option>
+          <option value="lead">Lead</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Currency" "name" "cv_currency" "value" "USD") }}
+    </div>
+    {{ template "form-field" (dict "label" "Default value" "name" "cv_value" "type" "number" "value" "0" "placeholder" "0") }}
+    <p class="mb-4 text-xs text-gray-400">The default value is baked into the pixel's <code>rev</code> param. Override it per-fire from your page if the conversion value varies (e.g. cart total).</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newConversion').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
 <!-- Edit campaign drawer -->
 {{ template "drawer-start" (dict "id" "editCampaign" "title" "Edit campaign") }}
   <form onsubmit="saveCampaign(event)">
@@ -526,7 +564,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'reports', 'billing', 'team'];
+const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'reports', 'billing', 'team'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -546,7 +584,7 @@ function showSection(name) {
   if (!loaded[name]) {
     loaded[name] = true;
     ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
-      creatives: loadCreatives, audiences: loadAudiences,
+      creatives: loadCreatives, audiences: loadAudiences, conversions: loadConversions,
       reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
       billing: loadBilling, team: loadTeam}[name])?.();
   } else if (name === 'reports') {
@@ -1156,6 +1194,62 @@ async function exportSegment(id, name) {
     })});
     toast('Export queued — download from Reports → Report jobs', 'success');
   } catch (err) { toast('Export failed: ' + err.message, 'error'); }
+}
+
+// ---- Conversions ----
+// Cache keyed by config id so the copy buttons can read the server-rendered
+// pixel/snippet without re-deriving the URL client-side.
+let conversionCache = {};
+async function loadConversions() {
+  const tbody = tbodyOf('conversions');
+  try {
+    const list = await fetchJSON('/v1/api/conversions') || [];
+    conversionCache = {};
+    list.forEach(c => { conversionCache[c.id] = c; });
+    tbody.innerHTML = list.length ? list.map(c => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(c.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(c.event_type)}</td>
+        <td class="px-3 py-2 font-mono">${esc(c.currency)} ${Number(c.default_value).toFixed(2)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded bg-surface-3 text-gray-500">${esc(c.status)}</span></td>
+        <td class="px-3 py-2">
+          <button onclick="copyPixel('${esc(c.id)}', 'pixel')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy pixel</button>
+          <button onclick="copyPixel('${esc(c.id)}', 'snippet')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy JS</button>
+        </td>
+        <td class="px-3 py-2 text-right"><button onclick="deleteConversion('${esc(c.id)}', '${esc(c.name)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Delete</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No conversions yet — define your first event above.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function copyPixel(id, which) {
+  const c = conversionCache[id];
+  if (!c) return;
+  const text = which === 'snippet' ? c.snippet : c.pixel;
+  navigator.clipboard?.writeText(text).then(() => toast('Copied — substitute __TRACE_ID__ with your captured trace id', 'info'));
+}
+async function createConversion(ev) {
+  ev.preventDefault();
+  try {
+    await fetchJSON('/v1/api/conversions', {method: 'POST', body: JSON.stringify({
+      name: $('cv_name').value.trim(),
+      event_type: $('cv_type').value,
+      currency: $('cv_currency').value.trim() || 'USD',
+      default_value: Number($('cv_value').value) || 0,
+    })});
+    $('newConversion').classList.add('hidden');
+    $('cv_name').value = '';
+    toast('Conversion created', 'success');
+    loadConversions();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+async function deleteConversion(id, name) {
+  try {
+    await fetchJSON('/v1/api/conversions?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast(`Deleted "${name}"`, 'success');
+    loadConversions();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // ---- Saved queries ----
