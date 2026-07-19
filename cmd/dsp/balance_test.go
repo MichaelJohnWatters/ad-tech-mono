@@ -41,6 +41,49 @@ func TestBalanceGate_GatesOnFunds(t *testing.T) {
 	}
 }
 
+// An invoiced account with a zero balance may bid on credit up to
+// credit_limit, then stops once accrued spend exceeds the limit. Prepay is the
+// special case credit_limit=0 (covered by the tests above).
+func TestBalanceGate_InvoicedBidsOnCredit(t *testing.T) {
+	l2 := cache.NewMemoryL2()
+	g := NewBalanceGate(l2, nil, quietBalanceLog())
+	// $0 balance, $5.00 credit limit — invoiced.
+	g.rebase(context.Background(), []postgres.AdvertiserBalance{{
+		AccountID: "inv-a", Balance: 0, Currency: "USD", PaymentTerms: "invoiced", CreditLimit: 5.00,
+	}})
+
+	// Zero balance but credit headroom → may bid.
+	if ok, rem := g.HasFunds("inv-a"); !ok || rem != 5.00 {
+		t.Fatalf("invoiced 0-balance: ok=%v rem=%v, want true 5.00 (credit headroom)", ok, rem)
+	}
+	// Spend draws the credit down; a positive sliver still bids.
+	g.RecordWin("inv-a", 4.80)
+	if ok, rem := g.HasFunds("inv-a"); !ok || rem != 0.20 {
+		t.Fatalf("invoiced after 4.80 spend: ok=%v rem=%v, want true 0.20", ok, rem)
+	}
+	// Spend now exceeds the credit limit → stops bidding.
+	g.RecordWin("inv-a", 0.40)
+	if ok, _ := g.HasFunds("inv-a"); ok {
+		t.Fatalf("invoiced past credit limit must stop bidding")
+	}
+}
+
+// A prepay account (credit_limit 0) with zero balance never bids — the new
+// formula reduces to the prepay gate exactly. A missing row still fails closed.
+func TestBalanceGate_PrepayZeroCreditUnchanged(t *testing.T) {
+	l2 := cache.NewMemoryL2()
+	g := NewBalanceGate(l2, nil, quietBalanceLog())
+	g.rebase(context.Background(), []postgres.AdvertiserBalance{{
+		AccountID: "pre-a", Balance: 0, Currency: "USD", PaymentTerms: "prepay", CreditLimit: 0,
+	}})
+	if ok, _ := g.HasFunds("pre-a"); ok {
+		t.Fatalf("prepay 0-balance 0-credit must not bid")
+	}
+	if ok, _ := g.HasFunds("pre-unknown"); ok {
+		t.Fatalf("account without a balance row must not bid, credit or not")
+	}
+}
+
 func TestBalanceGate_WinsDrawDownUntilRebase(t *testing.T) {
 	l2 := cache.NewMemoryL2()
 	g := NewBalanceGate(l2, nil, quietBalanceLog())

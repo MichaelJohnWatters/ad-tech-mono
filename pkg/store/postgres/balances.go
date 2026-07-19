@@ -8,13 +8,18 @@ import (
 )
 
 // AdvertiserBalance is one advertiser account's prepay balance as the DSP's
-// warm cache stores it. The bid path gates on Balance minus the Redis spend
-// mirror — see cmd/dsp BalanceGate.
+// warm cache stores it. The bid path gates on Balance (+ CreditLimit for
+// invoiced accounts) minus the Redis spend mirror — see cmd/dsp BalanceGate.
 type AdvertiserBalance struct {
-	AccountID    string
-	Balance      float64
-	Currency     string
+	AccountID string
+	Balance   float64
+	Currency  string
+	// PaymentTerms is 'prepay' (default) or 'invoiced'. CreditLimit is the
+	// invoiced headroom in DECIMAL dollars: an account may bid while
+	// balance + credit_limit − spend > 0. Prepay rows carry credit_limit 0,
+	// so the gate formula reduces to the prepay behaviour exactly.
 	PaymentTerms string
+	CreditLimit  float64
 }
 
 // BalanceLoader reads every advertiser balance row. One cheap SELECT — the
@@ -25,7 +30,8 @@ type BalanceLoader struct {
 
 func (l *BalanceLoader) LoadAll(ctx context.Context) ([]AdvertiserBalance, error) {
 	const q = `
-SELECT account_id::text, balance::float8, currency, payment_terms
+SELECT account_id::text, balance::float8, currency, payment_terms,
+       COALESCE(credit_limit, 0)::float8
 FROM advertiser_balances`
 
 	rows, err := l.Store.read.QueryContext(ctx, q)
@@ -37,7 +43,7 @@ FROM advertiser_balances`
 	var out []AdvertiserBalance
 	for rows.Next() {
 		var b AdvertiserBalance
-		if err := rows.Scan(&b.AccountID, &b.Balance, &b.Currency, &b.PaymentTerms); err != nil {
+		if err := rows.Scan(&b.AccountID, &b.Balance, &b.Currency, &b.PaymentTerms, &b.CreditLimit); err != nil {
 			return nil, fmt.Errorf("scan advertiser balance: %w", err)
 		}
 		out = append(out, b)

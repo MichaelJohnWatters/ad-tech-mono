@@ -457,6 +457,13 @@ func main() {
 	// list / support:update edit); invalidates the billing-rates cache.
 	mux.Handle(routes.APIRevshare, authMiddleware(http.HandlerFunc(revshareHandler(pgRevshareStore{db: gwDB}, secretsBus, log))))
 
+	// Billing terms — staff editor for advertiser prepay/invoiced posture +
+	// credit_limit (GET read on support:read, PUT set on support:update, both
+	// enforced inside the handler). Invoiced accounts bid on credit up to the
+	// limit; the PUT invalidates the DSP balance cache so the gate re-reads the
+	// new terms within NATS RTT.
+	mux.Handle(routes.APIBillingTerms, authMiddleware(http.HandlerFunc(billingTermsHandler(pgBillingTermsStore{db: gwDB}, secretsBus, log))))
+
 	// Staff ops console (/v1/api/ops/*) — monitor + act on the k8s stack from
 	// the staff portal. The kubeops client only exists in-cluster; off-cluster
 	// (bare `go run`) the k8s-backed handlers 503 with an ERROR log. Reads are

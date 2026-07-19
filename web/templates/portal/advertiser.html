@@ -199,6 +199,7 @@
     <section id="section-billing" class="portal-section p-6 space-y-6 hidden">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         {{ template "stat" (dict "label" "Balance" "value" "—" "id" "kpiBalance" "hint" "prepay funds available") }}
+        {{ template "stat" (dict "label" "Billing mode" "value" "—" "id" "kpiTerms" "hint" "set by your account manager") }}
       </div>
 
       {{ template "card-start" (dict "title" "Add funds") }}
@@ -1516,6 +1517,20 @@ async function loadBilling() {
   try {
     const b = await fetchJSON('/v1/api/billing/topup');
     $('kpiBalance').textContent = fmtUSD(b.balance);
+    // Billing mode is read-only here — only staff change it. Invoiced accounts
+    // bid on credit up to credit_limit (used = credit consumed, i.e. accrued
+    // spend beyond the paid balance).
+    const terms = $('kpiTerms');
+    if (terms) {
+      if (b.payment_terms === 'invoiced') {
+        const used = Math.max(0, -(b.balance || 0));
+        terms.textContent = `Invoiced — ${fmtUSD(b.credit_limit)} credit`;
+        terms.title = `Credit used: ${fmtUSD(used)} of ${fmtUSD(b.credit_limit)}`;
+      } else {
+        terms.textContent = 'Prepay';
+        terms.title = 'Prepay — add funds above to bid';
+      }
+    }
     const rows = b.topups || [];
     tbodyOf('billing').innerHTML = rows.length ? rows.map(t => `
       <tr class="border-t border-gray-100 dark:border-gray-800">

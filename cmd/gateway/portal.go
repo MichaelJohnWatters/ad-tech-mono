@@ -174,6 +174,7 @@ var staffNav = []NavItem{
 	{Label: "Moderation", Href: "#moderation", Icon: "⚑", Perm: "moderation:read"},
 	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
 	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
+	{Label: "Billing terms", Href: "#billingterms", Icon: "＄", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Profiles", Href: "#profiles", Icon: "◔", Perm: "support:read"},
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
