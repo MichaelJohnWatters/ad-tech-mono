@@ -258,6 +258,41 @@
         {{ template "stat" (dict "label" "Pending payout" "value" "—" "id" "kpiPending") }}
         {{ template "stat" (dict "label" "Paid out" "value" "—" "id" "kpiPaid") }}
       </div>
+      {{ template "card-start" (dict "title" "Payout method" "subtitle" "Where your earnings go, and the minimum balance before we pay out") }}
+      <form onsubmit="savePayoutMethod(event)" class="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        <label class="block text-sm mb-4">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Method</span>
+          <select id="pm_type" onchange="onPayoutTypeChange()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="bank_transfer">Bank transfer</option>
+            <option value="paypal">PayPal</option>
+            <option value="payoneer">Payoneer</option>
+            <option value="wire">Wire</option>
+          </select>
+        </label>
+        {{ template "form-field" (dict "label" "Display name (optional)" "name" "pm_display" "placeholder" "Main account") }}
+        {{/* Toggled per method type by onPayoutTypeChange(); the masked tail is
+             shown as a placeholder — leave blank to keep the stored value. */}}
+        <label id="pm_bank_field" class="block text-sm mb-4">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Account number</span>
+          <input id="pm_account_number" type="text" autocomplete="off" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+        </label>
+        <label id="pm_paypal_field" class="block text-sm mb-4 hidden">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">PayPal email</span>
+          <input id="pm_paypal_email" type="email" autocomplete="off" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+        </label>
+        <label id="pm_iban_field" class="block text-sm mb-4 hidden">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">IBAN</span>
+          <input id="pm_iban" type="text" autocomplete="off" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+        </label>
+        {{ template "form-field" (dict "label" "Minimum payout (USD)" "name" "pm_min" "type" "number" "value" "0") }}
+        {{ template "form-field" (dict "label" "Currency" "name" "pm_currency" "value" "USD") }}
+        <div class="md:col-span-2 flex items-center justify-between">
+          <span id="pm_status" class="text-xs text-gray-400"></span>
+          {{ template "button" (dict "label" "Save payout method" "type" "submit") }}
+        </div>
+      </form>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Payout history") }}
       {{ template "table-start" (dict "headers" (slice "Period" "Amount" "Platform fee" "Status")) }}
         <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
@@ -1589,7 +1624,70 @@ async function copyTag() {
 }
 
 // ---- Earnings ----
+// Payout method: which detail input each type uses, so the form toggles the
+// right field and sends details under the key the API validates.
+const PAYOUT_FIELDS = {
+  bank_transfer: {wrap: 'pm_bank_field', input: 'pm_account_number', key: 'account_number'},
+  paypal:        {wrap: 'pm_paypal_field', input: 'pm_paypal_email', key: 'paypal_email'},
+  payoneer:      {wrap: 'pm_iban_field', input: 'pm_iban', key: 'iban'},
+  wire:          {wrap: 'pm_iban_field', input: 'pm_iban', key: 'iban'},
+};
+
+function onPayoutTypeChange() {
+  const type = $('pm_type').value;
+  // Hide every detail wrapper, then show the one for the selected type.
+  ['pm_bank_field', 'pm_paypal_field', 'pm_iban_field'].forEach(id => $(id)?.classList.add('hidden'));
+  const f = PAYOUT_FIELDS[type];
+  $(f.wrap)?.classList.remove('hidden');
+}
+
+async function loadPayoutMethod() {
+  try {
+    const m = await fetchJSON('/v1/api/payout-method');
+    if (m && m.method_type) $('pm_type').value = m.method_type;
+    onPayoutTypeChange();
+    $('pm_display').value = m?.display_name || '';
+    $('pm_min').value = ((m?.minimum_payout_cents || 0) / 100);
+    $('pm_currency').value = m?.currency || 'USD';
+    // Details are masked server-side — show the masked tail as a placeholder and
+    // leave the input blank; only a retyped value is sent on save.
+    const f = PAYOUT_FIELDS[$('pm_type').value];
+    const input = $(f.input);
+    if (input) { input.value = ''; input.placeholder = m?.masked_tail || ''; }
+    $('pm_status').textContent = m?.configured
+      ? 'Configured' + (m.status && m.status !== 'active' ? ' (' + m.status + ')' : '')
+      : 'Not configured yet';
+  } catch (err) {
+    $('pm_status').textContent = 'load failed — ' + err.message;
+  }
+}
+
+async function savePayoutMethod(ev) {
+  ev.preventDefault();
+  const type = $('pm_type').value;
+  const f = PAYOUT_FIELDS[type];
+  const body = {
+    method_type: type,
+    display_name: $('pm_display').value.trim(),
+    minimum_payout_cents: Math.round(Number($('pm_min').value || 0) * 100),
+    currency: ($('pm_currency').value || 'USD').trim(),
+  };
+  // Only send details when the operator actually retyped a value — a blank
+  // input means "keep the stored destination".
+  const raw = $(f.input)?.value.trim();
+  if (raw) body.details = {[f.key]: raw};
+  try {
+    await fetchJSON('/v1/api/payout-method', {method: 'PUT', body: JSON.stringify(body)});
+    toast('Payout method saved', 'success');
+    loadPayoutMethod();
+  } catch (err) {
+    // The API enforces earnings:manage — a 403 surfaces here.
+    toast('Save failed: ' + err.message, 'error');
+  }
+}
+
 async function loadEarnings() {
+  loadPayoutMethod();
   const tbody = tbodyOf('earnings');
   try {
     const res = await fetchJSON('/v1/api/payouts');
