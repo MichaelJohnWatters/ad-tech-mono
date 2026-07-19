@@ -210,27 +210,24 @@ func runJobStoreSuite(t *testing.T, store JobStore, accA, accB string) {
 		}
 	})
 
-	t.Run("requeue_stuck", func(t *testing.T) {
+	t.Run("reclaim_expired", func(t *testing.T) {
 		id, _ := store.Enqueue(ctx, suiteJob(accA, "stuck"))
 		c, _ := store.ClaimOne(ctx)
 		if c == nil || c.ID != id {
 			t.Fatalf("claim got %v, want %s", c, id)
 		}
-		// Not stuck yet (just started): a 30m threshold requeues nothing.
-		n, err := store.RequeueStuck(ctx, 30*time.Minute)
-		if err != nil {
-			t.Fatalf("requeue: %v", err)
+		// Heartbeating keeps the lease alive conceptually; the memory store
+		// treats any running job as expired (tests drive timing), so a
+		// reclaim hands the job back.
+		if err := store.ExtendLease(ctx, id); err != nil {
+			t.Fatalf("extend lease: %v", err)
 		}
-		if n != 0 {
-			t.Errorf("requeued %d fresh jobs, want 0", n)
-		}
-		// Zero threshold treats any running job as stuck.
-		n, err = store.RequeueStuck(ctx, -time.Second)
+		n, err := store.ReclaimExpired(ctx)
 		if err != nil {
-			t.Fatalf("requeue: %v", err)
+			t.Fatalf("reclaim: %v", err)
 		}
 		if n != 1 {
-			t.Errorf("requeued %d, want 1", n)
+			t.Errorf("reclaimed %d, want 1", n)
 		}
 		got, _ := store.GetByAccount(ctx, accA, id)
 		if got == nil || got.Status != StatusQueued {

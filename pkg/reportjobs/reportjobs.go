@@ -43,7 +43,7 @@ const (
 	// DeliveryWebhook delivers via the account's webhook subscriptions (the
 	// executor publishes report.completed; the dispatcher does the POSTs).
 	DeliveryWebhook = "webhook"
-	DeliveryNone  = "none"
+	DeliveryNone    = "none"
 )
 
 // ValidFormat reports whether f is a supported artifact format.
@@ -88,7 +88,7 @@ type Artifact struct {
 }
 
 // JobStore is the queue + job registry. Enqueue/List/Get are tenant-facing
-// (gateway); Claim/Mark/Expired/Delete/RequeueStuck are worker-facing.
+// (gateway); Claim/Lease/Mark/Expired/Delete/Reclaim are worker-facing.
 type JobStore interface {
 	// Enqueue inserts a queued job and returns its id. For source=schedule it
 	// is idempotent per active saved report: if a queued/running job for the
@@ -110,7 +110,11 @@ type JobStore interface {
 	Expired(ctx context.Context, now time.Time, limit int) ([]Job, error)
 	// Delete removes a job row (the sweeper deletes the artifact first).
 	Delete(ctx context.Context, id string) error
-	// RequeueStuck flips running jobs older than olderThan back to queued —
-	// crash recovery on worker boot. Returns how many were requeued.
-	RequeueStuck(ctx context.Context, olderThan time.Duration) (int, error)
+	// ExtendLease heartbeats a running job's lease; a lapsed lease marks
+	// the claimant dead and the job reclaimable by any worker.
+	ExtendLease(ctx context.Context, id string) error
+
+	// ReclaimExpired flips running jobs with LAPSED leases back to queued —
+	// crash recovery that is safe at any replica count (boot + periodic).
+	ReclaimExpired(ctx context.Context) (int, error)
 }

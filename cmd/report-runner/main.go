@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -85,6 +86,13 @@ func main() {
 	sender := connectEmail(cfg, from, log)
 
 	jobStore := reportjobs.NewPostgresJobStore(db)
+	// POD_NAME is a per-DEPLOYMENT identity in this chart (all replicas
+	// share it); the hostname is the actual pod. Both, for observability.
+	if hn, _ := os.Hostname(); hn != "" {
+		jobStore.WorkerID = hn
+	} else {
+		jobStore.WorkerID = os.Getenv("POD_NAME")
+	}
 	scope := reportjobs.PostgresScopeLookup{DB: db}
 	retention := keys.ReportRunner.Retention.Get(cfg)
 
@@ -154,12 +162,15 @@ func main() {
 
 	sweeper := &reportjobs.Sweeper{Store: jobStore, Objects: objStore, Now: time.Now, Log: log}
 
-	// Crash recovery: jobs stuck running from a previous worker are requeued.
-	if n, err := jobStore.RequeueStuck(context.Background(),
-		keys.ReportRunner.StuckAfter.Get(cfg)); err != nil {
-		log.Warn("requeue stuck jobs", "error", err)
+	// Crash recovery: reclaim jobs whose LEASE lapsed (claimant stopped
+	// heartbeating = genuinely dead). Lease-based, so this is safe with any
+	// number of worker replicas — a booting pod can no longer steal jobs a
+	// live peer is executing (the old started_at requeue could, which is
+	// what pinned this service to 1 replica). Runs at boot and every tick.
+	if n, err := jobStore.ReclaimExpired(context.Background()); err != nil {
+		log.Warn("reclaim expired jobs", "error", err)
 	} else if n > 0 {
-		log.Info("requeued stuck report jobs", "count", n)
+		log.Info("reclaimed expired report jobs", "count", n)
 	}
 
 	loopCtx, stopLoops := context.WithCancel(context.Background())
@@ -172,6 +183,11 @@ func main() {
 		}
 	})
 	go tickLoop(loopCtx, keys.ReportRunner.PollInterval.Get(cfg), func(ctx context.Context) {
+		// Reclaim lapsed leases each tick — dead-peer recovery without
+		// waiting for a worker restart.
+		if n, err := jobStore.ReclaimExpired(ctx); err == nil && n > 0 {
+			log.Info("reclaimed expired report jobs", "count", n)
+		}
 		for { // drain the queue each tick
 			claimed, err := executor.RunOnce(ctx)
 			if err != nil {

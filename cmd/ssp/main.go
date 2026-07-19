@@ -283,13 +283,10 @@ func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (
 		log.Warn("audience store open failed", "error", err)
 		return nil, nil, func() {}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		log.Warn("audience store ping failed", "error", err)
-		_ = db.Close()
-		return nil, nil, func() {}
-	}
+	// NO boot-time ping gate — sql.Open is lazy and a cold boot races
+	// Postgres readiness; the ping used to permanently disable audience
+	// segments (see cmd/dsp openAudienceStore). Pool connects on first
+	// use; the preloader loop retries forever.
 	if l2 == nil {
 		log.Info("audience store connected (postgres-direct, no L2 cache)")
 		return audiencepg.New(db), nil, func() { _ = db.Close() }

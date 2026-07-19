@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
@@ -65,16 +66,32 @@ func main() {
 		hlth.AddReadinessCheck("postgres", func(ctx context.Context) error { return db.PingContext(ctx) })
 	}
 
-	// Optional Redis-backed fingerprint buckets, so probabilistic matching stays
-	// coherent if scaled beyond one replica. Falls back to in-memory (single
-	// replica) when unset or unreachable.
+	// Redis-backed fingerprint buckets, so probabilistic matching stays
+	// coherent if scaled beyond one replica. AUTO-SAFE: when the dedicated
+	// key is unset, fall back to the PLATFORM redis (always present in-
+	// cluster) — multi-replica correctness must not depend on an operator
+	// remembering a config when bumping replicas. In-memory only when no
+	// redis is reachable at all (host runs, unit-test contexts), and then
+	// the peer guard below screams if replicas exist.
 	var fpStore identityobserve.FPStore
-	if addr := keys.IdentityConsumer.RedisURL.Get(cfg); addr != "" {
+	addr := keys.IdentityConsumer.RedisURL.Get(cfg)
+	if addr == "" {
+		addr = keys.Redis.URL.Get(cfg)
+	}
+	if addr != "" {
 		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
 		rc, rerr := cacheredis.New(rctx, cacheredis.Config{Addr: addr})
 		rcancel()
 		if rerr != nil {
-			log.Warn("identity fingerprint redis unavailable, using in-memory buckets (single replica)", "error", rerr)
+			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+				// In-cluster, redis should ALWAYS be reachable; in-memory
+				// buckets here mean probabilistic linking silently splits
+				// across replicas. ERROR (not warn) per the platform rule:
+				// a broken dependency must be loud.
+				log.Error("identity fingerprint redis unavailable IN-CLUSTER — in-memory buckets are NOT replica-safe; linking will be degraded until redis returns", "error", rerr)
+			} else {
+				log.Warn("identity fingerprint redis unavailable, using in-memory buckets (single replica)", "error", rerr)
+			}
 		} else {
 			fpStore = newRedisFPStore(rc, keys.IdentityConsumer.FingerprintTTL.Get(cfg), log)
 			lc.OnShutdown("fp-redis", func(_ context.Context) error { return rc.Close() })

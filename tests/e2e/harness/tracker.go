@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 )
 
 // FireImpression hits the tracker's impression pixel endpoint as if a
@@ -57,6 +59,10 @@ func (h *Harness) FireView(t *testing.T, traceID, campaignID, placementID, publi
 }
 
 func (h *Harness) fireAndConsumeReturningHeader(t *testing.T, url, eventKind, header string) string {
+	// Sign like production: tracker.signature_validation is enforced on the
+	// local stack (2026-07-19 ratchet), so hand-built beacons must carry a
+	// valid HMAC exactly as adserver-built ones do.
+	url = adserving.SignURL(url, adserving.DefaultSigningKey)
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -100,6 +106,10 @@ var noRedirectClient = &http.Client{
 }
 
 func (h *Harness) fireAndConsume(t *testing.T, url, eventKind string) {
+	// Sign like production: tracker.signature_validation is enforced on the
+	// local stack (2026-07-19 ratchet), so hand-built beacons must carry a
+	// valid HMAC exactly as adserver-built ones do.
+	url = adserving.SignURL(url, adserving.DefaultSigningKey)
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
