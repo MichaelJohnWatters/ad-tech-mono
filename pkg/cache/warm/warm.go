@@ -18,15 +18,14 @@ package warm
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
 
 // Loader is the source-of-truth reader for an entity. Implementations
@@ -125,21 +124,18 @@ func (c *Cache[T]) Start(ctx context.Context) error {
 	c.cancel = cancel
 
 	if c.cfg.Bus != nil && c.cfg.InvalidateSubject != "" {
-		// Group must be per-pod, not per-service: warm caches need broadcast
+		// Group must be per-REPLICA, not per-service: warm caches need broadcast
 		// semantics (every pod refreshes its own snapshot on invalidate). If
 		// multiple pods of the same service shared the consumer name, they'd
 		// load-balance the invalidates — only one pod would refresh per
 		// message, leaving the others with stale caches and silently
 		// breaking cache coherence across the deployment.
 		//
-		// POD_NAME is set by the Tiltfile / K8s manifest per pod. Fall back
-		// to a process-unique suffix so dev environments without POD_NAME
-		// still get distinct consumers when multiple instances are running.
-		podID := os.Getenv("POD_NAME")
-		if podID == "" {
-			podID = fmt.Sprintf("pid-%d", os.Getpid())
-		}
-		group := c.cfg.Name + "-cache-" + podID
+		// Use podid.Replica() (the hostname / pod name), NOT POD_NAME: POD_NAME
+		// is pinned to a stable, SHARED value per service (e.g. "ssp-0") for the
+		// config system, so it is identical across replicas — using it here
+		// collapsed all replicas into one queue group and only one reloaded.
+		group := c.cfg.Name + "-cache-" + podid.Replica()
 		err := c.cfg.Bus.Subscribe(ctx, c.cfg.InvalidateSubject, group, c.onInvalidate)
 		if err != nil {
 			// Poll-only for now, but self-heal: a transient failure at boot

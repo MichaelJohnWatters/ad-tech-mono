@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
 
 // Manager provides live configuration with polling, change detection,
@@ -178,14 +179,12 @@ func (m *Manager) trySubscribeInvalidate(ctx context.Context) {
 	bus := m.bus
 	m.mu.Unlock()
 
-	podID := ""
-	if m.registry != nil {
-		podID = m.registry.PodID()
-	}
-	if podID == "" {
-		podID = fmt.Sprintf("pid-%d", os.Getpid())
-	}
-	group := "config-invalidate-" + podID
+	// Per-REPLICA group so every replica re-polls on a config invalidate.
+	// registry.PodID() (POD_NAME) is SHARED across a service's replicas (stable
+	// per-pod config identity), so it must NOT be the group suffix — that would
+	// queue-group the replicas and only one would re-poll. podid.Replica() is
+	// the unique hostname.
+	group := "config-invalidate-" + podid.Replica()
 	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateConfig, group, func(c context.Context, msg *events.Message) error {
 		m.log.Info("config invalidate received, re-polling", "key", string(msg.Data))
 		m.poll(c)
