@@ -84,64 +84,12 @@ func profilesHandler(db *sql.DB, resolver identityResolver, pipelineURL string, 
 		w.Header().Set("Content-Type", "application/json")
 		ctx := r.Context()
 
-		view := profileView{ID: id, ClusterMembers: []string{id}, IdentityLinks: []string{}, Memberships: []profileMembership{}}
-
-		// Cluster: the person this id belongs to, if the builder materialized
-		// one (singletons have no row — the id is its own person).
-		var personID string
-		err := db.QueryRowContext(ctx, `SELECT person_id FROM identity_clusters WHERE member_id = $1`, id).Scan(&personID)
-		if err != nil && err != sql.ErrNoRows {
-			log.Error("profile lookup: cluster query failed", "error", err)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-		if personID != "" {
-			view.PersonID = personID
-			rows, err := db.QueryContext(ctx, `SELECT member_id FROM identity_clusters WHERE person_id = $1 ORDER BY member_id`, personID)
-			if err != nil {
-				log.Error("profile lookup: members query failed", "error", err)
-				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-				return
-			}
-			view.ClusterMembers = view.ClusterMembers[:0]
-			for rows.Next() {
-				var m string
-				if err := rows.Scan(&m); err == nil {
-					view.ClusterMembers = append(view.ClusterMembers, m)
-				}
-			}
-			rows.Close()
-		}
-
-		// Direct graph edges (includes household links the clusterer excludes).
-		if resolver != nil {
-			if links, err := resolver.ResolveIdentity(ctx, id); err != nil {
-				log.Error("profile lookup: identity resolve failed", "error", err)
-			} else if links != nil {
-				view.IdentityLinks = links
-			}
-		}
-
-		// Memberships across the whole cluster, with provenance. Platform-wide
-		// read (staff surface) — the same cross-tenant posture as the audit log.
-		mrows, err := db.QueryContext(ctx, `
-SELECT m.user_id, m.segment_id::text, s.name, s.type, s.visibility, COALESCE(s.source,''), s.account_id::text
-FROM audience_segment_members m
-JOIN audience_segments s ON s.id = m.segment_id
-WHERE m.user_id = ANY($1)
-ORDER BY s.name, m.user_id`, pq.Array(view.ClusterMembers))
+		view, err := buildProfileView(ctx, db, resolver, id)
 		if err != nil {
-			log.Error("profile lookup: memberships query failed", "error", err)
+			log.Error("profile lookup failed", "id", id, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
-		for mrows.Next() {
-			var m profileMembership
-			if err := mrows.Scan(&m.MemberID, &m.SegmentID, &m.Name, &m.Type, &m.Visibility, &m.Source, &m.AccountID); err == nil {
-				view.Memberships = append(view.Memberships, m)
-			}
-		}
-		mrows.Close()
 
 		// Lake summary via the pipeline (it owns the Delta reader). Advisory:
 		// a pipeline outage degrades the view, it doesn't 500 it.
@@ -165,4 +113,67 @@ ORDER BY s.name, m.user_id`, pq.Array(view.ClusterMembers))
 
 		_ = json.NewEncoder(w).Encode(view)
 	}
+}
+
+// buildProfileView assembles the identity-cluster + graph-links + memberships
+// snapshot for one identifier from Postgres. It's the shared read path behind
+// the staff profiles API and the onboarding demo (BEFORE/AFTER snapshots) — the
+// lake-summary passthrough stays in the handler because it needs the pipeline
+// HTTP client. resolver may be nil (direct graph edges are then omitted). A DB
+// error is returned to the caller; a per-row scan error is skipped, matching the
+// handler's original best-effort posture.
+func buildProfileView(ctx context.Context, db *sql.DB, resolver identityResolver, id string) (profileView, error) {
+	view := profileView{ID: id, ClusterMembers: []string{id}, IdentityLinks: []string{}, Memberships: []profileMembership{}}
+	if db == nil {
+		return view, nil
+	}
+
+	// Cluster: the person this id belongs to, if the builder materialized one
+	// (singletons have no row — the id is its own person).
+	var personID string
+	if err := db.QueryRowContext(ctx, `SELECT person_id FROM identity_clusters WHERE member_id = $1`, id).Scan(&personID); err != nil && err != sql.ErrNoRows {
+		return view, err
+	}
+	if personID != "" {
+		view.PersonID = personID
+		rows, err := db.QueryContext(ctx, `SELECT member_id FROM identity_clusters WHERE person_id = $1 ORDER BY member_id`, personID)
+		if err != nil {
+			return view, err
+		}
+		view.ClusterMembers = view.ClusterMembers[:0]
+		for rows.Next() {
+			var m string
+			if err := rows.Scan(&m); err == nil {
+				view.ClusterMembers = append(view.ClusterMembers, m)
+			}
+		}
+		rows.Close()
+	}
+
+	// Direct graph edges (includes household links the clusterer excludes).
+	if resolver != nil {
+		if links, err := resolver.ResolveIdentity(ctx, id); err == nil && links != nil {
+			view.IdentityLinks = links
+		}
+	}
+
+	// Memberships across the whole cluster, with provenance. Platform-wide read
+	// (staff surface) — the same cross-tenant posture as the audit log.
+	mrows, err := db.QueryContext(ctx, `
+SELECT m.user_id, m.segment_id::text, s.name, s.type, s.visibility, COALESCE(s.source,''), s.account_id::text
+FROM audience_segment_members m
+JOIN audience_segments s ON s.id = m.segment_id
+WHERE m.user_id = ANY($1)
+ORDER BY s.name, m.user_id`, pq.Array(view.ClusterMembers))
+	if err != nil {
+		return view, err
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var m profileMembership
+		if err := mrows.Scan(&m.MemberID, &m.SegmentID, &m.Name, &m.Type, &m.Visibility, &m.Source, &m.AccountID); err == nil {
+			view.Memberships = append(view.Memberships, m)
+		}
+	}
+	return view, mrows.Err()
 }

@@ -349,6 +349,15 @@ func main() {
 	mux.Handle(routes.APIProfiles+"/", authMiddleware(http.HandlerFunc(
 		profilesHandler(gwDB, profileResolver, keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIOnboardingRuns, authMiddleware(http.HandlerFunc(onboardingMonitorHandler(gwDB, log))))
+
+	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic
+	// account). GET support:read (state), POST /run support:update (reset+run).
+	// The exact route (/run) must register before the GET path so it doesn't
+	// fall through to the GET handler.
+	demoOrch := &demoOrchestrator{db: gwDB, aud: audStore, resolver: profileResolver, bus: secretsBus, log: log}
+	demoOnboarding := authMiddleware(http.HandlerFunc(demoOnboardingHandler(demoOrch)))
+	mux.Handle(routes.APIDemoOnboardingRun, demoOnboarding)
+	mux.Handle(routes.APIDemoOnboarding, demoOnboarding)
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
