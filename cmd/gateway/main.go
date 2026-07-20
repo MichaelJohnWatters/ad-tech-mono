@@ -415,6 +415,32 @@ func main() {
 	mux.Handle(routes.APIDemoRollupsRun, demoRollups)
 	mux.Handle(routes.APIDemoRollups, demoRollups)
 
+	// Guided "Retargeting" demo (staff-only, isolated synthetic account) — the
+	// behavioural/lake sibling of the onboarding demo. Fires the REAL /v1/t/rt
+	// pixel + writes a site_visit behaviour_signals row to the SAME lake the
+	// pipeline uses, then runs the REAL lake-backed profile-builder so its
+	// behavioural rule matches the visit and cluster-expands the person into a
+	// retargeting segment. The lake ObjectStore is built pure-Go (no duckdb
+	// tag) from keys.S3.* + the datalake bucket; a nil lake (no store) 503s.
+	// GET support:read (last-run snapshot), POST /run support:update. /run first.
+	var rtBackend retargetingBackend
+	if gwDB != nil {
+		if lake := connectDatalake(context.Background(), cfg, log); lake != nil {
+			rtBackend = &httpLakeRetargetingBackend{
+				client:     &http.Client{Timeout: 10 * time.Second},
+				trackerURL: trackerURL,
+				db:         gwDB,
+				lake:       lake,
+				bus:        secretsBus,
+				log:        log,
+			}
+		}
+	}
+	rtDemoOrch := &rtDemoOrchestrator{db: gwDB, aud: audStore, resolver: profileResolver, backend: rtBackend, log: log}
+	demoRetargeting := authMiddleware(http.HandlerFunc(demoRetargetingHandler(rtDemoOrch)))
+	mux.Handle(routes.APIDemoRetargetingRun, demoRetargeting)
+	mux.Handle(routes.APIDemoRetargeting, demoRetargeting)
+
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
