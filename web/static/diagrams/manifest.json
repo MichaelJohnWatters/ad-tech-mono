@@ -1,4 +1,5 @@
 [
+  {"title":"★ Data lifecycle (start here)","file":"data-lifecycle.svg","type":"svg","level":"★"},
   {"title":"System context",        "file":"context.svg",       "type":"svg",     "level":"L0"},
   {"title":"Architecture · 5 planes","file":"architecture.svg",  "type":"svg",     "level":"L1"},
   {"title":"★ E2E trace (one request)","file":"e2e-trace.md",    "type":"mermaid", "level":"★"},

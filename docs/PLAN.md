@@ -39,6 +39,8 @@ This document is 13,000+ lines. Use this legend to find what you need.
 - **Versioning** - API versioning, event/data schema versioning
 
 ### Data & Storage
+> 📊 **New to the data flow? Start with [`docs/diagrams/data-lifecycle.md`](diagrams/data-lifecycle.md)** — one linear walk (ASCII + Mermaid + rendered [SVG](diagrams/data-lifecycle.svg)) of how data flows from first/third-party + auctions → audience → rollups: normalisation, audience expansion, the seven pixels, the money lane, the privacy/deletion flow, and the serving-vs-analytics boundary.
+
 - **Data Storage** - PostgreSQL, DuckDB/ClickHouse, Minio/S3, Parquet/Delta
 - **Caching** - L1/L2/L3, Redis topology, budget handling, cache invalidation
 - **Data Pipeline** - ingest, validate, normalise, enrich, schema drift, rollups (universal framework)
