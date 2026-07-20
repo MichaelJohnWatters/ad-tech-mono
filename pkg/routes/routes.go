@@ -188,6 +188,18 @@ const (
 	// returns the assembled 5-step timeline.
 	APIDemoOnboardingRun = apiPrefix + "/api/demo/onboarding/run"
 
+	// APIDemoTrace is the staff-only guided "Auction Trace" demo
+	// (GET, support:read): returns the last-run snapshot (or a "not run yet"
+	// shape) of the 5-step persona→request→auction→serve→pipeline story built
+	// from a single real ad request's trace.
+	APIDemoTrace = apiPrefix + "/api/demo/trace"
+	// APIDemoTraceRun runs the demo (POST, support:update): fires ONE fixed-
+	// persona ad request through the real serve path (SSP /v1/ssp/serve),
+	// captures the X-Trace-Id, polls the trace reader until the impression
+	// event lands (async via NATS→reporting), and returns the assembled 5-step
+	// timeline of that request's journey.
+	APIDemoTraceRun = apiPrefix + "/api/demo/trace/run"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.
