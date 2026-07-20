@@ -177,6 +177,17 @@ const (
 	// user", trace-explorer style. Platform-wide by design (operator tool).
 	APIProfiles = apiPrefix + "/api/profiles"
 
+	// APIDemoOnboarding is the staff-only guided "Onboarding & Expansion" demo
+	// (GET, support:read): returns the last-run snapshot (or a "not run yet"
+	// shape) of the 5-step upload→cluster→expand→serve story over an isolated
+	// synthetic demo account.
+	APIDemoOnboarding = apiPrefix + "/api/demo/onboarding"
+	// APIDemoOnboardingRun runs the demo (POST, support:update): RESETs the
+	// isolated demo account, re-seeds the synthetic identity edges, re-creates
+	// the empty "Demo Newsletter" segment, runs the real profile-builder, and
+	// returns the assembled 5-step timeline.
+	APIDemoOnboardingRun = apiPrefix + "/api/demo/onboarding/run"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.

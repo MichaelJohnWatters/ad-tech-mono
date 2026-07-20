@@ -220,6 +220,17 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Demos (guided teaching flows) ============ -->
+    <section id="section-demos" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Onboarding &amp; Expansion" "subtitle" "Watch a one-email upload become a cross-device audience — step by step, over an isolated synthetic account. Every run resets and replays.") }}
+      <div class="flex items-center gap-3 mb-4">
+        {{ template "button" (dict "label" "Run demo" "onclick" "runOnboardingDemo()") }}
+        <span id="demoStatus" class="text-sm text-gray-400"></span>
+      </div>
+      <div id="demoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Batch runs (conductor) ============ -->
     <section id="section-batchruns" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Batch chain runs" "subtitle" "checkpoint → compact → rollups → profile-builder → privacy — every step, in order, with its outcome") }}
@@ -475,12 +486,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'demos', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -491,7 +502,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadOnboardingDemo, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -1010,6 +1021,110 @@ async function loadProfile(ev) {
       </tr></thead><tbody>${signals}</tbody></table>`;
   } catch (err) {
     box.innerHTML = `<p class="text-error">lookup failed — ${esc(err.message)}</p>`;
+  }
+}
+
+// ---- Onboarding & Expansion demo ----
+// Reusable id-chip renderer; highlight marks ids the diff added (green) or the
+// household id that's deliberately excluded (amber).
+function demoChips(arr, opts = {}) {
+  const add = new Set(opts.added || []);
+  const excl = new Set(opts.excluded ? [opts.excluded] : []);
+  return (arr || []).map(x => {
+    let cls = 'bg-surface-3';
+    if (add.has(x)) cls = 'bg-green-500/20 text-green-300 ring-1 ring-green-500/40';
+    else if (excl.has(x)) cls = 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40';
+    return `<span class="inline-block m-0.5 px-1.5 py-0.5 rounded ${cls} font-mono text-xs">${esc(x)}</span>`;
+  }).join('') || '<span class="text-gray-400">none</span>';
+}
+
+// renderDemoStep dispatches on the step number to a step-specific body.
+function renderDemoStep(s) {
+  const d = s.data || {};
+  let body = '';
+  if (s.n === 1) {
+    // SETUP — the four identity edges.
+    const rows = (d.edges || []).map(e => `
+      <tr class="border-t border-gray-100 dark:border-gray-800 ${e.household ? 'bg-amber-500/5' : ''}">
+        <td class="px-3 py-1.5 font-mono text-xs">${esc(e.from)}</td>
+        <td class="px-3 py-1.5 font-mono text-xs">${esc(e.to)}</td>
+        <td class="px-3 py-1.5 text-xs">${esc(e.source)}</td>
+        <td class="px-3 py-1.5 text-xs font-mono">${e.confidence}</td>
+        <td class="px-3 py-1.5 text-xs">${e.household ? '<span class="text-amber-400">household — excluded from clustering</span>' : 'clusters'}</td>
+      </tr>`).join('');
+    body = `<table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-500">
+      <th class="px-3 py-1">From</th><th class="px-3 py-1">Linked id</th><th class="px-3 py-1">Source</th><th class="px-3 py-1">Confidence</th><th class="px-3 py-1">Role</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  } else if (s.n === 2) {
+    // UPLOAD — the normalised row + member count.
+    const r = d.normalised_row || {};
+    body = `
+      <div class="text-sm mb-2"><span class="text-gray-500">Segment:</span> <b>${esc(r.segment_name)}</b> · <span class="text-gray-500">members added:</span> <b>${d.members_added}</b></div>
+      <div class="text-xs text-gray-500 mb-1">Normalised profile_signals row</div>
+      <pre class="bg-surface-3 rounded p-3 text-xs font-mono overflow-auto">${esc(JSON.stringify(r, null, 2))}</pre>`;
+  } else if (s.n === 4) {
+    // EXPAND — the builder outcome + the BEFORE→AFTER diff (the centrepiece).
+    body = `
+      <div class="text-sm mb-3">clusters: <b>${d.clusters}</b> · cluster members: <b>${d.cluster_members}</b> · memberships expanded: <b>${d.expanded}</b></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+        <div><div class="text-xs text-gray-500 mb-1">Before</div>${demoChips(d.members_before)}</div>
+        <div><div class="text-xs text-gray-500 mb-1">After <span class="text-green-400">(+ ${(d.added || []).length} added)</span></div>${demoChips(d.members_after, {added: d.added})}</div>
+      </div>
+      <div class="mt-3 text-xs text-amber-300 bg-amber-500/10 rounded p-2">${esc(d.excluded)}</div>`;
+  } else {
+    // BEFORE / AFTER — the segment members for the email id.
+    const isAfter = s.n === 5;
+    body = `
+      <div class="text-xs text-gray-500 mb-1">"Demo Newsletter" segment members</div>
+      ${demoChips(d.segment_members, {added: isAfter ? (d.added || []) : []})}
+      ${isAfter && (d.added || []).length ? `<div class="mt-2 text-xs text-green-400">expansion added ${demoChips(d.added, {added: d.added})}</div>` : ''}`;
+  }
+  return `
+    <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+      <div class="flex items-baseline gap-2 mb-1">
+        <span class="flex-none w-6 h-6 rounded-full bg-brand/20 text-brand text-xs font-semibold grid place-items-center">${s.n}</span>
+        <span class="font-medium">${esc(s.title)}</span>
+      </div>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3 ml-8">${esc(s.narration)}</p>
+      <div class="ml-8">${body}</div>
+    </div>`;
+}
+
+function renderDemo(resp) {
+  const box = $('demoTimeline');
+  if (!resp || !resp.ran) {
+    box.innerHTML = `<p class="text-sm text-gray-400">${esc((resp && resp.summary) || 'The demo has not been run yet. Click "Run demo".')}</p>`;
+    return;
+  }
+  const steps = (resp.steps || []).slice().sort((a, b) => a.n - b.n).map(renderDemoStep).join('');
+  box.innerHTML = steps + `
+    <div class="border border-brand/30 bg-brand/5 rounded-lg p-4">
+      <div class="font-medium mb-1">What just happened</div>
+      <p class="text-sm text-gray-600 dark:text-gray-300">${esc(resp.summary)}</p>
+    </div>`;
+}
+
+async function loadOnboardingDemo() {
+  const box = $('demoTimeline');
+  box.innerHTML = '<p class="text-sm text-gray-400">loading…</p>';
+  try {
+    renderDemo(await fetchJSON('/v1/api/demo/onboarding'));
+  } catch (err) {
+    box.innerHTML = `<p class="text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function runOnboardingDemo() {
+  const status = $('demoStatus');
+  status.textContent = 'running…';
+  try {
+    const resp = await fetchJSON('/v1/api/demo/onboarding/run', {method: 'POST'});
+    renderDemo(resp);
+    status.textContent = '';
+    toast('Demo run — one email expanded across the cluster', 'success');
+  } catch (err) {
+    status.textContent = '';
+    toast('Demo run failed: ' + err.message, 'error');
   }
 }
 
