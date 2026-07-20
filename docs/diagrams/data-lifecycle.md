@@ -152,6 +152,43 @@ loops (marked ⟲).
           ─▶ rows back to the portal (no browser math)
 ```
 
+## The pixels — who fires what, and what it triggers
+
+"The tracker" in stage 1/2 is really **seven beacons** (`/v1/t/*` on the Tracker
+:8083). They split into two families by *who places the pixel*, and each one
+triggers a different downstream effect. Every ad-served beacon is **HMAC-signed**
+by the ad server; a tampered beacon is `403`'d when `tracker.signature_validation`
+is on.
+
+**Family 1 — ad-server-emitted** (baked into the served creative's tracking URLs,
+signed; these measure the ad and drive the money loop):
+
+| Pixel | Endpoint | Fires when… | Triggers downstream |
+|---|---|---|---|
+| Impression | `/v1/t/imp` | the ad renders | **billing accrual** — spend is booked *here*, not on the auction win |
+| Click | `/v1/t/click` | user clicks (redirect tracker) | **CPC settle** + click row |
+| Viewability | `/v1/t/view` | IAB viewable threshold met | **vCPM settle** (viewable→settle; non-viewable reservation expires) |
+| Video | `/v1/t/video` | VAST quartiles / completion | video engagement rows (**CPCV** settle on complete) |
+| Audio | `/v1/t/audio` | DAAST audio events | audio engagement rows |
+
+**Family 2 — advertiser-placed** (the advertiser embeds these on their *own*
+site; the gateway generates the snippet so the URL is never hardcoded):
+
+| Pixel | Endpoint | Placed on… | Triggers downstream |
+|---|---|---|---|
+| Conversion | `/v1/t/conv` | advertiser thank-you / purchase page | **CPA settle** + conversion attribution (matched back by `trace_id`) |
+| Retargeting | `/v1/t/rt` | advertiser product / category pages | **`site_visit` rows** → feed audience segments (this is how "visited but didn't buy" becomes a targetable list — stage 5) |
+
+**The pixel that isn't a pixel:** identity/household signals (`user_id`, `uid2`,
+`hashed_email`, `ifa`, `IP→household`) don't ride a separate sync pixel — they
+arrive on the **ad request itself** at the SSP (stage 2), then flow to the
+identity graph. So "how do we know who this is" and "did the ad work" enter
+through *different* doors.
+
+Every one of these seven, once recorded, publishes to NATS (stage 3) and so
+lands in **both** the hot rollups (stage 6) and the cold lake (stage 4) — plus
+billing (settles) and, for `/v1/t/rt`, the audience spine (stage 5).
+
 ## The one-sentence version of each stage
 
 1. **Sources** — two lanes: *observed* (pixels + auction exhaust) and *onboarded*
