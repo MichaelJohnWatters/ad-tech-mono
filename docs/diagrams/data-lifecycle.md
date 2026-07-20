@@ -152,6 +152,90 @@ loops (marked ⟲).
           ─▶ rows back to the portal (no browser math)
 ```
 
+## The same flow, rendered (Mermaid — for GitHub)
+
+The ASCII above is the terminal view; this is the identical story as a rendered
+flowchart. Solid arrows = sync/data flow, dotted = async or feedback loop.
+
+```mermaid
+flowchart TD
+  %% ---------- ① sources ----------
+  BR["Browser / CTV<br/>runs adtech.js + pixels"]
+  OWN["Advertiser / Publisher<br/>CSV upload"]
+  PART["Data partner<br/>drops a file"]
+
+  %% ---------- ② auction ----------
+  SSP["SSP 8084<br/>bid request · stamps segments"]
+  EX["Exchange<br/>fan-out · deal priority · floor"]
+  DSP["DSP 8082<br/>bids + audience modifiers"]
+  ADS["Ad Server<br/>serves creative + signed tracking URLs"]
+  TRK["Tracker 8083<br/>records the 7 beacons"]
+
+  BR -->|"ad request"| SSP
+  SSP --> EX --> DSP -->|"winner"| ADS -->|"renders"| BR
+  ADS -.->|"imp click view video audio (signed)"| TRK
+  BR -.->|"conv · rt pixels on advertiser site"| TRK
+
+  %% onboarded lane
+  OWN -->|"/v1/api/audiences"| GW1["Gateway · audiences"]
+  PART --> DZ["Minio drop-zone"] --> POLL["Pipeline poller<br/>decode · validate · normalise"]
+
+  %% ---------- ③ NATS fork ----------
+  SSP --> NATS
+  EX --> NATS
+  TRK --> NATS
+  NATS{{"③ NATS JetStream · adtech.*<br/>fan-out: each group its own copy"}}
+
+  NATS -->|"reporting group"| CH[("ClickHouse · HOT")]
+  NATS -->|"pipeline group"| SINK["Pipeline sink 8087<br/>ack after flush"]
+  NATS -->|"billing group"| TB[("TigerBeetle ledger")]
+  NATS -->|"identity group"| IDC["identity-consumer"]
+
+  %% ---------- ④ cold lake ----------
+  SINK --> LAKE[("④ Delta lake (Minio)<br/>Parquet + _delta_log")]
+  POLL --> LAKE
+  GW1 -.->|"lake copy"| LAKE
+
+  %% ---------- ⑤ audience ----------
+  IDC --> IDG[("identity_graph · PG edges")]
+  subgraph PB["⑤ profile-builder · batch"]
+    direction LR
+    C1["1 cluster to person_id"] --> C2["2 behavioural rules"] --> C3["3 expand to cluster"]
+  end
+  IDG --> PB
+  LAKE -.->|"behaviour + profile signals"| PB
+  PB --> MEM[("audience_segment_members · PG")]
+  GW1 -->|"direct fast path"| MEM
+  MEM --> PRE["audience preloader"] --> RDS[("Redis · audience:user:id")]
+  PB -.->|"cache.invalidate.audience"| PRE
+  RDS -.->|"25ms · feedback loop"| SSP
+  RDS -.->|"bid modifiers"| DSP
+  MEM --> EXP["Segment exports · Profile API"]
+
+  %% ---------- ⑥ rollups + read ----------
+  subgraph ROLL["⑥ Rollups · ClickHouse tiers (coarser = cheaper = kept longer)"]
+    direction LR
+    RAW["RAW<br/>24-48h"] -->|"minute"| MIN["MINUTE<br/>7d"] -->|"hourly"| HR["HOURLY<br/>90d"] -->|"daily"| DAY["DAILY<br/>2y"] -->|"monthly"| MON["MONTHLY<br/>forever"]
+  end
+  CH --> RAW
+
+  PORTAL["Portal"] -->|"/v1/api/reports"| GW2["Gateway<br/>enforceReportTenant"]
+  GW2 --> QE["QueryEngine<br/>eCPM · CTR · fill · net_rev"]
+  QE --> AT["AutoTier · pick coarsest tier"] --> HCS{{"HotColdStore · route by age"}}
+  HCS -->|"recent"| CH
+  HCS -.->|"aged · delta_scan"| LAKE
+  ROLL --> HCS
+  HCS --> QE
+  QE -->|"rows"| PORTAL
+
+  classDef hot fill:#fde68a,stroke:#b45309;
+  classDef cold fill:#faf5ff,stroke:#7c3aed;
+  classDef bus fill:#dcfce7,stroke:#15803d;
+  class CH,RAW,MIN,HR,DAY,MON hot;
+  class LAKE,SINK cold;
+  class NATS bus;
+```
+
 ## The pixels — who fires what, and what it triggers
 
 "The tracker" in stage 1/2 is really **seven beacons** (`/v1/t/*` on the Tracker
