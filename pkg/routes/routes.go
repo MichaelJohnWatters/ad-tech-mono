@@ -212,6 +212,20 @@ const (
 	// lands, and returns the assembled 5-step before→after money-flow timeline.
 	APIDemoBillingRun = apiPrefix + "/api/demo/billing/run"
 
+	// APIDemoRollups is the staff-only guided "Rollups" demo
+	// (GET, support:read): returns the last-run snapshot (or a "not run yet"
+	// shape) of the 5-step firehose→landed→collapse→coarser→ladder story that
+	// shows how raw impression rows collapse into far fewer aggregated rows
+	// (same totals) as you climb the rollup ladder.
+	APIDemoRollups = apiPrefix + "/api/demo/rollups"
+	// APIDemoRollupsRun runs the demo (POST, support:update): fires N real
+	// fixed-persona impressions through the serve path, waits for them to land,
+	// then asks the reporting query API for the raw impression row count and the
+	// same count grouped by the rollup dimensions — one row per dimension-tuple,
+	// which IS what an hourly rollup row is — proving the collapse (fewer rows,
+	// identical totals). Returns the assembled 5-step timeline.
+	APIDemoRollupsRun = apiPrefix + "/api/demo/rollups/run"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.

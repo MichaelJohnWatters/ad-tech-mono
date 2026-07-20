@@ -395,6 +395,26 @@ func main() {
 	demoBilling := authMiddleware(http.HandlerFunc(demoBillingHandler(billingDemoOrch)))
 	mux.Handle(routes.APIDemoBillingRun, demoBilling)
 	mux.Handle(routes.APIDemoBilling, demoBilling)
+
+	// Guided "Rollups" demo (staff-only): fires N real fixed-persona impressions,
+	// waits for them to land, then asks the reporting query API for the raw
+	// impression row count and the same count grouped by the rollup dimensions —
+	// one row per dimension-tuple (what a rollup row IS) — to show raw rows
+	// collapsing into far fewer aggregated rows with identical totals. GET
+	// support:read (last-run snapshot), POST /run support:update. /run first.
+	rollupsDemoOrch := &rollupsDemoOrchestrator{
+		backend: &httpRollupsBackend{
+			client:       &http.Client{Timeout: 10 * time.Second},
+			sspURL:       sspURL,
+			reportingURL: reportingURL,
+			log:          log,
+		},
+		log: log,
+	}
+	demoRollups := authMiddleware(http.HandlerFunc(demoRollupsHandler(rollupsDemoOrch)))
+	mux.Handle(routes.APIDemoRollupsRun, demoRollups)
+	mux.Handle(routes.APIDemoRollups, demoRollups)
+
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
