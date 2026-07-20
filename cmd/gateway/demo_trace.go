@@ -473,87 +473,23 @@ type httpTraceBackend struct {
 	log          *slog.Logger
 }
 
-// sspServeResult is the subset of the SSP serve JSON the demo needs. The
-// impression/viewability URLs are the REAL HMAC-signed beacons the ad server
-// built for this render — the demo fires them exactly like a browser would, so
-// the impression event actually lands (firing /serve alone runs the auction but
-// never records an impression).
-type sspServeResult struct {
-	NoBid          bool    `json:"nobid"`
-	ImpressionURL  string  `json:"impression_url"`
-	ViewabilityURL string  `json:"viewability_url"`
-	ClearingPrice  float64 `json:"clearing_price"`
-}
-
 // fireRequest fires ONE display request at the SSP serve path for the fixed
-// persona, capturing the trace_id from the X-Trace-Id response header.
+// persona (via the shared serveOnce), then fires the server-returned beacons the
+// way a browser render would — without them the auction runs but no impression
+// is ever recorded, so the trace's serve→impression half stays empty.
 func (b *httpTraceBackend) fireRequest(ctx context.Context) (fireResult, error) {
-	p, ok := request.PersonaByName(demoTracePersona)
-	if !ok {
-		return fireResult{}, fmt.Errorf("unknown demo persona %q", demoTracePersona)
-	}
-	params := p.QueryParams(demoTracePlacement, request.Display)
-	url := strings.TrimRight(b.sspURL, "/") + routes.SSPServe + "?" + params.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	sr, err := serveOnce(ctx, b.client, b.sspURL, demoTracePersona, demoTracePlacement)
 	if err != nil {
 		return fireResult{}, err
 	}
-	// Browser-shaped so downstream fraud checks don't drop the request.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-demo)")
-	req.Header.Set("Referer", "https://demo.adtech.local/")
-
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return fireResult{}, err
-	}
-	defer resp.Body.Close()
-	traceID := resp.Header.Get(constants.HeaderTraceID)
-
-	fr := fireResult{TraceID: traceID}
-	if resp.StatusCode == http.StatusOK {
-		var sr sspServeResult
-		if err := json.NewDecoder(resp.Body).Decode(&sr); err == nil {
-			fr.Served = !sr.NoBid
-			fr.ClearingPriceCPM = sr.ClearingPrice
-			if fr.Served {
-				// Fire the server-returned beacons — this is what a browser does
-				// on render; without it the auction runs but no impression is
-				// ever recorded, so the trace's serve→impression half stays empty.
-				if b.fireBeacon(ctx, sr.ImpressionURL) {
-					fr.FiredImpression = true
-				}
-				b.fireBeacon(ctx, sr.ViewabilityURL) // best-effort; enriches the trace
-			}
+	fr := fireResult{TraceID: sr.TraceID, Served: sr.Served, ClearingPriceCPM: sr.ClearingPriceCPM}
+	if sr.Served {
+		if fireBeacon(ctx, b.client, b.log, sr.ImpressionURL) {
+			fr.FiredImpression = true
 		}
-	}
-	if traceID == "" {
-		return fireResult{}, fmt.Errorf("no %s header on serve response (status %d)", constants.HeaderTraceID, resp.StatusCode)
+		fireBeacon(ctx, b.client, b.log, sr.ViewabilityURL) // best-effort; enriches the trace
 	}
 	return fr, nil
-}
-
-// fireBeacon GETs a server-returned tracking URL (already HMAC-signed) the way a
-// browser render would. Best-effort: a beacon failure just means the event
-// won't show in the trace, which the poll narrates. Returns whether it fired OK.
-func (b *httpTraceBackend) fireBeacon(ctx context.Context, beaconURL string) bool {
-	beaconURL = strings.TrimSpace(beaconURL)
-	if beaconURL == "" {
-		return false
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, beaconURL, nil)
-	if err != nil {
-		b.log.Warn("demo-trace: bad beacon url", "error", err)
-		return false
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-demo)")
-	resp, err := b.client.Do(req)
-	if err != nil {
-		b.log.Warn("demo-trace: beacon fire failed", "error", err)
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode < 400
 }
 
 // fetchTrace reads the reporting trace reader (the same endpoint the gateway

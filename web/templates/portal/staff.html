@@ -237,6 +237,14 @@
       </div>
       <div id="traceDemoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Billing / Money Flow" "subtitle" "Fire ONE real impression and watch money move: spend books on the impression (not the auction win), the winning advertiser's prepay balance draws down by exactly the clearing CPM ÷ 1000, and the committed spend rolls into the monthly invoice. This bills a real ~sub-cent drawdown.") }}
+      <div class="flex items-center gap-3 mb-4">
+        {{ template "button" (dict "label" "Run demo" "onclick" "runBillingDemo()") }}
+        <span id="billingDemoStatus" class="text-sm text-gray-400"></span>
+      </div>
+      <div id="billingDemoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Batch runs (conductor) ============ -->
@@ -1128,10 +1136,11 @@ function renderDemo(resp) {
   renderDemoTimeline(resp, 'demoTimeline', onboardingStepBody);
 }
 
-// loadDemos loads BOTH guided demos when the Demos section opens.
+// loadDemos loads ALL guided demos when the Demos section opens.
 function loadDemos() {
   loadOnboardingDemo();
   loadTraceDemo();
+  loadBillingDemo();
 }
 
 async function loadOnboardingDemo() {
@@ -1236,6 +1245,99 @@ async function runTraceDemo() {
   } catch (err) {
     status.textContent = '';
     toast('Trace demo failed: ' + err.message, 'error');
+  }
+}
+
+// ---- Billing / Money Flow demo ----
+// Renders through the SHARED demoStepCard/renderDemoTimeline; only the per-step
+// body differs. Centrepiece (step 4) is the BEFORE→AFTER balance with the
+// per-impression delta + the CPM ÷ 1000 math.
+const fmtUSD6 = (n) => '$' + Number(n || 0).toFixed(6);
+const fmtUSD4 = (n) => '$' + Number(n || 0).toFixed(4);
+
+function billingStepBody(s) {
+  const d = s.data || {};
+  if (s.n === 1) {
+    // THE IMPRESSION — persona + real winner + clearing CPM.
+    const rows = [
+      ['Persona', d.persona], ['Placement', d.placement],
+      ['Advertiser (account)', d.advertiser_account || '—'],
+      ['Campaign', d.campaign_id || '—'],
+      ['Clearing price', d.clearing_price_cpm || '—'],
+      ['trace_id', d.trace_id],
+    ];
+    return `<table class="w-full text-sm"><tbody>${rows.map(([k, v]) => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-1.5 text-xs text-gray-500 w-40">${esc(k)}</td>
+        <td class="px-3 py-1.5 font-mono text-xs">${esc(v == null ? '' : String(v))}</td>
+      </tr>`).join('')}</tbody></table>
+      <div class="mt-2">${traceFlag(!!d.served, d.served ? 'served (won)' : 'no-bid')}${d.attempts > 1 ? `<span class="text-xs text-amber-300 ml-1">(${d.attempts} fires to win)</span>` : ''}</div>`;
+  }
+  if (s.n === 2) {
+    // BEFORE — the winner's balance + committed spend right now.
+    return `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Prepay balance</div><div class="font-medium font-mono">${fmtUSD4(d.balance_usd)}</div>${d.balance_found === false ? '<div class="text-xs text-amber-300">no balance row</div>' : ''}</div>
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Committed spend (today)</div><div class="font-medium font-mono">${fmtUSD4(d.committed_usd)}</div><div class="text-xs text-gray-500">${fmtInt(d.committed_micros)} micros</div></div>
+      </div>`;
+  }
+  if (s.n === 3) {
+    // FIRE — the money math, shown explicitly.
+    return `
+      <div class="bg-brand/5 border border-brand/30 rounded p-3 text-sm">
+        <div class="font-mono">${esc(d.math || '')}</div>
+        <div class="mt-1 text-xs text-gray-500">= ${fmtUSD6(d.per_impression_usd)} · ${fmtInt(d.per_impression_micros)} micros</div>
+      </div>
+      <div class="mt-2 text-xs text-gray-500">Billable event: <span class="font-mono">${esc(d.billable_event || 'impression')}</span> (NOT the auction win)</div>`;
+  }
+  if (s.n === 4) {
+    // THE MONEY MOVED — the BEFORE→AFTER centrepiece.
+    const delta = Number(d.balance_delta_usd || 0);
+    const landed = !!d.landed;
+    return `
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Balance before</div><div class="font-mono font-medium">${fmtUSD4(d.before_balance_usd)}</div></div>
+        <div class="rounded p-3 ${landed ? 'bg-green-500/10 border border-green-500/30' : 'bg-surface-3'}"><div class="text-xs text-gray-500">Delta</div><div class="font-mono font-medium ${landed ? 'text-green-300' : 'text-gray-400'}">${fmtUSD6(delta)}</div><div class="text-xs text-gray-500">expected ${fmtUSD6(d.expected_delta_usd)}</div></div>
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Balance after</div><div class="font-mono font-medium">${fmtUSD4(d.after_balance_usd)}</div></div>
+      </div>
+      <div class="mt-3 text-sm">
+        ${traceFlag(landed, landed ? 'spend ledger row landed' : 'drawdown in flight')}
+        <span class="text-xs text-gray-500 ml-2">committed +${fmtInt(d.committed_delta_micros)} micros · ${d.ledger_spend_rows} spend ledger row(s)</span>
+      </div>`;
+  }
+  // Step 5 — the invoice tie-back.
+  return `
+    <div class="text-sm space-y-1">
+      <div><span class="text-gray-500">Settlement:</span> <b>${esc(d.settlement || '')}</b></div>
+      <div class="text-xs text-gray-500">${esc(d.invoiced_monthly || '')}</div>
+    </div>`;
+}
+
+function renderBillingDemo(resp) {
+  renderDemoTimeline(resp, 'billingDemoTimeline', billingStepBody);
+}
+
+async function loadBillingDemo() {
+  const box = $('billingDemoTimeline');
+  box.innerHTML = '<p class="text-sm text-gray-400">loading…</p>';
+  try {
+    renderBillingDemo(await fetchJSON('/v1/api/demo/billing'));
+  } catch (err) {
+    box.innerHTML = `<p class="text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function runBillingDemo() {
+  const status = $('billingDemoStatus');
+  status.textContent = 'firing a real impression + waiting for the drawdown…';
+  try {
+    const resp = await fetchJSON('/v1/api/demo/billing/run', {method: 'POST'});
+    renderBillingDemo(resp);
+    status.textContent = '';
+    toast('Billing demo — one impression drew the advertiser down', 'success');
+  } catch (err) {
+    status.textContent = '';
+    toast('Billing demo failed: ' + err.message, 'error');
   }
 }
 

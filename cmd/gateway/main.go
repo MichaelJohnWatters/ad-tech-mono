@@ -376,6 +376,25 @@ func main() {
 	demoTrace := authMiddleware(http.HandlerFunc(demoTraceHandler(traceDemoOrch)))
 	mux.Handle(routes.APIDemoTraceRun, demoTrace)
 	mux.Handle(routes.APIDemoTrace, demoTrace)
+
+	// Guided "Billing / Money Flow" demo (staff-only): fires ONE fixed-persona
+	// request so a real advertiser wins, snapshots that advertiser's prepay
+	// balance + committed spend, fires the real impression beacon (the billable
+	// event — spend books on the impression, not the win), polls Postgres until
+	// the drawdown lands, and returns the 5-step before→after timeline. GET
+	// support:read (last-run snapshot), POST /run support:update. /run first.
+	billingDemoOrch := &billingDemoOrchestrator{
+		backend: &httpBillingBackend{
+			client: &http.Client{Timeout: 10 * time.Second},
+			sspURL: sspURL,
+			db:     gwDB,
+			log:    log,
+		},
+		log: log,
+	}
+	demoBilling := authMiddleware(http.HandlerFunc(demoBillingHandler(billingDemoOrch)))
+	mux.Handle(routes.APIDemoBillingRun, demoBilling)
+	mux.Handle(routes.APIDemoBilling, demoBilling)
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))

@@ -200,6 +200,18 @@ const (
 	// timeline of that request's journey.
 	APIDemoTraceRun = apiPrefix + "/api/demo/trace/run"
 
+	// APIDemoBilling is the staff-only guided "Billing / Money Flow" demo
+	// (GET, support:read): returns the last-run snapshot (or a "not run yet"
+	// shape) of the 5-step win→impression→ledger→balance→invoice story built
+	// from a single real impression's drawdown.
+	APIDemoBilling = apiPrefix + "/api/demo/billing"
+	// APIDemoBillingRun runs the demo (POST, support:update): fires ONE fixed-
+	// persona request through the real serve path so a real advertiser wins,
+	// snapshots the winner's prepay balance + committed spend, fires the real
+	// impression beacon (the billable event), polls Postgres until the drawdown
+	// lands, and returns the assembled 5-step before→after money-flow timeline.
+	APIDemoBillingRun = apiPrefix + "/api/demo/billing/run"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.
