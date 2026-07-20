@@ -469,6 +469,69 @@ consumers** — the analytics spine isn't just for humans:
   DSP reconciles its pacing counter against it (one of the four analytics→serving
   feedback loops; see [`billing-flow`](billing-flow.svg) and [`cache-freshness`](cache-freshness.svg)).
 
+## The money lane — billing, in one pass
+
+Money is its own spine (full detail in [`billing-flow`](billing-flow.svg)). The
+one thing to internalise: **spend books on the IMPRESSION, not the win.**
+
+```
+prepay balance GATES bidding   →   DSP bids only while balance (+ credit_limit) > spend
+        │
+   auction WIN        (nothing billed yet — a win that never renders is free)
+        │
+   /v1/t/imp  ─▶ billing engine:
+        │          · CPM              → bill immediately
+        │          · CPC/CPA/vCPM/    → RESERVE now, SETTLE on the click / conversion /
+        │            CPCV               view / complete pixel (the settle-side beacon)
+        ▼
+   TigerBeetle ledger (double-entry)  ──▶  advertiser prepay balance drawn DOWN
+        │                                  publisher payout accrued (rev-share split at settle)
+        ▼
+   committed_spend (PG)  ──snapshot ~30s──▶  ⟲ DSP reconciles its pacing counter to billed reality
+        │
+   monthly invoice-runner sums committed_spend → invoices (invoiced accounts only;
+        prepay already paid up front — see the prepay-vs-invoiced billing mode)
+```
+
+## Serving variants — display vs video / audio / CTV
+
+Stages 1–2 drew "Ad Server → creative". The *serve envelope* differs by format;
+everything downstream (pixels → NATS → hot/cold/billing/audience) is identical.
+
+- **Display** — the ad server returns HTML; the SDK injects it. Beacons: imp/click/view.
+- **Video / audio** — the publisher ad server returns **VAST / DAAST** XML; the player
+  fetches it and fires quartile beacons (`/v1/t/video` · `/v1/t/audio`). A **VMAP**
+  schedule describes multiple breaks; **CTV ad pods** pack several ads into one break.
+- **SSAI** (server-side ad insertion, `cmd/ssai` :8093) — for CTV/streaming the ads are
+  **stitched into the content manifest server-side** (no client ad calls). An avail that
+  can't be filled splices a **slate** clip (`ssai.slate_creative_id`) instead of dropping
+  to black; the **transcoder** conditions creatives to match the stream. Outcome per
+  avail: `filled · slate · unfilled`.
+
+## The OTHER circulatory system — why analytics never touches serving
+
+There are **two blood supplies and they don't cross.** This is the boundary that
+confuses people most: the dashboards and the auction run on different data.
+
+```
+SERVING SIDE  (sub-millisecond — must NEVER block on analytics)
+  Postgres  (campaigns · placements · creatives · balances · deals · house-ads · …)
+      │  loaded into in-process WARM CACHES (lock-free atomic snapshots)
+      │  kept fresh by 18 adtech.cache.invalidate.* subjects (sub-second) + a 30s poll
+      ▼
+  the auction / serve reads ONLY these caches + Redis:
+      · frequency caps — Redis counters (per user per campaign, windowed;
+        households share ONE cap across co-viewers)
+      · budgets / pacing, audience memberships — also Redis
+
+ANALYTICS SIDE  (stages 3–6)  is READ-ONLY toward serving — it never feeds a bid,
+  EXCEPT four deliberate feedback loops (⟲): audience memberships, spend→pacing,
+  boot warm-starts, identity top-up.   (full map: cache-freshness.svg)
+```
+
+If you remember one boundary: **a slow ClickHouse query can never slow an auction.**
+Serving feeds from Postgres + NATS invalidates; analytics only ever *reads*.
+
 ## The one-sentence version of each stage
 
 1. **Sources** — two lanes: *observed* (pixels + auction exhaust) and *onboarded*
