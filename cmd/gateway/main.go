@@ -358,6 +358,24 @@ func main() {
 	demoOnboarding := authMiddleware(http.HandlerFunc(demoOnboardingHandler(demoOrch)))
 	mux.Handle(routes.APIDemoOnboardingRun, demoOnboarding)
 	mux.Handle(routes.APIDemoOnboarding, demoOnboarding)
+
+	// Guided "Auction Trace" demo (staff-only): fires ONE fixed-persona ad
+	// request through the real SSP serve path, captures its trace_id, polls the
+	// real trace reader until the impression lands, and returns the 5-step
+	// timeline. GET support:read (last-run snapshot), POST /run support:update
+	// (fire+poll). The /run route registers before the GET path.
+	traceDemoOrch := &traceDemoOrchestrator{
+		backend: &httpTraceBackend{
+			client:       &http.Client{Timeout: 10 * time.Second},
+			sspURL:       sspURL,
+			reportingURL: reportingURL,
+			log:          log,
+		},
+		log: log,
+	}
+	demoTrace := authMiddleware(http.HandlerFunc(demoTraceHandler(traceDemoOrch)))
+	mux.Handle(routes.APIDemoTraceRun, demoTrace)
+	mux.Handle(routes.APIDemoTrace, demoTrace)
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))

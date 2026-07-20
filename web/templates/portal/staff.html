@@ -229,6 +229,14 @@
       </div>
       <div id="demoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Auction Trace" "subtitle" "Fire ONE ad request from a fixed persona through the live stack and follow its journey — auction, win, serve, impression — on a trace timeline built from the request's real trace_id.") }}
+      <div class="flex items-center gap-3 mb-4">
+        {{ template "button" (dict "label" "Run demo" "onclick" "runTraceDemo()") }}
+        <span id="traceDemoStatus" class="text-sm text-gray-400"></span>
+      </div>
+      <div id="traceDemoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Batch runs (conductor) ============ -->
@@ -502,7 +510,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadOnboardingDemo, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -1038,8 +1046,42 @@ function demoChips(arr, opts = {}) {
   }).join('') || '<span class="text-gray-400">none</span>';
 }
 
-// renderDemoStep dispatches on the step number to a step-specific body.
-function renderDemoStep(s) {
+// demoStepCard is the SHARED timeline step shell — the numbered bubble, title,
+// narration and body wrapper — used by BOTH guided demos. Each demo passes a
+// bodyFn(step) that returns the step-specific inner HTML, so the timeline markup
+// lives in exactly one place.
+function demoStepCard(s, bodyFn) {
+  return `
+    <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+      <div class="flex items-baseline gap-2 mb-1">
+        <span class="flex-none w-6 h-6 rounded-full bg-brand/20 text-brand text-xs font-semibold grid place-items-center">${s.n}</span>
+        <span class="font-medium">${esc(s.title)}</span>
+      </div>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3 ml-8">${esc(s.narration)}</p>
+      <div class="ml-8">${bodyFn(s)}</div>
+    </div>`;
+}
+
+// renderDemoTimeline is the SHARED renderer for both demos: it draws the steps
+// (each through demoStepCard + the demo's bodyFn) plus the "What just happened"
+// summary card, into boxId. Not-yet-run responses show the summary hint.
+function renderDemoTimeline(resp, boxId, bodyFn) {
+  const box = $(boxId);
+  if (!resp || !resp.ran) {
+    box.innerHTML = `<p class="text-sm text-gray-400">${esc((resp && resp.summary) || 'The demo has not been run yet. Click "Run demo".')}</p>`;
+    return;
+  }
+  const steps = (resp.steps || []).slice().sort((a, b) => a.n - b.n).map(s => demoStepCard(s, bodyFn)).join('');
+  box.innerHTML = steps + `
+    <div class="border border-brand/30 bg-brand/5 rounded-lg p-4">
+      <div class="font-medium mb-1">What just happened</div>
+      <p class="text-sm text-gray-600 dark:text-gray-300">${esc(resp.summary)}</p>
+    </div>`;
+}
+
+// onboardingStepBody dispatches on the step number to the onboarding demo's
+// step-specific body.
+function onboardingStepBody(s) {
   const d = s.data || {};
   let body = '';
   if (s.n === 1) {
@@ -1079,29 +1121,17 @@ function renderDemoStep(s) {
       ${demoChips(d.segment_members, {added: isAfter ? (d.added || []) : []})}
       ${isAfter && (d.added || []).length ? `<div class="mt-2 text-xs text-green-400">expansion added ${demoChips(d.added, {added: d.added})}</div>` : ''}`;
   }
-  return `
-    <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
-      <div class="flex items-baseline gap-2 mb-1">
-        <span class="flex-none w-6 h-6 rounded-full bg-brand/20 text-brand text-xs font-semibold grid place-items-center">${s.n}</span>
-        <span class="font-medium">${esc(s.title)}</span>
-      </div>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-3 ml-8">${esc(s.narration)}</p>
-      <div class="ml-8">${body}</div>
-    </div>`;
+  return body;
 }
 
 function renderDemo(resp) {
-  const box = $('demoTimeline');
-  if (!resp || !resp.ran) {
-    box.innerHTML = `<p class="text-sm text-gray-400">${esc((resp && resp.summary) || 'The demo has not been run yet. Click "Run demo".')}</p>`;
-    return;
-  }
-  const steps = (resp.steps || []).slice().sort((a, b) => a.n - b.n).map(renderDemoStep).join('');
-  box.innerHTML = steps + `
-    <div class="border border-brand/30 bg-brand/5 rounded-lg p-4">
-      <div class="font-medium mb-1">What just happened</div>
-      <p class="text-sm text-gray-600 dark:text-gray-300">${esc(resp.summary)}</p>
-    </div>`;
+  renderDemoTimeline(resp, 'demoTimeline', onboardingStepBody);
+}
+
+// loadDemos loads BOTH guided demos when the Demos section opens.
+function loadDemos() {
+  loadOnboardingDemo();
+  loadTraceDemo();
 }
 
 async function loadOnboardingDemo() {
@@ -1125,6 +1155,87 @@ async function runOnboardingDemo() {
   } catch (err) {
     status.textContent = '';
     toast('Demo run failed: ' + err.message, 'error');
+  }
+}
+
+// ---- Auction Trace demo ----
+// Renders through the SHARED demoStepCard/renderDemoTimeline; only the per-step
+// body differs. A yes/no chip helper marks which milestones the real trace hit.
+function traceFlag(on, label) {
+  const cls = on ? 'bg-green-500/20 text-green-300' : 'bg-surface-3 text-gray-400';
+  return `<span class="inline-block m-0.5 px-1.5 py-0.5 rounded ${cls} text-xs">${on ? '✓' : '·'} ${esc(label)}</span>`;
+}
+
+function traceStepBody(s) {
+  const d = s.data || {};
+  if (s.n === 1) {
+    // PERSONA — who's browsing + placement/format.
+    const rows = [
+      ['Geo', [d.city, d.region, d.geo].filter(Boolean).join(', ')],
+      ['Device', [d.device, d.os].filter(Boolean).join(' · ')],
+      ['Identity', d.identity], ['Consent', d.consent],
+      ['Placement', d.placement], ['Format', d.format],
+      ['Segments', (d.segments || []).join(', ') || '—'],
+    ];
+    return `<table class="w-full text-sm"><tbody>${rows.map(([k, v]) => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-1.5 text-xs text-gray-500 w-32">${esc(k)}</td>
+        <td class="px-3 py-1.5">${esc(v == null ? '' : String(v))}</td>
+      </tr>`).join('')}</tbody></table>`;
+  }
+  if (s.n === 2) {
+    // REQUEST FIRED — the trace_id + a link into the full trace explorer.
+    return `
+      <div class="text-sm mb-2"><span class="text-gray-500">Endpoint:</span> <code class="font-mono text-xs">${esc(d.endpoint)}</code></div>
+      <div class="text-sm mb-2"><span class="text-gray-500">trace_id:</span>
+        <a class="font-mono text-xs underline decoration-dotted hover:text-brand" href="${esc(d.explorer)}" target="_blank" title="open in the full trace explorer">${esc(d.trace_id)}</a></div>
+      <div>${traceFlag(!!d.served, d.served ? 'served' : 'no-bid')}${d.attempts > 1 ? `<span class="text-xs text-amber-300 ml-1">(${d.attempts} fires to win)</span>` : ''}</div>`;
+  }
+  if (s.n === 3) {
+    // AUCTION — the winner + clearing price straight from the trace (the centrepiece).
+    return `
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Winning DSP</div><div class="font-medium">${esc(d.winner_dsp || '—')}</div></div>
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Clearing price</div><div class="font-medium">${esc(d.clearing_price || '—')}</div></div>
+      </div>
+      ${d.detail ? `<div class="mt-2 text-xs text-gray-500">${d.time ? esc(d.time) + ' · ' + esc(d.service) + ' · ' : ''}${esc(d.detail)}</div>` : ''}`;
+  }
+  if (s.n === 4) {
+    // SERVE + TRACK — which tracker events the real trace recorded.
+    return `
+      <div>${traceFlag(!!d.impression, 'impression')}${traceFlag(!!d.viewable, 'viewable')}${traceFlag(!!d.click, 'click')}</div>
+      ${d.impression_detail ? `<div class="mt-2 text-xs text-gray-500">${d.impression_time ? esc(d.impression_time) + ' · ' : ''}${esc(d.impression_detail)}</div>` : ''}`;
+  }
+  // Step 5 — where the data went.
+  return `<div class="flex flex-wrap gap-2">${(d.destinations || []).map(x =>
+    `<span class="inline-block px-2 py-1 rounded bg-brand/15 text-brand text-xs">${esc(x)}</span>`).join('')}</div>`;
+}
+
+function renderTraceDemo(resp) {
+  renderDemoTimeline(resp, 'traceDemoTimeline', traceStepBody);
+}
+
+async function loadTraceDemo() {
+  const box = $('traceDemoTimeline');
+  box.innerHTML = '<p class="text-sm text-gray-400">loading…</p>';
+  try {
+    renderTraceDemo(await fetchJSON('/v1/api/demo/trace'));
+  } catch (err) {
+    box.innerHTML = `<p class="text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function runTraceDemo() {
+  const status = $('traceDemoStatus');
+  status.textContent = 'firing a request + waiting for the event pipeline…';
+  try {
+    const resp = await fetchJSON('/v1/api/demo/trace/run', {method: 'POST'});
+    renderTraceDemo(resp);
+    status.textContent = '';
+    toast('Auction trace — one request followed end to end', 'success');
+  } catch (err) {
+    status.textContent = '';
+    toast('Trace demo failed: ' + err.message, 'error');
   }
 }
 
