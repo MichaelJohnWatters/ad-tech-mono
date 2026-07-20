@@ -226,6 +226,22 @@ const (
 	// identical totals). Returns the assembled 5-step timeline.
 	APIDemoRollupsRun = apiPrefix + "/api/demo/rollups/run"
 
+	// APIDemoRetargeting is the staff-only guided "Retargeting" demo
+	// (GET, support:read): returns the last-run snapshot (or a "not run yet"
+	// shape) of the 5-step visit→behaviour-row→rule→segment→expand story that
+	// shows how one synthetic user visiting an advertiser's page (the
+	// retargeting pixel) becomes a member of a retargeting audience. The
+	// behavioural/lake sibling of the onboarding demo.
+	APIDemoRetargeting = apiPrefix + "/api/demo/retargeting"
+	// APIDemoRetargetingRun runs the demo (POST, support:update): RESETs the
+	// isolated demo account, re-seeds the synthetic identity edges + a
+	// site_visit retargeting-rule segment, fires the real /v1/t/rt pixel AND
+	// writes the site_visit behaviour_signals row to the lake, runs the REAL
+	// lake-backed profile-builder so its behavioural rule matches the row,
+	// enrols the person and cluster-expands the membership, and returns the
+	// assembled 5-step before→after timeline.
+	APIDemoRetargetingRun = apiPrefix + "/api/demo/retargeting/run"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.
