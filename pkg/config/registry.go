@@ -130,11 +130,23 @@ func (r *Registry) Register(ctx context.Context, serviceName, version, port stri
 		if exists {
 			continue
 		}
-		if err := source.UpdateForPod(ctx, r.podID, entry.Key, entry.Default, "config_seed"); err != nil {
+		// Seed the EFFECTIVE value, honouring an env override, not the raw
+		// schema default. Resolution order is pod-row → env → default, so
+		// seeding the default into a pod row would SHADOW an env override that
+		// differs (e.g. exchange.dsp_endpoints defaults to a dev localhost list
+		// but k8s sets EXCHANGE_DSP_ENDPOINTS to the service DNS — seeding
+		// "localhost" broke exchange→DSP fan-out platform-wide). Seeding the
+		// env value keeps the seeded row consistent with what the pod actually
+		// uses.
+		seedVal := entry.Default
+		if v := os.Getenv(envKeyFromConfigKey(entry.Key)); v != "" {
+			seedVal = v
+		}
+		if err := source.UpdateForPod(ctx, r.podID, entry.Key, seedVal, "config_seed"); err != nil {
 			r.log.Warn("seed failed", "key", entry.Key, "pod", r.podID, "error", err)
 			continue
 		}
-		r.log.Debug("seeded config key", "key", entry.Key, "pod", r.podID, "default", entry.Default, "version", version)
+		r.log.Debug("seeded config key", "key", entry.Key, "pod", r.podID, "value", seedVal, "version", version)
 	}
 
 	r.log.Info("pod registered",
