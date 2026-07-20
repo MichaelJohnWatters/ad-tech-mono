@@ -273,6 +273,139 @@ Every one of these seven, once recorded, publishes to NATS (stage 3) and so
 lands in **both** the hot rollups (stage 6) and the cold lake (stage 4) — plus
 billing (settles) and, for `/v1/t/rt`, the audience spine (stage 5).
 
+## Zoom-in A — how the pipeline NORMALISES onboarded data (stage 4 detail)
+
+This is the part that's easy to hand-wave. A CSV from an advertiser and a
+Parquet from a data partner and a subscriber list from a publisher must all end
+up as the **same shape**: one row per identifier, with a hashed id, an id-type,
+who it belongs to, and consent. That flattening is the pipeline's whole job.
+
+There are **two doors in**, both ending at the same `profile_signals` shape:
+
+```
+DOOR 1 · Portal upload (small, interactive)      DOOR 2 · Drop-zone (bulk, partner)
+advertiser OR publisher picks a CSV               partner drops a file + a manifest
+        │ browser hashes PII (SHA-256)                    │ adtech-onboarding/<provider>/
+        │ raw emails REJECTED, ≤5 MB                      │   incoming/  (csv·tsv·parquet,
+        ▼                                                 │   zip/gzip auto-detected)
+  POST /v1/api/audiences  ─────────┐                      ▼
+  (Gateway, tenant-scoped to the   │            ┌──────────────────────────────────────┐
+   caller's account — never        │            │ Pipeline poller (cmd/pipeline)         │
+   trusted from the body)          │            │                                        │
+        │                          │            │  ① DECODE   sniff magic bytes →        │
+        ▼                          │            │             rows (csv/tsv/parquet)     │
+   ┌──────────────────────┐        │            │  ② MAP      manifest.json field_map:   │
+   │ normalise inline:     │       │            │             "email"→id_value,          │
+   │  id columns → id_value│       └───────────▶│             "provider_uid"→id_value,   │
+   │  + id_type            │                     │            id_type stamped (defaults    │
+   │  match rate computed  │                     │            merged UNDER the manifest)  │
+   └──────────┬───────────┘                      │  ③ VALIDATE required fields present?   │
+              │                                   │             NO → quarantine row to     │
+              │                                   │             <provider>/rejected/ +     │
+              │                                   │             an onboarding_runs record  │
+              │                                   │  ④ ENRICH   geo from IP, device class  │
+              │                                   │  ⑤ MATCH    % of ids already known to   │
+              │                                   │             the identity graph =        │
+              │                                   │             "match rate" shown to       │
+              │                                   │             the uploader                │
+              │                                   └───────────────────┬────────────────────┘
+              │                                                       │
+              ▼  writes BOTH:                                         ▼  writes BOTH:
+   ┌─────────────────────────────────────────────────────────────────────────────────┐
+   │ profile_signals (Delta lake)     ← durable, replayable: 1 row per id              │
+   │   {id_type, id_value(hashed), source, account_id, provider, segment, consent, ts} │
+   │ audience_segment_members (PG)    ← the live "fast path" — usable in auctions NOW   │
+   └─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why two writes?** The PG row makes the list usable in the *next auction*
+immediately (the fast path). The lake row is the durable fact the
+**profile-builder** re-reads every run to expand + reconcile (below). Same data,
+two speeds.
+
+## Zoom-in B — how audiences EXPAND (the part that feels like magic)
+
+An upload only ever contains the ids the customer *had* (say, hashed emails). But
+the same person also has a cookie, a mobile ad id, a household. **Expansion** is:
+"enrol the person once, then apply that membership to *every* id we know is the
+same person." That's what turns a 10k-email list into a segment that actually
+matches traffic (which arrives as cookies/IFAs, not emails).
+
+```
+profile-builder  (a step in the hourly batch-conductor chain, pkg/profilebuilder)
+
+  INPUT ─ identity_graph (PG edges)         INPUT ─ behaviour_signals + profile_signals (lake)
+          who is linked to whom                     what each person did / was uploaded as
+              │                                              │
+              ▼                                              │
+  ① CLUSTER  union-find over the edges:                      │
+     • keep edges with confidence ≥ 0.5                      │
+     • exclude household (hh:) links                         │
+     • drop pathological mega-clusters                       │
+     → person_id  ⇄  [all member ids]                        │
+              │                                              │
+              ▼                                              ▼
+  ② SEGMENT  build membership at the PERSON level, four kinds:
+     • onboarded (plain)   the uploaded list, as-is
+     • behavioural rule    "visited /pricing 3× in 7d"  (evaluated over behaviour_signals)
+     • composite           all_of / any_of / none_of  (boolean set logic on other segments)
+     • lookalike           seed segment → top-K categories → score every other person →
+                           enrol those ≥ min_similarity, capped at max_members
+              │
+              ▼
+  ③ EXPAND   expandKeys(): for each enrolled person, fan the membership out to
+             EVERY id in their cluster.
+             ┌──────────────────────────────────────────────────────────────┐
+             │  enrolled:  sha256(email)  ─ in segment "newsletter"          │
+             │  cluster of that person also holds:  cookie:xyz, ifa:123, ... │
+             │  after expand:  cookie:xyz, ifa:123  ALSO in "newsletter"     │
+             └──────────────────────────────────────────────────────────────┘
+              │
+              ▼
+  ④ WRITE    audience_segment_members (PG, replace-by-segment prune) + lake durable copy
+              │   ⟲ publishes cache.invalidate.audience
+              ▼
+  audience preloader → Redis (audience:user:<id>) → back into the AUCTION (stage 2):
+     SSP stamps user.ext.segments · DSP applies the audience bid modifier
+     (+ optional read-time BFS top-up on the DSP for extra freshness)
+```
+
+### Worked example — follow one person end-to-end
+
+1. A **publisher** uploads `subscribers.csv` (column `email`) as segment
+   "newsletter", visibility `public`. The browser hashes each email to
+   `sha256:ab…`; the raw email never leaves the page.
+2. Pipeline normalises → `profile_signals` row `{id_type:email, id_value:sha256:ab…,
+   account:pub-42, segment:newsletter, consent:yes}` **and** a PG member row.
+   Match rate comes back "68% of these emails are already known to us."
+3. The **identity graph** already links `sha256:ab…` ⇄ `cookie:xyz` (seen in a
+   past auction) ⇄ `hh:home7` (same IP household).
+4. **profile-builder** clusters those three ids into `person_42`, enrols
+   `person_42` in "newsletter", then **expands**: now `cookie:xyz` and `ifa:…`
+   are members too — not just the email.
+5. Members → Redis. The **next auction** where `cookie:xyz` shows up: the SSP
+   stamps `segments:[newsletter]`, the DSP sees it and applies the newsletter bid
+   modifier. The email became a cookie became a bid.
+
+**That is the whole pipeline.** Normalise (make every source one shape) →
+cluster (who's the same person) → expand (apply the label to all their ids) →
+serve (target them in the auction).
+
+## Publisher-submitted data — yes, and it's symmetric
+
+Onboarding is **not advertiser-only**. Publishers onboard their own first-party
+data through the *same* two doors, tenant-scoped to the publisher account:
+
+- **Publisher portal → "First-party audiences"** (subscriber lists, behavioural
+  cohorts, suppression lists) via `POST /v1/api/audiences` — identical to the
+  advertiser path, just a publisher session.
+- **Drop-zone** for a publisher's data partner, same manifest ingestion.
+
+The supply-side use is different (a publisher's segments enrich *their own*
+inventory / power seller-defined audiences) but the **plumbing is the same**:
+normalise → cluster → expand → available for targeting. In the diagrams the
+onboarded lane says "Advertiser / **Publisher**" for exactly this reason.
+
 ## The one-sentence version of each stage
 
 1. **Sources** — two lanes: *observed* (pixels + auction exhaust) and *onboarded*
