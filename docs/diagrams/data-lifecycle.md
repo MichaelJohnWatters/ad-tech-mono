@@ -263,6 +263,16 @@ site; the gateway generates the snippet so the URL is never hardcoded):
 | Conversion | `/v1/t/conv` | advertiser thank-you / purchase page | **CPA settle** + conversion attribution (matched back by `trace_id`) |
 | Retargeting | `/v1/t/rt` | advertiser product / category pages | **`site_visit` rows** → feed audience segments (this is how "visited but didn't buy" becomes a targetable list — stage 5) |
 
+**How `/v1/t/rt` actually becomes a segment** (the bit the table glosses): the
+retargeting pixel doesn't write "segment members" directly. It publishes a
+**consent-gated `site_visit` behaviour row** (`kind=site_visit`, tagged with the
+advertiser's own label, e.g. `product-page`) — the *same* `behaviour_signals`
+lane as every other observed behaviour. It becomes a segment only when a
+**behavioural rule** with `event=site_visit` + a tag filter matches it in
+profile-builder (stage 5). So "visited /pricing but didn't buy" is just a rule
+over site-visit rows, then cluster-expanded like any other segment. No consent →
+no row → no retargeting.
+
 **The pixel that isn't a pixel:** identity/household signals (`user_id`, `uid2`,
 `hashed_email`, `ifa`, `IP→household`) don't ride a separate sync pixel — they
 arrive on the **ad request itself** at the SSP (stage 2), then flow to the
@@ -405,6 +415,59 @@ The supply-side use is different (a publisher's segments enrich *their own*
 inventory / power seller-defined audiences) but the **plumbing is the same**:
 normalise → cluster → expand → available for targeting. In the diagrams the
 onboarded lane says "Advertiser / **Publisher**" for exactly this reason.
+
+## Cross-cutting — consent & the right to be forgotten (the flow that runs BACKWARDS)
+
+Every stage above moves data *forward*. There is one flow that runs the other
+way — the privacy path — and it touches all three stores. `CLAUDE.md` requires
+consent to flow through the entire chain; here's where it actually lives.
+
+```
+CONSENT is enforced at CAPTURE, not later:
+  · no consent on the ad request → identity signals not observed
+  · no consent on a serve       → tracker emits NO behaviour_signals row
+    (publishBehaviour is consent-gated) → nothing to onboard, cluster or retarget
+
+THE RIGHT TO BE FORGOTTEN (opt-out → deletion), a 3-level system:
+  User / regulator
+      │  POST /v1/api/privacy/optout
+      │  level 1 = no personalisation (contextual only, still bids) ·
+      │  level 2 = no tracking (no bid) · level 3 = full deletion
+      ▼
+  opt_out_registry (PG)  ──publishes──▶  adtech.privacy.opt_out  (serving stops targeting NOW)
+      │
+      │  level 3 → cmd/privacy-delete (job) picks up rows not yet completed
+      ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │ PURGE the user across ALL THREE stores in one sweep:                        │
+  │   · identity_graph            — drop their edges (un-links the person)      │
+  │   · audience_segment_members  — drop their memberships (leaves every segment)│
+  │   · Delta lake (via pipeline) — filtered rewrite drops their event rows     │
+  │     (the lake is keep-forever EXCEPT this — GDPR beats "keep everything")   │
+  └───────────────────────────────┬───────────────────────────────────────────┘
+      │  marks opt_out_registry completed · publishes adtech.privacy.deletion_completed
+      ▼
+  cmd/privacy-verify (audit) — re-scans the stores; a leak = the delete didn't propagate
+```
+
+The lake being the pipeline's **single writer** is what makes the purge safe: one
+process rewrites the Parquet + commits one Delta version, so a scan never sees a
+half-deleted user.
+
+## Analytics has readers beyond the dashboard
+
+Stage 6 shows the portal reading rollups, but the hot/cold data has **other
+consumers** — the analytics spine isn't just for humans:
+
+- **`cmd/optimise`** — bid / placement / creative optimisation reads back
+  performance + the `dsp_call` auction-log events to tune routing and pacing.
+- **`cmd/fraud`** + **`python/fraud`** — batch fraud scoring over the event/auction
+  history; blocklist output feeds back to the tracker (warm cache).
+- **`python/optimisation`** — model training on the keep-forever Parquet corpus
+  (this is *why* the lake keeps everything: Parquet is the ML-native format).
+- **⟲ spend → pacing** — reporting computes committed spend, snapshots it, and the
+  DSP reconciles its pacing counter against it (one of the four analytics→serving
+  feedback loops; see [`billing-flow`](billing-flow.svg) and [`cache-freshness`](cache-freshness.svg)).
 
 ## The one-sentence version of each stage
 
