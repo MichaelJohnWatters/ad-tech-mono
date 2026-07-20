@@ -245,6 +245,14 @@
       </div>
       <div id="billingDemoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Rollups" "subtitle" "Fire a burst of real impressions, then watch the reporting query API collapse the raw event rows into far fewer aggregated rows — same totals, fewer rows — one row per rollup dimension-tuple. Coarser tiers drop dimensions for even fewer rows; reporting auto-picks the coarsest tier that answers a query's range. This fires real impressions (real ~sub-cent spend).") }}
+      <div class="flex items-center gap-3 mb-4">
+        {{ template "button" (dict "label" "Run demo" "onclick" "runRollupsDemo()") }}
+        <span id="rollupsDemoStatus" class="text-sm text-gray-400"></span>
+      </div>
+      <div id="rollupsDemoTimeline" class="space-y-4"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Batch runs (conductor) ============ -->
@@ -1141,6 +1149,7 @@ function loadDemos() {
   loadOnboardingDemo();
   loadTraceDemo();
   loadBillingDemo();
+  loadRollupsDemo();
 }
 
 async function loadOnboardingDemo() {
@@ -1338,6 +1347,103 @@ async function runBillingDemo() {
   } catch (err) {
     status.textContent = '';
     toast('Billing demo failed: ' + err.message, 'error');
+  }
+}
+
+// ---- Rollups demo ----
+// Renders through the SHARED demoStepCard/renderDemoTimeline; only the per-step
+// body differs. Centrepiece (step 3) is the "N_raw raw → N_agg rows · N×"
+// collapse visual with matching totals; step 5 is the retention ladder.
+function rollupsStepBody(s) {
+  const d = s.data || {};
+  if (s.n === 1) {
+    // THE FIREHOSE — N real impressions fired/served.
+    return `
+      <div class="text-sm mb-2"><span class="text-gray-500">Persona:</span> <span class="font-mono text-xs">${esc(d.persona)}</span> · <span class="text-gray-500">placement:</span> <span class="font-mono text-xs">${esc(d.placement)}</span></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-surface-3 rounded p-3"><div class="text-xs text-gray-500">Fired</div><div class="font-mono font-medium">${fmtInt(d.fired)}</div></div>
+        <div class="rounded p-3 ${d.served ? 'bg-green-500/10 border border-green-500/30' : 'bg-surface-3'}"><div class="text-xs text-gray-500">Served (won)</div><div class="font-mono font-medium ${d.served ? 'text-green-300' : 'text-gray-400'}">${fmtInt(d.served)}</div></div>
+      </div>
+      <div class="mt-2 text-xs text-gray-500">Tier: <span class="font-mono">${esc(d.tier)}</span> — one row per event.</div>`;
+  }
+  if (s.n === 2) {
+    // RAW LANDED — the raw impression row count.
+    if (!d.query_ok) return `<div class="text-sm text-amber-300 bg-amber-500/10 rounded p-3">query returned nothing — re-run once impressions have landed. No number is fabricated.</div>`;
+    return `
+      <div class="bg-surface-3 rounded p-3 inline-block">
+        <div class="text-xs text-gray-500">Raw impression rows (last ${d.window_h}h)</div>
+        <div class="text-2xl font-mono font-semibold">${fmtInt(d.raw_rows)}</div>
+        <div class="text-xs text-gray-500">queryable to the ${esc(d.queryable || 'individual event')}</div>
+      </div>`;
+  }
+  if (s.n === 3) {
+    // THE COLLAPSE — the centrepiece: raw → aggregated, same totals.
+    if (!d.query_ok) return `<div class="text-sm text-amber-300 bg-amber-500/10 rounded p-3">grouped query failed — no reduction number is fabricated. Re-run once reporting is reachable.</div>`;
+    const ratio = Number(d.reduction || 0);
+    const match = !!d.totals_match;
+    return `
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="bg-surface-3 rounded p-3 text-center"><div class="text-xs text-gray-500">Raw rows</div><div class="text-2xl font-mono font-semibold">${fmtInt(d.raw_rows)}</div></div>
+        <div class="text-2xl text-gray-400">→</div>
+        <div class="bg-brand/10 border border-brand/30 rounded p-3 text-center"><div class="text-xs text-gray-500">Aggregated rows</div><div class="text-2xl font-mono font-semibold text-brand">${fmtInt(d.aggregated_rows)}</div></div>
+        <div class="rounded p-3 text-center bg-green-500/10 border border-green-500/30"><div class="text-xs text-gray-500">Reduction</div><div class="text-2xl font-mono font-semibold text-green-300">${ratio.toFixed(0)}×</div></div>
+      </div>
+      <div class="mt-3 text-xs text-gray-500">Grouped by ${(d.dimensions || []).map(x => `<span class="font-mono">${esc(x)}</span>`).join(' · ')} — one row per tuple = one rollup row.</div>
+      <div class="mt-2 text-sm">${match ? `<span class="text-green-300">✓ totals match</span> <span class="text-xs text-gray-500">— SUM(grouped counts) ${fmtInt(d.grouped_total)} = raw ${fmtInt(d.raw_rows)}</span>` : `<span class="text-amber-300">totals: grouped ${fmtInt(d.grouped_total)} vs raw ${fmtInt(d.raw_rows)}</span> <span class="text-xs text-gray-500">— window shifted between queries; re-run to line up.</span>`}</div>`;
+  }
+  if (s.n === 4) {
+    // COARSER = FEWER — a second grouped query with fewer dimensions.
+    if (!d.query_ok) return `<div class="text-sm text-amber-300 bg-amber-500/10 rounded p-3">coarser query failed — no number is fabricated. Re-run once reporting is reachable.</div>`;
+    return `
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="bg-surface-3 rounded p-3 text-center"><div class="text-xs text-gray-500">Fine (${(d.fine_dimensions || []).length} dims)</div><div class="text-xl font-mono font-semibold">${fmtInt(d.fine_rows)}</div></div>
+        <div class="text-2xl text-gray-400">→</div>
+        <div class="bg-brand/10 border border-brand/30 rounded p-3 text-center"><div class="text-xs text-gray-500">Coarse (${(d.coarse_dimensions || []).length} dims)</div><div class="text-xl font-mono font-semibold text-brand">${fmtInt(d.coarse_rows)}</div></div>
+      </div>
+      <div class="mt-2 text-xs text-gray-500">Coarse grouping: ${(d.coarse_dimensions || []).map(x => `<span class="font-mono">${esc(x)}</span>`).join(' + ')} — dropped creative_id + placement_id. Fewer dimensions, fewer rows, same totals.</div>`;
+  }
+  // Step 5 — the retention ladder.
+  const rows = (d.retention || []).map(t => `
+    <tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-1.5 font-mono text-xs">${esc(t.tier)}</td>
+      <td class="px-3 py-1.5 text-xs">${esc(t.retention)}</td>
+      <td class="px-3 py-1.5 text-xs text-gray-500">${esc(t.row_shape)}</td>
+    </tr>`).join('');
+  return `
+    <table class="w-full text-sm mb-3"><thead><tr class="text-left text-xs text-gray-500">
+      <th class="px-3 py-1">Tier</th><th class="px-3 py-1">Retention</th><th class="px-3 py-1">Row shape</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    <div class="text-xs text-gray-500 space-y-1">
+      <div><b>AutoTier:</b> ${esc(d.auto_tier || '')}</div>
+      <div><b>Hot/cold:</b> ${esc(d.hot_cold || '')}</div>
+    </div>`;
+}
+
+function renderRollupsDemo(resp) {
+  renderDemoTimeline(resp, 'rollupsDemoTimeline', rollupsStepBody);
+}
+
+async function loadRollupsDemo() {
+  const box = $('rollupsDemoTimeline');
+  box.innerHTML = '<p class="text-sm text-gray-400">loading…</p>';
+  try {
+    renderRollupsDemo(await fetchJSON('/v1/api/demo/rollups'));
+  } catch (err) {
+    box.innerHTML = `<p class="text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function runRollupsDemo() {
+  const status = $('rollupsDemoStatus');
+  status.textContent = 'firing real impressions + querying the collapse…';
+  try {
+    const resp = await fetchJSON('/v1/api/demo/rollups/run', {method: 'POST'});
+    renderRollupsDemo(resp);
+    status.textContent = '';
+    toast('Rollups demo — raw rows collapsed into aggregated rows', 'success');
+  } catch (err) {
+    status.textContent = '';
+    toast('Rollups demo failed: ' + err.message, 'error');
   }
 }
 
