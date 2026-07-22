@@ -44,11 +44,11 @@ test-e2e: ## Run end-to-end tests against the live stack (real ClickHouse backen
 test-e2e-chaos: ## Chaos e2e: kills infra pods (nats/postgres/redis/minio) to prove fail-open behaviour. Run SEPARATELY — the pod churn flaps port-forwards and destabilises unrelated tests, so these are opt-in (E2E_CHAOS=1) and excluded from test-e2e.
 	E2E_CHAOS=1 go test ./tests/e2e -tags=e2e -count=1 -timeout=15m -run 'TestChaos'
 
-test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs the hot/cold stack (duckdb reporting + pipeline). Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden.
+test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs a cold-store-enabled clickhouse stack. Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden. Cold reads are ClickHouse s3() over the Parquet export (ADR 0006); the test drives an export so the aged burst is in the archive.
 	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=90s
 	kubectl rollout status deployment/reporting -n adtech --timeout=150s
 	-go test ./tests/e2e/ -tags=e2e -run TestHotColdStore -count=1 -timeout=10m -v
-	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=15m
+	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=336h
 	kubectl rollout status deployment/reporting -n adtech --timeout=150s
 
 ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segment (needs tilt up + ffmpeg)

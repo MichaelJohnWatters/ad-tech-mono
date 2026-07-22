@@ -21,6 +21,46 @@ import (
 // snapshot (the cold write path), and the reporting deployment env (to learn the
 // live hot_window + whether hot/cold storage is enabled at all).
 
+// ClickHouseScalar runs a scalar-returning query against ClickHouse and returns
+// the integer result. Used to assert an event reached the analytical store (the
+// single source of truth since ADR 0006) without waiting on the hourly export.
+func (h *Harness) ClickHouseScalar(t *testing.T, query string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := h.clickhouseQuery(ctx, query)
+	if err != nil {
+		t.Fatalf("clickhouse scalar query: %v", err)
+	}
+	var n int
+	_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &n)
+	return n
+}
+
+// TriggerExport forces the ClickHouse→Parquet export for the hour containing
+// `when` (ADR 0006 phase 4), so a freshly-fired burst is in the derived archive
+// before a cold read reaches for it. The export is hourly in production; tests
+// can't wait an hour, so they drive it directly. Idempotent (overwrites the hour).
+func (h *Harness) TriggerExport(t *testing.T, when time.Time) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	hour := when.UTC().Truncate(time.Hour).Format(time.RFC3339)
+	url := h.URLs.Reporting + routes.ReportingExportRun + "?hours=1&hour=" + hour
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		t.Fatalf("export request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("trigger export: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trigger export: HTTP %d", resp.StatusCode)
+	}
+}
+
 // ReportImpressionCountSince POSTs a count query to the reporting query API
 // (the same endpoint the gateway proxies) scoped to time_from, and returns the
 // scalar count. This routes through the HotColdStore, so the answer comes from

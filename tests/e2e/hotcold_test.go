@@ -12,17 +12,18 @@ import (
 
 // TestHotColdStore is a LONG-RUNNING test (it waits out the reporting
 // hot_window on purpose). It proves the hot/cold HotColdStore end-to-end against
-// the live stack:
+// the live stack (ADR 0006: cold is now ClickHouse s3() over the Parquet export,
+// not DuckDB delta_scan over a live Delta dual-write):
 //
-//  1. fire a known burst -> reporting (hot/ClickHouse) reports it, and the
-//     pipeline writes it to the cold lake (dual-write);
+//  1. fire a known burst -> reporting (hot/ClickHouse) reports it; trigger the
+//     hourly ClickHouse->Parquet export so the burst lands in the cold archive;
 //  2. wait until the burst ages past hot_window -> the same query is now served
-//     ENTIRELY from the cold lake (delta_scan) and must still be lossless;
+//     ENTIRELY from cold (s3() over the export) and must still be lossless;
 //  3. fire fresh traffic -> a boundary-spanning query merges cold + fresh-hot
 //     exactly.
 //
-// Runs only against a hot/cold storage-enabled stack (duckdb reporting + pipeline). On the
-// default/memory e2e stack it skips. Use `make test-e2e-hotcold`.
+// Runs only against a cold-store-enabled clickhouse stack. On the default/memory
+// e2e stack it skips. Use `make test-e2e-hotcold`.
 func TestHotColdStore(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 
@@ -48,7 +49,7 @@ func TestHotColdStore(t *testing.T) {
 
 	w := harness.BuildBasicWorld(t, h, "hot/cold storage") // resets state
 	from := time.Now().UTC().Add(-5 * time.Second)
-	lakeBefore := h.LakeRows(t, "impressions") // lake is cumulative across runs
+	burstHour := time.Now().UTC() // the hour whose export must cover the burst
 
 	// --- Phase 1: fire a known burst (timestamped ~now -> HOT) ---
 	const N = 30
@@ -65,10 +66,11 @@ func TestHotColdStore(t *testing.T) {
 	if got := h.ReportImpressionCountSince(t, from); got != fired {
 		t.Fatalf("hot count = %d, want %d", got, fired)
 	}
-	// Cold write path received it too (dual-write): lake grew by >= fired.
-	harness.WaitFor(t, 30*time.Second, "lake to receive the burst", func() bool {
-		return h.LakeRows(t, "impressions")-lakeBefore >= fired
-	})
+	// Derive the cold archive: export the burst's hour to Parquet (idempotent,
+	// overwrites). In production the batch-conductor does this hourly; the test
+	// drives it so the cold read below has something to find. Proof the export
+	// received the burst is the lossless cold read in phase 2.
+	h.TriggerExport(t, burstHour)
 
 	// --- Phase 2: wait out hot_window; the burst becomes COLD ---
 	wait := hotWindow + 25*time.Second
