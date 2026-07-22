@@ -45,8 +45,8 @@ import (
 )
 
 // startOnboarding wires the drop-zone poller: object store, Postgres
-// (memberships + run records + match rate), NATS (cache invalidates), and
-// the interval ticker. Degrades explicitly: no object store or no Postgres
+// (the audience_ingest_jobs queue + memberships + match rate), NATS (cache
+// invalidates), and the interval ticker. Degrades explicitly: no object store or no Postgres
 // disables the zone with an ERROR (files would silently pile up otherwise);
 // no NATS only disables invalidates (warm caches still refresh on interval).
 func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) {
@@ -95,7 +95,6 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		Audience: audiencepg.New(db),
 		Matcher:  pgstore.NewFromDB(db),
 		Pipeline: pipeline.New(log),
-		DB:       db,
 		Log:      log,
 	}
 	if bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline+"-onboarding", log); err != nil {
@@ -159,15 +158,15 @@ type onboardingManifest struct {
 type onboarder struct {
 	obj    objects.Store
 	bucket string
-	db     *sql.DB // onboarding_runs writes (quarantineFile) + sweep queries
+	db     *sql.DB // audience_ingest_jobs sweep (swept_at stamp) queries
 	bus    events.EventBus
-	jobs   ingestjobs.Store    // audience_ingest_jobs queue (ADR 0007)
-	proc   *ingest.Processor   // the shared decode → match → memberships processor
+	jobs   ingestjobs.Store  // audience_ingest_jobs queue (ADR 0007)
+	proc   *ingest.Processor // the shared decode → match → memberships processor
 	log    *slog.Logger
 	// retention bounds how long processed/rejected artifact BYTES live in
-	// the bucket after ingestion; the onboarding_runs row survives the
-	// sweep. A func so the TierLive config key applies on the next tick
-	// without a restart.
+	// the bucket after ingestion; the audience_ingest_jobs row survives the
+	// sweep (stamped swept_at). A func so the TierLive config key applies on
+	// the next tick without a restart.
 	retention func() time.Duration
 }
 
@@ -238,12 +237,13 @@ func (o *onboarder) processStagedFile(ctx context.Context, job ingestjobs.Job) (
 	return o.proc.Process(ctx, job)
 }
 
-// sweep deletes processed/rejected artifact bytes for runs older than the
-// retention window and stamps swept_at — the run's stats stay queryable in
-// the monitor forever, only the object copies go. Without this, processed/
-// and rejected/ grow unbounded (the original file is only ever MOVED there,
-// never deleted; decompression happens in memory so there is no separate
-// unzipped copy to worry about).
+// sweep deletes processed/rejected artifact bytes for terminal ingest jobs
+// older than the retention window and stamps swept_at on the job row — the
+// job's stats stay queryable in the monitor forever, only the object copies
+// go. Without this, processed/ and rejected/ grow unbounded (the original file
+// is only ever MOVED there, never deleted; decompression happens in memory so
+// there is no separate unzipped copy to worry about). ADR 0007 Phase 4 folded
+// onboarding_runs into audience_ingest_jobs — the sweep now stamps the job row.
 func (o *onboarder) sweep(ctx context.Context) {
 	if o.db == nil || o.retention == nil {
 		return
@@ -253,9 +253,10 @@ func (o *onboarder) sweep(ctx context.Context) {
 		return // 0/negative = retention disabled, keep artifacts forever
 	}
 	rows, err := o.db.QueryContext(ctx, `
-SELECT id::text, provider, file_key, COALESCE(rejected_key, '')
-FROM onboarding_runs
-WHERE swept_at IS NULL AND finished_at < now() - $1::interval
+SELECT id::text, COALESCE(provider, ''), file_key, COALESCE(rejected_key, '')
+FROM audience_ingest_jobs
+WHERE swept_at IS NULL AND status IN ('done', 'failed')
+  AND finished_at IS NOT NULL AND finished_at < now() - $1::interval
 LIMIT 200`, fmt.Sprintf("%f seconds", retention.Seconds()))
 	if err != nil {
 		o.log.Error("onboarding sweep: query failed", "error", err)
@@ -279,23 +280,29 @@ LIMIT 200`, fmt.Sprintf("%f seconds", retention.Seconds()))
 			o.log.Error("onboarding sweep: delete failed (will retry)", "file", t.fileKey, "error", err)
 			continue
 		}
-		if _, err := o.db.ExecContext(ctx, `UPDATE onboarding_runs SET swept_at = now() WHERE id = $1::uuid`, t.id); err != nil {
-			o.log.Error("onboarding sweep: mark failed", "run", t.id, "error", err)
+		if _, err := o.db.ExecContext(ctx, `UPDATE audience_ingest_jobs SET swept_at = now() WHERE id = $1::uuid`, t.id); err != nil {
+			o.log.Error("onboarding sweep: mark failed", "job", t.id, "error", err)
 			continue
 		}
 		swept++
 	}
 	if swept > 0 {
-		o.log.Info("onboarding sweep: artifacts deleted", "runs", swept, "retention", retention.String())
+		o.log.Info("onboarding sweep: artifacts deleted", "jobs", swept, "retention", retention.String())
 	}
 }
 
-// deleteArtifacts removes every bucket copy a run can have left behind:
+// deleteArtifacts removes every bucket copy a job can have left behind:
 // the processed/ copy of the source file, the rejected-rows CSV, and the
 // quarantine error marker. Delete is a no-op on missing keys, so the
-// quarantined-whole-file case (no processed copy) needs no branching.
+// quarantined-whole-file case (no processed copy) needs no branching. The
+// processed/ prefix mirrors pkg/ingest: {provider}/processed/ for drop-zone
+// jobs, api/processed/ for gateway uploads (empty provider).
 func (o *onboarder) deleteArtifacts(ctx context.Context, provider, fileKey, rejectedKey string) error {
-	targets := []string{provider + "/processed/" + path.Base(fileKey)}
+	processedPrefix := provider + "/processed/"
+	if provider == "" {
+		processedPrefix = "api/processed/"
+	}
+	targets := []string{processedPrefix + path.Base(fileKey)}
 	if rejectedKey != "" {
 		targets = append(targets, rejectedKey, rejectedKey+".error.txt")
 	}
@@ -307,9 +314,13 @@ func (o *onboarder) deleteArtifacts(ctx context.Context, provider, fileKey, reje
 	return nil
 }
 
-// quarantineFile handles CONTENT failures where we couldn't even process
-// rows: move the whole file to rejected/ with a .error.txt marker and record
-// a failed run, so the zone never wedges on one bad file.
+// quarantineFile handles CONTENT failures at ENQUEUE time — a bad/missing
+// manifest, before any job row exists (and, for a manifest failure, before we
+// can even resolve the owning account). It moves the whole file to rejected/
+// with a .error.txt marker and logs ERROR so the zone never wedges on one bad
+// file. There is no audience_ingest_jobs row to record against here: the
+// manifest failure is what prevents enqueue (account_id is NOT NULL on the job
+// table), so this path is object-store quarantine + ERROR log only.
 func (o *onboarder) quarantineFile(ctx context.Context, provider, key string, started time.Time, reason string) {
 	base := path.Base(key)
 	if err := o.moveObject(ctx, key, provider+"/rejected/"+base); err != nil {
@@ -320,38 +331,7 @@ func (o *onboarder) quarantineFile(ctx context.Context, provider, key string, st
 	if err := o.obj.Put(ctx, o.bucket, marker, strings.NewReader(reason), int64(len(reason)), "text/plain"); err != nil {
 		o.log.Warn("onboarding: quarantine marker write failed", "file", key, "error", err)
 	}
-	o.recordRun(ctx, runRow{
-		provider: provider, fileKey: key, status: "failed", errMsg: reason,
-		rejectedKey: provider + "/rejected/" + base, started: started,
-	})
 	o.log.Error("onboarding: file quarantined", "provider", provider, "file", key, "reason", reason)
-}
-
-type runRow struct {
-	provider, fileKey, accountID, segmentID string
-	status                                  string
-	total, valid, rejected, matched         int
-	matchRate                               *float64
-	errMsg, rejectedKey                     string
-	started                                 time.Time
-}
-
-func (o *onboarder) recordRun(ctx context.Context, r runRow) {
-	if o.db == nil {
-		return
-	}
-	const q = `
-INSERT INTO onboarding_runs (provider, file_key, account_id, segment_id, status,
-    total_rows, valid_rows, rejected_rows, matched_rows, match_rate, error, rejected_key,
-    started_at, finished_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''), $13, now())`
-	accountID := sql.NullString{String: r.accountID, Valid: r.accountID != ""}
-	segmentID := sql.NullString{String: r.segmentID, Valid: r.segmentID != ""}
-	if _, err := o.db.ExecContext(ctx, q, r.provider, r.fileKey, accountID, segmentID,
-		r.status, r.total, r.valid, r.rejected, r.matched, r.matchRate,
-		r.errMsg, r.rejectedKey, r.started); err != nil {
-		o.log.Error("onboarding: record run failed", "file", r.fileKey, "error", err)
-	}
 }
 
 func (o *onboarder) loadManifest(ctx context.Context, provider string) (onboardingManifest, error) {
