@@ -23,6 +23,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/profilebuilder"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
 	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
@@ -49,10 +50,22 @@ func lakeStore(t *testing.T, h *harness.Harness) datalake.Store {
 
 func runBuilder(t *testing.T, h *harness.Harness, lake datalake.Store) profilebuilder.Result {
 	t.Helper()
+	// Read behaviour/profile signals from ClickHouse — where they live since ADR
+	// 0006 (the Delta dual-write is retired, so the lake behaviour tables are
+	// empty). Mirrors how the batch-conductor wires the builder.
+	q, err := profilebuilder.NewCHBehaviourQuerier(profilebuilder.CHConfig{
+		Addrs:    []string{routes.DefaultClickHouseNativeAddr},
+		Database: "adtech", Username: "adtech", Password: "adtech-local-dev",
+	})
+	if err != nil {
+		t.Fatalf("clickhouse behaviour querier: %v", err)
+	}
+	defer q.Close()
 	res, err := profilebuilder.Run(context.Background(), profilebuilder.Config{
-		DB:   h.DB,
-		Lake: lake,
-		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:        h.DB,
+		Lake:      lake,
+		Behaviour: q,
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("profilebuilder.Run: %v", err)
@@ -89,9 +102,9 @@ RETURNING id::text`, w.AdvAcc.ID, segName, w.Publisher.ID).Scan(&segID); err != 
 		})
 	}
 	deadline := time.Now().Add(45 * time.Second)
-	for h.LakeResidual(t, userA)["behaviour_signals"] < 3 {
+	for h.SignalResidual(t, userA)["behaviour_signals"] < 3 {
 		if time.Now().After(deadline) {
-			t.Fatalf("behaviour rows never landed: %v", h.LakeResidual(t, userA))
+			t.Fatalf("behaviour rows never landed: %v", h.SignalResidual(t, userA))
 		}
 		time.Sleep(2 * time.Second)
 	}

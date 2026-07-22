@@ -3,8 +3,8 @@
 // Batch-conductor gate — the data chain runs completion-ordered against the
 // live stack:
 //
-//   - every step green (checkpoint → compact → rollups → profile-builder →
-//     privacy delete → verify), recorded in batch_runs;
+//   - every step green (checkpoint → rollups → ch-parquet-export →
+//     profile-builder → privacy delete → verify), recorded in batch_runs;
 //   - ORDERING proven from the recorded timestamps: step N starts only
 //     after step N-1 finished — the property cron offsets only approximated;
 //   - a critical-step failure (pipeline down) aborts the chain and records
@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/batch"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacydelete"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
@@ -49,9 +48,9 @@ func TestBatchConductorChain(t *testing.T) {
 		ReportingURL: routes.DefaultReportingURL,
 		HTTP:         &http.Client{Timeout: 2 * time.Minute},
 		Log:          quiet,
-		PrivacyExtras: []privacydelete.ExtraPurger{
-			&privacydelete.LakePurger{BaseURL: routes.DefaultPipelineURL},
-		},
+		// Postgres-only privacy extras here: this test asserts chain ordering +
+		// the PG identity-edge purge. ClickHouse signal-purge depth (SignalsPurger)
+		// is covered by privacy_test. The lake LakePurger was retired (ADR 0006).
 	}
 	rec := &batch.Recorder{DB: h.DB, Log: quiet}
 	res, err := batch.RunChain(context.Background(), batch.StandardChain(deps), rec, quiet)
@@ -89,8 +88,8 @@ FROM batch_runs WHERE run_id = $1::uuid ORDER BY seq`, res.RunID)
 		prevFinished = finished
 		steps = append(steps, step)
 	}
-	want := []string{"checkpoint", "compact", "vacuum", "rollup:minute", "rollup:hourly",
-		"rollup:daily", "rollup:monthly", "profile-builder", "privacy-delete", "privacy-verify"}
+	want := []string{"checkpoint", "rollup:minute", "rollup:hourly",
+		"rollup:daily", "rollup:monthly", "ch-parquet-export", "profile-builder", "privacy-delete", "privacy-verify"}
 	if strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Errorf("recorded steps = %v, want %v", steps, want)
 	}

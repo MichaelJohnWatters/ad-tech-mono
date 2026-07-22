@@ -345,37 +345,10 @@ const (
 // Pipeline (:8087) - data lake
 // ============================================================
 
-const (
-	// DatalakePurge (POST {"user_id":...}) runs the GDPR filtered rewrite
-	// over the user-keyed lake tables (profile_signals, behaviour_signals).
-	// Lives on the pipeline because it is the lake's SINGLE WRITER — a purge
-	// from any other process would race its version allocation.
-	DatalakePurge = "/v1/datalake/purge"
-	// DatalakeResidual (GET ?user_id=) counts rows still keyed to the user —
-	// the privacy-verify residual check for the lake systems.
-	DatalakeResidual = "/v1/datalake/residual"
-	// DatalakeProfile (GET ?user_id=) returns the user's lake-side profile
-	// summary (onboarding signals + behaviour counts) — feeds the staff
-	// profile API's transparency view.
-	DatalakeProfile = "/v1/datalake/profile"
-	// DatalakeCompact (POST) bin-packs every sink table's small Parquet
-	// files. Lives on the pipeline for the same single-writer reason as the
-	// purge: a compaction commit from another process would race the sink's
-	// flush on Delta version allocation (which is exactly what the old
-	// standalone cmd/compact CronJob risked). Triggered by the
-	// batch-conductor's chain.
-	DatalakeCompact = "/v1/datalake/compact"
-	// DatalakeReset (POST) wipes every sink table's objects AND buffered
-	// rows — the lake leg of a full test-harness reset. Dev/e2e affordance:
-	// without it, lake data accumulates across runs and full-scan endpoints
-	// (residual) grow arbitrarily slow. Internal service surface.
-	DatalakeReset = "/v1/datalake/reset"
-
-	// DatalakeVacuum (POST ?grace=10m) physically deletes tombstoned Parquet
-	// files older than grace — the storage-level tail of the GDPR purge and
-	// of compaction. Same single-writer placement as compact.
-	DatalakeVacuum = "/v1/datalake/vacuum"
-)
+// The pipeline's /v1/datalake/{purge,residual,profile,compact,reset,vacuum}
+// endpoints were retired with the Delta dual-write sink (ADR 0006 phase 5). The
+// lake is now a derived hourly ClickHouse→Parquet export owned by reporting; GDPR
+// deletion of the user-keyed tables runs in ClickHouse (privacydelete.SignalsPurger).
 
 // ============================================================
 // Exchange (:8081) - auction pipeline

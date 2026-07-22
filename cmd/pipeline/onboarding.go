@@ -62,7 +62,7 @@ const onboardingSignalChunk = 1000
 // the interval ticker. Degrades explicitly: no object store or no Postgres
 // disables the zone with an ERROR (files would silently pile up otherwise);
 // no NATS only disables invalidates (warm caches still refresh on interval).
-func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle, sink *datalakeSink) {
+func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) {
 	if !keys.Pipeline.OnboardingEnabled.Get(cfg) {
 		return
 	}
@@ -90,7 +90,6 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 	o := &onboarder{
 		obj:     obj,
 		bucket:  bucket,
-		sink:    sink,
 		aud:     audiencepg.New(db),
 		matcher: pgstore.NewFromDB(db),
 		db:      db,
@@ -156,7 +155,6 @@ type identityCounter interface {
 type onboarder struct {
 	obj     objects.Store
 	bucket  string
-	sink    *datalakeSink
 	aud     *audiencepg.Store
 	matcher identityCounter
 	db      *sql.DB // onboarding_runs writes

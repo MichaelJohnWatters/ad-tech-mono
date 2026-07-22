@@ -32,7 +32,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"publisher-adserver", PublisherAdServerSchema(), 9},
 		{"content-packager", ContentPackagerSchema(), 9},
 		{"prewarm", PrewarmSchema(), 2},
-		{"pipeline", PipelineSchema(), 10},
+		{"pipeline", PipelineSchema(), 9},
 	} {
 		if len(tc.entries) != tc.want {
 			t.Errorf("%s schema: %d entries, want %d", tc.name, len(tc.entries), tc.want)

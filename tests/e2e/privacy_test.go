@@ -104,23 +104,25 @@ func TestPrivacyDeletionPropagation(t *testing.T) {
 
 	h.SetOptOut(t, userID, 3) // level 3 = full deletion
 
-	// Precondition: the data is actually there — including the async lake
-	// rows, which must have LANDED before the purge runs or the rewrite
-	// no-ops and the rows arrive afterwards as residuals.
+	// Precondition: the data is actually there — including the async signal
+	// rows in ClickHouse (NATS → reporting → ClickHouse), which must have LANDED
+	// before the purge runs or the delete no-ops and the rows arrive afterwards
+	// as residuals. (Since ADR 0006 phase 5 the profile-store signals live in
+	// ClickHouse, not the retired Delta lake.)
 	if h.IdentityEdgeCount(t, userID) == 0 {
 		t.Fatal("precondition: expected a seeded identity edge")
 	}
 	if h.UserSegmentMembershipCount(t, userID) == 0 {
 		t.Fatal("precondition: expected a seeded segment membership")
 	}
-	lakeDeadline := time.Now().Add(60 * time.Second)
+	signalDeadline := time.Now().Add(60 * time.Second)
 	for {
-		counts := h.LakeResidual(t, userID)
+		counts := h.SignalResidual(t, userID)
 		if counts["profile_signals"] > 0 && counts["behaviour_signals"] > 0 {
 			break
 		}
-		if time.Now().After(lakeDeadline) {
-			t.Fatalf("precondition: lake rows never landed (counts=%v)", counts)
+		if time.Now().After(signalDeadline) {
+			t.Fatalf("precondition: clickhouse signal rows never landed (counts=%v)", counts)
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -129,9 +131,9 @@ func TestPrivacyDeletionPropagation(t *testing.T) {
 	}
 
 	// Run the deletion pipeline against the live DB with the full extra set,
-	// exactly as the cmd/privacy-delete CronJob wires it.
+	// exactly as the cmd/privacy-delete CronJob wires it (BuildExtras).
 	extras := []privacydelete.ExtraPurger{
-		&privacydelete.LakePurger{BaseURL: routes.DefaultPipelineURL},
+		&privacydelete.SignalsPurger{Store: ch},
 		&privacydelete.FreqCapPurger{Store: ch},
 	}
 	deleter := &privacydelete.Deleter{
@@ -156,9 +158,9 @@ func TestPrivacyDeletionPropagation(t *testing.T) {
 	if !h.OptOutCompleted(t, userID) {
 		t.Error("opt_out_registry.completed_at not set after deletion")
 	}
-	for table, n := range h.LakeResidual(t, userID) {
+	for table, n := range h.SignalResidual(t, userID) {
 		if n != 0 {
-			t.Errorf("lake table %s not purged: %d rows remain", table, n)
+			t.Errorf("clickhouse table %s not purged: %d rows remain", table, n)
 		}
 	}
 	if n, _ := ch.CountFreqCapBlocks(context.Background(), userID); n != 0 {

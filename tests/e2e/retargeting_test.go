@@ -63,14 +63,14 @@ RETURNING id::text`, accountID, fmt.Sprintf("rt-seg-%s-%d", accountID[:8], uniq)
 	segTheirs := mkSeg(w.PubAcc.ID)
 
 	deadline := time.Now().Add(45 * time.Second)
-	for h.LakeResidual(t, visitor)["behaviour_signals"] < 2 {
+	for h.SignalResidual(t, visitor)["behaviour_signals"] < 2 {
 		if time.Now().After(deadline) {
-			t.Fatalf("site_visit rows never landed: %v", h.LakeResidual(t, visitor))
+			t.Fatalf("site_visit rows never landed: %v", h.SignalResidual(t, visitor))
 		}
 		time.Sleep(2 * time.Second)
 	}
 	// The GPC visit must not have produced a row.
-	if n := h.LakeResidual(t, gpcUser)["behaviour_signals"]; n != 0 {
+	if n := h.SignalResidual(t, gpcUser)["behaviour_signals"]; n != 0 {
 		t.Errorf("GPC visit captured %d rows, want 0", n)
 	}
 

@@ -6,10 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	neturl "net/url"
 	"testing"
 	"time"
 
@@ -94,29 +94,19 @@ func (h *Harness) OnboardingBucket(t *testing.T) (objects.Store, string) {
 	return store, bucket
 }
 
-// LakeResidual returns the pipeline's per-table counts of lake rows keyed to
-// userID (profile_signals / behaviour_signals) — the GDPR residual check,
-// also handy as "have this user's rows landed yet?" polling.
-func (h *Harness) LakeResidual(t *testing.T, userID string) map[string]int {
+// SignalResidual counts the user's rows in the ClickHouse profile-store tables
+// (profile_signals keyed on id_value, behaviour_signals on user_id/household_id)
+// — the GDPR residual check, also handy as "have this user's rows landed yet?"
+// polling. Since ADR 0006 phase 5 these live in ClickHouse (the single store),
+// not the retired Delta lake.
+func (h *Harness) SignalResidual(t *testing.T, userID string) map[string]int {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	u := routes.DefaultPipelineURL + routes.DatalakeResidual + "?user_id=" + neturl.QueryEscape(userID)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("lake residual: %v", err)
+	return map[string]int{
+		"profile_signals": h.ClickHouseScalar(t, fmt.Sprintf(
+			"SELECT count() FROM adtech.profile_signals WHERE id_value='%s'", userID)),
+		"behaviour_signals": h.ClickHouseScalar(t, fmt.Sprintf(
+			"SELECT count() FROM adtech.behaviour_signals WHERE user_id='%s' OR household_id='%s'", userID, userID)),
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("lake residual status %d: %s", resp.StatusCode, string(body))
-	}
-	var counts map[string]int
-	if err := json.Unmarshal(body, &counts); err != nil {
-		t.Fatalf("decode lake residual: %v", err)
-	}
-	return counts
 }
 
 // SeedIdentityEdges inserts identity_graph edges for the given ids (each
