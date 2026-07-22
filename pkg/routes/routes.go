@@ -646,6 +646,11 @@ const (
 	// (ADR 0006 phase 4). Idempotent per hour; defaults to the previous full
 	// hour. The batch-conductor calls it hourly; ops/e2e can force a run.
 	ReportingExportRun = "/debug/export/run"
+	// ReportingExportSnapshot (GET) reports total exported row count per table
+	// across the Parquet export — the "did every event reach the archive?"
+	// reconciliation that replaced the retired Delta /debug/datalake/snapshot
+	// (ADR 0006 phase 5). Same {table:{total_rows:n}} shape as the old endpoint.
+	ReportingExportSnapshot = "/debug/export/snapshot"
 )
 
 // ============================================================

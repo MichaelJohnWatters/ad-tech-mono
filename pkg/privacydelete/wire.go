@@ -18,9 +18,11 @@ import (
 //     only exists on the clickhouse analytics backend (memory/duckdb
 //     deployments have nothing durable to purge), so unreachable → WARN + skip.
 func BuildExtras(cfg *config.Config, log *slog.Logger) []ExtraPurger {
-	extras := []ExtraPurger{
-		&LakePurger{BaseURL: keys.PrivacyDelete.PipelineURL.Get(cfg)},
-	}
+	// The Delta-lake LakePurger is retired with the dual-write (ADR 0006 phase
+	// 5): the lake is now a derived ClickHouse→Parquet export, so the user-keyed
+	// tables are purged in ClickHouse (SignalsPurger) and the affected export
+	// partitions are re-derived there — no pipeline /v1/datalake/purge round-trip.
+	var extras []ExtraPurger
 	ch, err := analytics.NewClickHouse(analytics.ClickHouseConfig{
 		Addrs:    []string{keys.Reporting.ClickHouseAddr.Get(cfg)},
 		Database: keys.Reporting.ClickHouseDatabase.Get(cfg),

@@ -89,54 +89,10 @@ func StandardChain(d Deps) []Step {
 				return "pipeline + reporting ready", nil
 			},
 		},
-		{
-			Name: "compact",
-			Run: func(ctx context.Context) (string, error) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.PipelineURL+routes.DatalakeCompact, nil)
-				if err != nil {
-					return "", err
-				}
-				body, err := d.do(req)
-				if err != nil {
-					return "", err
-				}
-				var results map[string]datalake.CompactResult
-				if err := json.Unmarshal(body, &results); err != nil {
-					return "", fmt.Errorf("decode compact results: %w", err)
-				}
-				packed, files := 0, 0
-				for _, r := range results {
-					if r.FilesBefore > r.FilesAfter {
-						packed++
-						files += r.FilesBefore - r.FilesAfter
-					}
-				}
-				return fmt.Sprintf("%d/%d tables packed (%d files removed)", packed, len(results), files), nil
-			},
-		},
-		{
-			Name: "vacuum",
-			Run: func(ctx context.Context) (string, error) {
-				req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.PipelineURL+routes.DatalakeVacuum, nil)
-				if err != nil {
-					return "", err
-				}
-				body, err := d.do(req)
-				if err != nil {
-					return "", err
-				}
-				var results map[string]datalake.VacuumResult
-				if err := json.Unmarshal(body, &results); err != nil {
-					return "", fmt.Errorf("decode vacuum results: %w", err)
-				}
-				files, bytes := 0, int64(0)
-				for _, r := range results {
-					files += r.FilesDeleted
-					bytes += r.BytesFreed
-				}
-				return fmt.Sprintf("%d tombstoned files deleted (%d bytes freed)", files, bytes), nil
-			},
-		},
+		// compact + vacuum retired with the Delta dual-write (ADR 0006 phase 5):
+		// the lake is now a derived hourly ClickHouse→Parquet export (one object
+		// per table/hour, overwritten idempotently), so there are no small Delta
+		// files to bin-pack or tombstones to vacuum. The export step runs below.
 	}
 
 	// Rollup tiers, finest first — each tier's inputs are fresher because
@@ -189,7 +145,7 @@ func StandardChain(d Deps) []Step {
 			}
 			var res struct {
 				Rows    int64            `json:"rows"`
-				Tables  map[string]int64 `json:"tables"`
+				Hours   map[string]int64 `json:"hours"`
 				Skipped string           `json:"skipped"`
 			}
 			if err := json.Unmarshal(body, &res); err != nil {
@@ -198,7 +154,7 @@ func StandardChain(d Deps) []Step {
 			if res.Skipped != "" {
 				return res.Skipped, nil
 			}
-			return fmt.Sprintf("%d rows across %d tables exported to Parquet", res.Rows, len(res.Tables)), nil
+			return fmt.Sprintf("%d rows across %d hours exported to Parquet", res.Rows, len(res.Hours)), nil
 		},
 	})
 
