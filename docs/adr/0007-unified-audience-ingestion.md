@@ -1,6 +1,9 @@
 # ADR 0007 — Unified, durable audience file ingestion (one queue, one processor)
 
-**Status:** Accepted (2026-07-22)
+**Status:** Accepted — all 4 phases shipped + verified (2026-07-23). Follow-up
+considered but not built: schema-drift detection and synchronous pre-upload schema
+rejection — today validation is lenient (accept → stage → per-row quarantine at
+process time), not an up-front whole-file schema gate.
 **Related:** ADR 0006 (ClickHouse-primary; onboarding now publishes `profile.signal`
 to NATS → reporting → ClickHouse), the `targeting-data-flow` / `data-lifecycle`
 diagrams, `pkg/reportjobs` + `cmd/report-runner` (the queue+worker pattern this copies).
