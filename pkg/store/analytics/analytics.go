@@ -152,6 +152,15 @@ type BatchInserter interface {
 	InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error
 	InsertMediaEvents(ctx context.Context, es []*MediaEvent) error
 	InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error
+	// Profile-store tables (ADR 0006 phase 1): land the consent-gated
+	// behavioural observations and the expanded onboarding-signal id rows in
+	// ClickHouse alongside the existing lake dual-write, so phase 2 can repoint
+	// the profile-builder off its OOM-prone Arrow lake read onto server-side
+	// GROUP BY. ProfileSignalRow is the PER-ID expansion of one
+	// events.ProfileSignalEvent batch (mirrors the pipeline lake sink), so both
+	// stores hold the same one-row-per-id shape.
+	InsertBehaviourSignals(ctx context.Context, es []*BehaviourSignalRow) error
+	InsertProfileSignals(ctx context.Context, es []*ProfileSignalRow) error
 }
 
 var _ BatchInserter = (*MemoryStore)(nil)
@@ -464,6 +473,53 @@ type DSPCallEvent struct {
 	LatencyMs     int64     `json:"latency_ms"`
 	TimedOut      bool      `json:"timed_out"`
 	Timestamp     time.Time `json:"timestamp"`
+}
+
+// BehaviourSignalRow is the analytics mirror of events.BehaviourSignalEvent —
+// one consent-gated behavioural observation (a "request" row from the SSP, an
+// impression/click/conversion/view row from the tracker, or a "site_visit" row
+// from a retargeting pixel). Column shape matches the lake behaviour_signals
+// table so phase 2's rule GROUP BY lines up across both stores. Never written
+// for non-consented users (the publishers gate this upstream).
+type BehaviourSignalRow struct {
+	TraceID     string    `json:"trace_id"`
+	Kind        string    `json:"kind"`
+	UserID      string    `json:"user_id,omitempty"`
+	HouseholdID string    `json:"household_id,omitempty"`
+	PlacementID string    `json:"placement_id,omitempty"`
+	PublisherID string    `json:"publisher_id,omitempty"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
+	CreativeID  string    `json:"creative_id,omitempty"`
+	Channel     string    `json:"channel,omitempty"`
+	Categories  string    `json:"categories,omitempty"`
+	Geo         string    `json:"geo,omitempty"`
+	Device      string    `json:"device,omitempty"`
+	// AccountID + Tag carry retargeting-pixel attribution (kind "site_visit"):
+	// the advertiser account whose site fired the pixel and its self-chosen tag.
+	AccountID  string    `json:"account_id,omitempty"`
+	Tag        string    `json:"tag,omitempty"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// ProfileSignalRow is the EXPANDED per-id shape of one id inside an
+// events.ProfileSignalEvent batch: the event's shared onboarding fields plus
+// the single (IDType, IDValue) this row is about. One event with N ids becomes
+// N ProfileSignalRows — exactly the expansion the pipeline lake sink does
+// (profileSignalRecord), so the ClickHouse profile_signals table holds the same
+// one-row-per-id record and phase 2's membership rebuild queries match.
+type ProfileSignalRow struct {
+	TraceID     string    `json:"trace_id"`
+	AccountID   string    `json:"account_id"`
+	Provider    string    `json:"provider,omitempty"`
+	Source      string    `json:"source"`
+	Access      string    `json:"access"`
+	SegmentID   string    `json:"segment_id"`
+	SegmentName string    `json:"segment_name"`
+	Visibility  string    `json:"visibility"`
+	Consent     bool      `json:"consent"`
+	IDType      string    `json:"id_type"`
+	IDValue     string    `json:"id_value"`
+	ObservedAt  time.Time `json:"observed_at"`
 }
 
 // QueryParams defines a query against the analytics store.

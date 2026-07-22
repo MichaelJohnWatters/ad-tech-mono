@@ -30,6 +30,10 @@ type MemoryStore struct {
 	freqCapBlocks        []FreqCapBlock
 	rollups              []RollupRow
 	dspCalls             []DSPCallEvent
+	// Profile-store tables (ADR 0006 phase 1) — CI/test parity for the two
+	// new BatchInserter methods (append-only, same as the event slices).
+	behaviourSignals []BehaviourSignalRow
+	profileSignals   []ProfileSignalRow
 }
 
 // FreqCapBlock records a serve suppression — adserver's
@@ -542,6 +546,54 @@ func (s *MemoryStore) InsertDSPCalls(_ context.Context, es []*DSPCallEvent) erro
 		s.dspCalls = append(s.dspCalls, *e)
 	}
 	return nil
+}
+
+// InsertBehaviourSignals appends consent-gated behavioural rows (ADR 0006 phase
+// 1) — memory-backend parity for the ClickHouse bulk insert.
+func (s *MemoryStore) InsertBehaviourSignals(_ context.Context, es []*BehaviourSignalRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		s.behaviourSignals = append(s.behaviourSignals, *e)
+	}
+	return nil
+}
+
+// InsertProfileSignals appends the EXPANDED per-id onboarding rows (ADR 0006
+// phase 1) — memory-backend parity for the ClickHouse bulk insert.
+func (s *MemoryStore) InsertProfileSignals(_ context.Context, es []*ProfileSignalRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		s.profileSignals = append(s.profileSignals, *e)
+	}
+	return nil
+}
+
+// BehaviourSignals returns a copy of all stored behaviour-signal rows for test
+// assertions.
+func (s *MemoryStore) BehaviourSignals() []BehaviourSignalRow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]BehaviourSignalRow, len(s.behaviourSignals))
+	copy(out, s.behaviourSignals)
+	return out
+}
+
+// ProfileSignals returns a copy of all stored (expanded) profile-signal rows
+// for test assertions.
+func (s *MemoryStore) ProfileSignals() []ProfileSignalRow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]ProfileSignalRow, len(s.profileSignals))
+	copy(out, s.profileSignals)
+	return out
 }
 
 // CreativeStats aggregates in-memory impressions + clicks per creative since a

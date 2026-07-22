@@ -450,6 +450,147 @@ func (c *EventConsumer) handleAudioBatch(ctx context.Context, msgs []*events.Mes
 	)
 }
 
+// handleBehaviourSignalBatch decodes consent-gated behavioural observations and
+// bulk-inserts them into ClickHouse (ADR 0006 phase 1) — landed ALONGSIDE the
+// pipeline's lake dual-write, which is untouched. No business dedup key: a
+// single trace legitimately produces several behaviour rows (request +
+// impression + click + …), so dedup rides only on the JetStream message id.
+func (c *EventConsumer) handleBehaviourSignalBatch(ctx context.Context, msgs []*events.Message) error {
+	return batchProcess(ctx, c, msgs,
+		func(data []byte) (*analytics.BehaviourSignalRow, bool) {
+			var src events.BehaviourSignalEvent
+			if err := json.Unmarshal(data, &src); err != nil {
+				c.log.Error("batch: decode behaviour signal", "error", err)
+				return nil, false
+			}
+			if src.ObservedAt.IsZero() {
+				src.ObservedAt = time.Now()
+			}
+			return &analytics.BehaviourSignalRow{
+				TraceID: src.TraceID, Kind: src.Kind, UserID: src.UserID, HouseholdID: src.HouseholdID,
+				PlacementID: src.PlacementID, PublisherID: src.PublisherID, CampaignID: src.CampaignID,
+				CreativeID: src.CreativeID, Channel: src.Channel, Categories: src.Categories,
+				Geo: src.Geo, Device: src.Device, AccountID: src.AccountID, Tag: src.Tag,
+				ObservedAt: src.ObservedAt,
+			}, true
+		},
+		nil, // several legitimate behaviour rows per trace — no one-per-trace key
+		c.batch.InsertBehaviourSignals,
+		nil,
+	)
+}
+
+// handleProfileSignalBatch decodes onboarding-signal BATCHES and EXPANDS each
+// event's IDs into one analytics.ProfileSignalRow per id — exactly the
+// expansion the pipeline lake sink does (profileSignalRecord), so both stores
+// hold the same one-row-per-id shape (ADR 0006 phase 1). Because one NATS
+// message fans out to N rows, this can't use the generic 1-msg-1-row decoder;
+// the survivors decode to *ProfileSignalEvent and the insert closure collects
+// every batch's ids into one bulk InsertProfileSignals call.
+//
+// Dedup rides on the message id only (marked/acked per message by batchProcess);
+// there's no per-row business key, so a message is all-or-nothing, matching the
+// lake sink's at-least-once semantics (duplicate appended rows on redelivery,
+// never lost ones — the profile-builder reconcile dedupes on read).
+func (c *EventConsumer) handleProfileSignalBatch(ctx context.Context, msgs []*events.Message) error {
+	return batchProcess(ctx, c, msgs,
+		func(data []byte) (*events.ProfileSignalEvent, bool) {
+			var src events.ProfileSignalEvent
+			if err := json.Unmarshal(data, &src); err != nil {
+				c.log.Error("batch: decode profile signal", "error", err)
+				return nil, false
+			}
+			if src.ObservedAt.IsZero() {
+				src.ObservedAt = time.Now()
+			}
+			return &src, true
+		},
+		nil, // batch messages carry many ids — no one-per-trace key
+		func(ctx context.Context, evs []*events.ProfileSignalEvent) error {
+			var rows []*analytics.ProfileSignalRow
+			for _, ev := range evs {
+				for _, id := range ev.IDs {
+					rows = append(rows, &analytics.ProfileSignalRow{
+						TraceID: ev.TraceID, AccountID: ev.AccountID, Provider: ev.Provider,
+						Source: ev.Source, Access: ev.Access, SegmentID: ev.SegmentID,
+						SegmentName: ev.SegmentName, Visibility: ev.Visibility, Consent: ev.Consent,
+						IDType: id.IDType, IDValue: id.IDValue, ObservedAt: ev.ObservedAt,
+					})
+				}
+			}
+			return c.batch.InsertProfileSignals(ctx, rows)
+		},
+		nil,
+	)
+}
+
+// handleBehaviourSignal is the per-message fallback for the behaviour-observed
+// subject, used when the batch consumer is disabled. It decodes one event and
+// inserts it as a 1-row batch (the store's bulk InsertBehaviourSignals is the
+// only write path for these ADR-0006 tables). Bad data is acked, not
+// redelivered forever; an insert failure naks for redelivery.
+func (c *EventConsumer) handleBehaviourSignal(ctx context.Context, msg *events.Message) error {
+	bi, ok := c.store.(analytics.BatchInserter)
+	if !ok {
+		return msg.Ack() // backend can't hold these tables — drop, don't wedge the stream
+	}
+	var src events.BehaviourSignalEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode behaviour signal", "error", err)
+		return msg.Ack()
+	}
+	if src.ObservedAt.IsZero() {
+		src.ObservedAt = time.Now()
+	}
+	row := &analytics.BehaviourSignalRow{
+		TraceID: src.TraceID, Kind: src.Kind, UserID: src.UserID, HouseholdID: src.HouseholdID,
+		PlacementID: src.PlacementID, PublisherID: src.PublisherID, CampaignID: src.CampaignID,
+		CreativeID: src.CreativeID, Channel: src.Channel, Categories: src.Categories,
+		Geo: src.Geo, Device: src.Device, AccountID: src.AccountID, Tag: src.Tag,
+		ObservedAt: src.ObservedAt,
+	}
+	if err := bi.InsertBehaviourSignals(ctx, []*analytics.BehaviourSignalRow{row}); err != nil {
+		c.log.Error("failed to write behaviour signal", "error", err, "trace_id", src.TraceID)
+		return msg.Nak()
+	}
+	return msg.Ack()
+}
+
+// handleProfileSignal is the per-message fallback for the profile-signal
+// subject, used when the batch consumer is disabled. It EXPANDS one batch's ids
+// into one row per id (mirroring the lake sink) and bulk-inserts them.
+func (c *EventConsumer) handleProfileSignal(ctx context.Context, msg *events.Message) error {
+	bi, ok := c.store.(analytics.BatchInserter)
+	if !ok {
+		return msg.Ack()
+	}
+	var ev events.ProfileSignalEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		c.log.Error("failed to decode profile signal", "error", err)
+		return msg.Ack()
+	}
+	if ev.ObservedAt.IsZero() {
+		ev.ObservedAt = time.Now()
+	}
+	if len(ev.IDs) == 0 {
+		return msg.Ack()
+	}
+	rows := make([]*analytics.ProfileSignalRow, 0, len(ev.IDs))
+	for _, id := range ev.IDs {
+		rows = append(rows, &analytics.ProfileSignalRow{
+			TraceID: ev.TraceID, AccountID: ev.AccountID, Provider: ev.Provider,
+			Source: ev.Source, Access: ev.Access, SegmentID: ev.SegmentID,
+			SegmentName: ev.SegmentName, Visibility: ev.Visibility, Consent: ev.Consent,
+			IDType: id.IDType, IDValue: id.IDValue, ObservedAt: ev.ObservedAt,
+		})
+	}
+	if err := bi.InsertProfileSignals(ctx, rows); err != nil {
+		c.log.Error("failed to write profile signals", "error", err, "trace_id", ev.TraceID)
+		return msg.Nak()
+	}
+	return msg.Ack()
+}
+
 // coreBatchHandlers returns the subject→batch-handler map for the high-volume
 // core events that go through the bulk-insert path when batching is enabled.
 func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
@@ -465,6 +606,12 @@ func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
 		events.SubjectVideo:             c.handleVideoBatch,
 		events.SubjectAudio:             c.handleAudioBatch,
 		events.SubjectDSPCall:           c.handleDSPCallBatch,
+		// Profile-store tables (ADR 0006 phase 1): reporting consumes these off
+		// its OWN group (NATSGroupReporting, subscribed via SubscribeBatch in
+		// main.go) so BOTH reporting→ClickHouse and pipeline→lake receive every
+		// message. The pipeline's lake sink is untouched.
+		events.SubjectBehaviourObserved: c.handleBehaviourSignalBatch,
+		events.SubjectProfileSignal:     c.handleProfileSignalBatch,
 	}
 }
 

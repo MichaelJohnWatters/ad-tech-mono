@@ -243,6 +243,39 @@ func (d *DuckDB) createTables() error {
 			schema_version INTEGER DEFAULT 1,
 			timestamp     TIMESTAMP NOT NULL
 		)`,
+		// Profile-store tables (ADR 0006 phase 1) — DuckDB parity for the two
+		// new BatchInserter methods (column shape mirrors the ClickHouse tables).
+		`CREATE TABLE IF NOT EXISTS behaviour_signals (
+			trace_id     VARCHAR,
+			kind         VARCHAR,
+			user_id      VARCHAR,
+			household_id VARCHAR,
+			placement_id VARCHAR,
+			publisher_id VARCHAR,
+			campaign_id  VARCHAR,
+			creative_id  VARCHAR,
+			channel      VARCHAR,
+			categories   VARCHAR,
+			geo          VARCHAR,
+			device       VARCHAR,
+			account_id   VARCHAR,
+			tag          VARCHAR,
+			observed_at  TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS profile_signals (
+			trace_id     VARCHAR,
+			account_id   VARCHAR,
+			provider     VARCHAR,
+			source       VARCHAR,
+			access       VARCHAR,
+			segment_id   VARCHAR,
+			segment_name VARCHAR,
+			visibility   VARCHAR,
+			consent      BOOLEAN,
+			id_type      VARCHAR,
+			id_value     VARCHAR,
+			observed_at  TIMESTAMP NOT NULL
+		)`,
 	}
 
 	for _, stmt := range statements {
