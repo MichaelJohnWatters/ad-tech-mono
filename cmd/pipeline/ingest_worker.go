@@ -15,12 +15,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 )
@@ -108,8 +108,7 @@ func (o *onboarder) runIngestJob(ctx context.Context, job ingestjobs.Job) {
 	result, err := o.processStagedFile(ctx, job)
 	stopHB()
 	if err != nil {
-		var infra infraErr
-		if errors.As(err, &infra) && job.Attempts < job.MaxAttempts {
+		if ingest.IsInfra(err) && job.Attempts < job.MaxAttempts {
 			// Retryable + attempts remain: leave it. The lease lapses and a
 			// worker reclaims it; nothing is recorded (the run never happened).
 			o.log.Warn("ingest worker: job left for retry", "job", job.ID,

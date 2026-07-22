@@ -139,6 +139,30 @@ RETURNING `+jobColumns,
 	return j, err
 }
 
+// ClaimByID claims a specific queued job by id — the same lease + attempts++
+// as ClaimOne, but WHERE id=$1 AND status='queued'. It ignores run_at (the
+// caller has decided this row is due-now). Returns (nil, nil) when the row is
+// absent or no longer queued (already claimed/done). The gateway inline path
+// claims the row it just enqueued so its run holds the worker's lease, making a
+// crashed inline job recoverable by the worker.
+func (s PostgresIngestStore) ClaimByID(ctx context.Context, id string) (*Job, error) {
+	if s.DB == nil {
+		return nil, sql.ErrConnDone
+	}
+	row := s.DB.QueryRowContext(ctx, `
+UPDATE audience_ingest_jobs
+SET status = 'running', started_at = now(), attempts = attempts + 1,
+    lease_expires_at = now() + $1::interval, claimed_by = $2
+WHERE id = $3::uuid AND status = 'queued'
+RETURNING `+jobColumns,
+		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), s.WorkerID, id)
+	j, err := scanJob(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return j, err
+}
+
 // ExtendLease heartbeats a running job's lease. A worker that dies stops
 // extending; the lease lapses; ReclaimExpired hands the job to a peer.
 func (s PostgresIngestStore) ExtendLease(ctx context.Context, id string) error {

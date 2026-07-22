@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,18 +11,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
 
 // audienceUploadRequest is a CRM/audience upload: create-or-find a named
-// segment for an account and bulk-add user memberships. This is the
-// production write path the audience pipeline (CRM import, behavioural
-// rollup, lookalike publish) uses — previously memberships only ever
-// arrived via seed/e2e raw SQL.
+// segment for an account and bulk-add user memberships. Since ADR 0007 every
+// upload — small or large — is staged to object storage and recorded as one
+// audience_ingest_jobs row. Small, due-now files are processed INLINE (the same
+// pkg/ingest.Processor the pipeline worker runs) so the response still carries a
+// match rate; larger files are drained asynchronously by the pipeline ingest
+// worker and the response is a job id to poll.
 //
 // account_id is IGNORED — the handler binds the segment to the authenticated
 // account from the JWT claims, so a caller can never write another tenant's
@@ -37,6 +41,9 @@ type audienceUploadRequest struct {
 	UserIDs    []string `json:"user_ids"`
 }
 
+// audienceUploadResponse is the INLINE (small-file) 200 response — a genuine
+// terminal ingest with a match rate, mapped from the shared processor's
+// IngestResult.
 type audienceUploadResponse struct {
 	SegmentID    string  `json:"segment_id"`
 	MembersAdded int     `json:"members_added"`
@@ -45,43 +52,55 @@ type audienceUploadResponse struct {
 	MatchRate    float64 `json:"match_rate"`
 }
 
-// maxAudienceUploadBytes caps the multipart CSV variant. Larger third-party
-// files go via the Minio drop-zone (adtech-onboarding bucket) which the
-// pipeline polls — the portal upload is the small-file convenience path.
-const maxAudienceUploadBytes = 5 << 20
+// audienceEnqueuedResponse is the ASYNC (large-file) 202 response — the file is
+// staged + queued; the client polls GET /v1/api/audiences/ingest/{id}.
+type audienceEnqueuedResponse struct {
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+}
 
-// maxAudienceUploadRows bounds a single upload's row count so the synchronous
-// handler (member insert + match-rate query + signal publish) stays
-// interactive. Bigger lists belong in the drop-zone.
-const maxAudienceUploadRows = 50000
+// audienceIngestStatusResponse is the job-status view (GET .../ingest/{id}).
+type audienceIngestStatusResponse struct {
+	ID           string  `json:"id"`
+	Status       string  `json:"status"`
+	SegmentID    string  `json:"segment_id,omitempty"`
+	TotalRows    int     `json:"total_rows"`
+	ValidRows    int     `json:"valid_rows"`
+	RejectedRows int     `json:"rejected_rows"`
+	MatchedRows  int     `json:"matched_rows"`
+	MatchRate    float64 `json:"match_rate"`
+	Error        string  `json:"error,omitempty"`
+}
 
-// profileSignalChunk is how many ids ride in one ProfileSignalEvent message —
-// sized well under the NATS 1MB payload cap.
-const profileSignalChunk = 1000
-
-// identityMatcher answers "how many of these ids does the identity graph
-// know?" — the match-rate numerator. Implemented by pkg/store/postgres.Store.
-type identityMatcher interface {
-	CountKnownIdentifiers(ctx context.Context, ids []string) (int, error)
+// audienceDeps bundles the audience-upload handler's collaborators: the segment
+// store (list), the shared processor (inline run), the ingest queue (stage +
+// enqueue + claim + status), the staging object store + bucket, and the
+// inline/oversize thresholds.
+type audienceDeps struct {
+	store        *audiencepg.Store
+	proc         *ingest.Processor
+	ingestStore  ingestjobs.Store
+	objects      objects.Store
+	bucket       string
+	inlineMaxRow int
+	maxBytes     int
+	log          *slog.Logger
 }
 
 // audienceHandler serves the tenant-scoped audiences API for the customer
 // portal:
 //
 //	GET  /v1/api/audiences — list the account's segments (with member counts + match rate)
-//	POST /v1/api/audiences — upload a named segment + bulk-add members
+//	POST /v1/api/audiences — stage + enqueue a named segment upload
 //	  - application/json: {name, type, visibility, user_ids}
-//	  - multipart/form-data: fields name/type/visibility + a CSV file (≤5MB).
+//	  - multipart/form-data: fields name/type/visibility + a CSV file.
 //	    PII must be hashed client-side before transmission (the portal does).
 //
-// Both bind to the authenticated account from the JWT claims; a body
-// account_id is ignored, so a caller can never read or write another tenant's
-// data. Every upload computes + persists the segment's match rate (fraction of
-// ids known to identity_graph), publishes the normalized rows to the
-// profile_signals lake table via NATS, and publishes an audience
-// cache-invalidate so the DSP/SSP warm caches pick the new members up within a
-// round-trip.
-func audienceHandler(store *audiencepg.Store, matcher identityMatcher, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+// Both bind to the authenticated account from the JWT claims; a body account_id
+// is ignored. Small, due-now uploads run inline (200 + match rate); larger ones
+// return 202 + a job id to poll.
+func audienceHandler(deps audienceDeps) http.HandlerFunc {
+	store, log := deps.store, deps.log
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -92,7 +111,7 @@ func audienceHandler(store *audiencepg.Store, matcher identityMatcher, bus event
 		if devTenantGuard(w, r, claims, []audiencepg.Segment{}) {
 			return
 		}
-		if store == nil {
+		if store == nil || deps.proc == nil || deps.ingestStore == nil || deps.objects == nil {
 			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
@@ -116,75 +135,7 @@ func audienceHandler(store *audiencepg.Store, matcher identityMatcher, bus event
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			var req audienceUploadRequest
-			var ids []events.ProfileSignalID
-			var src string
-
-			mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			if mediaType == "multipart/form-data" {
-				var errMsg string
-				req, ids, errMsg = parseMultipartUpload(w, r)
-				if errMsg != "" {
-					http.Error(w, `{"error":`+jsonStr(errMsg)+`}`, http.StatusBadRequest)
-					return
-				}
-				src = "portal_csv"
-			} else {
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-					return
-				}
-				for _, uid := range req.UserIDs {
-					if uid = strings.TrimSpace(uid); uid != "" {
-						ids = append(ids, events.ProfileSignalID{IDType: "user_id", IDValue: uid})
-					}
-				}
-				src = "crm_upload"
-			}
-
-			// Bind to the authenticated tenant — never trust a body account_id.
-			req.AccountID = claims.AccountID
-			if req.Name == "" {
-				http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
-				return
-			}
-			if len(ids) == 0 {
-				http.Error(w, `{"error":"no user ids in upload"}`, http.StatusBadRequest)
-				return
-			}
-			if len(ids) > maxAudienceUploadRows {
-				http.Error(w, fmt.Sprintf(`{"error":"upload exceeds %d rows — use the partner drop-zone for large files"}`, maxAudienceUploadRows), http.StatusBadRequest)
-				return
-			}
-			if req.Type == "" {
-				req.Type = "first_party"
-			}
-			if !isValidSegmentType(req.Type) {
-				http.Error(w, `{"error":"invalid type"}`, http.StatusBadRequest)
-				return
-			}
-			if req.Visibility == "" {
-				req.Visibility = "dsp_private"
-			}
-			if req.Visibility != "public" && req.Visibility != "dsp_private" {
-				http.Error(w, `{"error":"visibility must be public or dsp_private"}`, http.StatusBadRequest)
-				return
-			}
-			if req.Source == "" {
-				req.Source = src
-			}
-
-			resp, err := runAudienceUpload(r.Context(), store, matcher, bus, log, req, ids)
-			if err != nil {
-				log.Error("audience upload failed", "name", req.Name, "error", err)
-				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-				return
-			}
-			log.Info("audience upload", "segment", resp.SegmentID, "name", req.Name,
-				"added", resp.MembersAdded, "sent", resp.MembersSent,
-				"matched", resp.Matched, "match_rate", resp.MatchRate)
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(resp)
+			deps.handleUpload(w, r, claims.AccountID)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -192,95 +143,273 @@ func audienceHandler(store *audiencepg.Store, matcher identityMatcher, bus event
 	}
 }
 
-// runAudienceUpload is the shared upload core for the JSON and multipart
-// variants: upsert segment, add members, compute + persist match rate,
-// publish profile signals to the lake, invalidate warm caches.
-func runAudienceUpload(ctx context.Context, store *audiencepg.Store, matcher identityMatcher,
-	bus events.EventBus, log *slog.Logger, req audienceUploadRequest, ids []events.ProfileSignalID,
-) (audienceUploadResponse, error) {
-	segmentID, err := store.UpsertSegment(ctx, req.AccountID, req.Name, req.Type, req.Source, req.Visibility)
-	if err != nil {
-		return audienceUploadResponse{}, fmt.Errorf("upsert segment: %w", err)
-	}
-	values := make([]string, len(ids))
-	for i, id := range ids {
-		values[i] = id.IDValue
-	}
-	added, err := store.AddMembers(ctx, req.AccountID, segmentID, values)
-	if err != nil {
-		return audienceUploadResponse{}, fmt.Errorf("add members: %w", err)
-	}
+// handleUpload validates the upload synchronously, stages the raw bytes, and
+// enqueues an ingest job. Small + due-now → claim + inline Process → 200 with a
+// match rate; otherwise → leave queued → 202 with the job id.
+func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, accountID string) {
+	var req audienceUploadRequest
+	var raw []byte // the CSV bytes staged to object storage
+	var src string
 
-	// Match rate: fraction of uploaded ids the identity graph can resolve.
-	// Advisory (upload feedback), so a failure degrades to 0 with an ERROR
-	// log rather than failing the whole upload.
-	matched := 0
-	if matcher != nil {
-		if matched, err = matcher.CountKnownIdentifiers(ctx, values); err != nil {
-			log.Error("audience upload: match-rate query failed", "segment", segmentID, "error", err)
-			matched = 0
-		} else if err := store.SetSegmentUploadStats(ctx, req.AccountID, segmentID, len(values), matched); err != nil {
-			log.Error("audience upload: persist match rate failed", "segment", segmentID, "error", err)
-		}
-	}
-
-	if bus != nil {
-		publishProfileSignals(ctx, bus, log, req, segmentID, ids)
-		payload := []byte(`{"segment_id":"` + segmentID + `","account_id":"` + req.AccountID + `"}`)
-		if err := bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
-			log.Warn("audience upload: invalidate publish failed", "segment", segmentID, "error", err)
-		}
-	}
-
-	return audienceUploadResponse{
-		SegmentID:    segmentID,
-		MembersAdded: added,
-		MembersSent:  len(ids),
-		Matched:      matched,
-		MatchRate:    float64(matched) / float64(len(ids)),
-	}, nil
-}
-
-// publishProfileSignals emits the upload's normalized rows to the
-// profile_signals lake table, chunked so each NATS message stays well under
-// the payload cap. Best-effort: the lake copy is the replayable record, and
-// the profile-builder's reconcile pass replays PG memberships the lake
-// missed, so a failed publish is an ERROR log, not a failed upload.
-func publishProfileSignals(ctx context.Context, bus events.EventBus, log *slog.Logger,
-	req audienceUploadRequest, segmentID string, ids []events.ProfileSignalID,
-) {
-	pub := events.NewPublisher(bus, log)
-	now := time.Now().UTC()
-	for start := 0; start < len(ids); start += profileSignalChunk {
-		end := min(start+profileSignalChunk, len(ids))
-		ev := events.ProfileSignalEvent{
-			SchemaVersion: events.CurrentSchemaVersion,
-			TraceID:       tracing.TraceIDFromContext(ctx),
-			AccountID:     req.AccountID,
-			Source:        req.Source,
-			Access:        "first_party",
-			SegmentID:     segmentID,
-			SegmentName:   req.Name,
-			Visibility:    req.Visibility,
-			Consent:       true, // uploader-declared basis: first-party CRM data
-			ObservedAt:    now,
-			IDs:           ids[start:end],
-		}
-		if err := pub.PublishJSON(ctx, events.SubjectProfileSignal, ev); err != nil {
-			log.Error("audience upload: profile signal publish failed",
-				"segment", segmentID, "chunk_start", start, "error", err)
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mediaType == "multipart/form-data" {
+		var errMsg string
+		req, raw, errMsg = parseMultipartUpload(w, r, deps.maxBytes)
+		if errMsg != "" {
+			http.Error(w, `{"error":`+jsonStr(errMsg)+`}`, http.StatusBadRequest)
 			return
 		}
+		src = "portal_csv"
+	} else {
+		if err := json.NewDecoder(io.LimitReader(r.Body, int64(deps.maxBytes)+1)).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		raw = userIDsToCSV(req.UserIDs)
+		src = "crm_upload"
 	}
+
+	// Bind to the authenticated tenant — never trust a body account_id.
+	req.AccountID = accountID
+	if req.Name == "" {
+		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(raw) > deps.maxBytes {
+		http.Error(w, fmt.Sprintf(`{"error":"upload exceeds %d bytes"}`, deps.maxBytes), http.StatusBadRequest)
+		return
+	}
+	rowCount := csvDataRows(raw)
+	if rowCount == 0 {
+		http.Error(w, `{"error":"no user ids in upload"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "first_party"
+	}
+	if !isValidSegmentType(req.Type) {
+		http.Error(w, `{"error":"invalid type"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Visibility == "" {
+		req.Visibility = "dsp_private"
+	}
+	if req.Visibility != "public" && req.Visibility != "dsp_private" {
+		http.Error(w, `{"error":"visibility must be public or dsp_private"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Source == "" {
+		req.Source = src
+	}
+
+	// Stage the raw bytes so a crashed inline run is recoverable by the worker,
+	// and so every upload is durable + recorded identically (ADR 0007).
+	fileKey := "api/" + accountID + "/" + uuid.NewString() + "/" + safeFileName(req.Name)
+	if err := deps.objects.Put(r.Context(), deps.bucket, fileKey,
+		bytes.NewReader(raw), int64(len(raw)), "text/csv"); err != nil {
+		deps.log.Error("audience upload: stage file failed", "name", req.Name, "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	spec := ingestjobs.SegmentSpec{
+		Name:       req.Name,
+		Type:       req.Type,
+		Visibility: req.Visibility,
+		Consent:    true, // uploader-declared basis: first-party CRM data
+		IDType:     "user_id",
+		Access:     req.Source,
+	}
+	job := ingestjobs.Job{
+		AccountID:   accountID,
+		Source:      ingestjobs.SourceAPI,
+		FileBucket:  deps.bucket,
+		FileKey:     fileKey,
+		SegmentSpec: spec,
+		RunAt:       time.Now().UTC(),
+	}
+	jobID, err := deps.ingestStore.Enqueue(r.Context(), job)
+	if err != nil {
+		deps.log.Error("audience upload: enqueue failed", "name", req.Name, "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if jobID == "" {
+		// Dedupe hit (a job for the same staged key is already in flight) — the
+		// uuid'd key makes this practically impossible, but stay honest.
+		http.Error(w, `{"error":"upload already in progress"}`, http.StatusConflict)
+		return
+	}
+
+	// Small + due-now → run inline for an instant match rate. Larger → leave it
+	// queued for the pipeline ingest worker.
+	if rowCount <= deps.inlineMaxRow {
+		deps.runInline(w, r, jobID, req)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusQueued})
+	deps.log.Info("audience upload queued", "job", jobID, "name", req.Name, "rows", rowCount)
+}
+
+// runInline claims the row it just enqueued (taking the worker's lease) and
+// runs the shared processor. Success → MarkDone + 200 with the match rate; an
+// inline Process error → MarkFailed + 500. If the row can't be claimed (a peer
+// worker beat us to it) the job is already being processed — return 202.
+func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID string, req audienceUploadRequest) {
+	claimed, err := deps.ingestStore.ClaimByID(r.Context(), jobID)
+	if err != nil {
+		deps.log.Error("audience upload: claim failed", "job", jobID, "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if claimed == nil {
+		// A worker already claimed it — hand back the job id to poll.
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusRunning})
+		return
+	}
+
+	result, err := deps.proc.Process(r.Context(), *claimed)
+	if err != nil {
+		// Infra failure mid-inline: leave the lease to lapse so the worker
+		// reprocesses (idempotent AddMembers), UNLESS attempts are exhausted.
+		if ingest.IsInfra(err) && claimed.Attempts < claimed.MaxAttempts {
+			deps.log.Warn("audience upload: inline run left for worker retry", "job", jobID, "error", err)
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusRunning})
+			return
+		}
+		if markErr := deps.ingestStore.MarkFailed(r.Context(), jobID, err.Error()); markErr != nil {
+			deps.log.Error("audience upload: mark failed", "job", jobID, "error", markErr)
+		}
+		deps.log.Error("audience upload failed", "name", req.Name, "job", jobID, "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := deps.ingestStore.MarkDone(r.Context(), jobID, result); err != nil {
+		deps.log.Error("audience upload: mark done", "job", jobID, "error", err)
+	}
+
+	resp := audienceUploadResponse{
+		SegmentID:    result.SegmentID,
+		MembersAdded: result.MembersAdded,
+		MembersSent:  result.ValidRows,
+		Matched:      result.MatchedRows,
+		MatchRate:    result.MatchRate,
+	}
+	deps.log.Info("audience upload", "segment", resp.SegmentID, "name", req.Name, "job", jobID,
+		"added", resp.MembersAdded, "sent", resp.MembersSent,
+		"matched", resp.Matched, "match_rate", resp.MatchRate)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// audienceIngestStatusHandler serves GET /v1/api/audiences/ingest/{id} —
+// tenant-scoped job status (queued/running/done/failed) with the terminal
+// counts + match rate.
+func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "audiences:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if ingestStore == nil {
+			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, routes.APIAudienceIngest)
+		id = strings.Trim(id, "/")
+		if id == "" || strings.Contains(id, "/") {
+			http.Error(w, `{"error":"job id required"}`, http.StatusBadRequest)
+			return
+		}
+		job, err := ingestStore.GetByAccount(r.Context(), claims.AccountID, id)
+		if err != nil {
+			log.Error("audience ingest status failed", "job", id, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if job == nil {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(audienceIngestStatusResponse{
+			ID: job.ID, Status: job.Status, SegmentID: job.SegmentID,
+			TotalRows: job.TotalRows, ValidRows: job.ValidRows, RejectedRows: job.RejectedRows,
+			MatchedRows: job.MatchedRows, MatchRate: job.MatchRate, Error: job.Error,
+		})
+	}
+}
+
+// userIDsToCSV renders JSON user_ids into the same CSV shape the drop-zone
+// stages, so both variants flow through the one processor. Non-empty ids only.
+func userIDsToCSV(ids []string) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("user_id\n")
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			buf.WriteString(id)
+			buf.WriteByte('\n')
+		}
+	}
+	return buf.Bytes()
+}
+
+// csvDataRows cheaply counts non-empty data lines (excluding the header) — the
+// inline/enqueue predicate. Cheap by design: it never fully parses the file.
+func csvDataRows(body []byte) int {
+	n := 0
+	for i, line := range bytes.Split(body, []byte{'\n'}) {
+		if i == 0 { // header
+			continue
+		}
+		if len(bytes.TrimSpace(line)) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// safeFileName sanitises a segment name into an object-key-safe file name.
+func safeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	repl := func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}
+	name = strings.Map(repl, name)
+	if name == "" {
+		name = "upload"
+	}
+	return name + ".csv"
 }
 
 // parseMultipartUpload handles the CSV file variant. Returns the metadata
-// fields, the extracted ids, and a non-empty error message on caller error.
-func parseMultipartUpload(w http.ResponseWriter, r *http.Request) (audienceUploadRequest, []events.ProfileSignalID, string) {
+// fields, the raw CSV bytes to stage, and a non-empty error message on caller
+// error. The portal path is delimiter-separated text only (the browser hashes
+// PII cell-by-cell before upload, which it can't do inside binary formats);
+// compressed / parquet uploads belong in the partner drop-zone, which decodes
+// them server-side.
+func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) (audienceUploadRequest, []byte, string) {
 	var req audienceUploadRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxAudienceUploadBytes)
-	if err := r.ParseMultipartForm(maxAudienceUploadBytes); err != nil {
-		return req, nil, "file too large or malformed multipart body (max 5MB — use the partner drop-zone for larger files)"
+	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
+	if err := r.ParseMultipartForm(int64(maxBytes)); err != nil {
+		return req, nil, "file too large or malformed multipart body"
 	}
 	req.Name = strings.TrimSpace(r.FormValue("name"))
 	req.Type = r.FormValue("type")
@@ -294,10 +423,6 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request) (audienceUploa
 	if err != nil {
 		return req, nil, "read file: " + err.Error()
 	}
-	// The portal path is delimiter-separated text only (the browser hashes
-	// PII cell-by-cell before upload, which it can't do inside binary
-	// formats). Parquet / compressed files belong in the partner drop-zone,
-	// which decodes them server-side.
 	switch {
 	case bytes.HasPrefix(body, []byte{0x50, 0x4b, 0x03, 0x04}),
 		bytes.HasPrefix(body, []byte{0x1f, 0x8b}):
@@ -305,71 +430,10 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request) (audienceUploa
 	case bytes.HasPrefix(body, []byte("PAR1")):
 		return req, nil, "parquet uploads are not supported here — use the partner drop-zone"
 	}
-	delimiter := ','
-	if header, _, _ := bytes.Cut(body, []byte{'\n'}); bytes.Count(header, []byte{'\t'}) > bytes.Count(header, []byte{','}) {
-		delimiter = '\t'
+	if len(bytes.TrimSpace(body)) == 0 {
+		return req, nil, "empty file"
 	}
-	records, err := pipeline.IngestCSV(bytes.NewReader(body), delimiter)
-	if err != nil {
-		return req, nil, "invalid CSV/TSV: " + err.Error()
-	}
-	ids, errMsg := extractMemberIDs(records)
-	return req, ids, errMsg
-}
-
-// idColumns maps recognised CSV header names to the id_type stamped on the
-// profile signal. Ordered by preference — id_value/user_id first so a file
-// with several id columns picks the canonical one.
-var idColumns = []struct{ column, idType string }{
-	{"id_value", ""}, // id_type from the id_type column, else user_id
-	{"user_id", "user_id"},
-	{"id", "user_id"},
-	{"hashed_email", "hashed_email"},
-	{"email_sha256", "hashed_email"},
-	{"uid2", "uid2"},
-	{"device_id", "device_id"},
-}
-
-// extractMemberIDs pulls (id_type, id_value) pairs out of parsed CSV records.
-// The id column is the first recognised header; an explicit id_type column
-// overrides the column-implied type per row. Raw emails are rejected — PII
-// must be hashed client-side before transmission.
-func extractMemberIDs(records []pipeline.Record) ([]events.ProfileSignalID, string) {
-	if len(records) == 0 {
-		return nil, "CSV has no data rows"
-	}
-	column, implied := "", ""
-	for _, c := range idColumns {
-		if _, ok := records[0][c.column]; ok {
-			column, implied = c.column, c.idType
-			break
-		}
-	}
-	if column == "" {
-		return nil, "no id column found (expected one of: id_value, user_id, id, hashed_email, uid2, device_id)"
-	}
-	var ids []events.ProfileSignalID
-	for _, rec := range records {
-		v := strings.TrimSpace(rec[column])
-		if v == "" {
-			continue
-		}
-		if strings.Contains(v, "@") {
-			return nil, "raw email addresses detected — hash PII client-side before upload"
-		}
-		t := implied
-		if explicit := strings.TrimSpace(rec["id_type"]); explicit != "" {
-			t = explicit
-		}
-		if t == "" {
-			t = "user_id"
-		}
-		ids = append(ids, events.ProfileSignalID{IDType: t, IDValue: v})
-	}
-	if len(ids) == 0 {
-		return nil, "CSV has no non-empty ids"
-	}
-	return ids, ""
+	return req, body, ""
 }
 
 func jsonStr(s string) string {

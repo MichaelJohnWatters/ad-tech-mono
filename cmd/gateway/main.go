@@ -23,11 +23,14 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/kubeops"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/notifications"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
@@ -313,16 +316,49 @@ func main() {
 	mux.Handle(routes.APISecrets, secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
 	mux.Handle(routes.APISecrets+"/", secretsAuth(http.HandlerFunc(secretsHandler(gwDB, secretsBus, log))))
 
-	// Audience CRM-upload endpoint — same operator-API-key auth as secrets.
-	// gwDB may be nil if Postgres was unreachable at boot; the handler 503s.
-	// The identity matcher powers the per-upload match rate (nil-safe).
+	// Audience upload endpoint (ADR 0007). Every upload is staged to the
+	// onboarding bucket + recorded as one audience_ingest_jobs row; small,
+	// due-now files run inline through the SAME pkg/ingest.Processor the pipeline
+	// worker uses (200 + match rate), larger files are drained by that worker
+	// (202 + job id, polled at .../ingest/{id}). gwDB may be nil if Postgres was
+	// unreachable at boot; the handler 503s.
 	var audStore *audiencepg.Store
-	var audMatcher identityMatcher
+	var ingestStore ingestjobs.Store
+	var ingestProc *ingest.Processor
+	onboardingBucket := keys.Pipeline.OnboardingBucket.Get(cfg)
+	ingestObjects := objects.Connect(cfg, "/tmp/adtech-onboarding", log)
+	if ingestObjects != nil {
+		if err := ingestObjects.EnsureBucket(context.Background(), onboardingBucket); err != nil {
+			log.Warn("audience ingest: ensure onboarding bucket failed", "bucket", onboardingBucket, "error", err)
+		}
+	}
 	if gwDB != nil {
 		audStore = audiencepg.New(gwDB)
-		audMatcher = postgres.NewFromDB(gwDB)
+		ingestStore = ingestjobs.NewPostgresIngestStore(gwDB)
+		ingestProc = &ingest.Processor{
+			Objects:  ingestObjects,
+			Audience: audStore,
+			Matcher:  postgres.NewFromDB(gwDB),
+			Pipeline: pipeline.New(log),
+			Bus:      secretsBus,
+			DB:       gwDB,
+			Log:      log,
+		}
 	}
-	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audStore, audMatcher, secretsBus, log))))
+	audDeps := audienceDeps{
+		store:        audStore,
+		proc:         ingestProc,
+		ingestStore:  ingestStore,
+		objects:      ingestObjects,
+		bucket:       onboardingBucket,
+		inlineMaxRow: keys.Gateway.IngestInlineMaxRows.Get(cfg),
+		maxBytes:     keys.Gateway.IngestMaxUploadBytes.Get(cfg),
+		log:          log,
+	}
+	// The ingest status subtree (.../ingest/{id}) must register BEFORE the base
+	// path so {id} lookups aren't swallowed by the base handler.
+	mux.Handle(routes.APIAudienceIngest, authMiddleware(http.HandlerFunc(audienceIngestStatusHandler(ingestStore, log))))
+	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).
 	// trackerURL is the browser-reachable tracker base baked into the pixel; a nil

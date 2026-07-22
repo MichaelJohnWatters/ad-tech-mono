@@ -1,12 +1,14 @@
-package main
+package ingest
 
-// onboarding_decode.go — multi-format decode for drop-zone files.
+// decode.go — multi-format decode for staged audience files (ADR 0007).
 //
-// Providers deliver audience files as CSV, TSV, or Parquet, optionally
-// zip- or gzip-compressed. Detection is CONTENT-FIRST (magic bytes for
-// zip/gzip/parquet), falling back to the file extension and finally a
-// delimiter sniff of the header line — provider files are routinely
-// misnamed, so the extension is a hint, not a contract.
+// Producers deliver audience files as CSV, TSV, or Parquet, optionally zip- or
+// gzip-compressed. Detection is CONTENT-FIRST (magic bytes for zip/gzip/
+// parquet), falling back to the file extension and finally a delimiter sniff of
+// the header line — provider files are routinely misnamed, so the extension is
+// a hint, not a contract. Moved out of cmd/pipeline so the shared processor
+// (imported by both the pipeline worker and the gateway) can decode staged
+// files itself.
 
 import (
 	"archive/zip"
@@ -22,7 +24,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
 )
 
-// maxDecompressedBytes bounds a decompressed drop-zone file (zip-bomb guard).
+// maxDecompressedBytes bounds a decompressed staged file (zip-bomb guard).
 const maxDecompressedBytes = 256 << 20
 
 // readAllBounded reads up to the decompression bound and ERRORS past it —
@@ -39,11 +41,11 @@ func readAllBounded(r io.Reader) ([]byte, error) {
 	return data, nil
 }
 
-// decodeOnboardingFile turns a raw drop-zone file into pipeline records,
-// auto-detecting compression and format. A zip archive's supported entries
-// are concatenated — a provider shipping one segment as N part-files inside
-// one archive lands as one segment.
-func decodeOnboardingFile(ctx context.Context, name string, body []byte) ([]pipeline.Record, error) {
+// DecodeFile turns a raw staged file into pipeline records, auto-detecting
+// compression and format. A zip archive's supported entries are concatenated —
+// a provider shipping one segment as N part-files inside one archive lands as
+// one segment.
+func DecodeFile(ctx context.Context, name string, body []byte) ([]pipeline.Record, error) {
 	switch {
 	case bytes.HasPrefix(body, []byte{0x50, 0x4b, 0x03, 0x04}): // zip
 		return decodeZip(ctx, body)
@@ -56,7 +58,7 @@ func decodeOnboardingFile(ctx context.Context, name string, body []byte) ([]pipe
 		if err != nil {
 			return nil, fmt.Errorf("gunzip: %w", err)
 		}
-		return decodeOnboardingFile(ctx, strings.TrimSuffix(name, ".gz"), inner)
+		return DecodeFile(ctx, strings.TrimSuffix(name, ".gz"), inner)
 	default:
 		return decodeFlat(ctx, name, body)
 	}
@@ -151,9 +153,9 @@ func stringifyValue(v any) string {
 	}
 }
 
-// segmentNameFromFile strips compression + format extensions so
+// SegmentNameFromFile strips compression + format extensions so
 // "auto-intenders.csv.gz" names the segment "auto-intenders".
-func segmentNameFromFile(base string) string {
+func SegmentNameFromFile(base string) string {
 	for _, ext := range []string{".gz", ".zip", ".csv", ".tsv", ".parquet"} {
 		base = strings.TrimSuffix(base, ext)
 	}
