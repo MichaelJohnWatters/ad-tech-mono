@@ -11,24 +11,24 @@ import (
 )
 
 // selectAnalyticsStore returns the analytics.Store implementation chosen
-// by reporting.analytics_backend ("memory" or "duckdb").
+// by reporting.analytics_backend ("memory" or "clickhouse").
 //
 // Memory is the default — dev/CI boot with zero infra, but it's volatile:
 // every impression / click / conversion / view / auction-win is lost on
-// pod restart. DuckDB is the durable local/staging story: an embedded
-// columnar file, no server. ClickHouse (prod, multi-replica) is the
-// eventual third option behind the same interface.
+// pod restart. ClickHouse is the durable store (real-time ingest + fast
+// aggregation, pure-Go driver). DuckDB was retired as an analytics backend
+// in ADR 0006 (ClickHouse is the single analytical store; the Parquet lake
+// is a derived export read back via ClickHouse s3()).
 //
-// DuckDB requires the `duckdb` build tag (the driver is CGO). A backend
-// requested without that tag is a hard config error (os.Exit) rather than
-// a silent fall-back to volatile memory — same posture as selectLedger:
-// the operator either builds correctly or flips the backend explicitly.
+// A requested-but-unreachable durable backend is a hard config error
+// (os.Exit) rather than a silent fall-back to volatile memory — same posture
+// as selectLedger: the operator either configures correctly or flips the
+// backend explicitly.
 //
 // Note: the operational-signal events (freq-cap blocks, render failures,
 // tracker rejections, budget depletions, serve no-fills, campaign state
 // changes) and the /debug read-back endpoints are MemoryStore-only today.
-// On the duckdb backend the consumer skips them (the type assertion in
-// each handler fails) and the debug endpoints return 501 — core billing /
+// On the clickhouse backend the debug endpoints return 501 — core billing /
 // analytics events still persist. Full parity is tracked in
 // docs/PLAN.md -> "Build Status & Outstanding Work".
 func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store {
@@ -37,16 +37,6 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 	case "memory", "":
 		log.Info("analytics store: memory backend (volatile — events lost on restart)")
 		return analytics.NewMemory()
-	case "duckdb":
-		path := strings.TrimSpace(keys.Reporting.DuckDBPath.Get(cfg))
-		store, err := newDuckDBStore(path, log)
-		if err != nil {
-			log.Error("analytics store: duckdb backend requested but unavailable", "path", path, "error", err)
-			os.Exit(1)
-		}
-		log.Info("analytics store: duckdb backend", "path", path)
-		log.Warn("analytics store: /debug read-back endpoints are memory-only and return 501 on the duckdb backend (core + operational events are persisted); see docs/PLAN.md \"Build Status & Outstanding Work\"")
-		return store
 	case "clickhouse":
 		addrs := splitAndTrim(keys.Reporting.ClickHouseAddr.Get(cfg))
 		// Bound the hot tier: TTL must comfortably EXCEED the cold-read
@@ -83,7 +73,7 @@ func selectAnalyticsStore(cfg *config.Config, log *slog.Logger) analytics.Store 
 		return store
 	default:
 		log.Error("analytics store: unknown backend, refusing to boot",
-			"reporting.analytics_backend", backend, "valid", []string{"memory", "duckdb", "clickhouse"})
+			"reporting.analytics_backend", backend, "valid", []string{"memory", "clickhouse"})
 		os.Exit(1)
 		return nil
 	}
