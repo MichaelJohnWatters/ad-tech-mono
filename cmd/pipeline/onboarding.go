@@ -49,7 +49,13 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	pgstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
+
+// onboardingSignalChunk caps how many ids ride in one ProfileSignalEvent —
+// mirrors cmd/gateway's profileSignalChunk so a huge drop-zone file fans out to
+// bounded NATS messages rather than one giant payload.
+const onboardingSignalChunk = 1000
 
 // startOnboarding wires the drop-zone poller: object store, Postgres
 // (memberships + run records + match rate), NATS (cache invalidates), and
@@ -385,30 +391,43 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		}
 	}
 
-	// Lake copy: same rows the gateway path publishes over NATS, written
-	// directly here — the sink shares the process (and the table's
-	// single-writer lock), so there's no reason to round-trip the bus.
+	// Publish the same ProfileSignalEvent the gateway audience-upload path
+	// publishes (chunked over NATS). Reporting lands it in ClickHouse — where
+	// the profile-builder now reconciles from (ADR 0006 phase 2) — and, while
+	// the dual-write still runs, the pipeline sink lands the lake copy from the
+	// same message. (Previously these rows were written straight to the lake
+	// sink and never reached ClickHouse, so drop-zone signals were invisible to
+	// the ClickHouse-based reconcile.)
 	access := manifest.Access
 	if access == "" {
 		access = "purchased:" + provider
 	}
-	ev := events.ProfileSignalEvent{
-		SchemaVersion: events.CurrentSchemaVersion,
-		AccountID:     manifest.AccountID,
-		Provider:      provider,
-		Source:        "dropzone",
-		Access:        access,
-		SegmentID:     segID,
-		SegmentName:   segName,
-		Visibility:    visibility,
-		Consent:       manifest.ConsentBasis != "" && manifest.ConsentBasis != "none",
-		ObservedAt:    started,
-	}
-	if o.sink != nil {
-		for _, id := range ids {
-			o.sink.record(profileSignalsTable, profileSignalRecord(ev, id))
+	if o.bus != nil && len(ids) > 0 {
+		pub := events.NewPublisher(o.bus, o.log)
+		for start := 0; start < len(ids); start += onboardingSignalChunk {
+			end := start + onboardingSignalChunk
+			if end > len(ids) {
+				end = len(ids)
+			}
+			ev := events.ProfileSignalEvent{
+				SchemaVersion: events.CurrentSchemaVersion,
+				TraceID:       tracing.TraceIDFromContext(ctx),
+				AccountID:     manifest.AccountID,
+				Provider:      provider,
+				Source:        "dropzone",
+				Access:        access,
+				SegmentID:     segID,
+				SegmentName:   segName,
+				Visibility:    visibility,
+				Consent:       manifest.ConsentBasis != "" && manifest.ConsentBasis != "none",
+				ObservedAt:    started,
+				IDs:           ids[start:end],
+			}
+			if err := pub.PublishJSON(ctx, events.SubjectProfileSignal, ev); err != nil {
+				o.log.Error("onboarding: profile signal publish failed",
+					"segment", segID, "chunk_start", start, "error", err)
+			}
 		}
-		o.sink.flushTable(ctx, profileSignalsTable)
 	}
 
 	if o.bus != nil {
