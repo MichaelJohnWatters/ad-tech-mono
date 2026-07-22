@@ -39,6 +39,13 @@ type audienceUploadRequest struct {
 	Visibility string   `json:"visibility,omitempty"` // public | dsp_private (default dsp_private)
 	Source     string   `json:"source,omitempty"`     // default crm_upload
 	UserIDs    []string `json:"user_ids"`
+	// RunAt (RFC3339, optional) holds the file until this time before it is
+	// processed — for data-licensing / embargo / point-in-time freshness (ADR
+	// 0007). Empty or past = process now. A future run_at forces the async
+	// (202) path: the file is staged but never opened until due. NOTE this is
+	// INGEST timing, not go-live — when the audience is served is still
+	// controlled by campaign/line-item flight dates.
+	RunAt string `json:"run_at,omitempty"`
 }
 
 // audienceUploadResponse is the INLINE (small-file) 200 response — a genuine
@@ -57,6 +64,9 @@ type audienceUploadResponse struct {
 type audienceEnqueuedResponse struct {
 	JobID  string `json:"job_id"`
 	Status string `json:"status"`
+	// RunAt is set when the file is HELD (future run_at) — the time it will be
+	// processed. Empty for a normal large-file queue (processed on the next tick).
+	RunAt string `json:"run_at,omitempty"`
 }
 
 // audienceIngestStatusResponse is the job-status view (GET .../ingest/{id}).
@@ -220,13 +230,27 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		IDType:     "user_id",
 		Access:     req.Source,
 	}
+	// run_at: hold the file until this time (licensing / embargo / freshness).
+	// Empty or in the past → now. A future run_at forces the async path below.
+	now := time.Now().UTC()
+	runAt := now
+	if s := strings.TrimSpace(req.RunAt); s != "" {
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			http.Error(w, `{"error":"run_at must be RFC3339"}`, http.StatusBadRequest)
+			return
+		}
+		if t.After(now) {
+			runAt = t.UTC()
+		}
+	}
 	job := ingestjobs.Job{
 		AccountID:   accountID,
 		Source:      ingestjobs.SourceAPI,
 		FileBucket:  deps.bucket,
 		FileKey:     fileKey,
 		SegmentSpec: spec,
-		RunAt:       time.Now().UTC(),
+		RunAt:       runAt,
 	}
 	jobID, err := deps.ingestStore.Enqueue(r.Context(), job)
 	if err != nil {
@@ -241,15 +265,21 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 
-	// Small + due-now → run inline for an instant match rate. Larger → leave it
-	// queued for the pipeline ingest worker.
-	if rowCount <= deps.inlineMaxRow {
+	// Small AND due-now → run inline for an instant match rate. Larger OR held
+	// (future run_at) → leave it queued for the pipeline ingest worker; a held
+	// file is staged but never opened until run_at (ClaimOne gates on it).
+	if rowCount <= deps.inlineMaxRow && !runAt.After(now) {
 		deps.runInline(w, r, jobID, req)
 		return
 	}
+	held := ""
+	if runAt.After(now) {
+		held = runAt.Format(time.RFC3339)
+	}
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusQueued})
-	deps.log.Info("audience upload queued", "job", jobID, "name", req.Name, "rows", rowCount)
+	_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusQueued, RunAt: held})
+	deps.log.Info("audience upload queued", "job", jobID, "name", req.Name, "rows", rowCount,
+		"run_at", runAt.Format(time.RFC3339))
 }
 
 // runInline claims the row it just enqueued (taking the worker's lease) and
@@ -414,6 +444,7 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 	req.Name = strings.TrimSpace(r.FormValue("name"))
 	req.Type = r.FormValue("type")
 	req.Visibility = r.FormValue("visibility")
+	req.RunAt = strings.TrimSpace(r.FormValue("run_at"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		return req, nil, "missing file field"
