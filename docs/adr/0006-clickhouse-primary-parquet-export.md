@@ -1,6 +1,11 @@
 # ADR 0006 — ClickHouse is the single analytical store; Parquet is an hourly export
 
-**Status:** Proposed (2026-07-22)
+**Status:** Accepted — all 5 phases shipped (2026-07-22). Follow-up owed: a full
+`make test-e2e-hotcold` run re-validating zero-slippage on the new
+NATS→ClickHouse→export spine (verified in-session via `--verify` traffic + a
+ClickHouse-vs-Parquet hour reconcile, but not the gated e2e suite). The retired
+dual-write sink code remains behind `pipeline.datalake_enabled` (default off) for
+one release; DuckDB code stays inert/tag-gated. Both are removable cleanup.
 **Supersedes:**
 - ADR 0001's role split ("DuckDB = cold/ad-hoc query engine over the lake") — DuckDB
   drops off the read path entirely.
