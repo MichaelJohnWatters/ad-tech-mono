@@ -641,6 +641,11 @@ const (
 	// hourly|daily|monthly (default minute). Lets ops + e2e force a rollup
 	// without waiting for the scheduler tick. Returns the per-config results.
 	DebugRollupRun = "/debug/rollup/run"
+	// ReportingExportRun (POST ?hour=RFC3339) snapshots the ClickHouse event +
+	// signal tables for one hour to Parquet on the lake bucket via s3()
+	// (ADR 0006 phase 4). Idempotent per hour; defaults to the previous full
+	// hour. The batch-conductor calls it hourly; ops/e2e can force a run.
+	ReportingExportRun = "/debug/export/run"
 )
 
 // ============================================================

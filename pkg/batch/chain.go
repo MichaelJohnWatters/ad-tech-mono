@@ -172,6 +172,36 @@ func StandardChain(d Deps) []Step {
 		})
 	}
 
+	// ADR 0006 phase 4: derive the Parquet lake from ClickHouse. Runs after
+	// the rollups so the hour's raw rows are settled; idempotent per hour, so
+	// a retried chain re-exports the same hour harmlessly. Exports the previous
+	// full hour (the endpoint's default).
+	steps = append(steps, Step{
+		Name: "ch-parquet-export",
+		Run: func(ctx context.Context) (string, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.ReportingURL+routes.ReportingExportRun, nil)
+			if err != nil {
+				return "", err
+			}
+			body, err := d.do(req)
+			if err != nil {
+				return "", err
+			}
+			var res struct {
+				Rows    int64            `json:"rows"`
+				Tables  map[string]int64 `json:"tables"`
+				Skipped string           `json:"skipped"`
+			}
+			if err := json.Unmarshal(body, &res); err != nil {
+				return "", fmt.Errorf("decode export results: %w", err)
+			}
+			if res.Skipped != "" {
+				return res.Skipped, nil
+			}
+			return fmt.Sprintf("%d rows across %d tables exported to Parquet", res.Rows, len(res.Tables)), nil
+		},
+	})
+
 	steps = append(steps,
 		Step{
 			Name: "profile-builder",
