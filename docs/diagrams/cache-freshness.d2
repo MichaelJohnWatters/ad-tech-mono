@@ -3,7 +3,7 @@
 #
 # The design rule this diagram exists to show: there are two circulatory
 # systems. Serving caches feed from POSTGRES (+ NATS invalidates) — never
-# from the analytics spine — so a lagging/compacting/vacuuming pipeline can
+# from the analytics spine — so a lagging/exporting ClickHouse can
 # never stale-out an auction. Analytics is read-side only, EXCEPT four
 # deliberate, numbered feedback loops.
 # Render: make diagrams
@@ -58,7 +58,7 @@ analytics: Analytics spine (READ-SIDE - never feeds the bid path) {
     style.fill: "#faff69"
     d: raw events + always-fresh hourly/daily MVs
   }
-  lake: "Delta lake (10-15s micro-batches, no daily ETL)" {
+  lake: "Parquet export (hourly, derived from ClickHouse)" {
     shape: cylinder
     style.fill: "#c72e49"
     style.font-color: "#fff"
@@ -68,11 +68,11 @@ analytics: Analytics spine (READ-SIDE - never feeds the bid path) {
 events: SSP · Exchange · Tracker (live traffic)
 events -> nats: events + behaviour + profile signals {style.stroke-dash: 3}
 nats -> analytics.ch: reporting consumer {style.stroke-dash: 3}
-nats -> analytics.lake: pipeline sink (ack-after-flush) {style.stroke-dash: 3}
+analytics.ch -> analytics.lake: hourly ch-parquet-export {style.stroke-dash: 2}
 
 readers: Portals · reports · exports · profile API
 analytics.ch -> readers: hot window {style.stroke-dash: 2}
-analytics.lake -> readers: cold history (identical SQL) {style.stroke-dash: 2}
+analytics.lake -> readers: cold history (ClickHouse s3()) {style.stroke-dash: 2}
 
 # ============================================================
 # THE FOUR FEEDBACK LOOPS - analytics → serving, all deliberate
@@ -80,13 +80,13 @@ analytics.lake -> readers: cold history (identical SQL) {style.stroke-dash: 2}
 loops: Feedback loops (the only analytics → serving paths) {
   style.fill: "#fffbeb"
 
-  l1: "1 · MEMBERSHIPS - profile-builder (hourly chain) recomputes segments over the lake → PG → Redis ≤30s later. A behavioural rule reaches live auctions within one preload cycle."
+  l1: "1 · MEMBERSHIPS - profile-builder (hourly chain) recomputes segments over ClickHouse → PG → Redis ≤30s later. A behavioural rule reaches live auctions within one preload cycle."
   l2: "2 · MONEY - billing engine computes committed spend from ingested events → NATS spend snapshot → DSP overwrites its Redis pacing counters to billed reality."
   l3: "3 · WARM-STARTS (boot) - adserver bandit seeds from historical CTR; exchange SmartRouter from dsp_calls. Then live signals take over."
   l4: "4 · IDENTITY - identity-consumer streams graph edges → PG → DSP in-memory snapshot; profile-builder pre-expands memberships across clusters so loop 1 covers every device of a person."
 }
 
-analytics.lake -> loops.l1 {style.stroke-dash: 2}
+analytics.ch -> loops.l1 {style.stroke-dash: 2}
 loops.l1 -> pg: audience_segment_members (replace-by-segment)
 loops.l2 -> serving.redis: pacing reconcile {style.stroke-dash: 3}
 analytics.ch -> loops.l2 {style.stroke-dash: 2}

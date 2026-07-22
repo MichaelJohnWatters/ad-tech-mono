@@ -1,32 +1,32 @@
-# Data & reporting — dual-write + hot/cold read path
+# Data & reporting — single write + derived cold export + hot/cold read path
 
-How an event becomes a number on a dashboard: **dual-written** to the hot store
-(ClickHouse) and the cold store (Delta lake) from the same NATS stream, then read
-back server-side through the metrics engine and the hot/cold router.
+How an event becomes a number on a dashboard: **written once** to ClickHouse (the
+single analytical store) from the NATS stream, exported hourly to a derived
+Parquet cold archive, then read back server-side through the metrics engine and
+the hot/cold router.
 
-See also: [`e2e-trace`](e2e-trace.md) (the full request), [`data-pipeline`](data-pipeline.svg)
-(the lake internals), [`architecture`](architecture.svg) (the map).
+See also: [`e2e-trace`](e2e-trace.md) (the full request),
+[`architecture`](architecture.svg) (the map).
 
-## Write path — one stream, two stores (independent NATS groups)
+## Write path — one stream, one store, a derived hourly export (ADR 0006)
 
 ```mermaid
 flowchart LR
   TR[Tracker / Exchange] -- publish --> N(("NATS<br/>events + auction.win"))
 
-  subgraph HOT[" Hot store "]
+  subgraph HOT[" Hot store — the analytical store "]
     REPc[Reporting<br/>NATS consumer<br/>+ ClickHouse batch] --> CH[(ClickHouse)]
     ROLL[Rollup engine] --> RUP[(minute · hourly<br/>daily · monthly)]
     CH -. summing MVs .-> RUP
   end
 
-  subgraph COLD[" Cold store "]
-    PIPEc[Pipeline<br/>datalake sink<br/>ack-after-flush] --> LAKE[(Delta lake<br/>Parquet + Delta log)]
-    COMP[Compaction<br/>CronJob :05] -.-> LAKE
+  subgraph COLD[" Cold archive — derived, hourly "]
+    EXP[Reporting<br/>ch-parquet-export<br/>hourly INSERT INTO FUNCTION s3] --> LAKE[(Parquet export<br/>Minio · clickhouse-export/)]
   end
 
   N -- "consume (reporting group)" --> REPc
-  N -- "consume (pipeline group)" --> PIPEc
   REPc --> ROLL
+  CH -- "hourly export (derived)" --> EXP
 ```
 
 ## Read path — server-side, tenant-scoped, hot/cold merged
@@ -38,7 +38,7 @@ flowchart LR
   ENG --> BLD[Builder · AutoTier<br/>rollup vs raw]
   BLD --> HC{HotColdStore<br/>route by age}
   HC -->|recent| CH[(ClickHouse<br/>HOT)]
-  HC -->|aged · delta_scan| LAKE[(Delta lake<br/>COLD)]
+  HC -->|"aged · ClickHouse s3()"| LAKE[(Parquet export<br/>COLD)]
   HC -->|spanning| MERGE[split + additive merge]
   CH --> MERGE
   LAKE --> MERGE
@@ -48,14 +48,15 @@ flowchart LR
 
 ## What to notice
 
-- **Dual-write, not a mover** — reporting → ClickHouse (hot), pipeline → lake
-  (cold), both from the *same* events via *independent* NATS consumer groups. No
-  scheduled hot→cold copy; `hot_window` is a read-routing boundary only.
+- **Single write, derived cold archive** — reporting → ClickHouse (hot) is the
+  only NATS-driven write; the cold Parquet archive is exported *from* ClickHouse
+  hourly (the `ch-parquet-export` chain step), not a second live writer.
+  `hot_window` is a read-routing boundary only.
 - **All business math is server-side** — the `QueryEngine` computes
   ecpm/ctr/fill_rate/net_revenue; the portal only renders (no browser math).
 - **Tenant scope is injected at the gateway** (`enforceReportTenant`) and rides
   through *every* sub-query the engine issues — the isolation invariant.
 - **Rollups are transparent** — `AutoTier` serves pre-aggregated rows when the
   range/metrics allow, else falls back to raw; correctness never depends on them.
-- **Cold reads use `delta_scan`** over the real Delta log (the lake is a genuine
-  Delta table); `cold_store_enabled` + the duckdb build tag gate it, off → hot-only.
+- **Cold reads use ClickHouse `s3()`** over the derived Parquet export;
+  `cold_store_enabled` gates it, off → hot-only.

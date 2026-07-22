@@ -31,15 +31,12 @@ Status: ✅ current · ⚠️ stale (needs a refresh) · 🚧 planned (not built
 | Ad-request lifecycle | `auction-flow.d2` | flow | D2 | bid req → auction → win → serve → track | ✅ the serving/auction path changes | ssp, exchange, dsp, adserver, tracker |
 | Async event fan-out | `nats-events.d2` | flow | D2 | NATS subjects → reporting/pipeline/billing/webhooks/identity | ✅ a **NATS subject or consumer** changes | `pkg/events`, consumers |
 | Money loop | `billing-flow.d2` | flow | D2 | budget gate → win → impression → billing accrual → **TigerBeetle** → committed-spend snapshot → DSP reconcile | ✅ billing/budget/ledger flow changes | dsp budget, `pkg/billing`, reporting |
-| Data & reporting | `data-reporting.md` | flow | Mermaid | event → **dual-write** (ClickHouse hot + Delta lake cold) → rollups → **hot/cold store** → gateway → portal | ✅ a store, rollup, or read path changes | reporting, `pkg/store/*`, pipeline |
-| Data lake / batch | `data-pipeline.d2` | flow | D2 | pipeline → Parquet+Delta → compaction → delta_scan | ✅ lake write/compaction/format changes | `cmd/pipeline`, `pkg/store/datalake` |
-| **E2E trace** ★ | `e2e-trace.md` | headline | Mermaid | **one `trace_id`, all planes**: request → auction → win (single source of truth) → serve → impression → {hot CH, cold lake, billing→TB, budget reconcile} → report | ✅ any **new hop** in the request/event lifecycle | everything |
+| Data & reporting | `data-reporting.md` | flow | Mermaid | event → **single write** (ClickHouse) → rollups → derived hourly **Parquet export** (cold) → **hot/cold store** → gateway → portal | ✅ a store, rollup, or read path changes | reporting, `pkg/store/*` |
+| **E2E trace** ★ | `e2e-trace.md` | headline | Mermaid | **one `trace_id`, all planes**: request → auction → win (single source of truth) → serve → impression → {hot CH, cold Parquet export, billing→TB, budget reconcile} → report | ✅ any **new hop** in the request/event lifecycle | everything |
 | End-to-end (subsystems) | `end-to-end-flow.md` | flow | Mermaid | per-subsystem sequences + standards overlays | ✅ a subsystem sequence changes | mixed |
 | Cache freshness & feedback loops | `cache-freshness.d2` | flow | D2 | the two circulatory systems: serving caches feed from Postgres + NATS invalidates (never analytics); the analytics spine is read-side only EXCEPT four numbered feedback loops (memberships ≤30s, spend reconcile, boot warm-starts, identity) | ✅ a cache layer, preloader, invalidate subject, or feedback loop changes | warm caches, `pkg/audience/store/preload`, pacing reconcile, profile-builder |
-| Targeting data flow | `targeting-data-flow.d2` | flow | D2 | observed (pixel/auction) + onboarded (1st/3rd party) sources → identity graph + lake → **profile-builder** → memberships → back into auctions + exports. Profile Store phases 1–5 SHIPPED; only the retargeting-pixel source remains 🚧 | ✅ audience/identity/profile-store flow changes | ssp, tracker, identity-consumer, `cmd/pipeline`, `cmd/profile-builder`, `pkg/audience`, `pkg/profilebuilder` |
-| **Data lifecycle (linear)** ★ | `data-lifecycle.md` | teaching | ASCII | the **single linear thread** stitching the five data-flow diagrams: sources (1st/3rd-party + observed) → auction → NATS fork → {cold lake · audience/profile-builder · hot rollups}. Start here to understand the data end-to-end | ✅ the data story spans multiple segments / onboarding a new reader | ssp, tracker, `cmd/pipeline`, `cmd/profile-builder`, reporting, `pkg/store/rollup` |
-
-`request-flow.txt` is a legacy ASCII sketch — superseded by `e2e-trace`; keep or delete.
+| Targeting data flow | `targeting-data-flow.d2` | flow | D2 | observed (pixel/auction) + onboarded (1st/3rd party) sources → identity graph + ClickHouse → **profile-builder** → memberships → back into auctions + exports. Profile Store phases 1–5 SHIPPED | ✅ audience/identity/profile-store flow changes | ssp, tracker, identity-consumer, `cmd/pipeline`, `cmd/profile-builder`, `pkg/audience`, `pkg/profilebuilder` |
+| **Data lifecycle (linear)** ★ | `data-lifecycle.md` | teaching | ASCII + Mermaid | the **single linear thread** stitching the data-flow diagrams: sources (1st/3rd-party + observed) → auction → NATS fork → {ClickHouse hot rollups · derived Parquet export · audience/profile-builder}. Start here to understand the data end-to-end | ✅ the data story spans multiple segments / onboarding a new reader | ssp, tracker, `cmd/pipeline`, `cmd/profile-builder`, reporting, `pkg/store/rollup` |
 
 ## Visual legend (same key in every D2 diagram)
 
@@ -62,7 +59,7 @@ So you can read any diagram without relearning it. Each `.d2` includes a small
 |---|---|
 | 🟦 Serving (sync RTB) | ssp, exchange, dsp×3, adserver, publisher-adserver, tracker |
 | 🟪 Async / events | NATS + reporting, pipeline, webhooks, identity-consumer |
-| 🟩 Data / analytics | ClickHouse (hot), Delta lake (cold), rollups, hot/cold store |
+| 🟩 Data / analytics | ClickHouse (hot + rollups), Parquet export (cold, via s3()), hot/cold store |
 | 🟨 Money | budgets (Redis), `pkg/billing`, TigerBeetle, advertiser balances |
 | ⬜ Control | gateway, portals, config, warm caches |
 

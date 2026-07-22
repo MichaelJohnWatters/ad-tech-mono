@@ -1,5 +1,5 @@
 # Targeting data flow - how audience/profile data is collected (observed +
-# onboarded), where the two sides meet (lake + profile-builder), and how the
+# onboarded), where the two sides meet (ClickHouse + profile-builder), and how the
 # output is loaded back into live auctions and exports.
 # Companion to docs/PLAN.md -> "Profile Store (Normalized Signals -> Expansion
 # -> Memberships -> Export)". Render: make diagrams
@@ -63,25 +63,27 @@ idc -> pg_graph
 onboarded.api -> pg_graph: crm_match edges via /v1/api/identity-links
 
 # ============================================================
-# The lake - where both sides land as replayable facts
+# ClickHouse - where both sides land as replayable facts (ADR 0006)
 # ============================================================
-pipeline: Pipeline sink (cmd/pipeline) {style.fill: "#a78bfa"}
+pipeline: Pipeline onboarding poller (cmd/pipeline) {style.fill: "#a78bfa"}
+reporting: Reporting :8086 - NATS consumer {style.fill: "#60a5fa"}
 
-lake: Delta lake (Minio) {
+lake: ClickHouse - THE analytical store {
   style.fill: "#faf5ff"
 
   events: event tables x7 - live {shape: cylinder}
   behaviour: behaviour_signals - user key + category, consent-gated {shape: cylinder}
   signals: profile_signals - normalized onboarded rows {shape: cylinder}
-  clusters: identity_clusters - person_id -> member ids {shape: cylinder}
+  clusters: identity_clusters - person_id -> member ids (PG) {shape: cylinder}
 }
 
-nats -> pipeline {style.stroke-dash: 3}
-pipeline -> lake.events
-pipeline -> lake.behaviour
-pipeline -> lake.signals: normalize
+nats -> reporting {style.stroke-dash: 3}
+reporting -> lake.events
+reporting -> lake.behaviour
+reporting -> lake.signals: normalize
 onboarded.dropzone <- pipeline: poll, validate, quarantine rejects {style.stroke-dash: 2}
-onboarded.api -> lake.signals: lake copy of uploads (batched via NATS)
+pipeline -> nats: profile.signal (drop-zone onboarding) {style.stroke-dash: 3}
+onboarded.api -> nats: profile.signal - uploads (batched) {style.stroke-dash: 3}
 
 # ============================================================
 # THE MEETING POINT - profile-builder (batch, CronJob)
@@ -90,7 +92,7 @@ builder: profile-builder - batch-conductor chain step (pkg/profilebuilder) {
   style.fill: "#f59e0b"
 
   cluster: 1 - cluster graph -> person_id (union-find)
-  rules: 2 - behavioural rules (pure-Go over the Delta reader) + reconcile
+  rules: 2 - behavioural rules (pure-Go over ClickHouse GROUP BY) + reconcile
   expand: 3 - enroll person, expand to every id in cluster
 
   cluster -> rules -> expand

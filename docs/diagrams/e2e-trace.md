@@ -24,8 +24,7 @@ sequenceDiagram
   participant IDC as Identity Consumer
   participant REP as Reporting
   participant CH as ClickHouse (hot)
-  participant PIPE as Pipeline
-  participant LAKE as Delta lake (cold)
+  participant LAKE as Parquet export (cold)
   participant TB as TigerBeetle
   participant GW as Gateway / Portal
 
@@ -58,14 +57,12 @@ sequenceDiagram
   end
 
   rect rgb(250,245,255)
-  Note over N,LAKE: 3 · Async fan-out — DUAL-WRITE (data), independent NATS groups
+  Note over N,CH: 3 · Async fan-out — single write (data), independent NATS groups
   TR-)N: adtech.events.impression
   N-)IDC: consume identity.observed (own group)
   IDC->>IDC: batch + dedup → upsert identity_graph edges (PG)
   N-)REP: consume
-  N-)PIPE: consume (own group)
-  REP->>CH: write impression — HOT store
-  PIPE->>LAKE: write Parquet + real Delta log — COLD store (ack-after-flush)
+  REP->>CH: write impression — HOT store (the single analytical store)
   end
 
   rect rgb(255,251,235)
@@ -80,7 +77,7 @@ sequenceDiagram
   Note over GW,LAKE: 5 · Report (read path, later)
   GW->>REP: /v1/api/reports — tenant scope injected
   REP->>CH: recent range (HOT)
-  REP->>LAKE: aged range via delta_scan (COLD)
+  REP->>LAKE: aged range via ClickHouse s3() (COLD)
   REP->>REP: HotColdStore merges + QueryEngine derived metrics
   REP-->>GW: rows → portal renders (no browser math)
   end
@@ -93,17 +90,18 @@ sequenceDiagram
   Grafana pivots Loki↔Jaeger on it.
 - **`adtech.auction.win` is the single source of truth for cost** — billing and
   reporting both derive from it, not from independent guesses.
-- **Dual-write, not a mover (§3)** — reporting writes ClickHouse (hot) and the
-  pipeline writes the Delta lake (cold) from the *same* event stream, via
-  independent NATS consumer groups. Nothing copies hot→cold on a schedule.
+- **Single write, derived cold archive (§3)** — reporting writes ClickHouse (hot)
+  from the NATS stream; the Parquet cold archive is exported *from* ClickHouse
+  hourly (the `ch-parquet-export` chain step), not written by a second consumer.
 - **Money is fast-then-correct (§1, §4)** — the DSP paces on a local win-notice
   in Redis (instant, approximate), and later reconciles to the billing ledger's
   committed-spend snapshot (authoritative). See `billing-flow`.
-- **The lake never loses events (§3)** — the sink acks NATS *after* a durable
-  flush (at-least-once); a crash redelivers instead of dropping.
-- **Reads route by age (§5)** — recent → ClickHouse, aged → lake via
-  `delta_scan`, spanning ranges merged; tenant scope is injected at the gateway
-  and rides through every sub-query.
+- **The cold archive can't drift from hot (§3)** — it's a derived hourly export
+  of the ClickHouse tables, re-exported per changed hour, so it always matches
+  what the hot store holds.
+- **Reads route by age (§5)** — recent → ClickHouse, aged → the Parquet export via
+  ClickHouse `s3()`, spanning ranges merged; tenant scope is injected at the
+  gateway and rides through every sub-query.
 - **Targeting data is read-only on the hot path (§1)** — segment lookups hit
   Redis inside a 25ms budget and degrade to "no segments", never blocking the
   bid; identity-graph *writes* happen off-path via the identity consumer (§3).

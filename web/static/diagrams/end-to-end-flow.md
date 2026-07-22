@@ -4,7 +4,7 @@
 one ad request from the user's browser all the way through auction, serve,
 tracking, billing — annotated with the transparency/trust, privacy, format, and
 identity standards layered on top. Companion to `architecture.d2` (static
-topology) and `request-flow.txt` (ASCII entry-point map).
+topology) and `e2e-trace.md` (one `trace_id` across all planes).
 
 Legend for the standards annotations: 🔗 supply-chain/trust · 🔒 privacy ·
 🎯 identity · 🎬 format.
