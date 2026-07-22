@@ -6,20 +6,28 @@ Ingests publisher data files in any format, validates, normalises to common sche
 
 - Accept files in any format (CSV, TSV, JSON, Excel, Parquet)
 - Auto-detect format, delimiter, encoding
-- Validate against publisher-specific config (`profiles/publishers/*.yaml`)
-- Quarantine bad rows/files with error details
+- Validate required fields per row (from the manifest/publisher config); **row-level**,
+  not whole-file — a row missing/empty `id_value` is quarantined, good rows proceed
+- Quarantine bad rows with error details to a `rejected/…` artifact (a file that yields
+  zero valid rows, or is undecodable, is recorded terminal with 0 members)
 - Normalise to common schema (field mapping, type casting, date parsing, dedup)
 - Enrich with derived data (geo from IP, device classification, audience matching)
-- Detect schema drift and alert
 - Publish normalised/enriched events to NATS (reporting lands them in ClickHouse;
   the old Parquet+Delta dual-write was retired in ADR 0006)
+
+> **Not built (planned — see `docs/PLAN.md`):** schema-drift detection/alerting and
+> synchronous pre-upload schema rejection. Today validation is **lenient**: files are
+> accepted + staged, then validated per-row at process time with quarantine — there is
+> no up-front "reject the whole file if it doesn't match a declared schema."
 
 ## Key Packages Used
 
 - `pkg/pipeline/` - format detection, validation, normalisation, enrichment logic
 - `pkg/store/datalake/` - Parquet read/write, Delta Log management
 - `pkg/store/objects/` - read source files from filesystem/S3
-- `pkg/events/` - publish pipeline events to NATS (file ingested, quarantined, drift detected)
+- `pkg/events/` - publish pipeline events to NATS (file ingested, quarantined)
+- `pkg/ingest/` - the shared audience-ingest processor (ADR 0007): both the drop-zone
+  worker and the gateway upload run files through `ingest.Processor.Process`
 
 ## gRPC Services Exposed
 
