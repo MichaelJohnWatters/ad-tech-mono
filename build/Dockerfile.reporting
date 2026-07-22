@@ -1,4 +1,7 @@
-# Reporting Dockerfile - CGO enabled for DuckDB driver.
+# Reporting Dockerfile — CGO enabled for tigerbeetle-go (the billing ledger).
+# No `duckdb` tag: cold reads go through ClickHouse s3() (pure Go) since
+# ADR 0006 phase 3, so the glibc go-duckdb build (Dockerfile.reporting.duckdb)
+# is retired from the dev loop.
 FROM golang:1.25-alpine AS builder
 WORKDIR /src
 RUN apk add --no-cache gcc musl-dev
