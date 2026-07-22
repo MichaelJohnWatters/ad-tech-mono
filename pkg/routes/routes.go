@@ -258,8 +258,8 @@ const (
 	APIBatchLake = apiPrefix + "/api/batch/lake"
 
 	// APIOnboardingRuns is the staff drop-zone monitor (GET, support:read):
-	// recent onboarding_runs + per-provider rollups (files, rejects, match
-	// rates). Platform-wide operational telemetry.
+	// recent audience_ingest_jobs (ADR 0007; incl. queued/running) + per-provider
+	// rollups (files, rejects, match rates). Platform-wide operational telemetry.
 	APIOnboardingRuns = apiPrefix + "/api/onboarding/runs"
 
 	// Staff ops console (/v1/api/ops/*) — monitor AND act on the k8s stack

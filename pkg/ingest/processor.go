@@ -12,7 +12,6 @@ package ingest
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -45,12 +44,11 @@ type IdentityCounter interface {
 // cmd/pipeline (worker) and cmd/gateway (inline) build one from their own
 // connections.
 type Processor struct {
-	Objects  objects.Store    // staged files live here (read + quarantine + move)
+	Objects  objects.Store     // staged files live here (read + quarantine + move)
 	Audience *audiencepg.Store // segment upsert + membership writes
-	Matcher  IdentityCounter  // match-rate numerator (nil-safe)
+	Matcher  IdentityCounter   // match-rate numerator (nil-safe)
 	Pipeline *pipeline.Pipeline
 	Bus      events.EventBus // profile.signal + cache-invalidate (nil-safe)
-	DB       *sql.DB         // onboarding_runs writes (kept until ADR Phase 4)
 	Log      *slog.Logger
 }
 
@@ -87,11 +85,11 @@ func IsInfra(err error) bool {
 // Process is the single audience-ingest processor: it reads the staged file at
 // job.FileBucket/job.FileKey, runs decode → field-map → validate/normalise →
 // CreateSegment/AddMembers → match rate → publish profile.signal in chunks →
-// quarantine rejects, and returns the terminal counts. It records the run in
-// onboarding_runs and moves the source file out of incoming/ (kept in Phase 1;
-// ADR folds onboarding_runs into the job row in Phase 4). An INFRA error is
-// returned wrapped so the caller retries; content failures return a result with
-// nil error.
+// quarantine rejects, and returns the terminal counts. It moves the source file
+// out of incoming/; the caller records the run on the audience_ingest_jobs row
+// via MarkDone (the terminal counts fold the old onboarding_runs table, ADR 0007
+// Phase 4). An INFRA error is returned wrapped so the caller retries; content
+// failures return a result with nil error.
 func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs.IngestResult, error) {
 	started := time.Now().UTC()
 	provider, key := job.Provider, job.FileKey
@@ -310,10 +308,12 @@ func processedPrefix(provider string) string {
 	return provider + "/processed/"
 }
 
-// finishFile moves the source out of incoming/ and records the run. errMsg ==
-// "" means completed; a non-empty message records a failed (content) run. It
-// returns the IngestResult (counts) the caller records on the job row, or an
-// infraErr if the source move fails (retryable — nothing was recorded).
+// finishFile moves the source out of incoming/ and returns the terminal counts.
+// errMsg == "" means the file processed cleanly; a non-empty message means a
+// content failure (the file is moved to rejected/). The caller records the run
+// on the audience_ingest_jobs row (MarkDone for a clean run, MarkFailed with
+// errMsg for a content failure). Returns an infraErr if the source move fails
+// (retryable — nothing was recorded).
 func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accountID string, started time.Time,
 	segID string, matched int, result pipeline.Result, rejectedKey, errMsg string,
 ) (ingestjobs.IngestResult, error) {
@@ -325,21 +325,10 @@ func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accou
 		p.Log.Error("ingest: move file failed (will retry)", "file", key, "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
 	}
-	status, matchRate := "completed", (*float64)(nil)
-	if errMsg != "" {
-		status = "failed"
-	}
 	rate := 0.0
 	if n := len(result.Valid); n > 0 {
 		rate = float64(matched) / float64(n)
-		matchRate = &rate
 	}
-	p.recordRun(ctx, runRow{
-		provider: provider, fileKey: key, accountID: accountID, segmentID: segID,
-		status: status, total: result.Stats.TotalInput, valid: len(result.Valid),
-		rejected: len(result.Quarantine), matched: matched, matchRate: matchRate,
-		errMsg: errMsg, rejectedKey: rejectedKey, started: started,
-	})
 	return ingestjobs.IngestResult{
 		SegmentID: segID, TotalRows: result.Stats.TotalInput, ValidRows: len(result.Valid),
 		RejectedRows: len(result.Quarantine), MatchedRows: matched, MatchRate: rate,
@@ -348,8 +337,8 @@ func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accou
 }
 
 // quarantineStaged is the content-failure path inside Process: it quarantines
-// the whole file (finishFile move + run record) and returns a terminal result
-// so the job is marked done, not retried.
+// the whole file (finishFile move) and returns a terminal result so the job is
+// marked done, not retried.
 func (p *Processor) quarantineStaged(ctx context.Context, bucket, provider, key, accountID string, started time.Time, reason string) (ingestjobs.IngestResult, error) {
 	base := path.Base(key)
 	rejectedKey := rejectedPrefix(provider) + base
@@ -363,37 +352,6 @@ func (p *Processor) quarantineStaged(ctx context.Context, bucket, provider, key,
 	}
 	p.Log.Error("ingest: file quarantined", "provider", provider, "file", key, "reason", reason)
 	return res, nil
-}
-
-type runRow struct {
-	provider, fileKey, accountID, segmentID string
-	status                                  string
-	total, valid, rejected, matched         int
-	matchRate                               *float64
-	errMsg, rejectedKey                     string
-	started                                 time.Time
-}
-
-func (p *Processor) recordRun(ctx context.Context, r runRow) {
-	if p.DB == nil {
-		return
-	}
-	const q = `
-INSERT INTO onboarding_runs (provider, file_key, account_id, segment_id, status,
-    total_rows, valid_rows, rejected_rows, matched_rows, match_rate, error, rejected_key,
-    started_at, finished_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''), $13, now())`
-	accountID := sql.NullString{String: r.accountID, Valid: r.accountID != ""}
-	segmentID := sql.NullString{String: r.segmentID, Valid: r.segmentID != ""}
-	provider := r.provider
-	if provider == "" {
-		provider = "api"
-	}
-	if _, err := p.DB.ExecContext(ctx, q, provider, r.fileKey, accountID, segmentID,
-		r.status, r.total, r.valid, r.rejected, r.matched, r.matchRate,
-		r.errMsg, r.rejectedKey, r.started); err != nil {
-		p.Log.Error("ingest: record run failed", "file", r.fileKey, "error", err)
-	}
 }
 
 func (p *Processor) readObject(ctx context.Context, bucket, key string) ([]byte, error) {

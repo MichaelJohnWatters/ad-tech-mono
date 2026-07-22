@@ -1570,10 +1570,10 @@ async function loadOnboarding() {
     const rb = document.querySelector('#onbRuns tbody');
     rb.innerHTML = (data.runs || []).map(r => `
       <tr class="border-t border-gray-100 dark:border-gray-800">
-        <td class="px-3 py-2 text-xs text-gray-500">${new Date(r.finished_at).toLocaleString()}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${(r.finished_at || r.created_at) ? new Date(r.finished_at || r.created_at).toLocaleString() : '—'}</td>
         <td class="px-3 py-2 font-mono text-xs">${esc(r.provider)}</td>
         <td class="px-3 py-2 font-mono text-xs">${minioLink('adtech-onboarding', r.file_key, r.file_key)}${r.rejected_key ? ' · ' + minioLink('adtech-onboarding', r.rejected_key, 'rejected') : ''}</td>
-        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${r.status === 'completed' ? 'bg-success/15 text-success' : 'bg-error/15 text-error'}">${esc(r.status)}</span></td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${r.status === 'done' ? 'bg-success/15 text-success' : r.status === 'failed' ? 'bg-error/15 text-error' : 'bg-info/15 text-info'}">${esc(r.status)}</span></td>
         <td class="px-3 py-2">${r.valid_rows}</td>
         <td class="px-3 py-2 ${r.rejected_rows ? 'text-warning' : ''}">${r.rejected_rows}</td>
         <td class="px-3 py-2 font-mono text-xs">${fmtPct(r.match_rate)}</td>

@@ -341,7 +341,6 @@ func main() {
 			Matcher:  postgres.NewFromDB(gwDB),
 			Pipeline: pipeline.New(log),
 			Bus:      secretsBus,
-			DB:       gwDB,
 			Log:      log,
 		}
 	}

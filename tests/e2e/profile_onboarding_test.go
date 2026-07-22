@@ -96,14 +96,17 @@ func TestProfileOnboardingCSVUpload(t *testing.T) {
 }
 
 // TestOnboardingRetentionSweep — processed/rejected artifact bytes are
-// deleted once their run ages past pipeline.onboarding_retention (30d
-// default): a backdated run row makes the live poller sweep on its next
-// tick, the objects disappear, and the run row survives stamped swept_at.
+// deleted once their ingest job ages past pipeline.onboarding_retention (30d
+// default): a backdated audience_ingest_jobs row makes the live poller sweep
+// on its next tick, the objects disappear, and the job row survives stamped
+// swept_at. ADR 0007 Phase 4 folded onboarding_runs into audience_ingest_jobs,
+// so the sweep now stamps the job row (terminal status 'done', not 'completed').
 func TestOnboardingRetentionSweep(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	obj, bucket := h.OnboardingBucket(t)
 	ctx := context.Background()
 	provider := fmt.Sprintf("sweep-%d", time.Now().UnixNano())
+	acc := h.CreateAdvertiser(t, "sweep-adv")
 
 	put := func(key, body string) {
 		t.Helper()
@@ -115,25 +118,31 @@ func TestOnboardingRetentionSweep(t *testing.T) {
 	put(provider+"/rejected/old.csv", "user_id,_errors\n,missing\n")
 	put(provider+"/rejected/old.csv.error.txt", "reason")
 
+	// A backdated terminal job: bytes live in {provider}/processed + rejected,
+	// finished_at is older than the retention window, swept_at is NULL.
 	var runID string
 	if err := h.DB.QueryRow(`
-INSERT INTO onboarding_runs (provider, file_key, rejected_key, status, started_at, finished_at)
-VALUES ($1, $2, $3, 'completed', now() - interval '31 days', now() - interval '31 days')
-RETURNING id::text`, provider, provider+"/incoming/old.csv", provider+"/rejected/old.csv").Scan(&runID); err != nil {
-		t.Fatalf("seed old run: %v", err)
+INSERT INTO audience_ingest_jobs
+    (account_id, source, provider, file_bucket, file_key, segment_spec, rejected_key,
+     status, started_at, finished_at)
+VALUES ($1::uuid, 'dropzone', $2, $3, $4, '{}'::jsonb, $5,
+     'done', now() - interval '31 days', now() - interval '31 days')
+RETURNING id::text`, acc.ID, provider, bucket, provider+"/incoming/old.csv",
+		provider+"/rejected/old.csv").Scan(&runID); err != nil {
+		t.Fatalf("seed old job: %v", err)
 	}
 
 	deadline := time.Now().Add(45 * time.Second)
 	for {
 		var sweptAt *time.Time
-		if err := h.DB.QueryRow(`SELECT swept_at FROM onboarding_runs WHERE id = $1::uuid`, runID).Scan(&sweptAt); err != nil {
+		if err := h.DB.QueryRow(`SELECT swept_at FROM audience_ingest_jobs WHERE id = $1::uuid`, runID).Scan(&sweptAt); err != nil {
 			t.Fatalf("read swept_at: %v", err)
 		}
 		if sweptAt != nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("poller never swept the aged run")
+			t.Fatal("poller never swept the aged job")
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -211,14 +220,15 @@ func TestProfileOnboardingDropZone(t *testing.T) {
 	if ok, _ := obj.Exists(ctx, bucket, provider+"/incoming/"+segName+".csv"); ok {
 		t.Error("incoming file still present after processing")
 	}
-	// Run recorded for the staff monitor.
+	// Ingest job recorded for the staff monitor. ADR 0007 folded onboarding_runs
+	// into audience_ingest_jobs; the terminal status is 'done' (was 'completed').
 	var status string
 	var rejected int
-	if err := h.DB.QueryRow(`SELECT status, rejected_rows FROM onboarding_runs WHERE provider = $1 AND file_key = $2 ORDER BY finished_at DESC LIMIT 1`,
+	if err := h.DB.QueryRow(`SELECT status, COALESCE(rejected_rows,0) FROM audience_ingest_jobs WHERE provider = $1 AND file_key = $2 ORDER BY created_at DESC LIMIT 1`,
 		provider, provider+"/incoming/"+segName+".csv").Scan(&status, &rejected); err != nil {
-		t.Errorf("onboarding_runs row missing: %v", err)
-	} else if status != "completed" || rejected != 1 {
-		t.Errorf("run status=%s rejected=%d, want completed/1", status, rejected)
+		t.Errorf("audience_ingest_jobs row missing: %v", err)
+	} else if status != "done" || rejected != 1 {
+		t.Errorf("job status=%s rejected=%d, want done/1", status, rejected)
 	}
 
 	// The gzipped TSV materialized its own segment (stacked extensions

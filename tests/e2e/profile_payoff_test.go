@@ -99,13 +99,17 @@ func TestProfileAPIAndOnboardingMonitor(t *testing.T) {
 		t.Errorf("memberships missing segment %s: %s", segID, memberships)
 	}
 
-	// Onboarding monitor: seed one run row and read it back.
+	// Onboarding monitor: seed one terminal ingest job and read it back. ADR 0007
+	// folded onboarding_runs into audience_ingest_jobs (terminal status 'done').
 	provider := fmt.Sprintf("papi-prov-%d", uniq)
 	if _, err := h.DB.Exec(`
-INSERT INTO onboarding_runs (provider, file_key, account_id, status, total_rows, valid_rows, rejected_rows, matched_rows, match_rate, started_at)
-VALUES ($1, $2, $3::uuid, 'completed', 10, 9, 1, 5, 0.55, now())`,
+INSERT INTO audience_ingest_jobs
+    (provider, file_bucket, file_key, account_id, source, segment_spec, status,
+     total_rows, valid_rows, rejected_rows, matched_rows, match_rate, started_at, finished_at)
+VALUES ($1, 'adtech-onboarding', $2, $3::uuid, 'dropzone', '{}'::jsonb, 'done',
+     10, 9, 1, 5, 0.55, now(), now())`,
 		provider, provider+"/incoming/x.csv", w.AdvAcc.ID); err != nil {
-		t.Fatalf("seed run: %v", err)
+		t.Fatalf("seed job: %v", err)
 	}
 	monitor := h.APIJSON(t, staff, http.MethodGet, "/v1/api/onboarding/runs?provider="+provider, "")
 	if !strings.Contains(fmt.Sprint(monitor["runs"]), provider) {
