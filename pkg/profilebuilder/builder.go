@@ -7,14 +7,20 @@
 //     identity_clusters, rebuilt wholesale in Postgres (serving copy) and
 //     as a Delta artifact in the lake (replayable record).
 //  2. SEGMENTATION — behavioural rules (audience_segments.rule JSONB)
-//     evaluated over the behaviour_signals lake table; enrollment is at
-//     PERSON level, then expanded to every id in the person's cluster;
-//     replace-by-segment prune drops users who no longer qualify. Plain
-//     (onboarded) segments get the expansion pass only — every member's
-//     cluster siblings join, nothing is pruned.
-//  3. RECONCILE — replay profile_signals lake rows into PG memberships
-//     (crash/replay safety: the lake row is the durable record; a
-//     membership lost between upload and crash is restored here).
+//     evaluated over behaviour_signals; enrollment is at PERSON level, then
+//     expanded to every id in the person's cluster; replace-by-segment prune
+//     drops users who no longer qualify. Plain (onboarded) segments get the
+//     expansion pass only — every member's cluster siblings join, nothing is
+//     pruned.
+//  3. RECONCILE — replay profile_signals rows into PG memberships
+//     (crash/replay safety: the durable record is the source; a membership
+//     lost between upload and crash is restored here).
+//
+// Jobs 2 and 3 read via Config.Behaviour (server-side ClickHouse GROUP BY,
+// ADR 0006 phase 2 — the OOM fix); with Behaviour nil they fall back to
+// aggregating the behaviour_signals / profile_signals LAKE tables in Go (the
+// original path). Clustering (Job 1) and the identity_clusters lake WRITE are
+// unchanged either way.
 //
 // cmd/profile-builder wires this to a K8s CronJob (dayboundary pattern);
 // e2e runs it in-process against the live stack.
@@ -46,9 +52,17 @@ var clustersLakeSchema = datalake.Schema{Version: 1, Columns: []datalake.Column{
 // artifact / the cache invalidates); DB is required.
 type Config struct {
 	DB   *sql.DB
-	Lake datalake.Store  // behaviour_signals + profile_signals reads, identity_clusters writes
+	Lake datalake.Store  // identity_clusters writes; behaviour/profile READS only when Behaviour is nil (fallback)
 	Bus  events.EventBus // audience cache invalidates
 	Log  *slog.Logger
+
+	// Behaviour (ADR 0006 phase 2) moves the three lake READS — behavioural
+	// rule evaluation, lookalike category signals, and the reconcile pass —
+	// onto server-side ClickHouse GROUP BY, killing the profile-builder's
+	// OOM-by-design. Nil falls back to the original in-Go lake aggregation
+	// (existing callers/tests and a safety valve keep working). Lake WRITES
+	// (the identity_clusters artifact) stay on the lake regardless.
+	Behaviour BehaviourQuerier
 
 	MinConfidence  float64 // identity edges below this don't link (default 0.5)
 	MaxClusterSize int     // clusters above this are dropped as pathological (default 100)
@@ -116,12 +130,28 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	aud := audiencepg.New(cfg.DB)
 	changed := map[string]string{} // segment id → account id, for invalidates
 
-	// --- Job 2a: behavioural rules ---
-	// A failed lake read FAILS the run rather than silently skipping rule
+	// --- Job 2a: behavioural rules (+ derived: composite/lookalike) ---
+	// A failed read FAILS the run rather than silently skipping rule
 	// evaluation: skipping would leave stale members (users who no longer
 	// qualify keep being targeted) with nothing but a log line to notice.
 	// The CronJob retries; memberships are recomputed wholesale anyway.
-	if cfg.Lake != nil {
+	//
+	// ADR 0006 phase 2: with cfg.Behaviour set, rule evaluation + lookalike
+	// category signals are server-side ClickHouse GROUP BY (no raw rows in
+	// Go). Nil falls back to the in-Go lake aggregation below.
+	if cfg.Behaviour != nil {
+		// The window still bounds lookalike's category-signal read; the
+		// per-rule QualifyingUsers query applies each rule's own window.
+		if window, werr := MaxRuleWindowDays(ctx, cfg.DB); werr != nil {
+			log.Error("profile-builder: max rule window query failed; lookalike reads default window", "error", werr)
+			res.WindowDays = 30
+		} else {
+			res.WindowDays = window
+		}
+		if err := runRuleSegments(ctx, cfg.DB, aud, cfg.Behaviour, clusters, nil, now, log, &res, changed); err != nil {
+			return res, err
+		}
+	} else if cfg.Lake != nil {
 		// Windowed read: only partitions inside the widest rule window are
 		// fetched (the lake keeps history forever; rules never look past
 		// their window, so the builder shouldn't read past it either). A
@@ -138,7 +168,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		if err != nil {
 			return res, fmt.Errorf("read behaviour_signals: %w", err)
 		}
-		if err := runRuleSegments(ctx, cfg.DB, aud, clusters, rows, now, log, &res, changed); err != nil {
+		if err := runRuleSegments(ctx, cfg.DB, aud, nil, clusters, rows, now, log, &res, changed); err != nil {
 			return res, err
 		}
 	}
@@ -149,7 +179,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	// --- Job 3: reconcile profile_signals → PG memberships ---
-	if cfg.Lake != nil {
+	// ADR 0006 phase 2: server-side GROUP BY over ClickHouse when Behaviour is
+	// set (this was the worst offender — an UNWINDOWED whole-table lake read);
+	// nil falls back to the lake replay.
+	if cfg.Behaviour != nil {
+		if err := reconcileFromQuerier(ctx, cfg.Behaviour, aud, log, &res, changed); err != nil {
+			log.Error("profile-builder: reconcile failed", "error", err)
+		}
+	} else if cfg.Lake != nil {
 		if err := reconcileProfileSignals(ctx, cfg.Lake, aud, log, &res, changed); err != nil {
 			log.Error("profile-builder: reconcile failed", "error", err)
 		}
@@ -246,7 +283,11 @@ func expandKeys(c Clusters, keys []string) []string {
 	return out
 }
 
-func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clusters Clusters,
+// runRuleSegments evaluates behavioural rules then derived (composite +
+// lookalike) rules. When q != nil the behavioural + lookalike inputs come from
+// ClickHouse (server-side GROUP BY, ADR 0006 phase 2); when q == nil they come
+// from the in-Go lake rows (fallback). Exactly one of q / rows is used.
+func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q BehaviourQuerier, clusters Clusters,
 	rows []datalake.Record, now time.Time, log *slog.Logger, res *Result, changed map[string]string,
 ) error {
 	segs, err := db.QueryContext(ctx,
@@ -306,12 +347,45 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clu
 				// so another tenant's identically-named tag can't enroll.
 				rule.accountID = s.accountID
 			}
-			apply(s, expandKeys(clusters, evaluateRule(rows, rule, now)))
+			var keys []string
+			if q != nil {
+				keys, err = q.QualifyingUsers(ctx, rule, now)
+				if err != nil {
+					log.Error("profile-builder: qualifying-users query failed — segment skipped", "segment", s.id, "name", s.name, "error", err)
+					continue
+				}
+			} else {
+				keys = evaluateRule(rows, rule, now)
+			}
+			apply(s, expandKeys(clusters, keys))
 		case "composite", "lookalike":
 			derived = append(derived, s)
 		default:
 			log.Error("profile-builder: unknown rule kind — segment skipped", "segment", s.id, "name", s.name)
 		}
+	}
+
+	// Lookalike scoring needs a per-person category map. Build it ONCE for the
+	// whole derived pass — from ClickHouse category signals (q != nil) or the
+	// in-Go lake rows — but only when a lookalike rule actually exists, so a
+	// run with no lookalikes skips the read entirely.
+	var byPerson map[string]map[string]bool
+	byPersonReady := false
+	ensureByPerson := func() error {
+		if byPersonReady {
+			return nil
+		}
+		if q != nil {
+			signals, err := q.CategorySignals(ctx, res.WindowDays, now)
+			if err != nil {
+				return err
+			}
+			byPerson = categoriesFromSignals(signals, clusters)
+		} else {
+			byPerson = personCategories(rows, clusters)
+		}
+		byPersonReady = true
+		return nil
 	}
 
 	for _, s := range derived {
@@ -331,7 +405,11 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clu
 				log.Error("profile-builder: invalid lookalike rule — segment skipped", "segment", s.id, "error", perr)
 				continue
 			}
-			members, err = evaluateLookalike(ctx, db, s.accountID, rule, clusters, rows)
+			if err = ensureByPerson(); err != nil {
+				log.Error("profile-builder: category-signal query failed — lookalike skipped", "segment", s.id, "error", err)
+				continue
+			}
+			members, err = evaluateLookalike(ctx, db, s.accountID, rule, clusters, byPerson)
 		}
 		if err != nil {
 			log.Error("profile-builder: derived rule evaluation failed — segment skipped", "segment", s.id, "error", err)
@@ -397,6 +475,37 @@ WHERE s.rule IS NULL AND s.status = 'active'`)
 // memberships. AddMembers is idempotent, so the common case is a no-op;
 // after a crash between upload and membership write (or a PG restore from
 // backup), this is what heals the gap.
+// reconcileFromQuerier is the ADR 0006 phase 2 reconcile: the (account,
+// segment) → id_values grouping runs server-side (groupUniqArray) instead of
+// loading the whole profile_signals table into Go. Identical downstream
+// semantics to reconcileProfileSignals — AddMembers per (account, segment),
+// skip-if-deleted, count restored rows.
+func reconcileFromQuerier(ctx context.Context, q BehaviourQuerier, aud *audiencepg.Store,
+	log *slog.Logger, res *Result, changed map[string]string,
+) error {
+	groups, err := q.SegmentMemberships(ctx)
+	if err != nil {
+		return fmt.Errorf("read profile_signals: %w", err)
+	}
+	for _, g := range groups {
+		if g.AccountID == "" || g.SegmentID == "" || len(g.IDValues) == 0 {
+			continue
+		}
+		added, err := aud.AddMembers(ctx, g.AccountID, g.SegmentID, g.IDValues)
+		if err != nil {
+			// Segment may have been deleted since the signal landed — the
+			// analytics store keeps the record; nothing to reconcile into.
+			log.Warn("profile-builder: reconcile skipped segment", "segment", g.SegmentID, "error", err)
+			continue
+		}
+		if added > 0 {
+			res.Reconciled += added
+			changed[g.SegmentID] = g.AccountID
+		}
+	}
+	return nil
+}
+
 func reconcileProfileSignals(ctx context.Context, lake datalake.Store, aud *audiencepg.Store,
 	log *slog.Logger, res *Result, changed map[string]string,
 ) error {

@@ -883,6 +883,12 @@ cronjobs:
         value: "adtech-datalake-hotcold"
       - name: REPORTING_CLICKHOUSE_ADDR
         value: "clickhouse:9000"
+      # ADR 0006 phase 2: profile-builder step reads behaviour/profile signals
+      # from ClickHouse (server-side GROUP BY) instead of Arrow-reading the lake
+      # (the OOM fix). Empty/unreachable addr → silent fallback to lake reads, so
+      # this MUST point at the in-cluster ClickHouse, not the localhost default.
+      - name: BATCH_CONDUCTOR_CLICKHOUSE_ADDR
+        value: "clickhouse:9000"
       - name: PRIVACY_DELETE_PIPELINE_URL
         value: "http://pipeline:8087"
       - name: S3_ENDPOINT
