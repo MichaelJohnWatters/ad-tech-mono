@@ -5,9 +5,9 @@
 # service binary on the host (fast, cached), then bake it into the tiny
 # per-service image. Three deviations from the generic pattern, same as
 # the Tiltfile's: gateway (bakes seed + web + profiles), transcoder
-# (ffmpeg base), reporting (in-image glibc build — go-duckdb won't link
-# on the musl fast path). migrate uses the prod in-image Dockerfile (no
-# host binary needed).
+# (ffmpeg base), reporting (in-image Alpine CGO build — for tigerbeetle-go;
+# no longer go-duckdb since ADR 0006 phase 3 moved cold reads to ClickHouse
+# s3()). migrate uses the prod in-image Dockerfile (no host binary needed).
 #
 # Usage:
 #   scripts/stack-images.sh              # all images
@@ -42,7 +42,10 @@ build_one() {
       docker build -q --build-arg SERVICE=transcoder -f build/Dockerfile.transcode -t adtech-transcoder . >/dev/null
       echo "built adtech-transcoder" ;;
     reporting)
-      docker build -q -f build/Dockerfile.reporting.duckdb -t adtech-reporting . >/dev/null
+      # ADR 0006 phase 3: cold reads go through ClickHouse s3() (pure Go), so
+      # reporting no longer needs the duckdb tag / glibc go-duckdb build. Standard
+      # Alpine image (CGO only for tigerbeetle-go) — much faster to build.
+      docker build -q -f build/Dockerfile.reporting -t adtech-reporting . >/dev/null
       echo "built adtech-reporting" ;;
     migrate)
       "${GOFLAGS_BUILD[@]}" -o ./bin/migrate ./cmd/migrate
