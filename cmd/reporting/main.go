@@ -185,6 +185,8 @@ func main() {
 	// First-class rollup trigger (the batch-conductor chain step drives
 	// this) — registered unconditionally, unlike the /debug alias below.
 	mux.HandleFunc(routes.ReportingRollupRun, rollupRunHandler(rollupEngine, log))
+	// ADR 0006 phase 4: hourly ClickHouse→Parquet export (idempotent per hour).
+	mux.HandleFunc(routes.ReportingExportRun, exportRunHandler(store, cfg, log))
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
