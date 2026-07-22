@@ -1,4 +1,4 @@
-package main
+package ingest
 
 import (
 	"archive/zip"
@@ -13,11 +13,11 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 )
 
-func TestDecodeOnboardingFile(t *testing.T) {
+func TestDecodeFile(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("csv", func(t *testing.T) {
-		recs, err := decodeOnboardingFile(ctx, "list.csv", []byte("user_id,geo\nu1,US\nu2,GB\n"))
+		recs, err := DecodeFile(ctx, "list.csv", []byte("user_id,geo\nu1,US\nu2,GB\n"))
 		if err != nil || len(recs) != 2 {
 			t.Fatalf("recs=%d err=%v", len(recs), err)
 		}
@@ -27,14 +27,14 @@ func TestDecodeOnboardingFile(t *testing.T) {
 	})
 
 	t.Run("tsv by extension", func(t *testing.T) {
-		recs, err := decodeOnboardingFile(ctx, "list.tsv", []byte("user_id\tgeo\nu1\tUS\n"))
+		recs, err := DecodeFile(ctx, "list.tsv", []byte("user_id\tgeo\nu1\tUS\n"))
 		if err != nil || len(recs) != 1 || recs[0]["geo"] != "US" {
 			t.Fatalf("recs=%v err=%v", recs, err)
 		}
 	})
 
 	t.Run("tsv by sniff when misnamed", func(t *testing.T) {
-		recs, err := decodeOnboardingFile(ctx, "list.dat", []byte("user_id\tgeo\nu1\tUS\n"))
+		recs, err := DecodeFile(ctx, "list.dat", []byte("user_id\tgeo\nu1\tUS\n"))
 		if err != nil || len(recs) != 1 || recs[0]["user_id"] != "u1" {
 			t.Fatalf("recs=%v err=%v", recs, err)
 		}
@@ -45,7 +45,7 @@ func TestDecodeOnboardingFile(t *testing.T) {
 		zw := gzip.NewWriter(&buf)
 		_, _ = zw.Write([]byte("user_id\nu1\nu2\n"))
 		_ = zw.Close()
-		recs, err := decodeOnboardingFile(ctx, "list.csv.gz", buf.Bytes())
+		recs, err := DecodeFile(ctx, "list.csv.gz", buf.Bytes())
 		if err != nil || len(recs) != 2 {
 			t.Fatalf("recs=%d err=%v", len(recs), err)
 		}
@@ -62,7 +62,7 @@ func TestDecodeOnboardingFile(t *testing.T) {
 			_, _ = w.Write([]byte(body))
 		}
 		_ = zw.Close()
-		recs, err := decodeOnboardingFile(ctx, "list.zip", buf.Bytes())
+		recs, err := DecodeFile(ctx, "list.zip", buf.Bytes())
 		if err != nil || len(recs) != 2 {
 			t.Fatalf("recs=%d err=%v", len(recs), err)
 		}
@@ -70,7 +70,7 @@ func TestDecodeOnboardingFile(t *testing.T) {
 
 	t.Run("parquet by magic", func(t *testing.T) {
 		// Real round-trip: encode a parquet file via the datalake writer,
-		// pull the raw object bytes back out, decode through the drop-zone.
+		// pull the raw object bytes back out, decode through the processor.
 		obj, err := fs.New(t.TempDir())
 		if err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func TestDecodeOnboardingFile(t *testing.T) {
 		if len(raw) == 0 {
 			t.Fatal("no parquet object written")
 		}
-		recs, err := decodeOnboardingFile(ctx, "list.parquet", raw)
+		recs, err := DecodeFile(ctx, "list.parquet", raw)
 		if err != nil || len(recs) != 2 {
 			t.Fatalf("recs=%d err=%v", len(recs), err)
 		}
@@ -115,8 +115,8 @@ func TestDecodeOnboardingFile(t *testing.T) {
 			"seg.zip":               "seg",
 			"plain.csv":             "plain",
 		} {
-			if got := segmentNameFromFile(in); got != want {
-				t.Errorf("segmentNameFromFile(%q) = %q, want %q", in, got, want)
+			if got := SegmentNameFromFile(in); got != want {
+				t.Errorf("SegmentNameFromFile(%q) = %q, want %q", in, got, want)
 			}
 		}
 	})

@@ -2,42 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 )
-
-func TestRenderRejectedCSV(t *testing.T) {
-	rows := []pipeline.QuarantineRecord{
-		{
-			Record: pipeline.Record{"id_value": "", "geo": "US"},
-			Errors: []pipeline.ValidationError{{Field: "id_value", Rule: "required", Message: "field is required but missing or empty"}},
-		},
-	}
-	body, err := renderRejectedCSV(rows)
-	if err != nil {
-		t.Fatalf("renderRejectedCSV: %v", err)
-	}
-	recs, err := csv.NewReader(strings.NewReader(string(body))).ReadAll()
-	if err != nil {
-		t.Fatalf("re-parse: %v", err)
-	}
-	if len(recs) != 2 {
-		t.Fatalf("want header + 1 row, got %d", len(recs))
-	}
-	header := strings.Join(recs[0], ",")
-	if header != "geo,id_value,_errors" {
-		t.Fatalf("unexpected header order: %s", header)
-	}
-	if !strings.Contains(recs[1][2], "required") {
-		t.Fatalf("errors column missing rule: %q", recs[1][2])
-	}
-}
 
 // TestDeleteArtifacts — the retention sweep's object-deletion half removes
 // every copy a run leaves behind and tolerates the quarantined-whole-file
@@ -98,8 +69,7 @@ func TestOnboarderQuarantinesFileWithoutManifest(t *testing.T) {
 
 	o := &onboarder{
 		obj: obj, bucket: bucket,
-		pipe: pipeline.New(slog.New(slog.NewTextHandler(io.Discard, nil))),
-		log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	o.tick(ctx)
 

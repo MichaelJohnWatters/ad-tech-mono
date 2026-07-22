@@ -86,6 +86,24 @@ func (m *MemoryIngestStore) ClaimOne(_ context.Context) (*Job, error) {
 	return &cp, nil
 }
 
+// ClaimByID claims a specific queued job by id (ignores run_at — the caller
+// decided it is due). Returns (nil, nil) when absent or not queued.
+func (m *MemoryIngestStore) ClaimByID(_ context.Context, id string) (*Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok || j.Status != StatusQueued {
+		return nil, nil
+	}
+	now := m.now()
+	j.Status = StatusRunning
+	j.StartedAt = &now
+	j.Attempts++
+	m.leases[id] = now.Add(LeaseTTL)
+	cp := *j
+	return &cp, nil
+}
+
 // less orders by run_at, then created_at, then id.
 func less(a, b *Job) bool {
 	if !a.RunAt.Equal(b.RunAt) {

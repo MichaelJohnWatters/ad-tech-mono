@@ -46,6 +46,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/profilebuilder"
 	pgstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 // Fixed, human-legible id values so the story reads the same every run. The
@@ -184,6 +185,48 @@ ON CONFLICT (id) DO NOTHING`,
 	return nil
 }
 
+// demoUpload does the demo's UPLOAD step directly against the audience store:
+// upsert the "Demo Newsletter" segment for the isolated demo account, add the
+// single hashed-email member, and publish the profile.signal (so the row lands
+// in the analytical store like a real upload). It's a thin, self-contained
+// version of the real ingest path — the demo needs one row added synchronously,
+// not the full stage+enqueue+worker machinery. Returns (segmentID, membersAdded).
+func (o *demoOrchestrator) demoUpload(ctx context.Context, acct string) (string, int, error) {
+	const idType, idValue = "hashed_email", demoEmailID
+	segID, err := o.aud.UpsertSegment(ctx, acct, demoSegmentName, "first_party", "demo_upload", "dsp_private")
+	if err != nil {
+		return "", 0, fmt.Errorf("upsert segment: %w", err)
+	}
+	added, err := o.aud.AddMembers(ctx, acct, segID, []string{idValue})
+	if err != nil {
+		return "", 0, fmt.Errorf("add members: %w", err)
+	}
+	if o.bus != nil {
+		pub := events.NewPublisher(o.bus, o.log)
+		ev := events.ProfileSignalEvent{
+			SchemaVersion: events.CurrentSchemaVersion,
+			TraceID:       tracing.TraceIDFromContext(ctx),
+			AccountID:     acct,
+			Source:        "demo_upload",
+			Access:        "first_party",
+			SegmentID:     segID,
+			SegmentName:   demoSegmentName,
+			Visibility:    "dsp_private",
+			Consent:       true,
+			ObservedAt:    time.Now().UTC(),
+			IDs:           []events.ProfileSignalID{{IDType: idType, IDValue: idValue}},
+		}
+		if err := pub.PublishJSON(ctx, events.SubjectProfileSignal, ev); err != nil {
+			o.log.Error("demo upload: profile signal publish failed", "segment", segID, "error", err)
+		}
+		payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + acct + `"}`)
+		if err := o.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
+			o.log.Warn("demo upload: invalidate publish failed", "segment", segID, "error", err)
+		}
+	}
+	return segID, added, nil
+}
+
 // run executes the reset then the 5 steps synchronously and returns the
 // assembled timeline.
 func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
@@ -208,12 +251,7 @@ func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
 
 	// --- Step 2: UPLOAD — 1-row list of ONLY the hashed email → plain segment. ---
 	// The real audience store path, tenant-scoped to the isolated demo account.
-	upReq := audienceUploadRequest{
-		AccountID: acct, Name: demoSegmentName, Type: "first_party",
-		Visibility: "dsp_private", Source: "demo_upload",
-	}
-	upIDs := []events.ProfileSignalID{{IDType: "hashed_email", IDValue: demoEmailID}}
-	upResp, err := runAudienceUpload(ctx, o.aud, nil, o.bus, o.log, upReq, upIDs)
+	upSegID, upAdded, err := o.demoUpload(ctx, acct)
 	if err != nil {
 		return demoResponse{}, fmt.Errorf("demo upload: %w", err)
 	}
@@ -221,8 +259,8 @@ func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
 		N: 2, Title: "Upload — a 1-row list, email only",
 		Narration: "An advertiser uploads a list containing ONLY the hashed email as a plain \"Demo Newsletter\" segment. It normalises to one profile_signals-shaped row and one segment member — just the email, nothing else yet.",
 		Data: map[string]interface{}{
-			"segment_id":    upResp.SegmentID,
-			"members_added": upResp.MembersAdded,
+			"segment_id":    upSegID,
+			"members_added": upAdded,
 			"normalised_row": demoUploadRow{
 				SegmentName: demoSegmentName, IDType: "hashed_email",
 				IDValue: demoEmailID, Access: "first_party", Consent: true,
@@ -235,7 +273,7 @@ func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
 	if err != nil {
 		return demoResponse{}, fmt.Errorf("demo before-view: %w", err)
 	}
-	beforeMembers := demoSegmentMembers(before, upResp.SegmentID)
+	beforeMembers := demoSegmentMembers(before, upSegID)
 	steps = append(steps, demoStep{
 		N: 3, Title: "Before — segment has one member",
 		Narration: "Looking up the email in the profile store: the \"Demo Newsletter\" segment has exactly one member (the email). The identity links already show the whole household — but the segment can only reach the one device that was uploaded.",
@@ -256,7 +294,7 @@ func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
 	if err != nil {
 		return demoResponse{}, fmt.Errorf("demo after-view: %w", err)
 	}
-	afterMembers := demoSegmentMembers(after, upResp.SegmentID)
+	afterMembers := demoSegmentMembers(after, upSegID)
 	added := demoDiff(beforeMembers, afterMembers)
 	expand := demoExpandResult{
 		Clusters: res.Clusters, ClusterMembers: res.ClusterMembers, Expanded: res.Expanded,

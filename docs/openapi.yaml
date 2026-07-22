@@ -1196,13 +1196,18 @@ paths:
       responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at }]" } }
     post:
       tags: [Audiences]
-      summary: Upload a segment + members (JSON ids, or multipart CSV/TSV ≤5MB)
+      summary: Upload a segment + members (JSON ids, or multipart CSV/TSV)
       description: >-
-        Binds to the authenticated account. Every upload computes and persists
-        the segment match rate (fraction of ids resolvable via the identity
-        graph) and lands the normalized rows in the profile_signals lake
-        table. Raw emails are rejected — hash PII client-side (the portal
-        does). Parquet/compressed files go via the partner drop-zone bucket.
+        Binds to the authenticated account. Every upload is staged to object
+        storage and recorded as one audience_ingest_jobs row (ADR 0007). Small,
+        due-now files are processed INLINE by the shared ingest processor and
+        return 200 with the segment match rate (fraction of ids resolvable via
+        the identity graph). Larger files (above gateway.ingest_inline_max_rows)
+        return 202 with a job id — matching runs asynchronously in the pipeline
+        ingest worker; poll GET /v1/api/audiences/ingest/{id}. Raw emails are
+        rejected (validation) — hash PII client-side (the portal does).
+        Parquet/compressed files go via the partner drop-zone bucket. Uploads
+        above gateway.ingest_max_upload_bytes (100MB default) are rejected.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -1215,7 +1220,7 @@ paths:
                 name: { type: string }
                 type: { type: string, enum: [first_party, behavioral, lookalike, suppression, retargeting, composite, predictive, cdp_imported], default: first_party }
                 visibility: { type: string, enum: [public, dsp_private], default: dsp_private }
-                user_ids: { type: array, items: { type: string }, maxItems: 50000 }
+                user_ids: { type: array, items: { type: string } }
           multipart/form-data:
             schema:
               type: object
@@ -1225,7 +1230,23 @@ paths:
                 type: { type: string }
                 visibility: { type: string }
                 file: { type: string, format: binary, description: "CSV/TSV with an id column (id_value/user_id/id/hashed_email/uid2/device_id; optional id_type column)" }
-      responses: { "200": { description: "{ segment_id, members_added, members_sent, matched, match_rate }" } }
+      responses:
+        "200": { description: "Inline (small file): { segment_id, members_added, members_sent, matched, match_rate }" }
+        "202": { description: "Queued (large file): { job_id, status }. Poll GET /v1/api/audiences/ingest/{id}." }
+  /v1/api/audiences/ingest/{id}:
+    get:
+      tags: [Audiences]
+      summary: Audience-ingest job status (ADR 0007)
+      description: >-
+        Tenant-scoped status of a staged/enqueued audience upload. Returns the
+        job's lifecycle state (queued | running | done | failed) plus terminal
+        counts and match rate once complete.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ id, status, segment_id?, total_rows, valid_rows, rejected_rows, matched_rows, match_rate, error? }" }
+        "404": { description: No such job for this account }
   /v1/api/profiles/{id}:
     get:
       tags: [Profiles]

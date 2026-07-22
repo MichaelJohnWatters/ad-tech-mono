@@ -1211,29 +1211,37 @@ async function uploadAudience(ev) {
   const name = $('au_name').value.trim();
   const file = $('au_file').files[0];
   try {
-    let res;
+    // Every upload stages + enqueues (ADR 0007). Small files are processed
+    // inline (200 + match rate); larger ones return 202 + a job id to poll.
+    let resp;
     if (file) {
-      if (file.size > 5 * 1024 * 1024) { toast('File exceeds 5 MB — use the partner drop-zone for large lists', 'error'); return; }
+      if (file.size > 100 * 1024 * 1024) { toast('File exceeds 100 MB', 'error'); return; }
       const csv = await hashCSVForUpload(await file.text());
       const fd = new FormData();
       fd.append('name', name);
       fd.append('type', $('au_type').value);
       fd.append('visibility', $('au_visibility').value);
       fd.append('file', new Blob([csv], {type: 'text/csv'}), file.name);
-      const resp = await fetch('/v1/api/audiences', {method: 'POST', body: fd});
-      const text = await resp.text();
-      if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
-      res = JSON.parse(text);
+      resp = await fetch('/v1/api/audiences', {method: 'POST', body: fd});
     } else {
       const ids = $('au_users').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
       if (!ids.length) { toast('Choose a CSV file or paste ids', 'error'); return; }
-      res = await fetchJSON('/v1/api/audiences', {method: 'POST', body: JSON.stringify({
-        name, type: $('au_type').value, visibility: $('au_visibility').value, user_ids: ids,
-      })});
+      resp = await fetch('/v1/api/audiences', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, type: $('au_type').value, visibility: $('au_visibility').value, user_ids: ids})});
     }
+    const text = await resp.text();
+    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    const res = JSON.parse(text);
     $('newAudience').classList.add('hidden');
     $('au_file').value = '';
-    toast(`Uploaded — ${res.members_added} new of ${res.members_sent}; match rate ${(res.match_rate * 100).toFixed(0)}%`, 'success');
+    if (resp.status === 202) {
+      // Large file — matching runs async; the result shows up in the
+      // onboarding monitor / segment list once the ingest worker finishes.
+      toast(`Queued for processing (job ${res.job_id}) — check the onboarding monitor for the match rate`, 'success');
+    } else {
+      toast(`Uploaded — ${res.members_added} new of ${res.members_sent}; match rate ${(res.match_rate * 100).toFixed(0)}%`, 'success');
+    }
     loadAudiences();
   } catch (err) { toast('Upload failed: ' + err.message, 'error'); }
 }

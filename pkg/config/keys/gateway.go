@@ -34,6 +34,12 @@ var Gateway = struct {
 	ServiceAPIKey        config.StringKey
 	SSAIURL              config.StringKey
 	PipelineURL          config.StringKey
+
+	// Audience ingestion (ADR 0007): an upload is validated, staged, and
+	// enqueued; small, due-now files run inline (200 + match rate), larger ones
+	// are drained by the pipeline ingest worker (202 + job_id).
+	IngestInlineMaxRows  config.IntKey
+	IngestMaxUploadBytes config.IntKey
 }{
 	JwtSigningKey:        gatewaySet.String("gateway.jwt_signing_key", "", config.TierSecret, "Fallback JWT signing key. Prefer an active jwt_signing secret in the secrets store (rotatable); this config key is the legacy/override path. Empty here AND no secret = auth bypassed (dev only — see gateway.require_auth).", config.Since("v1.0")),
 	RequireAuth:          gatewaySet.Bool("gateway.require_auth", "false", config.TierStatic, "When true, the gateway refuses to boot unless a JWT signing key is available (from the secrets store or gateway.jwt_signing_key) — i.e. the dev auth-bypass is forbidden. Set true in staging/prod overlays so a missing key fails loud instead of silently granting admin to every request.", config.Since("v1.3")),
@@ -54,4 +60,7 @@ var Gateway = struct {
 	SSAIURL:              config.RawString("gateway.ssai_url", routes.DefaultSSAIURL),
 	// Pipeline hosts the Delta-lake profile summary the staff profile API reads.
 	PipelineURL: config.RawString("gateway.pipeline_url", routes.DefaultPipelineURL),
+
+	IngestInlineMaxRows:  gatewaySet.Int("gateway.ingest_inline_max_rows", "50000", config.TierLive, "Audience uploads at or below this row count (and due now) are matched INLINE in the request — instant match rate, 200. Larger files stage + enqueue and the pipeline ingest worker drains them (202 + job_id). Above this, only cheap validation stays synchronous; matching goes async (ADR 0007).", config.Since("v1.14")),
+	IngestMaxUploadBytes: gatewaySet.Int("gateway.ingest_max_upload_bytes", "104857600", config.TierLive, "Hard cap on a single audience upload's raw size (bytes; default 100MB). Oversized uploads are rejected synchronously at intake before staging. Replaces the old 5MB multipart cap + row-count reject — large files now go through the same stage+enqueue path, not the drop-zone.", config.Since("v1.14")),
 }

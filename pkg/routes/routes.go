@@ -46,6 +46,11 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIAudienceIngest is the audience-ingest job status endpoint (ADR 0007):
+	// GET /v1/api/audiences/ingest/{id} returns the tenant-scoped job's status,
+	// counts, match rate, and error. Registered as a subtree so {id} is a path
+	// segment.
+	APIAudienceIngest = apiPrefix + "/api/audiences/ingest/"
 	// APIConversions is advertiser conversion-event setup: define named
 	// conversion types (GET list, POST create, DELETE ?id=) and get an
 	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read

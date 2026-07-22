@@ -63,6 +63,38 @@ func TestEnqueueClaimHappyPath(t *testing.T) {
 	}
 }
 
+func TestClaimByID(t *testing.T) {
+	m := NewMemoryIngestStore()
+	ctx := context.Background()
+
+	id, err := m.Enqueue(ctx, newJob("b", "inline.csv"))
+	if err != nil || id == "" {
+		t.Fatalf("enqueue: id=%q err=%v", id, err)
+	}
+
+	// Claim the specific row (the gateway inline path).
+	j, err := m.ClaimByID(ctx, id)
+	if err != nil {
+		t.Fatalf("claim by id: %v", err)
+	}
+	if j == nil || j.ID != id || j.Status != StatusRunning || j.Attempts != 1 {
+		t.Fatalf("claim by id returned %+v", j)
+	}
+
+	// Re-claiming the now-running row returns nil (not queued).
+	if j2, _ := m.ClaimByID(ctx, id); j2 != nil {
+		t.Errorf("second claim-by-id returned %+v, want nil", j2)
+	}
+	// ClaimOne must not also take it (it's running).
+	if j3, _ := m.ClaimOne(ctx); j3 != nil {
+		t.Errorf("ClaimOne took a running job: %+v", j3)
+	}
+	// Unknown id → nil.
+	if j4, _ := m.ClaimByID(ctx, "ingest-999"); j4 != nil {
+		t.Errorf("claim of unknown id returned %+v, want nil", j4)
+	}
+}
+
 func TestClaimSkipsFutureRunAt(t *testing.T) {
 	base := time.Now()
 	m := NewMemoryIngestStore()

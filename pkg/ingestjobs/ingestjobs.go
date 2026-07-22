@@ -58,9 +58,14 @@ type SegmentSpec struct {
 // IngestResult is what the processor returns for a completed ingest — the
 // counts that get recorded on the job row via MarkDone.
 type IngestResult struct {
-	SegmentID    string
-	TotalRows    int
-	ValidRows    int
+	SegmentID string
+	TotalRows int
+	ValidRows int
+	// MembersAdded is how many NEW memberships AddMembers inserted (additive per
+	// (segment, user), so a re-run adds 0). Powers the gateway inline upload
+	// response; not persisted to the job row (the queue records row counts, not
+	// membership deltas — reprocessing is idempotent).
+	MembersAdded int
 	RejectedRows int
 	MatchedRows  int
 	MatchRate    float64
@@ -108,6 +113,12 @@ type Store interface {
 	// ClaimOne atomically claims the oldest DUE queued job (run_at <= now),
 	// marking it running with a lease. Returns (nil, nil) when none are ready.
 	ClaimOne(ctx context.Context) (*Job, error)
+	// ClaimByID atomically claims a SPECIFIC queued job by id (same lease +
+	// attempts++ as ClaimOne, but WHERE id=$1). Returns (nil, nil) when the job
+	// is absent or not in the queued state — the gateway inline path uses it to
+	// claim the row it just enqueued so an inline run holds the same lease a
+	// worker would, making a crashed inline job recoverable by the worker.
+	ClaimByID(ctx context.Context, id string) (*Job, error)
 	// ExtendLease heartbeats a running job's lease; a lapsed lease marks the
 	// claimant dead and the job reclaimable by any worker.
 	ExtendLease(ctx context.Context, id string) error
