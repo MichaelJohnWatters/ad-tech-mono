@@ -11,6 +11,7 @@ import (
 // (unwrapping a HotColdStore first).
 type ParquetExporter interface {
 	ExportHourToParquet(ctx context.Context, cfg ExportConfig, hour time.Time) (map[string]int64, error)
+	ExportSnapshot(ctx context.Context, cfg ExportConfig) (map[string]int64, error)
 }
 
 // exportTables lists the raw ClickHouse tables the hourly export snapshots to
@@ -98,6 +99,39 @@ func (c *ClickHouse) ExportHourToParquet(ctx context.Context, cfg ExportConfig, 
 			return out, fmt.Errorf("export count %s: %w", t.name, err)
 		}
 		out[t.name] = n
+	}
+	return out, nil
+}
+
+// ExportSnapshot returns the total exported row count per table across all hour
+// partitions in the Parquet export — the "did every event reach the archive?"
+// reconciliation that replaces the retired Delta snapshot (ADR 0006 phase 5). A
+// table with no export objects yet counts 0 (empty glob → CANNOT_EXTRACT…).
+func (c *ClickHouse) ExportSnapshot(ctx context.Context, cfg ExportConfig) (map[string]int64, error) {
+	if cfg.Endpoint == "" || cfg.Bucket == "" {
+		return nil, fmt.Errorf("export snapshot: endpoint and bucket are required")
+	}
+	prefix := cfg.Prefix
+	if prefix == "" {
+		prefix = ExportPrefixDefault
+	}
+	scheme := "http"
+	if cfg.UseSSL {
+		scheme = "https"
+	}
+	out := make(map[string]int64, len(exportTables))
+	for _, t := range exportTables {
+		glob := fmt.Sprintf("%s://%s/%s/%s/%s/**/*.parquet", scheme, cfg.Endpoint, cfg.Bucket, prefix, t.name)
+		q := fmt.Sprintf("SELECT count() FROM s3('%s','%s','%s','Parquet')", glob, cfg.AccessKey, cfg.SecretKey)
+		var n uint64
+		if err := c.db.QueryRowContext(ctx, q).Scan(&n); err != nil {
+			if isNoParquetFiles(err) {
+				out[t.name] = 0
+				continue
+			}
+			return out, fmt.Errorf("export snapshot %s: %w", t.name, err)
+		}
+		out[t.name] = int64(n)
 	}
 	return out, nil
 }

@@ -442,7 +442,7 @@ func main() {
 	mux.Handle(routes.APIDemoRetargeting, demoRetargeting)
 
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
-	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(keys.Gateway.PipelineURL.Get(cfg), log))))
+	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(reportingURL, log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
 
 	// Privacy opt-out intake — operator-API-key auth like the others. Records

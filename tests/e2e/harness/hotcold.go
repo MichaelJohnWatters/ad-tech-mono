@@ -75,18 +75,20 @@ func (h *Harness) reportCount(t *testing.T, body map[string]interface{}) int {
 	}
 }
 
-// LakeRows returns the pipeline datalake snapshot's total_rows for a table — the
-// cold write path's own count (source of truth for what physically reached the
-// Parquet/Delta lake). Snapshot flushes first, so the number is consistent.
+// LakeRows returns the exported total_rows for a table from reporting's export
+// snapshot — the count of what physically reached the derived Parquet archive
+// (ADR 0006 phase 5; replaced the retired pipeline Delta snapshot). Note: the
+// export is hourly, so callers must trigger an export (POST /debug/export/run)
+// before expecting the current hour's rows to be reflected.
 func (h *Harness) LakeRows(t *testing.T, table string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	url := routes.DefaultPipelineURL + "/debug/datalake/snapshot?table=" + table
+	url := routes.DefaultReportingURL + routes.ReportingExportSnapshot
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("pipeline snapshot: %v", err)
+		t.Fatalf("reporting export snapshot: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
