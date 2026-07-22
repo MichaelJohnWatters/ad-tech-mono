@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -45,6 +46,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
@@ -87,6 +89,12 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 	}
 	lc.OnShutdown("onboarding-db", func(_ context.Context) error { return db.Close() })
 
+	jobStore := ingestjobs.NewPostgresIngestStore(db)
+	if hn, _ := os.Hostname(); hn != "" {
+		jobStore.WorkerID = hn
+	} else {
+		jobStore.WorkerID = os.Getenv("POD_NAME")
+	}
 	o := &onboarder{
 		obj:     obj,
 		bucket:  bucket,
@@ -94,6 +102,7 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		matcher: pgstore.NewFromDB(db),
 		db:      db,
 		pipe:    pipeline.New(log),
+		jobs:    jobStore,
 		log:     log,
 	}
 	if bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline+"-onboarding", log); err != nil {
@@ -121,6 +130,11 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		}
 	}()
 	log.Info("onboarding drop-zone poller running", "bucket", bucket, "poll_interval", interval.String())
+
+	// The ingest worker (ADR 0007) drains the audience_ingest_jobs queue the
+	// poller enqueues into — decoupling enqueue (list + manifest) from process
+	// (decode → match → memberships), durable + N-replica safe via SKIP LOCKED.
+	startIngestWorker(cfg, o, log, lc)
 }
 
 // onboardingManifest is the per-provider contract at {provider}/manifest.json.
@@ -160,6 +174,7 @@ type onboarder struct {
 	db      *sql.DB // onboarding_runs writes
 	bus     events.EventBus
 	pipe    *pipeline.Pipeline
+	jobs    ingestjobs.Store // audience_ingest_jobs queue (ADR 0007)
 	log     *slog.Logger
 	// retention bounds how long processed/rejected artifact BYTES live in
 	// the bucket after ingestion; the onboarding_runs row survives the
@@ -182,8 +197,11 @@ var idTypeForColumn = map[string]string{
 	"uid2": "uid2", "device_id": "device_id",
 }
 
-// tick scans {provider}/incoming/ across all providers and processes every
-// file found. Sequential — the zone is a batch surface, not a hot path.
+// tick scans {provider}/incoming/ across all providers and ENQUEUES an ingest
+// job for every new file (ADR 0007) — the ingest worker processes them. Reading
+// the manifest at enqueue keeps the queued job self-describing; the (bucket,key)
+// dedupe index means re-listing a file already queued/running is a no-op.
+// Sequential — the zone is a batch surface, not a hot path.
 func (o *onboarder) tick(ctx context.Context) {
 	keys, err := o.obj.List(ctx, o.bucket, "")
 	if err != nil {
@@ -195,9 +213,47 @@ func (o *onboarder) tick(ctx context.Context) {
 		if len(parts) < 3 || parts[1] != "incoming" || parts[len(parts)-1] == "" {
 			continue
 		}
-		o.processFile(ctx, parts[0], key)
+		o.enqueueFile(ctx, parts[0], key)
 	}
 	o.sweep(ctx)
+}
+
+// enqueueFile reads the provider manifest, builds a SegmentSpec, and enqueues
+// one ingest job for the staged file. Manifest failures quarantine the file
+// straight away (content failure — no job to run). Infra failures (manifest
+// read, enqueue) log ERROR and leave the file in incoming/ for the next tick.
+func (o *onboarder) enqueueFile(ctx context.Context, provider, key string) {
+	log := o.log.With("provider", provider, "file", key)
+	manifest, err := o.loadManifest(ctx, provider)
+	if err != nil {
+		o.quarantineFile(ctx, provider, key, time.Now().UTC(), fmt.Sprintf("manifest: %v", err))
+		return
+	}
+	spec := ingestjobs.SegmentSpec{
+		Name:           segmentNameFromFile(path.Base(key)),
+		Type:           manifest.SegmentType,
+		Visibility:     manifest.Visibility,
+		Consent:        manifest.ConsentBasis != "" && manifest.ConsentBasis != "none",
+		IDType:         manifest.IDType,
+		FieldMappings:  manifest.FieldMappings,
+		RequiredFields: manifest.RequiredFields,
+		Access:         manifest.Access,
+	}
+	id, err := o.jobs.Enqueue(ctx, ingestjobs.Job{
+		AccountID:   manifest.AccountID,
+		Source:      ingestjobs.SourceDropzone,
+		Provider:    provider,
+		FileBucket:  o.bucket,
+		FileKey:     key,
+		SegmentSpec: spec,
+	})
+	if err != nil {
+		log.Error("onboarding: enqueue ingest job failed (will retry)", "error", err)
+		return
+	}
+	if id != "" {
+		log.Info("onboarding: file enqueued", "job", id)
+	}
 }
 
 // sweep deletes processed/rejected artifact bytes for runs older than the
@@ -269,39 +325,51 @@ func (o *onboarder) deleteArtifacts(ctx context.Context, provider, fileKey, reje
 	return nil
 }
 
-func (o *onboarder) processFile(ctx context.Context, provider, key string) {
-	started := time.Now().UTC()
-	log := o.log.With("provider", provider, "file", key)
+// infraErr marks a retryable INFRA failure — the caller (ingest worker) leaves
+// the job for retry and records nothing, because the run never happened. A
+// CONTENT outcome (bad file, no valid rows) returns (result, nil): the file is
+// processed (quarantined) and the job is done.
+type infraErr struct{ err error }
 
-	manifest, err := o.loadManifest(ctx, provider)
-	if err != nil {
-		o.quarantineFile(ctx, provider, key, started, fmt.Sprintf("manifest: %v", err))
-		return
-	}
+func (e infraErr) Error() string { return e.err.Error() }
+
+// processStagedFile is the single audience-ingest processor (ADR 0007): it
+// reads the staged file at job.FileBucket/job.FileKey, runs the SAME stages the
+// drop-zone poller used to run inline (decode → field-map → validate/normalise
+// → CreateSegment/AddMembers → match rate → publish profile.signal in chunks →
+// quarantine rejects), and returns the terminal counts. It records the run in
+// onboarding_runs and moves the source file out of incoming/ (kept in Phase 1;
+// ADR folds onboarding_runs into the job row in Phase 4). An INFRA error is
+// returned as infraErr so the worker retries; content failures return a result
+// with nil error.
+func (o *onboarder) processStagedFile(ctx context.Context, job ingestjobs.Job) (ingestjobs.IngestResult, error) {
+	started := time.Now().UTC()
+	provider, key := job.Provider, job.FileKey
+	spec := job.SegmentSpec
+	accountID := job.AccountID
+	log := o.log.With("provider", provider, "file", key, "job", job.ID)
 
 	body, err := o.readObject(ctx, key)
 	if err != nil {
 		log.Error("onboarding: read file failed (will retry)", "error", err)
-		return
+		return ingestjobs.IngestResult{}, infraErr{err}
 	}
 	records, err := decodeOnboardingFile(ctx, path.Base(key), body)
 	if err != nil {
-		o.quarantineFile(ctx, provider, key, started, fmt.Sprintf("decode: %v", err))
-		return
+		return o.quarantineStaged(ctx, provider, key, accountID, started, fmt.Sprintf("decode: %v", err))
 	}
 	if len(records) == 0 {
-		o.quarantineFile(ctx, provider, key, started, "no data rows")
-		return
+		return o.quarantineStaged(ctx, provider, key, accountID, started, "no data rows")
 	}
 
 	mappings := map[string]string{}
 	for k, v := range defaultIDMappings {
 		mappings[k] = v
 	}
-	for k, v := range manifest.FieldMappings {
+	for k, v := range spec.FieldMappings {
 		mappings[k] = v
 	}
-	required := manifest.RequiredFields
+	required := spec.RequiredFields
 	if len(required) == 0 {
 		required = []string{"id_value"}
 	}
@@ -328,18 +396,17 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		rejectedKey = provider + "/rejected/" + path.Base(key)
 		if err := o.writeRejected(ctx, rejectedKey, result.Quarantine); err != nil {
 			log.Error("onboarding: persist quarantine failed (will retry)", "error", err)
-			return
+			return ingestjobs.IngestResult{}, infraErr{err}
 		}
 	}
 	if len(result.Valid) == 0 {
-		o.finishFile(ctx, provider, key, started, manifest, "", 0, result, rejectedKey,
+		return o.finishFile(ctx, provider, key, accountID, started, "", 0, result, rejectedKey,
 			"no valid rows after validation")
-		return
 	}
 
 	ids := make([]events.ProfileSignalID, 0, len(result.Valid))
 	values := make([]string, 0, len(result.Valid))
-	impliedType := manifest.IDType
+	impliedType := spec.IDType
 	if impliedType == "" {
 		impliedType = idTypeForColumn[sourceIDColumn]
 	}
@@ -359,24 +426,27 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		values = append(values, v)
 	}
 
-	segName := segmentNameFromFile(path.Base(key))
-	segType := manifest.SegmentType
+	segName := spec.Name
+	if segName == "" {
+		segName = segmentNameFromFile(path.Base(key))
+	}
+	segType := spec.Type
 	if segType == "" {
 		segType = "cdp_imported"
 	}
-	visibility := manifest.Visibility
+	visibility := spec.Visibility
 	if visibility == "" {
 		visibility = "dsp_private"
 	}
-	segID, err := o.aud.UpsertSegment(ctx, manifest.AccountID, segName, segType, "dropzone:"+provider, visibility)
+	segID, err := o.aud.UpsertSegment(ctx, accountID, segName, segType, "dropzone:"+provider, visibility)
 	if err != nil {
 		log.Error("onboarding: upsert segment failed (will retry)", "error", err)
-		return
+		return ingestjobs.IngestResult{}, infraErr{err}
 	}
-	added, err := o.aud.AddMembers(ctx, manifest.AccountID, segID, values)
+	added, err := o.aud.AddMembers(ctx, accountID, segID, values)
 	if err != nil {
 		log.Error("onboarding: add members failed (will retry)", "segment", segID, "error", err)
-		return
+		return ingestjobs.IngestResult{}, infraErr{err}
 	}
 
 	matched := 0
@@ -384,7 +454,7 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 		if matched, err = o.matcher.CountKnownIdentifiers(ctx, values); err != nil {
 			log.Error("onboarding: match-rate query failed", "error", err)
 			matched = 0
-		} else if err := o.aud.SetSegmentUploadStats(ctx, manifest.AccountID, segID, len(values), matched); err != nil {
+		} else if err := o.aud.SetSegmentUploadStats(ctx, accountID, segID, len(values), matched); err != nil {
 			log.Error("onboarding: persist match rate failed", "error", err)
 		}
 	}
@@ -393,10 +463,8 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 	// publishes (chunked over NATS). Reporting lands it in ClickHouse — where
 	// the profile-builder now reconciles from (ADR 0006 phase 2) — and, while
 	// the dual-write still runs, the pipeline sink lands the lake copy from the
-	// same message. (Previously these rows were written straight to the lake
-	// sink and never reached ClickHouse, so drop-zone signals were invisible to
-	// the ClickHouse-based reconcile.)
-	access := manifest.Access
+	// same message.
+	access := spec.Access
 	if access == "" {
 		access = "purchased:" + provider
 	}
@@ -410,14 +478,14 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 			ev := events.ProfileSignalEvent{
 				SchemaVersion: events.CurrentSchemaVersion,
 				TraceID:       tracing.TraceIDFromContext(ctx),
-				AccountID:     manifest.AccountID,
+				AccountID:     accountID,
 				Provider:      provider,
 				Source:        "dropzone",
 				Access:        access,
 				SegmentID:     segID,
 				SegmentName:   segName,
 				Visibility:    visibility,
-				Consent:       manifest.ConsentBasis != "" && manifest.ConsentBasis != "none",
+				Consent:       spec.Consent,
 				ObservedAt:    started,
 				IDs:           ids[start:end],
 			}
@@ -429,45 +497,75 @@ func (o *onboarder) processFile(ctx context.Context, provider, key string) {
 	}
 
 	if o.bus != nil {
-		payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + manifest.AccountID + `"}`)
+		payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + accountID + `"}`)
 		if err := o.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
 			o.log.Warn("onboarding: invalidate publish failed", "segment", segID, "error", err)
 		}
 	}
 
-	o.finishFile(ctx, provider, key, started, manifest, segID, matched, result, rejectedKey, "")
+	res, err := o.finishFile(ctx, provider, key, accountID, started, segID, matched, result, rejectedKey, "")
+	if err != nil {
+		return ingestjobs.IngestResult{}, err
+	}
 	log.Info("onboarding: file processed", "segment", segID, "segment_name", segName,
 		"valid", len(result.Valid), "rejected", len(result.Quarantine),
 		"added", added, "matched", matched)
+	return res, nil
 }
 
-// finishFile moves the source out of incoming/ and records the run. err ==
-// "" means completed; a non-empty message records a failed (content) run.
-func (o *onboarder) finishFile(ctx context.Context, provider, key string, started time.Time,
-	m onboardingManifest, segID string, matched int, result pipeline.Result, rejectedKey, errMsg string,
-) {
+// finishFile moves the source out of incoming/ and records the run. errMsg ==
+// "" means completed; a non-empty message records a failed (content) run. It
+// returns the IngestResult (counts) the worker records on the job row, or an
+// infraErr if the source move fails (retryable — nothing was recorded).
+func (o *onboarder) finishFile(ctx context.Context, provider, key, accountID string, started time.Time,
+	segID string, matched int, result pipeline.Result, rejectedKey, errMsg string,
+) (ingestjobs.IngestResult, error) {
 	dest := provider + "/processed/" + path.Base(key)
 	if errMsg != "" {
 		dest = provider + "/rejected/" + path.Base(key)
 	}
 	if err := o.moveObject(ctx, key, dest); err != nil {
 		o.log.Error("onboarding: move file failed (will retry)", "file", key, "error", err)
-		return
+		return ingestjobs.IngestResult{}, infraErr{err}
 	}
 	status, matchRate := "completed", (*float64)(nil)
 	if errMsg != "" {
 		status = "failed"
 	}
+	rate := 0.0
 	if n := len(result.Valid); n > 0 {
-		r := float64(matched) / float64(n)
-		matchRate = &r
+		rate = float64(matched) / float64(n)
+		matchRate = &rate
 	}
 	o.recordRun(ctx, runRow{
-		provider: provider, fileKey: key, accountID: m.AccountID, segmentID: segID,
+		provider: provider, fileKey: key, accountID: accountID, segmentID: segID,
 		status: status, total: result.Stats.TotalInput, valid: len(result.Valid),
 		rejected: len(result.Quarantine), matched: matched, matchRate: matchRate,
 		errMsg: errMsg, rejectedKey: rejectedKey, started: started,
 	})
+	return ingestjobs.IngestResult{
+		SegmentID: segID, TotalRows: result.Stats.TotalInput, ValidRows: len(result.Valid),
+		RejectedRows: len(result.Quarantine), MatchedRows: matched, MatchRate: rate,
+		RejectedKey: rejectedKey,
+	}, nil
+}
+
+// quarantineStaged is the content-failure path inside processStagedFile: it
+// quarantines the whole file (finishFile move + run record) and returns a
+// terminal result so the job is marked done, not retried.
+func (o *onboarder) quarantineStaged(ctx context.Context, provider, key, accountID string, started time.Time, reason string) (ingestjobs.IngestResult, error) {
+	base := path.Base(key)
+	rejectedKey := provider + "/rejected/" + base
+	res, err := o.finishFile(ctx, provider, key, accountID, started, "", 0, pipeline.Result{}, rejectedKey, reason)
+	if err != nil {
+		return ingestjobs.IngestResult{}, err
+	}
+	marker := rejectedKey + ".error.txt"
+	if err := o.obj.Put(ctx, o.bucket, marker, strings.NewReader(reason), int64(len(reason)), "text/plain"); err != nil {
+		o.log.Warn("onboarding: quarantine marker write failed", "file", key, "error", err)
+	}
+	o.log.Error("onboarding: file quarantined", "provider", provider, "file", key, "reason", reason)
+	return res, nil
 }
 
 // quarantineFile handles CONTENT failures where we couldn't even process
