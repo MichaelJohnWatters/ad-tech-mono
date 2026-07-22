@@ -11,9 +11,9 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `exchange/` | Ad exchange. Runs auctions, fan-out to DSPs, deal priority. | NATS, DSP (OpenRTB), Ad Server (gRPC) |
 | `adserver/` | Serves ad creatives to browsers, generates tracking URLs. | Object storage, Redis, Tracker (gRPC) |
 | `tracker/` | Records impressions, clicks, conversions, viewability. Publishes to NATS. | NATS, Redis |
-| `reporting/` | Consumes events from NATS, writes to analytics store, serves query API. | NATS, DuckDB/ClickHouse |
+| `reporting/` | Consumes events from NATS, writes to analytics store, serves query API + owns the hourly ClickHouse→Parquet export. | NATS, ClickHouse, Minio/S3 |
 | `gateway/` | API gateway. Auth, HTMX dashboard, REST API, proxies to internal gRPC services. | All services (gRPC) |
-| `pipeline/` | Data pipeline. Ingests publisher files, validates, normalises, enriches. | Object storage, Postgres, DuckDB |
+| `pipeline/` | Data pipeline. Ingests publisher files, validates, normalises, enriches; runs the audience drop-zone poller. (The Delta dual-write sink was retired in ADR 0006 — the lake is now a reporting-owned Parquet export.) | Object storage, Postgres, NATS |
 | `billing/` | Billing service. Consumes AuctionWinEvents, accrues spend, generates invoices. | NATS, Postgres |
 | `webhooks/` | Webhook dispatcher. Consumes NATS events, delivers HTTP POST to registered URLs. | NATS, Postgres |
 | `notifications/` | In-app notification builder (:8096). Consumes the same account-scoped business events as webhooks (budget/balance depleted, campaign state changed, report completed) and writes one per-account row to `notifications` for the portal bell. Gateway serves list/unread/mark-read. Run 1 replica (queue-grouped). Core in `pkg/notifications`. | NATS, Postgres |
@@ -33,7 +33,7 @@ Each subdirectory is a separate Go binary deployed as a K8s service or job.
 | `seed/` | Loads seed data profiles into the database. | Manual (Tilt button) |
 | `simulator/` | Generates fake ad traffic for testing. | Manual (Tilt button) |
 | `migrate/` | Runs database migrations (goose). | Before every deploy |
-| `batch-conductor/` | THE data chain, completion-ordered (pkg/batch): checkpoint → compact (via pipeline HTTP — single-writer rule) → rollup tiers → profile-builder → privacy delete → verify. Replaced the time-staggered lattice (standalone compact/rollup/privacy crons); steps recorded in `batch_runs`. | Hourly |
+| `batch-conductor/` | THE data chain, completion-ordered (pkg/batch): checkpoint → rollup tiers → ch-parquet-export (ClickHouse→Parquet, via reporting HTTP) → profile-builder → privacy delete → verify. Replaced the time-staggered lattice; steps recorded in `batch_runs`. (compact/vacuum retired with the Delta dual-write, ADR 0006.) | Hourly |
 | `profile-builder/` | Profile store expansion engine (pkg/profilebuilder) — standalone escape hatch; the conductor runs it as a chain step. | Via conductor (or manual) |
 | `optimise/` | Runs optimisation pipelines (bid, placement, creative). | Hourly/daily |
 | `fraud/` | Batch fraud detection and scoring. | Daily |

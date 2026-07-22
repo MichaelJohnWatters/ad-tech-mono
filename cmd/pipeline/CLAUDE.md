@@ -11,7 +11,8 @@ Ingests publisher data files in any format, validates, normalises to common sche
 - Normalise to common schema (field mapping, type casting, date parsing, dedup)
 - Enrich with derived data (geo from IP, device classification, audience matching)
 - Detect schema drift and alert
-- Store as Parquet + Delta Log
+- Publish normalised/enriched events to NATS (reporting lands them in ClickHouse;
+  the old Parquet+Delta dual-write was retired in ADR 0006)
 
 ## Key Packages Used
 
@@ -36,7 +37,8 @@ Per-publisher YAML in `profiles/publishers/`. Defines field mapping, validation 
 
 - Object storage (source files - filesystem/S3)
 - Postgres (publisher configs, quarantine records)
-- DuckDB/ClickHouse (normalised/enriched output)
+- ClickHouse (analytical store — reporting consumes the events; the pipeline's
+  own Delta dual-write was retired in ADR 0006)
 - NATS (publishes pipeline events)
 
 ## Diagram Updates
