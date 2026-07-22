@@ -1,92 +1,14 @@
 package privacydelete
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
-// LakePurger purges the user-keyed Delta lake tables by calling the
-// pipeline's purge endpoints — the pipeline is the lake's single writer, so
-// the filtered rewrite must run in its process, not ours. BaseURL is the
-// pipeline service (e.g. routes.DefaultPipelineURL or http://pipeline:8087).
-type LakePurger struct {
-	BaseURL string
-	Client  *http.Client
-}
-
-func (l *LakePurger) client() *http.Client {
-	if l.Client != nil {
-		return l.Client
-	}
-	return &http.Client{Timeout: 60 * time.Second} // rewrite reads every active file
-}
-
-// PurgeExtra POSTs the purge and maps the pipeline's table counts onto the
-// lake system names.
-func (l *LakePurger) PurgeExtra(ctx context.Context, userID string) (map[string]int, error) {
-	body, _ := json.Marshal(map[string]string{"user_id": userID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.BaseURL+routes.DatalakePurge, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	counts, err := l.do(req)
-	if err != nil {
-		return nil, fmt.Errorf("lake purge: %w", err)
-	}
-	return map[string]int{
-		SystemLakeProfileSignals:   counts["profile_signals"],
-		SystemLakeBehaviourSignals: counts["behaviour_signals"],
-	}, nil
-}
-
-// ResidualExtra returns the lake systems still holding rows for the user.
-func (l *LakePurger) ResidualExtra(ctx context.Context, userID string) ([]string, error) {
-	u := l.BaseURL + routes.DatalakeResidual + "?user_id=" + url.QueryEscape(userID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	counts, err := l.do(req)
-	if err != nil {
-		return nil, fmt.Errorf("lake residual: %w", err)
-	}
-	var residual []string
-	if counts["profile_signals"] > 0 {
-		residual = append(residual, SystemLakeProfileSignals)
-	}
-	if counts["behaviour_signals"] > 0 {
-		residual = append(residual, SystemLakeBehaviourSignals)
-	}
-	return residual, nil
-}
-
-func (l *LakePurger) do(req *http.Request) (map[string]int, error) {
-	resp, err := l.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pipeline %s: %s", resp.Status, string(body))
-	}
-	var counts map[string]int
-	if err := json.Unmarshal(body, &counts); err != nil {
-		return nil, fmt.Errorf("decode pipeline response: %w", err)
-	}
-	return counts, nil
-}
 
 // SignalsStore is the analytics seam for purging the ClickHouse profile-store
 // tables (behaviour_signals + profile_signals) and re-deriving the affected

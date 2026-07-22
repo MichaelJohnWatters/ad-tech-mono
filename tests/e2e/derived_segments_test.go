@@ -64,9 +64,9 @@ RETURNING id::text`, w.AdvAcc.ID, fmt.Sprintf("drv-lookalike-%d", uniq), segSeed
 		})
 	}
 	deadline := time.Now().Add(45 * time.Second)
-	for h.LakeResidual(t, uSimilar)["behaviour_signals"] < 2 {
+	for h.SignalResidual(t, uSimilar)["behaviour_signals"] < 2 {
 		if time.Now().After(deadline) {
-			t.Fatalf("behaviour rows never landed: %v", h.LakeResidual(t, uSimilar))
+			t.Fatalf("behaviour rows never landed: %v", h.SignalResidual(t, uSimilar))
 		}
 		time.Sleep(2 * time.Second)
 	}

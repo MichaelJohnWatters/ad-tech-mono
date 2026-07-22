@@ -4,7 +4,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/pprof"
 	"time"
@@ -28,18 +27,13 @@ func main() {
 
 	port := keys.Pipeline.Port.Get(cfg)
 
-	// Data-lake batch layer: consume the event stream (own NATS group, so it
-	// runs alongside reporting's real-time consumer) and land events as
-	// Parquet in object storage. Off only if pipeline.datalake_enabled=false.
-	var sink *datalakeSink
-	if keys.Pipeline.DatalakeEnabled.Get(cfg) {
-		sink = startDatalakeSink(cfg, log, lc)
-	}
-
 	// Third-party audience drop-zone: poll the adtech-onboarding bucket for
-	// provider CSV files, validate/normalize, write memberships +
-	// profile_signals, quarantine rejects. See onboarding.go.
-	startOnboarding(cfg, log, lc, sink)
+	// provider CSV files, validate/normalize, write memberships, publish
+	// profile_signals over NATS (→ reporting → ClickHouse), quarantine rejects.
+	// See onboarding.go. (The Delta dual-write sink + its /debug/datalake/*
+	// endpoints were retired in ADR 0006 phase 5 — the lake is now a derived
+	// hourly ClickHouse→Parquet export owned by reporting.)
+	startOnboarding(cfg, log, lc)
 
 	mux := http.NewServeMux()
 	// pprof: the 2026-07-18 wedge was undiagnosable post-mortem because
@@ -49,44 +43,6 @@ func main() {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
-
-	// GDPR purge surface for the user-keyed lake tables — runs here because
-	// the pipeline is the lake's single writer. See privacy.go.
-	if sink != nil {
-		registerPrivacyEndpoints(mux, sink)
-		registerProfileEndpoint(mux, sink)
-		registerCompactEndpoint(mux, sink)
-		registerVacuumEndpoint(mux, sink)
-		registerResetEndpoint(mux, sink)
-	}
-
-	// Cold-archive verification: report the Parquet snapshot (active files +
-	// total rows/bytes from the Delta log) for a table, or all tables. Used by
-	// ops and e2e to confirm the log→Parquet spine landed every event — the
-	// Parquet TotalRows should reconcile with the reporting/NATS event count.
-	if sink != nil && keys.Debug.EndpointsEnabled.Get(cfg) {
-		mux.HandleFunc("/debug/datalake/snapshot", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			ctx := r.Context()
-			tables := sink.Tables()
-			if t := r.URL.Query().Get("table"); t != "" {
-				tables = []string{t}
-			}
-			out := map[string]any{}
-			for _, t := range tables {
-				snap, err := sink.Snapshot(ctx, t)
-				if err != nil {
-					out[t] = map[string]any{"error": err.Error()}
-					continue
-				}
-				out[t] = map[string]any{
-					"version": snap.Version, "total_rows": snap.TotalRows,
-					"total_bytes": snap.TotalBytes, "active_files": len(snap.ActiveFiles),
-				}
-			}
-			_ = json.NewEncoder(w).Encode(out)
-		})
-	}
 
 	server := &http.Server{Addr: ":" + port, Handler: mux, ReadTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second}
 

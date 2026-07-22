@@ -20,7 +20,7 @@ func waitBehaviourRows(t *testing.T, h *harness.Harness, userID string, timeout 
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		if n := h.LakeResidual(t, userID)["behaviour_signals"]; n > 0 {
+		if n := h.SignalResidual(t, userID)["behaviour_signals"]; n > 0 {
 			return n
 		}
 		if time.Now().After(deadline) {
@@ -53,7 +53,7 @@ func TestBehaviourSignalsCaptured(t *testing.T) {
 	// then assert nothing arrived. (The positive wait above already proves
 	// the pipeline is consuming, so 15s here isn't racing a cold consumer.)
 	time.Sleep(15 * time.Second)
-	if n := h.LakeResidual(t, gpcUser)["behaviour_signals"]; n != 0 {
+	if n := h.SignalResidual(t, gpcUser)["behaviour_signals"]; n != 0 {
 		t.Errorf("GPC request produced %d behaviour_signals rows, want 0", n)
 	}
 }

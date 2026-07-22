@@ -23,8 +23,6 @@ import (
 const (
 	SystemIdentityGraph        = "identity_graph"
 	SystemSegmentMembers       = "audience_segment_members"
-	SystemLakeProfileSignals   = "lake:profile_signals"
-	SystemLakeBehaviourSignals = "lake:behaviour_signals"
 	SystemFreqCapBlocks        = "freq_cap_blocks"
 	SystemCHBehaviourSignals   = "clickhouse:behaviour_signals"
 	SystemCHProfileSignals     = "clickhouse:profile_signals"
