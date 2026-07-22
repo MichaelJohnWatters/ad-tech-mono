@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/batch"
@@ -27,6 +28,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacydelete"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/profilebuilder"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/fs"
 	objs3 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects/s3"
@@ -77,6 +79,29 @@ func main() {
 		bus = b
 	}
 
+	// Behaviour querier (ADR 0006 phase 2): the profile-builder step evaluates
+	// rules + reconcile via server-side ClickHouse GROUP BY instead of loading
+	// whole lake partitions into Go (the OOM fix). Empty addr, or a ClickHouse
+	// that won't connect, degrades to the lake reads (never blocks the run).
+	var behaviour profilebuilder.BehaviourQuerier
+	if addr := strings.TrimSpace(keys.BatchConductor.ClickHouseAddr.Get(cfg)); addr != "" {
+		q, err := profilebuilder.NewCHBehaviourQuerier(profilebuilder.CHConfig{
+			Addrs:    splitAndTrim(addr),
+			Database: keys.BatchConductor.ClickHouseDatabase.Get(cfg),
+			Username: keys.BatchConductor.ClickHouseUser.Get(cfg),
+			Password: keys.BatchConductor.ClickHousePassword.Get(cfg),
+		})
+		if err != nil {
+			log.Error("clickhouse unavailable — profile-builder step falls back to lake reads (ADR 0006 phase 2 OOM fix disabled)", "addr", addr, "error", err)
+		} else {
+			defer q.Close()
+			behaviour = q
+			log.Info("profile-builder: reading behaviour/profile signals from ClickHouse (ADR 0006 phase 2)", "addr", addr)
+		}
+	} else {
+		log.Warn("batch_conductor.clickhouse_addr empty — profile-builder step uses lake reads (ADR 0006 phase 2 OOM fix disabled)")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -84,6 +109,7 @@ func main() {
 		DB:             db,
 		Lake:           lake,
 		Bus:            bus,
+		Behaviour:      behaviour,
 		PipelineURL:    keys.BatchConductor.PipelineURL.Get(cfg),
 		ReportingURL:   keys.BatchConductor.ReportingURL.Get(cfg),
 		Log:            log,
@@ -115,6 +141,18 @@ func main() {
 		// standalone privacy-verify exited 2 for the same reason).
 		os.Exit(2)
 	}
+}
+
+// splitAndTrim splits a comma-separated list into trimmed, non-empty entries
+// (ClickHouse host:port addresses).
+func splitAndTrim(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // findFailed reports whether the named step failed.

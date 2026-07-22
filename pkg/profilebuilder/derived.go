@@ -182,9 +182,12 @@ func personCategories(rows []datalake.Record, c Clusters) map[string]map[string]
 }
 
 // evaluateLookalike scores non-seed persons by overlap with the seed's
-// top categories and returns the expanded member ids of qualifiers.
+// top categories and returns the expanded member ids of qualifiers. byPerson
+// is the per-person category map — built once per run from either the in-Go
+// lake rows (personCategories) or the ClickHouse category-signal query
+// (categoriesFromSignals), both of which produce the identical shape.
 func evaluateLookalike(ctx context.Context, db *sql.DB, accountID string, rule LookalikeRule,
-	c Clusters, behaviourRows []datalake.Record,
+	c Clusters, byPerson map[string]map[string]bool,
 ) ([]string, error) {
 	seedMembers, err := segmentMembers(ctx, db, accountID, rule.SeedSegment)
 	if err != nil {
@@ -194,13 +197,35 @@ func evaluateLookalike(ctx context.Context, db *sql.DB, accountID string, rule L
 	if len(seedPersons) == 0 {
 		return nil, nil // empty seed → nothing to resemble
 	}
-	byPerson := personCategories(behaviourRows, c)
 	var out []string
 	for _, person := range lookalikeQualified(seedPersons, byPerson, rule) {
 		out = append(out, personMembers(c, person)...)
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// categoriesFromSignals folds the ClickHouse (key, category) pairs into the
+// same per-person category map personCategories builds from lake rows: the key
+// maps to its cluster person, categories accumulate as a set. The signals are
+// already trimmed + lower-cased and empty ones dropped server-side, so this is
+// the parity fold of personCategories minus the split/normalise (done in SQL).
+func categoriesFromSignals(signals []KeyCategory, c Clusters) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for _, s := range signals {
+		if s.Key == "" || s.Category == "" {
+			continue
+		}
+		person := s.Key
+		if pid, ok := c.PersonOf[s.Key]; ok {
+			person = pid
+		}
+		if out[person] == nil {
+			out[person] = map[string]bool{}
+		}
+		out[person][s.Category] = true
+	}
+	return out
 }
 
 // lookalikeQualified is the pure scoring core: rank the seed's top

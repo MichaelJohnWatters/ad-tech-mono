@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -73,6 +74,29 @@ func main() {
 		bus = b
 	}
 
+	// Behaviour querier (ADR 0006 phase 2): rule evaluation + reconcile via
+	// server-side ClickHouse GROUP BY instead of loading whole lake partitions
+	// into Go (the OOM fix). Empty addr, or an unreachable ClickHouse, degrades
+	// to the lake reads.
+	var behaviour profilebuilder.BehaviourQuerier
+	if addr := strings.TrimSpace(keys.ProfileBuilder.ClickHouseAddr.Get(cfg)); addr != "" {
+		q, qerr := profilebuilder.NewCHBehaviourQuerier(profilebuilder.CHConfig{
+			Addrs:    splitAndTrim(addr),
+			Database: keys.ProfileBuilder.ClickHouseDatabase.Get(cfg),
+			Username: keys.ProfileBuilder.ClickHouseUser.Get(cfg),
+			Password: keys.ProfileBuilder.ClickHousePassword.Get(cfg),
+		})
+		if qerr != nil {
+			log.Error("clickhouse unavailable — falling back to lake reads (ADR 0006 phase 2 OOM fix disabled)", "addr", addr, "error", qerr)
+		} else {
+			defer q.Close()
+			behaviour = q
+			log.Info("reading behaviour/profile signals from ClickHouse (ADR 0006 phase 2)", "addr", addr)
+		}
+	} else {
+		log.Warn("profile_builder.clickhouse_addr empty — using lake reads (ADR 0006 phase 2 OOM fix disabled)")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -80,6 +104,7 @@ func main() {
 		DB:             db,
 		Lake:           lake,
 		Bus:            bus,
+		Behaviour:      behaviour,
 		Log:            log,
 		MinConfidence:  keys.ProfileBuilder.MinConfidence.Get(cfg),
 		MaxClusterSize: keys.ProfileBuilder.MaxClusterSize.Get(cfg),
@@ -91,4 +116,16 @@ func main() {
 	log.Info("profile-builder finished",
 		"clusters", res.Clusters, "enrolled", res.Enrolled, "pruned", res.Pruned,
 		"expanded", res.Expanded, "reconciled", res.Reconciled)
+}
+
+// splitAndTrim splits a comma-separated list into trimmed, non-empty entries
+// (ClickHouse host:port addresses).
+func splitAndTrim(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

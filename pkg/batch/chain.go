@@ -47,6 +47,12 @@ type Deps struct {
 	MinConfidence  float64
 	MaxClusterSize int
 
+	// Behaviour repoints the profile-builder step's three lake reads
+	// (behavioural rules, lookalike category signals, reconcile) onto
+	// server-side ClickHouse GROUP BY (ADR 0006 phase 2). Nil = the builder
+	// falls back to the lake reads.
+	Behaviour profilebuilder.BehaviourQuerier
+
 	// PrivacyExtras purge non-Postgres systems (lake via pipeline,
 	// freq_cap_blocks via ClickHouse) — privacydelete.BuildExtras output.
 	PrivacyExtras []privacydelete.ExtraPurger
@@ -172,6 +178,7 @@ func StandardChain(d Deps) []Step {
 			Run: func(ctx context.Context) (string, error) {
 				res, err := profilebuilder.Run(ctx, profilebuilder.Config{
 					DB: d.DB, Lake: d.Lake, Bus: d.Bus, Log: d.Log,
+					Behaviour:     d.Behaviour,
 					MinConfidence: d.MinConfidence, MaxClusterSize: d.MaxClusterSize,
 				})
 				if err != nil {
