@@ -114,3 +114,27 @@ a heavy JVM batch cluster at odds with the local-first, tiny-binary ethos. Spark
 plausible home is a future **Python ML** batch pipeline over the open Parquet corpus,
 decided on its own merits. See the "scaling ladder": bound reads → push down → bigger node
 → distributed SQL → (maybe) Spark-for-ML.
+
+### On "one ClickHouse to write, one to read" (replication)
+
+A recurring instinct is to split ClickHouse into a write node and a read node. Worth
+recording why that is **not** the next step:
+
+- ClickHouse replication (`ReplicatedMergeTree` + Keeper) is **symmetric multi-master**,
+  not Postgres-style primary/standby. Every replica holds a full copy and serves both
+  reads and writes; "write here, read there" is a routing convention you impose at the
+  LB/app layer, not a DB role. Replication is async (sub-second typical).
+- It buys **read/write resource isolation**, **read concurrency**, and **HA** — but it does
+  **not** shrink a single heavy query (each replica runs it on its own CPU/RAM). The
+  profile-builder OOM was a single-query working-set problem; replication would not have
+  helped — server-side aggregation (phase 2) did.
+- Cheaper moves come first on the ladder: **phase 4's Parquet export already gives read
+  offload** (heavy cold/ad-hoc/ML reads hit `s3()`, not the live ingest node), and a
+  **bigger single node** absorbs contention with far less operational surface than a
+  Keeper quorum + two full copies.
+- The one strong standalone reason to replicate is **HA** (ClickHouse is currently a SPOF
+  for analytics). When that's the goal, prefer **compute/storage separation** (stateless
+  compute over shared S3, the ClickHouse-Cloud model) over two full-copy replicas.
+
+Verdict: keep replication in the back pocket as the **HA** move; it is not a scaling step
+for this workload and is explicitly out of scope now.
