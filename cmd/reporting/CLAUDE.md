@@ -5,14 +5,17 @@ Consumes events from NATS, writes to analytics store, serves query API for dashb
 ## Responsibilities
 
 - Consume events from NATS (impressions, clicks, conversions, views, auction events)
-- Write to analytics store (DuckDB or ClickHouse)
+- Write to the analytics store (ClickHouse; `memory` for unit tests)
 - Serve query API via gRPC (metrics, trace events, custom report builder)
 - Auto-select rollup tier based on query time range
+- Own the hourly ClickHouse→Parquet export (the derived cold archive) + serve
+  cold reads via ClickHouse `s3()` over it (ADR 0006)
 
 ## Key Packages Used
 
 - `pkg/events/` - NATS consumption
-- `pkg/store/analytics/` - DuckDB/ClickHouse interface
+- `pkg/store/analytics/` - analytics store interface (ClickHouse + memory) +
+  HotColdStore (hot ClickHouse / cold `s3()` over the Parquet export)
 - `pkg/reporting/builder.go` - custom report query construction (multi-tenant filtered)
 - `pkg/reporting/templates.go` - pre-built report definitions
 
@@ -20,21 +23,19 @@ Consumes events from NATS, writes to analytics store, serves query API for dashb
 
 - `ReportingService` - see `pkg/proto/`
 
-## CRITICAL: DuckDB Constraints
+## Analytics store (ClickHouse)
 
-When using DuckDB (local/staging):
-- Single-writer only - max 1 replica
-- Uses `build/Dockerfile.reporting` (CGO_ENABLED=1 for DuckDB driver)
-- DuckDB file on PersistentVolumeClaim
-
-When using ClickHouse (prod):
-- Multiple replicas supported
-- Uses shared `build/Dockerfile` (CGO_ENABLED=0)
+ClickHouse is the single analytical store (ADR 0006 — DuckDB was retired). The
+driver is pure Go, so reporting runs multi-replica on the standard
+`build/Dockerfile.reporting` (CGO is only for tigerbeetle-go, the billing
+ledger). Cold/deep-history reads are ClickHouse `s3()` over the hourly Parquet
+export, not a separate engine. `reporting.analytics_backend` is `clickhouse`
+(prod/full-local) or `memory` (volatile unit-test/CI default).
 
 ## Dependencies
 
 - NATS JetStream (consumes event streams)
-- DuckDB or ClickHouse (analytics store)
+- ClickHouse (analytics store) + Minio/S3 (the Parquet export archive)
 - Postgres (saved reports, report scheduling config)
 
 ## Architecture Details

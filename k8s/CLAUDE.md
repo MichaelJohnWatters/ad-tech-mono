@@ -43,8 +43,9 @@ Requirements: Rancher Desktop running (moby engine, k8s enabled, built-in
 traefik DISABLED — the chart ships its own), kubectl context
 `rancher-desktop`. Image builds are host Go cross-compiles baked into tiny
 alpine images (`build/Dockerfile.dev`); exceptions: gateway (bakes seed +
-web + profiles), transcoder (ffmpeg), reporting (in-image glibc build for
-go-duckdb), migrate (prod-style in-image build).
+web + profiles), transcoder (ffmpeg), reporting (in-image Alpine CGO build for
+tigerbeetle-go — the glibc go-duckdb build was retired in ADR 0006), migrate
+(prod-style in-image build).
 
 ## Conventions
 
@@ -62,7 +63,7 @@ go-duckdb), migrate (prod-style in-image build).
 | Concern | Local | Staging | Prod |
 |---|---|---|---|
 | Object storage | Minio (S3-compatible) | S3 (dev bucket) | S3 (prod bucket) |
-| Analytics | ClickHouse (hot) + DuckDB/Delta cold | same | ClickHouse |
+| Analytics | ClickHouse (hot) + Parquet export cold (s3()) | same | ClickHouse |
 | Email | Mailpit | Mailpit or SES sandbox | SES/Sendgrid |
 | Secrets | Plaintext values | SOPS at deploy | SOPS at deploy |
 | Localhost LB services | on | off | off |
