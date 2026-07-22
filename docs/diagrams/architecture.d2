@@ -106,10 +106,8 @@ events: Async · events {
 
   pipeline: Pipeline :8087 {
     style.fill: "#a78bfa"
-    sink: Datalake sink (ack-after-flush)
-    write: Parquet + real Delta log
     dropzone: Onboarding drop-zone poller (csv/tsv/parquet, zip/gz)
-    gdpr: "GDPR lake purge /v1/datalake/{purge,residual,profile}"
+    signal: "publishes profile.signal → NATS (→ reporting → ClickHouse)"
   }
 
   webhooks: Webhooks :8091 { style.fill: "#f472b6"; d: HMAC HTTP delivery }
@@ -121,10 +119,10 @@ serving.tracker  -> events.nats: events { style.stroke-dash: 4 }
 serving.exchange -> events.nats: auction.win / complete { style.stroke-dash: 4 }
 serving.ssp      -> events.nats: identity.observed + behaviour.observed (consent-gated) { style.stroke-dash: 4 }
 control.gateway  -> events.nats: profile.signal (audience uploads, batched) { style.stroke-dash: 4 }
+events.pipeline  -> events.nats: profile.signal (drop-zone onboarding) { style.stroke-dash: 4 }
 
 # nats fans out to consumers
 events.nats -> events.reporting: consume { style.stroke-dash: 4 }
-events.nats -> events.pipeline: consume (own group) { style.stroke-dash: 4 }
 events.nats -> events.webhooks: consume { style.stroke-dash: 4 }
 events.nats -> events.identity: consume { style.stroke-dash: 4 }
 
@@ -135,25 +133,24 @@ data: Data · analytics {
   style.fill: "#faf5ff"
 
   clickhouse: ClickHouse {
-    shape: cylinder; style.fill: "#faff69"; d: HOT store (recent) + rollup MVs
+    shape: cylinder; style.fill: "#faff69"; d: THE analytical store · HOT (recent) + rollup MVs + signals
   }
-  lake: Delta lake (Minio/S3) {
+  lake: Parquet export (Minio, derived) {
     shape: cylinder; style.fill: "#c72e49"; style.font-color: "#fff"
-    d: COLD store · Parquet + Delta log
+    d: COLD archive · hourly export from ClickHouse
   }
 }
 
 events.reporting -> data.clickhouse: write + query (hot)
-events.pipeline  -> data.lake: write Parquet+Delta
-events.reporting -> data.lake: delta_scan (cold) { style.stroke-dash: 2; style.stroke: "#64748b" }
+events.reporting -> data.lake: hourly INSERT INTO FUNCTION s3() (derived export)
+events.reporting -> data.lake: ClickHouse s3() cold reads { style.stroke-dash: 2; style.stroke: "#64748b" }
 control.gateway  -> events.reporting: /v1/api/reports (tenant-scoped) { style.stroke-dash: 2; style.stroke: "#64748b" }
 
 # The data chain, completion-ordered (pkg/batch) — replaced the
 # time-staggered CronJob lattice. Steps recorded in batch_runs (staff portal).
-conductor: "batch-conductor (CronJob :10) - checkpoint → compact → rollups → profile-builder → privacy" { shape: hexagon; style.fill: "#f59e0b" }
-conductor -> events.pipeline: POST /v1/datalake/compact (single-writer rule)
-conductor -> events.reporting: rollup runs, minute → monthly
-conductor -> data.lake: profile-builder step - read signals · write identity_clusters { style.stroke-dash: 2; style.stroke: "#64748b" }
+conductor: "batch-conductor (CronJob :10) - checkpoint → rollups → ch-parquet-export → profile-builder → privacy" { shape: hexagon; style.fill: "#f59e0b" }
+conductor -> events.reporting: rollup runs (minute → monthly) + ch-parquet-export
+conductor -> data.clickhouse: profile-builder step - read signals (server-side GROUP BY) { style.stroke-dash: 2; style.stroke: "#64748b" }
 
 onboardingzone: "Minio adtech-onboarding (drop-zone bucket)" { shape: cylinder; style.fill: "#fef08a" }
 events.pipeline -> onboardingzone: poll incoming/ · quarantine rejected/ { style.stroke-dash: 2; style.stroke: "#64748b" }
@@ -171,7 +168,7 @@ data.reports: Reports bucket (Minio/S3) {
   d: PRIVATE · adtech-reports · 30d retention
 }
 control.gateway -> data.reportrunner: report_jobs queue (Postgres) { style.stroke-dash: 2; style.stroke: "#64748b" }
-control.gateway -> events.pipeline: "staff profile lake summary + Batch-runs lake snapshot (/v1/datalake/profile, /debug snapshot proxy)" { style.stroke-dash: 2; style.stroke: "#64748b" }
+control.gateway -> events.reporting: "staff profile summary + Batch-runs snapshot (/v1/reporting/profile, /debug snapshot proxy)" { style.stroke-dash: 2; style.stroke: "#64748b" }
 data.reportrunner -> events.reporting: /v1/reporting/query (per-job deadline)
 data.reportrunner -> data.reports: write artifact
 control.gateway -> data.reports: stream download (auth'd) { style.stroke-dash: 2; style.stroke: "#64748b" }

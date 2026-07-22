@@ -45,6 +45,11 @@ publishers: Publishers {
     style.fill: "#4361ee"
     style.font-color: "#fff"
   }
+
+  pipeline: Pipeline :8087 {
+    style.fill: "#a78bfa"
+    style.font-color: "#000"
+  }
 }
 
 # ============================================================
@@ -143,7 +148,9 @@ consumers: Consumers {
     style.fill: "#60a5fa"
     style.font-color: "#000"
     what: |md
-      Analytics Store write
+      ClickHouse write (THE analytical store):
+      events ×7 + profile_signals
+      + behaviour_signals
       + Billing ledger write
       (atomic, single consumer)
     |
@@ -172,16 +179,6 @@ consumers: Consumers {
     style.font-color: "#fff"
     what: Purge user data from all systems
   }
-
-  pipeline_consumer: Pipeline :8087 {
-    style.fill: "#a78bfa"
-    style.font-color: "#000"
-    what: |md
-      Delta lake sink (own group):
-      events ×7 + profile_signals
-      + behaviour_signals
-    |
-  }
 }
 
 # ============================================================
@@ -203,6 +200,7 @@ publishers.gateway -> subjects.optout: user opt-out
 publishers.gateway -> subjects.deletion: GDPR deletion
 publishers.gateway -> subjects.cache: config changed
 publishers.gateway -> subjects.profilesig: audience upload (batched ids)
+publishers.pipeline -> subjects.profilesig: drop-zone onboarding (normalised ids)
 
 publishers.ssp -> subjects.behaviour: consented request row (categories stamped)
 publishers.tracker -> subjects.behaviour: consented interaction row (uid= on beacon)
@@ -227,9 +225,8 @@ subjects.optout -> consumers.all_services
 subjects.deletion -> consumers.privacy_job
 subjects.cache -> consumers.all_services
 
-subjects.imp -> consumers.pipeline_consumer
-subjects.profilesig -> consumers.pipeline_consumer
-subjects.behaviour -> consumers.pipeline_consumer
+subjects.profilesig -> consumers.reporting
+subjects.behaviour -> consumers.reporting
 subjects.batchrun -> consumers.webhooks
 
 # ============================================================

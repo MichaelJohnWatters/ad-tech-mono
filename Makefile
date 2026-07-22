@@ -20,8 +20,12 @@ diagrams: ## Regenerate SVG diagrams from D2 source, then sync into the staff po
 	done
 	@echo "Syncing to web/static/diagrams (served by the staff-portal Architecture tab)..."
 	@mkdir -p web/static/diagrams
+	@# Mirror exactly (delete stale artifacts for diagrams removed from docs/).
+	@rm -f web/static/diagrams/*.svg
 	@cp docs/diagrams/*.svg web/static/diagrams/
-	@cp docs/diagrams/e2e-trace.md docs/diagrams/data-reporting.md docs/diagrams/end-to-end-flow.md web/static/diagrams/ 2>/dev/null || true
+	@# .md diagrams the portal renders (manifest type: mermaid) — data-lifecycle
+	@# is the ★ headline (portal extracts its ```mermaid block).
+	@cp docs/diagrams/data-lifecycle.md docs/diagrams/e2e-trace.md docs/diagrams/data-reporting.md docs/diagrams/end-to-end-flow.md web/static/diagrams/ 2>/dev/null || true
 	@echo "Diagrams regenerated + synced. (manifest: web/static/diagrams/manifest.json)"
 
 # --- Testing ---

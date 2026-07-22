@@ -2,8 +2,8 @@
 
 The other diagrams each show *one segment* of the data story
 ([`auction-flow`](auction-flow.svg) = serving, [`nats-events`](nats-events.svg) =
-fan-out, [`data-reporting`](data-reporting.md) = hot/cold, [`data-pipeline`](data-pipeline.svg)
-= the lake, [`targeting-data-flow`](targeting-data-flow.svg) = audience). This
+fan-out, [`data-reporting`](data-reporting.md) = hot/cold + the Parquet export,
+[`targeting-data-flow`](targeting-data-flow.svg) = audience). This
 page is the **single linear thread** that connects them: where every byte comes
 from, how the auction produces it, how it becomes an audience, and how it rolls
 up into dashboard numbers.
@@ -35,7 +35,8 @@ loops (marked ⟲).
          │            └───────┬──────────┘              │                         │
          │                    │                         │                         │
          └──── these two feed THE AUCTION (stage 2) ─────┘   both onboarded paths ─┘
-                    and emit events (stage 3)                land in stage 4 (lake)
+                    and emit events (stage 3)                → NATS → reporting →
+                                                             ClickHouse (stage 4)
                                                              + write segments directly (stage 5)
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -53,7 +54,7 @@ loops (marked ⟲).
                                                                 conversion / viewability
                                                                         │
         every step writes a row with the SAME trace_id ────────────────┘
-        (SSP-minted, W3C 32-hex; flows through logs, NATS, ledger, lake)
+        (SSP-minted, W3C 32-hex; flows through logs, NATS, ledger, ClickHouse)
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  STAGE 3 — THE EVENT BUS  (one stream in, many independent readers out)         ║
@@ -67,31 +68,32 @@ loops (marked ⟲).
                         ║   adtech.* subjects              ║
                         ╚═════════════════════════════════╝
         each consumer group gets its OWN copy (fan-out, not load-balanced):
-   ┌───────────────┬──────────────────┬────────────────┬───────────────┬──────────────┐
-   ▼               ▼                  ▼                ▼               ▼              ▼
- reporting       pipeline           billing         identity-       webhooks     notifications
- group           group              group           consumer        group        group
- (→ HOT +        (→ COLD lake)      (→ TigerBeetle   group           (HTTP POST)  (bell rows)
-  rollups)                           ledger)         (→ id graph)
-   │               │                                    │
-   │ STAGE 6       │ STAGE 4                             │ STAGE 5 (identity spine)
-   ▼               ▼                                     ▼
+   ┌───────────────┬────────────────┬───────────────┬──────────────┐
+   ▼               ▼                ▼               ▼              ▼
+ reporting       billing         identity-       webhooks     notifications
+ group           group           consumer        group        group
+ (→ HOT +        (→ TigerBeetle   group           (HTTP POST)  (bell rows)
+  rollups +       ledger)         (→ id graph)
+  cold export)
+   │               │                   │
+   │ STAGE 4 + 6   │                   │ STAGE 5 (identity spine)
+   ▼               ▼                   ▼
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  STAGE 4 — THE LAKE  (cold store: every event as a replayable Parquet fact)     ║
+║  STAGE 4 — THE EXPORT  (cold archive: ClickHouse tables exported to Parquet)    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-   Pipeline :8087 datalake sink                       Delta lake (Minio / S3)
-   ┌──────────────────────────────┐    writes     ┌──────────────────────────────────┐
-   │ per-subject handler           │──────────────▶│ event_date=YYYY-MM-DD/            │
-   │  → per-table buffer           │  Parquet +    │   part-NNNNN.parquet  (7 event    │
-   │  → ACK ONLY after durable      │  Delta commit │   tables + behaviour_signals +    │
-   │    flush (at-least-once)       │               │   profile_signals + id_clusters)  │
-   └──────────────────────────────┘               │ _delta_log/  (real Delta protocol)│
+   Reporting :8086 (hourly ch-parquet-export)          Parquet export (Minio / S3)
+   ┌──────────────────────────────┐    exports    ┌──────────────────────────────────┐
+   │ INSERT INTO FUNCTION s3(...)  │──────────────▶│ clickhouse-export/                │
+   │  per ClickHouse table         │  Parquet      │   <table>/YYYY-MM-DD/*.parquet    │
+   │  derived hourly from the HOT  │  (derived)    │   (7 event tables + behaviour_    │
+   │  store, per changed hour      │               │   signals + profile_signals)      │
+   └──────────────────────────────┘               │ DERIVED from ClickHouse (not NATS)│
         ▲                                          └──────────────────────────────────┘
-        │ onboarded rows (stage 1 lane B)            single writer = pipeline, always:
-        │ also land here as profile_signals          · compaction (bin-pack, via pipeline)
-        └────────────────────────────────           · GDPR purge (filtered rewrite)
+        │ onboarded rows (stage 1 lane B)            keep-forever, always:
+        │ land in ClickHouse as profile_signals      · exported hourly from ClickHouse
+        └────────────────────────────────           · GDPR purge = ALTER DELETE + re-export
                                                      · keep-forever (ML training corpus)
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -105,9 +107,9 @@ loops (marked ⟲).
                                                        ▼
    ┌────────────────────────────────────────────────────────────────────────────┐
    │ profile-builder   (a step in the batch-conductor chain, runs on a schedule)  │
-   │   reads: identity_graph (PG)  +  behaviour_signals & profile_signals (lake)  │
+   │   reads: identity_graph (PG) + behaviour_signals & profile_signals (ClickHouse)│
    │   ①  cluster graph → person_id            (union-find over the id edges)      │
-   │   ②  behavioural rules (pure-Go over the Delta reader) + reconcile windows    │
+   │   ②  behavioural rules (pure-Go over ClickHouse GROUP BY) + reconcile windows │
    │   ③  expand: enroll the person, fan out to EVERY id in their cluster          │
    └───────────────────────────────┬────────────────────────────────────────────┘
                                     │ writes
@@ -123,7 +125,7 @@ loops (marked ⟲).
    · Segment exports (CSV/Parquet via report jobs)
    · Profile API  GET /v1/api/profiles/<id>  (staff, support:read)
    NOTE: onboarded uploads (stage 1 lane B) can ALSO write segment members
-         directly — the live "fast path" — while the lake copy feeds the builder.
+         directly — the live "fast path" — while the ClickHouse rows feed the builder.
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  STAGE 6 — ROLLUPS  (the HOT spine: raw events → ever-coarser summaries)        ║
@@ -147,7 +149,7 @@ loops (marked ⟲).
           ─▶ AutoTier (picks the coarsest tier that answers the range)
           ─▶ HotColdStore (routes by age vs hot_window):
                 recent  → ClickHouse (HOT)
-                aged    → Delta lake  (COLD, DuckDB delta_scan)   ← stage 4
+                aged    → Parquet export (COLD, ClickHouse s3())   ← stage 4
                 spanning→ split + additive merge of both
           ─▶ rows back to the portal (no browser math)
 ```
@@ -186,15 +188,16 @@ flowchart TD
   TRK --> NATS
   NATS{{"③ NATS JetStream · adtech.*<br/>fan-out: each group its own copy"}}
 
-  NATS -->|"reporting group"| CH[("ClickHouse · HOT")]
-  NATS -->|"pipeline group"| SINK["Pipeline sink 8087<br/>ack after flush"]
+  NATS -->|"reporting group"| CH[("ClickHouse · THE analytical store<br/>events + behaviour/profile signals")]
   NATS -->|"billing group"| TB[("TigerBeetle ledger")]
   NATS -->|"identity group"| IDC["identity-consumer"]
 
-  %% ---------- ④ cold lake ----------
-  SINK --> LAKE[("④ Delta lake (Minio)<br/>Parquet + _delta_log")]
-  POLL --> LAKE
-  GW1 -.->|"lake copy"| LAKE
+  %% onboarded signals ride the same bus → reporting → ClickHouse (no lake copy)
+  GW1 -->|"profile.signal"| NATS
+  POLL -->|"profile.signal"| NATS
+
+  %% ---------- ④ derived Parquet export (ADR 0006) ----------
+  CH -->|"hourly INSERT INTO FUNCTION s3()"| LAKE[("④ Parquet export · Minio<br/>DERIVED from ClickHouse, hourly<br/>keep-forever ML corpus / archive")]
 
   %% ---------- ⑤ audience ----------
   IDC --> IDG[("identity_graph · PG edges")]
@@ -203,7 +206,7 @@ flowchart TD
     C1["1 cluster to person_id"] --> C2["2 behavioural rules"] --> C3["3 expand to cluster"]
   end
   IDG --> PB
-  LAKE -.->|"behaviour + profile signals"| PB
+  CH -.->|"behaviour + profile signals · server-side GROUP BY"| PB
   PB --> MEM[("audience_segment_members · PG")]
   GW1 -->|"direct fast path"| MEM
   MEM --> PRE["audience preloader"] --> RDS[("Redis · audience:user:id")]
@@ -223,7 +226,7 @@ flowchart TD
   GW2 --> QE["QueryEngine<br/>eCPM · CTR · fill · net_rev"]
   QE --> AT["AutoTier · pick coarsest tier"] --> HCS{{"HotColdStore · route by age"}}
   HCS -->|"recent"| CH
-  HCS -.->|"aged · delta_scan"| LAKE
+  HCS -.->|"aged · ClickHouse s3() over the export"| LAKE
   ROLL --> HCS
   HCS --> QE
   QE -->|"rows"| PORTAL
@@ -232,7 +235,7 @@ flowchart TD
   classDef cold fill:#faf5ff,stroke:#7c3aed;
   classDef bus fill:#dcfce7,stroke:#15803d;
   class CH,RAW,MIN,HR,DAY,MON hot;
-  class LAKE,SINK cold;
+  class LAKE cold;
   class NATS bus;
 ```
 
@@ -280,8 +283,9 @@ identity graph. So "how do we know who this is" and "did the ad work" enter
 through *different* doors.
 
 Every one of these seven, once recorded, publishes to NATS (stage 3) and so
-lands in **both** the hot rollups (stage 6) and the cold lake (stage 4) — plus
-billing (settles) and, for `/v1/t/rt`, the audience spine (stage 5).
+lands in the hot ClickHouse rollups (stage 6) — which are exported hourly to the
+cold Parquet archive (stage 4) — plus billing (settles) and, for `/v1/t/rt`, the
+audience spine (stage 5).
 
 ## Zoom-in A — how the pipeline NORMALISES onboarded data (stage 4 detail)
 
@@ -322,14 +326,14 @@ advertiser OR publisher picks a CSV               partner drops a file + a manif
               │                                                       │
               ▼  writes BOTH:                                         ▼  writes BOTH:
    ┌─────────────────────────────────────────────────────────────────────────────────┐
-   │ profile_signals (Delta lake)     ← durable, replayable: 1 row per id              │
+   │ profile_signals (ClickHouse via NATS→reporting) ← durable: 1 row per id           │
    │   {id_type, id_value(hashed), source, account_id, provider, segment, consent, ts} │
    │ audience_segment_members (PG)    ← the live "fast path" — usable in auctions NOW   │
    └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Why two writes?** The PG row makes the list usable in the *next auction*
-immediately (the fast path). The lake row is the durable fact the
+immediately (the fast path). The ClickHouse row is the durable fact the
 **profile-builder** re-reads every run to expand + reconcile (below). Same data,
 two speeds.
 
@@ -344,7 +348,7 @@ matches traffic (which arrives as cookies/IFAs, not emails).
 ```
 profile-builder  (a step in the hourly batch-conductor chain, pkg/profilebuilder)
 
-  INPUT ─ identity_graph (PG edges)         INPUT ─ behaviour_signals + profile_signals (lake)
+  INPUT ─ identity_graph (PG edges)         INPUT ─ behaviour_signals + profile_signals (ClickHouse)
           who is linked to whom                     what each person did / was uploaded as
               │                                              │
               ▼                                              │
@@ -372,7 +376,7 @@ profile-builder  (a step in the hourly batch-conductor chain, pkg/profilebuilder
              └──────────────────────────────────────────────────────────────┘
               │
               ▼
-  ④ WRITE    audience_segment_members (PG, replace-by-segment prune) + lake durable copy
+  ④ WRITE    audience_segment_members (PG, replace-by-segment prune)
               │   ⟲ publishes cache.invalidate.audience
               ▼
   audience preloader → Redis (audience:user:<id>) → back into the AUCTION (stage 2):
@@ -442,17 +446,17 @@ THE RIGHT TO BE FORGOTTEN (opt-out → deletion), a 3-level system:
   │ PURGE the user across ALL THREE stores in one sweep:                        │
   │   · identity_graph            — drop their edges (un-links the person)      │
   │   · audience_segment_members  — drop their memberships (leaves every segment)│
-  │   · Delta lake (via pipeline) — filtered rewrite drops their event rows     │
-  │     (the lake is keep-forever EXCEPT this — GDPR beats "keep everything")   │
+  │   · ClickHouse (SignalsPurger) — ALTER DELETE their rows + re-export the     │
+  │     affected hours (keep-forever EXCEPT this — GDPR beats "keep everything")│
   └───────────────────────────────┬───────────────────────────────────────────┘
       │  marks opt_out_registry completed · publishes adtech.privacy.deletion_completed
       ▼
   cmd/privacy-verify (audit) — re-scans the stores; a leak = the delete didn't propagate
 ```
 
-The lake being the pipeline's **single writer** is what makes the purge safe: one
-process rewrites the Parquet + commits one Delta version, so a scan never sees a
-half-deleted user.
+ClickHouse being the **single analytical store** is what makes the purge safe: one
+`ALTER DELETE` removes the rows and the affected hours are re-exported to Parquet,
+so a scan never sees a half-deleted user.
 
 ## Analytics has readers beyond the dashboard
 
@@ -464,7 +468,7 @@ consumers** — the analytics spine isn't just for humans:
 - **`cmd/fraud`** + **`python/fraud`** — batch fraud scoring over the event/auction
   history; blocklist output feeds back to the tracker (warm cache).
 - **`python/optimisation`** — model training on the keep-forever Parquet corpus
-  (this is *why* the lake keeps everything: Parquet is the ML-native format).
+  (this is *why* the export keeps everything: Parquet is the ML-native format).
 - **⟲ spend → pacing** — reporting computes committed spend, snapshots it, and the
   DSP reconciles its pacing counter against it (one of the four analytics→serving
   feedback loops; see [`billing-flow`](billing-flow.svg) and [`cache-freshness`](cache-freshness.svg)).
@@ -540,11 +544,12 @@ Serving feeds from Postgres + NATS invalidates; analytics only ever *reads*.
 2. **Auction** — SSP→Exchange→DSP→win→AdServer→Tracker. The "observed" lane is
    literally the exhaust of this pipe; one `trace_id` stitches every row.
 3. **Event bus** — one durable NATS stream; each consumer group (reporting,
-   pipeline, billing, identity, webhooks, notifications) gets its **own copy** and
+   billing, identity, webhooks, notifications) gets its **own copy** and
    goes its own way. This is the fork.
-4. **Lake (cold)** — the pipeline sink writes every event as Parquet + a real
-   Delta log, ack-only-after-flush. It is the single writer and the keep-forever
-   ML corpus. Onboarded rows land here too, normalised to `profile_signals`.
+4. **Export (cold)** — reporting exports the ClickHouse tables to Parquet on Minio
+   hourly (`clickhouse-export/`, the `ch-parquet-export` chain step). It is
+   DERIVED from ClickHouse and the keep-forever ML corpus. Onboarded rows are in
+   ClickHouse too, normalised to `profile_signals`.
 5. **Audience** — identity graph says *who is the same person*; **profile-builder**
    clusters → applies rules → expands membership to every id in the cluster,
    writes `audience_segment_members`, and pushes them to Redis so the **auction in
@@ -556,19 +561,20 @@ Serving feeds from Postgres + NATS invalidates; analytics only ever *reads*.
 
 ## The four things that trip people up
 
-- **Two stores, one stream — not a mover.** Reporting writes ClickHouse (hot),
-  pipeline writes the lake (cold), *from the same events* via independent NATS
-  groups. There is **no** scheduled hot→cold copy; `hot_window` is only a
-  read-routing line. (ClickHouse also keeps a 30-day TTL as a safety net.)
+- **One store, one stream — the cold side is derived.** Reporting writes
+  ClickHouse (hot) from the NATS events, then exports those tables to Parquet
+  (cold) hourly. The cold archive is DERIVED from ClickHouse, not a second live
+  writer; `hot_window` is only a read-routing line. (ClickHouse also keeps a
+  30-day TTL as a safety net.)
 - **Rollups are an optimisation, never the source of truth.** `AutoTier` serves
   a pre-aggregated tier when it can and falls back to raw otherwise —
   correctness never depends on a rollup having run.
 - **The audience spine and the rollup spine are separate circulatory systems.**
   Serving/audience caches feed from Postgres + NATS invalidates; the analytics
-  spine (ClickHouse/lake/rollups) is **read-side only**, except four deliberate
+  spine (ClickHouse/export/rollups) is **read-side only**, except four deliberate
   feedback loops (⟲): audience memberships, spend→pacing reconcile, boot
   warm-starts, and identity top-up. See [`cache-freshness`](cache-freshness.svg).
 - **The batch-conductor is the conductor, not a step.** It runs the whole cold
-  chain in completion order every hour: `checkpoint → compact → rollups →
-  profile-builder → privacy purge → verify`. Stages 4, 5, and 6's cold half all
-  hang off it.
+  chain in completion order every hour: `checkpoint → rollups → ch-parquet-export
+  → profile-builder → privacy-delete → privacy-verify`. Stages 4, 5, and 6's cold
+  half all hang off it.
