@@ -26,6 +26,8 @@ const (
 	SystemLakeProfileSignals   = "lake:profile_signals"
 	SystemLakeBehaviourSignals = "lake:behaviour_signals"
 	SystemFreqCapBlocks        = "freq_cap_blocks"
+	SystemCHBehaviourSignals   = "clickhouse:behaviour_signals"
+	SystemCHProfileSignals     = "clickhouse:profile_signals"
 )
 
 // Purge is the per-user outcome: how many rows were removed from each system.

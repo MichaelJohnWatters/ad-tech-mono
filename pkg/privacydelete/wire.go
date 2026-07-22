@@ -29,9 +29,23 @@ func BuildExtras(cfg *config.Config, log *slog.Logger) []ExtraPurger {
 		Log:      log,
 	})
 	if err != nil {
-		log.Warn("clickhouse unreachable — freq_cap_blocks purge skipped (only exists on the clickhouse backend)", "error", err)
+		log.Warn("clickhouse unreachable — freq_cap_blocks + profile-store signal purge skipped (only exist on the clickhouse backend)", "error", err)
 	} else {
 		extras = append(extras, &FreqCapPurger{Store: ch})
+		// ADR 0006: behaviour_signals/profile_signals live in ClickHouse (phase
+		// 1) and the Parquet export (phase 4); delete both. Endpoint empty →
+		// SignalsPurger skips the re-export (ClickHouse delete still runs).
+		extras = append(extras, &SignalsPurger{
+			Store: ch,
+			ExportCfg: analytics.ExportConfig{
+				Endpoint:  keys.S3.Endpoint.Get(cfg),
+				Bucket:    keys.Pipeline.DatalakeBucket.Get(cfg),
+				AccessKey: keys.S3.AccessKey.Get(cfg),
+				SecretKey: keys.S3.SecretKey.Get(cfg),
+				UseSSL:    keys.S3.UseSSL.Get(cfg),
+			},
+			Log: log,
+		})
 	}
 	return extras
 }

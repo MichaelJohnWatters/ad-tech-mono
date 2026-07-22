@@ -416,6 +416,68 @@ func (c *ClickHouse) CountFreqCapBlocks(ctx context.Context, userID string) (int
 	return int(n), nil
 }
 
+// PurgeUserSignals removes the user's rows from the profile-store tables that
+// carry user keys — behaviour_signals (user_id OR household_id) and
+// profile_signals (id_value) — the Level-3 privacy deletion for the ClickHouse
+// copies these gained in ADR 0006 phase 1. Lightweight DELETE (mutations_sync=1
+// so the rows are gone before any re-export re-derives the partition). The
+// caller re-exports affected hours so the derived Parquet loses them too.
+func (c *ClickHouse) PurgeUserSignals(ctx context.Context, userID string) error {
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM behaviour_signals WHERE user_id = ? OR household_id = ? SETTINGS mutations_sync = 1`,
+		userID, userID); err != nil {
+		return fmt.Errorf("purge behaviour_signals: %w", err)
+	}
+	if _, err := c.db.ExecContext(ctx,
+		`DELETE FROM profile_signals WHERE id_value = ? SETTINGS mutations_sync = 1`,
+		userID); err != nil {
+		return fmt.Errorf("purge profile_signals: %w", err)
+	}
+	return nil
+}
+
+// CountUserSignals counts the user's rows across behaviour_signals +
+// profile_signals (privacy-verify residual check + the purge's before-count,
+// since lightweight DELETE doesn't report affected rows).
+func (c *ClickHouse) CountUserSignals(ctx context.Context, userID string) (behaviour, profile int, err error) {
+	var b, p uint64
+	if err = c.db.QueryRowContext(ctx,
+		`SELECT count() FROM behaviour_signals WHERE user_id = ? OR household_id = ?`, userID, userID).Scan(&b); err != nil {
+		return 0, 0, fmt.Errorf("count behaviour_signals: %w", err)
+	}
+	if err = c.db.QueryRowContext(ctx,
+		`SELECT count() FROM profile_signals WHERE id_value = ?`, userID).Scan(&p); err != nil {
+		return 0, 0, fmt.Errorf("count profile_signals: %w", err)
+	}
+	return int(b), int(p), nil
+}
+
+// AffectedSignalHours returns the distinct hours (by observed_at) in which the
+// user appears across behaviour_signals + profile_signals — the exact set of
+// Parquet export partitions that must be re-derived after a delete so the
+// archive loses the user too. Queried BEFORE the delete.
+func (c *ClickHouse) AffectedSignalHours(ctx context.Context, userID string) ([]time.Time, error) {
+	const q = `SELECT DISTINCT toStartOfHour(observed_at) AS h FROM (
+		SELECT observed_at FROM behaviour_signals WHERE user_id = ? OR household_id = ?
+		UNION ALL
+		SELECT observed_at FROM profile_signals WHERE id_value = ?
+	) ORDER BY h`
+	rows, err := c.db.QueryContext(ctx, q, userID, userID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("affected signal hours: %w", err)
+	}
+	defer rows.Close()
+	var hours []time.Time
+	for rows.Next() {
+		var h time.Time
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("scan affected hour: %w", err)
+		}
+		hours = append(hours, h.UTC())
+	}
+	return hours, rows.Err()
+}
+
 func (c *ClickHouse) InsertRenderFailure(r RenderFailure) {
 	c.signal("render_failure", `INSERT INTO render_failures (trace_id, campaign_id, creative_id, placement_id, publisher_id, reason, detail, timestamp) VALUES (?,?,?,?,?,?,?,?)`,
 		r.TraceID, r.CampaignID, r.CreativeID, r.PlacementID, r.PublisherID, r.Reason, r.Detail, sig(r.Timestamp))
