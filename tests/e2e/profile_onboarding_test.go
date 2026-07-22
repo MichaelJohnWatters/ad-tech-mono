@@ -33,8 +33,6 @@ func TestProfileOnboardingCSVUpload(t *testing.T) {
 	// Half the list is known to the identity graph → match rate 0.5.
 	h.SeedIdentityEdges(t, users[0], users[1])
 
-	lakeBefore := h.LakeRows(t, "profile_signals")
-
 	csv := "user_id\n" + strings.Join(users, "\n") + "\n"
 	res := h.UploadAudienceCSV(t, w.AdvAcc.ID, uniq+"-list", "public", csv)
 	if res.SegmentID == "" {
@@ -79,15 +77,18 @@ func TestProfileOnboardingCSVUpload(t *testing.T) {
 		t.Errorf("non-member auction won (%+v), want no-bid", win)
 	}
 
-	// The normalized rows landed in the lake (NATS → pipeline sink; snapshot
-	// forces a flush, so this converges within the consume interval).
+	// The normalized rows reached the analytical store: NATS → reporting →
+	// ClickHouse (the single source of truth since ADR 0006 phase 5; the
+	// profile-builder + hourly Parquet export both derive from it). account_id
+	// is unique per run (reset truncates), so this count is just this upload.
 	deadline := time.Now().Add(45 * time.Second)
+	countQ := fmt.Sprintf("SELECT count() FROM adtech.profile_signals WHERE account_id='%s'", w.AdvAcc.ID)
 	for {
-		if got := h.LakeRows(t, "profile_signals"); got >= lakeBefore+len(users) {
+		if got := h.ClickHouseScalar(t, countQ); got >= len(users) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Errorf("profile_signals lake rows = %d, want >= %d", h.LakeRows(t, "profile_signals"), lakeBefore+len(users))
+			t.Errorf("profile_signals in clickhouse = %d, want >= %d", h.ClickHouseScalar(t, countQ), len(users))
 			break
 		}
 		time.Sleep(2 * time.Second)
