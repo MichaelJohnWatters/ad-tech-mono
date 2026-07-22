@@ -490,6 +490,13 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectAudio:                  c.handleAudio,
 		events.SubjectServeNoFill:            c.handleServeNoFill,
 		events.SubjectDSPCall:                c.handleDSPCall,
+		// Profile-store tables (ADR 0006 phase 1). Registered here too so the
+		// data still lands in ClickHouse when the batch consumer is disabled;
+		// when it IS enabled these are removed below and served in bulk via
+		// coreBatchHandlers. Same NATSGroupReporting group either way — reporting
+		// fans out independently of the pipeline's lake sink (untouched).
+		events.SubjectBehaviourObserved: c.handleBehaviourSignal,
+		events.SubjectProfileSignal:     c.handleProfileSignal,
 	}
 
 	ctx := context.Background()

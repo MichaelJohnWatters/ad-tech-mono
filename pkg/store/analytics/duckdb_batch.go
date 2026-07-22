@@ -99,3 +99,55 @@ func (d *DuckDB) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error {
 	}
 	return nil
 }
+
+// InsertBehaviourSignals bulk-inserts consent-gated behavioural rows (ADR 0006
+// phase 1) — DuckDB parity for the ClickHouse bulk insert.
+func (d *DuckDB) InsertBehaviourSignals(ctx context.Context, es []*BehaviourSignalRow) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		at := e.ObservedAt
+		if at.IsZero() {
+			at = time.Now()
+		}
+		if _, err := d.db.ExecContext(ctx,
+			`INSERT INTO behaviour_signals (trace_id, kind, user_id, household_id, placement_id,
+				publisher_id, campaign_id, creative_id, channel, categories, geo, device,
+				account_id, tag, observed_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.TraceID, e.Kind, e.UserID, e.HouseholdID, e.PlacementID, e.PublisherID,
+			e.CampaignID, e.CreativeID, e.Channel, e.Categories, e.Geo, e.Device,
+			e.AccountID, e.Tag, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InsertProfileSignals bulk-inserts the EXPANDED per-id onboarding rows (ADR
+// 0006 phase 1) — DuckDB parity for the ClickHouse bulk insert.
+func (d *DuckDB) InsertProfileSignals(ctx context.Context, es []*ProfileSignalRow) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		at := e.ObservedAt
+		if at.IsZero() {
+			at = time.Now()
+		}
+		if _, err := d.db.ExecContext(ctx,
+			`INSERT INTO profile_signals (trace_id, account_id, provider, source, access,
+				segment_id, segment_name, visibility, consent, id_type, id_value, observed_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.TraceID, e.AccountID, e.Provider, e.Source, e.Access, e.SegmentID,
+			e.SegmentName, e.Visibility, e.Consent, e.IDType, e.IDValue, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}

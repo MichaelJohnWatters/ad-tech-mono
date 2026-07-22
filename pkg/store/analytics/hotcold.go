@@ -306,6 +306,22 @@ func (t *HotColdStore) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) e
 	return nil // Store has no single-row DSPCall insert; hot always supports batch in practice
 }
 
+// Profile-store tables (ADR 0006 phase 1): delegate to the hot store's bulk
+// insert (ClickHouse). Like DSPCalls, the base Store has no single-row insert
+// for these, and the hot backend always supports BatchInserter in practice.
+func (t *HotColdStore) InsertBehaviourSignals(ctx context.Context, es []*BehaviourSignalRow) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertBehaviourSignals(ctx, es)
+	}
+	return nil
+}
+func (t *HotColdStore) InsertProfileSignals(ctx context.Context, es []*ProfileSignalRow) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertProfileSignals(ctx, es)
+	}
+	return nil
+}
+
 // Close closes the hot store; if the cold reader owns a closable handle it's
 // closed too (idempotent — the caller may also close it).
 func (t *HotColdStore) Close() error {

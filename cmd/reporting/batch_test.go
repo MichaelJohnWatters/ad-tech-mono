@@ -64,6 +64,12 @@ func (f *fakeBatchInserter) InsertMediaEvents(_ context.Context, es []*analytics
 func (f *fakeBatchInserter) InsertDSPCalls(_ context.Context, es []*analytics.DSPCallEvent) error {
 	return f.record(len(es))
 }
+func (f *fakeBatchInserter) InsertBehaviourSignals(_ context.Context, es []*analytics.BehaviourSignalRow) error {
+	return f.record(len(es))
+}
+func (f *fakeBatchInserter) InsertProfileSignals(_ context.Context, es []*analytics.ProfileSignalRow) error {
+	return f.record(len(es))
+}
 
 // fakeDedup is an in-memory events.DedupStore that records unmarks.
 type fakeDedup struct {
@@ -339,5 +345,77 @@ func TestBatch_PublisherRepublish_DedupedByTraceKey(t *testing.T) {
 	}
 	if fi2.rows != 1 {
 		t.Errorf("cross-batch rows=%d, want 1", fi2.rows)
+	}
+}
+
+// ADR 0006 phase 1: behaviour signals batch into one InsertBehaviourSignals
+// call, and every message is acked. Several rows per trace are legitimate
+// (request + impression + …), so there is no per-trace business dedup.
+func TestBatch_BehaviourSignal_GroupsAndInserts(t *testing.T) {
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, newFakeDedup(), nil)
+	st := &ackState{}
+	msg := func(id, kind string) *events.Message {
+		data, _ := json.Marshal(events.BehaviourSignalEvent{
+			TraceID: "t-" + id, Kind: kind, UserID: "u1", AccountID: "acct1", Tag: "product-page",
+		})
+		return events.NewMessage(events.SubjectBehaviourObserved, data, "", id,
+			func() error { atomic.AddInt32(&st.acks, 1); return nil },
+			func() error { atomic.AddInt32(&st.naks, 1); return nil },
+		)
+	}
+	msgs := []*events.Message{msg("s1", "site_visit"), msg("s2", "impression"), msg("s3", "click")}
+	if err := c.handleBehaviourSignalBatch(context.Background(), msgs); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if fi.calls != 1 || fi.rows != 3 {
+		t.Errorf("InsertBehaviourSignals calls=%d rows=%d, want 1/3", fi.calls, fi.rows)
+	}
+	if st.acks != 3 || st.naks != 0 {
+		t.Errorf("acks=%d naks=%d, want 3/0", st.acks, st.naks)
+	}
+}
+
+// ADR 0006 phase 1: ONE profile.signal event carrying 3 ids expands into 3
+// ProfileSignalRows in one InsertProfileSignals call — exactly the lake sink's
+// per-id expansion. Uses a MemoryStore as the batch inserter so the expanded
+// row content can be asserted, not just the count.
+func TestBatch_ProfileSignal_ExpandsIDsToRows(t *testing.T) {
+	mem := analytics.NewMemory()
+	c := newBatchConsumer(mem, newFakeDedup(), nil)
+	st := &ackState{}
+
+	data, _ := json.Marshal(events.ProfileSignalEvent{
+		TraceID: "tr", AccountID: "acct1", Source: "crm_upload", Access: "first_party",
+		SegmentID: "seg1", SegmentName: "High Value", Visibility: "dsp_private", Consent: true,
+		IDs: []events.ProfileSignalID{
+			{IDType: "hashed_email", IDValue: "h1"},
+			{IDType: "hashed_email", IDValue: "h2"},
+			{IDType: "uid2", IDValue: "u2"},
+		},
+	})
+	msg := events.NewMessage(events.SubjectProfileSignal, data, "", "s1",
+		func() error { atomic.AddInt32(&st.acks, 1); return nil },
+		func() error { atomic.AddInt32(&st.naks, 1); return nil },
+	)
+	if err := c.handleProfileSignalBatch(context.Background(), []*events.Message{msg}); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	rows := mem.ProfileSignals()
+	if len(rows) != 3 {
+		t.Fatalf("expanded to %d rows, want 3 (one per id)", len(rows))
+	}
+	if st.acks != 1 || st.naks != 0 {
+		t.Errorf("acks=%d naks=%d, want 1/0", st.acks, st.naks)
+	}
+	byVal := map[string]string{}
+	for _, r := range rows {
+		if r.SegmentID != "seg1" || r.AccountID != "acct1" || !r.Consent || r.Source != "crm_upload" {
+			t.Errorf("shared event fields not carried onto expanded row: %+v", r)
+		}
+		byVal[r.IDValue] = r.IDType
+	}
+	if byVal["h1"] != "hashed_email" || byVal["h2"] != "hashed_email" || byVal["u2"] != "uid2" {
+		t.Errorf("per-id expansion wrong: %v", byVal)
 	}
 }

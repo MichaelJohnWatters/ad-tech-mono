@@ -188,3 +188,57 @@ func (c *ClickHouse) InsertMediaEvents(ctx context.Context, es []*MediaEvent) er
 	}
 	return b.Send()
 }
+
+// InsertBehaviourSignals bulk-inserts consent-gated behavioural observations
+// (ADR 0006 phase 1). Append order matches the behaviour_signals CREATE TABLE
+// column order in createTables (PrepareBatch binds positionally).
+func (c *ClickHouse) InsertBehaviourSignals(ctx context.Context, es []*BehaviourSignalRow) error {
+	if len(es) == 0 {
+		return nil
+	}
+	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO behaviour_signals")
+	if err != nil {
+		return fmt.Errorf("prepare behaviour_signals batch: %w", err)
+	}
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		if err := b.Append(
+			e.TraceID, e.Kind, e.UserID, e.HouseholdID, e.PlacementID, e.PublisherID,
+			e.CampaignID, e.CreativeID, e.Channel, e.Categories, e.Geo, e.Device,
+			e.AccountID, e.Tag, bts(e.ObservedAt),
+		); err != nil {
+			b.Abort()
+			return fmt.Errorf("append behaviour_signal: %w", err)
+		}
+	}
+	return b.Send()
+}
+
+// InsertProfileSignals bulk-inserts the EXPANDED per-id onboarding rows (ADR
+// 0006 phase 1). One ProfileSignalRow per id (the reporting handler expands the
+// batch upstream, mirroring the lake sink). Append order matches the
+// profile_signals CREATE TABLE column order.
+func (c *ClickHouse) InsertProfileSignals(ctx context.Context, es []*ProfileSignalRow) error {
+	if len(es) == 0 {
+		return nil
+	}
+	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO profile_signals")
+	if err != nil {
+		return fmt.Errorf("prepare profile_signals batch: %w", err)
+	}
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		if err := b.Append(
+			e.TraceID, e.AccountID, e.Provider, e.Source, e.Access, e.SegmentID,
+			e.SegmentName, e.Visibility, b2u(e.Consent), e.IDType, e.IDValue, bts(e.ObservedAt),
+		); err != nil {
+			b.Abort()
+			return fmt.Errorf("append profile_signal: %w", err)
+		}
+	}
+	return b.Send()
+}

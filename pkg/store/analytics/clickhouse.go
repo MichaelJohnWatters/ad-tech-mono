@@ -169,6 +169,42 @@ func (c *ClickHouse) createTables() error {
 			bid_received UInt8, bid_price_usd Float64, latency_ms Int64, timed_out UInt8,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		// Profile-store tables (ADR 0006 phase 1) — landed in ClickHouse
+		// ALONGSIDE the existing Parquet lake dual-write. Phase 2 repoints the
+		// profile-builder's rule evaluation onto server-side GROUP BY over these.
+		//
+		// behaviour_signals: consent-gated behavioural observations. ORDER BY
+		// (account_id, tag, user_id, observed_at) directly serves phase 2's hot
+		// rule query "site_visit rows for a user/tag in a window" (account+tag
+		// prefix, user + time as the trailing key). Partition by day so a window
+		// scan only touches the relevant partitions. TTL 90d, NOT the raw-event
+		// ttlDays (default 30d): behavioural rule windows run up to ~30d, so a
+		// 30d hot TTL could evict a row a rule still needs mid-evaluation; 90d
+		// gives headroom. The lake stays the forever copy.
+		`CREATE TABLE IF NOT EXISTS behaviour_signals (
+			trace_id String, kind String, user_id String, household_id String,
+			placement_id String, publisher_id String, campaign_id String, creative_id String,
+			channel String, categories String, geo String, device String,
+			account_id String, tag String, observed_at DateTime64(3)
+		) ENGINE = MergeTree
+			PARTITION BY toYYYYMMDD(observed_at)
+			ORDER BY (account_id, tag, user_id, observed_at)
+			TTL toDateTime(observed_at) + INTERVAL 90 DAY`,
+		// profile_signals: the EXPANDED one-row-per-id onboarding record. ORDER
+		// BY (account_id, segment_id, id_value) serves "who is in this segment"
+		// membership rebuilds. Partition by day of observation. TTL 365d (much
+		// longer than behaviour) — onboarded lists are durable declared
+		// memberships, not transient interaction signals, so they don't age out
+		// the same way; the lake is still the keep-forever copy, this just keeps
+		// a year of the onboarding record queryable in-engine.
+		`CREATE TABLE IF NOT EXISTS profile_signals (
+			trace_id String, account_id String, provider String, source String, access String,
+			segment_id String, segment_name String, visibility String, consent UInt8,
+			id_type String, id_value String, observed_at DateTime64(3)
+		) ENGINE = MergeTree
+			PARTITION BY toYYYYMMDD(observed_at)
+			ORDER BY (account_id, segment_id, id_value)
+			TTL toDateTime(observed_at) + INTERVAL 365 DAY`,
 		`CREATE TABLE IF NOT EXISTS rollups (
 			config String, level String, window_from DateTime64(3), window_to DateTime64(3),
 			dimensions String, metrics String, created_at DateTime64(3)
