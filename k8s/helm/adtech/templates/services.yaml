@@ -53,6 +53,12 @@ spec:
           {{- end }}
           env:
             {{- toYaml $svc.env | nindent 12 }}
+            {{- /* extraEnv is APPENDED (env is a list, which Helm replaces
+                   wholesale on override — so overlays add vars here instead of
+                   restating the whole env). */}}
+            {{- with $svc.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- with $svc.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -98,6 +104,7 @@ spec:
       targetPort: {{ .port }}
     {{- end }}
 {{- if $svc.ingress }}
+{{- $tls := $.Values.tls | default dict }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -105,9 +112,31 @@ metadata:
   name: {{ $name }}
   namespace: {{ $ns }}
   annotations:
+    {{- if $tls.enabled }}
+    # TLS: terminate at Traefik's websecure (443) entrypoint. Same wiring in
+    # every env — only where the CERT comes from differs (values.tls):
+    #   local  → a pre-created mkcert secret (tls.secretName)
+    #   prod   → cert-manager issues per-ingress (tls.certManager.clusterIssuer)
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    {{- if $tls.certManager }}
+    cert-manager.io/cluster-issuer: {{ $tls.certManager.clusterIssuer | quote }}
+    {{- end }}
+    {{- else }}
     traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
 spec:
   ingressClassName: traefik
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        {{- range $svc.ingress.hosts }}
+        - {{ . }}
+        {{- end }}
+      # cert-manager writes into a per-ingress secret; local uses the shared
+      # mkcert secret. Either way the secret lives in this service's namespace.
+      secretName: {{ if $tls.certManager }}{{ $name }}-tls{{ else }}{{ $tls.secretName | default "adtech-tls" }}{{ end }}
+  {{- end }}
   rules:
     {{- range $svc.ingress.hosts }}
     - host: {{ . }}

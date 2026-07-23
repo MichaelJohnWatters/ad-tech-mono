@@ -182,7 +182,10 @@ stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
 	    --from-file=cert.pem=dev/tls/localhost.pem \
 	    --from-file=key.pem=dev/tls/localhost-key.pem \
 	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "gateway-tls secret applied"; \
-	fi
+	  kubectl create secret tls adtech-tls -n adtech \
+	    --cert=dev/tls/localhost.pem --key=dev/tls/localhost-key.pem \
+	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "adtech-tls (ingress) secret applied"; \
+	else echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS ingress"; fi
 
 deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }
