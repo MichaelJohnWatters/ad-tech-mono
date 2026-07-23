@@ -105,6 +105,18 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
+      <!-- ADR 0007/0008: upload history — every upload's outcome (done/failed/
+           queued/running) with counts, match rate, and the failure reason.
+           Tenant-scoped GET /v1/api/audiences/ingest/. Polls while any job is
+           in flight. -->
+      {{ template "card-start" (dict "title" "Upload history" "subtitle" "Recent audience uploads — status, match rate, and why a file was rejected") }}
+      <div class="overflow-x-auto">
+        {{ template "table-start" (dict "headers" (slice "When" "Name" "Source" "Status" "Valid" "Rejected" "Match" "Reason")) }}
+          <tbody id="ingestHistory"><tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+        {{ template "table-end" . }}
+      </div>
+      {{ template "card-end" . }}
+
       <!-- ADR 0008: custom field mappings ("connectors"). Build a reusable
            named mapping from a small sample, then apply it on an upload. Only
            the fields we consume (id_value / id_type) are offered — a provider
@@ -1231,6 +1243,7 @@ const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch 
 const fmtMatchRate = (r) => r == null ? '<span class="text-gray-400">—</span>' : `${(r * 100).toFixed(0)}%`;
 async function loadAudiences() {
   loadMappings();
+  loadIngestHistory();
   const tbody = tbodyOf('audiences');
   try {
     const list = await fetchJSON('/v1/api/audiences') || [];
@@ -1328,6 +1341,36 @@ async function deleteMapping(id) {
     toast('Mapping deleted', 'success');
     loadMappings();
   } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
+const INGEST_BADGE = {done: 'bg-success/15 text-success', failed: 'bg-error/15 text-error', queued: 'bg-info/15 text-info', running: 'bg-warning/15 text-warning'};
+let ingestPollTimer = null;
+async function loadIngestHistory() {
+  const tb = $('ingestHistory');
+  if (!tb) return;
+  try {
+    const data = await fetchJSON('/v1/api/audiences/ingest/') || {};
+    const jobs = data.jobs || [];
+    tb.innerHTML = jobs.length ? jobs.map(j => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 text-xs text-gray-500">${j.finished_at || j.created_at ? fmtDate(j.finished_at || j.created_at) : '—'}</td>
+        <td class="px-3 py-2 font-medium">${esc(j.name || '—')}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(j.source)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${INGEST_BADGE[j.status] || 'bg-surface-3 text-gray-500'}">${esc(j.status)}</span></td>
+        <td class="px-3 py-2 font-mono">${fmtInt(j.valid_rows)}</td>
+        <td class="px-3 py-2 font-mono ${j.rejected_rows ? 'text-warning' : ''}">${fmtInt(j.rejected_rows)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${j.status === 'done' ? fmtMatchRate(j.match_rate) : '—'}</td>
+        <td class="px-3 py-2 text-xs text-error max-w-xs truncate" title="${esc(j.error || '')}">${esc(j.error || '')}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">No uploads yet.</td></tr>';
+    // Poll while anything is still in flight.
+    const inFlight = jobs.some(j => j.status === 'queued' || j.status === 'running');
+    clearTimeout(ingestPollTimer);
+    if (inFlight && !document.getElementById('section-audiences').classList.contains('hidden')) {
+      ingestPollTimer = setTimeout(loadIngestHistory, 4000);
+    }
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
 }
 async function sha256Hex(s) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s.trim().toLowerCase()));
