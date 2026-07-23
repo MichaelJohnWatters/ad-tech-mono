@@ -23,6 +23,15 @@
 #   - per-service Redis (docs) — the chart currently models the single shared
 #     Redis the base ships; splitting it is future work
 
+# TLS: real Let's Encrypt certs via cert-manager (install cert-manager + define
+# the `letsencrypt-prod` ClusterIssuer out-of-band once). The Ingress template
+# then requests a per-ingress cert automatically — same wiring as local, only
+# the issuer differs. Point the ingress hosts at your real domain per service.
+tls:
+  enabled: true
+  certManager:
+    clusterIssuer: letsencrypt-prod
+
 infra:
   nats:
     replicas: 3
@@ -57,6 +66,12 @@ services:
     replicas: 4
   gateway:
     replicas: 2
+    # Auth is MANDATORY in prod: refuse to boot with the dev auth-bypass. Needs
+    # an active jwt_signing secret (seeded/SOPS) or GATEWAY_JWT_SIGNING_KEY.
+    # extraEnv APPENDS (doesn't replace the base env list).
+    extraEnv:
+      - name: GATEWAY_REQUIRE_AUTH
+        value: "true"
   # Single-replica BY DESIGN (do not scale without code changes):
   # reporting, identity-consumer, report-runner — see the deployment comments
   # in k8s/base/*/deployment.yaml.

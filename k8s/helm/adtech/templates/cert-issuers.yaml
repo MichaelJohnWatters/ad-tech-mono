@@ -1,0 +1,48 @@
+{{- /*
+cert-manager ClusterIssuers for the HTTPS ingress (ADR: TLS parity).
+
+Rendered ONLY when tls.certManager.createIssuers=true — because ClusterIssuer is
+a cert-manager CRD, so this must not render on a cluster without cert-manager
+installed (local dev uses a pre-made mkcert secret and never sets this). To use
+in staging/prod: install cert-manager once, then set in the values file:
+  tls:
+    certManager:
+      clusterIssuer: letsencrypt-prod   # matches the Ingress annotation
+      createIssuers: true
+      email: ops@yourdomain.com
+Both a staging (rate-limit-friendly) and a prod issuer are created; point the
+Ingress at whichever via tls.certManager.clusterIssuer.
+*/ -}}
+{{- if and .Values.tls .Values.tls.certManager .Values.tls.certManager.createIssuers }}
+{{- $cm := .Values.tls.certManager }}
+{{- $email := required "tls.certManager.email is required when createIssuers=true" $cm.email }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: {{ $email | quote }}
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: {{ $email | quote }}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+{{- end }}

@@ -10,6 +10,21 @@
 namespace: adtech
 createNamespace: true
 
+# TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
+# Same Ingress wiring in every env (templates/services.yaml terminates at
+# Traefik's websecure/443 entrypoint); only the cert SOURCE differs:
+#   local → a pre-created mkcert secret (`adtech-tls`, made by `make stack-up`
+#           from dev/tls/*.pem; wildcard *.adtech.local, trusted by the mkcert
+#           local CA). No cert-manager needed locally.
+#   prod  → set tls.certManager.clusterIssuer (see values-prod.yaml) and
+#           cert-manager issues a real Let's Encrypt cert per ingress.
+# Reach it on the host at https://<host>.adtech.local (Traefik LB is bound on
+# localhost:443). Add the hostnames to /etc/hosts pointing at 127.0.0.1, e.g.:
+#   127.0.0.1 gateway.adtech.local adserver.adtech.local tracker.adtech.local ssp.adtech.local pubad.adtech.local
+tls:
+  enabled: true
+  secretName: adtech-tls
+
 # Traefik ingress controller (own `traefik` namespace). Rendered verbatim from
 # files/traefik-install.yaml (a copy of k8s/base/traefik/install.yaml) because
 # it is itself pre-rendered helm output pinned by the repo.
