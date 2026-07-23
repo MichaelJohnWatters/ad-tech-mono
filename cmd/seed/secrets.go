@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
 
@@ -91,5 +92,47 @@ VALUES ('dev-jwt-signing', $1, 'jwt_signing', 'platform', 'active', now(), now()
 	}
 	in.log.Info("seeded dev jwt signing key — gateway runs REAL auth once restarted",
 		"purpose", "jwt_signing", "logins", "admin@ / advertiser@ / publisher@ adtech.local (password: admin)")
+	return nil
+}
+
+// SeedDevPGPKey generates a platform PGP keypair and stores the armored PRIVATE
+// key as an active pgp_private secret (ADR 0008), so audience files providers
+// encrypt to the platform public key decrypt on ingest locally. Prod supplies
+// the private key via SOPS/K8s Secret instead. Idempotent: skips when an active
+// pgp_private row already exists (never overwrites an operator-rotated key).
+// NOTE: the gateway + pipeline read this key at BOOT — restart them after the
+// first seed to activate decrypt-on-ingest.
+func (in *inserter) SeedDevPGPKey(ctx context.Context) error {
+	var existing string
+	err := in.db.QueryRowContext(ctx,
+		`SELECT id FROM secrets WHERE purpose = 'pgp_private' AND status = 'active' LIMIT 1`,
+	).Scan(&existing)
+	if err == nil {
+		in.log.Info("active pgp_private secret already present, skipping seed")
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check existing pgp private key: %w", err)
+	}
+	armoredPrivate, _, fingerprint, err := pgp.Generate()
+	if err != nil {
+		return fmt.Errorf("seed pgp key: generate: %w", err)
+	}
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		return fmt.Errorf("seed pgp key: encryption key: %w", err)
+	}
+	storedValue, err := cipher.Encrypt(armoredPrivate)
+	if err != nil {
+		return fmt.Errorf("seed pgp key: encrypt: %w", err)
+	}
+	const q = `
+INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
+VALUES ('pgp-ingest', $1, 'pgp_private', 'platform', 'active', now(), now())`
+	if _, err := in.db.ExecContext(ctx, q, storedValue); err != nil {
+		return fmt.Errorf("seed pgp key: %w", err)
+	}
+	in.log.Info("seeded dev pgp ingest keypair — restart gateway + pipeline to enable decrypt-on-ingest",
+		"purpose", "pgp_private", "owner", "platform", "fingerprint", fingerprint)
 	return nil
 }

@@ -51,6 +51,11 @@ const (
 	// counts, match rate, and error. Registered as a subtree so {id} is a path
 	// segment.
 	APIAudienceIngest = apiPrefix + "/api/audiences/ingest/"
+	// APIAudiencePGPKey serves the platform's PGP PUBLIC key (ADR 0008) so
+	// providers can encrypt audience files to it before upload: GET returns
+	// {public_key, fingerprint}. The key is public, but the endpoint sits behind
+	// the app (JWT-gated tenant user). 404/503 when no key is configured.
+	APIAudiencePGPKey = apiPrefix + "/api/audiences/pgp-key"
 	// APIConversions is advertiser conversion-event setup: define named
 	// conversion types (GET list, POST create, DELETE ?id=) and get an
 	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read

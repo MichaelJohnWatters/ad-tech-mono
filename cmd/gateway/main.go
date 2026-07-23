@@ -24,6 +24,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/kubeops"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
@@ -344,6 +345,21 @@ func main() {
 			Log:          log,
 			MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
 		}
+		// ADR 0008: load the platform PGP private key from the secrets cache so
+		// providers can encrypt audience files to the platform public key. A
+		// boot-time load — a rotation lands on the next gateway restart (the
+		// active/rotating grace window keeps in-flight files decryptable). Absent
+		// key = WARN + PGP files rejected as content failures; plaintext unaffected.
+		if sec, ok := secretsCache.LookupActiveByPurpose(secrets.PurposePGPPrivate); ok && sec.Value != "" {
+			if kr, err := pgp.ParsePrivate(sec.Value); err != nil {
+				log.Error("audience ingest: parse pgp private key failed — PGP files will be rejected", "error", err)
+			} else {
+				ingestProc.PGPKeyring = kr
+				log.Info("audience ingest: PGP decrypt-on-ingest enabled")
+			}
+		} else {
+			log.Warn("audience ingest: no active pgp_private secret — PGP-encrypted uploads will be rejected")
+		}
 	}
 	audDeps := audienceDeps{
 		store:        audStore,
@@ -358,6 +374,9 @@ func main() {
 	// The ingest status subtree (.../ingest/{id}) must register BEFORE the base
 	// path so {id} lookups aren't swallowed by the base handler.
 	mux.Handle(routes.APIAudienceIngest, authMiddleware(http.HandlerFunc(audienceIngestStatusHandler(ingestStore, log))))
+	// ADR 0008: the PGP public-key endpoint (more specific than the base
+	// audiences path, so it isn't swallowed by it). JWT-gated tenant user.
+	mux.Handle(routes.APIAudiencePGPKey, authMiddleware(audiencePGPKeyHandler(secretsCache, log)))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).

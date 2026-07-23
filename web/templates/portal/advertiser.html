@@ -452,9 +452,21 @@
     </div>
     <label class="block text-sm mb-3">
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV / TSV file (≤5 MB)</span>
-      <input type="file" id="au_file" accept=".csv,.tsv,text/csv,text/tab-separated-values" class="w-full text-xs" />
+      <input type="file" id="au_file" accept=".csv,.tsv,.pgp,.gpg,.asc,text/csv,text/tab-separated-values" class="w-full text-xs" />
       <span class="block mt-1 text-[11px] text-gray-400">Email columns are SHA-256 hashed in your browser before upload — raw PII never leaves the page. Larger files go via the partner drop-zone.</span>
     </label>
+    <!-- ADR 0008: encrypt-to-platform-key panel. Opening it fetches the platform PGP public key. -->
+    <details class="mb-3 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-surface-3" ontoggle="if(this.open) loadPGPKey()">
+      <summary class="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-300">🔒 Encrypt your file (optional)</summary>
+      <div class="px-3 pb-3 space-y-2">
+        <p class="text-[11px] text-gray-500 dark:text-gray-400">PGP-encrypt your file with this key before uploading — <code>.pgp</code>/<code>.gpg</code>/armored files are decrypted automatically on ingest.</p>
+        <div id="pgp_key_meta" class="text-[11px] text-gray-400">Loading key…</div>
+        <div class="relative">
+          <pre id="pgp_key_pem" class="max-h-40 overflow-auto rounded bg-white dark:bg-surface-2 border border-gray-200 dark:border-gray-700 p-2 text-[10px] font-mono whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300"></pre>
+          <button type="button" onclick="copyPGPKey()" class="absolute top-1 right-1 rounded bg-gray-200 dark:bg-surface-1 px-2 py-0.5 text-[10px] hover:bg-gray-300 dark:hover:bg-surface-3">Copy</button>
+        </div>
+      </div>
+    </details>
     <p class="mb-2 text-xs text-gray-400 text-center">— or paste ids —</p>
     <label class="block text-sm mb-4">
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">User IDs — one per line (hash client-side; no raw PII)</span>
@@ -1216,12 +1228,19 @@ async function uploadAudience(ev) {
     let resp;
     if (file) {
       if (file.size > 100 * 1024 * 1024) { toast('File exceeds 100 MB', 'error'); return; }
-      const csv = await hashCSVForUpload(await file.text());
       const fd = new FormData();
       fd.append('name', name);
       fd.append('type', $('au_type').value);
       fd.append('visibility', $('au_visibility').value);
-      fd.append('file', new Blob([csv], {type: 'text/csv'}), file.name);
+      // PGP-encrypted files (ADR 0008) are uploaded RAW — the server decrypts on
+      // ingest. Client-side PII hashing can't (and mustn't) touch ciphertext;
+      // the provider hashed PII before encrypting. Detect by extension.
+      if (/\.(pgp|gpg|asc)$/i.test(file.name)) {
+        fd.append('file', file, file.name);
+      } else {
+        const csv = await hashCSVForUpload(await file.text());
+        fd.append('file', new Blob([csv], {type: 'text/csv'}), file.name);
+      }
       resp = await fetch('/v1/api/audiences', {method: 'POST', body: fd});
     } else {
       const ids = $('au_users').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
@@ -1244,6 +1263,28 @@ async function uploadAudience(ev) {
     }
     loadAudiences();
   } catch (err) { toast('Upload failed: ' + err.message, 'error'); }
+}
+// ADR 0008: fetch + show the platform PGP public key so providers can encrypt
+// files to it. Fetched lazily when the panel is opened (cached after first load).
+let _pgpKeyLoaded = false;
+async function loadPGPKey() {
+  if (_pgpKeyLoaded) return;
+  const meta = $('pgp_key_meta'), pem = $('pgp_key_pem');
+  try {
+    const key = await fetchJSON('/v1/api/audiences/pgp-key');
+    meta.textContent = 'Fingerprint: ' + (key.fingerprint || '(none)');
+    pem.textContent = key.public_key || '';
+    _pgpKeyLoaded = true;
+  } catch (err) {
+    meta.innerHTML = `<span class="text-error">No key available — ${esc(err.message)}</span>`;
+    pem.textContent = '';
+  }
+}
+function copyPGPKey() {
+  const text = $('pgp_key_pem').textContent;
+  if (!text) { toast('No key to copy', 'error'); return; }
+  navigator.clipboard.writeText(text).then(() => toast('Public key copied', 'success'),
+    () => toast('Copy failed', 'error'));
 }
 // Export the segment's members as a report job (CSV artifact in Minio,
 // downloadable from Reports → Report jobs).

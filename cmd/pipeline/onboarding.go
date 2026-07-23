@@ -39,10 +39,65 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	pgstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
+
+// loadPGPKeyring reads the platform PGP private key(s) directly from the secrets
+// table (ADR 0008) and parses them into a decrypt keyring. It loads every
+// non-revoked (active + rotating) pgp_private row so a file encrypted to a
+// rotating predecessor still decrypts, and applies the same at-rest cipher the
+// warm-cache loader uses (passthrough when SECRETS_ENCRYPTION_KEY is unset).
+// Returns nil (with a WARN) when no key is configured or all rows are
+// unparseable — callers leave the keyring nil, so PGP files are rejected and
+// plaintext files ingest as before.
+func loadPGPKeyring(db *sql.DB, log *slog.Logger) openpgp.EntityList {
+	rows, err := db.Query(
+		`SELECT value FROM secrets WHERE purpose = $1 AND status != 'revoked' ORDER BY status = 'active' DESC`,
+		secrets.PurposePGPPrivate,
+	)
+	if err != nil {
+		log.Warn("onboarding: pgp key lookup failed — PGP-encrypted files will be rejected", "error", err)
+		return nil
+	}
+	defer rows.Close()
+
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		log.Error("onboarding: pgp at-rest cipher invalid — PGP-encrypted files will be rejected", "error", err)
+		return nil
+	}
+
+	var keyring openpgp.EntityList
+	for rows.Next() {
+		var stored string
+		if err := rows.Scan(&stored); err != nil {
+			log.Warn("onboarding: pgp key scan failed", "error", err)
+			continue
+		}
+		value, derr := cipher.Decrypt(stored)
+		if derr != nil {
+			log.Warn("onboarding: pgp key at-rest decrypt failed", "error", derr)
+			continue
+		}
+		kr, perr := pgp.ParsePrivate(value)
+		if perr != nil {
+			log.Warn("onboarding: parse pgp private key failed", "error", perr)
+			continue
+		}
+		keyring = append(keyring, kr...)
+	}
+	if len(keyring) == 0 {
+		log.Warn("onboarding: no active pgp_private secret — PGP-encrypted files will be rejected")
+		return nil
+	}
+	return keyring
+}
 
 // startOnboarding wires the drop-zone poller: object store, Postgres
 // (the audience_ingest_jobs queue + memberships + match rate), NATS (cache
@@ -97,6 +152,15 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		Pipeline:     pipeline.New(log),
 		Log:          log,
 		MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
+	}
+	// ADR 0008: load the platform PGP private key so drop-zone files encrypted
+	// to the platform public key decrypt on ingest. A small direct DB read at
+	// construction (cheaper than a whole secrets warm-cache here); a rotation
+	// lands on the next pipeline restart. Absent/unparseable = WARN + PGP files
+	// rejected as content failures; plaintext files are unaffected.
+	if kr := loadPGPKeyring(db, log); kr != nil {
+		proc.PGPKeyring = kr
+		log.Info("onboarding: PGP decrypt-on-ingest enabled")
 	}
 	if bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline+"-onboarding", log); err != nil {
 		log.Warn("onboarding: nats unavailable — audience invalidates disabled", "error", err)

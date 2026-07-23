@@ -17,9 +17,54 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
+
+// audiencePGPKeyResponse is the GET /v1/api/audiences/pgp-key body (ADR 0008):
+// the platform PUBLIC key (armored) + its fingerprint, derived on demand from
+// the active pgp_private secret so the public half is never stored separately.
+type audiencePGPKeyResponse struct {
+	PublicKey   string `json:"public_key"`
+	Fingerprint string `json:"fingerprint"`
+}
+
+// audiencePGPKeyHandler serves the platform PGP public key for provider-side
+// encryption. Reads the active pgp_private secret from the warm cache and
+// derives the public key + fingerprint. 503 if the cache is nil; 404 if no key
+// is configured. JWT-gated (the key is public, but the endpoint sits behind the
+// app so only authenticated tenant users see it).
+func audiencePGPKeyHandler(cache *secrets.Cache, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if middleware.ClaimsFromContext(r.Context()) == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if cache == nil {
+			http.Error(w, `{"error":"secrets unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		sec, ok := cache.LookupActiveByPurpose(secrets.PurposePGPPrivate)
+		if !ok || sec.Value == "" {
+			http.Error(w, `{"error":"no PGP key configured"}`, http.StatusNotFound)
+			return
+		}
+		pub, fp, err := pgp.PublicArmorFromPrivate(sec.Value)
+		if err != nil {
+			log.Error("audience pgp-key: derive public failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(audiencePGPKeyResponse{PublicKey: pub, Fingerprint: fp})
+	}
+}
 
 // audienceUploadRequest is a CRM/audience upload: create-or-find a named
 // segment for an account and bulk-add user memberships. Since ADR 0007 every
