@@ -104,6 +104,48 @@
         <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
+
+      <!-- ADR 0008: custom field mappings ("connectors"). Build a reusable
+           named mapping from a small sample, then apply it on an upload. Only
+           the fields we consume (id_value / id_type) are offered — a provider
+           can't map columns we don't use. -->
+      {{ template "card-start" (dict "title" "Custom mappings" "subtitle" "Reusable column mappings for providers whose files use arbitrary layouts") }}
+      <div class="grid md:grid-cols-2 gap-6">
+        <div>
+          <h4 class="text-sm font-medium mb-2">Build a mapping</h4>
+          <label class="block text-xs text-gray-600 dark:text-gray-300 mb-1">Sample file (a few rows, ≤1 MB)</label>
+          <input type="file" id="map_sample" accept=".csv,.tsv,text/csv,text/tab-separated-values" class="w-full text-xs mb-3" onchange="loadMappingSample()" />
+          <div id="map_builder" class="hidden space-y-3">
+            <table class="w-full text-xs">
+              <thead><tr class="text-left text-gray-500"><th class="py-1">Source column</th><th class="py-1">Maps to</th></tr></thead>
+              <tbody id="map_cols"></tbody>
+            </table>
+            <div class="grid grid-cols-2 gap-3">
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Mapping name</span>
+                <input id="map_name" placeholder="acme-provider" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+              </label>
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Default id type</span>
+                <select id="map_idtype" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+                  <option value="user_id">user_id</option>
+                  <option value="hashed_email">hashed_email</option>
+                  <option value="uid2">uid2</option>
+                  <option value="device_id">device_id</option>
+                </select>
+              </label>
+            </div>
+            <div class="flex justify-end">
+              {{ template "button" (dict "label" "Save mapping" "variant" "secondary" "size" "sm" "onclick" "saveMapping()") }}
+            </div>
+          </div>
+        </div>
+        <div>
+          <h4 class="text-sm font-medium mb-2">Saved mappings</h4>
+          <div id="map_list" class="text-sm space-y-1"><span class="text-xs text-gray-400">loading…</span></div>
+        </div>
+      </div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Conversions ============ -->
@@ -454,6 +496,14 @@
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV / TSV file (≤5 MB)</span>
       <input type="file" id="au_file" accept=".csv,.tsv,.pgp,.gpg,.asc,text/csv,text/tab-separated-values" class="w-full text-xs" />
       <span class="block mt-1 text-[11px] text-gray-400">Email columns are SHA-256 hashed in your browser before upload — raw PII never leaves the page. Larger files go via the partner drop-zone.</span>
+    </label>
+    <!-- ADR 0008: apply a saved custom field mapping ("connector") for providers whose columns aren't standard id names. -->
+    <label class="block text-sm mb-3">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Mapping (optional)</span>
+      <select id="au_mapping" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="">None — use standard id columns</option>
+      </select>
+      <span class="block mt-1 text-[11px] text-gray-400">Build a mapping under “Custom mappings” to onboard an arbitrary column layout.</span>
     </label>
     <!-- ADR 0008: encrypt-to-platform-key panel. Opening it fetches the platform PGP public key. -->
     <details class="mb-3 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-surface-3" ontoggle="if(this.open) loadPGPKey()">
@@ -1174,6 +1224,7 @@ async function inviteMember(ev) {
 const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch { return s; } };
 const fmtMatchRate = (r) => r == null ? '<span class="text-gray-400">—</span>' : `${(r * 100).toFixed(0)}%`;
 async function loadAudiences() {
+  loadMappings();
   const tbody = tbodyOf('audiences');
   try {
     const list = await fetchJSON('/v1/api/audiences') || [];
@@ -1192,6 +1243,86 @@ async function loadAudiences() {
     tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
+// ADR 0008: custom field mappings ("connectors"). The dropdown offers ONLY the
+// fields we consume (id_value / id_type) plus "ignore" — the UI enforces "no
+// needless data" (a provider can't map columns we don't use).
+const MAPPING_TARGETS = ['', 'id_value', 'id_type']; // '' = ignore
+function mappingTargetOptions(selected) {
+  return MAPPING_TARGETS.map(t =>
+    `<option value="${t}"${t === selected ? ' selected' : ''}>${t === '' ? 'ignore' : t}</option>`).join('');
+}
+// Upload a small sample, render one dropdown per detected column (pre-filled
+// from the server's suggestion for id-like columns).
+async function loadMappingSample() {
+  const file = $('map_sample').files[0];
+  if (!file) return;
+  try {
+    if (file.size > 1024 * 1024) { toast('Sample exceeds 1 MB', 'error'); return; }
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const resp = await fetch('/v1/api/audiences/mappings/sample', {method: 'POST', body: fd});
+    const text = await resp.text();
+    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    const data = JSON.parse(text);
+    const suggested = data.suggested || {};
+    $('map_cols').innerHTML = (data.columns || []).map(c => `
+      <tr>
+        <td class="py-1 pr-3 font-mono text-xs">${esc(c)}</td>
+        <td class="py-1"><select data-col="${esc(c)}" class="map-target rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs">${mappingTargetOptions(suggested[c] || '')}</select></td>
+      </tr>`).join('');
+    $('map_builder').classList.remove('hidden');
+  } catch (err) { toast('Sample failed: ' + err.message, 'error'); }
+}
+async function saveMapping() {
+  const name = $('map_name').value.trim();
+  if (!name) { toast('Mapping name is required', 'error'); return; }
+  const mappings = {};
+  document.querySelectorAll('#map_cols .map-target').forEach(sel => {
+    if (sel.value) mappings[sel.dataset.col] = sel.value;
+  });
+  if (!Object.values(mappings).includes('id_value')) {
+    toast('Map at least one column to id_value', 'error'); return;
+  }
+  try {
+    await fetchJSON('/v1/api/audiences/mappings', {method: 'POST',
+      body: JSON.stringify({name, mappings, id_type: $('map_idtype').value})});
+    toast('Mapping saved', 'success');
+    $('map_sample').value = '';
+    $('map_name').value = '';
+    $('map_builder').classList.add('hidden');
+    $('map_cols').innerHTML = '';
+    loadMappings();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+async function loadMappings() {
+  const box = $('map_list'), sel = $('au_mapping');
+  if (!box) return;
+  try {
+    const list = await fetchJSON('/v1/api/audiences/mappings') || [];
+    box.innerHTML = list.length ? list.map(m => `
+      <div class="flex items-center justify-between border-t border-gray-100 dark:border-gray-800 py-1">
+        <span><span class="font-medium">${esc(m.name)}</span> <span class="text-xs text-gray-400 font-mono">${esc(Object.keys(m.mappings || {}).join(', '))} → ${esc(m.id_type)}</span></span>
+        <button onclick="deleteMapping('${esc(m.id)}')" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Delete</button>
+      </div>`).join('')
+      : '<span class="text-xs text-gray-400">No saved mappings yet.</span>';
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">None — use standard id columns</option>' +
+        list.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+      sel.value = cur;
+    }
+  } catch (err) {
+    box.innerHTML = `<span class="text-xs text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+async function deleteMapping(id) {
+  try {
+    const resp = await fetch('/v1/api/audiences/mappings/' + encodeURIComponent(id), {method: 'DELETE'});
+    if (!resp.ok && resp.status !== 204) throw new Error(await resp.text());
+    toast('Mapping deleted', 'success');
+    loadMappings();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
 async function sha256Hex(s) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s.trim().toLowerCase()));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -1199,14 +1330,17 @@ async function sha256Hex(s) {
 // Privacy rule: hash PII in the browser — raw emails never leave the page.
 // Any cell containing '@' is SHA-256 hashed; email-ish headers are renamed
 // hashed_email so the server stamps the right id_type.
-async function hashCSVForUpload(text) {
+// renameEmail: rename email-ish headers to hashed_email (default, no mapping).
+// When a saved mapping is applied (ADR 0008) headers are PRESERVED so the source
+// columns still match the mapping keys — PII cells are still hashed either way.
+async function hashCSVForUpload(text, renameEmail = true) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (!lines.length) return '';
   // Delimiter-aware: TSV files hash the same way (the server sniffs tabs).
   const sep = (lines[0].split('\t').length > lines[0].split(',').length) ? '\t' : ',';
   const header = lines[0].split(sep).map(h => {
     const t = h.trim().toLowerCase();
-    return (t.includes('email') && !t.includes('hash')) ? 'hashed_email' : t;
+    return (renameEmail && t.includes('email') && !t.includes('hash')) ? 'hashed_email' : t;
   }).join(sep);
   const out = [header];
   for (let i = 1; i < lines.length; i++) {
@@ -1228,17 +1362,21 @@ async function uploadAudience(ev) {
     let resp;
     if (file) {
       if (file.size > 100 * 1024 * 1024) { toast('File exceeds 100 MB', 'error'); return; }
+      const mappingID = $('au_mapping') ? $('au_mapping').value : '';
       const fd = new FormData();
       fd.append('name', name);
       fd.append('type', $('au_type').value);
       fd.append('visibility', $('au_visibility').value);
+      if (mappingID) fd.append('mapping_id', mappingID);
       // PGP-encrypted files (ADR 0008) are uploaded RAW — the server decrypts on
       // ingest. Client-side PII hashing can't (and mustn't) touch ciphertext;
       // the provider hashed PII before encrypting. Detect by extension.
       if (/\.(pgp|gpg|asc)$/i.test(file.name)) {
         fd.append('file', file, file.name);
       } else {
-        const csv = await hashCSVForUpload(await file.text());
+        // With a mapping, preserve the provider's headers so they match the
+        // mapping's source columns (PII cells are still hashed either way).
+        const csv = await hashCSVForUpload(await file.text(), !mappingID);
         fd.append('file', new Blob([csv], {type: 'text/csv'}), file.name);
       }
       resp = await fetch('/v1/api/audiences', {method: 'POST', body: fd});

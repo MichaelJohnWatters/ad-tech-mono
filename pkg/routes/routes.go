@@ -56,6 +56,16 @@ const (
 	// {public_key, fingerprint}. The key is public, but the endpoint sits behind
 	// the app (JWT-gated tenant user). 404/503 when no key is configured.
 	APIAudiencePGPKey = apiPrefix + "/api/audiences/pgp-key"
+	// APIAudienceMappings is tenant-scoped custom field mappings ("connectors",
+	// ADR 0008 Feature 3): GET lists the account's saved mappings, POST
+	// creates/updates one ({name, mappings, id_type}), DELETE .../{id} removes one.
+	// Registered as both the base path and a subtree (.../{id}) — see main.go.
+	APIAudienceMappings = apiPrefix + "/api/audiences/mappings"
+	// APIAudienceMappingSample builds a mapping from a small sample upload (ADR
+	// 0008): POST a sample file, get back its detected (lowercased) columns + a
+	// suggested id_value mapping. More specific than APIAudienceMappings, so it
+	// registers before the mappings subtree.
+	APIAudienceMappingSample = apiPrefix + "/api/audiences/mappings/sample"
 	// APIConversions is advertiser conversion-event setup: define named
 	// conversion types (GET list, POST create, DELETE ?id=) and get an
 	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read

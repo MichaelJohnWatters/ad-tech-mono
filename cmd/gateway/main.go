@@ -14,6 +14,7 @@ import (
 	"time"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
@@ -361,6 +362,13 @@ func main() {
 			log.Warn("audience ingest: no active pgp_private secret — PGP-encrypted uploads will be rejected")
 		}
 	}
+	// ADR 0008: tenant-scoped custom field mappings ("connectors"). gwDB may be
+	// nil at boot — the handlers 503 on a nil store, and an upload with no
+	// mapping_id is unaffected.
+	var mappingStore audiencemappings.Store
+	if gwDB != nil {
+		mappingStore = audiencemappings.NewPostgresStore(gwDB)
+	}
 	audDeps := audienceDeps{
 		store:        audStore,
 		proc:         ingestProc,
@@ -369,6 +377,7 @@ func main() {
 		bucket:       onboardingBucket,
 		inlineMaxRow: keys.Gateway.IngestInlineMaxRows.Get(cfg),
 		maxBytes:     keys.Gateway.IngestMaxUploadBytes.Get(cfg),
+		mappingStore: mappingStore,
 		log:          log,
 	}
 	// The ingest status subtree (.../ingest/{id}) must register BEFORE the base
@@ -377,6 +386,16 @@ func main() {
 	// ADR 0008: the PGP public-key endpoint (more specific than the base
 	// audiences path, so it isn't swallowed by it). JWT-gated tenant user.
 	mux.Handle(routes.APIAudiencePGPKey, authMiddleware(audiencePGPKeyHandler(secretsCache, log)))
+	// ADR 0008: custom field mappings. ServeMux picks the LONGEST matching
+	// pattern, so registration order is immaterial, but the intent is explicit:
+	//   .../mappings/sample  (exact) — build a mapping from a sample upload
+	//   .../mappings/        (subtree) — DELETE .../mappings/{id}
+	//   .../mappings         (exact) — GET list / POST create-or-update
+	// All three sit under /audiences but are more specific than the base
+	// /audiences handler, so they aren't swallowed by it.
+	mux.Handle(routes.APIAudienceMappingSample, authMiddleware(http.HandlerFunc(audienceMappingSampleHandler(keys.Gateway.IngestMaxUploadBytes.Get(cfg), log))))
+	mux.Handle(routes.APIAudienceMappings+"/", authMiddleware(http.HandlerFunc(audienceMappingsHandler(mappingStore, log))))
+	mux.Handle(routes.APIAudienceMappings, authMiddleware(http.HandlerFunc(audienceMappingsHandler(mappingStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).

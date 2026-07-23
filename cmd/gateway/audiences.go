@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -91,6 +92,11 @@ type audienceUploadRequest struct {
 	// INGEST timing, not go-live — when the audience is served is still
 	// controlled by campaign/line-item flight dates.
 	RunAt string `json:"run_at,omitempty"`
+	// MappingID (optional, ADR 0008) applies a saved tenant-scoped custom field
+	// mapping ("connector") to this upload: the handler loads the mapping and
+	// sets SegmentSpec.FieldMappings + IDType from it. Empty = default behaviour
+	// (the built-in id column names). Multipart form field: mapping_id.
+	MappingID string `json:"mapping_id,omitempty"`
 }
 
 // audienceUploadResponse is the INLINE (small-file) 200 response — a genuine
@@ -139,6 +145,10 @@ type audienceDeps struct {
 	bucket       string
 	inlineMaxRow int
 	maxBytes     int
+	// mappingStore loads a tenant's saved custom field mapping when an upload
+	// carries mapping_id (ADR 0008). nil is tolerated — an upload with no
+	// mapping_id behaves exactly as before.
+	mappingStore audiencemappings.Store
 	log          *slog.Logger
 }
 
@@ -264,6 +274,32 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		Consent:    true, // uploader-declared basis: first-party CRM data
 		IDType:     "user_id",
 		Access:     req.Source,
+	}
+
+	// ADR 0008: apply a saved custom field mapping ("connector") if the upload
+	// references one. Tenant-scoped — GetByAccount 404s a mapping that isn't the
+	// caller's, so a tenant can never apply another tenant's connector. The
+	// mapping sets FieldMappings (their column → our canonical field) + IDType;
+	// the validate + process below run with it applied. No mapping_id → unchanged.
+	if mid := strings.TrimSpace(req.MappingID); mid != "" {
+		if deps.mappingStore == nil {
+			http.Error(w, `{"error":"mappings unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		mapping, err := deps.mappingStore.GetByAccount(r.Context(), accountID, mid)
+		if err != nil {
+			deps.log.Error("audience upload: load mapping failed", "mapping", mid, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if mapping == nil {
+			http.Error(w, `{"error":"mapping not found"}`, http.StatusNotFound)
+			return
+		}
+		spec.FieldMappings = mapping.Mappings
+		if mapping.IDType != "" {
+			spec.IDType = mapping.IDType
+		}
 	}
 
 	// PRE-FLIGHT: sample-parse the first rows (lowercased headers) and reject a
@@ -507,6 +543,7 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 	req.Type = r.FormValue("type")
 	req.Visibility = r.FormValue("visibility")
 	req.RunAt = strings.TrimSpace(r.FormValue("run_at"))
+	req.MappingID = strings.TrimSpace(r.FormValue("mapping_id"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		return req, nil, "missing file field"
