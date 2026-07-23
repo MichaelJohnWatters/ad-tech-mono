@@ -148,6 +148,22 @@ func TestAudienceCustomMapping(t *testing.T) {
 	}
 }
 
+// TestAudienceIngestHistory — the tenant upload-history endpoint lists the
+// account's own uploads with their outcome (ADR 0007/0008).
+func TestAudienceIngestHistory(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "aud-hist")
+
+	res := h.UploadAudienceCSV(t, w.AdvAcc.ID, "hist-list", "public", "user_id\n"+w.AdvAcc.ID+"-h1\n")
+	if res.SegmentID == "" {
+		t.Fatal("upload failed")
+	}
+	body := h.IngestHistory(t, w.AdvAcc.ID)
+	if !strings.Contains(body, `"hist-list"`) || !strings.Contains(body, `"status":"done"`) {
+		t.Errorf("history should list the done 'hist-list' upload, got: %s", body)
+	}
+}
+
 // TestAudienceIngestEmail — an upload notifies its additional recipients on
 // both success and failure (ADR 0008), delivered via Mailpit.
 func TestAudienceIngestEmail(t *testing.T) {

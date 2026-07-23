@@ -132,6 +132,21 @@ type audienceEnqueuedResponse struct {
 	RunAt string `json:"run_at,omitempty"`
 }
 
+// audienceIngestListItem is one row of the account's upload history
+// (GET .../ingest/ with no id) — the portal shows status + counts + reason.
+type audienceIngestListItem struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Source       string  `json:"source"`
+	Status       string  `json:"status"`
+	ValidRows    int     `json:"valid_rows"`
+	RejectedRows int     `json:"rejected_rows"`
+	MatchRate    float64 `json:"match_rate"`
+	Error        string  `json:"error,omitempty"`
+	CreatedAt    string  `json:"created_at"`
+	FinishedAt   string  `json:"finished_at,omitempty"`
+}
+
 // audienceIngestStatusResponse is the job-status view (GET .../ingest/{id}).
 type audienceIngestStatusResponse struct {
 	ID           string  `json:"id"`
@@ -501,8 +516,32 @@ func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger)
 		}
 		id := strings.TrimPrefix(r.URL.Path, routes.APIAudienceIngest)
 		id = strings.Trim(id, "/")
-		if id == "" || strings.Contains(id, "/") {
-			http.Error(w, `{"error":"job id required"}`, http.StatusBadRequest)
+		if strings.Contains(id, "/") {
+			http.Error(w, `{"error":"bad job id"}`, http.StatusBadRequest)
+			return
+		}
+		// No id → LIST the account's recent ingest jobs (the portal's upload
+		// history: success/failed/queued/running + reason). Tenant-scoped.
+		if id == "" {
+			jobs, err := ingestStore.ListByAccount(r.Context(), claims.AccountID, 50)
+			if err != nil {
+				log.Error("audience ingest list failed", "error", err)
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			out := make([]audienceIngestListItem, 0, len(jobs))
+			for _, j := range jobs {
+				item := audienceIngestListItem{
+					ID: j.ID, Name: j.SegmentSpec.Name, Source: j.Source, Status: j.Status,
+					ValidRows: j.ValidRows, RejectedRows: j.RejectedRows, MatchRate: j.MatchRate,
+					Error: j.Error, CreatedAt: j.CreatedAt.Format(time.RFC3339),
+				}
+				if j.FinishedAt != nil {
+					item.FinishedAt = j.FinishedAt.Format(time.RFC3339)
+				}
+				out = append(out, item)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": out})
 			return
 		}
 		job, err := ingestStore.GetByAccount(r.Context(), claims.AccountID, id)
