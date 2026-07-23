@@ -382,6 +382,9 @@ services:
         value: "http://dsp-internal:8082"
       - name: GATEWAY_SSP_URL
         value: "http://ssp:8084"
+      # ADR 0008: audience-ingest completion emails (inline uploads) via Mailpit.
+      - name: GATEWAY_SMTP_HOST
+        value: "mailpit:1025"
       - name: GATEWAY_EXCHANGE_URL
         value: "http://exchange:8081"
       - name: GATEWAY_TRACKER_URL
@@ -431,6 +434,9 @@ services:
         value: "pipeline-0"
       - name: PIPELINE_NATS_URL
         value: "nats://nats:4222"
+      # ADR 0008: audience-ingest completion emails (async worker) via Mailpit.
+      - name: PIPELINE_SMTP_HOST
+        value: "mailpit:1025"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL

@@ -88,6 +88,13 @@ type Job struct {
 	MaxAttempts int         `json:"max_attempts"`
 	Error       string      `json:"error,omitempty"`
 
+	// NotifyEmails are the recipients emailed when this job reaches a terminal
+	// state (done/failed), ADR 0008 Feature 3. Captured at enqueue — the
+	// uploader (resolved from team_members by the JWT UserID) plus any
+	// additional_emails on the upload, or notify_emails from a drop-zone
+	// manifest. Empty = no email.
+	NotifyEmails []string `json:"notify_emails,omitempty"`
+
 	// Terminal result (populated on done).
 	SegmentID    string  `json:"segment_id,omitempty"`
 	TotalRows    int     `json:"total_rows,omitempty"`

@@ -148,6 +148,46 @@ func TestAudienceCustomMapping(t *testing.T) {
 	}
 }
 
+// TestAudienceIngestEmail — an upload notifies its additional recipients on
+// both success and failure (ADR 0008), delivered via Mailpit.
+func TestAudienceIngestEmail(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "aud-email")
+	uniq := time.Now().UnixNano()
+	okAddr := fmt.Sprintf("notify-ok-%d@e2e.local", uniq)
+	failAddr := fmt.Sprintf("notify-fail-%d@e2e.local", uniq)
+
+	// Success → "succeeded" email to the additional recipient.
+	code, body := h.UploadAudienceCSVNotify(t, w.AdvAcc.ID, "email-ok", "public",
+		"user_id\n"+w.AdvAcc.ID+"-e1\n", []string{okAddr})
+	if code != 200 {
+		t.Fatalf("ok upload: status %d (%s)", code, body)
+	}
+	harness.WaitFor(t, 45*time.Second, "success email delivered", func() bool {
+		for _, m := range h.MailpitSearch(t, okAddr) {
+			if strings.Contains(strings.ToLower(m.Subject), "succeed") {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Failure (no id column) → "failed" email to the additional recipient.
+	code, _ = h.UploadAudienceCSVNotify(t, w.AdvAcc.ID, "email-bad", "public",
+		"email_address,city\nfoo@bar.com,NYC\n", []string{failAddr})
+	if code != 422 {
+		t.Fatalf("bad upload: status %d, want 422", code)
+	}
+	harness.WaitFor(t, 45*time.Second, "failure email delivered", func() bool {
+		for _, m := range h.MailpitSearch(t, failAddr) {
+			if strings.Contains(strings.ToLower(m.Subject), "fail") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // TestAudiencePGPUpload — a file PGP-encrypted to the platform public key is
 // decrypted on ingest and imported; a file encrypted to a DIFFERENT key is
 // rejected with 422 (ADR 0008).

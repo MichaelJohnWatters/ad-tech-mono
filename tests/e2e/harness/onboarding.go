@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,6 +77,34 @@ func (h *Harness) UploadAudienceCSVMapped(t *testing.T, accountID, name, visibil
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("mapped upload: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// UploadAudienceCSVNotify uploads a CSV with additional notification emails
+// (ADR 0008) and returns the raw (status, body).
+func (h *Harness) UploadAudienceCSVNotify(t *testing.T, accountID, name, visibility, csv string, additional []string) (int, string) {
+	t.Helper()
+	email := "aud-csv-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("name", name)
+	_ = mw.WriteField("visibility", visibility)
+	_ = mw.WriteField("additional_emails", strings.Join(additional, ","))
+	fw, _ := mw.CreateFormFile("file", "upload.csv")
+	_, _ = fw.Write([]byte(csv))
+	_ = mw.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Gateway+routes.APIAudiences, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("notify upload: %v", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // PostgresIngestStore is the audience_ingest_jobs queue. Tenant-facing writes
@@ -28,19 +30,24 @@ const jobColumns = `id::text, account_id::text, source, COALESCE(provider, ''),
        attempts, max_attempts, COALESCE(error, ''),
        COALESCE(segment_id::text, ''), COALESCE(total_rows, 0), COALESCE(valid_rows, 0),
        COALESCE(rejected_rows, 0), COALESCE(matched_rows, 0), COALESCE(match_rate, 0),
-       COALESCE(rejected_key, ''), created_at, started_at, finished_at`
+       COALESCE(rejected_key, ''), created_at, started_at, finished_at,
+       COALESCE(notify_emails, '{}')`
 
 func scanJob(scan func(dest ...any) error) (*Job, error) {
 	var j Job
 	var specJSON string
 	var started, finished sql.NullTime
+	var notify pq.StringArray
 	if err := scan(&j.ID, &j.AccountID, &j.Source, &j.Provider,
 		&j.FileBucket, &j.FileKey, &specJSON, &j.RunAt, &j.Status,
 		&j.Attempts, &j.MaxAttempts, &j.Error,
 		&j.SegmentID, &j.TotalRows, &j.ValidRows,
 		&j.RejectedRows, &j.MatchedRows, &j.MatchRate,
-		&j.RejectedKey, &j.CreatedAt, &started, &finished); err != nil {
+		&j.RejectedKey, &j.CreatedAt, &started, &finished, &notify); err != nil {
 		return nil, err
+	}
+	if len(notify) > 0 {
+		j.NotifyEmails = []string(notify)
 	}
 	if err := json.Unmarshal([]byte(specJSON), &j.SegmentSpec); err != nil {
 		return nil, fmt.Errorf("decode segment_spec for %s: %w", j.ID, err)
@@ -91,16 +98,16 @@ func (s PostgresIngestStore) Enqueue(ctx context.Context, j Job) (string, error)
 	}
 	q := `INSERT INTO audience_ingest_jobs
 	        (account_id, source, provider, file_bucket, file_key, segment_spec,
-	         run_at, max_attempts)
+	         run_at, max_attempts, notify_emails)
 	      VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb,
-	              COALESCE($7::timestamptz, now()), $8)
+	              COALESCE($7::timestamptz, now()), $8, $9::text[])
 	      ON CONFLICT (file_bucket, file_key) WHERE status IN ('queued', 'running')
 	        DO NOTHING
 	      RETURNING id::text`
 	var id string
 	err = tx.QueryRowContext(ctx, q,
 		j.AccountID, j.Source, provider, j.FileBucket, j.FileKey, string(specJSON),
-		runAt, maxAttempts).Scan(&id)
+		runAt, maxAttempts, pq.Array(j.NotifyEmails)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) { // dedupe hit
 		return "", tx.Commit()
 	}

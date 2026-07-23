@@ -118,9 +118,13 @@ func (o *onboarder) runIngestJob(ctx context.Context, job ingestjobs.Job) {
 		if markErr := o.jobs.MarkFailed(ctx, job.ID, err.Error()); markErr != nil {
 			o.log.Error("ingest worker: mark failed", "job", job.ID, "error", markErr)
 		}
+		// Best-effort completion email (ADR 0008 Feature 3).
+		ingest.NotifyResult(ctx, o.emailSender, o.emailFrom, job, result, err, o.log)
 		return
 	}
 	if err := o.jobs.MarkDone(ctx, job.ID, result); err != nil {
 		o.log.Error("ingest worker: mark done", "job", job.ID, "error", err)
 	}
+	// Best-effort completion email (ADR 0008 Feature 3).
+	ingest.NotifyResult(ctx, o.emailSender, o.emailFrom, job, result, nil, o.log)
 }

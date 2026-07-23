@@ -522,6 +522,12 @@
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">User IDs — one per line (hash client-side; no raw PII)</span>
       <textarea id="au_users" rows="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-xs font-mono" placeholder="a1b2c3…&#10;d4e5f6…"></textarea>
     </label>
+    <!-- ADR 0008: optional completion-email recipients. You (the uploader) are always notified. -->
+    <label class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Notify additional emails (comma-separated, optional)</span>
+      <input type="text" id="au_notify" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" placeholder="teammate@example.com, ops@example.com" />
+      <span class="block mt-1 text-[11px] text-gray-400">You (the uploader) are always notified when processing finishes; add others here.</span>
+    </label>
     <p class="mb-4 text-xs text-gray-400">Re-uploading the same name adds members to the existing segment (idempotent). Each upload reports its match rate — the share of ids the identity graph can resolve.</p>
     <div class="flex justify-end gap-2">
       {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newAudience').classList.add('hidden')") }}
@@ -1356,6 +1362,8 @@ async function uploadAudience(ev) {
   ev.preventDefault();
   const name = $('au_name').value.trim();
   const file = $('au_file').files[0];
+  // ADR 0008: optional completion-email recipients (in addition to the uploader).
+  const notify = $('au_notify') ? $('au_notify').value.trim() : '';
   try {
     // Every upload stages + enqueues (ADR 0007). Small files are processed
     // inline (200 + match rate); larger ones return 202 + a job id to poll.
@@ -1368,6 +1376,7 @@ async function uploadAudience(ev) {
       fd.append('type', $('au_type').value);
       fd.append('visibility', $('au_visibility').value);
       if (mappingID) fd.append('mapping_id', mappingID);
+      if (notify) fd.append('additional_emails', notify);
       // PGP-encrypted files (ADR 0008) are uploaded RAW — the server decrypts on
       // ingest. Client-side PII hashing can't (and mustn't) touch ciphertext;
       // the provider hashed PII before encrypting. Detect by extension.
@@ -1383,15 +1392,18 @@ async function uploadAudience(ev) {
     } else {
       const ids = $('au_users').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
       if (!ids.length) { toast('Choose a CSV file or paste ids', 'error'); return; }
+      const body = {name, type: $('au_type').value, visibility: $('au_visibility').value, user_ids: ids};
+      if (notify) body.additional_emails = notify.split(/[,\s;]+/).map(s => s.trim()).filter(Boolean);
       resp = await fetch('/v1/api/audiences', {method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name, type: $('au_type').value, visibility: $('au_visibility').value, user_ids: ids})});
+        body: JSON.stringify(body)});
     }
     const text = await resp.text();
     if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
     const res = JSON.parse(text);
     $('newAudience').classList.add('hidden');
     $('au_file').value = '';
+    if ($('au_notify')) $('au_notify').value = '';
     if (resp.status === 202) {
       // Large file — matching runs async; the result shows up in the
       // onboarding monitor / segment list once the ingest worker finishes.

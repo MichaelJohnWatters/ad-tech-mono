@@ -34,6 +34,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
@@ -135,12 +136,18 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 	} else {
 		jobStore.WorkerID = os.Getenv("POD_NAME")
 	}
+	// Ingest completion emails (ADR 0008 Feature 3): the async worker notifies a
+	// job's recipients when it finishes. SMTP when configured, else an in-memory
+	// sender that only logs (dev).
+	emailFrom := keys.Pipeline.EmailFrom.Get(cfg)
 	o := &onboarder{
-		obj:    obj,
-		bucket: bucket,
-		db:     db,
-		jobs:   jobStore,
-		log:    log,
+		obj:         obj,
+		bucket:      bucket,
+		db:          db,
+		jobs:        jobStore,
+		log:         log,
+		emailSender: connectIngestEmail(cfg, emailFrom, log),
+		emailFrom:   emailFrom,
 	}
 	// The shared processor (ADR 0007) does the actual decode → match →
 	// memberships → publish work; the poller only enqueues. The gateway builds
@@ -218,6 +225,10 @@ type onboardingManifest struct {
 	FieldMappings map[string]string `json:"field_mappings"`
 	// RequiredFields validated per row. Default ["id_value"].
 	RequiredFields []string `json:"required_fields"`
+	// NotifyEmails (optional, ADR 0008 Feature 3) are recipients emailed when a
+	// job for this provider's files reaches a terminal state (done/failed).
+	// Empty = no email.
+	NotifyEmails []string `json:"notify_emails"`
 }
 
 type onboarder struct {
@@ -228,6 +239,11 @@ type onboarder struct {
 	jobs   ingestjobs.Store  // audience_ingest_jobs queue (ADR 0007)
 	proc   *ingest.Processor // the shared decode → match → memberships processor
 	log    *slog.Logger
+	// emailSender + emailFrom deliver ingest completion emails (ADR 0008
+	// Feature 3) after MarkDone/MarkFailed. A nil sender (or a job with no
+	// NotifyEmails) is a no-op — email is best-effort.
+	emailSender email.Sender
+	emailFrom   string
 	// retention bounds how long processed/rejected artifact BYTES live in
 	// the bucket after ingestion; the audience_ingest_jobs row survives the
 	// sweep (stamped swept_at). A func so the TierLive config key applies on
@@ -278,12 +294,13 @@ func (o *onboarder) enqueueFile(ctx context.Context, provider, key string) {
 		Access:         manifest.Access,
 	}
 	id, err := o.jobs.Enqueue(ctx, ingestjobs.Job{
-		AccountID:   manifest.AccountID,
-		Source:      ingestjobs.SourceDropzone,
-		Provider:    provider,
-		FileBucket:  o.bucket,
-		FileKey:     key,
-		SegmentSpec: spec,
+		AccountID:    manifest.AccountID,
+		Source:       ingestjobs.SourceDropzone,
+		Provider:     provider,
+		FileBucket:   o.bucket,
+		FileKey:      key,
+		SegmentSpec:  spec,
+		NotifyEmails: ingest.SanitizeNotifyEmails(manifest.NotifyEmails),
 	})
 	if err != nil {
 		log.Error("onboarding: enqueue ingest job failed (will retry)", "error", err)
@@ -412,6 +429,23 @@ func (o *onboarder) loadManifest(ctx context.Context, provider string) (onboardi
 		return m, fmt.Errorf("%s/manifest.json: account_id is required", provider)
 	}
 	return m, nil
+}
+
+// connectIngestEmail selects SMTP (Mailpit/SES) when pipeline.smtp_host is set,
+// else an in-memory sender that only logs deliveries (dev). Mirrors
+// cmd/report-runner's connectEmail.
+func connectIngestEmail(cfg *config.Config, from string, log *slog.Logger) email.Sender {
+	host := keys.Pipeline.SMTPHost.Get(cfg)
+	if host == "" {
+		log.Info("pipeline ingest email via memory sender (no smtp_host set) — deliveries are logged only")
+		return email.NewMemory(log)
+	}
+	if user := keys.Pipeline.SMTPUsername.Get(cfg); user != "" {
+		log.Info("pipeline ingest email via authenticated SMTP", "host", host, "username", user)
+		return email.NewSMTPAuth(host, from, user, keys.Pipeline.SMTPPassword.Get(cfg), log)
+	}
+	log.Info("pipeline ingest email via SMTP", "host", host)
+	return email.NewSMTP(host, from, log)
 }
 
 func (o *onboarder) readObject(ctx context.Context, key string) ([]byte, error) {
