@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,9 +69,9 @@ var idTypeForColumn = map[string]string{
 
 // infraErr marks a retryable INFRA failure — the caller (ingest worker or
 // gateway inline path) leaves the job for a lease-lapse retry and records
-// nothing, because the run never happened. A CONTENT outcome (bad file, no
-// valid rows) returns (result, nil): the file is processed (quarantined) and
-// the job is done.
+// nothing, because the run never happened. A PARTIAL content outcome (some
+// valid rows, some quarantined) returns (result, nil): the file is processed
+// and the job is done.
 type infraErr struct{ err error }
 
 func (e infraErr) Error() string { return e.err.Error() }
@@ -80,6 +81,24 @@ func (e infraErr) Error() string { return e.err.Error() }
 func IsInfra(err error) bool {
 	var i infraErr
 	return errors.As(err, &i)
+}
+
+// rejectErr marks a terminal CONTENT rejection — the file could not be used at
+// all (undecodable, no data rows, or NO row had a usable id). The job is marked
+// FAILED with this reason (shown in the onboarding monitor), never retried; the
+// synchronous upload path maps it to HTTP 422. Distinct from a PARTIAL outcome
+// (some rows valid) which still succeeds and imports the good rows.
+type rejectErr struct{ reason string }
+
+func (e rejectErr) Error() string { return e.reason }
+
+// Reject builds a terminal content-rejection error carrying a human reason.
+func Reject(reason string) error { return rejectErr{reason} }
+
+// IsReject reports whether err is a content rejection (vs infra / other).
+func IsReject(err error) bool {
+	var r rejectErr
+	return errors.As(err, &r)
 }
 
 // Process is the single audience-ingest processor: it reads the staged file at
@@ -111,17 +130,7 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, "no data rows")
 	}
 
-	mappings := map[string]string{}
-	for k, v := range defaultIDMappings {
-		mappings[k] = v
-	}
-	for k, v := range spec.FieldMappings {
-		mappings[k] = v
-	}
-	required := spec.RequiredFields
-	if len(required) == 0 {
-		required = []string{"id_value"}
-	}
+	mappings, required := buildMappings(spec)
 	// Which source column became id_value — for the implied id_type.
 	sourceIDColumn := ""
 	for col := range records[0] {
@@ -149,8 +158,15 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		}
 	}
 	if len(result.Valid) == 0 {
-		return p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
-			"no valid rows after validation")
+		// REJECT: the file parsed but no row had a usable id. Quarantine the
+		// whole file (move to rejected/) and fail the job with a reason so the
+		// monitor shows WHY — rather than silently importing zero members.
+		if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
+			"no valid rows after validation"); err != nil {
+			return ingestjobs.IngestResult{}, err // infra move failure → retry
+		}
+		return ingestjobs.IngestResult{RejectedRows: len(result.Quarantine), RejectedKey: rejectedKey},
+			rejectErr{fmt.Sprintf("no usable id column: none of the %d rows had a non-empty id_value after field-mapping", result.Stats.TotalInput)}
 	}
 
 	ids := make([]events.ProfileSignalID, 0, len(result.Valid))
@@ -336,22 +352,87 @@ func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accou
 	}, nil
 }
 
-// quarantineStaged is the content-failure path inside Process: it quarantines
-// the whole file (finishFile move) and returns a terminal result so the job is
-// marked done, not retried.
+// quarantineStaged is the content-REJECT path inside Process (undecodable / no
+// data rows): it quarantines the whole file (move to rejected/ + an .error.txt
+// marker) and returns a rejectErr so the job is marked FAILED with the reason,
+// not retried and not silently "done".
 func (p *Processor) quarantineStaged(ctx context.Context, bucket, provider, key, accountID string, started time.Time, reason string) (ingestjobs.IngestResult, error) {
 	base := path.Base(key)
 	rejectedKey := rejectedPrefix(provider) + base
-	res, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, pipeline.Result{}, rejectedKey, reason)
-	if err != nil {
-		return ingestjobs.IngestResult{}, err
+	if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, pipeline.Result{}, rejectedKey, reason); err != nil {
+		return ingestjobs.IngestResult{}, err // infra move failure → retry
 	}
 	marker := rejectedKey + ".error.txt"
 	if err := p.Objects.Put(ctx, bucket, marker, strings.NewReader(reason), int64(len(reason)), "text/plain"); err != nil {
 		p.Log.Warn("ingest: quarantine marker write failed", "file", key, "error", err)
 	}
-	p.Log.Error("ingest: file quarantined", "provider", provider, "file", key, "reason", reason)
-	return res, nil
+	p.Log.Error("ingest: file rejected", "provider", provider, "file", key, "reason", reason)
+	// REJECT: fail the job with the reason (shown in the monitor / returned 422
+	// on the sync path), not marked done.
+	return ingestjobs.IngestResult{RejectedKey: rejectedKey}, rejectErr{reason}
+}
+
+// buildMappings merges the default id-column mappings with the spec's overrides
+// (lowercased — headers are lowercased at decode, so mapping keys must match)
+// and resolves the required-field list. Shared by Process and ValidateSample so
+// the pre-flight sample check uses the EXACT same rules as the real run.
+func buildMappings(spec ingestjobs.SegmentSpec) (map[string]string, []string) {
+	mappings := map[string]string{}
+	for k, v := range defaultIDMappings {
+		mappings[strings.ToLower(k)] = v
+	}
+	for k, v := range spec.FieldMappings {
+		mappings[strings.ToLower(k)] = v
+	}
+	required := spec.RequiredFields
+	if len(required) == 0 {
+		required = []string{"id_value"}
+	}
+	return mappings, required
+}
+
+// ValidateSample is the fast PRE-FLIGHT for the synchronous upload path: decode
+// name/body, sample up to n data rows, apply the SAME field-mapping + required-
+// field validation as Process, and return an error if the file can't be parsed
+// or NONE of the sampled rows yields a valid id_value. The gateway calls this
+// BEFORE staging so a wrong-shaped file is rejected with a 422 up front instead
+// of being discovered mid-ingest.
+func (p *Processor) ValidateSample(ctx context.Context, name string, body []byte, spec ingestjobs.SegmentSpec, n int) error {
+	records, err := DecodeFile(ctx, name, body)
+	if err != nil {
+		return Reject(fmt.Sprintf("could not parse file: %v", err))
+	}
+	if len(records) == 0 {
+		return Reject("file has no data rows")
+	}
+	if len(records) > n {
+		records = records[:n]
+	}
+	mappings, required := buildMappings(spec)
+	result := p.Pipeline.Process(ctx, records, pipeline.PublisherConfig{
+		PublisherID: "sample", Format: "csv", RequiredFields: required, FieldMappings: mappings,
+	})
+	if len(result.Valid) == 0 {
+		cols := make([]string, 0, len(records[0]))
+		for c := range records[0] {
+			cols = append(cols, c)
+		}
+		sort.Strings(cols)
+		return Reject(fmt.Sprintf("no usable id column in the first %d row(s) — need one of [%s]; file has columns [%s]",
+			len(records), strings.Join(idColumnNames(), ", "), strings.Join(cols, ", ")))
+	}
+	return nil
+}
+
+// idColumnNames lists the default source columns that map to id_value, for a
+// helpful rejection message.
+func idColumnNames() []string {
+	cols := make([]string, 0, len(defaultIDMappings))
+	for k := range defaultIDMappings {
+		cols = append(cols, k)
+	}
+	sort.Strings(cols)
+	return cols
 }
 
 func (p *Processor) readObject(ctx context.Context, bucket, key string) ([]byte, error) {

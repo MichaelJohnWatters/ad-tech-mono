@@ -212,6 +212,25 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		req.Source = src
 	}
 
+	spec := ingestjobs.SegmentSpec{
+		Name:       req.Name,
+		Type:       req.Type,
+		Visibility: req.Visibility,
+		Consent:    true, // uploader-declared basis: first-party CRM data
+		IDType:     "user_id",
+		Access:     req.Source,
+	}
+
+	// PRE-FLIGHT: sample-parse the first rows (lowercased headers) and reject a
+	// wrong-shaped file with a 422 BEFORE staging — instant feedback, and a bad
+	// file never enters the queue. Full per-row validation still runs at process
+	// time (partial files import the good rows + quarantine the bad).
+	if err := deps.proc.ValidateSample(r.Context(), safeFileName(req.Name)+".csv", raw, spec, 10); err != nil {
+		deps.log.Info("audience upload rejected (pre-flight)", "name", req.Name, "reason", err.Error())
+		http.Error(w, `{"error":`+jsonStr("file rejected: "+err.Error())+`}`, http.StatusUnprocessableEntity)
+		return
+	}
+
 	// Stage the raw bytes so a crashed inline run is recoverable by the worker,
 	// and so every upload is durable + recorded identically (ADR 0007).
 	fileKey := "api/" + accountID + "/" + uuid.NewString() + "/" + safeFileName(req.Name)
@@ -220,15 +239,6 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		deps.log.Error("audience upload: stage file failed", "name", req.Name, "error", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
-	}
-
-	spec := ingestjobs.SegmentSpec{
-		Name:       req.Name,
-		Type:       req.Type,
-		Visibility: req.Visibility,
-		Consent:    true, // uploader-declared basis: first-party CRM data
-		IDType:     "user_id",
-		Access:     req.Source,
 	}
 	// run_at: hold the file until this time (licensing / embargo / freshness).
 	// Empty or in the past → now. A future run_at forces the async path below.
@@ -312,6 +322,13 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 		}
 		if markErr := deps.ingestStore.MarkFailed(r.Context(), jobID, err.Error()); markErr != nil {
 			deps.log.Error("audience upload: mark failed", "job", jobID, "error", markErr)
+		}
+		// A content REJECT (bad file) is a 422 client error, not a 500 — though
+		// the pre-flight ValidateSample catches nearly all of these before here.
+		if ingest.IsReject(err) {
+			deps.log.Info("audience upload rejected", "name", req.Name, "job", jobID, "reason", err.Error())
+			http.Error(w, `{"error":`+jsonStr("file rejected: "+err.Error())+`}`, http.StatusUnprocessableEntity)
+			return
 		}
 		deps.log.Error("audience upload failed", "name", req.Name, "job", jobID, "error", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
