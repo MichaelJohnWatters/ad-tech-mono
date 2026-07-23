@@ -66,6 +66,13 @@ const (
 	// suggested id_value mapping. More specific than APIAudienceMappings, so it
 	// registers before the mappings subtree.
 	APIAudienceMappingSample = apiPrefix + "/api/audiences/mappings/sample"
+	// APIAudienceProviders is the tenant-scoped data-provider registry (ADR 0009,
+	// the DMP foundation): GET lists the account's providers, POST creates/updates
+	// one, DELETE .../{id} removes one. A provider carries a data-party
+	// classification, licence, default id_type, encryption contract, and
+	// notification defaults that an upload snapshots when it selects the provider.
+	// Registered as both the base path and a subtree (.../{id}) — see main.go.
+	APIAudienceProviders = apiPrefix + "/api/audiences/providers"
 	// APIConversions is advertiser conversion-event setup: define named
 	// conversion types (GET list, POST create, DELETE ?id=) and get an
 	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read

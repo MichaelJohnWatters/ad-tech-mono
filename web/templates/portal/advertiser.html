@@ -117,6 +117,64 @@
       </div>
       {{ template "card-end" . }}
 
+      <!-- ADR 0009: data providers (the DMP entity). Register who supplies
+           audience data + how it's classified (party / licence), so uploads can
+           be attributed and reported by provider and party. -->
+      {{ template "card-start" (dict "title" "Data providers" "subtitle" "Classify who supplies your audience data — party (1st/2nd/3rd), licence, and format defaults") }}
+      <div class="grid md:grid-cols-2 gap-6">
+        <div>
+          <h4 class="text-sm font-medium mb-2">Add a provider</h4>
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-3">
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Name</span>
+                <input id="dp_name" placeholder="Acme DMP" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+              </label>
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Kind</span>
+                <select id="dp_kind" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" onchange="dpKindDefaults()">
+                  <option value="crm">CRM (your own data)</option>
+                  <option value="cdp">CDP</option>
+                  <option value="dmp">DMP (third-party)</option>
+                  <option value="agency">Agency partner</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Data party</span>
+                <select id="dp_party" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+                  <option value="first">1st party</option>
+                  <option value="second">2nd party</option>
+                  <option value="third">3rd party</option>
+                </select>
+              </label>
+              <label class="block text-sm">
+                <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Licence</span>
+                <select id="dp_licence" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+                  <option value="first_party">first_party</option>
+                  <option value="purchased">purchased</option>
+                  <option value="barter">barter</option>
+                </select>
+              </label>
+            </div>
+            <label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+              <input type="checkbox" id="dp_encrypt" class="rounded border-gray-300" />
+              Require PGP-encrypted files from this provider
+            </label>
+            <div class="flex justify-end">
+              {{ template "button" (dict "label" "Save provider" "variant" "secondary" "size" "sm" "onclick" "saveProvider()") }}
+            </div>
+          </div>
+        </div>
+        <div>
+          <h4 class="text-sm font-medium mb-2">Saved providers</h4>
+          <div id="dp_list" class="text-sm space-y-1"><span class="text-xs text-gray-400">loading…</span></div>
+        </div>
+      </div>
+      {{ template "card-end" . }}
+
       <!-- ADR 0008: custom field mappings ("connectors"). Build a reusable
            named mapping from a small sample, then apply it on an upload. Only
            the fields we consume (id_value / id_type) are offered — a provider
@@ -508,6 +566,14 @@
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV / TSV file (≤5 MB)</span>
       <input type="file" id="au_file" accept=".csv,.tsv,.pgp,.gpg,.asc,text/csv,text/tab-separated-values" class="w-full text-xs" />
       <span class="block mt-1 text-[11px] text-gray-400">Email columns are SHA-256 hashed in your browser before upload — raw PII never leaves the page. Larger files go via the partner drop-zone.</span>
+    </label>
+    <!-- ADR 0009: attribute the upload to a data provider — snapshots its data-party, licence, id_type + notify defaults. -->
+    <label class="block text-sm mb-3">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Data provider (optional)</span>
+      <select id="au_provider" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="">None — first-party upload</option>
+      </select>
+      <span class="block mt-1 text-[11px] text-gray-400">Add providers under “Data providers” to classify third-party data (party, licence) and set format defaults.</span>
     </label>
     <!-- ADR 0008: apply a saved custom field mapping ("connector") for providers whose columns aren't standard id names. -->
     <label class="block text-sm mb-3">
@@ -1243,6 +1309,7 @@ const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch 
 const fmtMatchRate = (r) => r == null ? '<span class="text-gray-400">—</span>' : `${(r * 100).toFixed(0)}%`;
 async function loadAudiences() {
   loadMappings();
+  loadProviders();
   loadIngestHistory();
   const tbody = tbodyOf('audiences');
   try {
@@ -1342,6 +1409,68 @@ async function deleteMapping(id) {
     loadMappings();
   } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
+// ADR 0009: data providers. Party badge colours mirror the licence risk gradient
+// (1st = safe/green, 3rd = purchased/amber).
+const PARTY_BADGE = {first: 'bg-success/15 text-success', second: 'bg-info/15 text-info', third: 'bg-warning/15 text-warning'};
+const PARTY_LABEL = {first: '1st party', second: '2nd party', third: '3rd party'};
+// Kind → sensible party/licence defaults, matching the server's DefaultPartyForKind.
+function dpKindDefaults() {
+  const kind = $('dp_kind').value;
+  const party = (kind === 'dmp' || kind === 'cdp') ? 'third' : (kind === 'agency' ? 'second' : 'first');
+  $('dp_party').value = party;
+  $('dp_licence').value = party === 'first' ? 'first_party' : 'purchased';
+}
+async function saveProvider() {
+  const name = $('dp_name').value.trim();
+  if (!name) { toast('Provider name is required', 'error'); return; }
+  try {
+    await fetchJSON('/v1/api/audiences/providers', {method: 'POST',
+      body: JSON.stringify({
+        name,
+        kind: $('dp_kind').value,
+        default_party: $('dp_party').value,
+        default_licence: $('dp_licence').value,
+        encryption_expected: $('dp_encrypt').checked,
+      })});
+    toast('Provider saved', 'success');
+    $('dp_name').value = '';
+    $('dp_encrypt').checked = false;
+    loadProviders();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+async function loadProviders() {
+  const box = $('dp_list'), sel = $('au_provider');
+  if (!box) return;
+  try {
+    const list = await fetchJSON('/v1/api/audiences/providers') || [];
+    box.innerHTML = list.length ? list.map(p => `
+      <div class="flex items-center justify-between border-t border-gray-100 dark:border-gray-800 py-1">
+        <span>
+          <span class="font-medium">${esc(p.name)}</span>
+          <span class="ml-1 inline-block rounded px-1.5 py-0.5 text-[10px] ${PARTY_BADGE[p.default_party] || ''}">${esc(PARTY_LABEL[p.default_party] || p.default_party)}</span>
+          <span class="text-xs text-gray-400 font-mono">${esc(p.kind)} · ${esc(p.default_licence)}${p.encryption_expected ? ' · 🔒' : ''}</span>
+        </span>
+        <button onclick="deleteProvider('${esc(p.id)}')" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Delete</button>
+      </div>`).join('')
+      : '<span class="text-xs text-gray-400">No providers yet — add one to classify third-party data.</span>';
+    if (sel) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">None — first-party upload</option>' +
+        list.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(PARTY_LABEL[p.default_party] || p.default_party)})</option>`).join('');
+      sel.value = cur;
+    }
+  } catch (err) {
+    box.innerHTML = `<span class="text-xs text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+async function deleteProvider(id) {
+  try {
+    const resp = await fetch('/v1/api/audiences/providers/' + encodeURIComponent(id), {method: 'DELETE'});
+    if (!resp.ok && resp.status !== 204) throw new Error(await resp.text());
+    toast('Provider deleted', 'success');
+    loadProviders();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
 const INGEST_BADGE = {done: 'bg-success/15 text-success', failed: 'bg-error/15 text-error', queued: 'bg-info/15 text-info', running: 'bg-warning/15 text-warning'};
 let ingestPollTimer = null;
 async function loadIngestHistory() {
@@ -1414,11 +1543,13 @@ async function uploadAudience(ev) {
     if (file) {
       if (file.size > 100 * 1024 * 1024) { toast('File exceeds 100 MB', 'error'); return; }
       const mappingID = $('au_mapping') ? $('au_mapping').value : '';
+      const providerID = $('au_provider') ? $('au_provider').value : '';
       const fd = new FormData();
       fd.append('name', name);
       fd.append('type', $('au_type').value);
       fd.append('visibility', $('au_visibility').value);
       if (mappingID) fd.append('mapping_id', mappingID);
+      if (providerID) fd.append('provider_id', providerID);
       if (notify) fd.append('additional_emails', notify);
       // PGP-encrypted files (ADR 0008) are uploaded RAW — the server decrypts on
       // ingest. Client-side PII hashing can't (and mustn't) touch ciphertext;
@@ -1436,6 +1567,8 @@ async function uploadAudience(ev) {
       const ids = $('au_users').value.split(/\s+/).map(s => s.trim()).filter(Boolean);
       if (!ids.length) { toast('Choose a CSV file or paste ids', 'error'); return; }
       const body = {name, type: $('au_type').value, visibility: $('au_visibility').value, user_ids: ids};
+      const providerID = $('au_provider') ? $('au_provider').value : '';
+      if (providerID) body.provider_id = providerID;
       if (notify) body.additional_emails = notify.split(/[,\s;]+/).map(s => s.trim()).filter(Boolean);
       resp = await fetch('/v1/api/audiences', {method: 'POST',
         headers: {'Content-Type': 'application/json'},
