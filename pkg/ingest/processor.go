@@ -38,6 +38,10 @@ import (
 // identically (422 sync / failed job async).
 const pgpRejectReason = "file is PGP-encrypted but could not be decrypted (wrong key or no key configured)"
 
+// encryptionRequiredReason is the content-rejection for a cleartext file from a
+// provider whose contract requires PGP encryption (ADR 0009 encryption_expected).
+const encryptionRequiredReason = "this data provider requires PGP-encrypted files, but the uploaded file is not encrypted — encrypt it to the platform public key and retry"
+
 // signalChunk caps how many ids ride in one ProfileSignalEvent so a huge staged
 // file fans out to bounded NATS messages rather than one giant payload.
 const signalChunk = 1000
@@ -147,6 +151,13 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	if derr != nil {
 		log.Error("ingest: pgp decrypt failed", "encrypted", wasEncrypted, "error", derr)
 		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, pgpRejectReason)
+	}
+	// ADR 0009: enforce the provider's encryption contract. A cleartext file from
+	// an encryption_expected provider is a content reject (defense for the async /
+	// drop-zone paths; the gateway pre-flight rejects it up front too).
+	if spec.EncryptionExpected && !wasEncrypted {
+		log.Warn("ingest: cleartext file from encryption-required provider rejected")
+		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, encryptionRequiredReason)
 	}
 	records, err := DecodeFile(ctx, path.Base(key), body)
 	if err != nil {
@@ -459,9 +470,14 @@ func (p *Processor) ValidateSample(ctx context.Context, name string, body []byte
 	// ADR 0008: decrypt before decode, same as Process, so a PGP-encrypted file
 	// we can't read is rejected up front on the sync upload path (422) rather
 	// than being staged and discovered mid-ingest.
-	body, _, derr := pgp.MaybeDecrypt(body, p.PGPKeyring)
+	body, wasEncrypted, derr := pgp.MaybeDecrypt(body, p.PGPKeyring)
 	if derr != nil {
 		return Reject(pgpRejectReason)
+	}
+	// ADR 0009: reject a cleartext file from an encryption_expected provider up
+	// front (422), same rule the processor enforces at process time.
+	if spec.EncryptionExpected && !wasEncrypted {
+		return Reject(encryptionRequiredReason)
 	}
 	records, err := DecodeFile(ctx, name, body)
 	if err != nil {

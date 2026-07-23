@@ -1483,7 +1483,7 @@ async function loadIngestHistory() {
       <tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 text-xs text-gray-500">${j.finished_at || j.created_at ? fmtDate(j.finished_at || j.created_at) : '—'}</td>
         <td class="px-3 py-2 font-medium">${esc(j.name || '—')}</td>
-        <td class="px-3 py-2 text-xs text-gray-500">${esc(j.source)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(j.source)}${j.data_party && j.data_party !== 'first' ? ` <span class="ml-1 inline-block rounded px-1 py-0.5 text-[10px] ${PARTY_BADGE[j.data_party] || ''}">${esc(PARTY_LABEL[j.data_party] || j.data_party)}</span>` : ''}</td>
         <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${INGEST_BADGE[j.status] || 'bg-surface-3 text-gray-500'}">${esc(j.status)}</span></td>
         <td class="px-3 py-2 font-mono">${fmtInt(j.valid_rows)}</td>
         <td class="px-3 py-2 font-mono ${j.rejected_rows ? 'text-warning' : ''}">${fmtInt(j.rejected_rows)}</td>

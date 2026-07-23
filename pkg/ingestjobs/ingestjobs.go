@@ -57,6 +57,10 @@ type SegmentSpec struct {
 	// third, ADR 0009), snapshotted from the provider at enqueue. Empty →
 	// processor default (first). Stamped onto the segment + profile.signal.
 	DataParty string `json:"data_party,omitempty"`
+	// EncryptionExpected mirrors the provider's contract (ADR 0009): when true a
+	// cleartext (non-PGP) file is rejected — the provider is required to encrypt.
+	// Snapshotted from the provider at enqueue; false for plain uploads.
+	EncryptionExpected bool `json:"encryption_expected,omitempty"`
 }
 
 // IngestResult is what the processor returns for a completed ingest — the
