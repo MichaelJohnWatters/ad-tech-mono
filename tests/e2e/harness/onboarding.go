@@ -27,6 +27,36 @@ type AudienceUploadResult struct {
 	MatchRate    float64 `json:"match_rate"`
 }
 
+// UploadAudienceCSVStatus POSTs a CSV upload and returns the raw (status, body)
+// without asserting 200 — for the reject-path tests (a wrong-shaped file must
+// come back 422 with a reason).
+func (h *Harness) UploadAudienceCSVStatus(t *testing.T, accountID, name, visibility, csv string) (int, string) {
+	t.Helper()
+	email := "aud-csv-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("name", name)
+	_ = mw.WriteField("visibility", visibility)
+	fw, _ := mw.CreateFormFile("file", "upload.csv")
+	_, _ = fw.Write([]byte(csv))
+	_ = mw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Gateway+routes.APIAudiences, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("csv upload call: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
 // UploadAudienceCSV POSTs the multipart CSV variant of the audience upload —
 // the portal's small-file path — authenticated as an owner of accountID.
 func (h *Harness) UploadAudienceCSV(t *testing.T, accountID, name, visibility, csv string) AudienceUploadResult {

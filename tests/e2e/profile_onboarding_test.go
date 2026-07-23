@@ -95,6 +95,29 @@ func TestProfileOnboardingCSVUpload(t *testing.T) {
 	}
 }
 
+// TestAudienceUploadReject — a wrong-shaped file (no id column) is rejected up
+// front with 422 + a reason (the sample pre-flight), while a valid file 200s.
+// Case-insensitive headers: an UPPERCASE id column is accepted (ADR 0007).
+func TestAudienceUploadReject(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "aud-reject")
+
+	// No id column → 422 with a reason.
+	code, body := h.UploadAudienceCSVStatus(t, w.AdvAcc.ID, "bad-shape", "public", "email_address,city\nfoo@bar.com,NYC\n")
+	if code != 422 {
+		t.Fatalf("no-id upload: status %d, want 422 (body: %s)", code, body)
+	}
+	if !strings.Contains(strings.ToLower(body), "reject") || !strings.Contains(strings.ToLower(body), "id column") {
+		t.Errorf("422 body should explain the reject reason, got: %s", body)
+	}
+
+	// UPPERCASE id header is accepted (headers are lowercased at decode).
+	res := h.UploadAudienceCSV(t, w.AdvAcc.ID, "upper-ok", "public", "USER_ID\n"+w.AdvAcc.ID+"-u1\n")
+	if res.SegmentID == "" || res.MembersAdded != 1 {
+		t.Errorf("uppercase-header upload: %+v, want 1 member added", res)
+	}
+}
+
 // TestOnboardingRetentionSweep — processed/rejected artifact bytes are
 // deleted once their ingest job ages past pipeline.onboarding_retention (30d
 // default): a backdated audience_ingest_jobs row makes the live poller sweep
