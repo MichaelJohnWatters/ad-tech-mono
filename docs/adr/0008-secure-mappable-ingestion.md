@@ -66,8 +66,21 @@ manifest mapping). Two additions:
   (ProtonMail/go-crypto). Mapping targets are intentionally narrow — widening them
   is a deliberate future change, not provider-configurable.
 
+### 3. Ingest completion emails (optional)
+- On terminal state (done/failed) an ingest job optionally emails the outcome:
+  **primary recipient = the uploader** (email resolved from `team_members` by the
+  JWT `UserID`); **additional recipients optional** (an `additional_emails` field on
+  the upload, or `notify_emails` in a drop-zone manifest). Stored as
+  `audience_ingest_jobs.notify_emails TEXT[]` at enqueue.
+- Sent via `pkg/email.Sender` (SMTP/Mailpit, memory fallback) — inline jobs notify
+  from the gateway, async jobs from the pipeline worker, after MarkDone/MarkFailed.
+  Subject "Audience upload '<name>' succeeded/failed"; body = members added +
+  match rate on success, or the reject reason on failure.
+
 ## Migration plan
 1. **PGP** — secrets purpose + migration (CHECK enum), keygen in seed, decrypt in
    `pkg/ingest`, public-key endpoint, upload-screen panel.
 2. **Custom mappings** — table + RLS, store, sample/CRUD endpoints, `mapping_id` on
    upload, mapping-builder UI section.
+3. **Completion emails** — `notify_emails` column, capture at enqueue, send on
+   terminal state from both the gateway (inline) and pipeline worker (async).

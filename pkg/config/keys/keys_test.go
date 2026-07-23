@@ -20,7 +20,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"report-runner", ReportRunnerSchema(), 13},
 		{"dsp", DSPSchema(), 21},
 		{"exchange", ExchangeSchema(), 21},
-		{"gateway", GatewaySchema(), 13},
+		{"gateway", GatewaySchema(), 17},
 		{"tracker", TrackerSchema(), 11},
 		{"adserver", AdServerSchema(), 10},
 		{"ssp", SSPSchema(), 10},
@@ -32,7 +32,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"publisher-adserver", PublisherAdServerSchema(), 9},
 		{"content-packager", ContentPackagerSchema(), 9},
 		{"prewarm", PrewarmSchema(), 2},
-		{"pipeline", PipelineSchema(), 11},
+		{"pipeline", PipelineSchema(), 15},
 	} {
 		if len(tc.entries) != tc.want {
 			t.Errorf("%s schema: %d entries, want %d", tc.name, len(tc.entries), tc.want)

@@ -26,6 +26,14 @@ var Pipeline = struct {
 	OnboardingRetention   config.DurationKey
 	IngestWorkerInterval  config.DurationKey
 	IngestMaxRejectPct    config.IntKey
+
+	// Ingest completion emails (ADR 0008 Feature 3): the async ingest worker
+	// notifies a job's recipients when it finishes. SMTP when smtp_host is set,
+	// else an in-memory sender that only logs (dev).
+	EmailFrom    config.StringKey
+	SMTPHost     config.StringKey
+	SMTPUsername config.StringKey
+	SMTPPassword config.StringKey
 }{
 	Port:                  pipelineSet.String("pipeline.port", routes.PortPipeline, config.TierStatic, "HTTP port for /healthz, /readyz, the datalake debug snapshot, and the lake maintenance endpoints (purge/compact/vacuum/profile).", config.Since("v1.9")),
 	NATSURL:               pipelineSet.String("pipeline.nats_url", routes.DefaultNATSURL, config.TierStatic, "NATS JetStream URL the datalake sink consumes the event stream from.", config.Since("v1.9")),
@@ -38,4 +46,9 @@ var Pipeline = struct {
 	OnboardingRetention:   pipelineSet.Duration("pipeline.onboarding_retention", "720h", config.TierLive, "How long processed/rejected drop-zone artifact BYTES are retained before the sweep deletes them (the audience_ingest_jobs row survives, stamped swept_at). Live: re-read every poll tick, so a change applies without a restart. The lake's profile_signals is the replayable record — these copies are audit/debug only.", config.Since("v1.9")),
 	IngestWorkerInterval:  pipelineSet.Duration("pipeline.ingest_worker_interval", "5s", config.TierStatic, "How often the audience ingest worker reclaims lapsed leases and drains the audience_ingest_jobs queue (ADR 0007). Distinct from the drop-zone poll interval: the poller enqueues jobs, this worker processes them.", config.Since("v1.13")),
 	IngestMaxRejectPct:    pipelineSet.Int("pipeline.ingest_max_reject_pct", "0", config.TierLive, "Max %% of an audience file's rows that may fail validation before the WHOLE file is rejected (atomic per file — none of it imported). 0 = strict all-or-nothing (any bad row rejects); 20 = import the good rows as long as ≤20%% quarantined; 100 = never reject on bad rows (partial import). Read by the gateway upload pre-flight AND the ingest worker.", config.Since("v1.13")),
+
+	EmailFrom:    pipelineSet.String("pipeline.email_from", "audiences@adtech.local", config.TierStatic, "From address on audience-ingest completion emails (ADR 0008). The async ingest worker notifies a job's recipients when it finishes.", config.Since("v1.15")),
+	SMTPHost:     pipelineSet.String("pipeline.smtp_host", "", config.TierStatic, "SMTP host:port for audience-ingest completion emails (Mailpit/SES). Empty → in-memory sender that only logs deliveries.", config.Since("v1.15")),
+	SMTPUsername: pipelineSet.String("pipeline.smtp_username", "", config.TierStatic, "SMTP username for authenticated completion-email delivery (SES/Sendgrid). Empty → unauthenticated (Mailpit).", config.Since("v1.15")),
+	SMTPPassword: pipelineSet.String("pipeline.smtp_password", "", config.TierSecret, "SMTP password for authenticated completion-email delivery (SES/Sendgrid). Secret; paired with pipeline.smtp_username.", config.Since("v1.15")),
 }

@@ -158,6 +158,25 @@ func TestReclaimExpiredLease(t *testing.T) {
 	}
 }
 
+func TestNotifyEmailsRoundTrip(t *testing.T) {
+	m := NewMemoryIngestStore()
+	ctx := context.Background()
+
+	j := newJob("b", "notify.csv")
+	j.NotifyEmails = []string{"a@example.com", "b@example.com"}
+	id, err := m.Enqueue(ctx, j)
+	if err != nil || id == "" {
+		t.Fatalf("enqueue: id=%q err=%v", id, err)
+	}
+	claimed, err := m.ClaimOne(ctx)
+	if err != nil || claimed == nil {
+		t.Fatalf("claim: %+v err=%v", claimed, err)
+	}
+	if len(claimed.NotifyEmails) != 2 || claimed.NotifyEmails[0] != "a@example.com" {
+		t.Errorf("notify_emails not round-tripped onto claimed job: %+v", claimed.NotifyEmails)
+	}
+}
+
 func TestDedupeOnBucketKey(t *testing.T) {
 	m := NewMemoryIngestStore()
 	ctx := context.Background()

@@ -369,6 +369,11 @@ func main() {
 	if gwDB != nil {
 		mappingStore = audiencemappings.NewPostgresStore(gwDB)
 	}
+	// Ingest completion emails (ADR 0008 Feature 3): inline uploads notify the
+	// uploader (+ additional_emails) when a job finishes. SMTP when configured,
+	// else an in-memory sender that only logs (dev).
+	ingestEmailFrom := keys.Gateway.EmailFrom.Get(cfg)
+	ingestEmailSender := connectIngestEmail(cfg, ingestEmailFrom, log)
 	audDeps := audienceDeps{
 		store:        audStore,
 		proc:         ingestProc,
@@ -378,6 +383,9 @@ func main() {
 		inlineMaxRow: keys.Gateway.IngestInlineMaxRows.Get(cfg),
 		maxBytes:     keys.Gateway.IngestMaxUploadBytes.Get(cfg),
 		mappingStore: mappingStore,
+		db:           gwDB,
+		emailSender:  ingestEmailSender,
+		emailFrom:    ingestEmailFrom,
 		log:          log,
 	}
 	// The ingest status subtree (.../ingest/{id}) must register BEFORE the base

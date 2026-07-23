@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +18,10 @@ import (
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -97,6 +104,11 @@ type audienceUploadRequest struct {
 	// sets SegmentSpec.FieldMappings + IDType from it. Empty = default behaviour
 	// (the built-in id column names). Multipart form field: mapping_id.
 	MappingID string `json:"mapping_id,omitempty"`
+	// AdditionalEmails (optional, ADR 0008 Feature 3) are extra recipients
+	// notified when this upload's ingest job finishes — in addition to the
+	// uploader, who is always notified (resolved from team_members by the JWT
+	// UserID). Multipart form field: additional_emails (comma/space separated).
+	AdditionalEmails []string `json:"additional_emails,omitempty"`
 }
 
 // audienceUploadResponse is the INLINE (small-file) 200 response — a genuine
@@ -149,7 +161,15 @@ type audienceDeps struct {
 	// carries mapping_id (ADR 0008). nil is tolerated — an upload with no
 	// mapping_id behaves exactly as before.
 	mappingStore audiencemappings.Store
-	log          *slog.Logger
+	// db resolves the uploader's email from team_members by the JWT UserID for
+	// ingest completion emails (ADR 0008 Feature 3). nil is tolerated — the
+	// upload falls back to the additional_emails list only.
+	db *sql.DB
+	// emailSender + emailFrom deliver the inline ingest completion email. A nil
+	// sender (or an empty recipient list) is a no-op — email is best-effort.
+	emailSender email.Sender
+	emailFrom   string
+	log         *slog.Logger
 }
 
 // audienceHandler serves the tenant-scoped audiences API for the customer
@@ -200,7 +220,7 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			deps.handleUpload(w, r, claims.AccountID)
+			deps.handleUpload(w, r, claims)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -211,7 +231,8 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 // handleUpload validates the upload synchronously, stages the raw bytes, and
 // enqueues an ingest job. Small + due-now → claim + inline Process → 200 with a
 // match rate; otherwise → leave queued → 202 with the job id.
-func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, accountID string) {
+func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
+	accountID := claims.AccountID
 	var req audienceUploadRequest
 	var raw []byte // the CSV bytes staged to object storage
 	var src string
@@ -302,12 +323,25 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 		}
 	}
 
+	// Completion-email recipients (ADR 0008 Feature 3): the uploader (resolved
+	// from team_members by the JWT UserID) is always notified; additional_emails
+	// are appended. A failed uploader lookup still notifies the additional list.
+	// Computed BEFORE the pre-flight so a rejected file still emails a failure.
+	recipients := deps.resolveUploaderEmail(r.Context(), claims.UserID)
+	recipients = append(recipients, req.AdditionalEmails...)
+	notifyEmails := ingest.SanitizeNotifyEmails(recipients)
+
 	// PRE-FLIGHT: sample-parse the first rows (lowercased headers) and reject a
 	// wrong-shaped file with a 422 BEFORE staging — instant feedback, and a bad
 	// file never enters the queue. Full per-row validation still runs at process
 	// time (partial files import the good rows + quarantine the bad).
 	if err := deps.proc.ValidateSample(r.Context(), safeFileName(req.Name)+".csv", raw, spec, 10); err != nil {
 		deps.log.Info("audience upload rejected (pre-flight)", "name", req.Name, "reason", err.Error())
+		// Notify recipients of the failure even though no job was created — the
+		// pre-flight reject IS the terminal outcome. Synthetic job carries the
+		// segment name + recipients for the email body.
+		ingest.NotifyResult(context.Background(), deps.emailSender, deps.emailFrom,
+			ingestjobs.Job{SegmentSpec: spec, NotifyEmails: notifyEmails}, ingestjobs.IngestResult{}, err, deps.log)
 		http.Error(w, `{"error":`+jsonStr("file rejected: "+err.Error())+`}`, http.StatusUnprocessableEntity)
 		return
 	}
@@ -335,13 +369,15 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, ac
 			runAt = t.UTC()
 		}
 	}
+
 	job := ingestjobs.Job{
-		AccountID:   accountID,
-		Source:      ingestjobs.SourceAPI,
-		FileBucket:  deps.bucket,
-		FileKey:     fileKey,
-		SegmentSpec: spec,
-		RunAt:       runAt,
+		AccountID:    accountID,
+		Source:       ingestjobs.SourceAPI,
+		FileBucket:   deps.bucket,
+		FileKey:      fileKey,
+		SegmentSpec:  spec,
+		RunAt:        runAt,
+		NotifyEmails: notifyEmails,
 	}
 	jobID, err := deps.ingestStore.Enqueue(r.Context(), job)
 	if err != nil {
@@ -404,6 +440,10 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 		if markErr := deps.ingestStore.MarkFailed(r.Context(), jobID, err.Error()); markErr != nil {
 			deps.log.Error("audience upload: mark failed", "job", jobID, "error", markErr)
 		}
+		// Best-effort completion email (ADR 0008). Background ctx so it isn't
+		// cancelled when the HTTP response returns; a send failure never fails
+		// the request.
+		ingest.NotifyResult(context.Background(), deps.emailSender, deps.emailFrom, *claimed, result, err, deps.log)
 		// A content REJECT (bad file) is a 422 client error, not a 500 — though
 		// the pre-flight ValidateSample catches nearly all of these before here.
 		if ingest.IsReject(err) {
@@ -418,6 +458,9 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 	if err := deps.ingestStore.MarkDone(r.Context(), jobID, result); err != nil {
 		deps.log.Error("audience upload: mark done", "job", jobID, "error", err)
 	}
+	// Best-effort completion email (ADR 0008). Background ctx so it isn't
+	// cancelled when the HTTP response returns.
+	ingest.NotifyResult(context.Background(), deps.emailSender, deps.emailFrom, *claimed, result, nil, deps.log)
 
 	resp := audienceUploadResponse{
 		SegmentID:    result.SegmentID,
@@ -544,6 +587,7 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 	req.Visibility = r.FormValue("visibility")
 	req.RunAt = strings.TrimSpace(r.FormValue("run_at"))
 	req.MappingID = strings.TrimSpace(r.FormValue("mapping_id"))
+	req.AdditionalEmails = splitEmails(r.FormValue("additional_emails"))
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		return req, nil, "missing file field"
@@ -564,6 +608,60 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 		return req, nil, "empty file"
 	}
 	return req, body, ""
+}
+
+// resolveUploaderEmail looks up the uploader's email from team_members by the
+// JWT UserID (ADR 0008 Feature 3). Returns nil (no primary recipient) on any
+// failure — a nil db, a non-UUID dev user, an absent row, or a query error —
+// so the upload still notifies the additional_emails list. The lookup is not
+// tenant-filtered because team_members has no RLS and the id is the JWT's own
+// (a caller can't spoof another user's UserID).
+func (deps audienceDeps) resolveUploaderEmail(ctx context.Context, userID string) []string {
+	if deps.db == nil || strings.TrimSpace(userID) == "" {
+		return nil
+	}
+	var e string
+	if err := deps.db.QueryRowContext(ctx,
+		`SELECT email FROM team_members WHERE id = $1::uuid`, userID).Scan(&e); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			deps.log.Warn("audience upload: uploader email lookup failed", "user", userID, "error", err)
+		}
+		return nil
+	}
+	if e = strings.TrimSpace(e); e == "" {
+		return nil
+	}
+	return []string{e}
+}
+
+// splitEmails splits a comma/space-separated recipient string into trimmed,
+// non-empty entries. Sanitisation (dedup + "@" check) is ingest.SanitizeNotifyEmails.
+func splitEmails(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' || r == ';' })
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// connectIngestEmail selects SMTP (Mailpit/SES) when gateway.smtp_host is set,
+// else an in-memory sender that only logs deliveries (dev). Mirrors
+// cmd/report-runner's connectEmail.
+func connectIngestEmail(cfg *config.Config, from string, log *slog.Logger) email.Sender {
+	host := keys.Gateway.SMTPHost.Get(cfg)
+	if host == "" {
+		log.Info("gateway ingest email via memory sender (no smtp_host set) — deliveries are logged only")
+		return email.NewMemory(log)
+	}
+	if user := keys.Gateway.SMTPUsername.Get(cfg); user != "" {
+		log.Info("gateway ingest email via authenticated SMTP", "host", host, "username", user)
+		return email.NewSMTPAuth(host, from, user, keys.Gateway.SMTPPassword.Get(cfg), log)
+	}
+	log.Info("gateway ingest email via SMTP", "host", host)
+	return email.NewSMTP(host, from, log)
 }
 
 func jsonStr(s string) string {
