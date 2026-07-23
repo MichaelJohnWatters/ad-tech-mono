@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -186,6 +186,11 @@ stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
 	    --cert=dev/tls/localhost.pem --key=dev/tls/localhost-key.pem \
 	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "adtech-tls (ingress) secret applied"; \
 	else echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS ingress"; fi
+
+demosite: ## Run the external demo publisher site (host process, :9000). Needs the stack up + seeded.
+	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
+	@echo "for the public TLS path: see cmd/demosite/README.md"
+	go run ./cmd/demosite
 
 deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }

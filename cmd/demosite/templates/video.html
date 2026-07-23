@@ -1,0 +1,67 @@
+{{define "video.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>Watch: How a Pre-Roll Ad Auction Works</h2>
+    <div class="byline">By The Demo Desk · Video</div>
+    <p>The player below requests a <strong>VAST</strong> tag from the platform
+       (<code>/v1/pubad/video/vast</code>). A real auction picks a video creative; this minimal
+       VAST player parses the response, plays the winning pre-roll, fires the quartile beacons,
+       then plays the content.</p>
+
+    <div class="ad-label">Video player</div>
+    <div style="position:relative;width:100%;max-width:640px;">
+      <video id="player" width="640" height="360" controls style="background:#000;width:100%;height:auto;"></video>
+      <div id="ad-badge" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.7);color:#fff;font:11px sans-serif;padding:3px 8px;border-radius:4px;">Ad · <span id="ad-count"></span></div>
+    </div>
+    <div class="status" id="v-status">awaiting consent…</div>
+    <p style="font-size:14px;color:#6b7280">Content clip: Big Buck Bunny (sample). The pre-roll is a real served ad.</p>
+  </article>
+  <aside></aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  var CONTENT = {{.Cfg.MediaURL}} + '/v1/creatives/media/bbb-720-10mb.mp4';
+  function fire(url){ if(!url) return; var i=new Image(); i.src=url; }  // pixel beacon
+  window.__ads.onConsent = function() {
+    var status = document.getElementById('v-status'), player = document.getElementById('player');
+    status.textContent = 'requesting VAST…';
+    fetch({{.Cfg.PubadURL}} + '/v1/pubad/video/vast?placement_id=' + encodeURIComponent({{.Cfg.VideoPlacement}}) + '&geo=USA&device=desktop', { credentials:'omit' })
+      .then(function(r){ return r.text(); })
+      .then(function(xml){
+        var doc = new DOMParser().parseFromString(xml, 'text/xml');
+        var media = doc.querySelector('MediaFile');
+        if (!media) { status.textContent = 'no video fill — playing content'; return playContent(player); }
+        var adUrl = media.textContent.trim();
+        var imp = (doc.querySelector('Impression')||{}).textContent;
+        var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')] = t.textContent.trim(); });
+        status.textContent = 'pre-roll won ✓ — playing ad';
+        document.getElementById('ad-badge').style.display = 'block';
+        player.src = adUrl;
+        player.play();
+        var fired = {};
+        player.addEventListener('play', function(){ if(!fired.imp){ fired.imp=1; fire(imp); fire(track.start); } });
+        player.addEventListener('timeupdate', function(){
+          if (!player.duration) return;
+          var p = player.currentTime/player.duration;
+          document.getElementById('ad-count').textContent = Math.ceil(player.duration-player.currentTime)+'s';
+          if (p>=.25 && !fired.q1){ fired.q1=1; fire(track.firstQuartile); }
+          if (p>=.5 && !fired.q2){ fired.q2=1; fire(track.midpoint); }
+          if (p>=.75 && !fired.q3){ fired.q3=1; fire(track.thirdQuartile); }
+        });
+        player.addEventListener('ended', function(){ if(!fired.done){ fired.done=1; fire(track.complete); document.getElementById('ad-badge').style.display='none'; status.textContent='ad complete ✓ — playing content'; playContent(player); } });
+      })
+      .catch(function(e){ status.textContent = 'VAST error: ' + e.message + ' — playing content'; playContent(player); });
+  };
+  function playContent(player){ player.src = CONTENT; player.play(); }
+</script>
+</body>
+</html>{{end}}

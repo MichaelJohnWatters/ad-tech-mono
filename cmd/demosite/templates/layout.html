@@ -1,0 +1,73 @@
+{{define "styles"}}
+<style>
+  :root { --ink:#1a1a2e; --muted:#6b7280; --line:#e5e7eb; --accent:#b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: Georgia, 'Times New Roman', serif; color:var(--ink); background:#faf9f7; }
+  header.masthead { border-bottom:3px double var(--ink); text-align:center; padding:18px 12px 8px; }
+  .masthead h1 { margin:0; font-size:44px; letter-spacing:1px; }
+  .masthead .tagline { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:3px; }
+  nav { display:flex; gap:18px; justify-content:center; border-bottom:1px solid var(--line); padding:8px; font-family:-apple-system,system-ui,sans-serif; font-size:13px; }
+  nav a { color:var(--ink); text-decoration:none; text-transform:uppercase; letter-spacing:1px; padding:4px 6px; }
+  nav a.active { color:var(--accent); border-bottom:2px solid var(--accent); }
+  main { max-width:1080px; margin:0 auto; padding:24px 16px; display:grid; grid-template-columns: 1fr 320px; gap:32px; }
+  @media (max-width:820px){ main{ grid-template-columns:1fr; } }
+  article h2 { font-size:30px; margin:0 0 6px; line-height:1.15; }
+  article .byline { color:var(--muted); font-size:12px; font-family:sans-serif; margin-bottom:14px; }
+  article p { line-height:1.7; font-size:18px; }
+  aside { font-family:-apple-system,system-ui,sans-serif; }
+  .ad-rail { position:sticky; top:16px; }
+  .ad-label { font-size:9px; letter-spacing:2px; text-transform:uppercase; color:#9ca3af; text-align:center; margin-bottom:4px; font-family:sans-serif;}
+  .ad-slot { min-height:250px; display:flex; align-items:center; justify-content:center; background:#f1f0ee; border:1px dashed #d1d5db; color:#9ca3af; font-size:12px; font-family:sans-serif; }
+  .status { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:6px; text-align:center; }
+  .consent { position:fixed; left:0; right:0; bottom:0; background:#111827; color:#f9fafb; padding:14px 18px; display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; font-family:sans-serif; font-size:13px; z-index:9999; box-shadow:0 -2px 12px rgba(0,0,0,.25); }
+  .consent button { font-family:sans-serif; font-size:13px; border:0; border-radius:6px; padding:8px 16px; cursor:pointer; }
+  .consent .accept { background:#16a34a; color:#fff; }
+  .consent .reject { background:#374151; color:#f9fafb; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; }
+</style>
+{{end}}
+
+{{define "nav"}}
+<header class="masthead">
+  <h1>The Demo Times</h1>
+  <div class="tagline">An external publisher · powered by adtech.js</div>
+</header>
+<nav>
+  <a href="/" class="{{if eq .Active "home"}}active{{end}}">Home</a>
+  <a href="/video" class="{{if eq .Active "video"}}active{{end}}">Video</a>
+  <a href="/audio" class="{{if eq .Active "audio"}}active{{end}}">Audio</a>
+  <a href="/native" class="{{if eq .Active "native"}}active{{end}}">Native</a>
+</nav>
+{{end}}
+
+{{/* SDK load + init + consent controller. adtech.js is loaded from the platform's
+     PUBLIC url (cross-origin script). Pages register window.__ads.onConsent to
+     request their ads once a consent choice exists. */}}
+{{define "sdkboot"}}
+<script src="{{.Cfg.SDKURL}}"></script>
+<script>
+  window.__ads = { onConsent: null };
+  adtech.init({ publisherId: {{.Cfg.PublisherID}}, pubadUrl: {{.Cfg.PubadURL}}, debug: true });
+  function applyConsent(personalized) {
+    // GDPR applies; personalized = full TCF purposes 1-4, else contextual-only
+    // (no cookie/personalization — the SDK drops the id cookie without purpose 1).
+    adtech.setConsent({ gdpr: true, purposes: personalized ? [1,2,3,4] : [] });
+    localStorage.setItem('demotimes_consent', personalized ? 'personalized' : 'contextual');
+    var b = document.getElementById('consent'); if (b) b.style.display = 'none';
+    if (window.__ads.onConsent) window.__ads.onConsent(personalized);
+  }
+  document.addEventListener('DOMContentLoaded', function() {
+    var choice = localStorage.getItem('demotimes_consent');
+    if (choice) { applyConsent(choice === 'personalized'); }
+    else { var b = document.getElementById('consent'); if (b) b.style.display = 'flex'; }
+  });
+</script>
+{{end}}
+
+{{define "consentBanner"}}
+<div class="consent" id="consent" style="display:none">
+  <span>🍪 The Demo Times uses cookies to show personalized ads. Your choice controls whether the ad platform sets an id cookie (TCF purposes 1–4).</span>
+  <button class="accept" onclick="applyConsent(true)">Accept personalized</button>
+  <button class="reject" onclick="applyConsent(false)">Contextual only</button>
+</div>
+{{end}}

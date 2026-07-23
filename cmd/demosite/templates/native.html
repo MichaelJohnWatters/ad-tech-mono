@@ -1,0 +1,45 @@
+{{define "native.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>The Feed</h2>
+    <div class="byline">By The Demo Desk · Native</div>
+    <p>Native ads match the look of the surrounding feed but are labelled “Advertisement”.
+       Each card below the first is a real served native unit from
+       <code>/v1/pubad/native</code>.</p>
+
+    <div class="card" style="margin:14px 0"><strong>Editorial:</strong> How real-time bidding clears in ~100ms across SSP, exchange and DSP.</div>
+    <div class="ad-label">Advertisement</div>
+    <div id="native-1" class="card" style="min-height:110px">Loading…</div>
+    <div class="card" style="margin:14px 0"><strong>Editorial:</strong> First-price auctions and bid shading, explained.</div>
+    <div class="ad-label">Advertisement</div>
+    <div id="native-2" class="card" style="min-height:110px">Loading…</div>
+    <div class="status" id="n-status">awaiting consent…</div>
+  </article>
+  <aside></aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  function loadNative(slotId){
+    return fetch({{.Cfg.PubadURL}} + '/v1/pubad/native?placement_id=' + encodeURIComponent({{.Cfg.NativePlacement}}) + '&geo=USA&device=desktop&_=' + Math.random(), { credentials:'omit' })
+      .then(function(r){ return r.json(); })
+      .then(function(ad){ var el=document.getElementById(slotId);
+        if(ad&&ad.html){ el.innerHTML=ad.html; return true; } el.textContent='No fill.'; return false; });
+  }
+  window.__ads.onConsent = function(){
+    document.getElementById('n-status').textContent='requesting native…';
+    Promise.all([loadNative('native-1'), loadNative('native-2')])
+      .then(function(res){ document.getElementById('n-status').textContent = 'filled ' + res.filter(Boolean).length + '/2 ✓'; })
+      .catch(function(e){ document.getElementById('n-status').textContent='error: '+e.message; });
+  };
+</script>
+</body>
+</html>{{end}}

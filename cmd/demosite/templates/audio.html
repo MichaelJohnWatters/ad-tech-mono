@@ -1,0 +1,60 @@
+{{define "audio.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>Listen: The Programmatic Podcast</h2>
+    <div class="byline">By The Demo Desk · Audio</div>
+    <p>Podcast players insert audio ads the same way video does — a VAST tag
+       (<code>/v1/pubad/audio</code>) returns a winning audio creative with quartile beacons.
+       Press play: a real audio ad plays first, then the episode.</p>
+
+    <div class="ad-label">Audio player</div>
+    <div class="card">
+      <div id="a-now" style="font-family:sans-serif;font-size:13px;margin-bottom:8px;color:#6b7280">Ready.</div>
+      <audio id="aplayer" controls style="width:100%"></audio>
+      <button id="a-start" style="margin-top:10px;font-family:sans-serif;border:0;background:#111827;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer">▶ Play episode (with ad)</button>
+    </div>
+    <div class="status" id="a-status">awaiting consent…</div>
+  </article>
+  <aside></aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  var EPISODE = {{.Cfg.MediaURL}} + '/v1/creatives/media/sample-audio.mp3';
+  function fire(url){ if(!url) return; var i=new Image(); i.src=url; }
+  var consented = false;
+  window.__ads.onConsent = function(){ consented = true; document.getElementById('a-status').textContent = 'ready — press play'; };
+  document.getElementById('a-start').addEventListener('click', function(){
+    var status=document.getElementById('a-status'), now=document.getElementById('a-now'), player=document.getElementById('aplayer');
+    if(!consented){ status.textContent='make a consent choice first'; return; }
+    status.textContent = 'requesting audio ad…';
+    fetch({{.Cfg.PubadURL}} + '/v1/pubad/audio?placement_id=' + encodeURIComponent({{.Cfg.AudioPlacement}}) + '&geo=USA&device=mobile', { credentials:'omit' })
+      .then(function(r){ return r.text(); })
+      .then(function(xml){
+        var doc=new DOMParser().parseFromString(xml,'text/xml');
+        var media=doc.querySelector('MediaFile');
+        if(!media){ status.textContent='no audio fill — playing episode'; return playEpisode(); }
+        var imp=(doc.querySelector('Impression')||{}).textContent;
+        var track={}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')]=t.textContent.trim(); });
+        now.textContent='▶ Advertisement'; status.textContent='audio ad won ✓';
+        player.src=media.textContent.trim(); player.play();
+        var f={};
+        player.addEventListener('play',function(){ if(!f.i){f.i=1; fire(imp); fire(track.start);} });
+        player.addEventListener('ended',function(){ if(!f.d){f.d=1; fire(track.complete); playEpisode();} });
+        function playEpisode(){ now.textContent='▶ The Programmatic Podcast — Episode 1'; status.textContent='ad complete ✓ — playing episode'; player.src=EPISODE; player.play(); }
+        window.__playEpisode=playEpisode;
+      })
+      .catch(function(e){ status.textContent='audio VAST error: '+e.message; playEpisode(); });
+    function playEpisode(){ now.textContent='▶ Episode 1'; player.src=EPISODE; player.play(); }
+  });
+</script>
+</body>
+</html>{{end}}
