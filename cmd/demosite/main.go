@@ -1,0 +1,101 @@
+// cmd/demosite is a standalone DEMO PUBLISHER website — deliberately OUTSIDE the
+// ad-tech cluster. It embeds the real adtech.js SDK / VAST tags and requests real
+// ads from the platform's PUBLIC ingress (pubad), exactly as a third-party
+// publisher would. Running it as a separate origin (host process on :9000, or a
+// container in a second cluster) is the point: it exercises the real cross-origin
+// path — CORS, TLS, the configurable SDK host, public ingress routing — that an
+// in-cluster page would paper over.
+//
+// It talks to the platform ONLY via configurable public URLs (never in-cluster
+// DNS), so "host process now, second cluster later" is a deploy choice, not a
+// code change.
+//
+//	Run locally:  go run ./cmd/demosite   (then open http://localhost:9000)
+//	Config (env): DEMOSITE_PORT, DEMOSITE_PUBAD_URL, DEMOSITE_SDK_URL,
+//	              DEMOSITE_MEDIA_URL, DEMOSITE_PUBLISHER_ID
+package main
+
+import (
+	"embed"
+	"html/template"
+	"log"
+	"net/http"
+	"os"
+)
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+// siteConfig is injected into every page — all the platform-facing URLs the
+// browser uses. Defaults target the local HTTPS ingress (Phase A); override via
+// env for staging/prod (the real public domain).
+type siteConfig struct {
+	PubadURL    string // public base of the publisher-adserver (/v1/pubad/*)
+	SDKURL      string // where the browser loads adtech.js from
+	MediaURL    string // base for video/audio media + creative assets
+	PublisherID string // the seeded demo publisher
+	// Per-format seeded placement external IDs (idgen-derived server-side).
+	DisplayPlacement string
+	VideoPlacement   string
+	AudioPlacement   string
+	NativePlacement  string
+}
+
+type page struct {
+	Cfg    siteConfig
+	Active string // nav highlight
+	Title  string
+}
+
+func env(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func main() {
+	cfg := siteConfig{
+		// Defaults target the LOCALHOST-exposed ports so `go run ./cmd/demosite` +
+		// open http://localhost:9000 works in a browser with zero setup. To exercise
+		// the realistic PUBLIC path (TLS ingress + CORS, as a cloud-hosted publisher
+		// would), override with the ingress hostnames (needs /etc/hosts → 127.0.0.1):
+		//   DEMOSITE_PUBAD_URL=https://pubad.adtech.local \
+		//   DEMOSITE_SDK_URL=https://gateway.adtech.local/static/adtech.js \
+		//   DEMOSITE_MEDIA_URL=https://gateway.adtech.local  go run ./cmd/demosite
+		PubadURL:         env("DEMOSITE_PUBAD_URL", "http://localhost:8088"),
+		SDKURL:           env("DEMOSITE_SDK_URL", "http://localhost:8080/static/adtech.js"),
+		MediaURL:         env("DEMOSITE_MEDIA_URL", "http://localhost:8080"),
+		PublisherID:      env("DEMOSITE_PUBLISHER_ID", "pub-simulator"),
+		DisplayPlacement: env("DEMOSITE_DISPLAY_PLACEMENT", "pl-sim-mpu"),
+		VideoPlacement:   env("DEMOSITE_VIDEO_PLACEMENT", "pl-sim-video"),
+		AudioPlacement:   env("DEMOSITE_AUDIO_PLACEMENT", "pl-sim-audio"),
+		NativePlacement:  env("DEMOSITE_NATIVE_PLACEMENT", "pl-sim-native"),
+	}
+	port := env("DEMOSITE_PORT", "9000")
+
+	tmpl := template.Must(template.ParseFS(templatesFS, "templates/*.html"))
+
+	render := func(name, title, active string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" && name == "home.html" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := tmpl.ExecuteTemplate(w, name, page{Cfg: cfg, Active: active, Title: title}); err != nil {
+				log.Printf("render %s: %v", name, err)
+			}
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", render("home.html", "The Demo Times", "home"))
+	mux.HandleFunc("/video", render("video.html", "Video — The Demo Times", "video"))
+	mux.HandleFunc("/audio", render("audio.html", "Audio — The Demo Times", "audio"))
+	mux.HandleFunc("/native", render("native.html", "Native — The Demo Times", "native"))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+
+	log.Printf("demosite (external publisher) on :%s → pubad %s", port, cfg.PubadURL)
+	log.Fatal(http.ListenAndServe(":"+port, mux))
+}

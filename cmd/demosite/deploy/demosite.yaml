@@ -1,0 +1,67 @@
+# demosite — deploy to a SEPARATE cluster (NOT the ad-tech cluster).
+#
+# This is the "external publisher in its own cluster" topology: the demosite
+# calls the ad-tech cluster's PUBLIC URLs (set DEMOSITE_* below to your real
+# public hostnames), so it exercises a genuine cross-cluster programmatic path
+# to the ad-tech cluster's external IP.
+#
+# Build the image first (templates are go:embed'ed, so it's self-contained):
+#   go build -o bin/demosite ./cmd/demosite
+#   docker build --build-arg SERVICE=demosite -f build/Dockerfile.dev -t adtech-demosite .
+# Then load/push it into the SECOND cluster and: kubectl apply -f this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demosite
+  labels: { app: demosite }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: demosite } }
+  template:
+    metadata:
+      labels: { app: demosite }
+    spec:
+      containers:
+        - name: demosite
+          image: adtech-demosite
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+          env:
+            # Point these at the ad-tech cluster's PUBLIC (external) URLs.
+            - { name: DEMOSITE_PUBAD_URL, value: "https://pubad.adtech.local" }
+            - { name: DEMOSITE_SDK_URL,   value: "https://gateway.adtech.local/static/adtech.js" }
+            - { name: DEMOSITE_MEDIA_URL, value: "https://gateway.adtech.local" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 9000 }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demosite
+spec:
+  selector: { app: demosite }
+  ports:
+    - { port: 80, targetPort: 9000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demosite
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: demotimes.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demosite
+                port: { number: 80 }

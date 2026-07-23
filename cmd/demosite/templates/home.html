@@ -1,0 +1,64 @@
+{{define "home.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>Programmatic Advertising, Explained End-to-End</h2>
+    <div class="byline">By The Demo Desk · Technology</div>
+    <p>This page is a <strong>real external publisher</strong>. The ad in the sidebar was
+       filled by a live auction: this browser called the platform's public ad server, which
+       ran an SSP → exchange → DSP auction and returned a winning creative — all cross-origin
+       over HTTPS, exactly as it would for a third-party site.</p>
+    <p>Scroll down for an in-feed native placement. Use the top nav for video and audio demos.
+       Your consent choice (bottom banner) controls whether the platform sets an id cookie.</p>
+    <p>Everything you see rendered here came back from <code>/v1/pubad/serve</code> with
+       pre-signed impression and click tracking URLs that fire to the platform's tracker.</p>
+
+    <div class="ad-label">Advertisement — in-feed native</div>
+    <div id="native-slot" class="card" style="min-height:120px">Loading native ad…</div>
+    <div class="status" id="native-status"></div>
+
+    <p>More reporting continues below the fold. A native unit blends into editorial content
+       while still being clearly labelled “Advertisement”, matching IAB native guidelines.</p>
+  </article>
+
+  <aside>
+    <div class="ad-rail">
+      <div class="ad-label">Advertisement</div>
+      <div id="ad-slot-mpu" class="ad-slot" style="width:300px;height:250px;margin:0 auto;">Loading ad…</div>
+      <div class="status" id="mpu-status">awaiting consent…</div>
+    </div>
+  </aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  // Display: the real adtech.js SDK renders into the slot div.
+  // Native: raw cross-origin fetch (the SDK has no native helper yet).
+  window.__ads.onConsent = function(personalized) {
+    document.getElementById('mpu-status').textContent = 'requesting… (' + (personalized?'personalized':'contextual') + ')';
+    adtech.requestAd({ placementId: {{.Cfg.DisplayPlacement}}, elementId: 'ad-slot-mpu', geo: 'USA', device: 'desktop' });
+    // best-effort status: the SDK renders into the slot; check shortly after.
+    setTimeout(function(){
+      var slot = document.getElementById('ad-slot-mpu');
+      document.getElementById('mpu-status').textContent = slot.childElementCount ? 'filled ✓' : 'no fill';
+    }, 1500);
+
+    fetch({{.Cfg.PubadURL}} + '/v1/pubad/native?placement_id=' + encodeURIComponent({{.Cfg.NativePlacement}}) + '&geo=USA&device=desktop', { credentials:'omit' })
+      .then(function(r){ return r.json(); })
+      .then(function(ad){
+        var el = document.getElementById('native-slot');
+        if (ad && ad.html) { el.innerHTML = ad.html; document.getElementById('native-status').textContent = 'native filled ✓ (cpm ' + (ad.cpm||'?') + ')'; }
+        else { el.textContent = 'No native fill.'; document.getElementById('native-status').textContent = 'no fill: ' + ((ad&&ad.reason)||'unknown'); }
+      })
+      .catch(function(e){ document.getElementById('native-status').textContent = 'native error: ' + e.message; });
+  };
+</script>
+</body>
+</html>{{end}}
