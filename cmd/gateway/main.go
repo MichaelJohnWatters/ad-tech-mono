@@ -22,16 +22,17 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dataproviders"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/kubeops"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/notifications"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -369,24 +370,32 @@ func main() {
 	if gwDB != nil {
 		mappingStore = audiencemappings.NewPostgresStore(gwDB)
 	}
+	// ADR 0009: tenant-scoped data providers (the DMP entity). An upload that
+	// selects a provider snapshots its party/licence/id_type/notify defaults.
+	// nil store 503s the CRUD handler; an upload with no provider_id is unaffected.
+	var providerStore dataproviders.Store
+	if gwDB != nil {
+		providerStore = dataproviders.NewPostgresStore(gwDB)
+	}
 	// Ingest completion emails (ADR 0008 Feature 3): inline uploads notify the
 	// uploader (+ additional_emails) when a job finishes. SMTP when configured,
 	// else an in-memory sender that only logs (dev).
 	ingestEmailFrom := keys.Gateway.EmailFrom.Get(cfg)
 	ingestEmailSender := connectIngestEmail(cfg, ingestEmailFrom, log)
 	audDeps := audienceDeps{
-		store:        audStore,
-		proc:         ingestProc,
-		ingestStore:  ingestStore,
-		objects:      ingestObjects,
-		bucket:       onboardingBucket,
-		inlineMaxRow: keys.Gateway.IngestInlineMaxRows.Get(cfg),
-		maxBytes:     keys.Gateway.IngestMaxUploadBytes.Get(cfg),
-		mappingStore: mappingStore,
-		db:           gwDB,
-		emailSender:  ingestEmailSender,
-		emailFrom:    ingestEmailFrom,
-		log:          log,
+		store:         audStore,
+		proc:          ingestProc,
+		ingestStore:   ingestStore,
+		objects:       ingestObjects,
+		bucket:        onboardingBucket,
+		inlineMaxRow:  keys.Gateway.IngestInlineMaxRows.Get(cfg),
+		maxBytes:      keys.Gateway.IngestMaxUploadBytes.Get(cfg),
+		mappingStore:  mappingStore,
+		providerStore: providerStore,
+		db:            gwDB,
+		emailSender:   ingestEmailSender,
+		emailFrom:     ingestEmailFrom,
+		log:           log,
 	}
 	// The ingest status subtree (.../ingest/{id}) must register BEFORE the base
 	// path so {id} lookups aren't swallowed by the base handler.
@@ -404,6 +413,10 @@ func main() {
 	mux.Handle(routes.APIAudienceMappingSample, authMiddleware(http.HandlerFunc(audienceMappingSampleHandler(keys.Gateway.IngestMaxUploadBytes.Get(cfg), log))))
 	mux.Handle(routes.APIAudienceMappings+"/", authMiddleware(http.HandlerFunc(audienceMappingsHandler(mappingStore, log))))
 	mux.Handle(routes.APIAudienceMappings, authMiddleware(http.HandlerFunc(audienceMappingsHandler(mappingStore, log))))
+	// ADR 0009: data providers (the DMP entity). Base path (GET list / POST) +
+	// subtree (.../{id} GET/DELETE); both more specific than the base /audiences.
+	mux.Handle(routes.APIAudienceProviders+"/", authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
+	mux.Handle(routes.APIAudienceProviders, authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).

@@ -21,6 +21,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dataproviders"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
@@ -104,6 +105,11 @@ type audienceUploadRequest struct {
 	// sets SegmentSpec.FieldMappings + IDType from it. Empty = default behaviour
 	// (the built-in id column names). Multipart form field: mapping_id.
 	MappingID string `json:"mapping_id,omitempty"`
+	// ProviderID (optional, ADR 0009) attributes this upload to a saved data
+	// provider: the handler snapshots the provider's data-party, licence,
+	// default id_type, and notify recipients onto the job. Empty = no provider
+	// (plain first-party upload). Multipart form field: provider_id.
+	ProviderID string `json:"provider_id,omitempty"`
 	// AdditionalEmails (optional, ADR 0008 Feature 3) are extra recipients
 	// notified when this upload's ingest job finishes — in addition to the
 	// uploader, who is always notified (resolved from team_members by the JWT
@@ -176,6 +182,10 @@ type audienceDeps struct {
 	// carries mapping_id (ADR 0008). nil is tolerated — an upload with no
 	// mapping_id behaves exactly as before.
 	mappingStore audiencemappings.Store
+	// providerStore loads a tenant's data provider when an upload carries
+	// provider_id (ADR 0009); the upload snapshots the provider's party/licence/
+	// id_type/notify defaults. nil is tolerated — no provider_id is unaffected.
+	providerStore dataproviders.Store
 	// db resolves the uploader's email from team_members by the JWT UserID for
 	// ingest completion emails (ADR 0008 Feature 3). nil is tolerated — the
 	// upload falls back to the additional_emails list only.
@@ -312,6 +322,38 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 		Access:     req.Source,
 	}
 
+	// ADR 0009: attribute the upload to a data provider if one was selected, and
+	// snapshot its defaults onto the job (self-describing, per ADR 0007). Tenant-
+	// scoped — GetByAccount 404s a provider that isn't the caller's. Party/licence/
+	// id_type come from the provider; the mapping block below may still override
+	// id_type (a mapping is built for this specific file, so it's more specific).
+	// Provider notify recipients are appended to the completion-email list.
+	providerID := ""
+	var providerNotify []string
+	if pid := strings.TrimSpace(req.ProviderID); pid != "" {
+		if deps.providerStore == nil {
+			http.Error(w, `{"error":"providers unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		provider, err := deps.providerStore.GetByAccount(r.Context(), accountID, pid)
+		if err != nil {
+			deps.log.Error("audience upload: load provider failed", "provider", pid, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if provider == nil {
+			http.Error(w, `{"error":"provider not found"}`, http.StatusNotFound)
+			return
+		}
+		providerID = provider.ID
+		spec.DataParty = provider.DefaultParty
+		spec.Access = provider.DefaultLicence
+		if provider.DefaultIDType != "" {
+			spec.IDType = provider.DefaultIDType
+		}
+		providerNotify = provider.NotifyEmails
+	}
+
 	// ADR 0008: apply a saved custom field mapping ("connector") if the upload
 	// references one. Tenant-scoped — GetByAccount 404s a mapping that isn't the
 	// caller's, so a tenant can never apply another tenant's connector. The
@@ -344,6 +386,7 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 	// Computed BEFORE the pre-flight so a rejected file still emails a failure.
 	recipients := deps.resolveUploaderEmail(r.Context(), claims.UserID)
 	recipients = append(recipients, req.AdditionalEmails...)
+	recipients = append(recipients, providerNotify...) // provider default recipients (ADR 0009)
 	notifyEmails := ingest.SanitizeNotifyEmails(recipients)
 
 	// PRE-FLIGHT: sample-parse the first rows (lowercased headers) and reject a
@@ -388,6 +431,7 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 	job := ingestjobs.Job{
 		AccountID:    accountID,
 		Source:       ingestjobs.SourceAPI,
+		ProviderID:   providerID,
 		FileBucket:   deps.bucket,
 		FileKey:      fileKey,
 		SegmentSpec:  spec,
@@ -626,6 +670,7 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 	req.Visibility = r.FormValue("visibility")
 	req.RunAt = strings.TrimSpace(r.FormValue("run_at"))
 	req.MappingID = strings.TrimSpace(r.FormValue("mapping_id"))
+	req.ProviderID = strings.TrimSpace(r.FormValue("provider_id"))
 	req.AdditionalEmails = splitEmails(r.FormValue("additional_emails"))
 	file, _, err := r.FormFile("file")
 	if err != nil {

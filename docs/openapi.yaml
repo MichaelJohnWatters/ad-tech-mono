@@ -1228,6 +1228,7 @@ paths:
                 visibility: { type: string, enum: [public, dsp_private], default: dsp_private }
                 user_ids: { type: array, items: { type: string } }
                 mapping_id: { type: string, description: "Optional saved custom-mapping id (GET /mappings)" }
+                provider_id: { type: string, description: "Optional data-provider id (GET /providers, ADR 0009) — snapshots the provider's party/licence/id_type/notify defaults" }
                 run_at: { type: string, format: date-time, description: "Optional RFC3339 — hold the file until this time (ingest timing, not go-live)" }
                 additional_emails: { type: array, items: { type: string }, description: "Optional extra completion-email recipients" }
           multipart/form-data:
@@ -1239,6 +1240,7 @@ paths:
                 type: { type: string }
                 visibility: { type: string }
                 mapping_id: { type: string }
+                provider_id: { type: string, description: "Optional data-provider id (ADR 0009)" }
                 run_at: { type: string, description: "RFC3339" }
                 additional_emails: { type: string, description: "Comma/space-separated extra recipients" }
                 file: { type: string, format: binary, description: "CSV/TSV/Parquet (zip/gzip ok), optionally PGP-encrypted, with an id column (id_value/user_id/id/hashed_email/uid2/device_id) or a saved mapping" }
@@ -1328,6 +1330,63 @@ paths:
       responses:
         "200": { description: "{ columns: [..], suggested: { <col>: id_value } }" }
         "422": { description: Unparsable sample }
+  /v1/api/audiences/providers:
+    get:
+      tags: [Audiences]
+      summary: List the account's data providers (DMP entity, ADR 0009)
+      description: >-
+        Tenant-scoped data providers. A provider classifies who supplies audience
+        data (party 1st/2nd/3rd, licence) and carries format/encryption/notify
+        defaults an upload snapshots when it selects the provider (provider_id).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, name, kind, default_party, default_licence, default_id_type, encryption_expected, notify_emails, status }]" }
+    post:
+      tags: [Audiences]
+      summary: Create/update a data provider (tenant-scoped, ADR 0009)
+      description: >-
+        Upsert on (account, name). Omitted enum fields are defaulted from kind
+        (crm/other -> 1st party, agency -> 2nd, dmp/cdp -> 3rd; party -> licence).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                kind: { type: string, enum: [crm, dmp, cdp, agency, other], default: other }
+                default_party: { type: string, enum: [first, second, third], description: "defaulted from kind when omitted" }
+                default_licence: { type: string, enum: [first_party, purchased, barter], description: "defaulted from party when omitted" }
+                default_id_type: { type: string, default: user_id }
+                encryption_expected: { type: boolean, default: false, description: "reject cleartext files from this provider (enforced from ADR 0009 Phase 4)" }
+                notify_emails: { type: array, items: { type: string } }
+                status: { type: string, enum: [active, paused], default: active }
+      responses:
+        "200": { description: "{ id }" }
+        "422": { description: "Invalid provider (bad enum / missing name): { error }" }
+  /v1/api/audiences/providers/{id}:
+    get:
+      tags: [Audiences]
+      summary: Get one data provider (tenant-scoped, ADR 0009)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ id, name, kind, default_party, ... }" }
+        "404": { description: Not found }
+    delete:
+      tags: [Audiences]
+      summary: Delete a data provider (tenant-scoped, ADR 0009)
+      description: >-
+        Detaches (SET NULL) the provider from its ingest/segment history rather
+        than cascading it away.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "204": { description: Deleted } }
   /v1/api/audiences/ingest/{id}:
     get:
       tags: [Audiences]
