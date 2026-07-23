@@ -48,6 +48,9 @@ var Gateway = struct {
 	SMTPHost     config.StringKey
 	SMTPUsername config.StringKey
 	SMTPPassword config.StringKey
+
+	RateLimitRPS   config.IntKey
+	RateLimitBurst config.IntKey
 }{
 	JwtSigningKey:        gatewaySet.String("gateway.jwt_signing_key", "", config.TierSecret, "Fallback JWT signing key. Prefer an active jwt_signing secret in the secrets store (rotatable); this config key is the legacy/override path. Empty here AND no secret = auth bypassed (dev only — see gateway.require_auth).", config.Since("v1.0")),
 	RequireAuth:          gatewaySet.Bool("gateway.require_auth", "false", config.TierStatic, "When true, the gateway refuses to boot unless a JWT signing key is available (from the secrets store or gateway.jwt_signing_key) — i.e. the dev auth-bypass is forbidden. Set true in staging/prod overlays so a missing key fails loud instead of silently granting admin to every request.", config.Since("v1.3")),
@@ -76,4 +79,7 @@ var Gateway = struct {
 	SMTPHost:     gatewaySet.String("gateway.smtp_host", "", config.TierStatic, "SMTP host:port for audience-upload completion emails (Mailpit/SES). Empty → in-memory sender that only logs deliveries.", config.Since("v1.15")),
 	SMTPUsername: gatewaySet.String("gateway.smtp_username", "", config.TierStatic, "SMTP username for authenticated completion-email delivery (SES/Sendgrid). Empty → unauthenticated (Mailpit).", config.Since("v1.15")),
 	SMTPPassword: gatewaySet.String("gateway.smtp_password", "", config.TierSecret, "SMTP password for authenticated completion-email delivery (SES/Sendgrid). Secret; paired with gateway.smtp_username.", config.Since("v1.15")),
+
+	RateLimitRPS:   gatewaySet.Int("gateway.ratelimit_rps", "0", config.TierLive, "Per-client-IP HTTP request rate limit (requests/second) across the gateway (API + portals + login). 0 = disabled (default). Protects login brute-force and API abuse. Buckets are per-pod, so the effective ceiling is rps × replicas; the CDN/WAF is the prod edge shield. Health/readiness/metrics and CORS preflight are never limited.", config.Since("v1.16")),
+	RateLimitBurst: gatewaySet.Int("gateway.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for gateway.ratelimit_rps — max requests in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
 }

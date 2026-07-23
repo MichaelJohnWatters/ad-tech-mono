@@ -169,7 +169,11 @@ func main() {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(metaCache, freqCapCache))
 	}
 
-	handler := tracing.HTTPMiddleware(constants.ServiceAdServer)(metrics.Wrap(middleware.CORS(mux)))
+	// Per-IP rate limit on the public ad-serving endpoints (ratelimit_rps=0 →
+	// disabled: a nil limiter that passes through). Innermost so CORS preflight
+	// is handled before a request is counted.
+	adRL := middleware.NewRateLimiter(keys.AdServer.RateLimitRPS.Get(cfg), keys.AdServer.RateLimitBurst.Get(cfg), log)
+	handler := tracing.HTTPMiddleware(constants.ServiceAdServer)(metrics.Wrap(middleware.CORS(adRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
 	log.Info("adserver starting",
