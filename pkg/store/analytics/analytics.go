@@ -511,6 +511,8 @@ type ProfileSignalRow struct {
 	TraceID     string    `json:"trace_id"`
 	AccountID   string    `json:"account_id"`
 	Provider    string    `json:"provider,omitempty"`
+	ProviderID  string    `json:"provider_id,omitempty"` // data_providers.id (ADR 0009)
+	DataParty   string    `json:"data_party,omitempty"`  // first | second | third (ADR 0009)
 	Source      string    `json:"source"`
 	Access      string    `json:"access"`
 	SegmentID   string    `json:"segment_id"`

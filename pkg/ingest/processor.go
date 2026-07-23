@@ -246,10 +246,23 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	if visibility == "" {
 		visibility = "dsp_private"
 	}
+	// Data-party classification (ADR 0009): the producer snapshots it from the
+	// selected provider onto the spec at enqueue; absent that it's first-party
+	// (our own upload). Stamped onto the segment + every profile.signal so
+	// reporting/targeting/GDPR can key on it without parsing the licence string.
+	dataParty := spec.DataParty
+	if dataParty == "" {
+		dataParty = "first"
+	}
 	segID, err := p.Audience.UpsertSegment(ctx, accountID, segName, segType, segmentSource(job), visibility)
 	if err != nil {
 		log.Error("ingest: upsert segment failed (will retry)", "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
+	}
+	if err := p.Audience.SetSegmentProvenance(ctx, accountID, segID, job.ProviderID, dataParty); err != nil {
+		// Non-fatal: provenance is attribution metadata, not the membership
+		// itself — a failure here shouldn't retry the whole import.
+		log.Warn("ingest: set segment provenance failed", "segment", segID, "error", err)
 	}
 	added, err := p.Audience.AddMembers(ctx, accountID, segID, values)
 	if err != nil {
@@ -286,6 +299,8 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 				TraceID:       tracing.TraceIDFromContext(ctx),
 				AccountID:     accountID,
 				Provider:      provider,
+				ProviderID:    job.ProviderID,
+				DataParty:     dataParty,
 				Source:        source,
 				Access:        access,
 				SegmentID:     segID,

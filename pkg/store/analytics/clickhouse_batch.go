@@ -224,7 +224,13 @@ func (c *ClickHouse) InsertProfileSignals(ctx context.Context, es []*ProfileSign
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO profile_signals")
+	// Explicit column list (not positional): the ADR-0009 provider_id/data_party
+	// columns land at the END on ALTER-upgraded tables but MID-table on freshly
+	// CREATE'd ones, so a bare "INSERT INTO profile_signals" would map the wrong
+	// physical order. Naming the columns makes the insert order-independent.
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO profile_signals
+		(trace_id, account_id, provider, provider_id, data_party, source, access,
+		 segment_id, segment_name, visibility, consent, id_type, id_value, observed_at)`)
 	if err != nil {
 		return fmt.Errorf("prepare profile_signals batch: %w", err)
 	}
@@ -233,8 +239,8 @@ func (c *ClickHouse) InsertProfileSignals(ctx context.Context, es []*ProfileSign
 			continue
 		}
 		if err := b.Append(
-			e.TraceID, e.AccountID, e.Provider, e.Source, e.Access, e.SegmentID,
-			e.SegmentName, e.Visibility, b2u(e.Consent), e.IDType, e.IDValue, bts(e.ObservedAt),
+			e.TraceID, e.AccountID, e.Provider, e.ProviderID, e.DataParty, e.Source, e.Access,
+			e.SegmentID, e.SegmentName, e.Visibility, b2u(e.Consent), e.IDType, e.IDValue, bts(e.ObservedAt),
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append profile_signal: %w", err)
