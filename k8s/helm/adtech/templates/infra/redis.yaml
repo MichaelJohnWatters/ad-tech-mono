@@ -1,5 +1,9 @@
 {{- $ns := include "adtech.namespace" . -}}
 {{- $redis := .Values.infra.redis }}
+{{- /* infra.redis.enabled=false → no in-cluster Redis; point services at a
+       managed Redis via REDIS_URL. Redis is a cache — budget/pacing counters
+       reconcile from Postgres — so cache loss is tolerable. Default true. */}}
+{{- if ne (toString $redis.enabled) "false" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,3 +52,4 @@ spec:
   ports:
     - port: 6379
       targetPort: 6379
+{{- end }}

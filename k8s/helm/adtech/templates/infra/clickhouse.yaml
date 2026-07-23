@@ -1,5 +1,9 @@
 {{- $ns := include "adtech.namespace" . -}}
 {{- $ch := .Values.infra.clickhouse }}
+{{- /* infra.clickhouse.enabled=false → no in-cluster ClickHouse; point reporting
+       at a managed/replicated CH via its addr env. Analytics is partially
+       rebuildable from the S3 Parquet lake + NATS. Default true. */}}
+{{- if ne (toString $ch.enabled) "false" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -62,6 +66,9 @@ spec:
         name: clickhouse-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with $ch.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
         resources:
           requests:
             storage: {{ $ch.storage }}
@@ -81,3 +88,4 @@ spec:
     - port: 8123
       targetPort: 8123
       name: http
+{{- end }}

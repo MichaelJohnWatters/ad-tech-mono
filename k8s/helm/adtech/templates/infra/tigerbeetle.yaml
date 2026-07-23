@@ -6,6 +6,11 @@ already exists on the PVC. replica-count follows infra.tigerbeetle.replicas.
 */ -}}
 {{- $ns := include "adtech.namespace" . -}}
 {{- $tb := .Values.infra.tigerbeetle }}
+{{- /* infra.tigerbeetle.enabled=false → no in-cluster ledger (e.g. when
+       billing.ledger_backend=memory, or TB runs as a separate deployment).
+       This is the MONEY store: prod should run it CLUSTERED (replicas>=3) on a
+       durable storageClass — data loss = lost ledger. Default true. */}}
+{{- if ne (toString $tb.enabled) "false" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -77,6 +82,9 @@ spec:
         name: tigerbeetle-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with $tb.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
         resources:
           requests:
             storage: {{ $tb.storage }}
@@ -94,3 +102,4 @@ spec:
       targetPort: 3000
       name: tb
   clusterIP: None # headless for StatefulSet
+{{- end }}

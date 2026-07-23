@@ -1,0 +1,82 @@
+{{- /*
+Postgres backup CronJob — gated behind backup.postgres.enabled (default OFF).
+
+pg_dump → gzip → a retained backup PVC, on a schedule, with age-based pruning.
+Self-contained and real (no external tooling): postgres:*-alpine ships pg_dump.
+
+WHEN TO USE: only if you SELF-HOST Postgres in-cluster. If you use a managed DB
+(RDS/CloudSQL — the recommended prod path), prefer its built-in automated
+snapshots + PITR instead of this. For OFFSITE backups, override backup.postgres.args
+to pipe the dump to object storage (e.g. `... | aws s3 cp - s3://bucket/...`).
+*/ -}}
+{{- if and .Values.backup .Values.backup.postgres .Values.backup.postgres.enabled }}
+{{- $b := .Values.backup.postgres }}
+{{- $ns := include "adtech.namespace" . }}
+{{- $retention := $b.retentionDays | default 7 }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  namespace: {{ $ns }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with $b.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.storage | default "10Gi" }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: {{ $ns }}
+  labels:
+    app: postgres-backup
+    component: backup
+spec:
+  schedule: {{ $b.schedule | default "0 2 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ $b.activeDeadlineSeconds | default 3600 }}
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: {{ $b.image | default "postgres:16-alpine" }}
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                {{- if $b.args }}
+                {{- toYaml $b.args | nindent 16 }}
+                {{- else }}
+                - |
+                  set -euo pipefail
+                  ts=$(date +%Y%m%d-%H%M%S)
+                  out=/backups/adtech-${ts}.sql.gz
+                  echo "pg_dump → ${out}"
+                  pg_dump "$DATABASE_URL" | gzip > "$out"
+                  echo "pruning dumps older than {{ $retention }} days"
+                  find /backups -name 'adtech-*.sql.gz' -mtime +{{ $retention }} -delete || true
+                  ls -lh /backups
+                {{- end }}
+              env:
+                - name: DATABASE_URL
+                  value: {{ $b.databaseURL | default "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable" | quote }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgres-backups
+{{- end }}

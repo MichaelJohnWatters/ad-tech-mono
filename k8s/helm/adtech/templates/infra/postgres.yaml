@@ -1,5 +1,9 @@
 {{- $ns := include "adtech.namespace" . -}}
 {{- $pg := .Values.infra.postgres }}
+{{- /* infra.postgres.enabled=false → run NO in-cluster Postgres; point services
+       at a managed instance by overriding DATABASE_URL (+ the migrate job's).
+       Default true (local + anything not overridden). */}}
+{{- if ne (toString $pg.enabled) "false" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -75,6 +79,9 @@ spec:
         name: postgres-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with $pg.storageClass }}
+        storageClassName: {{ . }}  # prod: a real class (gp3/pd-ssd); empty = cluster default (local-path)
+        {{- end }}
         resources:
           requests:
             storage: {{ $pg.storage }}
@@ -101,3 +108,4 @@ type: Opaque
 stringData:
   username: {{ $pg.credentials.username }}
   password: {{ $pg.credentials.password }} # plaintext for local, SOPS-encrypted in staging/prod
+{{- end }}

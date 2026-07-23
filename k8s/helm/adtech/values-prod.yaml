@@ -32,20 +32,66 @@ tls:
   certManager:
     clusterIssuer: letsencrypt-prod
 
+# ============================================================
+# PERSISTENCE (the "fixed persistence layer" for prod).
+#
+# Recommended topology — bring-your-own MANAGED stores where it matters, keep
+# the rest in-cluster on a DURABLE storageClass:
+#   Postgres (source of truth) → MANAGED (RDS/CloudSQL). Set infra.postgres.enabled
+#     =false and override DATABASE_URL (services + the migrate job) to the managed
+#     endpoint (SOPS). Its automated snapshots/PITR replace the backup CronJob.
+#   TigerBeetle (money ledger)  → in-cluster but CLUSTERED (replicas>=3) on a
+#     durable class — data loss = lost ledger.
+#   ClickHouse (analytics)      → managed/replicated, OR in-cluster on a durable
+#     class (partially rebuildable from the S3 Parquet lake + NATS).
+#   NATS (events)               → 3-node JetStream cluster (below) on a durable class.
+#   Redis (cache)               → MANAGED, or in-cluster (cache loss tolerable —
+#     budget/pacing counters reconcile from Postgres).
+#   S3/object store             → REAL S3 (infra.minio.enabled=false + S3_ENDPOINT).
+#
+# The `enabled` + `storageClass` knobs below make each of those a values swap.
+# storageClass values shown are AWS gp3 examples — set your cloud's SSD class.
 infra:
   nats:
     replicas: 3
     cluster:
       enabled: true
+    storageClass: gp3
   registryMirror:
     enabled: false
   mailpit:
     enabled: false
+  # Managed Postgres example (uncomment + override DATABASE_URL via SOPS):
+  # postgres:
+  #   enabled: false
+  # Managed Redis example:
+  # redis:
+  #   enabled: false
+  postgres:
+    storageClass: gp3
+  clickhouse:
+    storageClass: gp3
+  minio:
+    # In real prod prefer S3 (minio.enabled=false + S3_ENDPOINT); if kept, durable class:
+    storageClass: gp3
   tigerbeetle:
+    replicas: 3          # CLUSTERED for the money ledger (do not run 1 in prod)
+    storageClass: gp3
     cacheGrid: 1GiB
     resources:
       requests: { cpu: "500m", memory: "2Gi" }
       limits: { cpu: "2", memory: "6Gi" }
+
+# Postgres backup CronJob — only for the SELF-HOSTED-Postgres case. With managed
+# Postgres, use its snapshots/PITR instead and leave this off. Override args to
+# ship dumps offsite to S3.
+backup:
+  postgres:
+    enabled: false
+    schedule: "0 2 * * *"
+    retentionDays: 14
+    storageClass: gp3
+    storage: 50Gi
 
 services:
   dsp-internal:
