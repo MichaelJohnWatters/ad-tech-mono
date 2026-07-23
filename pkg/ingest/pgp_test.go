@@ -84,6 +84,32 @@ func TestValidateSamplePGPNoKeyRejects(t *testing.T) {
 	}
 }
 
+// ADR 0009: an encryption_expected provider rejects a CLEARTEXT file up front.
+func TestValidateSampleEncryptionExpectedRejectsCleartext(t *testing.T) {
+	p, _ := procWithKeyring(t)
+	spec := ingestjobs.SegmentSpec{EncryptionExpected: true}
+	err := p.ValidateSample(context.Background(), "audience.csv", []byte("user_id\nu1\n"), spec, 10)
+	if err == nil {
+		t.Fatal("expected reject: cleartext file from encryption-required provider")
+	}
+	if !IsReject(err) {
+		t.Fatalf("expected rejectErr, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "requires PGP-encrypted") {
+		t.Fatalf("reject reason should explain the encryption contract, got: %v", err)
+	}
+}
+
+// ADR 0009: an encryption_expected provider ACCEPTS a properly-encrypted file.
+func TestValidateSampleEncryptionExpectedAcceptsCiphertext(t *testing.T) {
+	p, pub := procWithKeyring(t)
+	ciphertext := encryptCSV(t, "user_id\nu1\nu2\n", pub)
+	spec := ingestjobs.SegmentSpec{EncryptionExpected: true}
+	if err := p.ValidateSample(context.Background(), "audience.csv.pgp", ciphertext, spec, 10); err != nil {
+		t.Fatalf("expected encrypted file to pass the encryption-required gate, got: %v", err)
+	}
+}
+
 // A PGP file encrypted to a DIFFERENT key is rejected (wrong-key content reject).
 func TestValidateSamplePGPWrongKeyRejects(t *testing.T) {
 	p, _ := procWithKeyring(t) // p holds key A

@@ -1,6 +1,6 @@
 # ADR 0009 — First-class data providers (the DMP foundation)
 
-**Status:** Accepted (2026-07-23)
+**Status:** Accepted — all 4 phases shipped + verified on the live stack (2026-07-23)
 **Extends:** ADR 0007 (unified audience ingestion) + ADR 0008 (secure + mappable
 ingestion). Promotes the free-text `provider` string and the per-tenant
 `audience_mappings` / platform PGP key into a first-class **data provider**

@@ -148,9 +148,12 @@ type audienceIngestListItem struct {
 	ValidRows    int     `json:"valid_rows"`
 	RejectedRows int     `json:"rejected_rows"`
 	MatchRate    float64 `json:"match_rate"`
-	Error        string  `json:"error,omitempty"`
-	CreatedAt    string  `json:"created_at"`
-	FinishedAt   string  `json:"finished_at,omitempty"`
+	// DataParty is the provider's party classification for this upload (ADR
+	// 0009): first | second | third. Empty for a plain first-party upload.
+	DataParty string `json:"data_party,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt string `json:"created_at"`
+	FinishedAt string `json:"finished_at,omitempty"`
 }
 
 // audienceIngestStatusResponse is the job-status view (GET .../ingest/{id}).
@@ -348,6 +351,7 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 		providerID = provider.ID
 		spec.DataParty = provider.DefaultParty
 		spec.Access = provider.DefaultLicence
+		spec.EncryptionExpected = provider.EncryptionExpected
 		if provider.DefaultIDType != "" {
 			spec.IDType = provider.DefaultIDType
 		}
@@ -578,7 +582,8 @@ func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger)
 				item := audienceIngestListItem{
 					ID: j.ID, Name: j.SegmentSpec.Name, Source: j.Source, Status: j.Status,
 					ValidRows: j.ValidRows, RejectedRows: j.RejectedRows, MatchRate: j.MatchRate,
-					Error: j.Error, CreatedAt: j.CreatedAt.Format(time.RFC3339),
+					DataParty: j.SegmentSpec.DataParty,
+					Error:     j.Error, CreatedAt: j.CreatedAt.Format(time.RFC3339),
 				}
 				if j.FinishedAt != nil {
 					item.FinishedAt = j.FinishedAt.Format(time.RFC3339)
