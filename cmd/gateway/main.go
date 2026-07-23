@@ -336,12 +336,13 @@ func main() {
 		audStore = audiencepg.New(gwDB)
 		ingestStore = ingestjobs.NewPostgresIngestStore(gwDB)
 		ingestProc = &ingest.Processor{
-			Objects:  ingestObjects,
-			Audience: audStore,
-			Matcher:  postgres.NewFromDB(gwDB),
-			Pipeline: pipeline.New(log),
-			Bus:      secretsBus,
-			Log:      log,
+			Objects:      ingestObjects,
+			Audience:     audStore,
+			Matcher:      postgres.NewFromDB(gwDB),
+			Pipeline:     pipeline.New(log),
+			Bus:          secretsBus,
+			Log:          log,
+			MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
 		}
 	}
 	audDeps := audienceDeps{

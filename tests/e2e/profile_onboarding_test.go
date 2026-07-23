@@ -199,9 +199,14 @@ func TestProfileOnboardingDropZone(t *testing.T) {
 		}
 	}
 	put(provider+"/manifest.json", manifest)
-	// 3 good rows + 1 bad (empty id → quarantined).
-	csv := "user_id,geo\n" + users[0] + ",US\n" + users[1] + ",GB\n" + users[2] + ",US\n,US\n"
+	// All rows valid — strict ingestion (ADR 0007) imports the whole file or
+	// rejects it. This one imports; the bad file below proves the reject path.
+	csv := "user_id,geo\n" + users[0] + ",US\n" + users[1] + ",GB\n" + users[2] + ",US\n"
 	put(provider+"/incoming/"+segName+".csv", csv)
+	// A file with ONE bad row (empty id) → the WHOLE file is rejected: no
+	// segment, a failed ingest job with a reason.
+	badSeg := segName + "-bad"
+	put(provider+"/incoming/"+badSeg+".csv", "user_id,geo\n"+provider+"-b1,US\n,GB\n")
 
 	// Second file: gzip-compressed TSV — exercises the multi-format
 	// auto-detect (magic-byte sniff + decompress + delimiter sniff).
@@ -235,23 +240,43 @@ func TestProfileOnboardingDropZone(t *testing.T) {
 		t.Errorf("drop-zone members = %d, want %d", got, len(users))
 	}
 
-	// Quarantine persisted: the bad row is a CSV object under rejected/.
-	if ok, err := obj.Exists(ctx, bucket, provider+"/rejected/"+segName+".csv"); err != nil || !ok {
-		t.Errorf("rejected-rows object missing (ok=%v err=%v)", ok, err)
-	}
 	// Source file moved out of incoming/ (won't be reprocessed).
 	if ok, _ := obj.Exists(ctx, bucket, provider+"/incoming/"+segName+".csv"); ok {
 		t.Error("incoming file still present after processing")
 	}
-	// Ingest job recorded for the staff monitor. ADR 0007 folded onboarding_runs
-	// into audience_ingest_jobs; the terminal status is 'done' (was 'completed').
+	// The all-good file's ingest job is done with 0 rejects (ADR 0007 folded
+	// onboarding_runs into audience_ingest_jobs; terminal status 'done').
 	var status string
 	var rejected int
 	if err := h.DB.QueryRow(`SELECT status, COALESCE(rejected_rows,0) FROM audience_ingest_jobs WHERE provider = $1 AND file_key = $2 ORDER BY created_at DESC LIMIT 1`,
 		provider, provider+"/incoming/"+segName+".csv").Scan(&status, &rejected); err != nil {
 		t.Errorf("audience_ingest_jobs row missing: %v", err)
-	} else if status != "done" || rejected != 1 {
-		t.Errorf("job status=%s rejected=%d, want done/1", status, rejected)
+	} else if status != "done" || rejected != 0 {
+		t.Errorf("job status=%s rejected=%d, want done/0", status, rejected)
+	}
+
+	// The BAD file (one empty-id row) is rejected WHOLE: a failed job with a
+	// reason, and no segment created (nothing imported — atomic per file).
+	badDeadline := time.Now().Add(45 * time.Second)
+	for {
+		var st, reason string
+		err := h.DB.QueryRow(`SELECT status, COALESCE(error,'') FROM audience_ingest_jobs WHERE provider=$1 AND file_key=$2 ORDER BY created_at DESC LIMIT 1`,
+			provider, provider+"/incoming/"+badSeg+".csv").Scan(&st, &reason)
+		if err == nil && st == "failed" {
+			if reason == "" {
+				t.Error("rejected job has no reason")
+			}
+			break
+		}
+		if time.Now().After(badDeadline) {
+			t.Fatalf("bad file never rejected (status=%q)", st)
+		}
+		time.Sleep(3 * time.Second)
+	}
+	var badSegCount int
+	_ = h.DB.QueryRow(`SELECT count(*) FROM audience_segments WHERE account_id=$1::uuid AND name=$2`, w.AdvAcc.ID, badSeg).Scan(&badSegCount)
+	if badSegCount != 0 {
+		t.Errorf("rejected file created a segment (%d) — nothing should import", badSegCount)
 	}
 
 	// The gzipped TSV materialized its own segment (stacked extensions

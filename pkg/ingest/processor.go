@@ -51,6 +51,11 @@ type Processor struct {
 	Pipeline *pipeline.Pipeline
 	Bus      events.EventBus // profile.signal + cache-invalidate (nil-safe)
 	Log      *slog.Logger
+	// MaxRejectPct is the max % of a file's rows that may quarantine before the
+	// WHOLE file is rejected (atomic per file — import none of it). 0 = strict
+	// all-or-nothing (any bad row rejects); 100 = never reject on bad rows
+	// (partial import, quarantine the rest). Default 0.
+	MaxRejectPct int
 }
 
 // defaultIDMappings normalize the common id column names to id_value so a file
@@ -167,6 +172,23 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		}
 		return ingestjobs.IngestResult{RejectedRows: len(result.Quarantine), RejectedKey: rejectedKey},
 			rejectErr{fmt.Sprintf("no usable id column: none of the %d rows had a non-empty id_value after field-mapping", result.Stats.TotalInput)}
+	}
+
+	// Atomic per-file: a file with bad rows imports NONE of it. The rejected
+	// rows are persisted to rejected/ above so the operator sees exactly which
+	// failed; the job fails with the count (shown in the monitor / 422 on the
+	// sync path). Tunable via ingest.max_reject_pct — 0 = strict all-or-nothing
+	// (any bad row rejects the whole file); e.g. 20 imports the good rows as
+	// long as ≤20% quarantined (messy-partner-feed mode).
+	total := len(result.Valid) + len(result.Quarantine)
+	if len(result.Quarantine) > 0 && len(result.Quarantine)*100 > p.MaxRejectPct*total {
+		if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
+			"rejected rows exceed threshold"); err != nil {
+			return ingestjobs.IngestResult{}, err // infra move failure → retry
+		}
+		return ingestjobs.IngestResult{RejectedRows: len(result.Quarantine), RejectedKey: rejectedKey},
+			rejectErr{fmt.Sprintf("%d of %d rows failed validation — file rejected, nothing imported%s (see %s)",
+				len(result.Quarantine), total, firstQuarantineDetail(result.Quarantine), rejectedKey)}
 	}
 
 	ids := make([]events.ProfileSignalID, 0, len(result.Valid))
@@ -421,7 +443,25 @@ func (p *Processor) ValidateSample(ctx context.Context, name string, body []byte
 		return Reject(fmt.Sprintf("no usable id column in the first %d row(s) — need one of [%s]; file has columns [%s]",
 			len(records), strings.Join(idColumnNames(), ", "), strings.Join(cols, ", ")))
 	}
+	// Atomic per-file: a bad row in the sample means the whole file would be
+	// rejected at process time — so reject at upload too (unless the threshold
+	// tolerates it).
+	total := len(result.Valid) + len(result.Quarantine)
+	if len(result.Quarantine) > 0 && len(result.Quarantine)*100 > p.MaxRejectPct*total {
+		return Reject(fmt.Sprintf("%d of the first %d row(s) failed validation — file rejected, all-or-nothing%s (raise ingest.max_reject_pct to allow partial imports)",
+			len(result.Quarantine), total, firstQuarantineDetail(result.Quarantine)))
+	}
 	return nil
+}
+
+// firstQuarantineDetail returns a short " (e.g. …)" clause naming the first
+// failing row's column + reason, so a reject message says WHY, not just a count.
+func firstQuarantineDetail(q []pipeline.QuarantineRecord) string {
+	if len(q) == 0 || len(q[0].Errors) == 0 {
+		return ""
+	}
+	e := q[0].Errors[0]
+	return fmt.Sprintf(" (e.g. column %q: %s)", e.Field, e.Message)
 }
 
 // idColumnNames lists the default source columns that map to id_value, for a

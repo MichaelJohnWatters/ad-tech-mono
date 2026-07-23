@@ -91,11 +91,12 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 	// memberships → publish work; the poller only enqueues. The gateway builds
 	// the same Processor from its own connections for inline uploads.
 	proc := &ingest.Processor{
-		Objects:  obj,
-		Audience: audiencepg.New(db),
-		Matcher:  pgstore.NewFromDB(db),
-		Pipeline: pipeline.New(log),
-		Log:      log,
+		Objects:      obj,
+		Audience:     audiencepg.New(db),
+		Matcher:      pgstore.NewFromDB(db),
+		Pipeline:     pipeline.New(log),
+		Log:          log,
+		MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
 	}
 	if bus, err := natsbus.New(keys.Pipeline.NATSURL.Get(cfg), constants.ServicePipeline+"-onboarding", log); err != nil {
 		log.Warn("onboarding: nats unavailable — audience invalidates disabled", "error", err)

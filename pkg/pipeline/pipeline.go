@@ -136,13 +136,18 @@ func IngestCSV(r io.Reader, delimiter rune) ([]Record, error) {
 	}
 
 	var records []Record
+	line := 1 // header consumed above
 	for {
 		row, err := reader.Read()
 		if err == io.EOF {
 			break
 		}
+		line++
 		if err != nil {
-			continue // skip malformed rows
+			// A malformed row (wrong column count, broken quoting) FAILS the
+			// decode so the caller can reject the whole file — silently skipping
+			// it would import a partial audience as if it were complete.
+			return nil, fmt.Errorf("row %d could not be parsed (expected %d columns): %w", line, len(headers), err)
 		}
 
 		rec := make(Record, len(headers))

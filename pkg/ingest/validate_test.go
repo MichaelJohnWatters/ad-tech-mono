@@ -33,6 +33,8 @@ func TestValidateSample(t *testing.T) {
 		{"no id column → reject", "email_address,city\nfoo@bar.com,NYC\n", true},
 		{"header only, no data → reject", "user_id\n", true},
 		{"empty file → reject", "", true},
+		{"one good, one empty-id row → reject (strict all-or-nothing)", "user_id,geo\nu1,US\n,GB\n", true},
+		{"malformed row (wrong column count) → reject", "user_id,geo\nu1,US\nu2\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
