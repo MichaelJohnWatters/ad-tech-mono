@@ -120,6 +120,9 @@ spec:
         name: nats-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with $nats.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
         resources:
           requests:
             storage: {{ $nats.storage }}
