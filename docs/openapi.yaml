@@ -1204,10 +1204,16 @@ paths:
         return 200 with the segment match rate (fraction of ids resolvable via
         the identity graph). Larger files (above gateway.ingest_inline_max_rows)
         return 202 with a job id — matching runs asynchronously in the pipeline
-        ingest worker; poll GET /v1/api/audiences/ingest/{id}. Raw emails are
-        rejected (validation) — hash PII client-side (the portal does).
-        Parquet/compressed files go via the partner drop-zone bucket. Uploads
-        above gateway.ingest_max_upload_bytes (100MB default) are rejected.
+        ingest worker; poll GET /v1/api/audiences/ingest/{id}.
+        Validation is STRICT/atomic (ADR 0008): any failing row — validation OR
+        unparsable — rejects the WHOLE file with 422 + a reason (tunable via
+        pipeline.ingest_max_reject_pct). Headers are lowercased (case-insensitive).
+        Files may be PGP-encrypted to the platform public key (GET
+        /v1/api/audiences/pgp-key) — decrypted on ingest. mapping_id applies a
+        saved custom field mapping (connector). run_at holds the file until a
+        future time (licensing/embargo). additional_emails add recipients to the
+        completion email (the uploader is always notified).
+        Uploads above gateway.ingest_max_upload_bytes (100MB default) are rejected.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -1221,6 +1227,9 @@ paths:
                 type: { type: string, enum: [first_party, behavioral, lookalike, suppression, retargeting, composite, predictive, cdp_imported], default: first_party }
                 visibility: { type: string, enum: [public, dsp_private], default: dsp_private }
                 user_ids: { type: array, items: { type: string } }
+                mapping_id: { type: string, description: "Optional saved custom-mapping id (GET /mappings)" }
+                run_at: { type: string, format: date-time, description: "Optional RFC3339 — hold the file until this time (ingest timing, not go-live)" }
+                additional_emails: { type: array, items: { type: string }, description: "Optional extra completion-email recipients" }
           multipart/form-data:
             schema:
               type: object
@@ -1229,10 +1238,96 @@ paths:
                 name: { type: string }
                 type: { type: string }
                 visibility: { type: string }
-                file: { type: string, format: binary, description: "CSV/TSV with an id column (id_value/user_id/id/hashed_email/uid2/device_id; optional id_type column)" }
+                mapping_id: { type: string }
+                run_at: { type: string, description: "RFC3339" }
+                additional_emails: { type: string, description: "Comma/space-separated extra recipients" }
+                file: { type: string, format: binary, description: "CSV/TSV/Parquet (zip/gzip ok), optionally PGP-encrypted, with an id column (id_value/user_id/id/hashed_email/uid2/device_id) or a saved mapping" }
       responses:
         "200": { description: "Inline (small file): { segment_id, members_added, members_sent, matched, match_rate }" }
-        "202": { description: "Queued (large file): { job_id, status }. Poll GET /v1/api/audiences/ingest/{id}." }
+        "202": { description: "Queued (large file / held): { job_id, status, run_at? }. Poll GET /v1/api/audiences/ingest/{id}." }
+        "422": { description: "File rejected (bad shape / undecodable / PGP-undecryptable / all-or-nothing threshold): { error } with the reason" }
+  /v1/api/audiences/ingest/:
+    get:
+      tags: [Audiences]
+      summary: Upload history — the account's recent ingest jobs (ADR 0007/0008)
+      description: >-
+        Tenant-scoped list of the account's audience uploads with each one's
+        outcome (done | failed | queued | running), counts, match rate, and the
+        failure reason. Pre-flight 422 rejects do not create a job row (they are
+        the immediate upload error); all staged jobs appear here.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ jobs: [{ id, name, source, status, valid_rows, rejected_rows, match_rate, error?, created_at, finished_at? }] }" }
+  /v1/api/audiences/pgp-key:
+    get:
+      tags: [Audiences]
+      summary: Platform PGP public key for encrypting audience files (ADR 0008)
+      description: >-
+        The platform public key providers encrypt audience files to; files
+        encrypted to it are decrypted on ingest. Derived from the active
+        pgp_private secret.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ public_key (armored), fingerprint }" }
+        "404": { description: No PGP key configured }
+  /v1/api/audiences/mappings:
+    get:
+      tags: [Audiences]
+      summary: List the account's custom field mappings ("connectors", ADR 0008)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, name, mappings, id_type, created_at, updated_at }]" }
+    post:
+      tags: [Audiences]
+      summary: Create/update a custom field mapping (tenant-scoped)
+      description: >-
+        Maps a provider's columns to our canonical fields. Targets are limited to
+        the fields we consume (id_value, id_type) — at least one column must map
+        to id_value; other targets are rejected (422). Upsert on (account, name).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, mappings]
+              properties:
+                name: { type: string }
+                mappings: { type: object, additionalProperties: { type: string }, description: "their lowercased column -> id_value | id_type" }
+                id_type: { type: string, default: user_id }
+      responses:
+        "200": { description: "{ id }" }
+        "422": { description: "Invalid mapping (non-consumed target, or no id_value): { error }" }
+  /v1/api/audiences/mappings/{id}:
+    delete:
+      tags: [Audiences]
+      summary: Delete a custom field mapping (tenant-scoped)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses: { "200": { description: Deleted } }
+  /v1/api/audiences/mappings/sample:
+    post:
+      tags: [Audiences]
+      summary: Detect columns from a sample file to build a mapping (ADR 0008)
+      description: >-
+        Decodes a small sample (≤1MB) with the strict parser and returns its
+        detected (lowercased) columns plus a suggested id_value mapping, to drive
+        the mapping-builder UI. 422 if the sample is unparsable.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { description: "{ columns: [..], suggested: { <col>: id_value } }" }
+        "422": { description: Unparsable sample }
   /v1/api/audiences/ingest/{id}:
     get:
       tags: [Audiences]
