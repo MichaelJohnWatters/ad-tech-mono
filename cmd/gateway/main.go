@@ -845,7 +845,10 @@ func main() {
 		templates.Render(w, "dashboard.html", nil)
 	})
 
-	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(mux))
+	// Per-IP rate limit across the whole gateway (API + portals + login;
+	// ratelimit_rps=0 → disabled). Guards login brute-force and API abuse.
+	gwRL := middleware.NewRateLimiter(keys.Gateway.RateLimitRPS.Get(cfg), keys.Gateway.RateLimitBurst.Get(cfg), log)
+	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))
 
 	server := &http.Server{
 		Addr:         ":" + port,

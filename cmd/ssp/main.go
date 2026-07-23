@@ -208,7 +208,9 @@ func main() {
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
 	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
 
-	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(mux)))
+	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
+	sspRL := middleware.NewRateLimiter(keys.SSP.RateLimitRPS.Get(cfg), keys.SSP.RateLimitBurst.Get(cfg), log)
+	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(sspRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
 	log.Info("ssp starting", "port", port, "placements", placementCache.Len(), "exchange", exchangeURL)

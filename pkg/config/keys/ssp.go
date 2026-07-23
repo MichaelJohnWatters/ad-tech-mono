@@ -23,6 +23,8 @@ var SSP = struct {
 	BehaviourObserveEnabled    config.BoolKey
 	HouseholdEnabled           config.BoolKey
 	HouseholdSalt              config.StringKey
+	RateLimitRPS               config.IntKey
+	RateLimitBurst             config.IntKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -40,6 +42,8 @@ var SSP = struct {
 	BehaviourObserveEnabled:    sspSet.Bool("ssp.behaviour_observe_enabled", "true", config.TierLive, "Publish one consent-gated behavioural signal row (user/household key + placement + publisher + content categories, stamped at event time) per ad request to adtech.behaviour.observed, landed in the behaviour_signals Delta table. Rows are only published when the request's regulatory signals permit personalisation. Input to behavioural segmentation (cmd/profile-builder).", config.Since("v1.9")),
 	HouseholdEnabled:           sspSet.Bool("ssp.household_enabled", "true", config.TierLive, "Derive a household id (salted hash of the client IP — the CTV household proxy) and carry it as a user.eids entry on outbound bid requests, so DSPs can target household-scoped audience segments. The DSP only USES it under the consent gate, same as user segments.", config.Since("v1.8")),
 	HouseholdSalt:              sspSet.String("ssp.household_salt", "adtech-local-dev-household", config.TierSecret, "HMAC salt for household-id derivation (identity.HouseholdID). Must be identical across SSP pods and any offline deriver (seed, tests) or household ids won't line up. Rotate = every household id changes.", config.Since("v1.8")),
+	RateLimitRPS:               sspSet.Int("ssp.ratelimit_rps", "0", config.TierLive, "Per-client-IP HTTP request rate limit (requests/second) on the public SSP endpoints (bid-request intake / serve). 0 = disabled (default). Buckets are per-pod, so the effective ceiling is rps × replicas; the CDN/WAF is the prod edge shield. Health/readiness/metrics and CORS preflight are never limited.", config.Since("v1.16")),
+	RateLimitBurst:             sspSet.Int("ssp.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for ssp.ratelimit_rps — max requests in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
 	URL:                        config.RawString("ssp.url", routes.DefaultSSPURL),
 	Port:                       config.RawString("ssp.port", routes.PortSSP),
 	NATSURL:                    config.RawString("ssp.nats_url", routes.DefaultNATSURL),

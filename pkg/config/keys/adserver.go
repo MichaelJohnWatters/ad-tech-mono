@@ -23,6 +23,8 @@ var AdServer = struct {
 	WarmCreativesPollInterval config.DurationKey
 	URLTTL                    config.DurationKey
 	WarmFreqCapsPollInterval  config.DurationKey
+	RateLimitRPS              config.IntKey
+	RateLimitBurst            config.IntKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -40,6 +42,8 @@ var AdServer = struct {
 	WarmCreativesPollInterval: adServerSet.Duration("cache.warm.creatives.poll_interval", "30s", config.TierStatic, "How often the in-memory creative-metadata cache refreshes from Postgres. Affects how quickly approved/rejected creatives start/stop serving.", config.Since("v1.1")),
 	URLTTL:                    adServerSet.Duration("adserver.url_ttl", "1h", config.TierLive, "Freshness window baked into signed tracker pixel URLs as exp=<unix-ts>. Tracker rejects requests where now > exp. Bounds replay: an attacker who captures a click URL can't fire it after this window expires. Default 1h covers typical session length; 0 disables expiry (forever-valid URLs).", config.Since("v1.2")),
 	WarmFreqCapsPollInterval:  adServerSet.Duration("cache.warm.freq_caps.poll_interval", "30s", config.TierLive, "Ad-server per-campaign frequency-cap warm-cache refresh. Campaign PATCH invalidates via the campaigns subject; this bounds staleness otherwise.", config.Since("v1.3")),
+	RateLimitRPS:              adServerSet.Int("adserver.ratelimit_rps", "0", config.TierLive, "Per-client-IP HTTP request rate limit (requests/second) on the public ad-serving endpoints. 0 = disabled (default). Buckets are per-pod (in-process), so the effective ceiling is rps × replicas; the real edge shield in prod is the CDN/WAF. Health/readiness/metrics and CORS preflight are never limited.", config.Since("v1.16")),
+	RateLimitBurst:            adServerSet.Int("adserver.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for adserver.ratelimit_rps — the max requests allowed in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
 	URL:                       config.RawString("adserver.url", routes.DefaultAdServerURL),
 	Port:                      config.RawString("adserver.port", routes.PortAdServer),
 	NATSURL:                   config.RawString("adserver.nats_url", routes.DefaultNATSURL),
