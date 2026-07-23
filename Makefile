@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -191,6 +191,11 @@ demosite: ## Run the external demo publisher site (host process, :9000). Needs t
 	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
 	@echo "for the public TLS path: see cmd/demosite/README.md"
 	go run ./cmd/demosite
+
+extbidder: ## Run the external DSP partner bidder (host process, :9100). Wire it in: cmd/extbidder/README.md
+	@echo "extbidder (external DSP) → :9100  (Ctrl-C to stop)"
+	@echo "add http://host.docker.internal:9100 to exchange.dsp_endpoints — see cmd/extbidder/README.md"
+	go run ./cmd/extbidder
 
 deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }
