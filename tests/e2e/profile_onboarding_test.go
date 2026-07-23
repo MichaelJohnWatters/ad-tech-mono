@@ -119,6 +119,35 @@ func TestAudienceUploadReject(t *testing.T) {
 	}
 }
 
+// TestAudienceCustomMapping — a file with non-standard column names is rejected
+// without a mapping, but imports once a saved mapping points its column at
+// id_value (ADR 0008); mappings are tenant-isolated (validated in unit tests).
+func TestAudienceCustomMapping(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "aud-map")
+
+	// "crm_ref" is not one of our default id columns → rejected without a mapping.
+	csv := "crm_ref,region\n" + w.AdvAcc.ID + "-m1,EU\n" + w.AdvAcc.ID + "-m2,US\n"
+	code, _ := h.UploadAudienceCSVStatus(t, w.AdvAcc.ID, "map-nomap", "public", csv)
+	if code != 422 {
+		t.Errorf("unmapped unusual-column file: status %d, want 422", code)
+	}
+
+	// Save a mapping crm_ref → id_value, then the same file imports.
+	mapID := h.CreateAudienceMapping(t, w.AdvAcc.ID, "acme-crm",
+		map[string]string{"crm_ref": "id_value"}, "user_id")
+	if mapID == "" {
+		t.Fatal("create mapping returned no id")
+	}
+	code, body := h.UploadAudienceCSVMapped(t, w.AdvAcc.ID, "map-ok", "public", csv, mapID)
+	if code != 200 {
+		t.Fatalf("mapped upload: status %d, want 200 (%s)", code, body)
+	}
+	if !strings.Contains(body, `"members_added":2`) {
+		t.Errorf("mapped upload should import 2 members, got: %s", body)
+	}
+}
+
 // TestAudiencePGPUpload — a file PGP-encrypted to the platform public key is
 // decrypted on ingest and imported; a file encrypted to a DIFFERENT key is
 // rejected with 422 (ADR 0008).

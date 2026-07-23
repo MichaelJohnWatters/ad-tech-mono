@@ -503,6 +503,12 @@ func idColumnNames() []string {
 	return cols
 }
 
+// DefaultIDColumns returns the (lowercased) source column names that map to
+// id_value by default — user_id/id/hashed_email/email_sha256/uid2/device_id.
+// The mapping-builder (ADR 0008) uses it to SUGGEST an id_value mapping when a
+// sample column looks like an id.
+func DefaultIDColumns() []string { return idColumnNames() }
+
 func (p *Processor) readObject(ctx context.Context, bucket, key string) ([]byte, error) {
 	rc, err := p.Objects.Get(ctx, bucket, key)
 	if err != nil {
