@@ -26,6 +26,7 @@ type PostgresIngestStore struct {
 func NewPostgresIngestStore(db *sql.DB) PostgresIngestStore { return PostgresIngestStore{DB: db} }
 
 const jobColumns = `id::text, account_id::text, source, COALESCE(provider, ''),
+       COALESCE(provider_id::text, ''),
        file_bucket, file_key, segment_spec::text, run_at, status,
        attempts, max_attempts, COALESCE(error, ''),
        COALESCE(segment_id::text, ''), COALESCE(total_rows, 0), COALESCE(valid_rows, 0),
@@ -39,6 +40,7 @@ func scanJob(scan func(dest ...any) error) (*Job, error) {
 	var started, finished sql.NullTime
 	var notify pq.StringArray
 	if err := scan(&j.ID, &j.AccountID, &j.Source, &j.Provider,
+		&j.ProviderID,
 		&j.FileBucket, &j.FileKey, &specJSON, &j.RunAt, &j.Status,
 		&j.Attempts, &j.MaxAttempts, &j.Error,
 		&j.SegmentID, &j.TotalRows, &j.ValidRows,
@@ -88,6 +90,10 @@ func (s PostgresIngestStore) Enqueue(ctx context.Context, j Job) (string, error)
 	if j.Provider != "" {
 		provider = j.Provider
 	}
+	var providerID any
+	if j.ProviderID != "" {
+		providerID = j.ProviderID
+	}
 	var runAt any
 	if !j.RunAt.IsZero() {
 		runAt = j.RunAt
@@ -97,16 +103,16 @@ func (s PostgresIngestStore) Enqueue(ctx context.Context, j Job) (string, error)
 		maxAttempts = 5
 	}
 	q := `INSERT INTO audience_ingest_jobs
-	        (account_id, source, provider, file_bucket, file_key, segment_spec,
+	        (account_id, source, provider, provider_id, file_bucket, file_key, segment_spec,
 	         run_at, max_attempts, notify_emails)
-	      VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb,
-	              COALESCE($7::timestamptz, now()), $8, $9::text[])
+	      VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6, $7::jsonb,
+	              COALESCE($8::timestamptz, now()), $9, $10::text[])
 	      ON CONFLICT (file_bucket, file_key) WHERE status IN ('queued', 'running')
 	        DO NOTHING
 	      RETURNING id::text`
 	var id string
 	err = tx.QueryRowContext(ctx, q,
-		j.AccountID, j.Source, provider, j.FileBucket, j.FileKey, string(specJSON),
+		j.AccountID, j.Source, provider, providerID, j.FileBucket, j.FileKey, string(specJSON),
 		runAt, maxAttempts, pq.Array(j.NotifyEmails)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) { // dedupe hit
 		return "", tx.Commit()

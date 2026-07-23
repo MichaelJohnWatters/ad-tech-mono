@@ -327,9 +327,11 @@ type ProfileSignalEvent struct {
 	SchemaVersion int               `json:"schema_version"`
 	TraceID       string            `json:"trace_id"`
 	AccountID     string            `json:"account_id"`
-	Provider      string            `json:"provider,omitempty"` // drop-zone provider; empty = first-party
-	Source        string            `json:"source"`             // crm_upload | portal_csv | dropzone
-	Access        string            `json:"access"`             // first_party | purchased:{provider} | barter:{provider}
+	Provider      string            `json:"provider,omitempty"`    // drop-zone provider name; empty = first-party
+	ProviderID    string            `json:"provider_id,omitempty"` // data_providers.id (ADR 0009); empty = no provider
+	DataParty     string            `json:"data_party,omitempty"`  // first | second | third (ADR 0009); empty = first
+	Source        string            `json:"source"`                // crm_upload | portal_csv | dropzone
+	Access        string            `json:"access"`                // first_party | purchased:{provider} | barter:{provider}
 	SegmentID     string            `json:"segment_id"`
 	SegmentName   string            `json:"segment_name"`
 	Visibility    string            `json:"visibility"` // public | dsp_private

@@ -53,6 +53,10 @@ type SegmentSpec struct {
 	// Access records the licence (purchased:{provider} | barter:{provider} |
 	// first_party). Empty → processor default.
 	Access string `json:"access,omitempty"`
+	// DataParty is the resolved data-party classification (first | second |
+	// third, ADR 0009), snapshotted from the provider at enqueue. Empty →
+	// processor default (first). Stamped onto the segment + profile.signal.
+	DataParty string `json:"data_party,omitempty"`
 }
 
 // IngestResult is what the processor returns for a completed ingest — the
@@ -79,6 +83,9 @@ type Job struct {
 	AccountID   string      `json:"account_id"`
 	Source      string      `json:"source"`
 	Provider    string      `json:"provider,omitempty"`
+	// ProviderID references the data_providers row this ingest is attributed to
+	// (ADR 0009); empty = no provider (plain upload). Nullable FK column.
+	ProviderID  string      `json:"provider_id,omitempty"`
 	FileBucket  string      `json:"file_bucket"`
 	FileKey     string      `json:"file_key"`
 	SegmentSpec SegmentSpec `json:"segment_spec"`

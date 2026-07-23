@@ -230,6 +230,36 @@ WHERE id = $1 AND account_id = $2::uuid`
 	return nil
 }
 
+// SetSegmentProvenance stamps the data-provider attribution on a segment (ADR
+// 0009): which provider it was ingested from and its resolved data-party
+// classification. Both are optional — an empty providerID / dataParty writes SQL
+// NULL (a plain first-party upload with no provider). Called by the ingest
+// processor after UpsertSegment; the demo/retargeting callers don't set it.
+func (s *Store) SetSegmentProvenance(ctx context.Context, accountID, segmentID, providerID, dataParty string) error {
+	if providerID == "" && dataParty == "" {
+		return nil
+	}
+	var pid, party any
+	if providerID != "" {
+		pid = providerID
+	}
+	if dataParty != "" {
+		party = dataParty
+	}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+UPDATE audience_segments
+SET provider_id = $3::uuid, data_party = $4, updated_at = now()
+WHERE id = $1 AND account_id = $2::uuid`
+		_, err := tx.ExecContext(ctx, q, segmentID, accountID, pid, party)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("set provenance on %s: %w", segmentID, err)
+	}
+	return nil
+}
+
 // AddMembers bulk-inserts user memberships into a segment (idempotent) and
 // returns how many were newly added. The segment must belong to accountID.
 func (s *Store) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string) (int, error) {

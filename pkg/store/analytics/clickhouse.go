@@ -198,7 +198,8 @@ func (c *ClickHouse) createTables() error {
 		// the same way; the lake is still the keep-forever copy, this just keeps
 		// a year of the onboarding record queryable in-engine.
 		`CREATE TABLE IF NOT EXISTS profile_signals (
-			trace_id String, account_id String, provider String, source String, access String,
+			trace_id String, account_id String, provider String, provider_id String, data_party String,
+			source String, access String,
 			segment_id String, segment_name String, visibility String, consent UInt8,
 			id_type String, id_value String, observed_at DateTime64(3)
 		) ENGINE = MergeTree
@@ -242,6 +243,19 @@ func (c *ClickHouse) createTables() error {
 	for _, stmt := range statements {
 		if _, err := c.db.Exec(stmt); err != nil {
 			return fmt.Errorf("exec %.40s: %w", stmt, err)
+		}
+	}
+	// Additive columns on profile_signals for existing deployments (ADR 0009 —
+	// data-provider provenance). CREATE TABLE IF NOT EXISTS above only shapes a
+	// FRESH table; an already-created one needs ALTER. Non-fatal (older CH /
+	// permissions shouldn't block boot); new rows carry the values, old rows read
+	// as empty string — which is exactly "no provider / first party".
+	for _, ddl := range []string{
+		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS provider_id String`,
+		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS data_party String`,
+	} {
+		if _, err := c.db.Exec(ddl); err != nil {
+			c.log.Warn("clickhouse: could not add profile_signals column", "ddl", ddl, "error", err)
 		}
 	}
 	// Bound the raw-event tables: TTL drops rows older than ttlDays so the
