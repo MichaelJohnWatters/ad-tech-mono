@@ -20,6 +20,14 @@ Audience file ingestion has **two code paths doing the same work**:
   identical decode → validate → normalise → match → `AddMembers` → `onboarding_runs`
   → publish `profile.signal`, **asynchronously, any size**.
 
+> **Note (delivery):** the drop-zone is **INTERNAL-ONLY** today. Its processing is
+> real, but it presupposes a file already in the onboarding bucket, and we do not
+> support direct bucket access — so external providers can't self-deliver; files
+> arrive via platform-managed S3 creds. The customer-facing path is the gateway
+> upload (which handles big files via 202 → the same worker). Opening the drop-zone
+> externally needs a delivery broker (presigned prefix-scoped PUT URLs, an authed
+> streaming upload, or per-provider creds + per-prefix IAM) — deferred.
+
 Problems:
 1. **Two paths, one job.** The synchronous path duplicates the async one and imposes an
    awkward size cutoff. Real DMPs/CDPs treat *all* audience ingestion as async jobs with

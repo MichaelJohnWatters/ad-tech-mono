@@ -29,6 +29,15 @@ Ingests publisher data files in any format, validates, normalises to common sche
 - `pkg/ingest/` - the shared audience-ingest processor (ADR 0007): both the drop-zone
   worker and the gateway upload run files through `ingest.Processor.Process`
 
+> **Drop-zone is INTERNAL-ONLY (external delivery deferred).** The poller +
+> processor are real, but they presuppose a file already in the onboarding bucket.
+> We don't support direct bucket access, so external providers can't self-deliver —
+> files arrive via platform-managed S3 creds (staff/ops or an internal feed). The
+> customer-facing ingestion path is the authed gateway upload
+> (`POST /v1/api/audiences`), which also handles big files (202 → the same worker).
+> To open it externally: presigned prefix-scoped PUT URLs, an authed streaming
+> upload, or per-provider creds + per-prefix IAM (see ADR 0007).
+
 ## gRPC Services Exposed
 
 - `PipelineService` - see `pkg/proto/`
