@@ -27,6 +27,7 @@ const (
 	PurposePartnerShared = "partner_shared" // external partners (Prebid, S2S)
 	PurposeServiceS2S   = "service_s2s"   // internal service-to-service
 	PurposeAPIKey       = "api_key"       // operator-managed CRUD API keys
+	PurposePGPPrivate   = "pgp_private"   // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
 )
 
 // Status values.
@@ -89,10 +90,11 @@ type Filter struct {
 func FilterFor(serviceName string) Filter {
 	switch serviceName {
 	case "gateway":
-		// Gateway issues JWTs and validates incoming API keys for the
-		// dashboard / config UI.
+		// Gateway issues JWTs, validates incoming API keys for the dashboard /
+		// config UI, and serves the platform PGP public key (ADR 0008) + decrypts
+		// small inline audience uploads.
 		return Filter{
-			Purposes: []string{PurposeJWTSigning, PurposeAPIKey},
+			Purposes: []string{PurposeJWTSigning, PurposeAPIKey, PurposePGPPrivate},
 		}
 	case "dsp", "ssp":
 		// CRUD endpoints validate operator API keys + JWTs issued by gateway.

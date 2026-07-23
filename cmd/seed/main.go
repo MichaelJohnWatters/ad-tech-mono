@@ -123,6 +123,10 @@ func main() {
 		log.Error("seed dev jwt signing key failed", "error", err)
 		os.Exit(1)
 	}
+	if err := in.SeedDevPGPKey(ctx); err != nil {
+		log.Error("seed dev pgp key failed", "error", err)
+		os.Exit(1)
+	}
 	// Big world (additive) — runs BEFORE SeedDevUsers so its advertiser/
 	// publisher accounts pick up dev logins, and before SeedAdvertiserBalances
 	// so they get starting funds. Never truncates the small world.

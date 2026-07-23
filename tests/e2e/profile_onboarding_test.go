@@ -21,6 +21,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -115,6 +116,41 @@ func TestAudienceUploadReject(t *testing.T) {
 	res := h.UploadAudienceCSV(t, w.AdvAcc.ID, "upper-ok", "public", "USER_ID\n"+w.AdvAcc.ID+"-u1\n")
 	if res.SegmentID == "" || res.MembersAdded != 1 {
 		t.Errorf("uppercase-header upload: %+v, want 1 member added", res)
+	}
+}
+
+// TestAudiencePGPUpload — a file PGP-encrypted to the platform public key is
+// decrypted on ingest and imported; a file encrypted to a DIFFERENT key is
+// rejected with 422 (ADR 0008).
+func TestAudiencePGPUpload(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "pgp")
+
+	pub := h.PGPPublicKey(t, w.AdvAcc.ID)
+	csv := "user_id\n" + w.AdvAcc.ID + "-p1\n" + w.AdvAcc.ID + "-p2\n"
+
+	// Encrypted to the platform key → decrypts + imports.
+	enc, err := pgp.Encrypt([]byte(csv), pub)
+	if err != nil {
+		t.Fatalf("encrypt to platform key: %v", err)
+	}
+	res := h.UploadAudienceCSV(t, w.AdvAcc.ID, "pgp-ok", "public", string(enc))
+	if res.SegmentID == "" || res.MembersAdded != 2 {
+		t.Errorf("pgp upload result %+v, want 2 members added", res)
+	}
+
+	// Encrypted to a DIFFERENT key → we can't decrypt → rejected.
+	_, otherPub, _, err := pgp.Generate()
+	if err != nil {
+		t.Fatalf("gen other key: %v", err)
+	}
+	encBad, err := pgp.Encrypt([]byte(csv), otherPub)
+	if err != nil {
+		t.Fatalf("encrypt to other key: %v", err)
+	}
+	code, body := h.UploadAudienceCSVStatus(t, w.AdvAcc.ID, "pgp-bad", "public", string(encBad))
+	if code != 422 {
+		t.Errorf("wrong-key pgp upload: status %d, want 422 (%s)", code, body)
 	}
 }
 

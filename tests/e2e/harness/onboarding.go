@@ -27,6 +27,35 @@ type AudienceUploadResult struct {
 	MatchRate    float64 `json:"match_rate"`
 }
 
+// PGPPublicKey fetches the platform PGP public key (ADR 0008) as an authed
+// tenant user — what a provider would grab to encrypt their file.
+func (h *Harness) PGPPublicKey(t *testing.T, accountID string) string {
+	t.Helper()
+	email := "aud-csv-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.URLs.Gateway+routes.APIAudiencePGPKey, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("pgp-key call: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pgp-key status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		PublicKey   string `json:"public_key"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode pgp-key: %v", err)
+	}
+	return out.PublicKey
+}
+
 // UploadAudienceCSVStatus POSTs a CSV upload and returns the raw (status, body)
 // without asserting 200 — for the reject-path tests (a wrong-shaped file must
 // come back 422 with a reason).

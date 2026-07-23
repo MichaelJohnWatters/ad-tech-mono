@@ -21,13 +21,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
+
+// pgpRejectReason is the content-rejection message for a file that is
+// PGP-encrypted but can't be decrypted (no key configured, wrong key, or
+// corrupt). Shared by Process and ValidateSample so both paths reject
+// identically (422 sync / failed job async).
+const pgpRejectReason = "file is PGP-encrypted but could not be decrypted (wrong key or no key configured)"
 
 // signalChunk caps how many ids ride in one ProfileSignalEvent so a huge staged
 // file fans out to bounded NATS messages rather than one giant payload.
@@ -51,6 +60,10 @@ type Processor struct {
 	Pipeline *pipeline.Pipeline
 	Bus      events.EventBus // profile.signal + cache-invalidate (nil-safe)
 	Log      *slog.Logger
+	// PGPKeyring holds the platform private key(s) for decrypt-on-ingest (ADR
+	// 0008). nil/empty = no key configured: PGP files can't be decrypted and are
+	// rejected as content failures; plaintext files are unaffected.
+	PGPKeyring openpgp.EntityList
 	// MaxRejectPct is the max % of a file's rows that may quarantine before the
 	// WHOLE file is rejected (atomic per file — import none of it). 0 = strict
 	// all-or-nothing (any bad row rejects); 100 = never reject on bad rows
@@ -126,6 +139,14 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	if err != nil {
 		log.Error("ingest: read file failed (will retry)", "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
+	}
+	// ADR 0008: decrypt before decode. A plaintext file passes through; a
+	// PGP-encrypted file we can't decrypt is a content reject (same path as an
+	// undecodable file — quarantine the whole file, fail the job).
+	body, wasEncrypted, derr := pgp.MaybeDecrypt(body, p.PGPKeyring)
+	if derr != nil {
+		log.Error("ingest: pgp decrypt failed", "encrypted", wasEncrypted, "error", derr)
+		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, pgpRejectReason)
 	}
 	records, err := DecodeFile(ctx, path.Base(key), body)
 	if err != nil {
@@ -420,6 +441,13 @@ func buildMappings(spec ingestjobs.SegmentSpec) (map[string]string, []string) {
 // BEFORE staging so a wrong-shaped file is rejected with a 422 up front instead
 // of being discovered mid-ingest.
 func (p *Processor) ValidateSample(ctx context.Context, name string, body []byte, spec ingestjobs.SegmentSpec, n int) error {
+	// ADR 0008: decrypt before decode, same as Process, so a PGP-encrypted file
+	// we can't read is rejected up front on the sync upload path (422) rather
+	// than being staged and discovered mid-ingest.
+	body, _, derr := pgp.MaybeDecrypt(body, p.PGPKeyring)
+	if derr != nil {
+		return Reject(pgpRejectReason)
+	}
 	records, err := DecodeFile(ctx, name, body)
 	if err != nil {
 		return Reject(fmt.Sprintf("could not parse file: %v", err))
