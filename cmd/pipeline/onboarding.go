@@ -2,12 +2,22 @@ package main
 
 // onboarding.go — the third-party audience DROP-ZONE poller.
 //
-// Providers (data partners, CDPs, publishers with big files) land CSV files
-// in the adtech-onboarding bucket under {provider}/incoming/, next to a
-// per-provider manifest.json describing the contract (owning account, id
-// type, consent basis, licence/access, field mappings). The poller Lists the
-// bucket on an interval (Minio S3-event support isn't assumed) and ENQUEUES an
-// ingest job for every new file (ADR 0007). The shared processor
+// INTERNAL-ONLY (delivery deferred): the drop-zone PROCESSING is real, but it
+// presupposes a file already sitting in the adtech-onboarding bucket. We do NOT
+// support direct bucket access, so external providers currently have no way to
+// self-deliver here — files land via platform-managed S3 creds (staff/ops or an
+// internal feed). The customer-facing ingestion path is the authed, tenant-bound
+// gateway upload (POST /v1/api/audiences), which also handles big files (202 →
+// this same worker). To open the drop-zone to external providers, add a delivery
+// broker: presigned prefix-scoped PUT URLs, an authed streaming upload, or
+// per-provider scoped credentials + per-prefix IAM. See ADR 0007.
+//
+// Files land in the adtech-onboarding bucket under {provider}/incoming/, next to
+// a per-provider manifest.json describing the contract (owning account, id
+// type, consent basis, licence/access, field mappings, optional notify_emails).
+// The poller Lists the bucket on an interval (Minio S3-event support isn't
+// assumed) and ENQUEUES an ingest job for every new file (ADR 0007). The shared
+// processor
 // (pkg/ingest.Processor) — the same one the gateway upload path runs inline —
 // does the decode → validate → normalise → match → AddMembers → publish
 // profile.signal → quarantine work when the ingest worker drains the queue.
