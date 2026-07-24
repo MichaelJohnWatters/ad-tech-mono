@@ -4,19 +4,20 @@
 package main
 
 import (
-	"os"
 	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
@@ -29,6 +30,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
@@ -111,6 +113,22 @@ func main() {
 		lc.OnShutdown("fraud-blocklist-cache", func(_ context.Context) error { blocklistCache.Stop(); return nil })
 	}
 	signingKey := keys.Tracker.SigningKey.Get(cfg)
+	// Pixel-URL HMAC validation accepts the config signing key PLUS every
+	// non-revoked hmac_tracker secret in the secrets store — the OVERLAP set for
+	// key rotation. Add a new hmac_tracker secret (active) and pixels signed with
+	// it validate immediately; its predecessor stays 'rotating' (still accepted)
+	// until revoked, so pixels already in flight never break the instant a key
+	// rotates. Rotations propagate via the secrets warm cache (NATS invalidate) —
+	// no restart. Falls back to the config key alone when no secret is configured.
+	secretsCache := secrets.Start(context.Background(), cfg, clock.Real{}, log, constants.ServiceTracker)
+	lc.OnShutdown("tracker-secrets-cache", func(_ context.Context) error { secretsCache.Stop(); return nil })
+	sigKeys := func() []string {
+		ks := []string{signingKey}
+		for _, s := range secretsCache.NonRevokedByPurpose(secrets.PurposeHMACTracker) {
+			ks = append(ks, s.Value)
+		}
+		return ks
+	}
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
 	l2 := connectRedis(cfg, log)
@@ -139,7 +157,7 @@ func main() {
 		// the event through so dev pipelines that don't yet sign keep
 		// flowing. The config knob is live-tunable so ops can ratchet
 		// strictness without a redeploy.
-		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -260,7 +278,7 @@ func main() {
 		// 302s to the redir param — without sig validation an attacker
 		// could rewrite redir to a phishing landing page and use the
 		// tracker as an open redirect.
-		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -348,7 +366,7 @@ func main() {
 		// billing-fraud surface: anyone could fire /v1/t/conv with
 		// arbitrary cid/crid/rev and rack up spend on a campaign that
 		// didn't actually convert.
-		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -416,7 +434,7 @@ func main() {
 		reqLog := logger.WithContext(log, ctx)
 
 		// Same HMAC + fraud + dedup gates as the impression handler.
-		if !adserving.ValidateSignature(r.URL.Path, q, signingKey) {
+		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -499,7 +517,7 @@ func main() {
 	// sig → expiry → fraud → dedup checks the impression pixel runs, with the
 	// same live-tunable strictness knobs. See mediagate.go.
 	mediaGate := mediaEventGate{
-		signingKey:    signingKey,
+		sigKeys:       sigKeys,
 		sigValidation: func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
 		expValidation: func() bool { return keys.Tracker.ExpValidation.Get(cfg) },
 		fraud:         fraudChecker,

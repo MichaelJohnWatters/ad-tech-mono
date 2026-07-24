@@ -5,9 +5,46 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
+
+// SeedDevHMACTracker inserts the current pixel-signing key as the canonical
+// ACTIVE hmac_tracker secret (Phase I). Value = adserving.DefaultSigningKey (what
+// the ad servers sign with today), so existing signatures still validate and the
+// key becomes a real, rotatable secrets-store row: an operator rotates it by
+// adding a new active row (this becomes 'rotating' during the grace window, then
+// 'revoked') and the tracker accepts the overlap set live. Idempotent.
+func (in *inserter) SeedDevHMACTracker(ctx context.Context) error {
+	var existing string
+	err := in.db.QueryRowContext(ctx,
+		`SELECT id FROM secrets WHERE purpose = 'hmac_tracker' AND status != 'revoked' LIMIT 1`,
+	).Scan(&existing)
+	if err == nil {
+		in.log.Info("hmac_tracker secret already present, skipping seed")
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check existing hmac_tracker: %w", err)
+	}
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		return fmt.Errorf("seed hmac_tracker: encryption key: %w", err)
+	}
+	storedValue, err := cipher.Encrypt(adserving.DefaultSigningKey)
+	if err != nil {
+		return fmt.Errorf("seed hmac_tracker: encrypt: %w", err)
+	}
+	const q = `
+INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
+VALUES ('dev-hmac-tracker', $1, 'hmac_tracker', 'platform', 'active', now(), now())`
+	if _, err := in.db.ExecContext(ctx, q, storedValue); err != nil {
+		return fmt.Errorf("seed hmac_tracker: %w", err)
+	}
+	in.log.Info("seeded dev hmac_tracker key", "purpose", "hmac_tracker", "owner", "platform", "value", "(dev only — rotate in prod)")
+	return nil
+}
 
 // DevAPIKey is the well-known operator API key seeded into dev / e2e
 // environments. The pub sim and harness use this so management endpoints
