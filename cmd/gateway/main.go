@@ -421,6 +421,11 @@ func main() {
 	mux.Handle(routes.APIAudienceProviders+"/", authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudienceProviders, authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
+	// IAB Audience Taxonomy: the global reference list for the portal picker +
+	// the tenant-scoped label write. More specific paths than the base
+	// /audiences handler, so neither is swallowed by it.
+	mux.Handle(routes.APITaxonomy, authMiddleware(http.HandlerFunc(taxonomyHandler(audDeps.store, log))))
+	mux.Handle(routes.APIAudienceTaxonomy, authMiddleware(http.HandlerFunc(audienceTaxonomyHandler(audDeps.store, secretsBus, log))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).
 	// trackerURL is the browser-reachable tracker base baked into the pixel; a nil
@@ -850,8 +855,8 @@ func main() {
 
 	// Per-IP rate limit across the whole gateway (API + portals + login;
 	// ratelimit_rps=0 → disabled). Guards login brute-force and API abuse.
-	gwRL := middleware.NewLiveRateLimiter(func() (int, int) {
-		return keys.Gateway.RateLimitRPS.Get(cfg), keys.Gateway.RateLimitBurst.Get(cfg)
+	gwRL := middleware.NewLiveRateLimiter(func() (int, int, int) {
+		return keys.Gateway.RateLimitRPS.Get(cfg), keys.Gateway.RateLimitBurst.Get(cfg), keys.Gateway.RateLimitTrustedHops.Get(cfg)
 	}, log)
 	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))
 

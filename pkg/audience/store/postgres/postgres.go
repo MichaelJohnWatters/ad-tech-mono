@@ -41,6 +41,10 @@ type Segment struct {
 	// via identity_graph — nil until a first upload computes it.
 	MatchRate    *float64   `json:"match_rate,omitempty"`
 	LastUploadAt *time.Time `json:"last_upload_at,omitempty"`
+	// TaxonomyID/TaxonomyPath are the optional IAB Audience Taxonomy 1.1
+	// label (migration 062) — nil for custom-only segments.
+	TaxonomyID   *int64  `json:"taxonomy_id,omitempty"`
+	TaxonomyPath *string `json:"taxonomy_path,omitempty"`
 }
 
 // ListSegments returns every segment for an account with its member count,
@@ -51,11 +55,13 @@ func (s *Store) ListSegments(ctx context.Context, accountID string) ([]Segment, 
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
 SELECT s.id::text, s.name, s.type, s.status, s.source, s.visibility,
-       COALESCE(c.n, 0), s.updated_at, s.match_rate, s.last_upload_at
+       COALESCE(c.n, 0), s.updated_at, s.match_rate, s.last_upload_at,
+       s.taxonomy_id, t.path
 FROM audience_segments s
 LEFT JOIN (
     SELECT segment_id, count(*) AS n FROM audience_segment_members GROUP BY segment_id
 ) c ON c.segment_id = s.id
+LEFT JOIN iab_audience_taxonomy t ON t.id = s.taxonomy_id
 WHERE s.account_id = $1::uuid
 ORDER BY s.updated_at DESC`
 		rows, err := tx.QueryContext(ctx, q, accountID)
@@ -67,7 +73,8 @@ ORDER BY s.updated_at DESC`
 			var seg Segment
 			if err := rows.Scan(&seg.ID, &seg.Name, &seg.Type, &seg.Status,
 				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt,
-				&seg.MatchRate, &seg.LastUploadAt); err != nil {
+				&seg.MatchRate, &seg.LastUploadAt,
+				&seg.TaxonomyID, &seg.TaxonomyPath); err != nil {
 				return err
 			}
 			out = append(out, seg)

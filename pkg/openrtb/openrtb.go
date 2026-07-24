@@ -259,8 +259,42 @@ type User struct {
 	ID string `json:"id,omitempty"`
 	// EIDs are extended identifiers (OpenRTB 2.6) — cookieless IDs like UID2
 	// keyed by their source. See eid.go for the UID2 helpers.
-	EIDs []EID    `json:"eids,omitempty"`
+	EIDs []EID `json:"eids,omitempty"`
+	// Data carries audience segments in the standards-interoperable OpenRTB
+	// 2.6 shape: segment ids scoped to a named taxonomy via ext.segtax, so an
+	// EXTERNAL buyer can interpret them. Platform-internal segment ids stay on
+	// Ext.Segments — Data is only stamped for segments labelled with a
+	// standard taxonomy node, and only when consent permits personalisation.
+	Data []Data   `json:"data,omitempty"`
 	Ext  *UserExt `json:"ext,omitempty"`
+}
+
+// SegtaxIABAudience11 is the ext.segtax value declaring that a Data object's
+// segment ids are IAB Audience Taxonomy 1.1 node ids.
+const SegtaxIABAudience11 = 4
+
+// Data is an OpenRTB 2.6 data object: a set of audience segments from one
+// named source.
+type Data struct {
+	ID      string        `json:"id,omitempty"`
+	Name    string        `json:"name,omitempty"`
+	Segment []DataSegment `json:"segment,omitempty"`
+	Ext     *DataExt      `json:"ext,omitempty"`
+}
+
+// DataSegment is one segment within a Data object. When the enclosing Data
+// declares ext.segtax, ID is a node id in that taxonomy (stringified).
+type DataSegment struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+// DataExt holds extension fields for a Data object.
+type DataExt struct {
+	// Segtax identifies the taxonomy the segment ids refer to (IAB segtax
+	// registry; 4 = IAB Audience Taxonomy 1.1).
+	Segtax int `json:"segtax,omitempty"`
 }
 
 // UserExt holds extension fields for the user.

@@ -39,6 +39,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -81,8 +82,17 @@ func main() {
 	// and stamps user.ext.segments on the outbound OpenRTB. Nil-tolerant —
 	// if Postgres is unreachable the SSP keeps serving without segments.
 	l2 := connectRedis(cfg, log)
-	audienceStore, audiencePreloader, audienceStop := openAudienceStore(cfg, l2, log)
+	audienceStore, audiencePreloader, audiencePG, audienceStop := openAudienceStore(cfg, l2, log)
 	lc.OnShutdown("audience-store", func(_ context.Context) error { audienceStop(); return nil })
+
+	// Warm map of public segment → IAB Audience Taxonomy id, used to stamp
+	// standards-interoperable user.data on outbound bid requests. Nil when the
+	// audience store is disabled — bid requests then simply omit user.data.
+	var taxCache *taxonomyCache
+	if audiencePG != nil {
+		taxCache = newTaxonomyCache(context.Background(), audiencePG,
+			keys.Audience.TaxonomyRefresh.Get(cfg), log)
+	}
 
 	// Readiness: placement cache must have loaded at least once. The SSP
 	// can't serve bid requests without inventory metadata.
@@ -124,6 +134,14 @@ func main() {
 	// publishers and ZERO subscribers — a dead letter.)
 	if bus != nil && audiencePreloader != nil {
 		audiencePreloader.SubscribeInvalidate(context.Background(), bus, constants.ServiceSSP)
+	}
+	// Taxonomy-label invalidates → every pod's user.data stamp map refreshes
+	// in seconds (the gateway publishes on PUT /v1/api/audiences/taxonomy;
+	// ingest publishes on membership writes). Without this only the pod
+	// behind the debug port-forward refreshed promptly — the other replicas
+	// stamped stale user.data until the 30s tick.
+	if bus != nil {
+		taxCache.subscribeInvalidate(context.Background(), bus)
 	}
 	if bus != nil {
 		lc.OnShutdown("ssp-mgmt-bus", func(ctx context.Context) error { return bus.Close() })
@@ -168,7 +186,7 @@ func main() {
 	if keys.Debug.EndpointsEnabled.Get(cfg) {
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(placementCache, secretsCache.Cache))
 		if audiencePreloader != nil {
-			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
+			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, taxCache, log))
 		}
 	}
 
@@ -204,13 +222,13 @@ func main() {
 		}
 		return identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), ip)
 	}
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
 
 	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
-	sspRL := middleware.NewLiveRateLimiter(func() (int, int) {
-		return keys.SSP.RateLimitRPS.Get(cfg), keys.SSP.RateLimitBurst.Get(cfg)
+	sspRL := middleware.NewLiveRateLimiter(func() (int, int, int) {
+		return keys.SSP.RateLimitRPS.Get(cfg), keys.SSP.RateLimitBurst.Get(cfg), keys.SSP.RateLimitTrustedHops.Get(cfg)
 	}, log)
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(sspRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
@@ -273,37 +291,40 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-// openAudienceStore returns (Lookup, preloader-or-nil, stopFn). The
-// preloader is non-nil only when the warm-preload variant is active —
-// see DSP's matching function for the rationale (debug refresh endpoint).
-func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, func()) {
+// openAudienceStore returns (Lookup, preloader-or-nil, pg-store-or-nil,
+// stopFn). The preloader is non-nil only when the warm-preload variant is
+// active — see DSP's matching function for the rationale (debug refresh
+// endpoint). The raw pg store rides alongside whichever Lookup variant is
+// chosen: the taxonomy warm cache refreshes from it off the hot path.
+func openAudienceStore(cfg *config.Config, l2 cache.L2Cache, log *slog.Logger) (audstore.Lookup, *audpreload.Preloader, *audiencepg.Store, func()) {
 	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("database.url not set, audience store disabled")
-		return nil, nil, func() {}
+		return nil, nil, nil, func() {}
 	}
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Warn("audience store open failed", "error", err)
-		return nil, nil, func() {}
+		return nil, nil, nil, func() {}
 	}
 	// NO boot-time ping gate — sql.Open is lazy and a cold boot races
 	// Postgres readiness; the ping used to permanently disable audience
 	// segments (see cmd/dsp openAudienceStore). Pool connects on first
 	// use; the preloader loop retries forever.
+	pg := audiencepg.New(db)
 	if l2 == nil {
 		log.Info("audience store connected (postgres-direct, no L2 cache)")
-		return audiencepg.New(db), nil, func() { _ = db.Close() }
+		return pg, nil, pg, func() { _ = db.Close() }
 	}
 	interval := keys.Audience.PreloadInterval.Get(cfg)
 	ttl := keys.Audience.CacheTTL.Get(cfg)
 	pre := audpreload.New(audpreload.Config{DB: db, L2: l2, Interval: interval, TTL: ttl, Log: log})
 	if err := pre.Start(context.Background()); err != nil {
 		log.Warn("audience preloader start failed, falling back to lazy cache", "error", err)
-		return audcached.New(audiencepg.New(db), l2, ttl, log), nil, func() { _ = db.Close() }
+		return audcached.New(pg, l2, ttl, log), nil, pg, func() { _ = db.Close() }
 	}
 	log.Info("audience store connected (redis warm preload)", "interval", interval, "ttl", ttl)
-	return pre, pre, func() { pre.Stop(); _ = db.Close() }
+	return pre, pre, pg, func() { pre.Stop(); _ = db.Close() }
 }
 
 // connectRedis returns a real Redis L2 cache if reachable, falling back
@@ -345,7 +366,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -519,6 +540,23 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		if len(segs) > 0 {
 			user.Ext = &openrtb.UserExt{Segments: segs}
 		}
+		// Standard-taxonomy audience data for EXTERNAL buyers: OpenRTB
+		// user.data with ext.segtax=4 (IAB Audience Taxonomy 1.1). Only
+		// public segments carrying a taxonomy label ride here — unlabelled
+		// segments stay platform-internal on user.ext.segments. Consent is
+		// gated at source: our own DSP re-evaluates consent before USING
+		// segments, but an external bidder can't be relied on to, so no
+		// personalisation consent → no user.data leaves the platform.
+		if ds := taxCache.dataSegments(segs); len(ds) > 0 {
+			sig := privacy.SignalsFromQuery(r.URL.Query().Get, r.Header.Get("Sec-GPC"))
+			if privacy.Evaluate(sig).Personalise {
+				user.Data = []openrtb.Data{{
+					Name:    sellerDomain,
+					Segment: ds,
+					Ext:     &openrtb.DataExt{Segtax: openrtb.SegtaxIABAudience11},
+				}}
+			}
+		}
 		bidReq.User = user
 	}
 
@@ -672,9 +710,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -742,9 +780,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -932,8 +970,11 @@ func deviceTypeInt(s string) int {
 
 // audienceRefreshHandler — same shape as the DSP version. Forces a sync
 // preload so e2e tests' segment inserts are visible without waiting for
-// the 30s tick. Gated by debug.endpoints_enabled at the caller.
-func audienceRefreshHandler(pre *audpreload.Preloader, log *slog.Logger) http.HandlerFunc {
+// the 30s tick. Also refreshes the taxonomy warm map (nil-safe) — a test
+// that labels a segment needs the user.data stamp on the next bid, same
+// freshness contract as memberships. Gated by debug.endpoints_enabled at
+// the caller.
+func audienceRefreshHandler(pre *audpreload.Preloader, taxCache *taxonomyCache, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -943,6 +984,7 @@ func audienceRefreshHandler(pre *audpreload.Preloader, log *slog.Logger) http.Ha
 			http.Error(w, "refresh failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		taxCache.refresh(ctx)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"refreshed":true,"duration_ms":` +
 			strconv.FormatInt(time.Since(start).Milliseconds(), 10) + `}`))

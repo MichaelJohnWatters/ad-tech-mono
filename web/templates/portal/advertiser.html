@@ -100,8 +100,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Members" "Match rate" "Updated" "")) }}
-        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Taxonomy" "Members" "Match rate" "Updated" "")) }}
+        <tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
@@ -612,6 +612,20 @@
       {{ template "button" (dict "label" "Upload" "type" "submit") }}
     </div>
   </form>
+{{ template "modal-end" . }}
+
+<!-- IAB Audience Taxonomy picker: label a segment with a standard taxonomy
+     node so external buyers can interpret it (user.data + segtax on the bid
+     request). Fuzzy search by default; "quoted" input = strict substring. -->
+{{ template "modal-start" (dict "id" "taxonomyPicker" "title" "IAB Audience Taxonomy label") }}
+  <p class="mb-3 text-xs text-gray-400">A standard label makes this segment interpretable outside the platform — <b>public</b> labelled segments ride bid requests to external buyers as OpenRTB <code>user.data</code> (segtax 4). Your segment name and targeting are unchanged.</p>
+  <input type="text" id="tax_search" placeholder='Search — fuzzy by default, "quotes" for exact' oninput="renderTaxonomyList()" autocomplete="off"
+         class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+  <div id="tax_list" class="mt-2 max-h-72 overflow-auto rounded-md border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800"></div>
+  <div class="flex justify-between mt-4">
+    {{ template "button" (dict "label" "Clear label" "variant" "ghost" "onclick" "setTaxonomy(null)") }}
+    {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('taxonomyPicker').classList.add('hidden')") }}
+  </div>
 {{ template "modal-end" . }}
 
 <!-- New conversion modal -->
@@ -1319,15 +1333,83 @@ async function loadAudiences() {
         <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
         <td class="px-3 py-2 font-mono text-xs">${esc(a.type)}</td>
         <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${a.visibility === 'public' ? 'bg-info/15 text-info' : 'bg-surface-3 text-gray-500'}">${a.visibility === 'public' ? 'public' : 'DSP-private'}</span></td>
+        <td class="px-3 py-2">${a.taxonomy_path
+          ? `<button onclick="openTaxonomyPicker('${esc(a.id)}', ${a.taxonomy_id})" title="${esc(a.taxonomy_path)}" class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info hover:bg-info/25">${esc(a.taxonomy_path.split(' | ').pop())}</button>`
+          : `<button onclick="openTaxonomyPicker('${esc(a.id)}', null)" class="text-xs px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">+ IAB label</button>`}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(a.members)}</td>
         <td class="px-3 py-2 font-mono text-xs">${fmtMatchRate(a.match_rate)}</td>
         <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
         <td class="px-3 py-2 text-right"><button onclick="exportSegment('${esc(a.id)}', '${esc(a.name)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Export</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
+      : '<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+}
+
+// ---- IAB Audience Taxonomy picker ----
+// Labelling a segment with a standard taxonomy node is what makes it
+// expressible OUTSIDE the platform: public labelled segments ride bid
+// requests to external buyers as OpenRTB user.data (ext.segtax=4). The
+// reference list is global and small, so it loads once and filters
+// client-side — fuzzy by default, "quoted" for strict substring.
+let taxNodes = null;   // global reference list, fetched once per page life
+let taxTarget = null;  // { segmentId, prevId } — prevId powers toast-undo
+async function openTaxonomyPicker(segmentId, currentId) {
+  taxTarget = { segmentId, prevId: currentId ?? null };
+  if (!taxNodes) {
+    try { taxNodes = await fetchJSON('/v1/api/taxonomy') || []; }
+    catch (err) { toast('Taxonomy load failed: ' + err.message, 'error'); return; }
+  }
+  $('tax_search').value = '';
+  renderTaxonomyList();
+  $('taxonomyPicker').classList.remove('hidden');
+  $('tax_search').focus();
+}
+function taxFuzzyScore(q, s) {
+  if (!q) return 0;
+  s = s.toLowerCase();
+  if (q.startsWith('"')) return s.includes(q.replaceAll('"', '')) ? 0 : -1; // strict mode
+  let qi = 0, score = 0, streak = 0;
+  for (let i = 0; i < s.length && qi < q.length; i++) {
+    if (s[i] === q[qi]) { qi++; streak++; score += streak; }
+    else streak = 0;
+  }
+  return qi === q.length ? score : -1;
+}
+function renderTaxonomyList() {
+  const q = $('tax_search').value.trim().toLowerCase();
+  const rows = taxNodes
+    .map(n => ({ n, score: taxFuzzyScore(q, n.path) }))
+    .filter(r => r.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 60);
+  $('tax_list').innerHTML = rows.length ? rows.map(r => `
+    <button type="button" onclick="setTaxonomy(${r.n.id})" class="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-surface-3 ${taxTarget && taxTarget.prevId === r.n.id ? 'bg-info/10' : ''}">
+      ${esc(r.n.path)} <span class="text-[10px] text-gray-400 font-mono">#${r.n.id}</span>
+    </button>`).join('')
+    : '<div class="px-3 py-6 text-center text-sm text-gray-400">no matches</div>';
+}
+async function setTaxonomy(taxonomyId) { // null clears the label
+  const t = taxTarget;
+  if (!t) return;
+  $('taxonomyPicker').classList.add('hidden');
+  try {
+    await putTaxonomy(t.segmentId, taxonomyId);
+    loadAudiences();
+    toastUndo(taxonomyId == null ? 'Taxonomy label cleared' : 'Taxonomy label updated', async () => {
+      try { await putTaxonomy(t.segmentId, t.prevId); loadAudiences(); }
+      catch (err) { toast('Undo failed: ' + err.message, 'error'); }
+    });
+  } catch (err) { toast('Label update failed: ' + err.message, 'error'); }
+}
+async function putTaxonomy(segmentId, taxonomyId) {
+  const resp = await fetch('/v1/api/audiences/taxonomy', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segment_id: segmentId, taxonomy_id: taxonomyId }),
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
 }
 // ADR 0008: custom field mappings ("connectors"). The dropdown offers ONLY the
 // fields we consume (id_value / id_type) plus "ignore" — the UI enforces "no

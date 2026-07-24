@@ -1193,7 +1193,7 @@ paths:
       tags: [Audiences]
       summary: List the account's audience segments (member counts + match rate)
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at }]" } }
+      responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at, taxonomy_id?, taxonomy_path? }] — taxonomy_* is the optional IAB Audience Taxonomy label" } }
     post:
       tags: [Audiences]
       summary: Upload a segment + members (JSON ids, or multipart CSV/TSV)
@@ -1248,6 +1248,42 @@ paths:
         "200": { description: "Inline (small file): { segment_id, members_added, members_sent, matched, match_rate }" }
         "202": { description: "Queued (large file / held): { job_id, status, run_at? }. Poll GET /v1/api/audiences/ingest/{id}." }
         "422": { description: "File rejected (bad shape / undecodable / PGP-undecryptable / all-or-nothing threshold): { error } with the reason" }
+  /v1/api/taxonomy:
+    get:
+      tags: [Audiences]
+      summary: IAB Audience Taxonomy reference nodes (global, for the segment-label picker)
+      description: >-
+        The platform's IAB Audience Taxonomy 1.1 reference table (migration
+        062). Global reference data — identical for every account. The portal
+        fuzzy-filters client-side; there is no server-side search.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, parent_id?, name, path }] — path is the full breadcrumb, e.g. \"Interest | Automotive | Auto Body Styles | SUV\"" }
+  /v1/api/audiences/taxonomy:
+    put:
+      tags: [Audiences]
+      summary: Set or clear a segment's IAB Audience Taxonomy label
+      description: >-
+        Labels one of the account's segments with a standard taxonomy node
+        (taxonomy_id from GET /v1/api/taxonomy), or clears the label when
+        taxonomy_id is null/omitted. PUBLIC segments carrying a label are
+        expressed to external bidders on bid requests as OpenRTB user.data
+        with ext.segtax=4 (consent-gated at the SSP); unlabelled or
+        dsp_private segments never ride user.data.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [segment_id]
+              properties:
+                segment_id: { type: string }
+                taxonomy_id: { type: integer, nullable: true, description: "Node id, or null to clear" }
+      responses:
+        "204": { description: "Label updated" }
+        "404": { description: "Segment not found for this account" }
   /v1/api/audiences/ingest/:
     get:
       tags: [Audiences]

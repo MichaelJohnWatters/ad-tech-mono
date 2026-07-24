@@ -122,13 +122,20 @@ preload -> redis
 serve: Live auction path {
   style.fill: "#eff6ff"
 
-  stamp: SSP stamps user.ext.segments - public + household
+  stamp: SSP stamps user.ext.segments - public + household; user.data segtax=4 for IAB-labelled public segments (consent-gated at source)
   exchange: Exchange fan-out
   dsp: DSP unions dsp_private + audience bid modifiers price bids
   eval: targeting.Evaluate - include / exclude / modifiers
 
   stamp -> exchange -> dsp -> eval
 }
+
+# OUTPUT 1b - standards-interoperable audience data for EXTERNAL buyers:
+# public segments labelled with an IAB Audience Taxonomy node (migration 062)
+# ride the fan-out as OpenRTB user.data + ext.segtax=4 — interpretable
+# outside the platform, unlike the internal ids on user.ext.segments.
+extdsp: External DSPs (extbidder et al) - receive user.data ext.segtax=4 {shape: hexagon}
+serve.exchange -> extdsp: OpenRTB over the network boundary
 
 redis -> serve.stamp: 25ms budget {style.stroke-dash: 2}
 redis -> serve.dsp: 25ms budget {style.stroke-dash: 2}
