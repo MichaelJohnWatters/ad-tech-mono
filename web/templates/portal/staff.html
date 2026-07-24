@@ -349,6 +349,26 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Config ============ -->
+    <!-- Live config, grouped by service. Replaces the bounce-out to the
+         standalone /dev/console: search, per-service accordions, each key shows
+         its effective value + where it came from (default/env/live), inline edit
+         for live-tier keys, and reset-to-default. Data: /v1/config?schema=true. -->
+    <section id="section-config" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Live configuration" "subtitle" "Grouped by service. Live-tier keys are editable inline and apply within ~1 poll; static keys are boot-only; secrets are managed in the secrets console.") }}
+      <div class="flex flex-wrap items-center gap-3 mb-4">
+        <input id="cfgSearch" type="text" placeholder="Search keys, descriptions, services…" oninput="renderConfig()"
+          class="flex-1 min-w-[220px] rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm" />
+        <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 select-none">
+          <input id="cfgOverriddenOnly" type="checkbox" class="rounded border-gray-300" oninput="renderConfig()" />
+          Overridden only
+        </label>
+        {{ template "button" (dict "label" "Reload" "variant" "secondary" "size" "sm" "onclick" "loadConfig(true)") }}
+      </div>
+      <div id="cfgGroups"><div class="p-8 text-center text-sm text-gray-400">Loading…</div></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Control center ============ -->
     <section id="section-tools" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Control center") }}
@@ -366,9 +386,12 @@
         <a href="http://localhost:9090" target="_blank" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
           <div class="text-lg">🔥</div><div class="font-medium">Prometheus</div>
           <div class="text-xs text-gray-400">raw metrics + PromQL</div></a>
+        <a href="#config" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
+          <div class="text-lg">⚙️</div><div class="font-medium">Configuration</div>
+          <div class="text-xs text-gray-400">live config · grouped by service · inline overrides</div></a>
         <a href="/dev/console" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
-          <div class="text-lg">⚙️</div><div class="font-medium">Config manager + Secrets</div>
-          <div class="text-xs text-gray-400">live config · per-pod overrides · rotation</div></a>
+          <div class="text-lg">🔑</div><div class="font-medium">Secrets console</div>
+          <div class="text-xs text-gray-400">secret rotation · services · pods (legacy console)</div></a>
         <a href="/dev/trace-explorer" class="flex flex-col gap-0.5 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition no-underline">
           <div class="text-lg">🧭</div><div class="font-medium">Trace explorer</div>
           <div class="text-xs text-gray-400">trace lookup + batch reconciliation</div></a>
@@ -518,12 +541,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'demos', 'batchruns', 'ops', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -534,7 +557,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -996,6 +1019,147 @@ async function renderDiagram(i) {
   } catch (err) {
     v.innerHTML = `<div class="p-8 text-center text-sm text-error">render failed — ${esc(err.message)}</div>`;
   }
+}
+
+// ---- Config (live config, grouped by service) ----
+// Replaces the bounce-out to /dev/console. One GET /v1/config?schema=true gives
+// every key with its effective value + provenance; /v1/services?grouped=true maps
+// a service to its pod ids so an edit writes to the right per-pod rows (a global
+// write is shadowed by the seeded per-pod row, so we target pods explicitly).
+let cfgEntries = null;      // [{key,tier,service,default,description,current_value,source,status,deprecated}]
+let cfgServicePods = {};    // service -> [pod_id,…]
+const cfgOpenGroups = {};   // service -> expanded?
+
+async function loadConfig(force) {
+  if (cfgEntries && !force) { renderConfig(); return; }
+  const box = $('cfgGroups');
+  box.innerHTML = '<div class="p-8 text-center text-sm text-gray-400">Loading…</div>';
+  try {
+    const [schema, services] = await Promise.all([
+      fetchJSON('/v1/config?schema=true'),
+      fetchJSON('/v1/services?grouped=true').catch(() => []),
+    ]);
+    cfgEntries = (schema || []).filter(e => e.status !== 'orphaned');
+    cfgServicePods = {};
+    (services || []).forEach(g => {
+      const pods = (g.pods || []).map(p => p.pod_id).filter(Boolean);
+      if (g.service) cfgServicePods[g.service] = [...new Set(pods)];
+    });
+    renderConfig();
+  } catch (err) {
+    box.innerHTML = `<div class="p-6 text-center text-sm text-error">Failed to load config: ${esc(err.message)}</div>`;
+  }
+}
+
+const CFG_TIER = {
+  live:   {label: 'Live',   cls: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300', tip: 'Editable now — applies within ~1 config poll'},
+  static: {label: 'Static', cls: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300',       tip: 'Boot-only — set via env/values, needs a restart'},
+  secret: {label: 'Secret', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300', tip: 'Managed in the secrets console; value redacted'},
+};
+const CFG_SRC = {
+  'postgres-pod':    {label: 'live override', cls: 'text-brand-600'},
+  'postgres-global': {label: 'live (global)', cls: 'text-brand-600'},
+  'env':             {label: 'env',           cls: 'text-gray-400'},
+  'default':         {label: 'default',       cls: 'text-gray-400'},
+};
+
+function renderConfig() {
+  if (!cfgEntries) return;
+  const q = ($('cfgSearch').value || '').trim().toLowerCase();
+  const overriddenOnly = $('cfgOverriddenOnly').checked;
+  const match = e => {
+    if (overriddenOnly && !String(e.source || '').startsWith('postgres')) return false;
+    if (!q) return true;
+    return (e.key + ' ' + (e.description || '') + ' ' + (e.service || '')).toLowerCase().includes(q);
+  };
+  // Group by service.
+  const groups = {};
+  cfgEntries.filter(match).forEach(e => { (groups[e.service || 'other'] ||= []).push(e); });
+  const svcNames = Object.keys(groups).sort();
+  if (!svcNames.length) { $('cfgGroups').innerHTML = '<div class="p-8 text-center text-sm text-gray-400">No matching keys.</div>'; return; }
+
+  $('cfgGroups').innerHTML = svcNames.map(svc => {
+    const keys = groups[svc].sort((a, b) => a.key.localeCompare(b.key));
+    const overrides = keys.filter(e => String(e.source || '').startsWith('postgres')).length;
+    const open = q ? true : !!cfgOpenGroups[svc]; // auto-expand while searching
+    return `
+      <div class="mb-2 rounded-lg border border-gray-200 dark:border-gray-800">
+        <button onclick="toggleCfgGroup('${esc(svc)}')" class="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-800/50">
+          <span class="font-medium">${esc(svc)}<span class="ml-2 text-xs text-gray-400">${keys.length} key${keys.length === 1 ? '' : 's'}${overrides ? ` · ${overrides} overridden` : ''}</span></span>
+          <span class="text-gray-400 text-xs">${open ? '▾' : '▸'}</span>
+        </button>
+        ${open ? `<div class="divide-y divide-gray-100 dark:divide-gray-800 border-t border-gray-100 dark:border-gray-800">${keys.map(cfgRow).join('')}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function toggleCfgGroup(svc) { cfgOpenGroups[svc] = !cfgOpenGroups[svc]; renderConfig(); }
+
+function cfgRow(e) {
+  const tier = CFG_TIER[e.tier] || CFG_TIER.static;
+  const src = CFG_SRC[e.source] || {label: e.source || '', cls: 'text-gray-400'};
+  const overridden = String(e.source || '').startsWith('postgres');
+  const val = e.tier === 'secret' ? '••••••' : (e.current_value ?? '');
+  const editable = e.tier === 'live';
+  const id = 'cfg_' + e.key.replace(/[^a-z0-9]/gi, '_');
+  return `
+    <div class="px-4 py-3">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <code class="font-mono text-sm">${esc(e.key)}</code>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${tier.cls}" title="${esc(tier.tip)}">${tier.label}</span>
+            ${e.deprecated ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">deprecated</span>' : ''}
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 max-w-2xl">${esc(e.description || '')}</p>
+        </div>
+        <div class="shrink-0 text-right">
+          ${editable
+            ? `<div class="flex items-center gap-1.5 justify-end">
+                 <input id="${id}" value="${esc(String(val))}" class="w-40 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-sm font-mono text-right" />
+                 <button onclick="cfgSave('${esc(e.key)}','${esc(e.service)}','${id}')" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 text-xs hover:border-brand hover:text-brand">Apply</button>
+                 ${overridden ? `<button onclick="cfgReset('${esc(e.key)}','${esc(e.service)}','${esc(String(e.default))}')" class="px-2 py-1 rounded border border-gray-200 dark:border-gray-700 text-xs text-gray-500 hover:border-brand" title="Clear the override → back to default (${esc(String(e.default))})">Reset</button>` : ''}
+               </div>`
+            : `<code class="font-mono text-sm text-gray-600 dark:text-gray-300">${esc(String(val))}</code>`}
+          <div class="text-[11px] mt-1 ${src.cls}">${overridden ? '● ' : ''}${esc(src.label)}${!editable && e.default !== undefined && String(e.default) !== String(val) ? ` · default ${esc(String(e.default))}` : ''}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// cfgPodsFor returns the pod ids to write a service's key to. Falls back to a
+// global write ('') when the service's pods aren't known — better a global row
+// than silently doing nothing (the caller warns if it had no pod map).
+function cfgPodsFor(service) {
+  const pods = cfgServicePods[service];
+  return (pods && pods.length) ? pods : [''];
+}
+
+async function cfgPut(key, service, value) {
+  const pods = cfgPodsFor(service);
+  for (const pod of pods) {
+    const r = await fetch('/v1/config', {method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value, pod_id: pod})});
+    if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || ('status ' + r.status)); }
+  }
+  return pods.length;
+}
+
+async function cfgSave(key, service, inputId) {
+  const value = $(inputId).value;
+  try {
+    const n = await cfgPut(key, service, value);
+    toast(`${key} = ${value} (${n} pod${n === 1 ? '' : 's'})`, 'success');
+    setTimeout(() => loadConfig(true), 400); // reflect the new source/value after the write settles
+  } catch (err) { toast('Apply failed: ' + err.message, 'error'); }
+}
+
+async function cfgReset(key, service, def) {
+  try {
+    await cfgPut(key, service, def);
+    toast(`${key} reset to default (${def})`, 'success');
+    setTimeout(() => loadConfig(true), 400);
+  } catch (err) { toast('Reset failed: ' + err.message, 'error'); }
 }
 
 // ---- Control center ----
