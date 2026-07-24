@@ -191,3 +191,21 @@ func mustPriv(t *testing.T) ed25519.PrivateKey {
 	}
 	return priv
 }
+
+func TestVerifyAny_Overlap(t *testing.T) {
+	// Signed with key A. Verifies while the keyset holds [B, A] (overlap window),
+	// rejected once A is dropped — the ads.cert rotation grace window.
+	pubA, privA, _ := ed25519.GenerateKey(nil)
+	pubB, _, _ := ed25519.GenerateKey(nil)
+	req := sampleReq()
+	sig := Sign(privA, req)
+	if !VerifyAny([]ed25519.PublicKey{pubB, pubA}, req, sig) {
+		t.Error("expected accept under the overlap keyset [B, A]")
+	}
+	if VerifyAny([]ed25519.PublicKey{pubB}, req, sig) {
+		t.Error("expected reject once key A is dropped from the keyset")
+	}
+	if VerifyAny(nil, req, sig) {
+		t.Error("empty keyset must not verify")
+	}
+}

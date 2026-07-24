@@ -48,8 +48,8 @@ func TestAdCertKeyFetcher_FetchesAndVerifies(t *testing.T) {
 	}
 	// The fetched key must verify a signature made with the matching private key.
 	req := &openrtb.BidRequest{ID: "trace-1", Imp: []openrtb.Imp{{TagID: "pl-1"}}}
-	if !adcert.Verify(got, req, adcert.Sign(priv, req)) {
-		t.Error("fetched key failed to verify a genuine signature")
+	if !adcert.VerifyAny(got, req, adcert.Sign(priv, req)) {
+		t.Error("fetched keyset failed to verify a genuine signature")
 	}
 }
 
@@ -71,7 +71,7 @@ func TestAdCertKeySource_StaticFallback(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(nil)
 	cfg := cfgWith(map[string]string{"dsp.adcert_verify_key": adcert.EncodeKey(pub)})
 	keyFn := adCertKeySource(cfg, quietMgmtLog(), func(string, func()) {})
-	if got := keyFn(); got == nil {
+	if got := keyFn(); len(got) == 0 {
 		t.Fatal("expected the static key")
 	}
 }

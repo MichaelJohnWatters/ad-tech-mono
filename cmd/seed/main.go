@@ -127,6 +127,10 @@ func main() {
 		log.Error("seed dev hmac_tracker key failed", "error", err)
 		os.Exit(1)
 	}
+	if err := in.SeedDevAdCertKey(ctx); err != nil {
+		log.Error("seed dev adcert key failed", "error", err)
+		os.Exit(1)
+	}
 	if err := in.SeedDevPGPKey(ctx); err != nil {
 		log.Error("seed dev pgp key failed", "error", err)
 		os.Exit(1)
