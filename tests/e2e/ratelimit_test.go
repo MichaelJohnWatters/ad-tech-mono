@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -29,8 +30,13 @@ func TestRateLimitPerIP(t *testing.T) {
 	t.Cleanup(func() {
 		h.SetConfigForPod(t, "gateway.ratelimit_rps", "0", pod)
 		h.SetConfigForPod(t, "gateway.ratelimit_burst", "0", pod)
+		h.SetConfigForPod(t, "gateway.ratelimit_allowlist", keys.DefaultRateLimitAllowlist, pod)
 	})
 
+	// EMPTY the allowlist for the test so our synthetic client IPs aren't
+	// exempted (the shipped default allowlists all private ranges) — then we can
+	// hammer from one IP and actually get blocked.
+	h.SetConfigForPod(t, "gateway.ratelimit_allowlist", "", pod)
 	// Tight limit, live — 1 request/sec, burst 1, per pod.
 	h.SetConfigForPod(t, "gateway.ratelimit_burst", "1", pod)
 	h.SetConfigForPod(t, "gateway.ratelimit_rps", "1", pod)

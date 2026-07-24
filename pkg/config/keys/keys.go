@@ -22,6 +22,16 @@ package keys
 
 import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 
+// DefaultRateLimitAllowlist is the standard bypass list for the per-IP rate
+// limiters (gateway/adserver/ssp/tracker): loopback + all RFC1918 private +
+// link-local + IPv6 loopback/ULA. It means internal, cluster, and local-dev
+// traffic is NEVER throttled — locally, where every caller SNATs to a pod/host
+// private IP, the limiter is effectively inert, so `make demo`, the simulator,
+// and e2e keep working with limits turned on. In prod (edge preserving the real
+// client IP), only genuine public clients fall outside these ranges and get
+// limited. Operators add their CDN/LB egress ranges here when applicable.
+const DefaultRateLimitAllowlist = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7"
+
 // Platform-shared groups, declared in pkg/config (defaultSchema needs them;
 // this package imports config, so they can't live here) and re-exported so
 // everything is reachable through one import.

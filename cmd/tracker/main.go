@@ -562,7 +562,18 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(mux)))
+	// Per-IP rate limit on the pixel endpoints (off by default — forgery is
+	// already blocked by HMAC signature validation; this is a live-tunable
+	// volumetric floor). Allowlist + infra paths bypass; spoof-resistant XFF.
+	trkRL := middleware.NewLiveRateLimiter(func() middleware.RateLimitConfig {
+		return middleware.RateLimitConfig{
+			RPS:         keys.Tracker.RateLimitRPS.Get(cfg),
+			Burst:       keys.Tracker.RateLimitBurst.Get(cfg),
+			TrustedHops: keys.Tracker.RateLimitTrustedHops.Get(cfg),
+			Allowlist:   keys.Tracker.RateLimitAllowlist.Get(cfg),
+		}
+	}, log)
+	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(trkRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
 	mode := "NATS JetStream"

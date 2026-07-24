@@ -26,6 +26,7 @@ var AdServer = struct {
 	RateLimitRPS              config.IntKey
 	RateLimitBurst            config.IntKey
 	RateLimitTrustedHops      config.IntKey
+	RateLimitAllowlist        config.StringKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -46,6 +47,7 @@ var AdServer = struct {
 	RateLimitRPS:              adServerSet.Int("adserver.ratelimit_rps", "0", config.TierLive, "Per-client-IP HTTP request rate limit (requests/second) on the public ad-serving endpoints. 0 = disabled (default). Buckets are per-pod (in-process), so the effective ceiling is rps × replicas; the real edge shield in prod is the CDN/WAF. Health/readiness/metrics and CORS preflight are never limited.", config.Since("v1.16")),
 	RateLimitBurst:            adServerSet.Int("adserver.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for adserver.ratelimit_rps — the max requests allowed in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
 	RateLimitTrustedHops:      adServerSet.Int("adserver.ratelimit_trusted_proxy_hops", "0", config.TierLive, "Number of trusted reverse proxies in front of the ad server (your ingress, plus any CDN). The rate-limit client IP is taken this many entries from the RIGHT of X-Forwarded-For — the entries a trusted proxy appended — so a client cannot evade the limit by forging (prepending) X-Forwarded-For values. 0 (default) = the ingress is the only trusted hop: use the rightmost XFF entry. Set to 1 when a CDN sits in front of the ingress.", config.Since("v1.17")),
+	RateLimitAllowlist:        adServerSet.String("adserver.ratelimit_allowlist", DefaultRateLimitAllowlist, config.TierLive, "Comma-separated CIDRs/IPs that BYPASS the ad server rate limit. Defaults to loopback + private/link-local ranges so internal + local traffic is never throttled. Only consulted when adserver.ratelimit_rps > 0 (off by default — ad serving is high-volume and better shielded at the CDN/WAF).", config.Since("v1.17")),
 	URL:                       config.RawString("adserver.url", routes.DefaultAdServerURL),
 	Port:                      config.RawString("adserver.port", routes.PortAdServer),
 	NATSURL:                   config.RawString("adserver.nats_url", routes.DefaultNATSURL),

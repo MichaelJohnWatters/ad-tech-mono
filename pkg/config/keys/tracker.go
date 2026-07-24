@@ -18,7 +18,10 @@ var Tracker = struct {
 	SigningKey                  config.StringKey
 	FraudEnabled                config.BoolKey
 	SignatureValidation         config.BoolKey
-	RateLimitPerIP              config.IntKey
+	RateLimitRPS                config.IntKey
+	RateLimitBurst              config.IntKey
+	RateLimitTrustedHops        config.IntKey
+	RateLimitAllowlist          config.StringKey
 	DedupTTL                    config.DurationKey
 	DedupEnabled                config.BoolKey
 	ExpValidation               config.BoolKey
@@ -34,7 +37,10 @@ var Tracker = struct {
 	SigningKey:                  trackerSet.String("tracker.signing_key", "adtech-dev-signing-key-change-in-prod", config.TierSecret, "HMAC secret used to sign pixel URLs. Rotating this immediately invalidates every outstanding tracking URL — coordinate with ad server creative regeneration.", config.Since("v1.0")),
 	FraudEnabled:                trackerSet.Bool("tracker.fraud_enabled", "true", config.TierLive, "Run real-time fraud checks (bot UA, IP blocklist, rate limit) before recording an event. Disable only for clean-room investigations.", config.Since("v1.0")),
 	SignatureValidation:         trackerSet.Bool("tracker.signature_validation", "false", config.TierLive, "If true, requests without a valid HMAC sig param are rejected with 403. If false, signatures are logged as warnings but the event is still recorded — useful while phasing in signing.", config.Since("v1.0")),
-	RateLimitPerIP:              trackerSet.Int("tracker.rate_limit_per_ip", "60", config.TierLive, "Maximum requests per IP per minute. Hitting the limit returns 429 and drops the event. Tune up for legitimate high-traffic publishers.", config.Since("v1.0")),
+	RateLimitRPS:                trackerSet.Int("tracker.ratelimit_rps", "0", config.TierLive, "Per-client-IP rate limit (requests/second) on the tracker pixel endpoints. 0 = disabled (default — pixels are high-volume, and forgery is already blocked by tracker.signature_validation; the CDN/WAF is the volumetric shield). Buckets are per-pod (× replicas). Allowlisted + infra paths are never limited. Replaces the old unwired tracker.rate_limit_per_ip.", config.Since("v1.17")),
+	RateLimitBurst:              trackerSet.Int("tracker.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for tracker.ratelimit_rps. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.17")),
+	RateLimitTrustedHops:        trackerSet.Int("tracker.ratelimit_trusted_proxy_hops", "0", config.TierLive, "Trusted reverse-proxy count in front of the tracker: the rate-limit client IP is taken this many entries from the RIGHT of X-Forwarded-For so it can't be forged. 0 = single ingress (rightmost). Set 1 behind a CDN.", config.Since("v1.17")),
+	RateLimitAllowlist:          trackerSet.String("tracker.ratelimit_allowlist", DefaultRateLimitAllowlist, config.TierLive, "Comma-separated CIDRs/IPs that BYPASS the tracker rate limit. Defaults to loopback + private/link-local ranges so internal + local traffic is never throttled. Only consulted when tracker.ratelimit_rps > 0.", config.Since("v1.17")),
 	DedupTTL:                    trackerSet.Duration("tracker.dedup_ttl", "24h", config.TierLive, "How long the Redis dedup key for an event stays alive. Duplicates within this window are silently dropped.", config.Since("v1.1")),
 	DedupEnabled:                trackerSet.Bool("tracker.dedup_enabled", "true", config.TierLive, "Use Redis SetNX to deduplicate identical events (same event type + trace_id). Disable during incident replays where duplicates are expected.", config.Since("v1.1")),
 	ExpValidation:               trackerSet.Bool("tracker.exp_validation", "true", config.TierLive, "If true, reject requests whose exp=<unix-ts> param is in the past with 410 Gone. URLs without exp pass unchanged (legacy / unsigned dev calls). Disable for incident replay where stale URLs need to fire.", config.Since("v1.2")),
