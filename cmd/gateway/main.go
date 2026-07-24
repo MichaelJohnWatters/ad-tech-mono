@@ -403,6 +403,9 @@ func main() {
 	// ADR 0008: the PGP public-key endpoint (more specific than the base
 	// audiences path, so it isn't swallowed by it). JWT-gated tenant user.
 	mux.Handle(routes.APIAudiencePGPKey, authMiddleware(audiencePGPKeyHandler(secretsCache, log)))
+	// Phase I: the ads.txt authorisation policy for publishers, read from the
+	// same live config the exchange enforces on. JWT-gated tenant user.
+	mux.Handle(routes.APIIntegrationAdsTxt, authMiddleware(integrationAdsTxtHandler(cfg, log)))
 	// ADR 0008: custom field mappings. ServeMux picks the LONGEST matching
 	// pattern, so registration order is immaterial, but the intent is explicit:
 	//   .../mappings/sample  (exact) — build a mapping from a sample upload

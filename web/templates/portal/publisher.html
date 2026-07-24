@@ -250,6 +250,29 @@
         {{ template "empty-state" (dict "title" "No tag yet" "body" "Pick a placement and a tag type, then Generate.") }}
       </div>
       {{ template "card-end" . }}
+
+      <!-- Phase I: ads.txt authorisation. Shows the exact line the exchange
+           checks for (from the same live config it enforces on) so publishers
+           can authorise this platform as a seller. -->
+      {{ template "card-start" (dict "title" "Authorise us in your ads.txt") }}
+      <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+        Add this line to the <code>ads.txt</code> file at the root of each domain you monetise
+        (<code>https://yourdomain.com/ads.txt</code>). It declares us an authorised seller of your
+        inventory — buyers verify it before bidding. Our counterpart record is published at
+        <a id="adsTxtSellersLink" href="/sellers.json" target="_blank" class="text-brand-600 hover:underline">/sellers.json</a>.
+      </p>
+      <div id="adsTxtConfigured" class="hidden">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-gray-500">Paste into ads.txt:</span>
+          {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyAdsTxtLine()") }}
+        </div>
+        <pre id="adsTxtLine" class="text-xs font-mono bg-gray-50 dark:bg-surface-2 border border-gray-200 dark:border-gray-800 rounded-md p-4 overflow-x-auto whitespace-pre-wrap"></pre>
+        <p id="adsTxtEnforceNote" class="text-[11px] text-gray-400 mt-2"></p>
+      </div>
+      <div id="adsTxtUnconfigured" class="hidden">
+        {{ template "empty-state" (dict "title" "No authorisation required" "body" "This platform isn't enforcing ads.txt seller authorisation right now — nothing to add.") }}
+      </div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Earnings ============ -->
@@ -1603,6 +1626,35 @@ async function loadTagPicker() {
   }
   $('tagPlacement').innerHTML = placementsCache.map(p =>
     `<option value="${esc(p.ID)}">${esc(p.Name)} — ${p.Width}×${p.Height} (${esc(p.PublisherDomain || '')})</option>`).join('');
+  loadAdsTxtPolicy();
+}
+
+// Phase I: fetch + render the ads.txt authorisation line from the same live
+// config the exchange enforces on. When the platform hasn't set a seller
+// identity (enforcement off), show the "nothing to add" state instead.
+async function loadAdsTxtPolicy() {
+  try {
+    const pol = await fetchJSON('/v1/api/integration/adstxt');
+    if (pol.sellers_json_url) $('adsTxtSellersLink').href = pol.sellers_json_url;
+    if (pol.configured && pol.line) {
+      $('adsTxtLine').textContent = pol.line;
+      const note = {strict: 'Enforced (strict): requests from domains without this line are not bid on.',
+                    warn: 'Advisory (warn): missing lines are logged but still bid on.',
+                    off: 'Not currently enforced — add it now to stay ahead of enforcement.'}[pol.enforcement] || '';
+      $('adsTxtEnforceNote').textContent = note;
+      $('adsTxtConfigured').classList.remove('hidden');
+      $('adsTxtUnconfigured').classList.add('hidden');
+    } else {
+      $('adsTxtConfigured').classList.add('hidden');
+      $('adsTxtUnconfigured').classList.remove('hidden');
+    }
+  } catch { /* leave both hidden — non-critical panel */ }
+}
+async function copyAdsTxtLine() {
+  try {
+    await navigator.clipboard.writeText($('adsTxtLine').textContent);
+    toast('ads.txt line copied', 'success');
+  } catch { toast('Copy failed — select and copy manually', 'error'); }
 }
 
 async function generateTag() {
