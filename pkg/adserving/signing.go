@@ -48,6 +48,20 @@ func ValidateSignature(path string, params url.Values, signingKey string) bool {
 	return hmac.Equal([]byte(sig), []byte(expected))
 }
 
+// ValidateSignatureAny reports whether the request signature is valid under ANY
+// of the given keys — the overlap check for HMAC key rotation. During a rotation
+// the validator's key set is the active key PLUS the rotating predecessor(s), so
+// a pixel signed just before the switch still validates until the old key is
+// revoked. Empty keys are skipped. Returns false if none match (or all empty).
+func ValidateSignatureAny(path string, params url.Values, keys []string) bool {
+	for _, k := range keys {
+		if k != "" && ValidateSignature(path, params, k) {
+			return true
+		}
+	}
+	return false
+}
+
 func computeSignature(path string, params url.Values, key string) string {
 	// Sort params for deterministic signing
 	var keys []string

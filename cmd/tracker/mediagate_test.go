@@ -20,7 +20,7 @@ func newTestGate(sigValidation bool) mediaEventGate {
 	bus := events.NewMemoryBus()
 	pub := &eventPublisher{bus: bus, typed: events.NewPublisher(bus, log), log: log}
 	return mediaEventGate{
-		signingKey:    adserving.DefaultSigningKey,
+		sigKeys:       func() []string { return []string{adserving.DefaultSigningKey} },
 		sigValidation: func() bool { return sigValidation },
 		expValidation: func() bool { return true },
 		fraud:         fraud.NewRealTimeChecker(fraud.DefaultConfig()),

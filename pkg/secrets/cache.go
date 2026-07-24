@@ -138,6 +138,32 @@ func (c *Cache) LookupActiveByPurpose(purpose string) (Secret, bool) {
 	return Secret{}, false
 }
 
+// NonRevokedByPurpose returns every secret for a purpose that a VALIDATOR should
+// still accept: status active OR rotating (not revoked), and not past its
+// expires_at. This is the OVERLAP set — during a rotation both the new (active)
+// and old (rotating) keys validate, so signatures already in flight don't break
+// the instant a key rotates. Used for HMAC keys (tracker pixel URLs) where the
+// validator must try each key VALUE, unlike LookupByValue (which matches a
+// presented secret). Returns newest-rotated-first is not guaranteed; callers try
+// all. Empty when the cache is unset.
+func (c *Cache) NonRevokedByPurpose(purpose string) []Secret {
+	if c.Cache == nil {
+		return nil
+	}
+	now := time.Now()
+	var out []Secret
+	for _, s := range c.Cache.All() {
+		if s.Purpose != purpose || s.Status == StatusRevoked {
+			continue
+		}
+		if s.ExpiresAt != nil && s.ExpiresAt.Before(now) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // pickLoader returns a PostgresLoader keyed by dbURL. The loader is
 // self-healing: it lazily opens the connection on first LoadAll and
 // re-opens on every poll if the existing connection is dead. So even

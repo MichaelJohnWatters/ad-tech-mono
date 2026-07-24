@@ -61,3 +61,33 @@ func TestLookupActiveByPurpose_NoActive(t *testing.T) {
 		t.Error("rotating-only should not be returned as active")
 	}
 }
+
+// TestNonRevokedByPurpose is the OVERLAP set: active + rotating validate,
+// revoked + expired do not — so an in-flight signature survives a rotation.
+func TestNonRevokedByPurpose(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	c := testCache(t, []Secret{
+		{ID: "1", Name: "active", Purpose: PurposeHMACTracker, Status: StatusActive, Value: "new"},
+		{ID: "2", Name: "rotating", Purpose: PurposeHMACTracker, Status: StatusRotating, Value: "old"},
+		{ID: "3", Name: "revoked", Purpose: PurposeHMACTracker, Status: StatusRevoked, Value: "dead"},
+		{ID: "4", Name: "expired", Purpose: PurposeHMACTracker, Status: StatusActive, Value: "stale", ExpiresAt: &past},
+		{ID: "5", Name: "not-expired", Purpose: PurposeHMACTracker, Status: StatusActive, Value: "fresh", ExpiresAt: &future},
+		{ID: "6", Name: "other-purpose", Purpose: PurposeJWTSigning, Status: StatusActive, Value: "jwt"},
+	})
+	vals := map[string]bool{}
+	for _, s := range c.NonRevokedByPurpose(PurposeHMACTracker) {
+		vals[s.Value] = true
+	}
+	// active + rotating + not-expired accepted; revoked, expired, other-purpose not.
+	for _, want := range []string{"new", "old", "fresh"} {
+		if !vals[want] {
+			t.Errorf("expected %q in the overlap set, got %v", want, vals)
+		}
+	}
+	for _, no := range []string{"dead", "stale", "jwt"} {
+		if vals[no] {
+			t.Errorf("%q should NOT be in the overlap set", no)
+		}
+	}
+}

@@ -20,9 +20,9 @@ import (
 // signature). The two validation toggles are functions so they stay live-tunable
 // via the config manager, exactly like the impression path.
 type mediaEventGate struct {
-	signingKey    string
-	sigValidation func() bool // tracker.signature_validation (default false)
-	expValidation func() bool // tracker.exp_validation (default true)
+	sigKeys       func() []string // overlap set: config key + non-revoked hmac_tracker secrets
+	sigValidation func() bool     // tracker.signature_validation (default false)
+	expValidation func() bool     // tracker.exp_validation (default true)
 	fraud         *fraud.RealTimeChecker
 	dedup         *Dedup
 	publisher     *eventPublisher
@@ -41,7 +41,7 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 	q := r.URL.Query()
 	ctx := logger.WithTraceID(r.Context(), traceID)
 
-	if !adserving.ValidateSignature(r.URL.Path, q, g.signingKey) {
+	if !adserving.ValidateSignatureAny(r.URL.Path, q, g.sigKeys()) {
 		reqLog.Warn("invalid signature", "path", r.URL.Path)
 		if g.sigValidation() {
 			go g.publisher.publishRejected(context.WithoutCancel(ctx),

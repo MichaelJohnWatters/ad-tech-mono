@@ -253,3 +253,24 @@ func TestBuildViewabilityURL(t *testing.T) {
 		t.Errorf("expected view path in: %s", url)
 	}
 }
+
+func TestValidateSignatureAny_Overlap(t *testing.T) {
+	// A URL signed with the OLD (rotating) key still validates while the key set
+	// includes both old and new — the overlap window. Once only the new key is
+	// present, the old-signed URL is rejected.
+	signed := SignURL("http://x/v1/t/imp?tid=t1&cid=c1", "old-key")
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	q := u.Query()
+	if !ValidateSignatureAny(u.Path, q, []string{"new-key", "old-key"}) {
+		t.Error("expected accept under the overlap set [new, old]")
+	}
+	if ValidateSignatureAny(u.Path, q, []string{"new-key"}) {
+		t.Error("expected reject once the old key is dropped from the set")
+	}
+	if ValidateSignatureAny(u.Path, q, []string{"", ""}) {
+		t.Error("empty keys must not validate")
+	}
+}
