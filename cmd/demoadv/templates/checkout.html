@@ -1,0 +1,24 @@
+{{define "checkout.html"}}<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>{{template "styles" .}}
+</head><body>
+{{template "nav" .}}
+<main>
+  <div class="card">
+    <h1>Checkout</h1>
+    <p>Reserve your {{.Cfg.Brand}} F-150. Completing the order fires the real
+       <code>/v1/t/conv</code> conversion pixel — a billed conversion event on the platform,
+       linked to the campaign that drove the click (via its trace id in production).</p>
+    <p class="price">$38,000</p>
+    <button class="btn alt" onclick="fireConversion('purchase', 38000); document.getElementById('done').style.display='block';">
+      Complete purchase
+    </button>
+    <p id="done" style="display:none;color:#0a7d33;font-weight:600;margin-top:14px">
+      ✓ Order confirmed — conversion pixel fired. Check the panel (bottom-right).
+    </p>
+  </div>
+</main>
+{{template "consentBanner" .}}
+{{template "pixels" .}}
+</body></html>{{end}}

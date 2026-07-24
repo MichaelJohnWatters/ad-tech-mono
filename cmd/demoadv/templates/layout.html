@@ -1,0 +1,99 @@
+{{define "styles"}}
+<style>
+  :root { --ford:#003478; --ford2:#1666c9; --ink:#12161c; --line:#e4e7ec; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif; color:var(--ink); background:#fff; }
+  header.top { background:var(--ford); color:#fff; padding:12px 20px; display:flex; align-items:center; gap:22px; }
+  header .logo { font-weight:800; font-size:22px; letter-spacing:1px; font-style:italic; }
+  nav a { color:#dbe7ff; text-decoration:none; font-size:14px; margin-right:16px; }
+  nav a.active, nav a:hover { color:#fff; }
+  .hero { background:linear-gradient(120deg,var(--ford),var(--ford2)); color:#fff; padding:56px 20px; }
+  .hero h1 { margin:0 0 8px; font-size:38px; }
+  .hero p { margin:0; opacity:.9; font-size:18px; }
+  main { max-width:960px; margin:0 auto; padding:28px 20px; }
+  .card { border:1px solid var(--line); border-radius:12px; padding:20px; margin:14px 0; }
+  .btn { background:var(--ford); color:#fff; border:0; border-radius:8px; padding:12px 22px; font-size:15px; font-weight:600; cursor:pointer; }
+  .btn.alt { background:#0a7d33; }
+  .price { font-size:28px; font-weight:800; color:var(--ford); }
+  /* dev status overlay — shows the pixels firing so you can watch it work */
+  #adx { position:fixed; right:14px; bottom:14px; width:330px; background:#0b1220; color:#cbd5e1;
+    font:11px/1.5 ui-monospace,Menlo,monospace; border-radius:10px; padding:12px 14px; z-index:9998; box-shadow:0 6px 24px rgba(0,0,0,.35); }
+  #adx b { color:#7dd3fc; }
+  #adx .ev { color:#86efac; }
+  #adx .no { color:#fca5a5; }
+  .consent { position:fixed; left:0; right:0; bottom:0; background:#111827; color:#f9fafb; padding:14px 18px;
+    display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; font-size:13px; z-index:9999; }
+  .consent button { border:0; border-radius:6px; padding:8px 16px; font-size:13px; cursor:pointer; }
+  .consent .accept { background:#16a34a; color:#fff; } .consent .reject { background:#374151; color:#f9fafb; }
+</style>
+{{end}}
+
+{{define "nav"}}
+<header class="top">
+  <span class="logo">{{ .Cfg.Brand }}</span>
+  <nav>
+    <a href="/" class="{{if eq .Active "home"}}active{{end}}">Home</a>
+    <a href="/models/f150" class="{{if eq .Active "f150"}}active{{end}}">F-150</a>
+    <a href="/checkout" class="{{if eq .Active "checkout"}}active{{end}}">Checkout</a>
+  </nav>
+</header>
+{{end}}
+
+{{/* Advertiser pixels + consent. Fires the REAL /v1/t/rt retargeting pixel on
+     each page view (consent-gated) and exposes fireConversion() for the checkout
+     page. Identity = a fake hashed-email held in a first-party cookie, exactly
+     as an advertiser would pass its logged-in user's hashed email. */}}
+{{define "pixels"}}
+<div id="adx"><b>{{ .Cfg.Brand }} · ad pixels</b><div id="adxlog">…</div></div>
+<script>
+  var TRACKER = {{ .Cfg.TrackerURL }}, AID = {{ .Cfg.AccountID }}, TAG = {{ .Tag }};
+  function log(msg, cls){ var d=document.getElementById('adxlog'); d.innerHTML += '<div class="'+(cls||'')+'">'+msg+'</div>'; }
+  function fire(url){ var i=new Image(1,1); i.src=url; }        // 1x1 pixel beacon
+  // stable first-party visitor id (a hashed email, as an advertiser would have)
+  async function visitorId(){
+    var id = localStorage.getItem('ford_uid');
+    if (!id) {
+      var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('visitor-'+Math.random()+'@demo'));
+      id = 'he_' + [...new Uint8Array(buf)].slice(0,16).map(b=>b.toString(16).padStart(2,'0')).join('');
+      localStorage.setItem('ford_uid', id);
+    }
+    return id;
+  }
+  var consented = false, UID = null;
+  async function applyConsent(personalized){
+    UID = await visitorId();
+    consented = personalized;
+    localStorage.setItem('ford_consent', personalized ? 'yes' : 'no');
+    var b=document.getElementById('consent'); if(b) b.style.display='none';
+    log('visitor '+UID.slice(0,14)+'…');
+    if (personalized) {
+      // RETARGETING: this visit joins the advertiser's audience for the tag.
+      var tid = 'rt-'+Date.now();
+      fire(TRACKER+'/v1/t/rt?uid='+encodeURIComponent(UID)+'&aid='+encodeURIComponent(AID)+'&tag='+encodeURIComponent(TAG)+'&tid='+tid);
+      log('▶ retargeting pixel fired · tag="'+TAG+'" → you\'re in the audience', 'ev');
+    } else {
+      log('✗ consent declined — no retargeting pixel (no audience)', 'no');
+    }
+  }
+  // conversion pixel (checkout). tid = a fake order/click ref; rev in USD.
+  function fireConversion(type, rev){
+    if (!consented) { log('✗ conversion not fired (no consent)', 'no'); return; }
+    var tid = 'order-'+Date.now();
+    fire(TRACKER+'/v1/t/conv?tid='+tid+'&type='+encodeURIComponent(type)+'&rev='+rev+'&cur=USD');
+    log('▶ CONVERSION pixel fired · '+type+' $'+rev, 'ev');
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    var c = localStorage.getItem('ford_consent');
+    if (c) applyConsent(c==='yes');
+    else { var b=document.getElementById('consent'); if(b) b.style.display='flex'; }
+  });
+</script>
+{{end}}
+
+{{define "consentBanner"}}
+<div class="consent" id="consent" style="display:none">
+  <span>🍪 {{ .Cfg.Brand }} uses cookies for personalized advertising (retargeting). Accept to be shown relevant offers later.</span>
+  <button class="accept" onclick="applyConsent(true)">Accept</button>
+  <button class="reject" onclick="applyConsent(false)">Decline</button>
+</div>
+{{end}}
