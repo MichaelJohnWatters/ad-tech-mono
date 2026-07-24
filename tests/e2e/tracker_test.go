@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -149,6 +150,18 @@ func TestTrackerHMACStrictMode(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusForbidden
 	})
+
+	// Accept-under-strict: a correctly HMAC-signed pixel must be accepted even
+	// with validation on — proving strict rejects forgeries, not all traffic.
+	// (The reject above is unsigned → 403; this is the same endpoint, signed.)
+	signed := adserving.SignURL(
+		h.URLs.Tracker+fmt.Sprintf("/v1/t/imp?tid=trk-hmac-ok-%d&cid=%s", time.Now().UnixNano(), w.Campaign.ID),
+		adserving.DefaultSigningKey)
+	resp := get(t, h, signed)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("strict HMAC: a validly-signed pixel was rejected (status %d, want 200)", resp.StatusCode)
+	}
 }
 
 func get(t *testing.T, h *harness.Harness, url string) *http.Response {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -226,7 +227,25 @@ func TestFraudAdsTxtUnverifiedRejected(t *testing.T) {
 	h.SetConfigForPod(t, "exchange.adstxt_enforcement", "strict", pod)
 	h.RefreshAllCaches(t)
 
-	if !h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u2")).NoBid {
+	rejected := h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u2"))
+	if !rejected.NoBid {
 		t.Errorf("strict ads.txt: expected NoBid for a publisher whose ads.txt omits us")
+	}
+	// The block must be self-identifying — NBR=500 tells a genuine no-bid apart
+	// from an ads.txt authorisation failure.
+	if rejected.NBR != openrtb.NBRAdsTxtUnauthorised {
+		t.Errorf("strict ads.txt: NBR = %d (%q), want %d (adstxt_not_authorised)",
+			rejected.NBR, rejected.NBRReason, openrtb.NBRAdsTxtUnauthorised)
+	}
+
+	// Accept-under-strict: now the publisher authorises us (our seller_domain +
+	// seller_id, DIRECT). Strict enforcement must let the same auction through —
+	// proving strict isn't a blanket block, it's an authorisation check.
+	h.SetAdsTxt(t, domain, []fraud.AdsTxtEntry{
+		{Domain: "adtech.example", AccountID: "seat-1", Relationship: "DIRECT"},
+	}, "valid")
+	h.RefreshAllCaches(t)
+	if h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u3")).NoBid {
+		t.Errorf("strict ads.txt: expected a winning bid for a publisher that authorises us")
 	}
 }

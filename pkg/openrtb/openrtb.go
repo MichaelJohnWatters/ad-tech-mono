@@ -300,7 +300,27 @@ type BidResponse struct {
 	SeatBid []SeatBid `json:"seatbid,omitempty"`
 	Cur     string    `json:"cur,omitempty"`
 	NoBid   bool      `json:"nobid,omitempty"` // extension: explicit no-bid
+	// NBR is the OpenRTB no-bid reason code (spec §5.24). It lets a caller — and
+	// the trace explorer — distinguish a genuine "no matching demand" (NoBid with
+	// NBR unset/0) from a request BLOCKED by an enforcement gate (a specific code
+	// below). Set alongside NoBid; omitted when a bid is returned.
+	NBR int `json:"nbr,omitempty"`
+	// NBRReason is a human-readable companion to NBR (e.g. "adstxt_not_authorised")
+	// — an extension so operators reading a raw response or a captured span don't
+	// have to memorise the numeric codes. Empty for a genuine no-bid.
+	NBRReason string `json:"nbrreason,omitempty"`
 }
+
+// No-bid reason codes (BidResponse.NBR). The OpenRTB 2.5 spec reserves codes
+// ≥ 500 for exchange-specific use; our platform's enforcement gates each get a
+// stable code so a block is never mistaken for an ordinary no-bid. Code 0
+// (unset) is a genuine no-bid: valid request, simply no matching demand.
+const (
+	NBRAdsTxtUnauthorised = 500 // publisher's ads.txt does not list us as an authorised seller
+	NBRSChainInvalid      = 501 // inbound SupplyChain missing or malformed
+	NBRAdCertInvalid      = 502 // ads.cert signature missing or invalid
+	NBRAdCertStale        = 503 // ads.cert signature timestamp outside the replay window
+)
 
 // SeatBid represents a collection of bids from one bidder seat.
 type SeatBid struct {

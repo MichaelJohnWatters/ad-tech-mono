@@ -392,7 +392,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		if bidReq.Site != nil {
 			if allow, reason := adsTxtGate(bidReq.Site.Domain); !allow {
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBR: openrtb.NBRAdsTxtUnauthorised, NBRReason: reason})
 				reqLog.Info("auction rejected", "reason", reason, "domain", bidReq.Site.Domain)
 				am.auctionsTotal.WithLabelValues("rejected_adstxt", channel).Inc()
 				return
@@ -405,7 +405,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// enforcement live via schainGate.
 		if allow, reason := schainGate(&bidReq, traceID); !allow {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBR: openrtb.NBRSChainInvalid, NBRReason: reason})
 			reqLog.Info("auction rejected", "reason", reason)
 			am.auctionsTotal.WithLabelValues("rejected_schain", channel).Inc()
 			return

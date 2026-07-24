@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,34 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	return out
 }
 
+// PostOpenRTBBid POSTs a raw OpenRTB bid-request JSON straight to a service's
+// /v1/openrtb/bid endpoint, bypassing the SSP/exchange. Enforcement tests use it
+// to control the EXACT inbound request — e.g. an unsigned ads.cert request — and
+// then assert on the returned NBR. Because the DSP's ads.cert gate runs before
+// any targeting, a block is provable (NBR set) regardless of whether a campaign
+// would otherwise have matched, so no biddable-world setup is needed for the
+// reject case. baseURL is a host-reachable DSP URL (e.g. h.URLs.DSP).
+func (h *Harness) PostOpenRTBBid(t *testing.T, baseURL, bodyJSON string) BidResponseWinner {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+routes.OpenRTBBid, strings.NewReader(bodyJSON))
+	if err != nil {
+		t.Fatalf("build raw bid request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("raw bid call failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("raw bid status %d: %s", resp.StatusCode, string(body))
+	}
+	return h.ExtractWinner(t, AuctionResult{BidResponse: body})
+}
+
 // SSPServeResult is the browser-visible slice of the SSP /v1/ssp/serve
 // response: rendered HTML (or NoBid) with no auction internals.
 type SSPServeResult struct {
@@ -190,17 +219,26 @@ type BidResponseWinner struct {
 	CampaignID string
 	CreativeID string
 	DealID     string
+	// NBR is the OpenRTB no-bid reason code (0 = genuine no-bid / no demand;
+	// ≥500 = an enforcement gate blocked the request — see pkg/openrtb). Lets a
+	// test assert WHY a request no-bid without inferring it from a bare nobid.
+	NBR       int
+	NBRReason string
 }
 
 // ExtractWinner parses a BidResponse from an AuctionResult and pulls the
 // fields tests usually care about. Doesn't fail the test on NoBid — the
-// caller decides whether NoBid is expected for the scenario.
+// caller decides whether NoBid is expected for the scenario. On a no-bid it
+// still surfaces NBR/NBRReason so the caller can distinguish an enforcement
+// block from an ordinary "no demand".
 func (h *Harness) ExtractWinner(t *testing.T, r AuctionResult) BidResponseWinner {
 	t.Helper()
 	var br struct {
-		ID      string `json:"id"`
-		NoBid   bool   `json:"nobid,omitempty"`
-		SeatBid []struct {
+		ID        string `json:"id"`
+		NoBid     bool   `json:"nobid,omitempty"`
+		NBR       int    `json:"nbr,omitempty"`
+		NBRReason string `json:"nbrreason,omitempty"`
+		SeatBid   []struct {
 			Seat string `json:"seat"`
 			Bid  []struct {
 				ID     string  `json:"id"`
@@ -215,12 +253,13 @@ func (h *Harness) ExtractWinner(t *testing.T, r AuctionResult) BidResponseWinner
 		t.Fatalf("decode bid response: %v\nraw: %s", err, string(r.BidResponse))
 	}
 	if br.NoBid || len(br.SeatBid) == 0 || len(br.SeatBid[0].Bid) == 0 {
-		return BidResponseWinner{NoBid: true}
+		return BidResponseWinner{NoBid: true, NBR: br.NBR, NBRReason: br.NBRReason}
 	}
 	sb := br.SeatBid[0]
 	b := sb.Bid[0]
 	return BidResponseWinner{
 		Seat: sb.Seat, Price: b.Price,
 		CampaignID: b.CID, CreativeID: b.CrID, DealID: b.DealID,
+		NBR: br.NBR, NBRReason: br.NBRReason,
 	}
 }
