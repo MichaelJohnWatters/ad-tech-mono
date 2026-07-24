@@ -728,8 +728,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// Strict mode no-bids an unsigned/tampered request; warn logs and bids;
 		// off (default) skips. Reads enforcement live.
 		if allow, reason := adCertVerify(&bidReq); !allow {
+			nbr := openrtb.NBRAdCertInvalid
+			if reason == "adcert_stale" {
+				nbr = openrtb.NBRAdCertStale
+			}
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBR: nbr, NBRReason: reason})
 			reqLog.Info("no bid", "reason", reason)
 			return
 		}

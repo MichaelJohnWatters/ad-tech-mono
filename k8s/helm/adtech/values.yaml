@@ -104,6 +104,11 @@ services:
         value: "internal"
       - name: DSP_PORT
         value: "8082"
+      # ads.cert: fetch + refresh the exchange's signing keyset so the DSP can
+      # verify signed bid requests. Harmless until dsp.adcert_enforcement != off
+      # (live). Prod-shaped default; also what makes the adcert e2e test possible.
+      - name: DSP_ADCERT_KEY_URL
+        value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -139,6 +144,8 @@ services:
         value: "competitor1"
       - name: DSP_PORT
         value: "8089"
+      - name: DSP_ADCERT_KEY_URL
+        value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -174,6 +181,8 @@ services:
         value: "competitor2"
       - name: DSP_PORT
         value: "8090"
+      - name: DSP_ADCERT_KEY_URL
+        value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
