@@ -1,0 +1,26 @@
+{{define "product.html"}}<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>{{template "styles" .}}
+</head><body>
+{{template "nav" .}}
+<main>
+  <div class="card">
+    <h1>{{.Cfg.Brand}} F-150</h1>
+    <p>The best-selling truck. This is a high-intent product page — its retargeting pixel fires with
+       tag <code>f150-interest</code>, so the advertiser can build a "F-150 shoppers" audience distinct
+       from general visitors.</p>
+    <p class="price">$38,000</p>
+    <p>
+      <a href="/checkout"><button class="btn">Build &amp; Price →</button></a>
+      &nbsp;<button class="btn alt" onclick="fireConversion('lead', 0)">Request a quote (fires a lead)</button>
+    </p>
+  </div>
+  <div class="card">
+    <h3>Specs</h3>
+    <p>400 hp · 3.5L V6 · 14,000 lb towing · 12" touchscreen.</p>
+  </div>
+</main>
+{{template "consentBanner" .}}
+{{template "pixels" .}}
+</body></html>{{end}}

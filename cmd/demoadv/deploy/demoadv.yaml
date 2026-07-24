@@ -1,0 +1,62 @@
+# demoadv — deploy to a SEPARATE cluster (NOT the ad-tech cluster).
+# The external ADVERTISER ("Ford"): its pixels call the ad-tech cluster's PUBLIC
+# tracker URL (set DEMOADV_* below), so it exercises the real cross-origin
+# advertiser-pixel path (retargeting + conversion).
+#
+# Build: go build -o bin/demoadv ./cmd/demoadv
+#        docker build --build-arg SERVICE=demoadv -f build/Dockerfile.dev -t adtech-demoadv .
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demoadv
+  labels: { app: demoadv }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: demoadv } }
+  template:
+    metadata:
+      labels: { app: demoadv }
+    spec:
+      containers:
+        - name: demoadv
+          image: adtech-demoadv
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9200
+          env:
+            - { name: DEMOADV_TRACKER_URL, value: "https://tracker.adtech.local" }
+            - { name: DEMOADV_ACCOUNT_ID,  value: "demo-advertiser" }   # ← a real seeded advertiser account id
+            - { name: DEMOADV_BRAND,       value: "Ford" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 9200 }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demoadv
+spec:
+  selector: { app: demoadv }
+  ports:
+    - { port: 80, targetPort: 9200 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demoadv
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ford.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demoadv
+                port: { number: 80 }

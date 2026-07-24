@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder demoadv
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -196,6 +196,11 @@ extbidder: ## Run the external DSP partner bidder (host process, :9100). Wire it
 	@echo "extbidder (external DSP) → :9100  (Ctrl-C to stop)"
 	@echo "add http://host.docker.internal:9100 to exchange.dsp_endpoints — see cmd/extbidder/README.md"
 	go run ./cmd/extbidder
+
+demoadv: ## Run the external demo advertiser site "Ford" (host process, :9200). Fires retargeting + conversion pixels.
+	@echo "demoadv (external advertiser) → http://localhost:9200  (Ctrl-C to stop)"
+	@echo "visit pages → retargeting audience builds; see cmd/demoadv/README.md"
+	go run ./cmd/demoadv
 
 deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }
