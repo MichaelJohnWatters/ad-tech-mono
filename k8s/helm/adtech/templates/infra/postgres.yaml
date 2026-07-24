@@ -28,8 +28,12 @@ spec:
           # Default max_connections (100) survives a GRADUAL boot but not a
           # cold full-stack helm install: ~30 pods retry-storm while the
           # schema is still missing and exhaust the slots before the
-          # migrate hook can even connect (seen at cutover).
-          args: ["-c", "max_connections=300"]
+          # migrate hook can even connect (seen at cutover). 300 held the
+          # multi-pod steady state, but the ~54-pod stack (multi-replica dsp/
+          # gateway/tracker) baselines ~70 conns and a full e2e run's own
+          # per-test connections then tip it over 300 ("sorry, too many clients")
+          # — raise to give the test suite headroom. Configurable via values.
+          args: ["-c", "max_connections={{ $pg.maxConnections | default 500 }}"]
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432
