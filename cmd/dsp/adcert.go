@@ -29,21 +29,21 @@ import (
 //
 // Verification is also skipped (allow) when no key is available, so the feature
 // stays inert until a key is configured or fetched.
-func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time, keyFn func() ed25519.PublicKey) func(*openrtb.BidRequest) (bool, string) {
+func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time, keysFn func() []ed25519.PublicKey) func(*openrtb.BidRequest) (bool, string) {
 	return func(req *openrtb.BidRequest) (bool, string) {
 		mode := strings.ToLower(strings.TrimSpace(keys.DSP.AdCertEnforcement.Get(cfg)))
-		pub := keyFn()
-		if mode == "" || mode == "off" || pub == nil {
+		pubs := keysFn()
+		if mode == "" || mode == "off" || len(pubs) == 0 {
 			return true, ""
 		}
 		var sig string
 		if req.Source != nil && req.Source.Ext != nil {
 			sig = req.Source.Ext.AdCert
 		}
-		// Both must hold: a valid signature AND a fresh timestamp (replay
-		// protection). maxAge <= 0 disables the freshness check.
+		// Both must hold: a valid signature under ANY current key (overlap window)
+		// AND a fresh timestamp (replay protection). maxAge <= 0 disables freshness.
 		maxAge := keys.DSP.AdCertMaxAge.Get(cfg)
-		sigOK := adcert.Verify(pub, req, sig)
+		sigOK := adcert.VerifyAny(pubs, req, sig)
 		fresh := adcert.Fresh(req, now(), maxAge)
 		if sigOK && fresh {
 			return true, ""
@@ -65,35 +65,38 @@ func adCertVerifierFn(cfg *config.Config, log *slog.Logger, now func() time.Time
 // rotations propagate without a restart); otherwise the static
 // dsp.adcert_verify_key is used. The returned func always prefers a freshly
 // fetched key and falls back to the static one until the first fetch succeeds.
-func adCertKeySource(cfg *config.Config, log *slog.Logger, onShutdown func(name string, fn func())) func() ed25519.PublicKey {
-	staticPub, err := adcert.ParsePublicKey(keys.DSP.AdCertVerifyKey.Get(cfg))
-	if err != nil {
+func adCertKeySource(cfg *config.Config, log *slog.Logger, onShutdown func(name string, fn func())) func() []ed25519.PublicKey {
+	var static []ed25519.PublicKey
+	if staticPub, err := adcert.ParsePublicKey(keys.DSP.AdCertVerifyKey.Get(cfg)); err != nil {
 		log.Error("adcert: invalid static verify key", "error", err)
-		staticPub = nil
+	} else if staticPub != nil {
+		static = []ed25519.PublicKey{staticPub}
 	}
 	url := keys.DSP.AdCertKeyURL.Get(cfg)
 	if url == "" {
-		return func() ed25519.PublicKey { return staticPub }
+		return func() []ed25519.PublicKey { return static }
 	}
 	f := newAdCertKeyFetcher(url, keys.DSP.AdCertKeyRefresh.Get(cfg), log)
 	f.Start()
 	onShutdown("adcert-key-fetcher", f.Stop)
-	return func() ed25519.PublicKey {
-		if k := f.Current(); k != nil {
-			return k
+	return func() []ed25519.PublicKey {
+		if ks := f.Current(); len(ks) > 0 {
+			return ks
 		}
-		return staticPub
+		return static
 	}
 }
 
-// adCertKeyFetcher fetches the exchange's ads.cert public key on an interval,
-// holding the latest in an atomic pointer for lock-free reads on the bid path.
+// adCertKeyFetcher fetches the exchange's ads.cert public KEYSET on an interval,
+// holding the latest set in an atomic pointer for lock-free reads on the bid
+// path. The keyset lets a DSP verify against the active AND rotating keys during
+// a grace window (overlap).
 type adCertKeyFetcher struct {
 	url      string
 	interval time.Duration
 	client   *http.Client
 	log      *slog.Logger
-	key      atomic.Pointer[ed25519.PublicKey]
+	keys     atomic.Pointer[[]ed25519.PublicKey]
 	stop     chan struct{}
 }
 
@@ -129,9 +132,9 @@ func (f *adCertKeyFetcher) Start() {
 
 func (f *adCertKeyFetcher) Stop() { close(f.stop) }
 
-// Current returns the latest fetched key, or nil before the first success.
-func (f *adCertKeyFetcher) Current() ed25519.PublicKey {
-	if p := f.key.Load(); p != nil {
+// Current returns the latest fetched keyset, or nil before the first success.
+func (f *adCertKeyFetcher) Current() []ed25519.PublicKey {
+	if p := f.keys.Load(); p != nil {
 		return *p
 	}
 	return nil
@@ -155,19 +158,38 @@ func (f *adCertKeyFetcher) fetch() {
 		f.log.Error("adcert: key endpoint returned non-200 (keeping last key)", "status", resp.StatusCode)
 		return
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	// Keyset shape (JWKS-style) with `keys`; fall back to the legacy single `key`.
 	var kr struct {
-		Alg string `json:"alg"`
-		Key string `json:"key"`
+		Alg  string `json:"alg"`
+		Key  string `json:"key"`
+		Keys []struct {
+			Alg string `json:"alg"`
+			Key string `json:"key"`
+		} `json:"keys"`
 	}
 	if err := json.Unmarshal(body, &kr); err != nil {
 		f.log.Error("adcert: key response decode failed", "error", err)
 		return
 	}
-	pub, err := adcert.ParsePublicKey(kr.Key)
-	if err != nil || pub == nil {
-		f.log.Error("adcert: fetched key invalid", "error", err)
+	seen := map[string]bool{}
+	var pubs []ed25519.PublicKey
+	add := func(b64 string) {
+		if b64 == "" || seen[b64] {
+			return
+		}
+		if pub, err := adcert.ParsePublicKey(b64); err == nil && pub != nil {
+			seen[b64] = true
+			pubs = append(pubs, pub)
+		}
+	}
+	for _, k := range kr.Keys {
+		add(k.Key)
+	}
+	add(kr.Key) // legacy single-key field / active
+	if len(pubs) == 0 {
+		f.log.Error("adcert: fetched keyset had no valid keys (keeping last)")
 		return
 	}
-	f.key.Store(&pub)
+	f.keys.Store(&pubs)
 }

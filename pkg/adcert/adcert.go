@@ -120,6 +120,20 @@ func Verify(pub ed25519.PublicKey, req *openrtb.BidRequest, sig string) bool {
 	return ed25519.Verify(pub, []byte(Canonical(req)), raw)
 }
 
+// VerifyAny reports whether sig verifies under ANY of the given public keys —
+// the OVERLAP check for ads.cert key rotation. During a rotation the exchange
+// publishes both the new (active) and old (rotating) public keys, so a bid
+// request signed just before the switch still verifies until the old key is
+// dropped from the keyset. Returns false if none match (or the set is empty).
+func VerifyAny(pubs []ed25519.PublicKey, req *openrtb.BidRequest, sig string) bool {
+	for _, pub := range pubs {
+		if Verify(pub, req, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 // ParsePrivateKey decodes a base64 (raw-url or std) Ed25519 private key (the
 // 64-byte seed+public form). Empty input yields a nil key and no error so
 // callers can treat "unconfigured" as "signing disabled".

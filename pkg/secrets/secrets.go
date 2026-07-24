@@ -28,6 +28,7 @@ const (
 	PurposeServiceS2S    = "service_s2s"    // internal service-to-service
 	PurposeAPIKey        = "api_key"        // operator-managed CRUD API keys
 	PurposePGPPrivate    = "pgp_private"    // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
+	PurposeAdCertEd25519 = "adcert_ed25519" // Ed25519 private key: signing outbound OpenRTB bid requests (Phase I)
 )
 
 // Status values.
@@ -102,10 +103,11 @@ func FilterFor(serviceName string) Filter {
 			Purposes: []string{PurposeJWTSigning, PurposeAPIKey},
 		}
 	case "exchange":
-		// External Prebid partners present a shared secret; internal
-		// services may eventually use service_s2s for cross-service trust.
+		// External Prebid partners present a shared secret; internal services may
+		// eventually use service_s2s; the exchange also SIGNS outbound bid
+		// requests with the active ads.cert Ed25519 key (Phase I).
 		return Filter{
-			Purposes: []string{PurposePartnerShared, PurposeServiceS2S},
+			Purposes: []string{PurposePartnerShared, PurposeServiceS2S, PurposeAdCertEd25519},
 		}
 	case "tracker":
 		// HMAC sigs on every pixel URL.

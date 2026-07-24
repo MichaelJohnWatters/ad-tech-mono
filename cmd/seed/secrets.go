@@ -2,13 +2,54 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"fmt"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adcert"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 )
+
+// SeedDevAdCertKey generates a platform ads.cert Ed25519 keypair and stores the
+// PRIVATE key as the canonical ACTIVE adcert_ed25519 secret (Phase I). The
+// exchange signs outbound bid requests with it and publishes the public half at
+// /v1/adcert/key; rotation = add a new active row (this becomes 'rotating', then
+// 'revoked') and DSPs verify the overlap keyset live. Idempotent.
+func (in *inserter) SeedDevAdCertKey(ctx context.Context) error {
+	var existing string
+	err := in.db.QueryRowContext(ctx,
+		`SELECT id FROM secrets WHERE purpose = 'adcert_ed25519' AND status != 'revoked' LIMIT 1`,
+	).Scan(&existing)
+	if err == nil {
+		in.log.Info("adcert_ed25519 secret already present, skipping seed")
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("check existing adcert key: %w", err)
+	}
+	_, priv, gerr := ed25519.GenerateKey(nil)
+	if gerr != nil {
+		return fmt.Errorf("seed adcert key: generate: %w", gerr)
+	}
+	cipher, err := secrets.NewCipherFromEnv()
+	if err != nil {
+		return fmt.Errorf("seed adcert key: encryption key: %w", err)
+	}
+	storedValue, err := cipher.Encrypt(adcert.EncodeKey(priv))
+	if err != nil {
+		return fmt.Errorf("seed adcert key: encrypt: %w", err)
+	}
+	const q = `
+INSERT INTO secrets (name, value, purpose, owner, status, created_at, updated_at)
+VALUES ('dev-adcert-ed25519', $1, 'adcert_ed25519', 'platform', 'active', now(), now())`
+	if _, err := in.db.ExecContext(ctx, q, storedValue); err != nil {
+		return fmt.Errorf("seed adcert key: %w", err)
+	}
+	in.log.Info("seeded dev adcert_ed25519 key", "purpose", "adcert_ed25519", "owner", "platform", "value", "(dev only — rotate in prod)")
+	return nil
+}
 
 // SeedDevHMACTracker inserts the current pixel-signing key as the canonical
 // ACTIVE hmac_tracker secret (Phase I). Value = adserving.DefaultSigningKey (what

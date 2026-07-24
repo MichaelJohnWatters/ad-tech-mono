@@ -34,6 +34,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
@@ -138,7 +139,15 @@ func main() {
 	}
 	adsTxtGate := adsTxtGateFn(cfg, adsTxtCache, log)
 	schainGate := schainGateFn(cfg, log)
-	signReq := adCertSignerFn(cfg, log, clk.Now)
+	// ads.cert signing: the ACTIVE Ed25519 key comes from the secrets store
+	// (purpose adcert_ed25519) so it rotates HOT with overlap (Phase I); the
+	// /v1/adcert/key endpoint publishes the whole non-revoked keyset. Falls back
+	// to exchange.adcert_sign_key (env) until a secret is configured.
+	adcertSecrets := secrets.Start(context.Background(), cfg, clk, log, constants.ServiceExchange)
+	lc.OnShutdown("exchange-secrets-cache", func(_ context.Context) error { adcertSecrets.Stop(); return nil })
+	adcertSigner := newAdCertSigner(cfg, adcertSecrets, clk.Now, log)
+	adcertSecrets.WatchActive(context.Background(), secrets.PurposeAdCertEd25519, 30*time.Second, adcertSigner.setActiveKey)
+	signReq := adcertSigner.sign
 
 	// Readiness: deal cache must have run at least once (an empty result
 	// is still "ready" — empty is a valid state for fresh seed). Exchange
@@ -253,7 +262,7 @@ func main() {
 	}
 	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
-	mux.HandleFunc(routes.AdCertKey, adCertKeyHandler(cfg, log))
+	mux.HandleFunc(routes.AdCertKey, adCertKeyHandler(adcertSigner))
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
