@@ -880,14 +880,15 @@ func parseSlowDSPs(csv string) map[int]bool {
 
 func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool) ([]auction.Bid, []dspBidRecord) {
 	type dspResult struct {
-		dspID    string
-		endpoint string
-		bids     []auction.Bid
-		records  []dspBidRecord
-		err      error
-		latency  time.Duration
-		timedOut bool
-		topBid   float64
+		dspID       string
+		endpoint    string
+		bids        []auction.Bid
+		records     []dspBidRecord
+		err         error
+		latency     time.Duration
+		timedOut    bool
+		topBid      float64
+		noBidReason string // the DSP's stated reason when it declined (e.g. adcert_invalid)
 	}
 
 	ch := make(chan dspResult, len(endpoints))
@@ -957,7 +958,10 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			}
 
 			if bidResp.NoBid || len(bidResp.SeatBid) == 0 {
-				ch <- dspResult{dspID: dspID, endpoint: endpoint, latency: responseTime}
+				// Preserve the DSP's stated no-bid reason (e.g. an ads.cert
+				// block) so it lands in dsp_calls + the trace, instead of being
+				// flattened into the exchange's aggregated no-bid.
+				ch <- dspResult{dspID: dspID, endpoint: endpoint, latency: responseTime, noBidReason: bidResp.NBRReason}
 				return
 			}
 
@@ -1030,7 +1034,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 					TraceID: traceID, AuctionID: traceID, Channel: channel,
 					DSPEndpoint: result.endpoint, BidReceived: bidReceived,
 					BidPriceUSD: result.topBid, LatencyMs: result.latency.Milliseconds(),
-					TimedOut: result.timedOut, Timestamp: time.Now(),
+					TimedOut: result.timedOut, NoBidReason: result.noBidReason, Timestamp: time.Now(),
 				})
 			}
 			if result.err != nil {

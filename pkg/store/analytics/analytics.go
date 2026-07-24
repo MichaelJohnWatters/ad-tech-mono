@@ -423,6 +423,11 @@ type TraceEvent struct {
 	ClearingPriceUSD float64   `json:"clearing_price_usd,omitempty"`
 	DealID           string    `json:"deal_id,omitempty"`
 	EventType        string    `json:"event_type,omitempty"` // media quartile / view verdict / conversion type
+	// DSPEndpoint + NoBidReason are set on "dsp_block" events (Phase H): a DSP
+	// declined a bid for a stated reason (e.g. adcert_invalid), surfaced in the
+	// trace so the block isn't lost in the aggregated no-bid.
+	DSPEndpoint string `json:"dsp_endpoint,omitempty"`
+	NoBidReason string `json:"no_bid_reason,omitempty"`
 }
 
 // ImpressionRow is one recent impression for the portal "View trace" drill-down
@@ -472,6 +477,7 @@ type DSPCallEvent struct {
 	BidPriceUSD   float64   `json:"bid_price_usd"`
 	LatencyMs     int64     `json:"latency_ms"`
 	TimedOut      bool      `json:"timed_out"`
+	NoBidReason   string    `json:"no_bid_reason,omitempty"` // DSP's stated no-bid reason (e.g. adcert_invalid); empty for a bid or plain no-demand
 	Timestamp     time.Time `json:"timestamp"`
 }
 
@@ -482,18 +488,18 @@ type DSPCallEvent struct {
 // table so phase 2's rule GROUP BY lines up across both stores. Never written
 // for non-consented users (the publishers gate this upstream).
 type BehaviourSignalRow struct {
-	TraceID     string    `json:"trace_id"`
-	Kind        string    `json:"kind"`
-	UserID      string    `json:"user_id,omitempty"`
-	HouseholdID string    `json:"household_id,omitempty"`
-	PlacementID string    `json:"placement_id,omitempty"`
-	PublisherID string    `json:"publisher_id,omitempty"`
-	CampaignID  string    `json:"campaign_id,omitempty"`
-	CreativeID  string    `json:"creative_id,omitempty"`
-	Channel     string    `json:"channel,omitempty"`
-	Categories  string    `json:"categories,omitempty"`
-	Geo         string    `json:"geo,omitempty"`
-	Device      string    `json:"device,omitempty"`
+	TraceID     string `json:"trace_id"`
+	Kind        string `json:"kind"`
+	UserID      string `json:"user_id,omitempty"`
+	HouseholdID string `json:"household_id,omitempty"`
+	PlacementID string `json:"placement_id,omitempty"`
+	PublisherID string `json:"publisher_id,omitempty"`
+	CampaignID  string `json:"campaign_id,omitempty"`
+	CreativeID  string `json:"creative_id,omitempty"`
+	Channel     string `json:"channel,omitempty"`
+	Categories  string `json:"categories,omitempty"`
+	Geo         string `json:"geo,omitempty"`
+	Device      string `json:"device,omitempty"`
 	// AccountID + Tag carry retargeting-pixel attribution (kind "site_visit"):
 	// the advertiser account whose site fired the pixel and its self-chosen tag.
 	AccountID  string    `json:"account_id,omitempty"`

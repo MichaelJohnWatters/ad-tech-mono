@@ -151,14 +151,20 @@ func (c *ClickHouse) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) err
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO dsp_calls")
+	// Explicit column list (not positional): no_bid_reason (Phase H) lands at the
+	// END on ALTER-upgraded tables but MID-table on freshly CREATE'd ones, so a
+	// bare "INSERT INTO dsp_calls" would map the wrong physical order. Naming the
+	// columns makes the insert order-independent.
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO dsp_calls
+		(trace_id, auction_id, channel, dsp_endpoint, bid_received, bid_price_usd,
+		 latency_ms, timed_out, no_bid_reason, schema_version, timestamp)`)
 	if err != nil {
 		return fmt.Errorf("prepare dsp_calls batch: %w", err)
 	}
 	for _, e := range es {
 		if err := b.Append(
 			e.TraceID, e.AuctionID, e.Channel, e.DSPEndpoint, b2u(e.BidReceived),
-			e.BidPriceUSD, e.LatencyMs, b2u(e.TimedOut), int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+			e.BidPriceUSD, e.LatencyMs, b2u(e.TimedOut), e.NoBidReason, int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append dsp_call: %w", err)
