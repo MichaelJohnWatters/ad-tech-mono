@@ -63,6 +63,37 @@ func (h *Harness) UploadAudience(t *testing.T, accountID, name, visibility strin
 	return out.SegmentID
 }
 
+// SetSegmentTaxonomy labels a segment with an IAB Audience Taxonomy node via
+// the gateway API (PUT /v1/api/audiences/taxonomy) — the same tenant-scoped
+// write path the portal picker uses.
+func (h *Harness) SetSegmentTaxonomy(t *testing.T, accountID, segmentID string, taxonomyID int64) {
+	t.Helper()
+	email := "aud-upload-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+
+	body, _ := json.Marshal(map[string]any{
+		"segment_id":  segmentID,
+		"taxonomy_id": taxonomyID,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, h.URLs.Gateway+routes.APIAudienceTaxonomy, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build taxonomy set: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("taxonomy set call: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("taxonomy set status %d: %s", resp.StatusCode, string(respBody))
+	}
+}
+
 // SegmentMemberCount returns how many members a segment has (direct DB read
 // for assertions).
 func (h *Harness) SegmentMemberCount(t *testing.T, segmentID string) int {

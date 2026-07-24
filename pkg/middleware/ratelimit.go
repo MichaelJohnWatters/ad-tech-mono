@@ -24,11 +24,11 @@ import (
 // the CDN), falling back to RemoteAddr; only trust XFF because these services
 // sit behind the ingress, never directly on the internet.
 type RateLimiter struct {
-	// cfgFn is read on EVERY request so the rate is genuinely live — the
-	// <svc>.ratelimit_rps keys are TierLive, and an operator (or a test) can
-	// tune them without restarting the pod. Returns (rps, burst); rps <= 0
+	// cfgFn is read on EVERY request so the config is genuinely live — the
+	// <svc>.ratelimit_* keys are TierLive, and an operator (or a test) can tune
+	// them without restarting the pod. Returns (rps, burst, trustedHops); rps <= 0
 	// disables limiting for that request.
-	cfgFn func() (int, int)
+	cfgFn func() (int, int, int)
 	log   *slog.Logger
 
 	mu       sync.Mutex
@@ -47,21 +47,22 @@ type ipEntry struct {
 // <= 0 means "disabled" for that window — the limiter passes requests through.
 // Never returns nil; the passthrough is decided per request. A background
 // janitor evicts idle IPs so the map can't grow unbounded.
-func NewLiveRateLimiter(cfgFn func() (rps, burst int), log *slog.Logger) *RateLimiter {
+func NewLiveRateLimiter(cfgFn func() (rps, burst, trustedHops int), log *slog.Logger) *RateLimiter {
 	rl := &RateLimiter{cfgFn: cfgFn, log: log, ips: make(map[string]*ipEntry)}
 	go rl.janitor()
 	return rl
 }
 
-// NewRateLimiter is the fixed-rate constructor. Returns nil when rps <= 0
-// (disabled) — callers treat a nil limiter as "no limiting" via the nil-safe
-// Wrap. Retained for callers/tests that want a constant rate; services use
-// NewLiveRateLimiter so the TierLive keys actually take effect live.
+// NewRateLimiter is the fixed-rate constructor (trustedHops=0 → rightmost XFF).
+// Returns nil when rps <= 0 (disabled) — callers treat a nil limiter as "no
+// limiting" via the nil-safe Wrap. Retained for callers/tests that want a
+// constant rate; services use NewLiveRateLimiter so the TierLive keys take
+// effect live.
 func NewRateLimiter(rps, burst int, log *slog.Logger) *RateLimiter {
 	if rps <= 0 {
 		return nil
 	}
-	return NewLiveRateLimiter(func() (int, int) { return rps, burst }, log)
+	return NewLiveRateLimiter(func() (int, int, int) { return rps, burst, 0 }, log)
 }
 
 func (rl *RateLimiter) janitor() {
@@ -109,12 +110,12 @@ func (rl *RateLimiter) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		rps, burst := rl.cfgFn()
+		rps, burst, trustedHops := rl.cfgFn()
 		if rps <= 0 { // disabled live — pass through
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !rl.limiterFor(clientIP(r), rps, burst).Allow() {
+		if !rl.limiterFor(clientIP(r, trustedHops), rps, burst).Allow() {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return
@@ -130,15 +131,30 @@ func isInfraPath(p string) bool {
 		strings.HasPrefix(p, "/debug/")
 }
 
-// clientIP extracts the caller's IP, trusting X-Forwarded-For (first hop) then
-// X-Real-IP — both set by the Traefik ingress / CDN in front of these services —
-// and falling back to the transport RemoteAddr for direct/local calls.
-func clientIP(r *http.Request) string {
+// clientIP extracts the caller's IP for rate-limit bucketing. trustedHops is the
+// number of trusted reverse proxies in front of the app; the real client is that
+// many entries from the RIGHT of X-Forwarded-For, because each proxy APPENDS the
+// address it received the connection from. Taking a right-anchored entry is what
+// makes the limit spoof-resistant: a client can PREPEND fake X-Forwarded-For
+// values, but it can't forge the entries a trusted proxy appended after them —
+// so it can't mint a fresh bucket per request by rotating the header.
+//
+//   - trustedHops=0 (default): the app's direct upstream (our ingress) is the
+//     only trusted hop → use the rightmost XFF entry (the client the ingress saw).
+//   - trustedHops=1: a CDN sits in front of the ingress → skip the ingress entry,
+//     use the next one (the client the CDN saw). And so on.
+//
+// Falls back to X-Real-IP, then RemoteAddr, when XFF is absent (direct/local).
+func clientIP(r *http.Request, trustedHops int) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+		parts := strings.Split(xff, ",")
+		idx := len(parts) - 1 - trustedHops
+		if idx < 0 {
+			idx = 0 // more hops claimed than present → the leftmost is the best we have
 		}
-		return strings.TrimSpace(xff)
+		if ip := strings.TrimSpace(parts[idx]); ip != "" {
+			return ip
+		}
 	}
 	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
 		return xr

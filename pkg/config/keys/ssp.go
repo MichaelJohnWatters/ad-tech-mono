@@ -25,6 +25,7 @@ var SSP = struct {
 	HouseholdSalt              config.StringKey
 	RateLimitRPS               config.IntKey
 	RateLimitBurst             config.IntKey
+	RateLimitTrustedHops       config.IntKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -44,6 +45,7 @@ var SSP = struct {
 	HouseholdSalt:              sspSet.String("ssp.household_salt", "adtech-local-dev-household", config.TierSecret, "HMAC salt for household-id derivation (identity.HouseholdID). Must be identical across SSP pods and any offline deriver (seed, tests) or household ids won't line up. Rotate = every household id changes.", config.Since("v1.8")),
 	RateLimitRPS:               sspSet.Int("ssp.ratelimit_rps", "0", config.TierLive, "Per-client-IP HTTP request rate limit (requests/second) on the public SSP endpoints (bid-request intake / serve). 0 = disabled (default). Buckets are per-pod, so the effective ceiling is rps × replicas; the CDN/WAF is the prod edge shield. Health/readiness/metrics and CORS preflight are never limited.", config.Since("v1.16")),
 	RateLimitBurst:             sspSet.Int("ssp.ratelimit_burst", "0", config.TierLive, "Token-bucket burst for ssp.ratelimit_rps — max requests in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
+	RateLimitTrustedHops:       sspSet.Int("ssp.ratelimit_trusted_proxy_hops", "0", config.TierLive, "Number of trusted reverse proxies in front of the SSP (your ingress, plus any CDN). The rate-limit client IP is taken this many entries from the RIGHT of X-Forwarded-For — the entries a trusted proxy appended — so a client cannot evade the limit by forging (prepending) X-Forwarded-For values. 0 (default) = the ingress is the only trusted hop: use the rightmost XFF entry. Set to 1 when a CDN sits in front of the ingress.", config.Since("v1.17")),
 	URL:                        config.RawString("ssp.url", routes.DefaultSSPURL),
 	Port:                       config.RawString("ssp.port", routes.PortSSP),
 	NATSURL:                    config.RawString("ssp.nats_url", routes.DefaultNATSURL),

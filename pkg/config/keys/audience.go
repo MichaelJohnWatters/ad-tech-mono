@@ -12,7 +12,11 @@ import (
 var Audience = struct {
 	PreloadInterval config.DurationKey
 	CacheTTL        config.DurationKey
+	TaxonomyRefresh config.DurationKey
 }{
 	PreloadInterval: config.RawDuration("audience.preload_interval", 30*time.Second),
 	CacheTTL:        config.RawDuration("audience.cache_ttl", 90*time.Second),
+	// TaxonomyRefresh paces the SSP's warm map of public segment → IAB
+	// Audience Taxonomy id used to stamp user.data on bid requests.
+	TaxonomyRefresh: config.RawDuration("audience.taxonomy_refresh", 30*time.Second),
 }

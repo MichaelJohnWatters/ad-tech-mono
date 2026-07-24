@@ -17,12 +17,12 @@ import (
 // register a fake at a real http URL and then point exchange.dsp_endpoints
 // at it via SetConfigForPod. Two modes:
 //
-//   Mode = "broken":  /v1/openrtb/bid returns 500. Used by tests that need
-//                     to prove the exchange tolerates a misbehaving DSP.
-//   Mode = "bidder":  /v1/openrtb/bid returns a bid (configurable price).
-//                     Records inbound /v1/openrtb/win and /v1/openrtb/loss
-//                     calls so the test can assert the exchange's
-//                     notification fan-out behaviour.
+//	Mode = "broken":  /v1/openrtb/bid returns 500. Used by tests that need
+//	                  to prove the exchange tolerates a misbehaving DSP.
+//	Mode = "bidder":  /v1/openrtb/bid returns a bid (configurable price).
+//	                  Records inbound /v1/openrtb/win and /v1/openrtb/loss
+//	                  calls so the test can assert the exchange's
+//	                  notification fan-out behaviour.
 //
 // Lifecycle: t.Cleanup closes the server.
 type FakeDSP struct {
@@ -33,6 +33,7 @@ type FakeDSP struct {
 	winCalls  []FakeNotify
 	lossCalls []FakeNotify
 	bidCalls  int
+	bidReqs   []openrtb.BidRequest
 
 	srv *httptest.Server
 }
@@ -77,18 +78,21 @@ func NewFakeDSP(t *testing.T, opts FakeDSPOpts) *FakeDSP {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(routes.OpenRTBBid, func(w http.ResponseWriter, r *http.Request) {
+		// Decode before mode dispatch: the recorded request is assertable in
+		// every mode (segtax tests inspect what the exchange fanned out even
+		// when the fake never bids).
+		var bidReq openrtb.BidRequest
+		_ = json.NewDecoder(r.Body).Decode(&bidReq)
+
 		f.mu.Lock()
 		f.bidCalls++
+		f.bidReqs = append(f.bidReqs, bidReq)
 		f.mu.Unlock()
 
 		if f.Mode == FakeDSPBroken {
 			http.Error(w, "fake DSP broken", http.StatusInternalServerError)
 			return
 		}
-
-		// FakeDSPBidder: read incoming request, return a bid (or no_bid).
-		var bidReq openrtb.BidRequest
-		_ = json.NewDecoder(r.Body).Decode(&bidReq)
 
 		seat := opts.Seat
 		if seat == "" {
@@ -171,6 +175,16 @@ func (f *FakeDSP) BidCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.bidCalls
+}
+
+// BidRequests returns a copy of every decoded bid request the fake received,
+// in arrival order — what an external buyer actually saw cross the wire.
+func (f *FakeDSP) BidRequests() []openrtb.BidRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]openrtb.BidRequest, len(f.bidReqs))
+	copy(out, f.bidReqs)
+	return out
 }
 
 // WinCalls returns a copy of the recorded /win callbacks.

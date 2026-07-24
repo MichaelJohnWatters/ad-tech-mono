@@ -46,6 +46,14 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APITaxonomy lists the IAB Audience Taxonomy reference nodes (migration
+	// 062) for the portal's segment-labelling picker. GET only; global
+	// reference data, same list for every account.
+	APITaxonomy = apiPrefix + "/api/taxonomy"
+	// APIAudienceTaxonomy sets/clears a segment's IAB Audience Taxonomy label:
+	// PUT {segment_id, taxonomy_id|null}. Labelled PUBLIC segments are what
+	// the SSP expresses to external bidders as user.data (ext.segtax).
+	APIAudienceTaxonomy = apiPrefix + "/api/audiences/taxonomy"
 	// APIAudienceIngest is the audience-ingest job status endpoint (ADR 0007):
 	// GET /v1/api/audiences/ingest/{id} returns the tenant-scoped job's status,
 	// counts, match rate, and error. Registered as a subtree so {id} is a path

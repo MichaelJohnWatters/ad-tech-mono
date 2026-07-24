@@ -75,7 +75,7 @@ func TestRateLimiterSkipsInfraAndPreflight(t *testing.T) {
 func TestLiveRateLimiterRereadsRate(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var rps, burst int // start disabled
-	rl := NewLiveRateLimiter(func() (int, int) { return rps, burst }, log)
+	rl := NewLiveRateLimiter(func() (int, int, int) { return rps, burst, 0 }, log)
 	h := rl.Wrap(okHandler())
 
 	// Disabled (rps=0): everything passes.
@@ -101,6 +101,35 @@ func TestLiveRateLimiterRereadsRate(t *testing.T) {
 	rps, burst = 0, 0
 	if do(h, "/v1/t/imp", "7.7.7.7") != http.StatusOK {
 		t.Error("back to rps=0 must pass through immediately")
+	}
+}
+
+// The client IP is taken RIGHT-anchored in X-Forwarded-For so a client can't
+// evade the limit by forging (prepending) entries — the entry a trusted proxy
+// appended is what counts. This is the spoof-resistance the leftmost-XFF version
+// lacked (rotating the header minted a fresh bucket per request).
+func TestClientIPSpoofResistance(t *testing.T) {
+	// Single trusted ingress (hops=0): the ingress-appended rightmost entry wins,
+	// no matter what junk the client prepends.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Forwarded-For", "1.2.3.4, 9.9.9.9") // client claimed 1.2.3.4; ingress appended 9.9.9.9
+	if ip := clientIP(r, 0); ip != "9.9.9.9" {
+		t.Errorf("trustedHops=0 must use the rightmost (ingress-seen) IP, got %q", ip)
+	}
+	// A rotated forgery still resolves to the same real (rightmost) IP → same
+	// bucket → the abuser can't escape the limit.
+	r.Header.Set("X-Forwarded-For", "203.0.113.250, 9.9.9.9")
+	if ip := clientIP(r, 0); ip != "9.9.9.9" {
+		t.Errorf("a forged prepended IP must be ignored, got %q", ip)
+	}
+	// CDN in front (hops=1): skip the ingress entry, use the IP the CDN saw.
+	r.Header.Set("X-Forwarded-For", "1.2.3.4, 70.70.70.70, 9.9.9.9") // client, cdn-seen, ingress-seen
+	if ip := clientIP(r, 1); ip != "70.70.70.70" {
+		t.Errorf("trustedHops=1 must skip the ingress and use the CDN-seen IP, got %q", ip)
+	}
+	// More hops claimed than entries present → fall back to the leftmost, never panic.
+	if ip := clientIP(r, 9); ip != "1.2.3.4" {
+		t.Errorf("over-deep hops must clamp to the leftmost, got %q", ip)
 	}
 }
 

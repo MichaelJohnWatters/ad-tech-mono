@@ -13,8 +13,12 @@
 //	  exchange.dsp_endpoints += http://host.docker.internal:9100
 //
 // Config (env): EXTBIDDER_PORT, EXTBIDDER_SEAT, EXTBIDDER_BRAND,
+//
 //	EXTBIDDER_MARKUP (bid = floor × (1+markup)), EXTBIDDER_NOBID_RATE,
-//	EXTBIDDER_ADOMAIN, EXTBIDDER_VIDEO_URL, EXTBIDDER_AUDIO_URL.
+//	EXTBIDDER_ADOMAIN, EXTBIDDER_VIDEO_URL, EXTBIDDER_AUDIO_URL,
+//	EXTBIDDER_AUDIENCE_UPLIFT (extra markup when the request carries
+//	standard-taxonomy audience data in user.data — a real buyer pays more
+//	for inventory it can match to its audience models).
 package main
 
 import (
@@ -26,6 +30,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
@@ -33,14 +38,59 @@ import (
 )
 
 type bidder struct {
-	seat      string
-	brand     string
-	markup    float64 // bid = floor * (1 + markup)
-	noBidRate float64
-	adomain   string
-	videoURL  string
-	audioURL  string
-	rng       *rand.Rand
+	seat           string
+	brand          string
+	markup         float64 // bid = floor * (1 + markup)
+	audienceUplift float64 // extra markup when user.data carries segtax segments
+	noBidRate      float64
+	adomain        string
+	videoURL       string
+	audioURL       string
+	rng            *rand.Rand
+
+	// seen is a small ring of the user.data payloads received per bid
+	// request — how e2e proves standard-taxonomy audience data actually
+	// crossed the network boundary to an external buyer.
+	seenMu sync.Mutex
+	seen   []seenUserData
+}
+
+// seenUserData records what one bid request carried in user.data.
+type seenUserData struct {
+	RequestID string         `json:"request_id"`
+	Data      []openrtb.Data `json:"data"`
+}
+
+const seenRingCap = 100
+
+func (b *bidder) recordUserData(reqID string, data []openrtb.Data) {
+	b.seenMu.Lock()
+	defer b.seenMu.Unlock()
+	b.seen = append(b.seen, seenUserData{RequestID: reqID, Data: data})
+	if len(b.seen) > seenRingCap {
+		b.seen = b.seen[len(b.seen)-seenRingCap:]
+	}
+}
+
+// handleDebugUserData returns the recorded user.data payloads, newest last;
+// ?id= filters to one bid request id.
+func (b *bidder) handleDebugUserData(w http.ResponseWriter, r *http.Request) {
+	b.seenMu.Lock()
+	defer b.seenMu.Unlock()
+	out := b.seen
+	if id := r.URL.Query().Get("id"); id != "" {
+		out = nil
+		for _, s := range b.seen {
+			if s.RequestID == id {
+				out = append(out, s)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if out == nil {
+		out = []seenUserData{}
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func env(k, def string) string {
@@ -61,19 +111,21 @@ func envF(k string, def float64) float64 {
 
 func main() {
 	b := &bidder{
-		seat:      env("EXTBIDDER_SEAT", "ext-partner-dsp"),
-		brand:     env("EXTBIDDER_BRAND", "Partner DSP"),
-		markup:    envF("EXTBIDDER_MARKUP", 0.35),
-		noBidRate: envF("EXTBIDDER_NOBID_RATE", 0.2),
-		adomain:   env("EXTBIDDER_ADOMAIN", "partner-dsp.example"),
-		videoURL:  env("EXTBIDDER_VIDEO_URL", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"),
-		audioURL:  env("EXTBIDDER_AUDIO_URL", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"),
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		seat:           env("EXTBIDDER_SEAT", "ext-partner-dsp"),
+		brand:          env("EXTBIDDER_BRAND", "Partner DSP"),
+		markup:         envF("EXTBIDDER_MARKUP", 0.35),
+		audienceUplift: envF("EXTBIDDER_AUDIENCE_UPLIFT", 0.10),
+		noBidRate:      envF("EXTBIDDER_NOBID_RATE", 0.2),
+		adomain:        env("EXTBIDDER_ADOMAIN", "partner-dsp.example"),
+		videoURL:       env("EXTBIDDER_VIDEO_URL", "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"),
+		audioURL:       env("EXTBIDDER_AUDIO_URL", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"),
+		rng:            rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	port := env("EXTBIDDER_PORT", "9100")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(routes.OpenRTBBid, b.handleBid)
+	mux.HandleFunc("/v1/debug/user-data", b.handleDebugUserData)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 
@@ -94,6 +146,22 @@ func (b *bidder) handleBid(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
+	// Standard-taxonomy audience data (user.data + ext.segtax) is the only
+	// audience signal an external buyer can interpret — platform-internal
+	// segment ids in user.ext mean nothing to us. Record it (even on a
+	// no-bid, so the debug endpoint reflects everything received) and count
+	// interpretable segments for the bid uplift.
+	taxSegs := 0
+	if req.User != nil && len(req.User.Data) > 0 {
+		b.recordUserData(req.ID, req.User.Data)
+		for _, d := range req.User.Data {
+			if d.Ext != nil && d.Ext.Segtax > 0 {
+				taxSegs += len(d.Segment)
+			}
+		}
+		log.Printf("request %s: user.data with %d taxonomy segment(s)", req.ID, taxSegs)
+	}
+
 	nobid := func() { _ = json.NewEncoder(w).Encode(openrtb.BidResponse{ID: req.ID, NoBid: true}) }
 
 	if len(req.Imp) == 0 || b.rng.Float64() < b.noBidRate {
@@ -106,6 +174,9 @@ func (b *bidder) handleBid(w http.ResponseWriter, r *http.Request) {
 		floor = 1.0 // assume a $1 CPM floor when none is declared
 	}
 	price := floor * (1 + b.markup)
+	if taxSegs > 0 {
+		price *= 1 + b.audienceUplift
+	}
 
 	bid := openrtb.BidObj{
 		ID:       "ext-" + req.ID,
