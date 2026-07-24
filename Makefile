@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder demoadv
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder demoadv security-harness
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -201,6 +201,9 @@ demoadv: ## Run the external demo advertiser site "Ford" (host process, :9200). 
 	@echo "demoadv (external advertiser) → http://localhost:9200  (Ctrl-C to stop)"
 	@echo "visit pages → retargeting audience builds; see cmd/demoadv/README.md"
 	go run ./cmd/demoadv
+
+security-harness: ## Toggle the anti-spoofing enforcement test harness: make security-harness ARG=on|off|status
+	scripts/security-harness.sh $(or $(ARG),status)
 
 deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 	@[ -n "$(SVC)" ] || { echo "usage: make deploy SVC=<service>"; exit 1; }
