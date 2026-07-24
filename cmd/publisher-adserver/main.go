@@ -41,6 +41,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/publisheradserver/pacing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/publisheradserver/prebidclient"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
@@ -54,6 +55,13 @@ func main() {
 	_ = sc
 	hlth := health.New()
 	lc := lifecycle.New(log)
+
+	// Sign VAST/audio click-tracking URLs with the ACTIVE hmac_tracker key from
+	// the secrets store (Phase I) — follows rotation live; the tracker validates
+	// the overlap set. Falls back to adserving.DefaultSigningKey until configured.
+	pubadSecrets := secrets.Start(context.Background(), cfg, clk, log, constants.ServicePublisherAdServer)
+	lc.OnShutdown("pubad-secrets-cache", func(_ context.Context) error { pubadSecrets.Stop(); return nil })
+	pubadSecrets.WatchActive(context.Background(), secrets.PurposeHMACTracker, 30*time.Second, adserving.SetActiveSigningKey)
 
 	port := keys.PublisherAdServer.Port.Get(cfg)
 	sspURL := keys.PublisherAdServer.SSPURL.Get(cfg)

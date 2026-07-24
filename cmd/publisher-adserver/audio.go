@@ -180,13 +180,13 @@ func buildAudioVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext)
 		},
 		ErrorURLs: []string{beacon("error")},
 		Click: vast.ClickSpec{
-			ClickThrough:  clickURL,
+			ClickThrough: clickURL,
 			ClickTracking: []string{
 				// Re-sign: appending a param to an already-signed URL
 				// invalidates the HMAC (every VAST/DAAST click tracker
 				// failed verification for as long as this append existed —
 				// unnoticed because tracker.signature_validation was off).
-				adserving.SignURL(clickURL+"&ev=click-tracking", adserving.DefaultSigningKey),
+				adserving.SignURL(clickURL+"&ev=click-tracking", adserving.ActiveSigningKey()),
 			},
 		},
 		Pricing: &vast.Pricing{

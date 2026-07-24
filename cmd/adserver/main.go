@@ -28,6 +28,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -55,6 +56,14 @@ func main() {
 	knobs := NewKnobs(sc)
 	hlth := health.New()
 	lc := lifecycle.New(log)
+
+	// Sign the impression/click/view pixels baked into served ad HTML with the
+	// ACTIVE hmac_tracker key from the secrets store (Phase I) — so newly-served
+	// pixels follow key rotation while the tracker still validates the overlap
+	// set. Falls back to adserving.DefaultSigningKey until a secret is configured.
+	adSecrets := secrets.Start(context.Background(), cfg, clk, log, constants.ServiceAdServer)
+	lc.OnShutdown("adserver-secrets-cache", func(_ context.Context) error { adSecrets.Stop(); return nil })
+	adSecrets.WatchActive(context.Background(), secrets.PurposeHMACTracker, 30*time.Second, adserving.SetActiveSigningKey)
 
 	port := keys.AdServer.Port.Get(cfg)
 	trackerURL := keys.AdServer.TrackerURL.Get(cfg)

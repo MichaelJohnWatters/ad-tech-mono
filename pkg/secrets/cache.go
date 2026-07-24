@@ -164,6 +164,35 @@ func (c *Cache) NonRevokedByPurpose(purpose string) []Secret {
 	return out
 }
 
+// WatchActive keeps a signer in sync with the store's ACTIVE secret for a
+// purpose: it calls set(value) immediately (boot) and again every interval,
+// until ctx is done. Signer services (adserver, publisher-adserver) use it to
+// sign with the current hmac_tracker key — so when an operator rotates (adds a
+// new active key), newly-signed URLs follow within one interval, while the
+// tracker's overlap set keeps accepting URLs signed with the predecessor. A
+// missing/empty active secret is left alone (set is not called), so signing
+// falls back to whatever default the signer already holds.
+func (c *Cache) WatchActive(ctx context.Context, purpose string, interval time.Duration, set func(string)) {
+	apply := func() {
+		if s, ok := c.LookupActiveByPurpose(purpose); ok && s.Value != "" {
+			set(s.Value)
+		}
+	}
+	apply()
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				apply()
+			}
+		}
+	}()
+}
+
 // pickLoader returns a PostgresLoader keyed by dbURL. The loader is
 // self-healing: it lazily opens the connection on first LoadAll and
 // re-opens on every poll if the existing connection is dead. So even
