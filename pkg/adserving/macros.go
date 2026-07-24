@@ -35,13 +35,13 @@ type MacroContext struct {
 	// consent (models.ServeRequest.UserID: "empty = no consent"). Baked into
 	// tracker beacons as uid= so interaction events can feed the consent-gated
 	// behaviour_signals table; its presence IS the consent signal downstream.
-	UserID string
-	Channel      string // display|video|native|audio — baked into tracker beacons so analytics label the right channel
-	UserAgent    string
-	IP           string
-	TrackerURL   string // base URL for tracker service
-	LandingURL   string // baked into the signed click URL as redir= so the tracker can 302 to the advertiser page after recording the click
-	URLTTL       time.Duration // signed-URL freshness window; baked in as exp=<unix-ts> param and covered by the HMAC. 0 = no exp (URL never expires, replay-able forever once HMAC is stolen).
+	UserID     string
+	Channel    string // display|video|native|audio — baked into tracker beacons so analytics label the right channel
+	UserAgent  string
+	IP         string
+	TrackerURL string        // base URL for tracker service
+	LandingURL string        // baked into the signed click URL as redir= so the tracker can 302 to the advertiser page after recording the click
+	URLTTL     time.Duration // signed-URL freshness window; baked in as exp=<unix-ts> param and covered by the HMAC. 0 = no exp (URL never expires, replay-able forever once HMAC is stolen).
 }
 
 // SubstituteMacros replaces all ${...} macros in the input string.
@@ -105,7 +105,7 @@ func BuildImpressionURL(ctx MacroContext) string {
 	setGeoDevice(params, ctx)
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/imp?" + params.Encode()
-	return SignURL(rawURL, DefaultSigningKey)
+	return SignURL(rawURL, ActiveSigningKey())
 }
 
 // BuildClickURL builds the click tracking URL. LandingURL (when set) is
@@ -126,7 +126,7 @@ func BuildClickURL(ctx MacroContext) string {
 	setGeoDevice(params, ctx)
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
-	return SignURL(rawURL, DefaultSigningKey)
+	return SignURL(rawURL, ActiveSigningKey())
 }
 
 // BuildViewabilityURL builds the viewability beacon URL.
@@ -141,7 +141,7 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	}
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/view?" + params.Encode()
-	return SignURL(rawURL, DefaultSigningKey)
+	return SignURL(rawURL, ActiveSigningKey())
 }
 
 // BuildVideoEventURL builds a signed URL for a single video player
@@ -169,7 +169,7 @@ func BuildVideoEventURL(ctx MacroContext, event string) string {
 	}
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/video?" + params.Encode()
-	return SignURL(rawURL, DefaultSigningKey)
+	return SignURL(rawURL, ActiveSigningKey())
 }
 
 // BuildAudioEventURL is the audio analogue — same shape, different
@@ -187,7 +187,7 @@ func BuildAudioEventURL(ctx MacroContext, event string) string {
 	}
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/audio?" + params.Encode()
-	return SignURL(rawURL, DefaultSigningKey)
+	return SignURL(rawURL, ActiveSigningKey())
 }
 
 // setExp adds an exp=<unix-seconds> param to a tracker-URL param set

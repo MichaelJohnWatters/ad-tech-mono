@@ -9,12 +9,12 @@
 //
 // Schema mirrors migrations/027_secrets.sql. Status semantics:
 //
-//   active   — currently the canonical value; validators MUST accept
-//   rotating — old value during a grace window after rotation; validators
-//              MUST accept these too so partners + in-flight requests
-//              don't break instantly when an operator rotates
-//   revoked  — no longer accepted by anyone; kept in the table for audit
-//              but filtered out of warm-cache loads
+//	active   — currently the canonical value; validators MUST accept
+//	rotating — old value during a grace window after rotation; validators
+//	           MUST accept these too so partners + in-flight requests
+//	           don't break instantly when an operator rotates
+//	revoked  — no longer accepted by anyone; kept in the table for audit
+//	           but filtered out of warm-cache loads
 package secrets
 
 import "time"
@@ -22,12 +22,12 @@ import "time"
 // Purpose taxonomy. New purposes need a migration to extend the CHECK
 // constraint AND the per-service filter helpers below.
 const (
-	PurposeJWTSigning   = "jwt_signing"   // JWT HS256/RS256 keys
-	PurposeHMACTracker  = "hmac_tracker"  // browser-pixel HMAC secrets
+	PurposeJWTSigning    = "jwt_signing"    // JWT HS256/RS256 keys
+	PurposeHMACTracker   = "hmac_tracker"   // browser-pixel HMAC secrets
 	PurposePartnerShared = "partner_shared" // external partners (Prebid, S2S)
-	PurposeServiceS2S   = "service_s2s"   // internal service-to-service
-	PurposeAPIKey       = "api_key"       // operator-managed CRUD API keys
-	PurposePGPPrivate   = "pgp_private"   // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
+	PurposeServiceS2S    = "service_s2s"    // internal service-to-service
+	PurposeAPIKey        = "api_key"        // operator-managed CRUD API keys
+	PurposePGPPrivate    = "pgp_private"    // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
 )
 
 // Status values.
@@ -112,10 +112,13 @@ func FilterFor(serviceName string) Filter {
 		return Filter{
 			Purposes: []string{PurposeHMACTracker},
 		}
-	case "publisher-adserver":
-		// Calls SSP and adserver internally; may eventually carry an S2S
-		// header. For now nothing.
-		return Filter{}
+	case "adserver", "publisher-adserver":
+		// SIGN pixel/click URLs with the active hmac_tracker key (the tracker
+		// validates the overlap set). publisher-adserver also calls SSP/adserver
+		// internally; may eventually carry an S2S header.
+		return Filter{
+			Purposes: []string{PurposeHMACTracker},
+		}
 	default:
 		return Filter{}
 	}
