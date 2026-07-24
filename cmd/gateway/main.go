@@ -850,7 +850,9 @@ func main() {
 
 	// Per-IP rate limit across the whole gateway (API + portals + login;
 	// ratelimit_rps=0 → disabled). Guards login brute-force and API abuse.
-	gwRL := middleware.NewRateLimiter(keys.Gateway.RateLimitRPS.Get(cfg), keys.Gateway.RateLimitBurst.Get(cfg), log)
+	gwRL := middleware.NewLiveRateLimiter(func() (int, int) {
+		return keys.Gateway.RateLimitRPS.Get(cfg), keys.Gateway.RateLimitBurst.Get(cfg)
+	}, log)
 	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))
 
 	server := &http.Server{

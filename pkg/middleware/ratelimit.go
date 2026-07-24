@@ -24,12 +24,17 @@ import (
 // the CDN), falling back to RemoteAddr; only trust XFF because these services
 // sit behind the ingress, never directly on the internet.
 type RateLimiter struct {
-	rps   rate.Limit
-	burst int
+	// cfgFn is read on EVERY request so the rate is genuinely live — the
+	// <svc>.ratelimit_rps keys are TierLive, and an operator (or a test) can
+	// tune them without restarting the pod. Returns (rps, burst); rps <= 0
+	// disables limiting for that request.
+	cfgFn func() (int, int)
 	log   *slog.Logger
 
-	mu  sync.Mutex
-	ips map[string]*ipEntry
+	mu       sync.Mutex
+	ips      map[string]*ipEntry
+	curRPS   int // the rps/burst the current buckets were built with; a change
+	curBurst int // rebuilds them so a live tune takes effect immediately.
 }
 
 type ipEntry struct {
@@ -37,25 +42,26 @@ type ipEntry struct {
 	seen time.Time
 }
 
-// NewRateLimiter returns a limiter allowing rps requests/sec per IP with the
-// given burst, or nil when rps <= 0 (disabled) — callers treat a nil limiter as
-// "no limiting" via Wrap, which is nil-safe. A background janitor evicts idle
-// IPs so the map can't grow unbounded under a churn of source addresses.
+// NewLiveRateLimiter returns a limiter whose rate is resolved from cfgFn on
+// every request, so <svc>.ratelimit_rps can be tuned live (it's TierLive). rps
+// <= 0 means "disabled" for that window — the limiter passes requests through.
+// Never returns nil; the passthrough is decided per request. A background
+// janitor evicts idle IPs so the map can't grow unbounded.
+func NewLiveRateLimiter(cfgFn func() (rps, burst int), log *slog.Logger) *RateLimiter {
+	rl := &RateLimiter{cfgFn: cfgFn, log: log, ips: make(map[string]*ipEntry)}
+	go rl.janitor()
+	return rl
+}
+
+// NewRateLimiter is the fixed-rate constructor. Returns nil when rps <= 0
+// (disabled) — callers treat a nil limiter as "no limiting" via the nil-safe
+// Wrap. Retained for callers/tests that want a constant rate; services use
+// NewLiveRateLimiter so the TierLive keys actually take effect live.
 func NewRateLimiter(rps, burst int, log *slog.Logger) *RateLimiter {
 	if rps <= 0 {
 		return nil
 	}
-	if burst <= 0 {
-		burst = rps
-	}
-	rl := &RateLimiter{
-		rps:   rate.Limit(rps),
-		burst: burst,
-		log:   log,
-		ips:   make(map[string]*ipEntry),
-	}
-	go rl.janitor()
-	return rl
+	return NewLiveRateLimiter(func() (int, int) { return rps, burst }, log)
 }
 
 func (rl *RateLimiter) janitor() {
@@ -70,12 +76,21 @@ func (rl *RateLimiter) janitor() {
 	}
 }
 
-func (rl *RateLimiter) limiterFor(ip string) *rate.Limiter {
+func (rl *RateLimiter) limiterFor(ip string, rps, burst int) *rate.Limiter {
+	if burst <= 0 {
+		burst = rps
+	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	// A live rate change rebuilds every bucket so the new limit takes effect at
+	// once (an existing token bucket keeps its original rate otherwise).
+	if rps != rl.curRPS || burst != rl.curBurst {
+		rl.curRPS, rl.curBurst = rps, burst
+		rl.ips = make(map[string]*ipEntry)
+	}
 	e, ok := rl.ips[ip]
 	if !ok {
-		e = &ipEntry{lim: rate.NewLimiter(rl.rps, rl.burst)}
+		e = &ipEntry{lim: rate.NewLimiter(rate.Limit(rps), burst)}
 		rl.ips[ip] = e
 	}
 	e.seen = time.Now()
@@ -94,7 +109,12 @@ func (rl *RateLimiter) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !rl.limiterFor(clientIP(r)).Allow() {
+		rps, burst := rl.cfgFn()
+		if rps <= 0 { // disabled live — pass through
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !rl.limiterFor(clientIP(r), rps, burst).Allow() {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return

@@ -69,6 +69,41 @@ func TestRateLimiterSkipsInfraAndPreflight(t *testing.T) {
 	}
 }
 
+// The live limiter re-reads its rate on every request, so a tune (or an
+// enable/disable) takes effect without reconstructing the limiter — this is what
+// makes the TierLive <svc>.ratelimit_rps keys actually live.
+func TestLiveRateLimiterRereadsRate(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var rps, burst int // start disabled
+	rl := NewLiveRateLimiter(func() (int, int) { return rps, burst }, log)
+	h := rl.Wrap(okHandler())
+
+	// Disabled (rps=0): everything passes.
+	for i := 0; i < 20; i++ {
+		if do(h, "/v1/t/imp", "7.7.7.7") != http.StatusOK {
+			t.Fatal("rps=0 must pass through")
+		}
+	}
+	// Tune to 1 rps / burst 2 live — no new limiter. Next burst is capped.
+	rps, burst = 1, 2
+	got200, got429 := 0, 0
+	for i := 0; i < 6; i++ {
+		if do(h, "/v1/t/imp", "7.7.7.7") == http.StatusOK {
+			got200++
+		} else {
+			got429++
+		}
+	}
+	if got200 != 2 || got429 == 0 {
+		t.Errorf("after live tune to burst 2: got %d ok / %d limited, want 2 ok and some 429", got200, got429)
+	}
+	// Tune back to disabled — passes again immediately.
+	rps, burst = 0, 0
+	if do(h, "/v1/t/imp", "7.7.7.7") != http.StatusOK {
+		t.Error("back to rps=0 must pass through immediately")
+	}
+}
+
 // A nil (disabled) limiter is a transparent passthrough.
 func TestRateLimiterDisabledPassthrough(t *testing.T) {
 	var rl *RateLimiter // NewRateLimiter(0,...) returns nil
