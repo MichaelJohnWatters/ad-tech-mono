@@ -34,10 +34,23 @@ import (
 
 // audiencePGPKeyResponse is the GET /v1/api/audiences/pgp-key body (ADR 0008):
 // the platform PUBLIC key (armored) + its fingerprint, derived on demand from
-// the active pgp_private secret so the public half is never stored separately.
+// the pgp_private secrets so the public half is never stored separately. The
+// top-level pair is the ACTIVE key (encrypt to this); `keys` is the full overlap
+// set — during a rotation grace window the active AND rotating keys both decrypt
+// on ingest, so a provider that encrypted to either is still accepted (Phase I).
 type audiencePGPKeyResponse struct {
+	PublicKey   string            `json:"public_key"`
+	Fingerprint string            `json:"fingerprint"`
+	Keys        []audiencePGPItem `json:"keys"`
+}
+
+// audiencePGPItem is one entry in the PGP keyset. `status` tells a provider which
+// key to prefer (active) versus which is still accepted while it winds down
+// (rotating).
+type audiencePGPItem struct {
 	PublicKey   string `json:"public_key"`
 	Fingerprint string `json:"fingerprint"`
+	Status      string `json:"status"`
 }
 
 // audiencePGPKeyHandler serves the platform PGP public key for provider-side
@@ -60,18 +73,32 @@ func audiencePGPKeyHandler(cache *secrets.Cache, log *slog.Logger) http.HandlerF
 			http.Error(w, `{"error":"secrets unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		sec, ok := cache.LookupActiveByPurpose(secrets.PurposePGPPrivate)
-		if !ok || sec.Value == "" {
+		active, ok := cache.LookupActiveByPurpose(secrets.PurposePGPPrivate)
+		if !ok || active.Value == "" {
 			http.Error(w, `{"error":"no PGP key configured"}`, http.StatusNotFound)
 			return
 		}
-		pub, fp, err := pgp.PublicArmorFromPrivate(sec.Value)
+		pub, fp, err := pgp.PublicArmorFromPrivate(active.Value)
 		if err != nil {
 			log.Error("audience pgp-key: derive public failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(audiencePGPKeyResponse{PublicKey: pub, Fingerprint: fp})
+		// Build the overlap keyset: every non-revoked key's public half, active
+		// first. A rotating key that fails to derive is skipped, not fatal.
+		resp := audiencePGPKeyResponse{PublicKey: pub, Fingerprint: fp}
+		for _, s := range cache.NonRevokedByPurpose(secrets.PurposePGPPrivate) {
+			if s.Value == "" {
+				continue
+			}
+			kpub, kfp, kerr := pgp.PublicArmorFromPrivate(s.Value)
+			if kerr != nil {
+				log.Warn("audience pgp-key: skip keyset entry (derive failed)", "status", s.Status, "error", kerr)
+				continue
+			}
+			resp.Keys = append(resp.Keys, audiencePGPItem{PublicKey: kpub, Fingerprint: kfp, Status: s.Status})
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -150,9 +177,9 @@ type audienceIngestListItem struct {
 	MatchRate    float64 `json:"match_rate"`
 	// DataParty is the provider's party classification for this upload (ADR
 	// 0009): first | second | third. Empty for a plain first-party upload.
-	DataParty string `json:"data_party,omitempty"`
-	Error     string `json:"error,omitempty"`
-	CreatedAt string `json:"created_at"`
+	DataParty  string `json:"data_party,omitempty"`
+	Error      string `json:"error,omitempty"`
+	CreatedAt  string `json:"created_at"`
 	FinishedAt string `json:"finished_at,omitempty"`
 }
 

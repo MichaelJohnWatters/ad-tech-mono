@@ -25,15 +25,23 @@ EXCHANGE_ID="adtech-exchange"
 SSP_ID="adtech-ssp"
 
 psql() { kubectl -n "$NS" exec postgres-0 -- psql -U adtech -d adtech -tAc "$1"; }
-setcfg() { psql "UPDATE config SET value='\"$2\"', updated_at=now() WHERE key='$1'" >/dev/null; }
+# setcfg writes a GLOBAL (pod_id='') live-config row so every pod — the exchange
+# that enforces AND the gateway that surfaces the policy to publishers — reads the
+# same value. Upsert, not UPDATE: a fresh stack may not have the row yet.
+setcfg() {
+  psql "INSERT INTO config (key,value,service,pod_id,updated_by)
+        VALUES ('$1','\"$2\"','platform','','security-harness')
+        ON CONFLICT (pod_id,key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()" >/dev/null
+}
 
 case "${1:-status}" in
 on)
   echo "▶ 1/4 wiring prerequisites (signing keys, identities, schain origin)…"
+  # ads.cert sign key is a fallback only — the exchange prefers the active
+  # adcert_ed25519 secret from the store (Phase I). The seller identity is set as
+  # a GLOBAL config row below (step 4) so the gateway can surface it to publishers.
   kubectl -n "$NS" set env deploy/exchange \
-    EXCHANGE_ADCERT_SIGN_KEY="$DEV_ADCERT_PRIV" \
-    EXCHANGE_ADSTXT_SELLER_DOMAIN="$SELLER_DOMAIN" \
-    EXCHANGE_ADSTXT_SELLER_ID="$EXCHANGE_ID" >/dev/null
+    EXCHANGE_ADCERT_SIGN_KEY="$DEV_ADCERT_PRIV" >/dev/null
   for d in dsp-internal dsp-competitor1 dsp-competitor2; do
     kubectl -n "$NS" set env deploy/$d DSP_ADCERT_KEY_URL="http://exchange:8081/v1/adcert/key" >/dev/null
   done
@@ -59,6 +67,10 @@ on)
   done
 
   echo "▶ 4/4 flipping enforcement → strict (live config)…"
+  # Platform seller identity — global rows so BOTH the exchange (enforcement) and
+  # the gateway (publisher-facing /v1/api/integration/adstxt) resolve the same line.
+  setcfg exchange.adstxt_seller_domain "$SELLER_DOMAIN"
+  setcfg exchange.adstxt_seller_id "$EXCHANGE_ID"
   setcfg dsp.adcert_enforcement strict
   setcfg exchange.adstxt_enforcement strict
   setcfg exchange.schain_enforcement strict

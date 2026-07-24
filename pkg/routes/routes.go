@@ -56,6 +56,12 @@ const (
 	// {public_key, fingerprint}. The key is public, but the endpoint sits behind
 	// the app (JWT-gated tenant user). 404/503 when no key is configured.
 	APIAudiencePGPKey = apiPrefix + "/api/audiences/pgp-key"
+	// APIIntegrationAdsTxt tells a publisher how to authorise this platform in
+	// their ads.txt: GET returns {seller_domain, seller_id, relationship, line,
+	// enforcement, sellers_json_url, configured}. Read from the same shared
+	// exchange.adstxt_seller_domain/id the exchange enforces on, so the surfaced
+	// line always matches what strict mode checks. JWT-gated.
+	APIIntegrationAdsTxt = apiPrefix + "/api/integration/adstxt"
 	// APIAudienceMappings is tenant-scoped custom field mappings ("connectors",
 	// ADR 0008 Feature 3): GET lists the account's saved mappings, POST
 	// creates/updates one ({name, mappings, id_type}), DELETE .../{id} removes one.

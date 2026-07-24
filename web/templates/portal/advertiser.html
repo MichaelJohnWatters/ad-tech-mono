@@ -1598,7 +1598,13 @@ async function loadPGPKey() {
   const meta = $('pgp_key_meta'), pem = $('pgp_key_pem');
   try {
     const key = await fetchJSON('/v1/api/audiences/pgp-key');
-    meta.textContent = 'Fingerprint: ' + (key.fingerprint || '(none)');
+    // The active key is the policy — encrypt to this. During a rotation grace
+    // window the endpoint also returns any 'rotating' key that still decrypts;
+    // list them so a provider knows a file encrypted to the old key is accepted.
+    let m = 'Encrypt to fingerprint: ' + (key.fingerprint || '(none)');
+    const also = (key.keys || []).filter(k => k.status === 'rotating').map(k => k.fingerprint);
+    if (also.length) m += ' · also accepted (rotating): ' + also.join(', ');
+    meta.textContent = m;
     pem.textContent = key.public_key || '';
     _pgpKeyLoaded = true;
   } catch (err) {
