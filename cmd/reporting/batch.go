@@ -419,7 +419,8 @@ func (c *EventConsumer) handleDSPCallBatch(ctx context.Context, msgs []*events.M
 			return &analytics.DSPCallEvent{
 				TraceID: src.TraceID, AuctionID: src.AuctionID, Channel: src.Channel,
 				DSPEndpoint: src.DSPEndpoint, BidReceived: src.BidReceived, BidPriceUSD: src.BidPriceUSD,
-				LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, SchemaVersion: 1, Timestamp: src.Timestamp,
+				LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, NoBidReason: src.NoBidReason,
+				SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
 		nil, // one call per DSP per trace: multiple legitimate rows

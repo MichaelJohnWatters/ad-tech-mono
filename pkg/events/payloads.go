@@ -55,16 +55,22 @@ type CampaignSpendSnapshotEvent struct {
 // (kept out of this event so it can be emitted at fan-out time, before the
 // winner is known).
 type DSPCallEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	TraceID       string    `json:"trace_id"`
-	AuctionID     string    `json:"auction_id"`
-	Channel       string    `json:"channel"`
-	DSPEndpoint   string    `json:"dsp_endpoint"`
-	BidReceived   bool      `json:"bid_received"`
-	BidPriceUSD   float64   `json:"bid_price_usd"`
-	LatencyMs     int64     `json:"latency_ms"`
-	TimedOut      bool      `json:"timed_out"`
-	Timestamp     time.Time `json:"timestamp"`
+	SchemaVersion int     `json:"schema_version"`
+	TraceID       string  `json:"trace_id"`
+	AuctionID     string  `json:"auction_id"`
+	Channel       string  `json:"channel"`
+	DSPEndpoint   string  `json:"dsp_endpoint"`
+	BidReceived   bool    `json:"bid_received"`
+	BidPriceUSD   float64 `json:"bid_price_usd"`
+	LatencyMs     int64   `json:"latency_ms"`
+	TimedOut      bool    `json:"timed_out"`
+	// NoBidReason carries the DSP's no-bid reason string when it declined for a
+	// stated reason (e.g. "adcert_invalid"). Empty when the DSP bid or simply
+	// had no matching demand. This is what keeps a DSP-level enforcement block
+	// from vanishing into the exchange's aggregated no-bid — it's persisted per
+	// DSP and surfaced in the trace timeline.
+	NoBidReason string    `json:"no_bid_reason,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 // AuctionCompleteEvent includes all bids and timing (for analytics).
@@ -270,19 +276,19 @@ type DirectWinEvent struct {
 // privacy.Evaluate(...).Personalise, and the tracker only sees a user key
 // when the consented serve path baked one into the pixel URL.
 type BehaviourSignalEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	TraceID       string    `json:"trace_id"`
-	Kind          string    `json:"kind"` // request | impression | click | conversion | view
-	UserID        string    `json:"user_id,omitempty"`
-	HouseholdID   string    `json:"household_id,omitempty"`
-	PlacementID   string    `json:"placement_id,omitempty"`
-	PublisherID   string    `json:"publisher_id,omitempty"`
-	CampaignID    string    `json:"campaign_id,omitempty"`
-	CreativeID    string    `json:"creative_id,omitempty"`
-	Channel       string    `json:"channel,omitempty"`
-	Categories    string    `json:"categories,omitempty"` // comma-separated content categories
-	Geo           string    `json:"geo,omitempty"`
-	Device        string    `json:"device,omitempty"`
+	SchemaVersion int    `json:"schema_version"`
+	TraceID       string `json:"trace_id"`
+	Kind          string `json:"kind"` // request | impression | click | conversion | view
+	UserID        string `json:"user_id,omitempty"`
+	HouseholdID   string `json:"household_id,omitempty"`
+	PlacementID   string `json:"placement_id,omitempty"`
+	PublisherID   string `json:"publisher_id,omitempty"`
+	CampaignID    string `json:"campaign_id,omitempty"`
+	CreativeID    string `json:"creative_id,omitempty"`
+	Channel       string `json:"channel,omitempty"`
+	Categories    string `json:"categories,omitempty"` // comma-separated content categories
+	Geo           string `json:"geo,omitempty"`
+	Device        string `json:"device,omitempty"`
 	// AccountID + Tag carry retargeting-pixel attribution (kind
 	// "site_visit"): the advertiser account whose site fired the pixel and
 	// its self-chosen tag ("product-page"). Rules scope site_visit rows to

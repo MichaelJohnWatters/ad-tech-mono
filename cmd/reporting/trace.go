@@ -191,6 +191,7 @@ func buildTraceSteps(events []analytics.TraceEvent, acctType string) []traceStep
 			tlabel = "+" + strconv.FormatInt(off, 10) + "ms"
 		}
 		svc, msg, detail := "tracker", "", ""
+		cls := "active"
 		switch e.Kind {
 		case "auction_win":
 			svc = "exchange"
@@ -228,8 +229,19 @@ func buildTraceSteps(events []analytics.TraceEvent, acctType string) []traceStep
 			detail = e.EventType
 		case "media":
 			msg = "Video/audio: " + e.EventType
+		case "dsp_block":
+			// A DSP declined for a stated enforcement reason. This is internal
+			// supply-path detail (which demand partner, why) — staff only; an
+			// advertiser/publisher trace shouldn't leak a competitor DSP's block.
+			if !isStaff(acctType) {
+				continue
+			}
+			svc = "exchange"
+			cls = "warn"
+			msg = "DSP blocked: " + humanNoBidReason(e.NoBidReason)
+			detail = "partner " + e.DSPEndpoint
 		}
-		steps = append(steps, traceStep{Time: tlabel, Service: svc, Cls: "active", Msg: msg, Detail: detail})
+		steps = append(steps, traceStep{Time: tlabel, Service: svc, Cls: cls, Msg: msg, Detail: detail})
 	}
 	return steps
 }
@@ -292,4 +304,20 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// humanNoBidReason turns a DSP no-bid reason code string into a readable phrase
+// for the trace timeline. Falls back to the raw reason so a new code still shows
+// something meaningful.
+func humanNoBidReason(reason string) string {
+	switch reason {
+	case "adcert_invalid":
+		return "ads.cert signature invalid"
+	case "adcert_stale":
+		return "ads.cert signature stale (replay window)"
+	case "":
+		return "no reason given"
+	default:
+		return reason
+	}
 }

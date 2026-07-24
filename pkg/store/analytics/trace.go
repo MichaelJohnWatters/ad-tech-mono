@@ -257,6 +257,17 @@ func (c *ClickHouse) EventsByTrace(ctx context.Context, traceID string, scope Tr
 		}); err != nil {
 		return nil, err
 	}
+	// DSP-level enforcement blocks (Phase H): only rows carrying a reason — a DSP
+	// that declined for a stated cause (e.g. adcert_invalid). Ordinary no-bids
+	// (empty reason) are intentionally NOT surfaced, to keep the timeline to the
+	// signal: "this DSP was blocked, and why".
+	if err := scan("dsp_block",
+		`SELECT dsp_endpoint, no_bid_reason, timestamp FROM dsp_calls WHERE trace_id = ? AND no_bid_reason != ''`,
+		func(e *TraceEvent) []any {
+			return []any{&e.DSPEndpoint, &e.NoBidReason, &e.Timestamp}
+		}); err != nil {
+		return nil, err
+	}
 
 	sortByTime(out)
 	return out, nil

@@ -167,7 +167,7 @@ func (c *ClickHouse) createTables() error {
 		`CREATE TABLE IF NOT EXISTS dsp_calls (
 			trace_id String, auction_id String, channel String, dsp_endpoint String,
 			bid_received UInt8, bid_price_usd Float64, latency_ms Int64, timed_out UInt8,
-			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+			no_bid_reason String, schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		// Profile-store tables (ADR 0006 phase 1) — landed in ClickHouse
 		// ALONGSIDE the existing Parquet lake dual-write. Phase 2 repoints the
@@ -253,9 +253,13 @@ func (c *ClickHouse) createTables() error {
 	for _, ddl := range []string{
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS provider_id String`,
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS data_party String`,
+		// Per-DSP no-bid reason (Phase H) — keeps a DSP-level enforcement block
+		// (e.g. adcert_invalid) from being lost in the aggregated no-bid. Old rows
+		// read as empty = "bid or plain no-demand".
+		`ALTER TABLE dsp_calls ADD COLUMN IF NOT EXISTS no_bid_reason String`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
-			c.log.Warn("clickhouse: could not add profile_signals column", "ddl", ddl, "error", err)
+			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
 		}
 	}
 	// Bound the raw-event tables: TTL drops rows older than ttlDays so the
@@ -408,6 +412,7 @@ func (c *ClickHouse) InsertFreqCapBlock(b FreqCapBlock) {
 	c.signal("freq_cap_block", `INSERT INTO freq_cap_blocks (trace_id, user_id, campaign_id, placement_id, publisher_id, timestamp) VALUES (?,?,?,?,?,?)`,
 		b.TraceID, b.UserID, b.CampaignID, b.PlacementID, b.PublisherID, sig(b.Timestamp))
 }
+
 // PurgeFreqCapBlocks removes every freq-cap block row for the user — the
 // Level-3 privacy deletion for the one operational-signal table that carries
 // user_id. Lightweight DELETE (same as the rollups replace-by-window path):
