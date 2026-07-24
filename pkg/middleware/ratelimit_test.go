@@ -75,7 +75,7 @@ func TestRateLimiterSkipsInfraAndPreflight(t *testing.T) {
 func TestLiveRateLimiterRereadsRate(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var rps, burst int // start disabled
-	rl := NewLiveRateLimiter(func() (int, int, int) { return rps, burst, 0 }, log)
+	rl := NewLiveRateLimiter(func() RateLimitConfig { return RateLimitConfig{RPS: rps, Burst: burst} }, log)
 	h := rl.Wrap(okHandler())
 
 	// Disabled (rps=0): everything passes.
@@ -130,6 +130,37 @@ func TestClientIPSpoofResistance(t *testing.T) {
 	// More hops claimed than entries present → fall back to the leftmost, never panic.
 	if ip := clientIP(r, 9); ip != "1.2.3.4" {
 		t.Errorf("over-deep hops must clamp to the leftmost, got %q", ip)
+	}
+}
+
+// Allowlisted IPs bypass the limit entirely — this is what keeps internal /
+// private / local traffic unthrottled when limiting is on by default.
+func TestRateLimiterAllowlistBypass(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Tight limit (1/burst 1) but a private-range allowlist.
+	rl := NewLiveRateLimiter(func() RateLimitConfig {
+		return RateLimitConfig{RPS: 1, Burst: 1, Allowlist: "10.0.0.0/8,127.0.0.1"}
+	}, log)
+	h := rl.Wrap(okHandler())
+
+	// An allowlisted IP is never throttled, no matter how hard it hammers.
+	for i := 0; i < 50; i++ {
+		if do(h, "/v1/t/imp", "10.42.0.1") != http.StatusOK {
+			t.Fatalf("allowlisted 10.42.0.1 must never be limited (req %d)", i)
+		}
+	}
+	if do(h, "/x", "127.0.0.1") != http.StatusOK {
+		t.Error("allowlisted 127.0.0.1 must pass")
+	}
+	// A NON-allowlisted public IP still gets throttled after its burst.
+	got429 := false
+	for i := 0; i < 6; i++ {
+		if do(h, "/v1/t/imp", "203.0.113.9") == http.StatusTooManyRequests {
+			got429 = true
+		}
+	}
+	if !got429 {
+		t.Error("a non-allowlisted public IP must still be rate-limited")
 	}
 }
 

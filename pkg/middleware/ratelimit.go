@@ -23,18 +23,28 @@ import (
 // The client IP is read from X-Forwarded-For / X-Real-IP (set by Traefik and
 // the CDN), falling back to RemoteAddr; only trust XFF because these services
 // sit behind the ingress, never directly on the internet.
+// RateLimitConfig is the live per-request configuration the limiter reads from
+// cfgFn. Every field is resolved fresh on each request so the TierLive
+// <svc>.ratelimit_* keys take effect without a restart.
+type RateLimitConfig struct {
+	RPS         int    // sustained requests/sec per client IP; <= 0 disables limiting
+	Burst       int    // token-bucket burst; <= 0 defaults to RPS
+	TrustedHops int    // X-Forwarded-For entries-from-the-right added by trusted proxies
+	Allowlist   string // comma-separated CIDRs/IPs that BYPASS the limit (internal + private ranges by default, so local/cluster traffic is never throttled)
+}
+
 type RateLimiter struct {
-	// cfgFn is read on EVERY request so the config is genuinely live — the
-	// <svc>.ratelimit_* keys are TierLive, and an operator (or a test) can tune
-	// them without restarting the pod. Returns (rps, burst, trustedHops); rps <= 0
-	// disables limiting for that request.
-	cfgFn func() (int, int, int)
+	// cfgFn is read on EVERY request so the config is genuinely live.
+	cfgFn func() RateLimitConfig
 	log   *slog.Logger
 
 	mu       sync.Mutex
 	ips      map[string]*ipEntry
 	curRPS   int // the rps/burst the current buckets were built with; a change
 	curBurst int // rebuilds them so a live tune takes effect immediately.
+
+	allowRaw  string       // the allowlist string the parsed nets were built from
+	allowNets []*net.IPNet // parsed once per distinct allowlist string (cached)
 }
 
 type ipEntry struct {
@@ -42,27 +52,70 @@ type ipEntry struct {
 	seen time.Time
 }
 
-// NewLiveRateLimiter returns a limiter whose rate is resolved from cfgFn on
-// every request, so <svc>.ratelimit_rps can be tuned live (it's TierLive). rps
+// NewLiveRateLimiter returns a limiter whose config is resolved from cfgFn on
+// every request, so the TierLive <svc>.ratelimit_* keys can be tuned live. RPS
 // <= 0 means "disabled" for that window — the limiter passes requests through.
 // Never returns nil; the passthrough is decided per request. A background
 // janitor evicts idle IPs so the map can't grow unbounded.
-func NewLiveRateLimiter(cfgFn func() (rps, burst, trustedHops int), log *slog.Logger) *RateLimiter {
+func NewLiveRateLimiter(cfgFn func() RateLimitConfig, log *slog.Logger) *RateLimiter {
 	rl := &RateLimiter{cfgFn: cfgFn, log: log, ips: make(map[string]*ipEntry)}
 	go rl.janitor()
 	return rl
 }
 
-// NewRateLimiter is the fixed-rate constructor (trustedHops=0 → rightmost XFF).
-// Returns nil when rps <= 0 (disabled) — callers treat a nil limiter as "no
-// limiting" via the nil-safe Wrap. Retained for callers/tests that want a
-// constant rate; services use NewLiveRateLimiter so the TierLive keys take
-// effect live.
+// NewRateLimiter is the fixed-rate constructor (trustedHops=0 → rightmost XFF,
+// no allowlist). Returns nil when rps <= 0 (disabled) — callers treat a nil
+// limiter as "no limiting" via the nil-safe Wrap. Retained for callers/tests
+// that want a constant rate; services use NewLiveRateLimiter so the TierLive
+// keys take effect live.
 func NewRateLimiter(rps, burst int, log *slog.Logger) *RateLimiter {
 	if rps <= 0 {
 		return nil
 	}
-	return NewLiveRateLimiter(func() (int, int, int) { return rps, burst, 0 }, log)
+	return NewLiveRateLimiter(func() RateLimitConfig { return RateLimitConfig{RPS: rps, Burst: burst} }, log)
+}
+
+// allowlisted reports whether ip falls in any CIDR/IP on the (comma-separated)
+// allowlist — such IPs bypass the limit entirely. The parse is cached and only
+// redone when the allowlist string changes. A bare IP is treated as a /32
+// (or /128). Malformed entries are skipped (logged once via the parse).
+func (rl *RateLimiter) allowlisted(ip, allowlist string) bool {
+	if allowlist == "" {
+		return false
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	rl.mu.Lock()
+	if allowlist != rl.allowRaw {
+		rl.allowRaw = allowlist
+		rl.allowNets = rl.allowNets[:0]
+		for _, tok := range strings.Split(allowlist, ",") {
+			tok = strings.TrimSpace(tok)
+			if tok == "" {
+				continue
+			}
+			if !strings.Contains(tok, "/") {
+				if strings.Contains(tok, ":") {
+					tok += "/128"
+				} else {
+					tok += "/32"
+				}
+			}
+			if _, n, err := net.ParseCIDR(tok); err == nil {
+				rl.allowNets = append(rl.allowNets, n)
+			}
+		}
+	}
+	nets := rl.allowNets
+	rl.mu.Unlock()
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 func (rl *RateLimiter) janitor() {
@@ -110,12 +163,17 @@ func (rl *RateLimiter) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		rps, burst, trustedHops := rl.cfgFn()
-		if rps <= 0 { // disabled live — pass through
+		cfg := rl.cfgFn()
+		if cfg.RPS <= 0 { // disabled live — pass through
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !rl.limiterFor(clientIP(r, trustedHops), rps, burst).Allow() {
+		ip := clientIP(r, cfg.TrustedHops)
+		if rl.allowlisted(ip, cfg.Allowlist) { // internal/private/trusted → never throttled
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !rl.limiterFor(ip, cfg.RPS, cfg.Burst).Allow() {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return
