@@ -23,6 +23,13 @@
 #   - per-service Redis (docs) — the chart currently models the single shared
 #     Redis the base ships; splitting it is future work
 
+# ONE knob: your real registered domain. Every browser-facing ingress host
+# (gateway.<domain>, adserver.<domain>, tracker.<domain>, ssp.<domain>,
+# pubad.<domain>, the apex <domain>, …) + the cert SANs derive from it. Point
+# your DNS A/AAAA (or Cloudflare CNAME) at the ingress LB IP for these hosts.
+global:
+  domain: adtech.example.com   # ← change to your domain
+
 # TLS: real Let's Encrypt certs via cert-manager (install cert-manager + define
 # the `letsencrypt-prod` ClusterIssuer out-of-band once). The Ingress template
 # then requests a per-ingress cert automatically — same wiring as local, only
@@ -31,6 +38,11 @@ tls:
   enabled: true
   certManager:
     clusterIssuer: letsencrypt-prod
+    # After installing cert-manager once, set createIssuers: true + your email and
+    # the chart renders the letsencrypt-staging/prod ClusterIssuers for you
+    # (templates/cert-issuers.yaml). Leave false to manage issuers out-of-band.
+    createIssuers: false
+    email: ""   # ← ops@yourdomain.com (required when createIssuers: true)
 
 # ============================================================
 # PERSISTENCE (the "fixed persistence layer" for prod).
@@ -106,18 +118,35 @@ services:
     replicas: 3
   adserver:
     replicas: 3
+    # PUBLIC browser-facing pixel base baked into served ad HTML. MUST be HTTPS
+    # (an HTTPS publisher page blocks http pixels as mixed content) and match
+    # global.domain. Points at the tracker's public ingress host.
+    extraEnv:
+      - name: ADSERVER_TRACKER_URL
+        value: "https://tracker.adtech.example.com"   # ← match global.domain
   publisher-adserver:
     replicas: 2
+    extraEnv:
+      - name: PUBLISHER_ADSERVER_TRACKER_URL
+        value: "https://tracker.adtech.example.com"   # ← match global.domain
+      - name: PUBLISHER_ADSERVER_PUBLIC_URL
+        value: "https://pubad.adtech.example.com"     # ← match global.domain
   tracker:
     replicas: 4
   gateway:
     replicas: 2
     # Auth is MANDATORY in prod: refuse to boot with the dev auth-bypass. Needs
     # an active jwt_signing secret (seeded/SOPS) or GATEWAY_JWT_SIGNING_KEY.
-    # extraEnv APPENDS (doesn't replace the base env list).
+    # The public_tracker_url is baked into advertiser conversion pixels (HTTPS,
+    # must resolve from the advertiser's own site). creatives_store_url → your
+    # S3/CDN. extraEnv APPENDS (doesn't replace the base env list).
     extraEnv:
       - name: GATEWAY_REQUIRE_AUTH
         value: "true"
+      - name: GATEWAY_PUBLIC_TRACKER_URL
+        value: "https://tracker.adtech.example.com"   # ← match global.domain
+      - name: GATEWAY_CREATIVES_STORE_URL
+        value: "https://cdn.adtech.example.com/adtech-creatives/"  # ← your S3/CDN
   # Single-replica BY DESIGN (do not scale without code changes):
   # reporting, identity-consumer, report-runner — see the deployment comments
   # in k8s/base/*/deployment.yaml.

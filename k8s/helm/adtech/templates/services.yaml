@@ -105,6 +105,15 @@ spec:
     {{- end }}
 {{- if $svc.ingress }}
 {{- $tls := $.Values.tls | default dict }}
+{{- /* Ingress hostnames derive from ONE knob: global.domain (default adtech.local).
+       ingress.subdomains: [gateway] → gateway.<domain>; ingress.apex: true → the
+       bare <domain>; ingress.hosts: [...] → verbatim (override/back-compat). Prod
+       sets global.domain=your-real-domain.com and every host follows. */}}
+{{- $domain := (($.Values.global | default dict).domain | default "adtech.local") }}
+{{- $hosts := list }}
+{{- range ($svc.ingress.subdomains | default list) }}{{- $hosts = append $hosts (printf "%s.%s" . $domain) }}{{- end }}
+{{- if $svc.ingress.apex }}{{- $hosts = append $hosts $domain }}{{- end }}
+{{- range ($svc.ingress.hosts | default list) }}{{- $hosts = append $hosts . }}{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -130,7 +139,7 @@ spec:
   {{- if $tls.enabled }}
   tls:
     - hosts:
-        {{- range $svc.ingress.hosts }}
+        {{- range $hosts }}
         - {{ . }}
         {{- end }}
       # cert-manager writes into a per-ingress secret; local uses the shared
@@ -138,7 +147,7 @@ spec:
       secretName: {{ if $tls.certManager }}{{ $name }}-tls{{ else }}{{ $tls.secretName | default "adtech-tls" }}{{ end }}
   {{- end }}
   rules:
-    {{- range $svc.ingress.hosts }}
+    {{- range $hosts }}
     - host: {{ . }}
       http:
         paths:

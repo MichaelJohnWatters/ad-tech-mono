@@ -10,6 +10,13 @@
 namespace: adtech
 createNamespace: true
 
+# ONE knob for the ingress domain. Every browser-facing host derives from it
+# (services set ingress.subdomains / ingress.apex). Local = adtech.local (matches
+# the mkcert wildcard + /etc/hosts). Prod overlays set global.domain to the real
+# registered domain and every ingress host + cert follows automatically.
+global:
+  domain: adtech.local
+
 # TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
 # Same Ingress wiring in every env (templates/services.yaml terminates at
 # Traefik's websecure/443 entrypoint); only the cert SOURCE differs:
@@ -119,7 +126,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [dsp.adtech.local, dsp-int.adtech.local]
+      subdomains: [dsp, dsp-int]
 
   dsp-competitor1:
     image: adtech-dsp
@@ -154,7 +161,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [dsp-comp1.adtech.local]
+      subdomains: [dsp-comp1]
 
   dsp-competitor2:
     image: adtech-dsp
@@ -189,7 +196,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [dsp-comp2.adtech.local]
+      subdomains: [dsp-comp2]
 
   ssp:
     image: adtech-ssp
@@ -224,7 +231,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [ssp.adtech.local]
+      subdomains: [ssp]
 
   exchange:
     image: adtech-exchange
@@ -257,7 +264,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [exchange.adtech.local]
+      subdomains: [exchange]
 
   adserver:
     image: adtech-adserver
@@ -295,7 +302,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [adserver.adtech.local]
+      subdomains: [adserver]
 
   publisher-adserver:
     image: adtech-publisher-adserver
@@ -330,7 +337,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [pubad.adtech.local]
+      subdomains: [pubad]
 
   tracker:
     image: adtech-tracker
@@ -366,7 +373,7 @@ services:
       timeoutSeconds: 3
       failureThreshold: 5
     ingress:
-      hosts: [tracker.adtech.local]
+      subdomains: [tracker]
 
   gateway:
     image: adtech-gateway
@@ -439,7 +446,8 @@ services:
       periodSeconds: 2
       failureThreshold: 5
     ingress:
-      hosts: [gateway.adtech.local, adtech.local]
+      subdomains: [gateway]
+      apex: true
 
   pipeline:
     image: adtech-pipeline
