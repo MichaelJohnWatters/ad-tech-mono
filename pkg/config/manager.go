@@ -185,7 +185,12 @@ func (m *Manager) trySubscribeInvalidate(ctx context.Context) {
 	// queue-group the replicas and only one would re-poll. podid.Replica() is
 	// the unique hostname.
 	group := "config-invalidate-" + podid.Replica()
-	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateConfig, group, func(c context.Context, msg *events.Message) error {
+	// SubscribeBroadcast: per-pod EPHEMERAL consumer that JetStream reaps when
+	// the pod dies. The old per-pod-group Subscribe created a permanent durable
+	// per pod name that never got cleaned up — the config-invalidate consumers
+	// were a large share of the 1039 orphans that wedged JetStream on
+	// 2026-07-25. Falls back to Subscribe on buses without broadcast support.
+	err := events.SubscribeBroadcast(ctx, bus, events.SubjectCacheInvalidateConfig, group, func(c context.Context, msg *events.Message) error {
 		m.log.Info("config invalidate received, re-polling", "key", string(msg.Data))
 		m.poll(c)
 		_ = msg.Ack()
