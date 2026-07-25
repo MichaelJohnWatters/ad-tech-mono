@@ -122,6 +122,7 @@ func (l *Ledger) Record(entry billing.LedgerEntry) int64 {
 		return 0
 	}
 
+	l.recordStats([]billing.LedgerEntry{entry})
 	l.bumpSummary(entry)
 	return id
 }
@@ -171,6 +172,10 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 		if len(chunk) == 0 {
 			return
 		}
+		// Entries whose money transfers committed this flush; their summary
+		// buckets are bumped in one stats request at the end.
+		var recorded []billing.LedgerEntry
+		defer func() { l.recordStats(recorded) }()
 		byIdx, err := l.createTransfersResults(chunk)
 		if err != nil {
 			// Transport-level error (the whole request didn't land) — retry each
@@ -184,6 +189,7 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 						"campaign_id", b.entry.CampaignID, "error", e2)
 					continue
 				}
+				recorded = append(recorded, b.entry)
 				l.bumpSummary(b.entry)
 			}
 			chunk = chunk[:0]
@@ -211,6 +217,7 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 					"entry_type", string(b.entry.Type), "trace_id", b.entry.TraceID,
 					"campaign_id", b.entry.CampaignID, "result", badResult.Result)
 			} else {
+				recorded = append(recorded, b.entry)
 				l.bumpSummary(b.entry)
 			}
 			idx += len(b.transfers)
@@ -251,13 +258,13 @@ func (l *Ledger) buildSpend(e billing.LedgerEntry) ([]tbtypes.Transfer, error) {
 		return nil, fmt.Errorf("parse publisher account: %w", err)
 	}
 
-	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
+	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(pubID, tb.AccountCodePublisher); err != nil {
+	if err := l.ensureAccount(pubID, tb.AccountCodePublisher, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse); err != nil {
+	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse, tb.USDLedger); err != nil {
 		return nil, err
 	}
 
@@ -297,10 +304,10 @@ func (l *Ledger) buildReservation(e billing.LedgerEntry) ([]tbtypes.Transfer, er
 		return nil, fmt.Errorf("parse advertiser account: %w", err)
 	}
 
-	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
+	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow); err != nil {
+	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow, tb.USDLedger); err != nil {
 		return nil, err
 	}
 
@@ -340,16 +347,16 @@ func (l *Ledger) buildSettlement(e billing.LedgerEntry) ([]tbtypes.Transfer, err
 		return nil, fmt.Errorf("parse advertiser id %q: %w", e.AdvertiserID, err)
 	}
 
-	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser); err != nil {
+	if err := l.ensureAccount(advID, tb.AccountCodeAdvertiser, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(pubID, tb.AccountCodePublisher); err != nil {
+	if err := l.ensureAccount(pubID, tb.AccountCodePublisher, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow); err != nil {
+	if err := l.ensureAccount(tb.EscrowAccountID, tb.AccountCodeEscrow, tb.USDLedger); err != nil {
 		return nil, err
 	}
-	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse); err != nil {
+	if err := l.ensureAccount(tb.HouseAccountID, tb.AccountCodeHouse, tb.USDLedger); err != nil {
 		return nil, err
 	}
 
@@ -488,7 +495,7 @@ func (l *Ledger) createTransfersResults(transfers []tbtypes.Transfer) (map[int]t
 
 // ensureAccount lazily creates a TB account. Idempotent across processes
 // because TB's CreateAccounts treats "exists" as a non-error result code.
-func (l *Ledger) ensureAccount(id tbtypes.Uint128, code uint16) error {
+func (l *Ledger) ensureAccount(id tbtypes.Uint128, code uint16, ledger uint32) error {
 	l.accountCacheMu.Lock()
 	if _, ok := l.accountCache[id]; ok {
 		l.accountCacheMu.Unlock()
@@ -498,7 +505,7 @@ func (l *Ledger) ensureAccount(id tbtypes.Uint128, code uint16) error {
 
 	results, err := l.client.CreateAccounts([]tbtypes.Account{{
 		ID:     id,
-		Ledger: tb.USDLedger,
+		Ledger: ledger,
 		Code:   code,
 	}})
 	l.noteTransport(err)
