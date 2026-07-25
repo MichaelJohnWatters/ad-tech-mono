@@ -28,11 +28,11 @@ FROM line_items li
 JOIN targeting_rules tr ON tr.line_item_id = li.id
 WHERE li.status IN ('live', 'paused')`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query freq caps: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []models.FreqCapRule
 	for rows.Next() {

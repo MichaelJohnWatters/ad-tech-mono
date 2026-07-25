@@ -37,11 +37,11 @@ SELECT
 FROM creatives
 WHERE review_status = 'approved'`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query creatives: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []models.Creative
 	for rows.Next() {

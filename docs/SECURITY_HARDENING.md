@@ -122,28 +122,28 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    (`FORCE ROW LEVEL SECURITY` is only needed if the querying role owns the table;
    `adtech_app` won't own anything, so plain `ENABLE` — already in place — suffices.)
 
-3. **Add a `QueryPlatform` store helper + rewire the platform loaders.** ~16
-   files call the raw `s.read.QueryContext(...)` (grep `\.read\.Query` in
-   `pkg/store/postgres/`). These need a helper that runs the query inside a read
-   tx with `SET LOCAL app.platform_read = 'on'`.
+3. ✅ **DONE — `QueryPlatform`/`QueryRowPlatform` helpers + all platform loaders
+   rewired** (`pkg/store/postgres/postgres.go`). Each opens a read-only tx, sets
+   `SET LOCAL app.platform_read = 'on'`, and — because `lib/pq` invalidates
+   `*sql.Rows` once the tx ends — keeps the tx OPEN, returning the rows plus a
+   `closeFn` the caller defers (the single-row form scans via a callback inside
+   the tx). The retired `QueryRead` committed *before* returning rows, which under
+   lib/pq silently yields ZERO rows — it was dead code and is deleted.
 
-   ⚠️ **Two traps — this is the crux, do it with integration tests, not blind:**
-   - **Classify every `.read.Query` call site first.** NOT all 16 are
-     cross-tenant platform loads — some are tenant-scoped reads that filter by an
-     `account_id` in the WHERE. Switching one of *those* to `platform_read` would
-     BYPASS tenant isolation — the exact bug this task fixes. Only the `LoadAll`
-     warm-cache loaders (CampaignLoader, BalanceLoader, DealLoader, …) get
-     `QueryPlatform`; audit each of the others.
-   - **`lib/pq` does not buffer rows past tx commit.** `QueryRead` today commits
-     its tx *before* returning `*sql.Rows` (works only because tenant reads are
-     small / already drained). `QueryPlatform` loads can be large (all campaigns),
-     so it must NOT commit before the caller scans — pass a `func(*sql.Rows)`
-     callback that runs inside the tx, or return a closer that commits after
-     scan. Don't copy `QueryRead`'s commit-then-return shape.
+   All 18 `.read.Query` sites were classified first (a security-critical step: a
+   tenant-scoped read wrongly switched to `platform_read` would BYPASS isolation).
+   Result: all 18 are genuinely cross-tenant — the `LoadAll` warm-cache loaders
+   plus `CampaignLoader.LoadOne` (called only from the warm cache), the
+   billing-internal `committed_spend`/`reservation` lookups (keyed by day/trace,
+   not tenant), and the platform-global `identity_graph` queries. None was a
+   tenant-scoped request read, so there was nothing to leave behind.
 
-   Under the superuser this is a behavioural no-op (RLS bypassed either way), so it
-   can ship ahead of the flip. Keep the flag confined to `QueryPlatform` — grep
-   for `platform_read` should return only that helper + this migration.
+   No-op under the current superuser (RLS bypassed), so it's shipped ahead of the
+   flip. Proven by the integration test above: its `real_loader_sees_all_tenants`
+   case drives the actual `BalanceLoader` through `QueryPlatform` under a real
+   `NOBYPASSRLS` role and asserts it sees every tenant (while `no_guc_sees_nothing`
+   confirms a raw read would be filtered to nothing). `grep platform_read` returns
+   only these two helpers + migration 065.
 
 4. **Flip `DATABASE_URL`** to `adtech_app` (EXCLUSIVE stack) and run the full e2e
    suite: tenant-isolation (`rls_test.go`), the money loop, pacing, and a warm-

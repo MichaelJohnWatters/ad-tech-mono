@@ -34,11 +34,11 @@ SELECT account_id::text, balance::float8, currency, payment_terms,
        COALESCE(credit_limit, 0)::float8
 FROM advertiser_balances`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query advertiser balances: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []AdvertiserBalance
 	for rows.Next() {

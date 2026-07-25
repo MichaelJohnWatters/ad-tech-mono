@@ -36,11 +36,11 @@ SELECT
 FROM deals
 WHERE status = 'active'`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query deals: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []models.Deal
 	for rows.Next() {

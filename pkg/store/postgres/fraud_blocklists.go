@@ -17,11 +17,11 @@ type BlocklistLoader struct {
 
 func (l *BlocklistLoader) LoadAll(ctx context.Context) ([]fraud.BlocklistEntry, error) {
 	const q = `SELECT type, value FROM fraud_blocklists`
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query fraud_blocklists: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []fraud.BlocklistEntry
 	for rows.Next() {

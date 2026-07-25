@@ -171,33 +171,51 @@ func (s *Store) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// QueryRead executes a read query on the read replica with tenant context.
-// For tenant-scoped reads that don't need a transaction.
-func (s *Store) QueryRead(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	accountID := AccountIDFromContext(ctx)
-	if accountID != "" {
-		// For read queries, we need to set the session variable.
-		// Use a transaction even for reads to scope the SET LOCAL.
-		tx, err := s.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
-			tx.Rollback()
-			return nil, err
-		}
-		rows, err := tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			tx.Rollback()
-			return nil, err
-		}
-		// Note: caller must close rows, then we commit.
-		// In practice, wrap this in a higher-level method.
-		// For now, commit after query (rows buffered by driver).
-		tx.Commit()
-		return rows, nil
+// QueryPlatform runs a deliberately CROSS-TENANT read with the RLS platform-read
+// escape hatch enabled (migration 065). It's for the warm-cache LoadAll loaders,
+// which load every tenant's rows with no app.current_account_id set — under a
+// NOBYPASSRLS app role (security #77) those would otherwise be filtered to
+// nothing. `SET LOCAL` inside a read-only tx so the flag auto-resets when the tx
+// ends (no leak onto the pooled connection).
+//
+// The tx is held OPEN until closeFn runs: lib/pq invalidates *sql.Rows once the
+// tx commits/rolls back, so the caller MUST `defer closeFn()` and finish
+// scanning before it fires. (The retired QueryRead committed before returning
+// rows — under lib/pq that silently yields ZERO rows; it was dead code, removed.)
+//
+// A no-op under the current superuser (RLS is bypassed, so the hatch is never
+// consulted), so wiring the loaders to it changes nothing today; it's what makes
+// them keep working once the app role is downgraded.
+func (s *Store) QueryPlatform(ctx context.Context, query string, args ...any) (*sql.Rows, func(), error) {
+	tx, err := s.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
 	}
-	return s.read.QueryContext(ctx, query, args...)
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.platform_read', 'on', true)"); err != nil {
+		tx.Rollback()
+		return nil, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		tx.Rollback()
+		return nil, nil, err
+	}
+	return rows, func() { rows.Close(); tx.Rollback() }, nil
+}
+
+// QueryRowPlatform is the single-row form of QueryPlatform: scan runs inside the
+// read-only platform-read tx (the *sql.Row can't outlive the tx under lib/pq).
+// sql.ErrNoRows propagates out of row.Scan exactly as with a plain QueryRow.
+func (s *Store) QueryRowPlatform(ctx context.Context, scan func(*sql.Row) error, query string, args ...any) error {
+	tx, err := s.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.platform_read', 'on', true)"); err != nil {
+		return err
+	}
+	return scan(tx.QueryRowContext(ctx, query, args...))
 }
 
 // Ping checks both primary and read connections.

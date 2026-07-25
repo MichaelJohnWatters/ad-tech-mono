@@ -34,11 +34,11 @@ SELECT
 FROM publishers
 WHERE status = 'active'`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query contracts: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []ContractRow
 	for rows.Next() {

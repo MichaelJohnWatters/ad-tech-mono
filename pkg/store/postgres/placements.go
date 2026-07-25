@@ -51,11 +51,11 @@ FROM placements pl
 JOIN publishers pub ON pub.id = pl.publisher_id
 WHERE pl.status = 'active'`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query placements: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []PlacementRow
 	for rows.Next() {

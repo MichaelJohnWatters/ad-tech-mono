@@ -44,13 +44,14 @@ func (s *ReservationContextStore) GetReservation(ctx context.Context, traceID st
 	if s.Store == nil {
 		return rc, false, sql.ErrConnDone
 	}
-	err := s.Store.read.QueryRowContext(ctx, `
+	err := s.Store.QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&rc.TraceID, &rc.CampaignID, &rc.CreativeID, &rc.PlacementID,
+			&rc.PublisherID, &rc.AdvertiserID, &rc.DealType, &rc.Currency, &rc.Amount, &rc.BidModel)
+	}, `
 SELECT trace_id, COALESCE(campaign_id,''), COALESCE(creative_id,''), COALESCE(placement_id,''),
        COALESCE(publisher_id,''), COALESCE(advertiser_id,''), COALESCE(deal_type,''),
        currency, amount::float8, bid_model
-FROM reservation_context WHERE trace_id = $1`, traceID).
-		Scan(&rc.TraceID, &rc.CampaignID, &rc.CreativeID, &rc.PlacementID,
-			&rc.PublisherID, &rc.AdvertiserID, &rc.DealType, &rc.Currency, &rc.Amount, &rc.BidModel)
+FROM reservation_context WHERE trace_id = $1`, traceID)
 	if err == sql.ErrNoRows {
 		return rc, false, nil
 	}
