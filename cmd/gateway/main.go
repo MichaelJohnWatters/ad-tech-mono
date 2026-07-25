@@ -888,8 +888,10 @@ func main() {
 		}
 	}, log)
 	// SecurityHeaders is OUTERMOST so HSTS/X-Frame-Options/etc. ride every
-	// response — including rate-limit 429s and error pages.
-	handler := middleware.SecurityHeaders(tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux))))
+	// response — including rate-limit 429s and error pages. CSRF sits just inside
+	// it: it blocks cross-site cookie-authed state changes (defense-in-depth on
+	// SameSite=Lax); Bearer/no-cookie/safe requests pass through untouched.
+	handler := middleware.SecurityHeaders(middleware.CSRF(tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))))
 
 	server := &http.Server{
 		Addr:         ":" + port,
