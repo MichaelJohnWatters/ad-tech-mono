@@ -71,9 +71,32 @@ func (f *fakeClient) CreateTransfers(transfers []tbtypes.Transfer) ([]tbtypes.Tr
 		if override, ok := f.transferResults[len(f.transfers)-1]; ok {
 			res = override
 		}
+		// Minimal balance simulation, ONLY for summary stat transfers, so
+		// Summary()-via-buckets is unit-testable. Money-transfer balance
+		// math stays out of the fake (integration_test covers it).
+		if res == tbtypes.TransferOK && t.Code == tb.CodeStat {
+			acc := f.lookupAccount[t.CreditAccountID]
+			acc.ID = t.CreditAccountID
+			prev, _ := tb.AmountToMicros(acc.CreditsPosted)
+			inc, _ := tb.AmountToMicros(t.Amount)
+			acc.CreditsPosted = tb.MicrosToAmount(prev + inc)
+			f.lookupAccount[t.CreditAccountID] = acc
+		}
 		results = append(results, tbtypes.TransferEventResult{Index: uint32(i), Result: res})
 	}
 	return results, nil
+}
+
+// moneyTransfers filters out summary stat transfers (StatsLedger) so
+// assertions about the money movement aren't polluted by stats bookkeeping.
+func moneyTransfers(ts []tbtypes.Transfer) []tbtypes.Transfer {
+	var out []tbtypes.Transfer
+	for _, t := range ts {
+		if t.Code != tb.CodeStat {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (f *fakeClient) LookupAccounts(ids []tbtypes.Uint128) ([]tbtypes.Account, error) {
@@ -163,11 +186,12 @@ func TestLedgerSpendProducesTwoTransfers(t *testing.T) {
 	if id == 0 {
 		t.Fatal("Record returned 0 — implies an internal error path was hit")
 	}
-	if got, want := len(fc.transfers), 2; got != want {
-		t.Fatalf("Spend should produce %d transfers, got %d", want, got)
+	money := moneyTransfers(fc.transfers)
+	if got, want := len(money), 2; got != want {
+		t.Fatalf("Spend should produce %d money transfers, got %d", want, got)
 	}
 
-	rev, mar := fc.transfers[0], fc.transfers[1]
+	rev, mar := money[0], money[1]
 	if rev.Code != tb.CodeSpend {
 		t.Errorf("revenue transfer code = %d, want CodeSpend(%d)", rev.Code, tb.CodeSpend)
 	}
@@ -212,17 +236,19 @@ func TestRecordBatchOneCallSameTransfers(t *testing.T) {
 		perLedger.Record(e)
 	}
 
-	if batchFC.createTransfersCalls != 1 {
-		t.Errorf("RecordBatch made %d CreateTransfers calls, want 1 (batched)", batchFC.createTransfersCalls)
+	// One money request + one stats request per batch; per-entry pays the
+	// same pair per Record call.
+	if batchFC.createTransfersCalls != 2 {
+		t.Errorf("RecordBatch made %d CreateTransfers calls, want 2 (money + stats)", batchFC.createTransfersCalls)
 	}
-	if perFC.createTransfersCalls != len(entries) {
-		t.Errorf("per-entry made %d CreateTransfers calls, want %d", perFC.createTransfersCalls, len(entries))
+	if perFC.createTransfersCalls != len(entries)*2 {
+		t.Errorf("per-entry made %d CreateTransfers calls, want %d", perFC.createTransfersCalls, len(entries)*2)
 	}
-	if got, want := len(batchFC.transfers), len(entries)*2; got != want {
-		t.Errorf("batch produced %d transfers, want %d (2 per CPM spend)", got, want)
+	if got, want := len(moneyTransfers(batchFC.transfers)), len(entries)*2; got != want {
+		t.Errorf("batch produced %d money transfers, want %d (2 per CPM spend)", got, want)
 	}
-	if !reflect.DeepEqual(batchFC.transfers, perFC.transfers) {
-		t.Errorf("batched transfers differ from per-entry:\n batch=%+v\n per  =%+v", batchFC.transfers, perFC.transfers)
+	if !reflect.DeepEqual(moneyTransfers(batchFC.transfers), moneyTransfers(perFC.transfers)) {
+		t.Errorf("batched money transfers differ from per-entry:\n batch=%+v\n per  =%+v", moneyTransfers(batchFC.transfers), moneyTransfers(perFC.transfers))
 	}
 }
 
@@ -243,10 +269,11 @@ func TestLedgerReservationProducesPendingTransfer(t *testing.T) {
 		ReservationID: "res-trace-002",
 	})
 
-	if got, want := len(fc.transfers), 1; got != want {
-		t.Fatalf("Reservation should produce %d transfer, got %d", want, got)
+	money := moneyTransfers(fc.transfers)
+	if got, want := len(money), 1; got != want {
+		t.Fatalf("Reservation should produce %d money transfer, got %d", want, got)
 	}
-	tr := fc.transfers[0]
+	tr := money[0]
 	flags := tr.TransferFlags()
 	if !flags.Pending {
 		t.Error("reservation must have Pending flag")
@@ -286,10 +313,11 @@ func TestLedgerSettlementProducesThreeLinkedTransfers(t *testing.T) {
 		ReservationID:    "res-trace-003",
 	})
 
-	if got, want := len(fc.transfers), 3; got != want {
-		t.Fatalf("Settlement should produce %d transfers, got %d", want, got)
+	money := moneyTransfers(fc.transfers)
+	if got, want := len(money), 3; got != want {
+		t.Fatalf("Settlement should produce %d money transfers, got %d", want, got)
 	}
-	post, rev, mar := fc.transfers[0], fc.transfers[1], fc.transfers[2]
+	post, rev, mar := money[0], money[1], money[2]
 
 	postFlags := post.TransferFlags()
 	if !postFlags.PostPendingTransfer {
@@ -338,10 +366,11 @@ func TestLedgerReleaseProducesVoidPendingTransfer(t *testing.T) {
 		AdvertiserID: adv,
 	})
 
-	if got, want := len(fc.transfers), 1; got != want {
-		t.Fatalf("Release should produce %d transfer, got %d", want, got)
+	money := moneyTransfers(fc.transfers)
+	if got, want := len(money), 1; got != want {
+		t.Fatalf("Release should produce %d money transfer, got %d", want, got)
 	}
-	tr := fc.transfers[0]
+	tr := money[0]
 	if !tr.TransferFlags().VoidPendingTransfer {
 		t.Error("release must have VoidPendingTransfer flag")
 	}
@@ -533,8 +562,8 @@ func TestRecordBatch_ReplayNoStorm(t *testing.T) {
 	l := New(fc, silentLogger())
 	l.RecordBatch(entries)
 
-	if fc.createTransfersCalls != 1 {
-		t.Fatalf("CreateTransfers calls = %d, want 1 (a replay must NOT trigger the per-entry retry storm)", fc.createTransfersCalls)
+	if fc.createTransfersCalls != 2 {
+		t.Fatalf("CreateTransfers calls = %d, want 2 (money + stats; a replay must NOT trigger the per-entry retry storm)", fc.createTransfersCalls)
 	}
 	if got := l.Summary().TotalEntries; got != 3 {
 		t.Fatalf("recorded entries = %d, want 3 (the idempotent replay still counts as recorded)", got)
@@ -566,8 +595,8 @@ func TestRecordBatch_RealFailureIsolated(t *testing.T) {
 	l := New(fc, silentLogger())
 	l.RecordBatch(entries)
 
-	if fc.createTransfersCalls != 1 {
-		t.Fatalf("CreateTransfers calls = %d, want 1 (no whole-chunk retry on a real failure)", fc.createTransfersCalls)
+	if fc.createTransfersCalls != 2 {
+		t.Fatalf("CreateTransfers calls = %d, want 2 (money + stats; no whole-chunk retry on a real failure)", fc.createTransfersCalls)
 	}
 	if got := l.Summary().TotalEntries; got != 2 {
 		t.Fatalf("recorded entries = %d, want 2 (A and C commit, B fails)", got)

@@ -9,6 +9,7 @@ const (
 	CodeSettlement  uint16 = 3 // Reservation fulfilled (publisher slice on settle)
 	CodeRelease     uint16 = 4 // Reservation released (void-pending on expiry/explicit)
 	CodeMargin      uint16 = 5 // Platform margin slice (advertiser → house)
+	CodeStat        uint16 = 6 // Summary bucket increment on StatsLedger (not money)
 )
 
 // TB account `code` enum. Mirrors the EntryType taxonomy but at the account
@@ -18,6 +19,7 @@ const (
 	AccountCodePublisher  uint16 = 11
 	AccountCodeEscrow     uint16 = 12
 	AccountCodeHouse      uint16 = 13
+	AccountCodeStats      uint16 = 14 // summary bucket accounts on StatsLedger
 )
 
 // Bid model codes packed into transfer.user_data_32. The low byte holds

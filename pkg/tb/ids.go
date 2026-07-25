@@ -93,6 +93,27 @@ func ReleaseTransferID(traceID string) types.Uint128 {
 	return mustDeriveTransferID("tb_release", traceID)
 }
 
+// StatsSourceAccountID is the funding side of every stats bucket transfer
+// on StatsLedger. Its balance means nothing (it only ever accumulates
+// debits); it exists because TB transfers need two accounts.
+var StatsSourceAccountID = mustDeriveAccountID("platform:stats:source")
+
+// StatsBucketAccountID derives the deterministic account ID for one
+// summary bucket (e.g. "spend", "reserved", "settled"). The bucket's
+// credits_posted IS the lifetime total for that summary field — durable,
+// cluster-global, identical from every reporting pod.
+func StatsBucketAccountID(bucket string) types.Uint128 {
+	return mustDeriveAccountID("platform:stats:" + bucket)
+}
+
+// StatTransferID derives the transfer ID for one bucket increment of one
+// ledger entry. entryKey is "<entry-type>:<trace-id>", so a redelivered
+// event re-derives the same ID and TB's Exists result makes the replay a
+// no-op — stats stay exactly-once alongside the money transfers.
+func StatTransferID(bucket, entryKey string) types.Uint128 {
+	return mustDeriveTransferID("tb_stat_"+bucket, entryKey)
+}
+
 // mustDeriveAccountID converts an idgen key into a TB account ID via UUIDv5.
 // Used for static accounts (house, escrow) — any error here is a
 // build-time bug, panic is fine.

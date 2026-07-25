@@ -146,13 +146,20 @@ func (l *Ledger) BalanceFor(accountID string) billing.BalanceSummary {
 	}
 }
 
-// Summary returns the in-process roll-up. TB has no GROUP BY, so we
-// accumulate on Record(). After a process restart this resets — durable
-// totals come from BalanceFor per account.
+// Summary reads the cluster-global stats bucket accounts (see summary.go),
+// so every reporting pod answers with the same durable totals — the
+// in-process roll-up is only per-pod partial truth at N replicas and is
+// kept solely as the fallback when TB is unreachable.
 func (l *Ledger) Summary() billing.LedgerSummary {
-	l.summaryMu.RLock()
-	defer l.summaryMu.RUnlock()
-	return l.summary
+	s, err := l.summaryFromBuckets()
+	if err != nil {
+		l.log.Error("tigerbeetle summary bucket read failed, serving in-process fallback",
+			"error", err)
+		l.summaryMu.RLock()
+		defer l.summaryMu.RUnlock()
+		return l.summary
+	}
+	return s
 }
 
 // entriesForAccountID is the shared body of Entries and EntriesForAccount.

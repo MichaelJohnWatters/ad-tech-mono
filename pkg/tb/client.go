@@ -22,6 +22,13 @@ const ClusterID uint64 = 0
 // Ledger" → "Explicitly out of scope").
 const USDLedger uint32 = 1
 
+// StatsLedger holds the platform-wide summary bucket accounts (see
+// pkg/billing/tigerbeetle summary.go). A separate TB ledger keeps the
+// stat counters strictly apart from USD money invariants — TB requires
+// both sides of a transfer to share a ledger, so a stats transfer can
+// never touch a real balance.
+const StatsLedger uint32 = 2
+
 // ReservationTimeoutSeconds is the TB `timeout` we set on every pending
 // reservation transfer. After this elapses TB auto-voids the pending,
 // which obsoletes the reservation-expiry cron we would otherwise need.
