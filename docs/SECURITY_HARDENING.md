@@ -76,17 +76,22 @@ tenant-isolation hardening, and the riskiest.
 
 ## 4. Image supply chain (pinning + scanning)
 
-Only Minio is pinned by digest; base + infra images float, and there's no scan.
+**DONE (committed, no deploy needed — only affects freshly-built images / CI):**
+- ✅ Base images pinned by digest in every `build/Dockerfile*`
+  (`golang:1.25-alpine@sha256:…`, `alpine:3.20@sha256:…`). Re-resolve with
+  `docker buildx imagetools inspect <img> --format '{{.Manifest.Digest}}'` when
+  bumping the tag.
+- ✅ Trivy CI job (`supply-chain-scan` in `.github/workflows/ci.yml`): Dockerfile
+  misconfig scan + fixable HIGH/CRITICAL dependency CVEs, both fail the build.
 
-**Steps:**
-1. Pin base images by digest in `build/Dockerfile*`:
-   `FROM golang:1.25-alpine@sha256:…` / `FROM alpine:3.20@sha256:…` (get the
-   digest with `docker buildx imagetools inspect <img>` or `crane digest`).
-2. Pin infra image tags in `values.yaml` (postgres/nats/redis/clickhouse) to
-   digests, like Minio already is.
-3. Tag app images with the git SHA (not `:latest`) in CI; set
+**Still deferred (need a controlled deploy — changing an infra image string
+restarts that StatefulSet, e.g. a postgres/nats bounce):**
+1. Pin infra image tags in `values.yaml` (postgres/nats/redis/clickhouse) to
+   digests, like Minio already is. **Do this during a planned maintenance
+   window** — it rolls the stateful infra pods. Pin to the digest of the
+   currently-running image to keep the bits identical.
+2. Tag app images with the git SHA (not `:latest`) in CI; set
    `imagePullPolicy: Always` in prod.
-4. Add a Trivy (or Grype) scan step in CI that fails on HIGH/CRITICAL CVEs.
 
 ## 5. Minor / accepted
 
