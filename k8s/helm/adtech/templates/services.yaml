@@ -40,7 +40,7 @@ spec:
              as a non-root USER (build/Dockerfile* — a paired change validated on
              the first hardened deploy), else runAsNonRoot refuses to start the
              pod. Explicit-true check avoids the Sprig bool-false gotcha. */}}
-      {{- if eq (toString (($.Values.global | default dict).hardenedContainers)) "true" }}
+      {{- if and (eq (toString (($.Values.global | default dict).hardenedContainers)) "true") (ne (toString $svc.hardenedExempt) "true") }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -56,7 +56,7 @@ spec:
         - name: {{ $svc.containerName | default $name }}
           image: {{ $svc.image }}
           imagePullPolicy: {{ $svc.imagePullPolicy | default "IfNotPresent" }}
-          {{- if eq (toString (($.Values.global | default dict).hardenedContainers)) "true" }}
+          {{- if and (eq (toString (($.Values.global | default dict).hardenedContainers)) "true") (ne (toString $svc.hardenedExempt) "true") }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

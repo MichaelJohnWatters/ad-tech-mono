@@ -11,7 +11,9 @@ COPY . .
 RUN CGO_ENABLED=1 go build -o /app ./cmd/reporting
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /app /app
-USER 1000:1000
+# NOTE: reporting stays ROOT + hardenedExempt (values) — its tigerbeetle-go CGO
+# client SIGSEGVs under the hardened securityContext (drop ALL caps / seccomp).
+# Revisit with a tuned seccomp profile if we want it non-root.
 ENTRYPOINT ["/app"]
