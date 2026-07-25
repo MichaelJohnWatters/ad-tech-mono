@@ -267,11 +267,17 @@ func main() {
 	// is an alias kept for backward compatibility — same template, just
 	// historic naming. Both land on the tabbed console; the URL hash
 	// (#config, #services, etc.) picks the active tab.
-	consoleHandler := func(w http.ResponseWriter, r *http.Request) {
-		templates.Render(w, "manager.html", nil)
+	// Legacy standalone console (config + secrets). Config editing now lives in
+	// the staff portal (#config); this stays as a dev-only launcher and is gated
+	// off in prod (debug.endpoints_enabled=false) — its /v1/config + /v1/services
+	// data APIs are now authenticated regardless.
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
+		consoleHandler := func(w http.ResponseWriter, r *http.Request) {
+			templates.Render(w, "manager.html", nil)
+		}
+		mux.HandleFunc("/dev/console", consoleHandler)
+		mux.HandleFunc("/dev/config-manager", consoleHandler)
 	}
-	mux.HandleFunc("/dev/console", consoleHandler)
-	mux.HandleFunc("/dev/config-manager", consoleHandler)
 
 	// sellers.json (IAB standard - lists all active publishers we represent),
 	// sourced live from the publishers table.
@@ -291,17 +297,33 @@ func main() {
 	mux.HandleFunc("/docs", swaggerUIHandler())
 	mux.HandleFunc("/docs/", swaggerUIHandler())
 
-	// Config management API
-	mux.HandleFunc(routes.Config, cfgMgr.HTTPHandler())
-	mux.HandleFunc(routes.ProxyConfig, cfgMgr.HTTPHandler())
+	// Config management API — AUTHENTICATED. Reads leak DB URLs / internal
+	// topology and writes mutate live config, so require a real session and the
+	// config permission (read for GET, config:update for PUT/DELETE). The staff
+	// Config UI calls these same-origin, so the session cookie flows.
+	configAuth := func(h http.HandlerFunc) http.Handler {
+		return authMiddleware(middleware.RequirePermissionByMethod(map[string]string{
+			http.MethodGet:    "config:read",
+			http.MethodPut:    "config:update",
+			http.MethodDelete: "config:update",
+		})(h))
+	}
+	mux.Handle(routes.Config, configAuth(cfgMgr.HTTPHandler()))
+	mux.Handle(routes.ProxyConfig, configAuth(cfgMgr.HTTPHandler()))
 
-	// Service registry - shows all running services and their config
+	// Service registry - shows all running services and their config (topology
+	// recon if open) — require an authenticated caller with config:read.
 	if sc.Registry != nil {
-		mux.HandleFunc("/v1/services", sc.Registry.HTTPHandler())
+		mux.Handle("/v1/services", authMiddleware(middleware.RequirePermission("config:read")(sc.Registry.HTTPHandler())))
 	}
 
-	// Auth endpoint
-	mux.HandleFunc(routes.AuthToken, tokenHandler(signingKey))
+	// Dev-only token minter: /v1/auth/token issues a signed JWT for an arbitrary
+	// account/role with NO credential — a total auth bypass if reachable. Gated
+	// behind debug.endpoints_enabled (which MUST be false in prod). Real callers
+	// use /v1/auth/login (credentials) or /v1/auth/bootstrap (root password).
+	if keys.Debug.EndpointsEnabled.Get(cfg) {
+		mux.HandleFunc(routes.AuthToken, tokenHandler(signingKey))
+	}
 	// Bootstrap is the one-shot operator-key minting endpoint.
 	// PLATFORM_ROOT_PASSWORD env var gates it; once a row with
 	// name='bootstrap-admin-key' exists in secrets, subsequent calls
