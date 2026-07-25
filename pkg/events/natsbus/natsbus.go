@@ -27,8 +27,9 @@ import (
 )
 
 var (
-	_ events.EventBus        = (*Bus)(nil)
-	_ events.BatchSubscriber = (*Bus)(nil)
+	_ events.EventBus            = (*Bus)(nil)
+	_ events.BatchSubscriber     = (*Bus)(nil)
+	_ events.BroadcastSubscriber = (*Bus)(nil)
 )
 
 // Bus implements events.EventBus using NATS JetStream.
@@ -216,6 +217,80 @@ func (b *Bus) Subscribe(ctx context.Context, subject, group string, handler even
 	}()
 
 	b.log.Info("subscribed", "subject", subject, "consumer", consumerName)
+	return nil
+}
+
+// broadcastInactiveThreshold is how long an ephemeral per-pod broadcast
+// consumer may go without an active fetch before JetStream deletes it. It must
+// comfortably exceed the fetch max-wait (5s) plus any pod restart / brief
+// disconnect, but be short enough that a dead pod's consumer is reaped
+// promptly (not left to accumulate). 5m is well clear of a rolling restart yet
+// bounds the leak: a churned pod's consumer is gone within 5 minutes.
+const broadcastInactiveThreshold = 5 * time.Minute
+
+// SubscribeBroadcast implements events.BroadcastSubscriber: an EPHEMERAL
+// per-pod consumer (no Durable) with an InactiveThreshold, so the pod gets its
+// own fan-out copy of every message AND the consumer self-deletes when the pod
+// dies. This is the leak-free replacement for building a per-pod group on top
+// of the durable Subscribe path (see events.BroadcastSubscriber for the
+// incident that motivated it).
+func (b *Bus) SubscribeBroadcast(ctx context.Context, subject, name string, handler events.Handler) error {
+	consumerName := fmt.Sprintf("%s-%s-%s", b.service, name, subjectToConsumerSuffix(subject))
+
+	// Ephemeral: Name (so we can find/observe it) but NO Durable, plus an
+	// InactiveThreshold so JetStream reaps it once the pod stops fetching.
+	consumer, err := b.js.CreateOrUpdateConsumer(ctx, streamForSubject(subject), jetstream.ConsumerConfig{
+		Name:              consumerName,
+		FilterSubject:     subject,
+		DeliverPolicy:     jetstream.DeliverNewPolicy,
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		AckWait:           30 * time.Second,
+		MaxDeliver:        5,
+		InactiveThreshold: broadcastInactiveThreshold,
+	})
+	if err != nil {
+		return fmt.Errorf("create broadcast consumer %s on %s: %w", consumerName, subject, err)
+	}
+
+	go func() {
+		for {
+			msgs, err := consumer.Fetch(10, jetstream.FetchMaxWait(5*time.Second))
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+			for msg := range msgs.Messages() {
+				msgCtx := otel.GetTextMapPropagator().Extract(ctx, natsHeaderCarrier(msg.Headers()))
+				msgCtx, span := otel.Tracer("adtech").Start(msgCtx,
+					"nats consume "+msg.Subject(),
+					trace.WithSpanKind(trace.SpanKindConsumer),
+					trace.WithAttributes(
+						attribute.String("messaging.system", "nats"),
+						attribute.String("messaging.destination", msg.Subject()),
+					),
+				)
+				traceID := ""
+				if sc := span.SpanContext(); sc.HasTraceID() {
+					traceID = sc.TraceID().String()
+				}
+				evtMsg := events.NewMessage(
+					msg.Subject(), msg.Data(), traceID, msgID(msg),
+					func() error { return msg.Ack() },
+					func() error { return msg.Nak() },
+				)
+				if err := handler(msgCtx, evtMsg); err != nil {
+					b.log.Error("broadcast handler failed", "subject", subject, "error", err)
+					msg.Nak()
+				}
+				span.End()
+			}
+		}
+	}()
+
+	b.log.Info("subscribed (broadcast/ephemeral)", "subject", subject, "consumer", consumerName)
 	return nil
 }
 

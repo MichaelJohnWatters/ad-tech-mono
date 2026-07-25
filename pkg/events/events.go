@@ -76,6 +76,41 @@ type BatchSubscriber interface {
 	SubscribeBatch(ctx context.Context, subject, group string, handler BatchHandler) error
 }
 
+// BroadcastSubscriber is the optional per-pod fan-out capability: every
+// subscribing pod gets its OWN copy of each message (broadcast), NOT a shared
+// queue group. Used for cache invalidation, where each replica must refresh
+// its own in-process snapshot.
+//
+// Crucially, the underlying consumer is EPHEMERAL with an inactivity timeout —
+// when the pod dies, NATS auto-deletes the consumer. This is what a per-pod
+// group MUST NOT be built from `Subscribe` (which creates a permanent durable
+// keyed by the pod name): those durables never get cleaned up, so every pod
+// that ever existed leaks a consumer forever. That leak wedged the JetStream
+// meta layer on 2026-07-25 (1039 orphaned cache-invalidate consumers → 2m+
+// CONSUMER.CREATE latency). Ephemeral + InactiveThreshold is the fix.
+//
+// Delivery is best-effort (DeliverNew, no redelivery guarantee): a missed
+// invalidate only means a stale cache until the warm-cache poll backstop
+// catches up, so the guarantees of a durable consumer aren't needed here.
+//
+// Discovered by type assertion on EventBus; callers fall back to Subscribe
+// (with a per-pod group) when the bus doesn't implement it — that keeps the
+// memory bus / fakes working, at the cost of the old durable behaviour in
+// tests (which never run long enough to leak).
+type BroadcastSubscriber interface {
+	SubscribeBroadcast(ctx context.Context, subject, name string, handler Handler) error
+}
+
+// SubscribeBroadcast subscribes with per-pod ephemeral fan-out when the bus
+// supports it, else falls back to a per-pod durable group via Subscribe. name
+// must be unique per pod (e.g. cacheName + "-" + podid.Replica()).
+func SubscribeBroadcast(ctx context.Context, bus EventBus, subject, name string, handler Handler) error {
+	if b, ok := bus.(BroadcastSubscriber); ok {
+		return b.SubscribeBroadcast(ctx, subject, name, handler)
+	}
+	return bus.Subscribe(ctx, subject, name, handler)
+}
+
 // Message represents a received event.
 type Message struct {
 	Subject   string

@@ -136,7 +136,12 @@ func (c *Cache[T]) Start(ctx context.Context) error {
 		// config system, so it is identical across replicas — using it here
 		// collapsed all replicas into one queue group and only one reloaded.
 		group := c.cfg.Name + "-cache-" + podid.Replica()
-		err := c.cfg.Bus.Subscribe(ctx, c.cfg.InvalidateSubject, group, c.onInvalidate)
+		// SubscribeBroadcast: per-pod EPHEMERAL consumer (auto-reaped when the
+		// pod dies). The plain per-pod-group Subscribe path created a permanent
+		// durable per pod name — those never cleaned up and leaked one consumer
+		// per pod that ever existed (wedged JetStream on 2026-07-25). Falls back
+		// to Subscribe on buses without broadcast support (fakes/memory).
+		err := events.SubscribeBroadcast(ctx, c.cfg.Bus, c.cfg.InvalidateSubject, group, c.onInvalidate)
 		if err != nil {
 			// Poll-only for now, but self-heal: a transient failure at boot
 			// (JetStream unavailable during a cluster restart) shouldn't leave
@@ -248,7 +253,7 @@ func (c *Cache[T]) resubscribeLoop(ctx context.Context, group string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.cfg.Bus.Subscribe(ctx, c.cfg.InvalidateSubject, group, c.onInvalidate); err != nil {
+			if err := events.SubscribeBroadcast(ctx, c.cfg.Bus, c.cfg.InvalidateSubject, group, c.onInvalidate); err != nil {
 				c.cfg.Log.Debug("warm cache nats re-subscribe retry failed",
 					"cache", c.cfg.Name, "error", err)
 				continue
