@@ -69,10 +69,10 @@ serving: Serving · sync RTB {
   pubad: Publisher Ad Server :8088 { style.fill: "#a78bfa"; d: serves markup to the page }
   tracker: Tracker :8083   { style.fill: "#fbbf24"; d: imp · click · conv · view }
 
-  ssp -> exchange: OpenRTB
-  exchange -> dsp: OpenRTB
-  exchange -> dspc: OpenRTB
-  exchange -> adserver: serve
+  ssp -> exchange: OpenRTB · gRPC
+  exchange -> dsp: OpenRTB · gRPC
+  exchange -> dspc: OpenRTB HTTP
+  ssp -> adserver: serve · gRPC
 }
 
 control.gateway -> serving.ssp: ad request

@@ -6,7 +6,8 @@ The supply-side platform. Publishers' inventory lives here. Generates bid reques
 
 - Publisher and placement management (CRUD via gRPC from Gateway)
 - Generate bid requests with placement details, user signals, publisher first-party data
-- Send bid requests to Exchange via gRPC
+- Send bid requests to Exchange via the internal gRPC twin (`grpc://` scheme in `ssp.exchange_url`; `http://` falls back to OpenRTB HTTP)
+- Call the Ad Server's gRPC twin to render the winner (`ssp.adserver_url`)
 - Manage publisher quality controls (blocklists, allowlists, category filters)
 - Floor price management (static, time-based, device-based, geo-based)
 - Generate ad tags for publishers to embed on their sites
@@ -20,12 +21,15 @@ The supply-side platform. Publishers' inventory lives here. Generates bid reques
 
 ## gRPC Services Exposed
 
-- `InventoryService` - see `pkg/proto/`
+- None. The SSP is a gRPC *client* only (exchange + ad server twins in
+  `pkg/proto/internalrpc/` via `pkg/grpcx`); its own endpoints are HTTP
+  (publisher ad tags are browser-facing).
 
 ## Dependencies
 
 - Postgres (publishers, placements, quality controls, deals)
-- Exchange (calls via gRPC to initiate auctions)
+- Exchange (internal gRPC twin — or OpenRTB HTTP when `ssp.exchange_url` is `http://`)
+- Ad Server (internal gRPC twin — or HTTP when `ssp.adserver_url` is `http://`)
 
 ## Architecture Details
 

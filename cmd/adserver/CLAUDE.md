@@ -18,13 +18,15 @@ Delivers ad creatives to end-user browsers. Generates tracking URLs with signed 
 
 ## gRPC Services Exposed
 
-- `AdService` - see `pkg/proto/`
+- `InternalAdServeService.Serve` (:8185) - see `pkg/proto/internalrpc/`;
+  JSON-envelope twin of `POST /v1/ad/serve`, dialled only by our SSP. The
+  429 frequency-cap decline rides the envelope's HTTP-equivalent status.
 
 ## Dependencies
 
 - Object storage (creative assets - filesystem locally, S3 in prod)
 - Redis (frequency cap counters, creative metadata L2 cache)
-- Tracker (calls via gRPC to record server-side events)
+- Tracker (indirect: bakes signed tracker pixel URLs into served HTML; the browser fires them)
 
 ## Architecture Details
 

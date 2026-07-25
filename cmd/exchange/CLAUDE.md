@@ -4,9 +4,13 @@ The central auction marketplace. Receives bid requests from SSPs, fans out to DS
 
 ## Responsibilities
 
-- Receive bid requests from SSP via gRPC (`AuctionService.RunAuction`)
+- Receive bid requests from our SSP via the internal gRPC twin
+  (`InternalAuctionService.RunAuction`, :8181) or OpenRTB HTTP — same handler
+  either way (`pkg/grpcx.Bridge`); external sources (Prebid) are HTTP-only
 - Evaluate deal priority: PG -> Preferred Deal -> PMP -> Open Auction
-- Fan out bid requests to eligible DSPs via OpenRTB JSON/HTTP
+- Fan out bid requests to eligible DSPs: our DSP over its gRPC twin
+  (`grpc://` endpoint in `exchange.dsp_endpoints`), third-party/competitor
+  DSPs over industry-standard OpenRTB JSON/HTTP
 - Enforce bid timeout (configurable via live config: `exchange.bid_timeout_ms`)
 - Run auction (second-price by default)
 - Publish `AuctionWinEvent` to NATS (single source of truth for cost)
@@ -25,7 +29,8 @@ The central auction marketplace. Receives bid requests from SSPs, fans out to DS
 
 ## gRPC Services Exposed
 
-- `AuctionService.RunAuction` - see `pkg/proto/`
+- `InternalAuctionService.RunAuction` (:8181) - see `pkg/proto/internalrpc/`;
+  JSON-envelope twin of `POST /v1/openrtb/auction`, internal callers only
 
 ## OpenRTB Endpoints (HTTP)
 
@@ -37,8 +42,7 @@ The central auction marketplace. Receives bid requests from SSPs, fans out to DS
 ## Dependencies
 
 - NATS JetStream (publishes auction events)
-- DSP services (calls via OpenRTB HTTP)
-- Ad Server (calls via gRPC after auction win)
+- DSP services (our DSP via gRPC twin, third-party via OpenRTB HTTP)
 - Redis (L1 cache for DSP endpoints, floor prices, ads.txt)
 - Postgres (deal configs, publisher quality controls)
 

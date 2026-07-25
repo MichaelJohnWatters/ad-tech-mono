@@ -22,7 +22,8 @@ All reusable libraries live here. Every service imports from `pkg/`. Nothing is 
 | `config/` | Configuration loading | defaults -> env vars -> live Postgres config; every key is a typed handle in `config/keys/` (`keys.DSP.NoisePct.Get(cfg)`) — no magic strings at call sites |
 | `middleware/` | HTTP/gRPC middleware | Auth, tenant, rate limit, circuit breaker, audit |
 | `logger/` | Structured logging (slog) | JSON output, trace_id in every line |
-| `proto/` | Protobuf definitions + generated Go code | Single source of truth for gRPC contracts |
+| `proto/` | Protobuf definitions + generated Go code | `proto/internalrpc/` is the live gRPC contract (internal hot-path twins); the root .proto files are message-model definitions only |
+| `grpcx/` | Internal gRPC transport (servers, clients, handler bridge) | gRPC ONLY on edges we own both ends of; `grpc://` vs `http://` URL scheme picks transport; `Bridge` runs the same http.HandlerFunc on both |
 | `cache/` | Layered cache (L1 + L2) | In-process + Redis, NATS invalidation |
 | `cache/redis/` | Redis client wrapper | Atomic counters, typed get/set |
 | `health/` | Health check registration | `/healthz` and `/readyz` endpoints |

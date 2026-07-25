@@ -43,11 +43,13 @@ the CPC/CPA/viewability rates are known — not duplicated here.
 
 ## gRPC Services Exposed
 
-- `CampaignService` - see `pkg/proto/`
+- `InternalBidService.Bid` (:8182) - see `pkg/proto/internalrpc/`;
+  JSON-envelope twin of `POST /v1/openrtb/bid`, dialled only by OUR exchange
+  (competitor-profile pods listen too but are always called over HTTP)
 
 ## OpenRTB Endpoint
 
-- `POST /v1/openrtb/bid` - receives bid requests from Exchange, responds with bid or no-bid
+- `POST /v1/openrtb/bid` - receives bid requests from Exchange, responds with bid or no-bid; same handler backs the gRPC twin via `pkg/grpcx.Bridge`
 
 ## Budget Flow
 
@@ -58,7 +60,7 @@ See `docs/PLAN.md` -> "Budget Handling", "How Billing Models Interact with Aucti
 - Postgres (campaigns, targeting rules, budgets)
 - Redis (budget counters, campaign config L2 cache)
 - NATS (consumes `adtech.billing.campaign_spend_snapshot` for pacing reconcile + cache-invalidate subjects; publishes BudgetDepletedEvent / BalanceDepletedEvent). Win notices arrive over HTTP (the OpenRTB nurl), not NATS.
-- Exchange calls this service via OpenRTB HTTP
+- Exchange calls this service via the internal gRPC twin (our profile) or OpenRTB HTTP (competitor profiles / rollback)
 
 ## Diagram Updates
 
