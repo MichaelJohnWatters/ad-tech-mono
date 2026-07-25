@@ -709,11 +709,19 @@ func (c *ClickHouse) CreativeStats(ctx context.Context, since time.Time) ([]Crea
 
 // DSPCallStats aggregates dsp_calls per (channel, endpoint) since a cutoff
 // (DSPCallAggregator) — the exchange's routing warm-start source.
+//
+// ifNotFinite: avgIf over a group with ZERO bids is NaN, and one NaN
+// anywhere poisons the whole response — json.Encode rejects NaN before
+// writing a single byte, so the routing-stats endpoint returned a silent
+// 200-with-empty-body and the exchange warm-start/reseed decoded EOF. An
+// always-no-bid DSP (the exact case smart routing exists to learn) hit it
+// every time. The Go-side scrub is belt-and-braces for other backends.
 func (c *ClickHouse) DSPCallStats(ctx context.Context, since time.Time) ([]DSPCallStat, error) {
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT channel, dsp_endpoint, count() AS calls,
 			sum(bid_received) AS bids, sum(timed_out) AS timeouts,
-			avgIf(bid_price_usd, bid_received = 1) AS avg_bid, avg(latency_ms) AS avg_lat
+			ifNotFinite(avgIf(bid_price_usd, bid_received = 1), 0) AS avg_bid,
+			ifNotFinite(avg(latency_ms), 0) AS avg_lat
 		 FROM dsp_calls WHERE timestamp >= ?
 		 GROUP BY channel, dsp_endpoint`, since)
 	if err != nil {
@@ -726,6 +734,12 @@ func (c *ClickHouse) DSPCallStats(ctx context.Context, since time.Time) ([]DSPCa
 		var avgBid, avgLat float64
 		if err := rows.Scan(&s.Channel, &s.DSPEndpoint, &s.TotalCalls, &s.TotalBids, &s.TotalTimeouts, &avgBid, &avgLat); err != nil {
 			return nil, fmt.Errorf("scan dsp_call stat: %w", err)
+		}
+		if math.IsNaN(avgBid) || math.IsInf(avgBid, 0) {
+			avgBid = 0
+		}
+		if math.IsNaN(avgLat) || math.IsInf(avgLat, 0) {
+			avgLat = 0
 		}
 		s.AvgBidUSD = avgBid
 		s.AvgLatencyMs = avgLat
