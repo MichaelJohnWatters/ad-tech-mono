@@ -17,7 +17,7 @@ See `docs/PLAN.md` for the comprehensive project plan.
 
 - **Language:** Go everywhere (backend, frontend, tooling). Python only for ML/data science.
 - **Frontend:** Go templates + HTMX + Tailwind CSS. No JS build pipeline.
-- **Protocols:** gRPC (internal), OpenRTB JSON/HTTP (bidding), HTTP/JSON (dashboard), NATS JetStream (async events)
+- **Protocols:** gRPC on internal hot-path edges where we own BOTH ends (SSP→Exchange, Exchange→our DSP, SSP→AdServer; `pkg/grpcx`, transport picked by `grpc://` vs `http://` URL scheme in config), OpenRTB JSON/HTTP on every external bidding boundary (third-party DSPs, Prebid, win/loss), HTTP/JSON (dashboard + gateway proxy), NATS JetStream (async events, JSON payloads)
 - **Databases:** PostgreSQL (transactional), DuckDB/ClickHouse (analytics), Parquet + Delta Log (data pipeline)
 - **Object storage:** S3 everywhere - Minio locally, real S3 in staging/prod. One code path.
 - **Caching:** L1 in-process (Go maps) + L2 Redis + L3 Postgres

@@ -995,15 +995,15 @@ graph TB
     Traefik -->|/v1/t/*| Tracker
     Traefik -->|/v1/openrtb/*| Exchange
 
-    Gateway -->|gRPC| DSP
-    Gateway -->|gRPC| SSP
-    Gateway -->|gRPC| Reporting
-    Gateway -->|gRPC| AdServer
+    Gateway -->|HTTP proxy| DSP
+    Gateway -->|HTTP proxy| SSP
+    Gateway -->|HTTP proxy| Reporting
+    Gateway -->|HTTP proxy| AdServer
 
-    SSP -->|gRPC| Exchange
-    Exchange -->|OpenRTB HTTP| DSP
-    Exchange -->|gRPC| AdServer
-    AdServer -->|gRPC| Tracker
+    SSP -->|gRPC internal| Exchange
+    Exchange -->|gRPC ours / OpenRTB HTTP 3rd-party| DSP
+    SSP -->|gRPC internal| AdServer
+    AdServer -->|signed pixel URLs, browser fires| Tracker
 
     DSP --> Redis
     DSP --> Postgres
@@ -1049,20 +1049,20 @@ sequenceDiagram
     participant Reporting as Reporting + Billing
 
     User->>SSP: Page load (ad tag fires)
-    SSP->>Exchange: gRPC RunAuction(bid request)
+    SSP->>Exchange: gRPC RunAuction (OpenRTB bid request)
 
     par Fan out to DSPs
-        Exchange->>DSP: OpenRTB POST /bid
+        Exchange->>DSP: gRPC Bid (ours) / OpenRTB POST /bid (3rd-party)
         Note over DSP: Pacing check -> Targeting -> Bid modifiers -> Shading
         DSP-->>Exchange: Bid response ($2.80)
     end
 
     Note over Exchange: Run auction (first-price)
-    Exchange->>AdServer: gRPC ServeAd(winner)
+    Exchange-->>SSP: Auction response (winner)
+    SSP->>AdServer: gRPC Serve(winner)
     Note over AdServer: Select creative, frequency cap check, macro substitution
 
-    AdServer-->>Exchange: Creative HTML + tracking URLs
-    Exchange-->>SSP: Auction response
+    AdServer-->>SSP: Creative HTML + tracking URLs
     SSP-->>User: Ad creative rendered
 
     Exchange->>NATS: AuctionWinEvent (clearing_price)
@@ -1299,17 +1299,17 @@ webhooks: Webhooks {
     style.fill: "#64748B"
 }
 
-# --- gRPC connections ---
-gateway -> dsp: gRPC
-gateway -> ssp: gRPC
-gateway -> reporting: gRPC
-gateway -> adserver: gRPC
+# --- service-to-service connections ---
+gateway -> dsp: HTTP proxy
+gateway -> ssp: HTTP proxy
+gateway -> reporting: HTTP proxy
+gateway -> adserver: HTTP proxy
 
-ssp -> exchange: gRPC
-exchange -> dsp: OpenRTB HTTP
-exchange -> adserver: gRPC
-adserver -> tracker: gRPC
-ssai_svc -> exchange: gRPC
+ssp -> exchange: gRPC (internal)
+exchange -> dsp: gRPC (ours) · OpenRTB HTTP (3rd-party)
+ssp -> adserver: gRPC (internal)
+adserver -> tracker: signed pixel URLs (browser fires)
+ssai_svc -> exchange: HTTP (VAST)
 
 # --- Infrastructure ---
 postgres: PostgreSQL {
@@ -14213,35 +14213,46 @@ infra/
 
 ### Protocol Split
 
+The rule: **gRPC only on hot-path edges where this platform owns BOTH ends;
+industry-standard protocols on every boundary an external party can sit on.**
+Which transport an edge uses is selected per endpoint by URL scheme in config
+(`grpc://` vs `http://`), so rollback/A-B is a config value, not a deploy.
+
 | Communication | Protocol | Why |
 |---|---|---|
-| Internal service-to-service | Protobuf/gRPC | Binary, fast, type-safe, generated Go clients. Low margin business - every byte and microsecond matters. |
-| Auction bidding (Exchange <-> DSP) | OpenRTB JSON/HTTP | Industry standard. Our DSP could talk to external exchanges later. |
-| Frontend dashboard APIs | HTTP/JSON | HTMX requires HTML-over-HTTP. |
-| Async events (Tracker -> Reporting) | NATS with protobuf-encoded messages | Decouples hot path from cold path, binary payloads keep it efficient. |
+| Internal hot-path edges we own both ends of: SSP→Exchange auction, Exchange→**our** DSP bid, SSP→Ad Server serve | gRPC (`pkg/grpcx` twins of the HTTP endpoints, ports 81xx) | Multiplexed persistent HTTP/2, binary framing. Low-margin business — every microsecond matters — without touching any external contract. |
+| Bidding across any external boundary: Exchange→third-party DSPs (incl. the competitor sims), inbound Prebid, win/loss notices | OpenRTB JSON/HTTP | Industry standard. Never gRPC — interop is the product. The competitor DSPs stay `http://` deliberately so the standard path is exercised in every auction. |
+| Frontend dashboard APIs + gateway reverse proxy to services | HTTP/JSON | HTMX requires HTML-over-HTTP; the gateway proxies `/v1/*` over HTTP. |
+| Async events (Tracker → Reporting etc.) | NATS JetStream, JSON payloads | Decouples hot path from cold path; exactly-once via Nats-Msg-Id + biz-key dedup. |
 
-### Internal gRPC Calls
+### Internal gRPC Twins (implemented — `pkg/grpcx` + `pkg/proto/internalrpc`)
 
 ```
-SSP ---gRPC---> Exchange ---OpenRTB/HTTP---> DSP
-                   |
-                   +---gRPC---> Ad Server ---gRPC---> Tracker
-                                                        |
-                                                  NATS (protobuf)
-                                                        |
-                                                    Reporting
+SSP ---gRPC---> Exchange ---gRPC---------> DSP (ours)
+  \                  \-----OpenRTB/HTTP--> 3rd-party / competitor DSPs
+   \--gRPC---> Ad Server   (creative HTML + signed pixel URLs)
+Browser ---HTTP pixels---> Tracker ---NATS (JSON)---> Reporting
 ```
 
-- SSP calls Exchange via gRPC to initiate an auction
-- Exchange calls DSPs via OpenRTB JSON/HTTP (industry standard for bidding)
-- Exchange calls Ad Server via gRPC to serve the winning creative
-- Ad Server calls Tracker via gRPC to record the impression
-- Tracker publishes events to NATS as protobuf messages
-- Reporting subscribes to NATS and aggregates
+- Each gRPC twin bridges into the **same `http.HandlerFunc`** that serves the
+  HTTP endpoint (`grpcx.Bridge`): one code path, two transports, zero drift.
+  The envelope carries the exact JSON body plus an HTTP-equivalent status, so
+  semantics like the ad server's 429 frequency-cap decline survive.
+- Trace context rides gRPC metadata through the same OTel propagator as HTTP
+  headers and NATS headers; `trace_id` flows into logs/Jaeger/analytics
+  identically on either transport. `adtech_grpc_*` metrics land in each
+  service's existing Prometheus registry.
+- Ad Server → Tracker is **not** a service call: the ad server bakes signed
+  pixel URLs into creative HTML and the browser fires them.
 
 ### Service Discovery
 
-Kubernetes internal DNS. A service calls another by its K8s service name (e.g. `exchange.default.svc:9090`). No service mesh, no Consul. Same locally and in prod.
+Kubernetes internal DNS. HTTP calls use the ClusterIP service name
+(e.g. `http://exchange:8081`). gRPC calls use the **headless** `<svc>-grpc`
+twin (e.g. `grpc://exchange-grpc:8181`) — `pkg/grpcx` dials `dns:///` with
+`round_robin` so RPCs spread across pod IPs instead of pinning one HTTP/2
+connection to a single pod via the ClusterIP. No service mesh, no Consul.
+Same locally and in prod.
 
 ### Proto Definitions
 
