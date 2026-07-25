@@ -185,6 +185,10 @@ func main() {
 	// Warm-start routing from reporting's dsp_calls history (ADR 0003) so a
 	// restarted exchange isn't cold. Async + fail-open — never blocks boot.
 	go warmStartRouter(cfg, router, log)
+	// Cross-replica router sync: periodic reseed from the cluster-global
+	// dsp_calls aggregate + reset broadcast (see routingsync.go). Own bus
+	// handle, same lifecycle independence as the warm-cache invalidate bus.
+	routerSync := startRoutingSync(cfg, router, connectInvalidateBus(cfg, log), log)
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
@@ -220,7 +224,9 @@ func main() {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			q := r.URL.Query()
 			if q.Get("reset") == "true" {
-				router.Reset()
+				// Broadcast so ALL replicas reset — a pod-local reset would
+				// leave N-1 pods trained on history the caller meant to wipe.
+				routerSync.broadcastReset(r.Context())
 				json.NewEncoder(w).Encode(map[string]any{"reset": true})
 				return
 			}

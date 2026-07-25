@@ -10944,6 +10944,7 @@ Each subject gets its own consumer, its own `FilterSubject`, and its own fetch g
 | `adtech.cache.invalidate.keys` | Gateway | All Tracker instances | CacheInvalidation{} |
 | `adtech.cache.invalidate.config` | Gateway | All service instances | CacheInvalidation{key} |
 | `adtech.cache.invalidate.house-ads` | Gateway (staff house-ad CRUD) | Publisher Ad Server instances | CacheInvalidation{id} |
+| `adtech.cache.invalidate.router-stats` | Exchange (debug routing reset) | All Exchange instances | {} — each pod wipes its SmartRouter and rebases its reseed watermark |
 
 Trace IDs are included in every JetStream message so events can be correlated across subjects. Cache invalidation messages are fire-and-forget (worst case: one stale cache cycle).
 

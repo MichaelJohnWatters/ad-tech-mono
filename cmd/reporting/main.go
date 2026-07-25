@@ -384,7 +384,16 @@ func main() {
 					hours = n
 				}
 			}
-			stats, err := agg.DSPCallStats(r.Context(), time.Now().Add(-time.Duration(hours)*time.Hour))
+			since := time.Now().Add(-time.Duration(hours) * time.Hour)
+			// since_ms (unix millis) overrides since_hours — the exchange's
+			// router reseed passes its reset watermark here so a broadcast
+			// reset genuinely forgets pre-reset history.
+			if ms := r.URL.Query().Get("since_ms"); ms != "" {
+				if n, err := strconv.ParseInt(ms, 10, 64); err == nil && n > 0 {
+					since = time.UnixMilli(n)
+				}
+			}
+			stats, err := agg.DSPCallStats(r.Context(), since)
 			if err != nil {
 				log.Error("dsp_call stats query failed", "error", err)
 				http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
