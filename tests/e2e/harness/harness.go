@@ -90,7 +90,14 @@ func DefaultURLs() URLs {
 		// Used when a test writes a config value that a pod will dial
 		// (e.g. exchange.dsp_endpoints, publisher_adserver.prebid_servers).
 		ClusterExchange: "http://exchange:" + routes.PortExchange,
-		ClusterDSP:      "http://dsp-internal:" + routes.PortDSP,
+		// ClusterDSP is the canonical exchange.dsp_endpoints ENTRY for our
+		// DSP, not a plain base URL: the bid edge rides the internal gRPC
+		// twin and ;notify= carries the HTTP base for OpenRTB win/loss
+		// notices (budget caps depend on them). Tests that override
+		// dsp_endpoints and restore with this value keep the deployed
+		// transport instead of silently reverting the stack to HTTP.
+		ClusterDSP: "grpc://dsp-internal-grpc:" + routes.PortDSPGRPC +
+			";notify=http://dsp-internal:" + routes.PortDSP,
 		ClusterDSPComp1: "http://dsp-competitor1:" + routes.PortDSPComp1,
 		ClusterDSPComp2: "http://dsp-competitor2:" + routes.PortDSPComp2,
 		ClusterTracker:  "http://tracker:" + routes.PortTracker,
