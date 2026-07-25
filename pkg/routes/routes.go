@@ -746,6 +746,13 @@ const (
 	PortTranscoder        = "8094"
 	PortReportRunner      = "8095"
 	PortNotifications     = "8096"
+	// 81xx = internal gRPC twin of the service's 80xx HTTP port. Only edges
+	// where this platform owns both ends listen here (see pkg/grpcx);
+	// external boundaries stay OpenRTB/HTTP.
+	PortExchangeGRPC = "8181"
+	PortDSPGRPC      = "8182"
+	PortAdServerGRPC = "8185"
+
 	PortClickHouseHTTP    = "8123"
 	PortClickHouseNative  = "9010"
 	PortGrafana           = "3000"

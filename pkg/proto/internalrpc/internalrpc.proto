@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package adtech.internalrpc;
+
+option go_package = "github.com/MichaelJohnWatters/ad-tech-mono/pkg/proto/internalrpc";
+
+// Internal-only gRPC twins of the platform's hot-path HTTP endpoints.
+//
+// These services exist ONLY for edges where this platform owns both ends
+// (SSP -> exchange, exchange -> our own DSP, SSP -> ad server). Every
+// boundary an external party can sit on stays industry-standard OpenRTB
+// JSON/HTTP: the exchange's fan-out to third-party DSPs, win/loss notices,
+// browser-facing serving and trackers. Which transport an edge uses is
+// decided per-endpoint by URL scheme (grpc:// vs http://) in live config,
+// so rollback is a config value, not a deploy.
+//
+// The request/response `body` is byte-for-byte the JSON the HTTP twin
+// endpoint exchanges (OpenRTB BidRequest/BidResponse, models.ServeRequest/
+// ServeResponse). Servers bridge into the exact same http.HandlerFunc that
+// serves the HTTP twin — one code path, two transports, zero behavioural
+// drift. `status` carries the HTTP-equivalent status code so semantics
+// like the ad server's 429 frequency-cap decline survive the transport.
+
+// InternalAuctionService is the gRPC twin of POST /v1/openrtb/auction (exchange).
+service InternalAuctionService {
+  rpc RunAuction(RunAuctionRequest) returns (RunAuctionResponse);
+}
+
+// InternalBidService is the gRPC twin of POST /v1/openrtb/bid (our DSP only —
+// third-party DSPs are always called over OpenRTB HTTP).
+service InternalBidService {
+  rpc Bid(BidRequest) returns (BidResponse);
+}
+
+// InternalAdServeService is the gRPC twin of POST /v1/ad/serve (ad server).
+service InternalAdServeService {
+  rpc Serve(ServeRequest) returns (ServeResponse);
+}
+
+message RunAuctionRequest {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin accepts (OpenRTB BidRequest).
+  bytes body = 2;
+  // Forwarded control headers (e.g. X-Dev-Slow-DSPs). Trace context rides
+  // gRPC metadata via the otel propagator, never here.
+  map<string, string> headers = 3;
+}
+
+message RunAuctionResponse {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin returns (OpenRTB BidResponse).
+  bytes body = 2;
+  // HTTP-equivalent status code from the bridged handler.
+  int32 status = 3;
+}
+
+message BidRequest {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin accepts (OpenRTB BidRequest).
+  bytes body = 2;
+  // Forwarded control headers (e.g. X-Dev-Delay-Ms).
+  map<string, string> headers = 3;
+}
+
+message BidResponse {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin returns (OpenRTB BidResponse).
+  bytes body = 2;
+  // HTTP-equivalent status code from the bridged handler.
+  int32 status = 3;
+}
+
+message ServeRequest {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin accepts (models.ServeRequest).
+  bytes body = 2;
+  map<string, string> headers = 3;
+}
+
+message ServeResponse {
+  uint32 schema_version = 1;
+  // Exact JSON body the HTTP twin returns (models.ServeResponse).
+  bytes body = 2;
+  // HTTP-equivalent status; 429 = frequency-cap decline (normal no-fill).
+  int32 status = 3;
+}
