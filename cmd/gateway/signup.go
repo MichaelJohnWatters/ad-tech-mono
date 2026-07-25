@@ -48,8 +48,8 @@ func signupHandler(store signupStore, signingKey string, log *slog.Logger) http.
 			http.Error(w, "name, email and password are required", http.StatusBadRequest)
 			return
 		}
-		if len(in.Password) < 6 {
-			http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+		if len(in.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
 			return
 		}
 		if in.AccountType != string(auth.AccountAdvertiser) && in.AccountType != string(auth.AccountPublisher) {

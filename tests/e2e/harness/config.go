@@ -75,12 +75,40 @@ func (h *Harness) putConfig(key, value, podID string) (*http.Response, error) {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+		// /v1/config is auth-gated (config:update for PUT). Authenticate with an
+		// admin bearer minted from the dev token endpoint (available because the
+		// e2e stack runs debug.endpoints_enabled=true).
+		if tok := h.adminBearer(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 		resp, err = h.HTTP.Do(req)
 		if err == nil {
 			return resp, nil
 		}
 	}
 	return nil, err
+}
+
+// adminBearer mints (once, cached) an admin JWT via the dev token endpoint and
+// caches it on the harness. Used to authenticate the auth-gated /v1/config PUTs.
+// Best-effort: returns "" on failure (the caller's PUT then fails loudly, which
+// is the right signal — the endpoint IS gated).
+func (h *Harness) adminBearer() string {
+	if h.adminTok != "" {
+		return h.adminTok
+	}
+	resp, err := h.HTTP.Post(h.URLs.Gateway+routes.AuthToken, "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Token string `json:"token"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) == nil {
+		h.adminTok = out.Token
+	}
+	return h.adminTok
 }
 
 // RestoreConfigForPod is the cleanup counterpart of SetConfigForPod. Tests
