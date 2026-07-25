@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -30,6 +31,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/floors"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/grpcx"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
@@ -607,33 +609,53 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	)
 
 	body, _ := json.Marshal(bidReq)
-	exReq, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
-	if err != nil {
-		reqLog.Error("build exchange request", "error", err)
-		http.Error(w, "exchange request build failed", http.StatusInternalServerError)
-		return auctionContext{}, false
-	}
-	exReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	// Propagate the inbound X-Dev-Slow-DSPs only when debug endpoints are
 	// enabled. Real publisher requests don't set this header so prod is
 	// effectively unaffected, but defence-in-depth: prod with the flag
 	// off won't pass it through even if a malicious upstream injects it.
+	var devHeaders map[string]string
 	if debugEnabledFn() {
 		if v := r.Header.Get("X-Dev-Slow-DSPs"); v != "" {
-			exReq.Header.Set("X-Dev-Slow-DSPs", v)
+			devHeaders = map[string]string{"X-Dev-Slow-DSPs": v}
 		}
 	}
-	tracing.InjectHTTP(ctx, exReq)
-	resp, err := http.DefaultClient.Do(exReq)
-	if err != nil {
-		reqLog.Error("exchange call failed", "error", err)
-		http.Error(w, "exchange unavailable", http.StatusBadGateway)
-		return auctionContext{}, false
+	var respBody []byte
+	if grpcx.IsURL(exchangeURL) {
+		// Internal fast path: the exchange is ours, so this edge rides the
+		// gRPC twin of /v1/openrtb/auction. Same JSON, same handler on the
+		// far side — a non-200 falls through to the decode below and lands
+		// on the no-winner path, exactly like the HTTP branch.
+		_, rb, err := grpcx.RunAuction(ctx, grpcx.Target(exchangeURL), body, devHeaders)
+		if err != nil {
+			reqLog.Error("exchange call failed", "error", err)
+			http.Error(w, "exchange unavailable", http.StatusBadGateway)
+			return auctionContext{}, false
+		}
+		respBody = rb
+	} else {
+		exReq, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
+		if err != nil {
+			reqLog.Error("build exchange request", "error", err)
+			http.Error(w, "exchange request build failed", http.StatusInternalServerError)
+			return auctionContext{}, false
+		}
+		exReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		for k, v := range devHeaders {
+			exReq.Header.Set(k, v)
+		}
+		tracing.InjectHTTP(ctx, exReq)
+		resp, err := http.DefaultClient.Do(exReq)
+		if err != nil {
+			reqLog.Error("exchange call failed", "error", err)
+			http.Error(w, "exchange unavailable", http.StatusBadGateway)
+			return auctionContext{}, false
+		}
+		defer resp.Body.Close()
+		respBody, _ = io.ReadAll(resp.Body)
 	}
-	defer resp.Body.Close()
 
 	var bidResp openrtb.BidResponse
-	json.NewDecoder(resp.Body).Decode(&bidResp)
+	json.Unmarshal(respBody, &bidResp)
 
 	// Data monetization: if fee-bearing audience data rode this request and
 	// an EXTERNAL bidder won, publish the attribution record (fire-and-
@@ -909,39 +931,57 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			Device: r.URL.Query().Get("device"),
 		}
 		body, _ := json.Marshal(serveReq)
-		adReq, err := http.NewRequestWithContext(ctx, http.MethodPost, adServerURL+routes.AdServe, bytes.NewReader(body))
-		if err != nil {
-			reqLog.Error("build ad server request", "error", err)
-			http.Error(w, "ad server request build failed", http.StatusInternalServerError)
-			return
+		var adStatus int
+		var adBody []byte
+		if grpcx.IsURL(adServerURL) {
+			// Internal fast path: the ad server is ours, so this edge rides
+			// the gRPC twin of /v1/ad/serve. The envelope carries the
+			// HTTP-equivalent status so the 429 frequency-cap decline below
+			// behaves identically on either transport.
+			st, rb, err := grpcx.ServeAd(ctx, grpcx.Target(adServerURL), body, nil)
+			if err != nil {
+				reqLog.Error("ad server call failed", "error", err)
+				http.Error(w, "ad server unavailable", http.StatusBadGateway)
+				return
+			}
+			adStatus, adBody = st, rb
+		} else {
+			adReq, err := http.NewRequestWithContext(ctx, http.MethodPost, adServerURL+routes.AdServe, bytes.NewReader(body))
+			if err != nil {
+				reqLog.Error("build ad server request", "error", err)
+				http.Error(w, "ad server request build failed", http.StatusInternalServerError)
+				return
+			}
+			adReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			tracing.InjectHTTP(ctx, adReq)
+			adResp, err := http.DefaultClient.Do(adReq)
+			if err != nil {
+				reqLog.Error("ad server call failed", "error", err)
+				http.Error(w, "ad server unavailable", http.StatusBadGateway)
+				return
+			}
+			defer adResp.Body.Close()
+			adStatus = adResp.StatusCode
+			adBody, _ = io.ReadAll(adResp.Body)
 		}
-		adReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		tracing.InjectHTTP(ctx, adReq)
-		adResp, err := http.DefaultClient.Do(adReq)
-		if err != nil {
-			reqLog.Error("ad server call failed", "error", err)
-			http.Error(w, "ad server unavailable", http.StatusBadGateway)
-			return
-		}
-		defer adResp.Body.Close()
 		// The ad server can decline to render even after an auction win — most
 		// commonly a frequency cap (429), which is a normal no-fill, not an
 		// error. Treat any non-200 as an unfilled opportunity and return the
 		// same nobid response the no-winner path uses, instead of JSON-decoding
 		// a plain-text error body (which produced spurious "decode failed"
 		// ERRORs + 502s: "frequency cap exceeded" parses as a bad `false`).
-		if adResp.StatusCode != http.StatusOK {
-			if adResp.StatusCode == http.StatusTooManyRequests {
-				reqLog.Debug("ad server declined: frequency cap", "status", adResp.StatusCode)
+		if adStatus != http.StatusOK {
+			if adStatus == http.StatusTooManyRequests {
+				reqLog.Debug("ad server declined: frequency cap", "status", adStatus)
 			} else {
-				reqLog.Warn("ad server declined to render", "status", adResp.StatusCode)
+				reqLog.Warn("ad server declined to render", "status", adStatus)
 			}
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
 			return
 		}
 		var sr models.ServeResponse
-		if err := json.NewDecoder(adResp.Body).Decode(&sr); err != nil {
+		if err := json.Unmarshal(adBody, &sr); err != nil {
 			reqLog.Error("ad server response decode failed", "error", err)
 			http.Error(w, "ad server bad response", http.StatusBadGateway)
 			return

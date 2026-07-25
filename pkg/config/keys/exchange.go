@@ -36,8 +36,9 @@ var Exchange = struct {
 	IdentityObserveEnabled config.BoolKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
-	URL  config.StringKey
-	Port config.StringKey
+	URL      config.StringKey
+	Port     config.StringKey
+	GRPCPort config.StringKey
 
 	RoutingMinCalls config.IntKey
 }{
@@ -64,5 +65,6 @@ var Exchange = struct {
 	IdentityObserveEnabled: exchangeSet.Bool("exchange.identity_observe_enabled", "false", config.TierStatic, "Publish identity signals from inbound Prebid bid requests (external demand our own SSP never saw) to the identity-consumer, which builds identity_graph edges. Fire-and-forget, off the hot path. Off by default; needs NATS.", config.Since("v1.4")),
 	URL:                    config.RawString("exchange.url", routes.DefaultExchangeURL),
 	Port:                   config.RawString("exchange.port", routes.PortExchange),
+	GRPCPort:               config.RawString("exchange.grpc_port", routes.PortExchangeGRPC),
 	RoutingMinCalls:        config.RawInt("exchange.routing_min_calls", 20),
 }

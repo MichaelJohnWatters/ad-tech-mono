@@ -136,7 +136,11 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	mux.HandleFunc(routes.AdServe, serveHandler(log, resolver, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value))
+	serve := serveHandler(log, resolver, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value)
+	mux.HandleFunc(routes.AdServe, serve)
+	// Internal gRPC twin of the serve endpoint — the SSP's fast path.
+	// Browser-facing creative/asset endpoints stay HTTP.
+	startInternalGRPC(lc, cfg, log, metrics, serve)
 
 	mux.HandleFunc(routes.AdBandit, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)

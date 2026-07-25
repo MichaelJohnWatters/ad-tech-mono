@@ -29,8 +29,9 @@ var AdServer = struct {
 	RateLimitAllowlist        config.StringKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
-	URL  config.StringKey
-	Port config.StringKey
+	URL      config.StringKey
+	Port     config.StringKey
+	GRPCPort config.StringKey
 
 	NATSURL config.StringKey
 }{
@@ -50,5 +51,6 @@ var AdServer = struct {
 	RateLimitAllowlist:        adServerSet.String("adserver.ratelimit_allowlist", DefaultRateLimitAllowlist, config.TierLive, "Comma-separated CIDRs/IPs that BYPASS the ad server rate limit. Defaults to loopback + private/link-local ranges so internal + local traffic is never throttled. Only consulted when adserver.ratelimit_rps > 0 (off by default — ad serving is high-volume and better shielded at the CDN/WAF).", config.Since("v1.17")),
 	URL:                       config.RawString("adserver.url", routes.DefaultAdServerURL),
 	Port:                      config.RawString("adserver.port", routes.PortAdServer),
+	GRPCPort:                  config.RawString("adserver.grpc_port", routes.PortAdServerGRPC),
 	NATSURL:                   config.RawString("adserver.nats_url", routes.DefaultNATSURL),
 }

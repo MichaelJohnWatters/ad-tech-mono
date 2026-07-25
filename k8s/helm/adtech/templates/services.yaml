@@ -47,6 +47,10 @@ spec:
             - containerPort: {{ .port }}
               name: {{ .name }}
             {{- end }}
+            {{- with $svc.grpcPort }}
+            - containerPort: {{ . }}
+              name: grpc
+            {{- end }}
           {{- with $svc.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
@@ -112,6 +116,29 @@ spec:
       port: {{ .port }}
       targetPort: {{ .port }}
     {{- end }}
+{{- if $svc.grpcPort }}
+---
+# Headless twin for the internal gRPC port: clients dial
+# grpc://<name>-grpc:<port> and pkg/grpcx resolves pod IPs via DNS
+# (dns:///) with round_robin, spreading RPCs across replicas. A normal
+# ClusterIP would pin each client's single multiplexed HTTP/2 conn to
+# one pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-grpc
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  clusterIP: None
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: grpc
+      port: {{ $svc.grpcPort }}
+      targetPort: {{ $svc.grpcPort }}
+{{- end }}
 {{- if $svc.ingress }}
 {{- $tls := $.Values.tls | default dict }}
 {{- /* Ingress hostnames derive from ONE knob: global.domain (default adtech.local).

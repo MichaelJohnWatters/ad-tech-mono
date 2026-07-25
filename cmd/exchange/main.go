@@ -25,6 +25,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/grpcx"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
@@ -273,6 +274,9 @@ func main() {
 	mux.HandleFunc(routes.PrebidSetUID, prebidSetUIDHandler(log))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceExchange)(metrics.Wrap(middleware.CORS(mux)))
+
+	// Internal gRPC twin of the auction endpoint — our SSP's fast path.
+	startInternalGRPC(lc, cfg, log, metrics, auction)
 
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 
@@ -921,36 +925,64 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 
 		go func() {
 			body, _ := json.Marshal(bidReq)
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-				endpoint+routes.OpenRTBBid, bytes.NewReader(body))
-			if err != nil {
-				ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err}
-				return
-			}
-			req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			// Inject the W3C trace context so the DSP-side server span
-			// becomes a child of this fanout span in Jaeger.
-			tracing.InjectHTTP(ctx, req)
-			// Dev-mode: if the inbound auction request flagged this DSP
-			// index as "slow," tell the DSP to add artificial latency.
-			// DSP gates the header on debug.endpoints_enabled.
-			if slowDSPs[i] {
-				req.Header.Set("X-Dev-Delay-Ms", "150")
-			}
+			var respBody []byte
+			var responseTime time.Duration
+			if grpcx.IsURL(endpoint) {
+				// Our own DSP: ride the gRPC twin of /v1/openrtb/bid. Only
+				// demand we own is ever configured with a grpc:// endpoint —
+				// third-party DSPs always take the OpenRTB HTTP branch below.
+				// Same JSON, same bid handler on the far side; the client
+				// *http.Client timeout is mirrored as a ctx deadline.
+				var hdrs map[string]string
+				if slowDSPs[i] {
+					hdrs = map[string]string{"X-Dev-Delay-Ms": "150"}
+				}
+				cctx := ctx
+				if client.Timeout > 0 {
+					var cancel context.CancelFunc
+					cctx, cancel = context.WithTimeout(ctx, client.Timeout)
+					defer cancel()
+				}
+				start := time.Now()
+				_, rb, err := grpcx.Bid(cctx, grpcx.Target(endpoint), body, hdrs)
+				responseTime = time.Since(start)
+				if err != nil {
+					timedOut := cctx.Err() != nil || strings.Contains(err.Error(), "deadline")
+					ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err, latency: responseTime, timedOut: timedOut}
+					return
+				}
+				respBody = rb
+			} else {
+				req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+					endpoint+routes.OpenRTBBid, bytes.NewReader(body))
+				if err != nil {
+					ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err}
+					return
+				}
+				req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				// Inject the W3C trace context so the DSP-side server span
+				// becomes a child of this fanout span in Jaeger.
+				tracing.InjectHTTP(ctx, req)
+				// Dev-mode: if the inbound auction request flagged this DSP
+				// index as "slow," tell the DSP to add artificial latency.
+				// DSP gates the header on debug.endpoints_enabled.
+				if slowDSPs[i] {
+					req.Header.Set("X-Dev-Delay-Ms", "150")
+				}
 
-			start := time.Now()
-			resp, err := client.Do(req)
-			responseTime := time.Since(start)
-			if err != nil {
-				// Distinguish timeouts from other failures so the router
-				// can penalise high-timeout DSPs specifically.
-				timedOut := ctx.Err() != nil || strings.Contains(err.Error(), "deadline")
-				ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err, latency: responseTime, timedOut: timedOut}
-				return
+				start := time.Now()
+				resp, err := client.Do(req)
+				responseTime = time.Since(start)
+				if err != nil {
+					// Distinguish timeouts from other failures so the router
+					// can penalise high-timeout DSPs specifically.
+					timedOut := ctx.Err() != nil || strings.Contains(err.Error(), "deadline")
+					ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err, latency: responseTime, timedOut: timedOut}
+					return
+				}
+				defer resp.Body.Close()
+				respBody, _ = io.ReadAll(resp.Body)
 			}
-			defer resp.Body.Close()
-
-			respBody, _ := io.ReadAll(resp.Body)
 			var bidResp openrtb.BidResponse
 			if err := json.Unmarshal(respBody, &bidResp); err != nil {
 				ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err, latency: responseTime}

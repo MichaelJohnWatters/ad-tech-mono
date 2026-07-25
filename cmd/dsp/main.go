@@ -230,7 +230,14 @@ func main() {
 	identityResolver, identityStop := openIdentityResolver(cfg, log)
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
-	mux.HandleFunc(routes.OpenRTBBid, bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked))
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked)
+	mux.HandleFunc(routes.OpenRTBBid, bid)
+	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
+	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
+	// DSP stays OpenRTB HTTP. Competitor-profile pods also listen but nothing
+	// dials them over gRPC — their endpoints stay http:// to keep the
+	// industry-standard path exercised in every auction.
+	startInternalGRPC(lc, cfg, log, metrics, bid)
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))

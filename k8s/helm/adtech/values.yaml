@@ -97,6 +97,7 @@ services:
     replicas: 3
     containerName: dsp
     ports: [{ name: http, port: 8082 }]
+    grpcPort: 8182
     env:
       - name: POD_NAME
         value: "dsp-internal-0"
@@ -216,10 +217,14 @@ services:
         value: "redis:6379"
       - name: POD_NAME
         value: "ssp-0"
+      # grpc:// scheme = internal gRPC twin (pkg/grpcx), dialled via the
+      # headless -grpc service so RPCs round-robin across replicas. Flip
+      # back to http://exchange:8081 / http://adserver:8085 to roll back —
+      # it's a config value, not a deploy.
       - name: SSP_EXCHANGE_URL
-        value: "http://exchange:8081"
+        value: "grpc://exchange-grpc:8181"
       - name: SSP_ADSERVER_URL
-        value: "http://adserver:8085"
+        value: "grpc://adserver-grpc:8185"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -246,11 +251,15 @@ services:
     image: adtech-exchange
     replicas: 3
     ports: [{ name: http, port: 8081 }]
+    grpcPort: 8181
     env:
       - name: POD_NAME
         value: "exchange-0"
+      # Our own DSP rides the internal gRPC twin; the competitor DSPs stay
+      # OpenRTB HTTP deliberately — they stand in for third-party demand,
+      # so the industry-standard path is exercised in every auction.
       - name: EXCHANGE_DSP_ENDPOINTS
-        value: "http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
+        value: "grpc://dsp-internal-grpc:8182,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
       - name: EXCHANGE_ADSERVER_URL
         value: "http://adserver:8085"
       - name: DATABASE_URL
@@ -279,6 +288,7 @@ services:
     image: adtech-adserver
     replicas: 3
     ports: [{ name: http, port: 8085 }]
+    grpcPort: 8185
     env:
       - name: POD_NAME
         value: "adserver-0"

@@ -36,8 +36,9 @@ var DSP = struct {
 	BalanceGateEnabled                 config.BoolKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
-	URL  config.StringKey
-	Port config.StringKey
+	URL      config.StringKey
+	Port     config.StringKey
+	GRPCPort config.StringKey
 
 	NATSURL config.StringKey
 }{
@@ -64,5 +65,6 @@ var DSP = struct {
 	BalanceGateEnabled:                 dspSet.Bool("dsp.balance_gate_enabled", "true", config.TierLive, "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", config.Since("v1.2")),
 	URL:                                config.RawString("dsp.url", routes.DefaultDSPURL),
 	Port:                               config.RawString("dsp.port", routes.PortDSP),
+	GRPCPort:                           config.RawString("dsp.grpc_port", routes.PortDSPGRPC),
 	NATSURL:                            config.RawString("dsp.nats_url", routes.DefaultNATSURL),
 }
