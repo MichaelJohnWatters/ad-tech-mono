@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -115,6 +116,33 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 // right answerer). Without this, wrapping ClickHouse in HotColdStore hid its
 // DebugReader and the /debug endpoints 501'd on the full-local stack.
 func (t *HotColdStore) HotStore() Store { return t.hot }
+
+// Warm-start aggregators — optional capabilities discovered by type
+// assertion on the reporting store, so the wrapper must forward them or
+// wrapping ClickHouse silently strips them: the exchange routing
+// warm-start/reseed and the ad-server bandit warm-start 501'd whenever
+// reporting.cold_store_enabled was on. Both windows are minutes-to-hours,
+// squarely inside the hot window, so hot-only is the right answerer.
+var (
+	_ DSPCallAggregator      = (*HotColdStore)(nil)
+	_ CreativeStatAggregator = (*HotColdStore)(nil)
+)
+
+func (t *HotColdStore) DSPCallStats(ctx context.Context, since time.Time) ([]DSPCallStat, error) {
+	agg, ok := t.hot.(DSPCallAggregator)
+	if !ok {
+		return nil, fmt.Errorf("hot store does not aggregate dsp_calls")
+	}
+	return agg.DSPCallStats(ctx, since)
+}
+
+func (t *HotColdStore) CreativeStats(ctx context.Context, since time.Time) ([]CreativeStat, error) {
+	agg, ok := t.hot.(CreativeStatAggregator)
+	if !ok {
+		return nil, fmt.Errorf("hot store does not aggregate creative stats")
+	}
+	return agg.CreativeStats(ctx, since)
+}
 
 // ObservabilityWriter — operational signals (no-fills, freq-cap blocks,
 // render failures, rejections, state changes, depletions) forward to the hot
