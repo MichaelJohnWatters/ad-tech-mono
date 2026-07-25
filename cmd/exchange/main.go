@@ -180,8 +180,29 @@ func main() {
 	// handler asks it to filter the fan-out list each request so we stop
 	// calling DSPs that haven't bid in a long time.
 	router := optimise.NewSmartRouter()
-	routerMinCalls := keys.Exchange.RoutingMinCalls.Get(cfg)
-	_ = routerMinCalls // SmartRouter uses 20 as a hardcoded threshold today
+	// Live routing knobs: every threshold the router acts on reads config
+	// per selection, so the staff portal's exchange.routing_* edits apply
+	// within the config poll interval — no restart.
+	router.SetKnobs(func() optimise.Knobs {
+		k := optimise.DefaultKnobs()
+		k.Enabled = keys.Exchange.RoutingEnabled.Get(cfg)
+		k.MinCalls = int64(keys.Exchange.RoutingMinCalls.Get(cfg))
+		k.MinBidRate = keys.Exchange.RoutingMinBidRate.Get(cfg)
+		k.MaxTimeoutRate = keys.Exchange.RoutingMaxTimeoutRate.Get(cfg)
+		k.ExplorePct = keys.Exchange.RoutingExplorePct.Get(cfg)
+		k.LatencySoft = keys.Exchange.RoutingLatencySoft.Get(cfg)
+		k.LatencyHard = keys.Exchange.RoutingLatencyHard.Get(cfg)
+		if raw := keys.Exchange.RoutingNeverSkip.Get(cfg); raw != "" {
+			set := make(map[string]struct{})
+			for _, e := range strings.Split(raw, ",") {
+				if e = strings.TrimSpace(e); e != "" {
+					set[e] = struct{}{}
+				}
+			}
+			k.NeverSkip = set
+		}
+		return k
+	})
 	// Warm-start routing from reporting's dsp_calls history (ADR 0003) so a
 	// restarted exchange isn't cold. Async + fail-open — never blocks boot.
 	go warmStartRouter(cfg, router, log)
@@ -448,10 +469,11 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 
 		// Smart routing: filter the DSP list to the ones likely to bid.
 		// First-time/unseen DSPs get a neutral score and stay in. Heavy no-bid
-		// or timeout patterns drop a DSP for this auction (still gets occasional
-		// traffic via the periodic poll model — see optimise.SmartRouter).
+		// or timeout patterns drop a DSP for this auction — except on the
+		// deterministic ε-probe slice (exchange.routing_explore_pct), which
+		// keeps a skipped DSP's stats flowing so it can earn its way back.
 		dspEndpoints := dspEndpointsFn()
-		selectedEndpoints := router.SelectDSPs(routingChannel, dspEndpoints)
+		selectedEndpoints := router.SelectDSPsForTrace(routingChannel, dspEndpoints, traceID)
 		if len(selectedEndpoints) == 0 {
 			// Safety floor: if the router would skip everyone (cold start edge
 			// case or learned-bad state), fall back to the full list. We never
