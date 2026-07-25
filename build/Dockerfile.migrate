@@ -10,8 +10,9 @@
 #   docker build -f build/Dockerfile.migrate -t adtech-migrate .
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
 COPY bin/migrate /app
 COPY migrations /migrations
 ENV MIGRATIONS_DIR=/migrations
+USER 1000:1000
 ENTRYPOINT ["/app"]

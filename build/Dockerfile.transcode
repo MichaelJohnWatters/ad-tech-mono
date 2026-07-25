@@ -9,8 +9,9 @@
 # Prereq: ./bin/${SERVICE} built on the host (the Tiltfile's ${svc}-build does this).
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates ffmpeg
+RUN apk add --no-cache ca-certificates ffmpeg && adduser -D -u 1000 app
 ARG SERVICE
 COPY bin/${SERVICE} /app
 WORKDIR /
+USER 1000:1000
 ENTRYPOINT ["/app"]

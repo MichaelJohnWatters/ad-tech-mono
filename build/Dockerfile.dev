@@ -21,7 +21,10 @@
 # build/Dockerfile.reporting for the variants).
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+# Non-root runtime user (uid 1000). Pairs with the gated pod securityContext
+# (global.hardenedContainers). Static Go binary binding a high port + writing
+# only /tmp — no root needed. COPY leaves /app + assets world-readable.
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
 ARG SERVICE
 COPY bin/${SERVICE} /app
 # Optional service-specific assets (gateway needs web/, others don't).
@@ -33,4 +36,5 @@ COPY web /web
 # defaults-only behaviour in pod mode.
 COPY profiles /profiles
 WORKDIR /
+USER 1000:1000
 ENTRYPOINT ["/app"]
