@@ -33,6 +33,13 @@ global:
   # (/v1/auth/token — mints admin JWTs with no credential), and the /dev/* console.
   # MUST stay false in prod.
   debugEndpoints: false
+  # Container + network hardening (gated templates, default off). Enable AFTER
+  # validating in staging — see docs/SECURITY_HARDENING.md:
+  #   hardenedContainers → pod runs non-root + drop ALL caps + seccomp. REQUIRES
+  #     the images to have a non-root USER (build/Dockerfile*); turn on together.
+  #   networkPolicies    → default-deny ingress + same-namespace/Traefik allows.
+  # hardenedContainers: true
+  # networkPolicies: true
 
 # TLS: real Let's Encrypt certs via cert-manager (install cert-manager + define
 # the `letsencrypt-prod` ClusterIssuer out-of-band once). The Ingress template
