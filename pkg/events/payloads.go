@@ -32,6 +32,33 @@ type AuctionWinEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// DataFeeSegment is one fee-bearing segment that rode a won bid request:
+// who owns the data and what it costs (CPM in MICRO-dollars).
+type DataFeeSegment struct {
+	SegmentID      string `json:"segment_id"`
+	OwnerAccountID string `json:"owner_account_id"`
+	FeeMicros      int64  `json:"fee_micros"`
+}
+
+// DataFeeEvent is published by the SSP when an EXTERNAL bidder wins an
+// auction whose bid request carried fee-bearing audience data (public,
+// taxonomy-labelled segments stamped as user.data — consent already gated at
+// the stamp). It is the attribution record for data monetization: reporting
+// holds it (durable, data_fee_pending) until the impression for the trace
+// arrives, then accrues the fee to each segment owner net of platform
+// margin. Deliberately a separate event — segment owners and fees must never
+// ride the bid request itself, which external parties receive verbatim.
+type DataFeeEvent struct {
+	SchemaVersion int              `json:"schema_version"`
+	TraceID       string           `json:"trace_id"`
+	PlacementID   string           `json:"placement_id"`
+	PublisherID   string           `json:"publisher_id"`
+	WinnerSeat    string           `json:"winner_seat"`
+	Segments      []DataFeeSegment `json:"segments"`
+	ClearingPrice float64          `json:"clearing_price"`
+	Timestamp     time.Time        `json:"timestamp"`
+}
+
 // CampaignSpendSnapshotEvent is the periodic per-campaign committed-spend
 // broadcast from Reporting (billing engine) to every DSP pod. Committed maps a
 // campaign id (the line-item UUID) to committed spend in MICRO-DOLLARS (1 USD = 1e6 µ) for the given

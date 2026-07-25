@@ -137,6 +137,12 @@ serve: Live auction path {
 extdsp: External DSPs (extbidder et al) - receive user.data ext.segtax=4 {shape: hexagon}
 serve.exchange -> extdsp: OpenRTB over the network boundary
 
+# Data monetization (ADR 0009): fee-bearing labelled segments earn for their
+# owner when an external buyer wins - attribution NEVER rides the request
+# (SSP publishes DataFeeEvent; reporting accrues at impression).
+datafee_out: "Data earnings - owner credited fee x (1 - margin) per delivered impression" {shape: page}
+serve.stamp -> datafee_out: DataFeeEvent on external win {style.stroke-dash: 3}
+
 redis -> serve.stamp: 25ms budget {style.stroke-dash: 2}
 redis -> serve.dsp: 25ms budget {style.stroke-dash: 2}
 pg_graph -> serve.dsp: read-time BFS freshness top-up (opt-in) {style.stroke-dash: 2}

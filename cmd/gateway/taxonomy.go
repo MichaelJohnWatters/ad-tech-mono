@@ -48,6 +48,97 @@ type audienceTaxonomyRequest struct {
 	TaxonomyID *int64 `json:"taxonomy_id"`
 }
 
+// audienceEarningsHandler serves GET /v1/api/audiences/earnings — the
+// account's accrued data-fee earnings per segment (data_fee_earnings,
+// migration 063). Tenant-scoped from the JWT claims.
+func audienceEarningsHandler(store *audiencepg.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "audiences:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		rows, err := store.DataEarnings(r.Context(), claims.AccountID)
+		if err != nil {
+			log.Error("data earnings query failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(rows)
+	}
+}
+
+// audienceFeeRequest sets (data_fee_micros present, >= 0) or clears (null/
+// absent) a segment's data fee — CPM in micro-dollars.
+type audienceFeeRequest struct {
+	SegmentID     string `json:"segment_id"`
+	DataFeeMicros *int64 `json:"data_fee_micros"`
+}
+
+// audienceFeeHandler serves PUT /v1/api/audiences/fee. Same contract as the
+// taxonomy handler: tenant-scoped write + audience cache invalidate so every
+// SSP pod's monetization map refreshes in seconds.
+func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPut {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "audiences:upload") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		var req audienceFeeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SegmentID == "" {
+			http.Error(w, `{"error":"segment_id required"}`, http.StatusBadRequest)
+			return
+		}
+		if req.DataFeeMicros != nil && *req.DataFeeMicros < 0 {
+			http.Error(w, `{"error":"data_fee_micros must be >= 0"}`, http.StatusBadRequest)
+			return
+		}
+		if err := store.SetSegmentDataFee(r.Context(), claims.AccountID, req.SegmentID, req.DataFeeMicros); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				http.Error(w, `{"error":"segment not found"}`, http.StatusNotFound)
+				return
+			}
+			log.Error("set segment data fee failed", "segment", req.SegmentID, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if bus != nil {
+			payload := []byte(`{"segment_id":"` + req.SegmentID + `","account_id":"` + claims.AccountID + `"}`)
+			if err := bus.Publish(r.Context(), events.SubjectCacheInvalidateAudience, payload); err != nil {
+				log.Warn("data-fee invalidate publish failed", "segment", req.SegmentID, "error", err)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // audienceTaxonomyHandler serves PUT /v1/api/audiences/taxonomy. The segment
 // is resolved under the authenticated account — labelling another tenant's
 // segment is a 404, same contract as every other segment write. A successful

@@ -36,6 +36,7 @@ var Reporting = struct {
 	HotWindow                    config.DurationKey
 	ClickHouseTTLDays            config.IntKey
 	QueryTimeout                 config.DurationKey
+	DataFeeMarginPct             config.FloatKey
 
 	// URL is the reporting service's base URL, bridged from REPORTING_URL
 	// by Setup in pod mode. Not in the schema (see keys.go on Raw handles);
@@ -46,6 +47,7 @@ var Reporting = struct {
 	NATSURL:                      reportingSet.String("reporting.nats_url", "nats://localhost:4222", config.TierStatic, "NATS JetStream URL the reporting service consumes events from.", config.Since("v1.0")),
 	RollupEnabled:                reportingSet.Bool("reporting.rollup_enabled", "false", config.TierLive, "Run scheduled rollups (minute/hour/day/month aggregates) inside this pod. Off in dev; on in prod where rollup ownership is centralised here.", config.Since("v1.0")),
 	BillingEnabled:               reportingSet.Bool("reporting.billing_enabled", "true", config.TierLive, "Accrue billable spend in the billing ledger as AuctionWinEvents arrive. Disable to silence billing side-effects during replays.", config.Since("v1.0")),
+	DataFeeMarginPct:             reportingSet.Float("reporting.data_fee_margin_pct", "30", config.TierLive, "Platform margin on data-monetization fees, percent 0-100. When an external buyer wins on a request carrying a fee-bearing segment, the segment owner is credited fee×(1−margin/100) per impression; the platform retains the rest. 30 = owner keeps 70%.", config.Since("v1.11")),
 	WarmBillingRatesPollInterval: reportingSet.Duration("cache.warm.billing_rates.poll_interval", "300s", config.TierStatic, "How often the publisher billing-rate cache refreshes. Long interval is fine — rates rarely change and a stale rate just delays the new revshare by a few minutes.", config.Since("v1.1")),
 	AnalyticsBackend:             reportingSet.String("reporting.analytics_backend", "memory", config.TierStatic, "Backing store for analytics events: 'memory' (in-process, volatile — events lost on restart) or 'clickhouse' (server, pure-Go client, no CGO). Memory is the unit-test/CI default; clickhouse is the full-local + prod event store. DuckDB was retired as a backend in ADR 0006 (ClickHouse is the single analytical store; cold reads are ClickHouse s3() over the Parquet export).", config.Since("v1.3")),
 	ClickHouseAddr:               reportingSet.String("reporting.clickhouse_addr", "127.0.0.1:9000", config.TierStatic, "Comma-separated ClickHouse native-protocol addresses (host:port). Only consulted when reporting.analytics_backend=clickhouse. Locally the Tiltfile port-forwards 9000 to the in-cluster clickhouse service.", config.Since("v1.4")),

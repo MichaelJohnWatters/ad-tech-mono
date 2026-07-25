@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -138,6 +139,24 @@ func main() {
 
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
+
+	// Data-monetization accrual (ADR 0009): parked DataFeeEvents settle when
+	// the impression for their trace arrives. Needs Postgres (the durable
+	// pending join + earnings + ledger); absent DB → feature off with a WARN,
+	// everything else unaffected.
+	if dfURL := cfg.Get(keys.Database.URL.Key(), ""); dfURL != "" {
+		if dfDB, err := sql.Open("postgres", dfURL); err == nil {
+			dfDB.SetMaxOpenConns(3)
+			dfDB.SetMaxIdleConns(1)
+			lc.OnShutdown("datafee-db", func(_ context.Context) error { return dfDB.Close() })
+			consumer.SetDataFeeAccrual(newDataFeeAccrual(dfDB,
+				func() float64 { return keys.Reporting.DataFeeMarginPct.Get(cfg) }, log))
+		} else {
+			log.Warn("data-fee accrual disabled (postgres open failed)", "error", err)
+		}
+	} else {
+		log.Warn("data-fee accrual disabled (database.url not set)")
+	}
 
 	// Bulk NATS consumer for high-volume core events. Default ON: single-row
 	// ClickHouse inserts can't keep up with sustained traffic (~2/sec) and pile
@@ -458,6 +477,18 @@ type EventConsumer struct {
 	dedup        events.DedupStore
 	dedupTTL     time.Duration
 	batchEnabled bool
+
+	// dataFee settles parked data-monetization attribution at impression
+	// time (datafee.go). nil = feature off (no Postgres) — all hooks no-op.
+	dataFee *dataFeeAccrual
+}
+
+// SetDataFeeAccrual connects data-monetization accrual (nil-tolerant).
+func (c *EventConsumer) SetDataFeeAccrual(a *dataFeeAccrual) { c.dataFee = a }
+
+// handleDataFee parks one DataFeeEvent for its impression (datafee.go).
+func (c *EventConsumer) handleDataFee(ctx context.Context, msg *events.Message) error {
+	return c.dataFee.HandleEvent(ctx, msg)
 }
 
 func NewEventConsumer(log *slog.Logger, store analytics.Store, billingEngine *billing.Engine) *EventConsumer {
@@ -501,6 +532,10 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		// fans out independently of the pipeline's lake sink (untouched).
 		events.SubjectBehaviourObserved: c.handleBehaviourSignal,
 		events.SubjectProfileSignal:     c.handleProfileSignal,
+		// Data monetization (ADR 0009): park the SSP's attribution record
+		// until the impression for its trace arrives (see datafee.go).
+		// Low-volume operational subject — always per-message.
+		events.SubjectDataFee: c.handleDataFee,
 	}
 
 	ctx := context.Background()
@@ -559,6 +594,11 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 			EventType: "impression", Timestamp: e.Timestamp,
 		})
 	}
+
+	// Data monetization: settle any parked fee attribution for this trace
+	// (single PK lookup; near-always a miss). Never blocks the Ack — the
+	// impression is already recorded and billed.
+	c.dataFee.AccrueOnImpression(ctx, e.TraceID)
 
 	c.log.Debug("impression recorded + billed", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
 	return msg.Ack()

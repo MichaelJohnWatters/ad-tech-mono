@@ -45,6 +45,10 @@ type Segment struct {
 	// label (migration 062) — nil for custom-only segments.
 	TaxonomyID   *int64  `json:"taxonomy_id,omitempty"`
 	TaxonomyPath *string `json:"taxonomy_path,omitempty"`
+	// DataFeeMicros is the optional data fee (migration 063): CPM in
+	// micro-dollars the owner earns when this public labelled segment rides
+	// a bid request an external buyer wins. nil = not monetized.
+	DataFeeMicros *int64 `json:"data_fee_micros,omitempty"`
 }
 
 // ListSegments returns every segment for an account with its member count,
@@ -56,7 +60,7 @@ func (s *Store) ListSegments(ctx context.Context, accountID string) ([]Segment, 
 		const q = `
 SELECT s.id::text, s.name, s.type, s.status, s.source, s.visibility,
        COALESCE(c.n, 0), s.updated_at, s.match_rate, s.last_upload_at,
-       s.taxonomy_id, t.path
+       s.taxonomy_id, t.path, s.data_fee_micros
 FROM audience_segments s
 LEFT JOIN (
     SELECT segment_id, count(*) AS n FROM audience_segment_members GROUP BY segment_id
@@ -74,7 +78,7 @@ ORDER BY s.updated_at DESC`
 			if err := rows.Scan(&seg.ID, &seg.Name, &seg.Type, &seg.Status,
 				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt,
 				&seg.MatchRate, &seg.LastUploadAt,
-				&seg.TaxonomyID, &seg.TaxonomyPath); err != nil {
+				&seg.TaxonomyID, &seg.TaxonomyPath, &seg.DataFeeMicros); err != nil {
 				return err
 			}
 			out = append(out, seg)

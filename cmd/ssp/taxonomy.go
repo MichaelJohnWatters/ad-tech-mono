@@ -7,17 +7,20 @@ import (
 	"sync"
 	"time"
 
+	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
 
-// taxonomyCache is the SSP's L1 warm map of public segment id → IAB Audience
-// Taxonomy node id (audience_segments.taxonomy_id, public visibility only).
-// The bid-request hot path already knows which public segments a user is in;
-// this map just translates those ids into standard taxonomy ids for the
-// OpenRTB user.data stamp — a pure in-memory lookup, no per-request query.
+// taxonomyCache is the SSP's L1 warm map of public, taxonomy-labelled
+// segment id → monetization view (taxonomy node id + owner + optional data
+// fee; migrations 062/063). The bid-request hot path already knows which
+// public segments a user is in; this map translates them into (a) the
+// standard taxonomy ids for the OpenRTB user.data stamp and (b) the
+// owner/fee attribution for the post-auction DataFeeEvent — pure in-memory
+// lookups, no per-request query.
 //
 // Same degradation stance as the segment lookup itself: if the refresh
 // fails, the previous map keeps serving (or stays empty on a cold boot) and
@@ -27,20 +30,20 @@ type taxonomyCache struct {
 	log *slog.Logger
 
 	mu   sync.RWMutex
-	byID map[string]int64
+	byID map[string]audiencepg.SegmentMonetization
 }
 
 // taxonomySource is the store read the cache refreshes from — satisfied by
 // *audiencepg.Store.
 type taxonomySource interface {
-	PublicSegmentTaxonomy(ctx context.Context) (map[string]int64, error)
+	PublicSegmentMonetization(ctx context.Context) (map[string]audiencepg.SegmentMonetization, error)
 }
 
 // newTaxonomyCache starts the refresh loop and returns the cache. The first
 // refresh is synchronous with a short deadline so a warm boot serves labels
 // immediately; failures degrade to an empty map.
 func newTaxonomyCache(ctx context.Context, src taxonomySource, interval time.Duration, log *slog.Logger) *taxonomyCache {
-	c := &taxonomyCache{src: src, log: log, byID: map[string]int64{}}
+	c := &taxonomyCache{src: src, log: log, byID: map[string]audiencepg.SegmentMonetization{}}
 	c.refresh(ctx)
 	go func() {
 		t := time.NewTicker(interval)
@@ -65,7 +68,7 @@ func (c *taxonomyCache) refresh(ctx context.Context) {
 	}
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	m, err := c.src.PublicSegmentTaxonomy(rctx)
+	m, err := c.src.PublicSegmentMonetization(rctx)
 	if err != nil {
 		c.log.Warn("taxonomy map refresh failed (serving previous)", "error", err)
 		return
@@ -110,12 +113,40 @@ func (c *taxonomyCache) dataSegments(segmentIDs []string) []openrtb.DataSegment 
 	var out []openrtb.DataSegment
 	seen := map[int64]bool{}
 	for _, id := range segmentIDs {
-		tid, ok := c.byID[id]
-		if !ok || seen[tid] {
+		m, ok := c.byID[id]
+		if !ok || seen[m.TaxonomyID] {
 			continue
 		}
-		seen[tid] = true
-		out = append(out, openrtb.DataSegment{ID: strconv.FormatInt(tid, 10)})
+		seen[m.TaxonomyID] = true
+		out = append(out, openrtb.DataSegment{ID: strconv.FormatInt(m.TaxonomyID, 10)})
+	}
+	return out
+}
+
+// feeSegments returns the fee-bearing attribution for the request's stamped
+// segments: which of the user's public labelled segments carry a data fee,
+// who owns each, and what it costs. Callers only invoke this for requests
+// where user.data was actually stamped (consent-gated), so a non-empty
+// result means "this data rode the request and is billable on a win".
+func (c *taxonomyCache) feeSegments(segmentIDs []string) []events.DataFeeSegment {
+	if c == nil || len(segmentIDs) == 0 {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []events.DataFeeSegment
+	seen := map[string]bool{}
+	for _, id := range segmentIDs {
+		m, ok := c.byID[id]
+		if !ok || m.FeeMicros <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, events.DataFeeSegment{
+			SegmentID:      id,
+			OwnerAccountID: m.OwnerAccountID,
+			FeeMicros:      m.FeeMicros,
+		})
 	}
 	return out
 }

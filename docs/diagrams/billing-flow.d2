@@ -93,6 +93,17 @@ output: Output {
 revenue -> output.payout
 ledger -> output.invoice
 
+# Data monetization (ADR 0009): an EXTERNAL buyer's win on a request that
+# carried fee-bearing segments parks a DataFeeEvent; the delivered impression
+# settles it — owner credited fee net of margin, external seat accrues a
+# receivable (invoiced out-of-band; external seats hold no prepay balance).
+datafee: Data-fee accrual {
+  pending: data_fee_pending (durable trace join)
+  settle: "impression -> owner balance credit (net) + platform margin + extseat receivable"
+  pending -> settle: impression for trace arrives
+}
+datafee.settle -> ledger: double-entry (reference_type=data_fee)
+
 legend: Legend {
   near: bottom-right
   style.fill: "#f8fafc"

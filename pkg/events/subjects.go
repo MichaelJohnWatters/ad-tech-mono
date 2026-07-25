@@ -38,6 +38,12 @@ const (
 	SubjectAuctionWin      = "adtech.auction.win"
 	SubjectAuctionComplete = "adtech.auction.complete"
 
+	// SubjectDataFee carries DataFeeEvent: SSP → reporting attribution for
+	// data monetization (an EXTERNAL bidder won an auction whose request
+	// carried fee-bearing audience data). Accrual happens at impression
+	// time via the data_fee_pending join, not here.
+	SubjectDataFee = "adtech.datafee.observed"
+
 	// SubjectDSPCall fires once per DSP fan-out call per auction (Exchange →
 	// Reporting). Per-DSP routing telemetry — bid received?, price, latency,
 	// timeout — feeding the dsp_calls analytics table and the SmartRouter
@@ -128,7 +134,7 @@ const (
 	// Subscribed by the DSP's balance warm cache so the bid-path funds gate
 	// rebases within NATS RTT instead of the 30s poll.
 	SubjectCacheInvalidateAdvertiserBalances = "adtech.cache.invalidate.advertiser-balances"
-	SubjectCacheInvalidateSigningKeys  = "adtech.cache.invalidate.signing-keys"
+	SubjectCacheInvalidateSigningKeys        = "adtech.cache.invalidate.signing-keys"
 	// Publisher-side direct-sold line items consumed by cmd/publisher-adserver.
 	SubjectCacheInvalidatePublisherLineItems = "adtech.cache.invalidate.publisher-line-items"
 	// House ads (the platform's own fallback creatives) consumed by

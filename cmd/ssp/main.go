@@ -143,6 +143,8 @@ func main() {
 	if bus != nil {
 		taxCache.subscribeInvalidate(context.Background(), bus)
 	}
+	// Data-monetization attribution publisher (nil bus → no-op).
+	dfPublisher := newDataFeePublisher(bus, log)
 	if bus != nil {
 		lc.OnShutdown("ssp-mgmt-bus", func(ctx context.Context) error { return bus.Close() })
 	}
@@ -222,9 +224,9 @@ func main() {
 		}
 		return identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), ip)
 	}
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn))
 
 	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
 	sspRL := middleware.NewLiveRateLimiter(func() middleware.RateLimitConfig {
@@ -371,7 +373,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -492,6 +494,10 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		}
 		householdID = householdFn(endUserIP)
 	}
+	// feeSegs is the data-monetization attribution captured when (and only
+	// when) fee-bearing user.data is stamped below; consumed after the
+	// auction resolves.
+	var feeSegs []events.DataFeeSegment
 	if userID != "" || uid2 != "" || householdID != "" {
 		user := &openrtb.User{ID: userID}
 		if uid2 != "" {
@@ -560,6 +566,11 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 					Segment: ds,
 					Ext:     &openrtb.DataExt{Segtax: openrtb.SegtaxIABAudience11},
 				}}
+				// Attribution for data monetization, captured under the SAME
+				// consent gate as the stamp: these fee-bearing segments are
+				// riding the request, so a win by an external buyer owes
+				// their owners a fee. Held locally — never on the request.
+				feeSegs = taxCache.feeSegments(segs)
 			}
 		}
 		bidReq.User = user
@@ -623,6 +634,11 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 
 	var bidResp openrtb.BidResponse
 	json.NewDecoder(resp.Body).Decode(&bidResp)
+
+	// Data monetization: if fee-bearing audience data rode this request and
+	// an EXTERNAL bidder won, publish the attribution record (fire-and-
+	// forget; accrual happens at impression time in reporting).
+	dfPublisher.Observe(r, traceID, p, bidResp, feeSegs)
 
 	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp, HouseholdID: householdID}, true
 }
@@ -715,9 +731,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
@@ -785,9 +801,9 @@ type serveAdResponse struct {
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)
 		if !ok {
 			return
 		}
