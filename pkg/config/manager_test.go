@@ -198,3 +198,24 @@ func TestManager_PartialApplyDoesNotRemove(t *testing.T) {
 		t.Fatalf("partial apply removed an unrelated live key: channel = %q, want video", got)
 	}
 }
+
+// TestManager_SnapshotPollPreservesEnvLayer — Setup's env bridges
+// (NATS_URL → <svc>.nats_url etc.) live in the process env layer, and a
+// snapshot poll must never disturb them: only Postgres-backed live rows
+// are the poll's to give and take. Regression: bridges used to ride the
+// live layer and the first snapshot poll wiped them, dropping in-cluster
+// services onto localhost infra defaults.
+func TestManager_SnapshotPollPreservesEnvLayer(t *testing.T) {
+	t.Setenv("BRIDGETEST_NATS_URL", "nats://real-nats:4222")
+
+	cfg := Load()
+	mgr := NewManager(cfg, logger.New("config-test"))
+	mgr.SetSource(NewMemorySource(nil)) // no rows at all
+
+	mgr.poll(context.Background())
+	mgr.poll(context.Background())
+
+	if got := cfg.Get("bridgetest.nats_url", "nats://localhost:4222"); got != "nats://real-nats:4222" {
+		t.Fatalf("env-layer value after snapshot polls = %q, want the env bridge to survive", got)
+	}
+}

@@ -182,6 +182,19 @@ func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...S
 	// only sets TRACKER_NATS_URL (and not NATS_URL) still populates
 	// nats.url and tracker.nats_url. Apply the prefix-fallback first so
 	// the literal-env-var pass below can override it if both are set.
+	// Bridged values land in the ENV layer (os.Setenv on the key's own env
+	// form), NOT the live layer. They used to go in via SetLive, which made
+	// them indistinguishable from Postgres rows — the manager's snapshot
+	// poll (which is authoritative for the live layer, so deleted rows
+	// actually revert) wiped them on the first tick and services fell back
+	// to localhost defaults in-cluster. As env-layer values they survive
+	// every poll, and a real live row still overrides them — the documented
+	// defaults → env → live precedence, now actually true for bridges.
+	bridge := func(key, v string) {
+		if err := os.Setenv(envKeyFromConfigKey(key), v); err != nil {
+			log.Warn("env bridge failed", "key", key, "error", err)
+		}
+	}
 	upperService := strings.ToUpper(strings.ReplaceAll(serviceName, "-", "_"))
 	for _, infra := range []struct{ envSuffix, key string }{
 		{"NATS_URL", "nats.url"},
@@ -190,12 +203,12 @@ func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...S
 		{"REDIS_URL", serviceName + ".redis_addr"},
 	} {
 		if v := os.Getenv(upperService + "_" + infra.envSuffix); v != "" {
-			cfg.SetLive(infra.key, v)
+			bridge(infra.key, v)
 		}
 	}
 	for _, m := range envKeyMap {
 		if v := os.Getenv(m.env); v != "" {
-			cfg.SetLive(m.key, v)
+			bridge(m.key, v)
 		}
 	}
 
