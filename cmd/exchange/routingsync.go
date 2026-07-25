@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -29,6 +30,15 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/optimise"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
+
+// routerResetMsg is the reset broadcast payload. Carrying the reset time
+// makes the handler idempotent: JetStream redelivers on the ack-wait
+// boundary, and a re-applied reset would otherwise wipe the router AGAIN
+// mid-training and advance the reseed watermark past calls that already
+// happened — exactly-once by timestamp comparison instead.
+type routerResetMsg struct {
+	AtMs int64 `json:"at_ms"`
+}
 
 type routingSync struct {
 	cfg    *config.Config
@@ -52,8 +62,14 @@ func startRoutingSync(cfg *config.Config, router *optimise.SmartRouter, bus even
 		group := "router-stats-" + podid.Replica()
 		err := bus.Subscribe(context.Background(), events.SubjectCacheInvalidateRouterStats, group,
 			func(ctx context.Context, msg *events.Message) error {
-				rs.resetLocal()
-				rs.log.Info("smart router reset (broadcast)")
+				var m routerResetMsg
+				_ = json.Unmarshal(msg.Data, &m)
+				if m.AtMs == 0 {
+					m.AtMs = time.Now().UnixMilli()
+				}
+				if rs.applyReset(m.AtMs) {
+					rs.log.Info("smart router reset (broadcast)")
+				}
 				return nil
 			})
 		if err != nil {
@@ -64,21 +80,34 @@ func startRoutingSync(cfg *config.Config, router *optimise.SmartRouter, bus even
 	return rs
 }
 
-// resetLocal wipes this pod's router and rebases the reseed watermark.
-func (rs *routingSync) resetLocal() {
-	rs.resetAt.Store(time.Now().UnixMilli())
-	rs.router.Reset()
+// applyReset wipes the router and rebases the reseed watermark to atMs —
+// but only if atMs is newer than the last applied reset, so a JetStream
+// redelivery of the same broadcast is a no-op instead of a second wipe.
+// Returns whether the reset was applied.
+func (rs *routingSync) applyReset(atMs int64) bool {
+	for {
+		cur := rs.resetAt.Load()
+		if atMs <= cur {
+			return false
+		}
+		if rs.resetAt.CompareAndSwap(cur, atMs) {
+			rs.router.Reset()
+			return true
+		}
+	}
 }
 
 // broadcastReset resets locally and tells every other replica to do the
 // same. Fail-open: if the publish fails the local reset still happened —
 // same behaviour as before the broadcast existed.
 func (rs *routingSync) broadcastReset(ctx context.Context) {
-	rs.resetLocal()
+	at := time.Now().UnixMilli()
+	rs.applyReset(at)
 	if rs.bus == nil {
 		return
 	}
-	if err := rs.bus.Publish(ctx, events.SubjectCacheInvalidateRouterStats, []byte(`{}`)); err != nil {
+	payload, _ := json.Marshal(routerResetMsg{AtMs: at})
+	if err := rs.bus.Publish(ctx, events.SubjectCacheInvalidateRouterStats, payload); err != nil {
 		rs.log.Error("router reset broadcast failed; other replicas keep stale routing stats", "error", err)
 	}
 }
