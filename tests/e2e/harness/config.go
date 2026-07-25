@@ -144,3 +144,41 @@ func (h *Harness) tryPutConfig(t *testing.T, key, value, podID string) bool {
 	t.Logf("restore of %s=%q rejected (status %d) — falling back to schema default", key, value, resp.StatusCode)
 	return false
 }
+
+// DeleteConfig removes a live config key via DELETE /v1/config (all pod
+// rows for the key). The gateway's manager broadcasts the config
+// invalidate, and every pod's next snapshot poll DROPS the key — reads
+// revert to env/schema default. This is the behaviour under test in
+// TestConfigDeleteRevertsLiveValue: deleting a row used to pin the
+// last-known value in every pod until restart.
+func (h *Harness) DeleteConfig(t *testing.T, key string) {
+	t.Helper()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		req, err := http.NewRequest(http.MethodDelete,
+			h.URLs.Gateway+routes.Config+"?key="+key, nil)
+		if err != nil {
+			t.Fatalf("DELETE %s: %v", routes.Config, err)
+		}
+		if tok := h.adminBearer(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		resp, err := h.HTTP.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("DELETE /v1/config status %d: %s", resp.StatusCode, string(body))
+		}
+		// NATS invalidate + subscriber re-poll, same margin as SetConfigForPod.
+		time.Sleep(300 * time.Millisecond)
+		return
+	}
+	t.Fatalf("DELETE /v1/config: %v", lastErr)
+}
