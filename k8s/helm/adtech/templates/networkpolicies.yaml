@@ -1,0 +1,56 @@
+{{- /*
+NetworkPolicies — gated behind global.networkPolicies (default off; prod/staging
+set it true). Conservative baseline: default-deny INGRESS, then explicitly allow
+(a) same-namespace pod-to-pod (the app's own traffic — gateway→services,
+exchange→dsp, everything→postgres/nats/redis/clickhouse/minio, prometheus scrape)
+and (b) the Traefik ingress from its own namespace. EGRESS is left open on purpose
+— restricting it is where most breakage happens (DNS, managed stores, S3), and is
+a follow-up once the ingress baseline is proven in staging.
+
+Off by default so it can't disrupt the shared dev stack; enable + validate in
+staging before prod. Explicit-true check avoids the Sprig bool-false gotcha.
+*/ -}}
+{{- if eq (toString (($.Values.global | default dict).networkPolicies)) "true" }}
+{{- $ns := include "adtech.namespace" . -}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# Allow any pod in this namespace to reach any other (the app's internal mesh:
+# gateway→services, exchange→DSPs, all→infra, prometheus→scrape targets).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns }}
+---
+# Allow the Traefik ingress controller (its own namespace) to reach any pod —
+# this is how browser/API traffic enters.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+{{- end }}

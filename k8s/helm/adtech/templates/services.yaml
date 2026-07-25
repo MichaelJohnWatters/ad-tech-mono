@@ -35,6 +35,20 @@ spec:
       # K8s service-link env injection collides with pkg/config's env-var
       # fallback (see k8s/base/tracker/deployment.yaml) — off platform-wide.
       enableServiceLinks: false
+      {{- /* Hardened pod securityContext — gated behind global.hardenedContainers
+             (default off; prod/staging set it true). REQUIRES the images to run
+             as a non-root USER (build/Dockerfile* — a paired change validated on
+             the first hardened deploy), else runAsNonRoot refuses to start the
+             pod. Explicit-true check avoids the Sprig bool-false gotcha. */}}
+      {{- if eq (toString (($.Values.global | default dict).hardenedContainers)) "true" }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- end }}
       {{- with $svc.serviceAccountName }}
       serviceAccountName: {{ . }}
       {{- end }}
@@ -42,6 +56,15 @@ spec:
         - name: {{ $svc.containerName | default $name }}
           image: {{ $svc.image }}
           imagePullPolicy: {{ $svc.imagePullPolicy | default "IfNotPresent" }}
+          {{- if eq (toString (($.Values.global | default dict).hardenedContainers)) "true" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # readOnlyRootFilesystem intentionally omitted — several services
+            # write scratch to / or /tmp; enabling it needs per-service emptyDir
+            # mounts + validation. Do that as a follow-up once the above is proven.
+          {{- end }}
           ports:
             {{- range $svc.ports }}
             - containerPort: {{ .port }}
