@@ -265,6 +265,10 @@ services:
         value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
       - name: EXCHANGE_ADSERVER_URL
         value: "http://adserver:8085"
+      # Routing warm-start + cross-replica reseed source. Without this the
+      # key defaults to localhost:8086 and both silently no-op in-cluster.
+      - name: EXCHANGE_REPORTING_URL
+        value: "http://reporting:8086"
       - name: DATABASE_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -297,6 +301,10 @@ services:
         value: "adserver-0"
       - name: ADSERVER_TRACKER_URL
         value: "http://localhost:8080"
+      # Bandit warm-start source (ADR 0003 part C). Without this the key
+      # defaults to localhost:8086 and warm-start silently no-ops in-cluster.
+      - name: ADSERVER_REPORTING_URL
+        value: "http://reporting:8086"
       - name: REDIS_URL
         value: "redis:6379"
       - name: DATABASE_URL
