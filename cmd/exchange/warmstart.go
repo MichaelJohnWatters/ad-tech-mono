@@ -46,28 +46,40 @@ func warmStartRouter(cfg *config.Config, router *optimise.SmartRouter, log *slog
 		return
 	}
 	base := keys.Exchange.ReportingURL.Get(cfg)
-	url := base + "/debug/routing/stats?since_hours=6"
+	seed, ok := fetchRoutingStats(base+"/debug/routing/stats?since_hours=6", log, "routing warm-start")
+	if !ok {
+		return
+	}
+	router.Seed(seed)
+	log.Info("routing warm-started from reporting dsp_calls", "endpoints", len(seed))
+}
+
+// fetchRoutingStats GETs one of reporting's routing-stats URLs and converts
+// the rows into SmartRouter seed entries. Shared by the boot warm-start and
+// the periodic cross-replica reseed (routingsync.go). Fail-open: any error
+// logs at WARN and returns ok=false so callers keep their current state.
+func fetchRoutingStats(url string, log *slog.Logger, what string) ([]optimise.DSPStats, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		log.Warn("routing warm-start skipped: bad request", "error", err)
-		return
+		log.Warn(what+" skipped: bad request", "error", err)
+		return nil, false
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Warn("routing warm-start skipped: reporting unreachable", "url", url, "error", err)
-		return
+		log.Warn(what+" skipped: reporting unreachable", "url", url, "error", err)
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Warn("routing warm-start skipped: reporting non-200", "status", resp.StatusCode)
-		return
+		log.Warn(what+" skipped: reporting non-200", "status", resp.StatusCode)
+		return nil, false
 	}
 	var stats []dspCallStat
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		log.Warn("routing warm-start skipped: decode failed", "error", err)
-		return
+		log.Warn(what+" skipped: decode failed", "error", err)
+		return nil, false
 	}
 	seed := make([]optimise.DSPStats, 0, len(stats))
 	for _, s := range stats {
@@ -83,6 +95,5 @@ func warmStartRouter(cfg *config.Config, router *optimise.SmartRouter, log *slog
 		// WinRate not derivable from dsp_calls alone — re-learned live.
 		seed = append(seed, ds)
 	}
-	router.Seed(seed)
-	log.Info("routing warm-started from reporting dsp_calls", "endpoints", len(seed))
+	return seed, true
 }

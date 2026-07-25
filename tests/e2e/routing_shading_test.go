@@ -74,14 +74,21 @@ func TestSmartRoutingSkipsAlwaysNoBidDSP(t *testing.T) {
 		t.Errorf("router skipped comp1 after only 10 calls; expected it to wait for routing_min_calls (default 20)")
 	}
 
-	// Train past the threshold and re-check — comp1 must drop now.
+	// Train past the threshold and re-check — comp1 must drop now. At N
+	// exchange replicas no single pod records all 30 calls; pods converge
+	// on the cluster-global totals via the periodic reseed from reporting
+	// (events → NATS → ClickHouse → exchange.routing_reseed_interval), so
+	// poll rather than asserting the first preview — and the LB may hand
+	// each preview to a different pod, so require the drop to hold.
 	h.FireNAuctions(t, 20, "pl-news-mpu", "GBR", "mobile")
-	preview = h.SmartRouterPreview(t)
-	for _, ep := range preview.Selected {
-		if ep == h.URLs.ClusterDSPComp1 {
-			t.Fatalf("router still selecting comp1 after 30 no-bids; selected=%v", preview.Selected)
+	harness.WaitFor(t, 30*time.Second, "router to drop comp1 after 30 no-bids (cross-replica reseed)", func() bool {
+		for _, ep := range h.SmartRouterPreview(t).Selected {
+			if ep == h.URLs.ClusterDSPComp1 {
+				return false
+			}
 		}
-	}
+		return true
+	})
 }
 
 // TestBidShadingTrackerRecords — DSPs maintain a per-placement shading

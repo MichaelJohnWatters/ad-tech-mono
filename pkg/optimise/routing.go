@@ -61,6 +61,28 @@ func (r *SmartRouter) Seed(stats []DSPStats) {
 	}
 }
 
+// Reseed replaces per-(channel, DSP) call stats with a cluster-global
+// aggregate (reporting's dsp_calls, which every exchange replica feeds),
+// PRESERVING locally-learned win history — wins aren't in dsp_calls, so
+// overwriting them each reseed tick would zero WinRate forever. Entries
+// absent from the aggregate keep their local state: a DSP whose calls
+// haven't landed in analytics yet must not lose its fresh stats.
+func (r *SmartRouter) Reseed(stats []DSPStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range stats {
+		s := stats[i]
+		key := channelDSPKey{channel: s.Channel, dspID: s.DSPID}
+		if old, ok := r.stats[key]; ok {
+			s.TotalWins = old.TotalWins
+			if s.TotalBids > 0 {
+				s.WinRate = float64(s.TotalWins) / float64(s.TotalBids)
+			}
+		}
+		r.stats[key] = &s
+	}
+}
+
 // RecordCall records a DSP call outcome for a given channel.
 func (r *SmartRouter) RecordCall(channel, dspID string, bidReceived bool, bidPrice float64, latency time.Duration, timedOut bool) {
 	r.mu.Lock()

@@ -19,7 +19,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"reporting", ReportingSchema(), 25},
 		{"report-runner", ReportRunnerSchema(), 13},
 		{"dsp", DSPSchema(), 21},
-		{"exchange", ExchangeSchema(), 21},
+		{"exchange", ExchangeSchema(), 22},
 		{"gateway", GatewaySchema(), 21},
 		{"tracker", TrackerSchema(), 14},
 		{"adserver", AdServerSchema(), 14},

@@ -135,6 +135,11 @@ const (
 	// rebases within NATS RTT instead of the 30s poll.
 	SubjectCacheInvalidateAdvertiserBalances = "adtech.cache.invalidate.advertiser-balances"
 	SubjectCacheInvalidateSigningKeys        = "adtech.cache.invalidate.signing-keys"
+	// RouterStats: broadcast by the exchange's /debug routing reset so ALL
+	// exchange replicas wipe their SmartRouter state and rebase their
+	// reseed watermark (per-pod otherwise — an LB'd reset would leave N-1
+	// pods trained on stale history).
+	SubjectCacheInvalidateRouterStats = "adtech.cache.invalidate.router-stats"
 	// Publisher-side direct-sold line items consumed by cmd/publisher-adserver.
 	SubjectCacheInvalidatePublisherLineItems = "adtech.cache.invalidate.publisher-line-items"
 	// House ads (the platform's own fallback creatives) consumed by
