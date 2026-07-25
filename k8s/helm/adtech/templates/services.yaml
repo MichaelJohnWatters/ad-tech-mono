@@ -53,6 +53,15 @@ spec:
           {{- end }}
           env:
             {{- toYaml $svc.env | nindent 12 }}
+            {{- /* Global debug-endpoints toggle. debug.endpoints_enabled defaults
+                   to true (dev); prod/staging set global.debugEndpoints=false to
+                   turn OFF /debug/*, the dev token minter (/v1/auth/token) and the
+                   /dev/* console cluster-wide. Injected only on an EXPLICIT false
+                   (avoids the Sprig `default true` bool-false gotcha). */}}
+            {{- if eq (toString (($.Values.global | default dict).debugEndpoints)) "false" }}
+            - name: DEBUG_ENDPOINTS_ENABLED
+              value: "false"
+            {{- end }}
             {{- /* extraEnv is APPENDED (env is a list, which Helm replaces
                    wholesale on override — so overlays add vars here instead of
                    restating the whole env). */}}

@@ -129,6 +129,45 @@ ad-tech cluster):
 - **`cmd/extbidder`** (external DSP) — run it, then add its public URL to the
   `exchange.dsp_endpoints` live config.
 
+## Step 8 — security hardening (do NOT skip) 🔵
+
+The local stack ships permissive by design. `values-prod.yaml` closes the biggest
+gaps automatically (`GATEWAY_REQUIRE_AUTH=true`, `global.debugEndpoints: false` →
+`/debug/*` + the dev token minter `/v1/auth/token` + the `/dev/*` console are OFF).
+The rest are environment-specific and MUST be supplied out-of-band via SOPS/env:
+
+**Secrets & keys (SOPS at deploy):**
+- `SECRETS_ENCRYPTION_KEY` (32 bytes, `openssl rand -hex 32`) — WITHOUT it, the
+  secrets table is stored **plaintext** in Postgres. Set it on every service that
+  reads secrets (gateway/ssp/dsp/exchange/pipeline).
+- `PLATFORM_ROOT_PASSWORD` — gates the one-shot `/v1/auth/bootstrap` that mints the
+  first operator key. Unset ⇒ bootstrap 503s.
+- `jwt_signing` secret (or `GATEWAY_JWT_SIGNING_KEY`) — real 32B random; without it
+  auth is bypassed (and with `require_auth=true` the gateway refuses to boot).
+- Real `DATABASE_URL`, ClickHouse password, S3 keys, `SSP_HOUSEHOLD_SALT` (unique &
+  STABLE — it salts CTV household hashing; the dev default collides across envs).
+
+**Rotate the dev-seeded keys** if you ever ran `cmd/seed` against the environment:
+the HMAC pixel-signing key, the ads.cert Ed25519 key, and delete the
+`dev-api-key-do-not-use-in-prod` operator key. Use the secrets console / rotation
+(overlapping-rotation is supported, so no downtime).
+
+**Turn on anti-spoofing enforcement (staged — strict needs the identity bundle):**
+Enforcement defaults to off/warn because *strict without the supporting setup
+no-bids real traffic*. Enable in order, watching logs at `warn` before `strict`:
+1. **schain** — set `SSP_SELLER_DOMAIN` (+ `SSP_SELLER_ID`) so the SSP *originates*
+   a SupplyChain, then `exchange.schain_enforcement=strict`. (Strict with no
+   seller_domain = every auction no-bids.)
+2. **ads.cert** — DSPs already fetch the exchange keyset (`DSP_ADCERT_KEY_URL`, baked
+   in); rotate in a real `adcert_ed25519` key, then `dsp.adcert_enforcement=warn→strict`.
+3. **ads.txt** — set `exchange.adstxt_seller_domain/_id`, get publishers to add the
+   line (surfaced in the publisher portal + `/v1/api/integration/adstxt`), then
+   `exchange.adstxt_enforcement=warn→strict`.
+4. **tracker HMAC** — with a real signing key deployed, `tracker.signature_validation=true`.
+
+These are live-tier config: set once via the Config UI (Staff → Config) or the
+config API; on a fresh cluster you can also pre-seed them.
+
 ## Go-live checklist
 
 - [ ] 🔵 Domain registered + DNS at the ingress LB (or Cloudflare)
