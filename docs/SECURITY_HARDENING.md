@@ -87,10 +87,22 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    superuser** (policy expressions aren't evaluated when RLS is bypassed), so it's
    safe to land ahead of the role flip — which it is.
 
-   Proven (2026-07-25) against the REAL schema in a throwaway Postgres + a real
-   `NOBYPASSRLS` role: on `data_providers`, all five cases green — tenant read
-   scoped, platform_read=on sees all, unset-GUC empty (no error), cross-tenant
-   read + write blocked. Down/Up cycle preserves the subquery-form policies.
+   Each policy's `current_setting('app.current_account_id')` is rewritten as
+   `NULLIF(current_setting('app.current_account_id', true), '')::uuid` — not just
+   missing_ok. The `NULLIF(_, '')` matters: on a POOLED connection a custom GUC
+   reverts to the empty string (not undefined) after its first tx-local set, so a
+   later platform-read tx (account_id not set) would hit `''::uuid` → "invalid
+   input syntax for type uuid" without it. (An early cut used only missing_ok and
+   the integration test below caught exactly this on the second query of a reused
+   connection.)
+
+   Locked in by an ENFORCING regression test —
+   `pkg/store/postgres/rls_platform_read_integration_test.go` (build tag
+   `integration`, `make test-integration`). It creates a real `NOBYPASSRLS` role
+   and asserts, on the real schema: tenant read scoped, platform_read=on sees all,
+   unset-GUC empty (no error), cross-tenant write blocked. This is the first
+   enforcing RLS test — `tests/e2e/rls_test.go` is `t.Skip`ped precisely because
+   the dev role is a BYPASSRLS superuser. Down/Up preserves the subquery forms.
 
 2. **Create the limited role** (idempotent; migration runs as owner/superuser):
    ```sql

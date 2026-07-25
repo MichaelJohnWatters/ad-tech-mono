@@ -12,14 +12,16 @@
 --
 -- Two transforms per policy, PRESERVING each policy's existing tenant logic
 -- (the 33 policies have 4 distinct forms incl. subquery/child-table scoping):
---   1. make current_setting('app.current_account_id') missing_ok (add `, true`)
---      so a platform-read tx (no account_id set) matches nothing instead of
---      RAISE-ing "unrecognized configuration parameter"
+--   1. rewrite current_setting('app.current_account_id') as
+--      NULLIF(current_setting('app.current_account_id', true), '')::uuid — the
+--      `, true` (missing_ok) stops an unset GUC from RAISE-ing, and NULLIF(_, '')
+--      maps the empty string a pooled connection reverts to (after its first
+--      tx-local set) to NULL so the ::uuid cast never sees ''
 --   2. OR in the explicit app.platform_read='on' flag
 --
 -- No-op under the current superuser (policy expressions are never evaluated
 -- when RLS is bypassed), so this is safe to land ahead of the role flip.
--- Idempotent: the position() guard skips policies already carrying the hatch.
+-- Idempotent: the platform_read guard skips policies already carrying the hatch.
 DO $$
 DECLARE
     r RECORD;
@@ -30,18 +32,34 @@ BEGIN
         FROM pg_policies
         WHERE policyname = 'tenant_isolation'
     LOOP
-        -- 1. missing_ok: only matches the non-missing_ok form (the `)` after
-        --    ::text distinguishes it from an already-`, true)` occurrence).
-        new_using := replace(
-            r.qual,
-            'current_setting(''app.current_account_id''::text)',
-            'current_setting(''app.current_account_id''::text, true)'
-        );
-        -- 2. add the platform-read OR-clause unless it's already present.
-        IF position('app.platform_read' in new_using) = 0 THEN
-            new_using := '(' || new_using
-                || ') OR (current_setting(''app.platform_read''::text, true) = ''on'')';
+        -- Idempotent: a policy already carrying the hatch is fully transformed.
+        CONTINUE WHEN position('app.platform_read' in r.qual) > 0;
+
+        -- 1. Wrap every current_setting('app.current_account_id') — with or
+        --    without an existing `, true` — as NULLIF(current_setting(..., true),
+        --    ''). Two reasons: `, true` (missing_ok) stops an unset GUC from
+        --    RAISE-ing, and NULLIF(_, '') maps the EMPTY-STRING case to NULL so
+        --    `::uuid` never sees ''. The empty string is not hypothetical: on a
+        --    POOLED connection a custom GUC reverts to '' (not undefined) after
+        --    its first tx-local set, so a later platform-read tx (account_id not
+        --    set) would otherwise hit `''::uuid` → "invalid input syntax for type
+        --    uuid". (Skip the rewrite if NULLIF is already applied, e.g. a
+        --    Down-then-Up, so we don't double-wrap.)
+        IF r.qual LIKE '%NULLIF(current_setting(''app.current_account_id%' THEN
+            new_using := r.qual;
+        ELSE
+            new_using := regexp_replace(
+                r.qual,
+                'current_setting\(''app\.current_account_id''::text(, true)?\)',
+                'NULLIF(current_setting(''app.current_account_id''::text, true), ''''::text)',
+                'g'
+            );
         END IF;
+
+        -- 2. OR in the explicit platform-read escape hatch.
+        new_using := '(' || new_using
+            || ') OR (current_setting(''app.platform_read''::text, true) = ''on'')';
+
         EXECUTE format(
             'ALTER POLICY tenant_isolation ON %I.%I USING (%s)',
             r.schemaname, r.tablename, new_using
