@@ -29,6 +29,10 @@
 # your DNS A/AAAA (or Cloudflare CNAME) at the ingress LB IP for these hosts.
 global:
   domain: adtech.example.com   # ← change to your domain
+  # Turn OFF debug/dev endpoints cluster-wide: /debug/*, the dev token minter
+  # (/v1/auth/token — mints admin JWTs with no credential), and the /dev/* console.
+  # MUST stay false in prod.
+  debugEndpoints: false
 
 # TLS: real Let's Encrypt certs via cert-manager (install cert-manager + define
 # the `letsencrypt-prod` ClusterIssuer out-of-band once). The Ingress template

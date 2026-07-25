@@ -21,6 +21,11 @@
 #     SSAI_PUBLIC_URL, TRANSCODER_PUBLIC_BASE, REPORT_RUNNER_PUBLIC_GATEWAY_URL)
 #     pointed at the public staging gateway, not http://localhost:8080
 
+# Turn OFF debug/dev endpoints (/debug/*, the /v1/auth/token dev minter, /dev/*)
+# cluster-wide — staging shares prod's posture.
+global:
+  debugEndpoints: false
+
 # TLS via cert-manager (Let's Encrypt staging issuer — avoids the LE rate limit
 # while validating the pipeline). Install cert-manager + the issuer out-of-band.
 tls:
