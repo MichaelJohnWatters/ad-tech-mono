@@ -130,3 +130,71 @@ func TestManager_NoChangeNoCallback(t *testing.T) {
 		t.Errorf("expected still 1 call (no change), got %d", got)
 	}
 }
+
+// TestManager_PollRemovalRevertsToDefault — deleting a live config row
+// must revert the key on the next poll, not pin the last-known value in
+// memory forever. The regression this guards: ops deleted a row and every
+// running pod silently kept serving the deleted value until restart.
+func TestManager_PollRemovalRevertsToDefault(t *testing.T) {
+	cfg := Load()
+	mgr := NewManager(cfg, logger.New("config-test"))
+	// Register the key's schema like Setup would for a real service, so
+	// the removal callback can rebase to the schema default.
+	Register("removal-test", []SchemaEntry{{
+		Key: "removaltest.knob", Type: "duration", Default: "500ms",
+		Tier: TierLive, Service: "removal-test",
+	}})
+	source := NewMemorySource(map[string]string{"removaltest.knob": "200ms"})
+	mgr.SetSource(source)
+
+	var lastNew atomic.Value
+	mgr.OnChange("removaltest.knob", func(_, _, newVal string) {
+		lastNew.Store(newVal)
+	})
+
+	mgr.poll(context.Background())
+	if got := cfg.Get("removaltest.knob", "x"); got != "200ms" {
+		t.Fatalf("after first poll = %q, want 200ms", got)
+	}
+
+	// Row deleted at the source — next poll must clear the live layer.
+	if err := source.Delete(context.Background(), "removaltest.knob"); err != nil {
+		t.Fatal(err)
+	}
+	mgr.poll(context.Background())
+
+	// The live layer is gone: reads fall through to the caller default.
+	if got := cfg.Get("removaltest.knob", "fallback"); got != "fallback" {
+		t.Fatalf("after removal poll = %q, want caller fallback (live layer cleared)", got)
+	}
+
+	// Callback rebased to the schema default, parseable by Live* handles.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v, ok := lastNew.Load().(string); ok && v == "500ms" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("removal callback newVal = %v, want schema default 500ms", lastNew.Load())
+}
+
+// TestManager_PartialApplyDoesNotRemove — a single-key API write must
+// never be treated as a full snapshot: other live keys stay intact.
+func TestManager_PartialApplyDoesNotRemove(t *testing.T) {
+	cfg := Load()
+	mgr := NewManager(cfg, logger.New("config-test"))
+	source := NewMemorySource(map[string]string{
+		"exchange.bid_timeout": "200ms",
+		"exchange.channel":     "video",
+	})
+	mgr.SetSource(source)
+	mgr.poll(context.Background())
+
+	// API-path partial update of ONE key.
+	mgr.applyChanges(map[string]string{"exchange.bid_timeout": "300ms"}, "api")
+
+	if got := cfg.Get("exchange.channel", "x"); got != "video" {
+		t.Fatalf("partial apply removed an unrelated live key: channel = %q, want video", got)
+	}
+}
