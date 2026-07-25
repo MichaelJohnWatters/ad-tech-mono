@@ -258,8 +258,11 @@ services:
       # Our own DSP rides the internal gRPC twin; the competitor DSPs stay
       # OpenRTB HTTP deliberately — they stand in for third-party demand,
       # so the industry-standard path is exercised in every auction.
+      # ;notify= declares the HTTP base for win/loss notices (OpenRTB
+      # nurl/lurl stay HTTP by design) — required whenever the bid edge
+      # is grpc://, or notices are undeliverable and budget caps break.
       - name: EXCHANGE_DSP_ENDPOINTS
-        value: "grpc://dsp-internal-grpc:8182,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
+        value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
       - name: EXCHANGE_ADSERVER_URL
         value: "http://adserver:8085"
       - name: DATABASE_URL

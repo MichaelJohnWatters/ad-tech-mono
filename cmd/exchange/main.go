@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auction"
@@ -75,12 +76,22 @@ func main() {
 		raw := keys.Exchange.DSPEndpoints.Get(cfg)
 		parts := strings.Split(raw, ",")
 		out := make([]string, 0, len(parts))
+		notify := make(map[string]string, len(parts))
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
-			if p != "" {
-				out = append(out, p)
+			if p == "" {
+				continue
+			}
+			endpoint, notifyBase := splitDSPEndpoint(p)
+			out = append(out, endpoint)
+			if notifyBase != "" {
+				notify[endpoint] = notifyBase
 			}
 		}
+		// The clean bid endpoint is the stable key everywhere (router stats,
+		// dsp_calls, warm-start); the notify base rides out-of-band so
+		// win/loss URLs don't inherit a grpc:// scheme they can't use.
+		dspNotifyBases.Store(notify)
 		return out
 	}
 
@@ -745,6 +756,43 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 	}
 }
 
+// dspNotifyBases maps a DSP's bid endpoint to the HTTP base URL its OpenRTB
+// win/loss notices are sent to. Win/loss notices are HTTP by design (they're
+// the OpenRTB nurl/lurl mechanism), so a DSP whose BID edge rides the
+// internal gRPC twin declares where notices go with a ";notify=<http-base>"
+// suffix on its exchange.dsp_endpoints entry, e.g.
+//
+//	grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082
+//
+// Plain http:// entries need no suffix — their bid endpoint doubles as the
+// notify base. Refreshed by dspEndpointsFn on every auction (live config).
+var dspNotifyBases atomic.Value // map[string]string
+
+// splitDSPEndpoint separates one exchange.dsp_endpoints entry into the bid
+// endpoint and its optional ";notify=" base.
+func splitDSPEndpoint(entry string) (endpoint, notifyBase string) {
+	endpoint, suffix, found := strings.Cut(entry, ";")
+	endpoint = strings.TrimSpace(endpoint)
+	if !found {
+		return endpoint, ""
+	}
+	if v, ok := strings.CutPrefix(strings.TrimSpace(suffix), "notify="); ok {
+		return endpoint, strings.TrimSpace(v)
+	}
+	return endpoint, ""
+}
+
+// notifyBaseFor resolves where a DSP's win/loss notices go: the declared
+// ;notify= base if any, else the bid endpoint itself.
+func notifyBaseFor(endpoint string) string {
+	if m, ok := dspNotifyBases.Load().(map[string]string); ok {
+		if v := m[endpoint]; v != "" {
+			return v
+		}
+	}
+	return endpoint
+}
+
 // sendWinLossNotifications notifies each DSP whether they won or lost.
 // Winner gets price confirmation. Losers get the reason and clearing price
 // so they can adjust their bid shading models.
@@ -763,13 +811,24 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 
 	for _, rec := range records {
 		isWin := rec.Bid.DSPID == winnerDSP
+		// Notices are OpenRTB HTTP even when the bid edge rode the internal
+		// gRPC twin — resolve the HTTP notify base for this endpoint. A
+		// grpc:// base here means the ;notify= suffix is missing from the
+		// exchange.dsp_endpoints entry: undeliverable, and silently dropped
+		// win notices break budget caps — say so loudly.
+		base := notifyBaseFor(rec.Endpoint)
+		if grpcx.IsURL(base) {
+			log.Error("win/loss notify base is grpc:// — add ';notify=<http-base>' to the exchange.dsp_endpoints entry",
+				"endpoint", rec.Endpoint, "dsp", rec.Bid.DSPID)
+			continue
+		}
 		var url string
 		if isWin {
 			// Win notification — campaign_id is required so the DSP can
 			// decrement the right budget counter (Redis IncrBy keyed on
 			// campaign_id). Without it, budget caps never trigger.
 			url = fmt.Sprintf("%s/v1/openrtb/win?bid_id=%s&price=%.4f&campaign_id=%s&placement_id=%s",
-				rec.Endpoint, rec.BidID, clearingPrice, rec.Bid.CampaignID, placementID)
+				base, rec.BidID, clearingPrice, rec.Bid.CampaignID, placementID)
 		} else {
 			// Loss notification with reason
 			reason := 102 // outbid
@@ -777,7 +836,7 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 				reason = 100 // below floor
 			}
 			url = fmt.Sprintf("%s/v1/openrtb/loss?bid_id=%s&reason=%d&clearing_price=%.4f&campaign_id=%s&placement_id=%s",
-				rec.Endpoint, rec.BidID, reason, clearingPrice, rec.Bid.CampaignID, placementID)
+				base, rec.BidID, reason, clearingPrice, rec.Bid.CampaignID, placementID)
 		}
 		sendNotify(ctx, client, url, isWin, rec, log)
 	}
