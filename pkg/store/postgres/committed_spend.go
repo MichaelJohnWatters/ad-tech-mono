@@ -70,12 +70,12 @@ func (s *CommittedSpendStore) Load(ctx context.Context, day string) (settled, re
 	if s.Store == nil {
 		return settled, reserved, sql.ErrConnDone
 	}
-	rows, err := s.Store.read.QueryContext(ctx,
+	rows, closeRows, err := s.Store.QueryPlatform(ctx,
 		`SELECT campaign_id, settled_micros, reserved_micros FROM campaign_committed_spend WHERE day = $1`, day)
 	if err != nil {
 		return settled, reserved, fmt.Errorf("load committed-spend: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 	for rows.Next() {
 		var id string
 		var s, r int64

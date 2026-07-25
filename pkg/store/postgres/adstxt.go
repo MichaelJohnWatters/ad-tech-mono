@@ -17,11 +17,11 @@ type AdsTxtLoader struct {
 
 func (l *AdsTxtLoader) LoadAll(ctx context.Context) ([]fraud.AdsTxtRecord, error) {
 	const q = `SELECT domain, entries, status FROM ads_txt_cache`
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query ads_txt_cache: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []fraud.AdsTxtRecord
 	for rows.Next() {

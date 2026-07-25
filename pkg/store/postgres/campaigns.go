@@ -133,11 +133,11 @@ func (l *CampaignLoader) LoadAll(ctx context.Context) ([]models.Campaign, error)
 		args = append(args, pq.StringArray(l.AccountIDs))
 	}
 
-	rows, err := l.Store.read.QueryContext(ctx, q, args...)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query campaigns: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []models.Campaign
 	for rows.Next() {
@@ -220,7 +220,12 @@ func (l *CampaignLoader) LoadOne(ctx context.Context, id string) (models.Campaig
 		q += ` AND li.status = 'live'`
 	}
 	q += ` AND li.id = $1::uuid`
-	c, err := scanCampaign(l.Store.read.QueryRowContext(ctx, q, args...).Scan)
+	var c models.Campaign
+	err := l.Store.QueryRowPlatform(ctx, func(row *sql.Row) error {
+		var e error
+		c, e = scanCampaign(row.Scan)
+		return e
+	}, q, args...)
 	if err == sql.ErrNoRows {
 		return models.Campaign{}, false, nil
 	}

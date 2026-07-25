@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/lib/pq"
@@ -77,11 +78,11 @@ func (s *Store) LoadIdentityGraph(ctx context.Context) (map[string][]IdentityLin
 	// float64 rather than a string.
 	const q = `SELECT user_id, linked_id, confidence::float8 FROM identity_graph
 		WHERE expires_at IS NULL OR expires_at > now()`
-	rows, err := s.read.QueryContext(ctx, q)
+	rows, closeRows, err := s.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("load identity graph: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 	b := newAdjacencyBuilder()
 	for rows.Next() {
 		var u, l string
@@ -174,7 +175,7 @@ SELECT count(*) FROM (
           AND (g.expires_at IS NULL OR g.expires_at > now()))
 ) t`
 	var n int
-	if err := s.read.QueryRowContext(ctx, q, pq.Array(ids)).Scan(&n); err != nil {
+	if err := s.QueryRowPlatform(ctx, func(row *sql.Row) error { return row.Scan(&n) }, q, pq.Array(ids)); err != nil {
 		return 0, fmt.Errorf("count known identifiers: %w", err)
 	}
 	return n, nil
@@ -197,11 +198,11 @@ SELECT DISTINCT other FROM (
 ) t
 WHERE other <> $1
 ORDER BY other`
-	rows, err := s.read.QueryContext(ctx, q, id)
+	rows, closeRows, err := s.QueryPlatform(ctx, q, id)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity %q: %w", id, err)
 	}
-	defer rows.Close()
+	defer closeRows()
 	var out []string
 	for rows.Next() {
 		var v string

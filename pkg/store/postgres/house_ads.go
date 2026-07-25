@@ -19,11 +19,11 @@ func (l *HouseAdLoader) LoadAll(ctx context.Context) ([]houseads.HouseAd, error)
 	const q = `
 SELECT id::text, format, name, markup, COALESCE(landing_url, ''), enabled, weight, created_at, updated_at
 FROM house_ads`
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query house_ads: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 	var out []houseads.HouseAd
 	for rows.Next() {
 		var h houseads.HouseAd

@@ -42,11 +42,11 @@ SELECT
 FROM publisher_line_items pli
 WHERE pli.status = 'active'`
 
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query publisher_line_items: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []publisheradserver.PublisherLineItem
 	for rows.Next() {

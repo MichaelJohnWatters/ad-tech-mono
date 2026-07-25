@@ -67,6 +67,7 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 	// (leaked role / seed rows) can't fail this one with stale state.
 	cleanup := func() {
 		super.ExecContext(ctx, `DELETE FROM data_providers WHERE account_id IN ($1,$2)`, accA, accB)
+		super.ExecContext(ctx, `DELETE FROM advertiser_balances WHERE account_id IN ($1,$2)`, accA, accB)
 		super.ExecContext(ctx, `DELETE FROM accounts WHERE id IN ($1,$2)`, accA, accB)
 		super.ExecContext(ctx, `DO $$ BEGIN
 			IF EXISTS (SELECT FROM pg_roles WHERE rolname = '`+role+`') THEN
@@ -84,6 +85,7 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 	}
 	for _, g := range []string{
 		fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON data_providers TO %s`, role),
+		fmt.Sprintf(`GRANT SELECT ON advertiser_balances TO %s`, role),
 		fmt.Sprintf(`GRANT SELECT ON accounts TO %s`, role),
 	} {
 		if _, err := super.ExecContext(ctx, g); err != nil {
@@ -103,6 +105,12 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 		`INSERT INTO data_providers (account_id, name) VALUES ($1,'probe-A'),($2,'probe-B')`,
 		accA, accB); err != nil {
 		t.Fatalf("seed data_providers: %v", err)
+	}
+	// advertiser_balances is a tenant table with a tenant_isolation policy
+	// (migration 064) — used below to drive a REAL loader through QueryPlatform.
+	if _, err := super.ExecContext(ctx,
+		`INSERT INTO advertiser_balances (account_id) VALUES ($1),($2)`, accA, accB); err != nil {
+		t.Fatalf("seed advertiser_balances: %v", err)
 	}
 
 	// Connect AS the limited role.
@@ -183,5 +191,25 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 			t.Errorf("tenant A deleted %d of tenant B's rows; want 0 (RLS should hide them)", n)
 		}
 		tx.Commit()
+	})
+
+	// End-to-end: a REAL warm-cache loader (BalanceLoader) driven through
+	// QueryPlatform must see EVERY tenant's rows under the NOBYPASSRLS role —
+	// this is the whole point of the platform-read hatch. A raw read with no GUC
+	// would be filtered to nothing (proven by no_guc_sees_nothing_no_error above),
+	// so seeing both probe balances proves QueryPlatform's SET LOCAL hatch works.
+	t.Run("real_loader_sees_all_tenants", func(t *testing.T) {
+		store := NewFromDB(app) // Store on the limited-role connection
+		balances, err := (&BalanceLoader{Store: store}).LoadAll(ctx)
+		if err != nil {
+			t.Fatalf("BalanceLoader.LoadAll under NOBYPASSRLS role: %v", err)
+		}
+		got := map[string]bool{}
+		for _, b := range balances {
+			got[b.AccountID] = true
+		}
+		if !got[accA] || !got[accB] {
+			t.Errorf("platform loader saw accA=%v accB=%v; want both (hatch failed → RLS filtered the loader)", got[accA], got[accB])
+		}
 	})
 }

@@ -20,11 +20,11 @@ type OptOutLoader struct {
 
 func (l *OptOutLoader) LoadAll(ctx context.Context) ([]privacy.OptOut, error) {
 	const q = `SELECT user_id, level FROM opt_out_registry`
-	rows, err := l.Store.read.QueryContext(ctx, q)
+	rows, closeRows, err := l.Store.QueryPlatform(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query opt_out_registry: %w", err)
 	}
-	defer rows.Close()
+	defer closeRows()
 
 	var out []privacy.OptOut
 	for rows.Next() {
