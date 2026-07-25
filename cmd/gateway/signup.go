@@ -100,7 +100,7 @@ func signupHandler(store signupStore, signingKey string, log *slog.Logger) http.
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name: middleware.SessionCookieName, Value: token, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: claims.ExpiresAt, Secure: r.TLS != nil,
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: claims.ExpiresAt, Secure: middleware.RequestIsSecure(r),
 		})
 		log.Info("signup ok", "account_type", at, "account_id", accountID)
 		http.Redirect(w, r, portalHome(at), http.StatusSeeOther)

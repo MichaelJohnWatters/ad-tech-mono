@@ -145,7 +145,7 @@ func loginSubmitHandler(lookup userLookupFn, signingKey string, log *slog.Logger
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 			Expires:  claims.ExpiresAt,
-			Secure:   r.TLS != nil,
+			Secure:   middleware.RequestIsSecure(r), // TLS direct OR X-Forwarded-Proto=https (behind Traefik)
 		})
 		log.Info("login ok", "account_type", u.AccountType, "role", u.Role)
 		http.Redirect(w, r, portalHome(u.AccountType), http.StatusSeeOther)
