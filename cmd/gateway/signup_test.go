@@ -39,7 +39,7 @@ func TestSignup(t *testing.T) {
 	h := signupHandler(store, "key", quietLog())
 
 	// Valid advertiser → 303 + session cookie + advertiser portal.
-	rec := postSignup(h, url.Values{"name": {"Acme"}, "email": {"A@Acme.com"}, "password": {"secret1"}, "account_type": {"advertiser"}})
+	rec := postSignup(h, url.Values{"name": {"Acme"}, "email": {"A@Acme.com"}, "password": {"secret12"}, "account_type": {"advertiser"}})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("valid signup code = %d, want 303", rec.Code)
 	}
@@ -60,12 +60,12 @@ func TestSignup(t *testing.T) {
 	}
 
 	// Duplicate email → 409.
-	if rec := postSignup(fakeSignupHandlerWith(true), url.Values{"name": {"X"}, "email": {"x@x.com"}, "password": {"secret1"}, "account_type": {"publisher"}}); rec.Code != http.StatusConflict {
+	if rec := postSignup(fakeSignupHandlerWith(true), url.Values{"name": {"X"}, "email": {"x@x.com"}, "password": {"secret12"}, "account_type": {"publisher"}}); rec.Code != http.StatusConflict {
 		t.Errorf("dup email code = %d, want 409", rec.Code)
 	}
 
 	// Bad account type → 400.
-	if rec := postSignup(h, url.Values{"name": {"X"}, "email": {"x@x.com"}, "password": {"secret1"}, "account_type": {"admin"}}); rec.Code != http.StatusBadRequest {
+	if rec := postSignup(h, url.Values{"name": {"X"}, "email": {"x@x.com"}, "password": {"secret12"}, "account_type": {"admin"}}); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad account_type code = %d, want 400", rec.Code)
 	}
 	// Short password → 400.

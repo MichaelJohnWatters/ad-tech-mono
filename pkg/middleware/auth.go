@@ -202,6 +202,21 @@ func validateToken(token, signingKey string) (*auth.Claims, error) {
 		return nil, errInvalidToken
 	}
 
+	// Reject any token whose header doesn't declare HS256. Defence-in-depth
+	// against algorithm-confusion: the HMAC check below already only accepts
+	// HS256 (we never read alg to pick the verifier), but failing fast on a
+	// forged "alg":"none"/"RS256" header is explicit and cheap.
+	if hdr, err := base64.RawURLEncoding.DecodeString(parts[0]); err != nil {
+		return nil, errInvalidToken
+	} else {
+		var h struct {
+			Alg string `json:"alg"`
+		}
+		if json.Unmarshal(hdr, &h) != nil || h.Alg != "HS256" {
+			return nil, errInvalidToken
+		}
+	}
+
 	// Verify signature with a constant-time compare so the check can't be
 	// timing-probed byte-by-byte.
 	signingInput := parts[0] + "." + parts[1]

@@ -106,6 +106,8 @@ type Harness struct {
 	URLs URLs
 	DB   *sql.DB
 	HTTP *http.Client
+
+	adminTok string // cached admin bearer for auth-gated ops endpoints (config PUT)
 }
 
 // New connects to Postgres and returns a ready-to-use Harness. Does NOT

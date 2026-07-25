@@ -887,7 +887,9 @@ func main() {
 			Allowlist:   keys.Gateway.RateLimitAllowlist.Get(cfg),
 		}
 	}, log)
-	handler := tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))
+	// SecurityHeaders is OUTERMOST so HSTS/X-Frame-Options/etc. ride every
+	// response — including rate-limit 429s and error pages.
+	handler := middleware.SecurityHeaders(tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux))))
 
 	server := &http.Server{
 		Addr:         ":" + port,
