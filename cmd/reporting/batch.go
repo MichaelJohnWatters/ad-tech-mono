@@ -161,6 +161,11 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 		func(e *analytics.ImpressionEvent) string { return e.TraceID },
 		c.batch.InsertImpressions,
 		func(ctx context.Context, es []*analytics.ImpressionEvent) {
+			// Data monetization rides the batch path too — same per-trace
+			// settle as the per-message handler (fast PK misses).
+			for _, e := range es {
+				c.dataFee.AccrueOnImpression(ctx, e.TraceID)
+			}
 			if c.billing == nil {
 				return
 			}

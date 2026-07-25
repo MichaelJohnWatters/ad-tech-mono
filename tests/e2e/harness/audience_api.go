@@ -94,6 +94,37 @@ func (h *Harness) SetSegmentTaxonomy(t *testing.T, accountID, segmentID string, 
 	}
 }
 
+// SetSegmentDataFee sets a segment's data fee (CPM in micro-dollars) via the
+// gateway API (PUT /v1/api/audiences/fee) — the same tenant-scoped write
+// path the portal fee editor uses.
+func (h *Harness) SetSegmentDataFee(t *testing.T, accountID, segmentID string, feeMicros int64) {
+	t.Helper()
+	email := "aud-upload-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+
+	body, _ := json.Marshal(map[string]any{
+		"segment_id":      segmentID,
+		"data_fee_micros": feeMicros,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, h.URLs.Gateway+routes.APIAudienceFee, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build fee set: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("fee set call: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("fee set status %d: %s", resp.StatusCode, string(respBody))
+	}
+}
+
 // SegmentMemberCount returns how many members a segment has (direct DB read
 // for assertions).
 func (h *Harness) SegmentMemberCount(t *testing.T, segmentID string) int {

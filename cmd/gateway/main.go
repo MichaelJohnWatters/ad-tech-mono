@@ -426,6 +426,8 @@ func main() {
 	// /audiences handler, so neither is swallowed by it.
 	mux.Handle(routes.APITaxonomy, authMiddleware(http.HandlerFunc(taxonomyHandler(audDeps.store, log))))
 	mux.Handle(routes.APIAudienceTaxonomy, authMiddleware(http.HandlerFunc(audienceTaxonomyHandler(audDeps.store, secretsBus, log))))
+	mux.Handle(routes.APIAudienceFee, authMiddleware(http.HandlerFunc(audienceFeeHandler(audDeps.store, secretsBus, log))))
+	mux.Handle(routes.APIAudienceEarnings, authMiddleware(http.HandlerFunc(audienceEarningsHandler(audDeps.store, log))))
 
 	// Advertiser conversion-event setup (define named conversions + embed pixel).
 	// trackerURL is the browser-reachable tracker base baked into the pixel; a nil

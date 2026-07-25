@@ -130,6 +130,10 @@ subjects: Subjects {
     style.fill: "#9a3412"
     style.font-color: "#fff"
   }
+  datafee: adtech.datafee.observed {
+    style.fill: "#9a3412"
+    style.font-color: "#fff"
+  }
   batchrun: adtech.batch.run_completed {
     style.fill: "#7c2d12"
     style.font-color: "#fff"
@@ -203,6 +207,8 @@ publishers.gateway -> subjects.profilesig: audience upload (batched ids)
 publishers.pipeline -> subjects.profilesig: drop-zone onboarding (normalised ids)
 
 publishers.ssp -> subjects.behaviour: consented request row (categories stamped)
+publishers.ssp -> subjects.datafee: external win with fee-bearing segments (ADR 0009)
+subjects.datafee -> consumers.reporting: park until impression, then accrue
 publishers.tracker -> subjects.behaviour: consented interaction row (uid= on beacon)
 
 publishers.conductor -> subjects.batchrun: one event per chain run (run_id, aborted, failed steps)

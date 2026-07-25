@@ -54,6 +54,14 @@ const (
 	// PUT {segment_id, taxonomy_id|null}. Labelled PUBLIC segments are what
 	// the SSP expresses to external bidders as user.data (ext.segtax).
 	APIAudienceTaxonomy = apiPrefix + "/api/audiences/taxonomy"
+	// APIAudienceFee sets/clears a segment's data fee (migration 063): PUT
+	// {segment_id, data_fee_micros|null} — CPM in micro-dollars the owner
+	// earns per delivered impression when an EXTERNAL buyer wins a request
+	// carrying this public, taxonomy-labelled segment.
+	APIAudienceFee = apiPrefix + "/api/audiences/fee"
+	// APIAudienceEarnings lists the account's accrued data-fee earnings per
+	// segment (GET) — impressions, gross fee, platform margin, owner net.
+	APIAudienceEarnings = apiPrefix + "/api/audiences/earnings"
 	// APIAudienceIngest is the audience-ingest job status endpoint (ADR 0007):
 	// GET /v1/api/audiences/ingest/{id} returns the tenant-scoped job's status,
 	// counts, match rate, and error. Registered as a subtree so {id} is a path

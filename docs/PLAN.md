@@ -10863,6 +10863,7 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.events.conversion` | Tracker | Reporting (analytics + CPA settle) | ConversionEvent |
 | `adtech.auction.win` | Exchange | DSP (budget reservation), Reporting (analytics + billing accrual in one consumer) | AuctionWinEvent (single source of truth for cost) |
 | `adtech.auction.complete` | Exchange | Reporting | AuctionCompleteEvent (includes all bids, winner, timing) |
+| `adtech.datafee.observed` | SSP | Reporting (data-monetization accrual) | DataFeeEvent (external win on a request carrying fee-bearing segments; parked in data_fee_pending, accrues at impression — owner credited net of reporting.data_fee_margin_pct, external seat accrues a receivable) |
 | `adtech.budget.depleted` | DSP | Exchange (stop bidding for this campaign) | BudgetDepletedEvent |
 | `adtech.balance.depleted` | DSP (bid gate), Reporting (billing sink) | Webhooks, Reporting | BalanceDepletedEvent (advertiser prepay balance hit zero — account-wide no-bid until topup) |
 | `adtech.billing.campaign_spend_snapshot` | Reporting (billing engine, periodic) | DSP (all pods, fan-out) | CampaignSpendSnapshotEvent (per-campaign committed spend = settled + open reserves, in cents; DSPs reconcile pacing counters to it) |

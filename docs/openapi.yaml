@@ -1193,7 +1193,7 @@ paths:
       tags: [Audiences]
       summary: List the account's audience segments (member counts + match rate)
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at, taxonomy_id?, taxonomy_path? }] — taxonomy_* is the optional IAB Audience Taxonomy label" } }
+      responses: { "200": { description: "[{ id, name, type, visibility, members, match_rate?, last_upload_at?, updated_at, taxonomy_id?, taxonomy_path?, data_fee_micros? }] — taxonomy_* is the optional IAB Audience Taxonomy label; data_fee_micros the optional data fee (CPM, micro-dollars)" } }
     post:
       tags: [Audiences]
       summary: Upload a segment + members (JSON ids, or multipart CSV/TSV)
@@ -1284,6 +1284,38 @@ paths:
       responses:
         "204": { description: "Label updated" }
         "404": { description: "Segment not found for this account" }
+  /v1/api/audiences/fee:
+    put:
+      tags: [Audiences]
+      summary: Set or clear a segment's data fee (data monetization, ADR 0009)
+      description: >-
+        The CPM (micro-dollars) the owning account earns per DELIVERED
+        impression when an external buyer wins an auction whose bid request
+        carried this segment. Only public, IAB-labelled segments ride to
+        external buyers, so only they can earn. The owner is credited the fee
+        net of reporting.data_fee_margin_pct; the buyer's seat accrues a
+        receivable (invoiced out-of-band). null clears the fee.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [segment_id]
+              properties:
+                segment_id: { type: string }
+                data_fee_micros: { type: integer, nullable: true, minimum: 0, description: "CPM in micro-dollars (500000 = $0.50 CPM), or null to clear" }
+      responses:
+        "204": { description: "Fee updated" }
+        "404": { description: "Segment not found for this account" }
+  /v1/api/audiences/earnings:
+    get:
+      tags: [Audiences]
+      summary: Accrued data-fee earnings per segment (data monetization)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ segment_id, segment_name, impressions, fee_micros, owner_net_micros, margin_micros, last_earned_at? }] — summed per-impression micro-dollars, biggest earner first" }
   /v1/api/audiences/ingest/:
     get:
       tags: [Audiences]

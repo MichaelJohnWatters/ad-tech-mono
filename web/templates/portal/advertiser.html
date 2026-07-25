@@ -100,9 +100,20 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Taxonomy" "Members" "Match rate" "Updated" "")) }}
-        <tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Taxonomy" "Fee" "Members" "Match rate" "Updated" "")) }}
+        <tr><td colspan="9" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      <!-- ADR 0009 data monetization: what this account's fee-bearing public
+           segments have earned from external buyers. Accrues per delivered
+           impression; owner net = fee minus the platform margin. -->
+      {{ template "card-start" (dict "title" "Data earnings" "subtitle" "What your labelled public segments earn when external buyers win on them") }}
+      <div class="overflow-x-auto">
+        {{ template "table-start" (dict "headers" (slice "Segment" "Impressions" "Gross fees" "Platform margin" "Net earned" "Last earned")) }}
+          <tbody id="dataEarnings"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+        {{ template "table-end" . }}
+      </div>
       {{ template "card-end" . }}
 
       <!-- ADR 0007/0008: upload history — every upload's outcome (done/failed/
@@ -625,6 +636,25 @@
   <div class="flex justify-between mt-4">
     {{ template "button" (dict "label" "Clear label" "variant" "ghost" "onclick" "setTaxonomy(null)") }}
     {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('taxonomyPicker').classList.add('hidden')") }}
+  </div>
+{{ template "modal-end" . }}
+
+<!-- Data-fee editor (ADR 0009): the CPM this segment's owner earns per
+     delivered impression when an EXTERNAL buyer wins a request carrying it.
+     Net of the platform margin; accrues into Data earnings below. -->
+{{ template "modal-start" (dict "id" "feeEditor" "title" "Segment data fee") }}
+  <p class="mb-3 text-xs text-gray-400">The CPM external buyers owe when they win an impression on a request carrying this segment. You earn the fee net of the platform margin, credited to your balance per delivered impression. Only public segments with an IAB label ride to external buyers.</p>
+  <label class="block text-sm mb-4">
+    <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Fee (USD CPM)</span>
+    <input type="number" id="fee_input" min="0" step="0.01" placeholder="0.50"
+           class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" />
+  </label>
+  <div class="flex justify-between">
+    {{ template "button" (dict "label" "Clear fee" "variant" "ghost" "onclick" "saveFee(true)") }}
+    <div class="flex gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('feeEditor').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Save" "onclick" "saveFee(false)") }}
+    </div>
   </div>
 {{ template "modal-end" . }}
 
@@ -1336,15 +1366,79 @@ async function loadAudiences() {
         <td class="px-3 py-2">${a.taxonomy_path
           ? `<button onclick="openTaxonomyPicker('${esc(a.id)}', ${a.taxonomy_id})" title="${esc(a.taxonomy_path)}" class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info hover:bg-info/25">${esc(a.taxonomy_path.split(' | ').pop())}</button>`
           : `<button onclick="openTaxonomyPicker('${esc(a.id)}', null)" class="text-xs px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">+ IAB label</button>`}</td>
+        <td class="px-3 py-2">${a.data_fee_micros != null
+          ? `<button onclick="openFeeEditor('${esc(a.id)}', ${a.data_fee_micros})" title="Data fee (CPM) earned when external buyers win on this segment" class="text-xs px-1.5 py-0.5 rounded bg-success/15 text-success hover:bg-success/25 font-mono">$${(a.data_fee_micros / 1e6).toFixed(2)}</button>`
+          : (a.visibility === 'public' && a.taxonomy_path
+            ? `<button onclick="openFeeEditor('${esc(a.id)}', null)" class="text-xs px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">+ fee</button>`
+            : `<span class="text-xs text-gray-300 dark:text-gray-600" title="Only public segments with an IAB label can carry a data fee">—</span>`)}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(a.members)}</td>
         <td class="px-3 py-2 font-mono text-xs">${fmtMatchRate(a.match_rate)}</td>
         <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
         <td class="px-3 py-2 text-right"><button onclick="exportSegment('${esc(a.id)}', '${esc(a.name)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Export</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
+      : '<tr><td colspan="9" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+  loadDataEarnings();
+}
+
+// ---- Data earnings (ADR 0009) ----
+const fmtMicros = (m) => '$' + (m / 1e6).toFixed(4);
+async function loadDataEarnings() {
+  const tbody = document.getElementById('dataEarnings');
+  if (!tbody) return;
+  try {
+    const rows = await fetchJSON('/v1/api/audiences/earnings') || [];
+    tbody.innerHTML = rows.length ? rows.map(r => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(r.segment_name)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(r.impressions)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${fmtMicros(r.fee_micros)}</td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${fmtMicros(r.margin_micros)}</td>
+        <td class="px-3 py-2 font-mono text-xs text-success">${fmtMicros(r.owner_net_micros)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(r.last_earned_at)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">Nothing earned yet — set a fee on a public, IAB-labelled segment and earnings accrue when external buyers win on it.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// ---- Data-fee editor ----
+let feeTarget = null; // { segmentId, prevMicros } — prevMicros powers toast-undo
+function openFeeEditor(segmentId, currentMicros) {
+  feeTarget = { segmentId, prevMicros: currentMicros ?? null };
+  $('fee_input').value = currentMicros != null ? (currentMicros / 1e6).toFixed(2) : '';
+  $('feeEditor').classList.remove('hidden');
+  $('fee_input').focus();
+}
+async function saveFee(clear) {
+  const t = feeTarget;
+  if (!t) return;
+  let micros = null;
+  if (!clear) {
+    const dollars = parseFloat($('fee_input').value);
+    if (isNaN(dollars) || dollars < 0) { toast('Enter a fee of $0.00 or more', 'error'); return; }
+    micros = Math.round(dollars * 1e6);
+  }
+  $('feeEditor').classList.add('hidden');
+  try {
+    await putFee(t.segmentId, micros);
+    loadAudiences();
+    toastUndo(clear ? 'Data fee cleared' : 'Data fee updated', async () => {
+      try { await putFee(t.segmentId, t.prevMicros); loadAudiences(); }
+      catch (err) { toast('Undo failed: ' + err.message, 'error'); }
+    });
+  } catch (err) { toast('Fee update failed: ' + err.message, 'error'); }
+}
+async function putFee(segmentId, micros) {
+  const resp = await fetch('/v1/api/audiences/fee', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segment_id: segmentId, data_fee_micros: micros }),
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
 }
 
 // ---- IAB Audience Taxonomy picker ----
