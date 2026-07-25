@@ -12,10 +12,11 @@
 # bin/seed + profiles in its `only=[...]` even though only gateway uses
 # them.
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
 COPY bin/gateway /app
 COPY web /web
 COPY bin/seed /seed
 COPY profiles /profiles
 WORKDIR /
+USER 1000:1000
 ENTRYPOINT ["/app"]

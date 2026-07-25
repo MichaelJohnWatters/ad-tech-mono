@@ -10,6 +10,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /app ./cmd/${SERVICE}
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
 COPY --from=builder /app /app
+USER 1000:1000
 ENTRYPOINT ["/app"]
