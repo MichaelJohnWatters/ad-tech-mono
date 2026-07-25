@@ -21,6 +21,22 @@ type claimsKey struct{}
 // clients keep using the header; the middleware accepts either.
 const SessionCookieName = "adtech_session"
 
+// RequestIsSecure reports whether the ORIGINAL client connection was HTTPS —
+// used to set the Secure flag on session cookies. It's true for a direct TLS
+// connection (r.TLS) OR when a TLS-terminating proxy (our Traefik ingress)
+// forwarded the request with X-Forwarded-Proto: https. The proxy terminates TLS
+// and dials the app over plain HTTP, so r.TLS alone is nil in prod and the
+// cookie would wrongly ship without Secure — this closes that gap.
+//
+// Trusting the client-settable X-Forwarded-Proto is safe HERE (unlike for rate
+// limiting): forcing Secure=true only makes the cookie MORE restrictive — a
+// client that lies about https then can't receive its own cookie over http, so
+// it only harms the liar. Local/test traffic over plain HTTP sets no such header
+// and r.TLS is nil, so the cookie stays non-Secure and works without certs.
+func RequestIsSecure(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
 // tokenFromRequest pulls a bearer token from the Authorization header, falling
 // back to the session cookie (browser UI). Returns "" if neither is present or
 // the header is malformed.

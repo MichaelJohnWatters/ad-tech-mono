@@ -195,6 +195,11 @@ spec:
         - --entryPoints.metrics.address=:9100/tcp
         - --entryPoints.traefik.address=:8080/tcp
         - --entryPoints.web.address=:8000/tcp
+        # HTTP→HTTPS redirect: the app routers are websecure-only, so without this
+        # a client on http:// gets a 404 instead of being bounced to https. Local
+        # direct klipper ports (localhost:PORT) bypass Traefik and are unaffected.
+        - --entryPoints.web.http.redirections.entryPoint.to=websecure
+        - --entryPoints.web.http.redirections.entryPoint.scheme=https
         - --entryPoints.websecure.address=:8443/tcp
         - --api.dashboard=true
         - --ping=true
