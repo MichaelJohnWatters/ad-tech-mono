@@ -42,3 +42,30 @@ jobs:
         with:
           go-version-file: go.mod
       - run: CGO_ENABLED=1 go build -tags duckdb ./cmd/reporting/ ./pkg/store/analytics/
+
+  # Supply-chain scan (security hardening #74). Two Trivy passes:
+  #   - config: Dockerfile misconfigurations (root user, missing USER, etc.)
+  #   - fs:     known CVEs in Go module deps (go.sum) + the pinned base images
+  # `ignore-unfixed` means we only fail on ACTIONABLE HIGH/CRITICAL findings
+  # (a fix is available upstream) — otherwise a newly-disclosed unfixable CVE
+  # would wedge every unrelated PR. Bump/patch the dep to clear a failure.
+  supply-chain-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy — Dockerfile misconfig
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: build
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Trivy — dependency CVEs (fixable only)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

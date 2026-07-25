@@ -11,7 +11,7 @@
 # shared image would force every per-service docker_build to whitelist
 # bin/seed + profiles in its `only=[...]` even though only gateway uses
 # them.
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN apk add --no-cache ca-certificates && adduser -D -u 1000 app
 COPY bin/gateway /app
 COPY web /web
