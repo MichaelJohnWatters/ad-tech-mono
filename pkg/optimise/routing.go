@@ -1,10 +1,56 @@
 package optimise
 
 import (
+	"hash/fnv"
 	"sort"
 	"sync"
 	"time"
 )
+
+// Knobs are the SmartRouter's tunable thresholds. The exchange wires them
+// to live config (exchange.routing_*) via SetKnobs so ops can tune skip
+// behaviour from the staff portal without a deploy; the zero-value-free
+// defaults below are the previously hardcoded numbers.
+type Knobs struct {
+	// Enabled=false is the kill-switch: SelectDSPs returns the input list
+	// unchanged (no skips, no ranking). For routing misbehaviour or while
+	// onboarding a DSP that must not be throttled during ramp-up.
+	Enabled bool
+	// MinCalls is the per-(channel, DSP) sample size before the skip rules
+	// may act — thin stats never exclude anyone.
+	MinCalls int64
+	// MinBidRate skips a DSP whose bid rate is below this (default 5%).
+	MinBidRate float64
+	// MaxTimeoutRate skips a DSP whose timeout rate exceeds this (default 50%).
+	MaxTimeoutRate float64
+	// ExplorePct (0-100) is the ε-probe: a skip-filtered DSP is still called
+	// on this percentage of auctions (deterministic per trace), so its stats
+	// keep flowing and a DSP that recovers earns its way back in within
+	// minutes instead of staying blacklisted until the next pod restart.
+	// 0 disables exploration (skips become sticky for the pod's lifetime).
+	ExplorePct float64
+	// NeverSkip lists DSP endpoints the skip rules must never exclude —
+	// e.g. a DSP holding PG/PMP deals, whose deal bids would silently
+	// starve if its open-market bid rate got it routed out.
+	NeverSkip map[string]struct{}
+	// LatencySoft/LatencyHard are the ranking penalty thresholds:
+	// avg latency above soft multiplies the score ×0.8, above hard ×0.5.
+	LatencySoft time.Duration
+	LatencyHard time.Duration
+}
+
+// DefaultKnobs returns the historical hardcoded thresholds.
+func DefaultKnobs() Knobs {
+	return Knobs{
+		Enabled:        true,
+		MinCalls:       20,
+		MinBidRate:     0.05,
+		MaxTimeoutRate: 0.50,
+		ExplorePct:     1,
+		LatencySoft:    50 * time.Millisecond,
+		LatencyHard:    80 * time.Millisecond,
+	}
+}
 
 // DSPStats tracks per-(channel, DSP) performance for smart routing.
 //
@@ -33,6 +79,9 @@ type DSPStats struct {
 type SmartRouter struct {
 	mu    sync.RWMutex
 	stats map[channelDSPKey]*DSPStats
+
+	// knobsFn supplies live thresholds per selection; nil = DefaultKnobs.
+	knobsFn func() Knobs
 }
 
 type channelDSPKey struct {
@@ -40,9 +89,21 @@ type channelDSPKey struct {
 	dspID   string
 }
 
-// NewSmartRouter creates a smart router.
+// NewSmartRouter creates a smart router with DefaultKnobs.
 func NewSmartRouter() *SmartRouter {
 	return &SmartRouter{stats: make(map[channelDSPKey]*DSPStats)}
+}
+
+// SetKnobs wires live threshold resolution — called once at boot with a
+// closure over the config handle, evaluated per selection so portal edits
+// apply within the config poll interval, no restart.
+func (r *SmartRouter) SetKnobs(fn func() Knobs) { r.knobsFn = fn }
+
+func (r *SmartRouter) currentKnobs() Knobs {
+	if r.knobsFn == nil {
+		return DefaultKnobs()
+	}
+	return r.knobsFn()
 }
 
 // Seed pre-populates the router's per-(channel, DSP) stats from a prior
@@ -124,16 +185,41 @@ func (r *SmartRouter) RecordWin(channel, dspID string) {
 
 // SelectDSPs returns the DSPs to call for an auction on the given channel,
 // sorted by expected value (best-first). DSPs with no history get a neutral
-// score so they aren't starved.
+// score so they aren't starved. No exploration probe (no trace to key it
+// on) — the auction path uses SelectDSPsForTrace.
 //
-// Skip rules (per-channel, after enough samples):
-//   - bid_rate < 5% → almost never bids on this channel, skip
-//   - timeout_rate > 50% → too slow on this channel, skip
+// Skip rules (per-channel, once TotalCalls exceeds Knobs.MinCalls; a DSP
+// in Knobs.NeverSkip is exempt):
+//   - bid_rate < Knobs.MinBidRate → almost never bids on this channel, skip
+//   - timeout_rate > Knobs.MaxTimeoutRate → too slow on this channel, skip
 //
 // Ranking: expected value = bid_rate × avg_bid (× win_rate if any wins
-// recorded). Latency penalty (×0.8 if avg > 50ms, ×0.5 if avg > 80ms) so a
-// fast bidder beats a slow bidder of equivalent EV.
+// recorded), with a latency penalty (×0.8 above LatencySoft, ×0.5 above
+// LatencyHard) so a fast bidder beats a slow bidder of equivalent EV.
+//
+// Knobs.Enabled=false bypasses everything and returns the input unchanged.
 func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
+	return r.selectDSPs(channel, allDSPs, "")
+}
+
+// SelectDSPsForTrace is SelectDSPs plus the ε-probe: a skip-filtered DSP is
+// still included (appended after the ranked list) on Knobs.ExplorePct% of
+// auctions, decided deterministically from (trace, dsp) so replays and
+// tests are reproducible. This is what keeps a skipped DSP's stats flowing
+// so it can earn its way back in when it recovers — without it, a skip is
+// a lifetime sentence for the pod.
+func (r *SmartRouter) SelectDSPsForTrace(channel string, allDSPs []string, traceID string) []string {
+	return r.selectDSPs(channel, allDSPs, traceID)
+}
+
+func (r *SmartRouter) selectDSPs(channel string, allDSPs []string, traceID string) []string {
+	k := r.currentKnobs()
+	if !k.Enabled {
+		out := make([]string, len(allDSPs))
+		copy(out, allDSPs)
+		return out
+	}
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -143,6 +229,7 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 	}
 
 	var candidates []scored
+	var explored []string
 	for _, dspID := range allDSPs {
 		key := channelDSPKey{channel: channel, dspID: dspID}
 		s, ok := r.stats[key]
@@ -153,11 +240,14 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 			continue
 		}
 
-		if s.TotalCalls > 20 && s.BidRate < 0.05 {
-			continue
-		}
-		if s.TotalCalls > 20 && s.TimeoutRate > 0.50 {
-			continue
+		_, neverSkip := k.NeverSkip[dspID]
+		if !neverSkip && s.TotalCalls > k.MinCalls {
+			if s.BidRate < k.MinBidRate || s.TimeoutRate > k.MaxTimeoutRate {
+				if traceID != "" && exploreTrace(traceID, dspID, k.ExplorePct) {
+					explored = append(explored, dspID)
+				}
+				continue
+			}
 		}
 
 		expectedValue := s.BidRate * s.AvgBid
@@ -165,10 +255,10 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 			expectedValue *= s.WinRate
 		}
 		latencyPenalty := 1.0
-		if s.AvgLatency > 50*time.Millisecond {
+		if s.AvgLatency > k.LatencySoft {
 			latencyPenalty = 0.8
 		}
-		if s.AvgLatency > 80*time.Millisecond {
+		if s.AvgLatency > k.LatencyHard {
 			latencyPenalty = 0.5
 		}
 
@@ -179,15 +269,31 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 		return candidates[i].score > candidates[j].score
 	})
 
-	result := make([]string, len(candidates))
-	for i, c := range candidates {
-		result[i] = c.id
+	result := make([]string, 0, len(candidates)+len(explored))
+	for _, c := range candidates {
+		result = append(result, c.id)
 	}
-	return result
+	// Explore probes ride at the back: they're being measured, not trusted.
+	return append(result, explored...)
+}
+
+// exploreTrace deterministically decides whether this (trace, dsp) pair is
+// in the exploration sample for pct (0-100). Same inputs → same decision,
+// so a replayed trace explores identically and tests are reproducible.
+func exploreTrace(traceID, dspID string, pct float64) bool {
+	if pct <= 0 {
+		return false
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(traceID))
+	_, _ = h.Write([]byte{'|'})
+	_, _ = h.Write([]byte(dspID))
+	return float64(h.Sum32()%10000)/100.0 < pct
 }
 
 // Preview returns the list of DSPs SelectDSPs would currently return for
-// (channel, allDSPs). Read-only — does not record a call. Used by the
+// (channel, allDSPs). Read-only — does not record a call, and shows the
+// steady-state decision (no exploration probe). Used by the
 // /debug/exchange/routing?preview=true debug endpoint so tests and ops can
 // inspect the router's current filter decisions without having to run a
 // real auction (which would also mutate stats).

@@ -113,16 +113,18 @@ func (rs *routingSync) broadcastReset(ctx context.Context) {
 }
 
 // reseedLoop converges this pod's router to the cluster-global dsp_calls
-// aggregate. Interval 0 disables (per-pod stats + boot warm-start only).
+// aggregate. The interval is live-read each cycle so ops can retune or
+// disable/re-enable from the portal; 0 pauses reseeding (per-pod stats +
+// boot warm-start only) and is re-checked every 30s.
 func (rs *routingSync) reseedLoop() {
-	interval := keys.Exchange.RoutingReseedInterval.Get(rs.cfg)
-	if interval <= 0 {
-		return
-	}
 	base := keys.Exchange.ReportingURL.Get(rs.cfg)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		interval := keys.Exchange.RoutingReseedInterval.Get(rs.cfg)
+		if interval <= 0 {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+		time.Sleep(interval)
 		url := base + "/debug/routing/stats?since_hours=6"
 		if at := rs.resetAt.Load(); at > 0 {
 			url = fmt.Sprintf("%s/debug/routing/stats?since_ms=%d", base, at)
