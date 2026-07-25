@@ -76,19 +76,21 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
 
 ### Proven design: an `app.platform_read` escape-hatch GUC
 
-1. **Rewrite every tenant policy** to allow either a tenant match OR an explicit
-   platform-read flag. `current_setting(_, true)` (missing_ok) returns NULL when
-   unset, so a query with no GUC safely matches nothing instead of erroring:
-   ```sql
-   CREATE POLICY tenant_isolation ON <table>
-     USING (
-       account_id = current_setting('app.current_account_id', true)::uuid
-       OR current_setting('app.platform_read', true) = 'on'
-     );
-   ```
-   This migration is a **no-op under the current superuser** (RLS still bypassed),
-   so it's safe to land ahead of the role flip. Do it as one migration covering
-   all ~23 policies (generate from `pg_policies` to avoid missing one).
+1. ✅ **DONE — migration `065_rls_platform_read_hatch.sql`** rewrites every
+   `tenant_isolation` policy (33 of them, 4 distinct forms incl. subquery/
+   child-table scoping) to allow either the existing tenant match OR an explicit
+   platform-read flag, preserving each policy's own logic. A `DO`-block loops
+   `pg_policies` and, per policy: makes `current_setting('app.current_account_id')`
+   missing_ok (`, true`) so a platform-read tx matches nothing instead of
+   erroring, then OR-s in `current_setting('app.platform_read', true) = 'on'`.
+   Idempotent; the Down reverses it via regexp. **No-op under the current
+   superuser** (policy expressions aren't evaluated when RLS is bypassed), so it's
+   safe to land ahead of the role flip — which it is.
+
+   Proven (2026-07-25) against the REAL schema in a throwaway Postgres + a real
+   `NOBYPASSRLS` role: on `data_providers`, all five cases green — tenant read
+   scoped, platform_read=on sees all, unset-GUC empty (no error), cross-tenant
+   read + write blocked. Down/Up cycle preserves the subquery-form policies.
 
 2. **Create the limited role** (idempotent; migration runs as owner/superuser):
    ```sql
@@ -108,13 +110,28 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    (`FORCE ROW LEVEL SECURITY` is only needed if the querying role owns the table;
    `adtech_app` won't own anything, so plain `ENABLE` — already in place — suffices.)
 
-3. **Add a `QueryPlatform` store helper** that opens a read tx and sets
-   `SET LOCAL app.platform_read = 'on'`, mirroring `QueryRead`'s SET-LOCAL pattern.
-   Switch the `LoadAll` methods above to it. Under the superuser this is a
-   behavioural no-op (RLS bypassed either way), so it can land + ship ahead of the
-   flip; once the role is downgraded it's what makes the loaders work. Keep the
-   flag confined to these named platform-read helpers — grep for `platform_read`
-   should return only the loader path.
+3. **Add a `QueryPlatform` store helper + rewire the platform loaders.** ~16
+   files call the raw `s.read.QueryContext(...)` (grep `\.read\.Query` in
+   `pkg/store/postgres/`). These need a helper that runs the query inside a read
+   tx with `SET LOCAL app.platform_read = 'on'`.
+
+   ⚠️ **Two traps — this is the crux, do it with integration tests, not blind:**
+   - **Classify every `.read.Query` call site first.** NOT all 16 are
+     cross-tenant platform loads — some are tenant-scoped reads that filter by an
+     `account_id` in the WHERE. Switching one of *those* to `platform_read` would
+     BYPASS tenant isolation — the exact bug this task fixes. Only the `LoadAll`
+     warm-cache loaders (CampaignLoader, BalanceLoader, DealLoader, …) get
+     `QueryPlatform`; audit each of the others.
+   - **`lib/pq` does not buffer rows past tx commit.** `QueryRead` today commits
+     its tx *before* returning `*sql.Rows` (works only because tenant reads are
+     small / already drained). `QueryPlatform` loads can be large (all campaigns),
+     so it must NOT commit before the caller scans — pass a `func(*sql.Rows)`
+     callback that runs inside the tx, or return a closer that commits after
+     scan. Don't copy `QueryRead`'s commit-then-return shape.
+
+   Under the superuser this is a behavioural no-op (RLS bypassed either way), so it
+   can ship ahead of the flip. Keep the flag confined to `QueryPlatform` — grep
+   for `platform_read` should return only that helper + this migration.
 
 4. **Flip `DATABASE_URL`** to `adtech_app` (EXCLUSIVE stack) and run the full e2e
    suite: tenant-isolation (`rls_test.go`), the money loop, pacing, and a warm-
