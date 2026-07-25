@@ -14,15 +14,20 @@
 -- Applying this now is safe (no behavior change under the superuser) and makes
 -- the schema correct for that future downgrade.
 
+-- Idempotent (DROP POLICY IF EXISTS before CREATE) so it's safe to re-run — e.g.
+-- if the policies were applied out-of-band before goose recorded this migration.
 ALTER TABLE creative_review_queue ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON creative_review_queue;
 CREATE POLICY tenant_isolation ON creative_review_queue
     USING (account_id = current_setting('app.current_account_id')::UUID);
 
 ALTER TABLE team_members ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON team_members;
 CREATE POLICY tenant_isolation ON team_members
     USING (account_id = current_setting('app.current_account_id')::UUID);
 
 ALTER TABLE advertiser_balances ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON advertiser_balances;
 CREATE POLICY tenant_isolation ON advertiser_balances
     USING (account_id = current_setting('app.current_account_id')::UUID);
 

@@ -706,6 +706,10 @@ services:
   reporting:
     image: adtech-reporting
     replicas: 3
+    # Exempt from global.hardenedContainers: the tigerbeetle-go CGO ledger client
+    # SIGSEGVs under runAsNonRoot + drop-ALL-caps + seccomp. Runs as root, no
+    # securityContext (its baseline). Revisit with a tuned seccomp profile.
+    hardenedExempt: true
     ports: [{ name: http, port: 8086 }]
     env:
       - name: POD_NAME
