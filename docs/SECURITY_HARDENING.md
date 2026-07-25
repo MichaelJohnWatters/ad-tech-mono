@@ -57,22 +57,70 @@ lives).
 Today the app connects as `adtech` with `rolsuper=t, rolbypassrls=t`, so **all
 RLS is bypassed by the app** — the 20+ tenant_isolation policies (incl. the three
 added in migration 064) are a no-op safety net. Fixing this is the highest-value
-tenant-isolation hardening, and the riskiest.
+tenant-isolation hardening, and the riskiest. It needs an EXCLUSIVE stack for the
+`DATABASE_URL` flip + full e2e, so it is not landed yet — but the design below is
+**proven** against a real `NOBYPASSRLS` role in an isolated Postgres (2026-07-25;
+all six isolation cases green: tenant read scoped, platform escape-hatch works,
+unset-GUC returns empty with no error, cross-tenant read+write blocked).
 
-**Steps (staging, carefully):**
-1. Create a limited role: `CREATE ROLE adtech_app LOGIN PASSWORD '…' NOSUPERUSER
-   NOBYPASSRLS;` and `GRANT` only the needed table privileges (SELECT/INSERT/
-   UPDATE/DELETE on the app tables, USAGE on sequences). Migrations keep running
-   as the owner/superuser.
-2. Point the app `DATABASE_URL` at `adtech_app`.
-3. **Cross-tenant warm-cache loaders break here** — `CampaignLoader`,
-   `ContractLoader`, `BalanceLoader` load platform-wide with no tenant context, so
-   RLS now filters them to nothing. Give the loaders a bypass: either a dedicated
-   role with `BYPASSRLS` for those queries, or `ALTER TABLE … FORCE ROW LEVEL
-   SECURITY` off + a policy that permits a "platform" GUC. Audit every store path
-   that must set `app.current_account_id`.
-4. Run the full e2e suite — tenant-isolation tests (`rls_test.go`) + the money
-   loop + pacing must stay green.
+### The crux: the platform loaders
+
+Tenant queries set `app.current_account_id` in a tx (see
+`pkg/store/postgres/postgres.go` `SetTenantContext` / `QueryRead`). But the
+cross-tenant warm-cache loaders — `CampaignLoader`, `ContractLoader`,
+`BalanceLoader`, `DealLoader`, `CreativeLoader`, `HouseAdLoader`, `FreqCapLoader`,
+`OptOutLoader`, `AdsTxtLoader`, `PublisherLineItemLoader` (every `LoadAll` in
+`pkg/store/postgres/`) — run with **no** GUC set and rely on the superuser
+bypassing RLS. Under `NOBYPASSRLS` they'd filter to nothing. They need an
+explicit, auditable escape hatch, NOT a blanket bypass role.
+
+### Proven design: an `app.platform_read` escape-hatch GUC
+
+1. **Rewrite every tenant policy** to allow either a tenant match OR an explicit
+   platform-read flag. `current_setting(_, true)` (missing_ok) returns NULL when
+   unset, so a query with no GUC safely matches nothing instead of erroring:
+   ```sql
+   CREATE POLICY tenant_isolation ON <table>
+     USING (
+       account_id = current_setting('app.current_account_id', true)::uuid
+       OR current_setting('app.platform_read', true) = 'on'
+     );
+   ```
+   This migration is a **no-op under the current superuser** (RLS still bypassed),
+   so it's safe to land ahead of the role flip. Do it as one migration covering
+   all ~23 policies (generate from `pg_policies` to avoid missing one).
+
+2. **Create the limited role** (idempotent; migration runs as owner/superuser):
+   ```sql
+   DO $$ BEGIN
+     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='adtech_app') THEN
+       CREATE ROLE adtech_app LOGIN NOSUPERUSER NOBYPASSRLS;
+     END IF;
+   END $$;
+   -- password set out-of-band (SOPS secret), not in the migration
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO adtech_app;
+   GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO adtech_app;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO adtech_app;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+     GRANT USAGE ON SEQUENCES TO adtech_app;
+   ```
+   (`FORCE ROW LEVEL SECURITY` is only needed if the querying role owns the table;
+   `adtech_app` won't own anything, so plain `ENABLE` — already in place — suffices.)
+
+3. **Add a `QueryPlatform` store helper** that opens a read tx and sets
+   `SET LOCAL app.platform_read = 'on'`, mirroring `QueryRead`'s SET-LOCAL pattern.
+   Switch the `LoadAll` methods above to it. Under the superuser this is a
+   behavioural no-op (RLS bypassed either way), so it can land + ship ahead of the
+   flip; once the role is downgraded it's what makes the loaders work. Keep the
+   flag confined to these named platform-read helpers — grep for `platform_read`
+   should return only the loader path.
+
+4. **Flip `DATABASE_URL`** to `adtech_app` (EXCLUSIVE stack) and run the full e2e
+   suite: tenant-isolation (`rls_test.go`), the money loop, pacing, and a warm-
+   cache refresh (proves the platform loaders still load cross-tenant). Migrations
+   keep pointing at the owner/superuser `DATABASE_URL` (a separate env for the
+   migrate job) so DDL still works.
 
 ## 4. Image supply chain (pinning + scanning)
 
