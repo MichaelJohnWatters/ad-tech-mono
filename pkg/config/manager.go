@@ -232,7 +232,12 @@ func (m *Manager) poll(ctx context.Context) {
 		return
 	}
 
-	m.applyChanges(values, "poll")
+	// The poll result is a COMPLETE snapshot of this pod's live rows, so it
+	// is authoritative for the whole live layer — including rows that no
+	// longer exist. applySnapshot (not applyChanges) so a deleted row
+	// reverts the key to its env/schema-default value instead of pinning
+	// the last-known value in memory forever.
+	m.applySnapshot(values, "poll")
 
 	if registry != nil && serviceName != "" {
 		registry.Ping(ctx, serviceName)
@@ -249,33 +254,79 @@ func (m *Manager) poll(ctx context.Context) {
 	}
 }
 
+// applyChanges applies a PARTIAL update (a single API write, a rollback).
+// It never removes keys — only applySnapshot, fed by a complete poll
+// fetch, is allowed to decide that a live value no longer exists.
 func (m *Manager) applyChanges(newValues map[string]string, source string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.applyLocked(newValues, source)
+}
 
+// applySnapshot applies a COMPLETE fetch of this pod's live rows: present
+// values are applied, and any key currently in the live layer but absent
+// from the snapshot is cleared so reads revert to env/schema default.
+// Without this, deleting a config row pinned the last-known value in every
+// running pod until restart — a silent lie ops could not see or fix short
+// of writing the old value back by hand.
+func (m *Manager) applySnapshot(newValues map[string]string, source string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, oldVal := range m.cfg.snapshot() {
+		if _, still := newValues[key]; still {
+			continue
+		}
+		m.cfg.ClearLive(key)
+		// The effective value after the clear — env var or schema default —
+		// is what callbacks receive, so Live* handles rebase to something
+		// parseable instead of sticking on the deleted value.
+		effective := m.cfg.Get(key, schemaDefault(key))
+		m.recordChangeLocked(key, oldVal, effective, source)
+		m.log.Info("config row removed, reverting to env/default",
+			"key", key, "old", oldVal, "new", effective, "source", source)
+	}
+
+	m.applyLocked(newValues, source)
+}
+
+// applyLocked is the shared body of applyChanges/applySnapshot. Caller
+// holds m.mu.
+func (m *Manager) applyLocked(newValues map[string]string, source string) {
 	for key, newVal := range newValues {
 		oldVal, existed := m.cfg.rawGet(key)
 		if !existed || oldVal != newVal {
 			m.cfg.SetLive(key, newVal)
-
-			record := ChangeRecord{
-				Key: key, OldValue: oldVal, NewValue: newVal,
-				Source: source, Timestamp: time.Now(),
-			}
-			m.history = append(m.history, record)
-
+			m.recordChangeLocked(key, oldVal, newVal, source)
 			m.log.Info("config changed", "key", key, "old", oldVal, "new", newVal, "source", source)
-
-			// Fire key-specific callbacks
-			for _, cb := range m.callbacks[key] {
-				go cb(key, oldVal, newVal)
-			}
-			// Fire global callbacks
-			for _, cb := range m.globalCBs {
-				go cb(key, oldVal, newVal)
-			}
 		}
 	}
+}
+
+// recordChangeLocked appends history and fires callbacks. Caller holds m.mu.
+func (m *Manager) recordChangeLocked(key, oldVal, newVal, source string) {
+	m.history = append(m.history, ChangeRecord{
+		Key: key, OldValue: oldVal, NewValue: newVal,
+		Source: source, Timestamp: time.Now(),
+	})
+	for _, cb := range m.callbacks[key] {
+		go cb(key, oldVal, newVal)
+	}
+	for _, cb := range m.globalCBs {
+		go cb(key, oldVal, newVal)
+	}
+}
+
+// schemaDefault returns the schema default for key, or "" when the key
+// isn't in the platform schema (raw keys resolve their default at the
+// call site).
+func schemaDefault(key string) string {
+	for _, e := range Schema() {
+		if e.Key == key {
+			return e.Default
+		}
+	}
+	return ""
 }
 
 // Set updates a config value via the API (bypasses polling).
@@ -452,7 +503,10 @@ func (m *Manager) ResetToDefault(ctx context.Context, key string) error {
 	return fmt.Errorf("key %q not in schema", key)
 }
 
-// Remove deletes a config value.
+// Remove deletes a config value. The key reverts to its env/schema-default
+// value locally, callbacks fire with that effective value (so Live* handles
+// rebase), and an invalidate is broadcast so sibling pods re-poll and drop
+// the row too instead of waiting for their next poll tick.
 func (m *Manager) Remove(ctx context.Context, key string) error {
 	m.mu.RLock()
 	source := m.source
@@ -467,13 +521,20 @@ func (m *Manager) Remove(ctx context.Context, key string) error {
 	m.mu.Lock()
 	oldVal, _ := m.cfg.rawGet(key)
 	m.cfg.ClearLive(key)
-	m.history = append(m.history, ChangeRecord{
-		Key: key, OldValue: oldVal, NewValue: "",
-		Source: "api", Timestamp: time.Now(),
-	})
+	effective := m.cfg.Get(key, schemaDefault(key))
+	m.recordChangeLocked(key, oldVal, effective, "api")
 	m.mu.Unlock()
 
-	m.log.Info("config removed", "key", key)
+	m.log.Info("config removed, reverting to env/default", "key", key, "old", oldVal, "new", effective)
+
+	m.mu.RLock()
+	bus := m.bus
+	m.mu.RUnlock()
+	if bus != nil {
+		if err := bus.Publish(ctx, events.SubjectCacheInvalidateConfig, []byte(key)); err != nil {
+			m.log.Warn("config invalidate publish failed", "key", key, "error", err)
+		}
+	}
 	return nil
 }
 
