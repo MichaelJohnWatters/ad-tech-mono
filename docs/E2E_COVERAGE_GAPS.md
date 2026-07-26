@@ -32,13 +32,17 @@ Status key: ✅ done · ⬜ todo.
   item live→ended), and that a re-run is idempotent. Follow-up: the
   `ActivateFlights` direction (draft IO → active) needs a direct draft-IO
   fixture since the API creates IOs `active`.
-- ⬜ **`notifications` (`:8096`)** — consumes budget/balance/campaign/report NATS
-  events, writes per-account portal rows. Zero coverage. (The "notification"
-  hits in the suite are auction win/loss notices — a different thing.)
+- ✅ **`notifications` (`:8096`)** — `notifications_test.go`. Proves the full
+  chain: a campaign live→paused transition → `SubjectCampaignStateChanged` → the
+  notifications consumer → the `notifications` table → the tenant-scoped portal
+  bell API (list + unread count + mark-read).
 - ⬜ **`appadstxt`** — daily app-ads.txt crawler; no test it crawls + upserts.
-- ⬜ **CSRF + session-tamper negatives** — `pkg/middleware/csrf.go` and the
-  `Secure`-cookie logic exist but nothing asserts a state-changing POST without a
-  valid CSRF token, or with a tampered session cookie, is rejected.
+  Feasible but needs a host-reachable fake-TLS server + a publisher
+  developer-domain seed helper (`harness.HostReachableServer` exists); deferred.
+- ✅ **CSRF cross-site block** — `csrf_test.go`. A cross-site, cookie-authed POST
+  → 403; absent-Origin / same-origin / safe-method requests pass (the exemptions
+  that keep legitimate + non-browser traffic working). Session-cookie *tamper*
+  (flip a byte → 401) is still ⬜ — a small add on top of this.
 
 ## P2 — rich-media depth (Phase 9 is orchestration-tested, not format-tested)
 - ⬜ **VAST/VMAP round-trip** — a real video auction returning VAST 4.2 with
