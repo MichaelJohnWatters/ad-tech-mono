@@ -151,6 +151,19 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    keep pointing at the owner/superuser `DATABASE_URL` (a separate env for the
    migrate job) so DDL still works.
 
+### Pre-flip correctness audit (done 2026-07-26 — both classes clean)
+
+Two bug classes would break silently once RLS is active under the limited role;
+both were swept and are clean, so the flip shouldn't surprise you:
+- **Session-level GUC leaks.** All 35 `set_config('app.…')` call sites across
+  `pkg/` + `cmd/` pass `is_local = true` (SET LOCAL) — a session-level set would
+  leak `app.current_account_id`/`app.platform_read` onto the pooled connection
+  and corrupt the next borrower's tenant scope. None do.
+- **Scan-after-commit** (the retired `QueryRead` bug — lib/pq invalidates rows
+  once the tx ends). Audited every function that uses both `tx.Query*` and
+  `tx.Commit`; all scan before the tx ends. `QueryRead` was the only offender and
+  is deleted.
+
 ## 4. Image supply chain (pinning + scanning)
 
 **DONE (committed, no deploy needed — only affects freshly-built images / CI):**
