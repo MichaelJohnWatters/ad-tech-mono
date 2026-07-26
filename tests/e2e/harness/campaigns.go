@@ -29,13 +29,13 @@ type InsertionOrder struct {
 // + line_item_creatives where set). Carries the IDs so downstream helpers
 // can pause/resume, change budget, or attach more creatives.
 type Campaign struct {
-	ID         string
-	ExternalID string
-	AccountID  string
-	IOId       string
-	CreativeID string
+	ID          string
+	ExternalID  string
+	AccountID   string
+	IOId        string
+	CreativeID  string
 	DailyBudget float64
-	Status     string
+	Status      string
 }
 
 // Targeting is the subset of targeting fields the e2e suite cares about.
@@ -109,6 +109,62 @@ INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1, 
 ON CONFLICT (line_item_id, creative_id) DO NOTHING`
 		if _, err := tx.Exec(linkQ, lineItemID, creativeID); err != nil {
 			t.Fatalf("line_item_creatives insert: %v", err)
+		}
+	})
+
+	return Campaign{
+		ID: lineItemID, ExternalID: externalKey,
+		AccountID: owner.ID, IOId: io.ID, CreativeID: creativeID,
+		DailyBudget: dailyBudget, Status: "live",
+	}
+}
+
+// CreateVideoCampaign is CreateCampaign's video sibling: a live video line item
+// with a video creative (format='video', asset_url + duration_seconds) so a VAST
+// serve can fill. The DSP video match gates on duration ∈ the placement's
+// [min,max] window and a non-empty MediaURL (asset_url), so durationSec must sit
+// inside the AddVideoPlacement window. Empty targeting = match all.
+func (h *Harness) CreateVideoCampaign(t *testing.T, owner Account, io InsertionOrder, externalKey string, baseBid, dailyBudget float64, creativeExternalKey, creativeDomain string, durationSec int, targeting Targeting) Campaign {
+	t.Helper()
+	if owner.Type != "advertiser" {
+		t.Fatalf("CreateVideoCampaign: owner must be an advertiser account")
+	}
+	lineItemID := idgen.Derive("line_item", externalKey)
+	creativeID := idgen.Derive("creative", creativeExternalKey)
+	targetingID := idgen.Derive("targeting", externalKey)
+
+	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
+		const liQ = `
+INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'live', 'video', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())
+ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, format = 'video', base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
+		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
+			t.Fatalf("video line_items insert: %v", err)
+		}
+
+		const trQ = `
+INSERT INTO targeting_rules (id, line_item_id, account_id, include_geo, include_device, bid_modifiers, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, '{}', now(), now())
+ON CONFLICT (line_item_id) DO UPDATE SET include_geo = EXCLUDED.include_geo, include_device = EXCLUDED.include_device, updated_at = now()`
+		if _, err := tx.Exec(trQ, targetingID, lineItemID, owner.ID, pq.StringArray(targeting.Geos), pq.StringArray(targeting.Devices)); err != nil {
+			t.Fatalf("video targeting_rules insert: %v", err)
+		}
+
+		const crQ = `
+INSERT INTO creatives (id, account_id, name, format, width, height, duration_seconds, asset_url, landing_url, review_status, created_at, updated_at)
+VALUES ($1, $2, $3, 'video', 640, 360, $4, $5, $6, 'approved', now(), now())
+ON CONFLICT (id) DO UPDATE SET asset_url = EXCLUDED.asset_url, duration_seconds = EXCLUDED.duration_seconds, landing_url = EXCLUDED.landing_url, updated_at = now()`
+		assetURL := "https://cdn." + creativeDomain + "/" + creativeExternalKey + ".mp4"
+		landing := "https://" + creativeDomain
+		if _, err := tx.Exec(crQ, creativeID, owner.ID, creativeExternalKey, durationSec, assetURL, landing); err != nil {
+			t.Fatalf("video creatives insert: %v", err)
+		}
+
+		const linkQ = `
+INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1, $2, 100)
+ON CONFLICT (line_item_id, creative_id) DO NOTHING`
+		if _, err := tx.Exec(linkQ, lineItemID, creativeID); err != nil {
+			t.Fatalf("video line_item_creatives insert: %v", err)
 		}
 	})
 
