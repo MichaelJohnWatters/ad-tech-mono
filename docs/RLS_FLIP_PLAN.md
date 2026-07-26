@@ -36,6 +36,35 @@ Two sub-patterns, both mechanical:
   caller's GUC before the SELECT, in a read-only tx held open while scanning).
   This is the bulk of A's remaining sites — mechanical but many.
 
+## STATUS (2026-07-27) — buckets A–E done; ~52 of 54 cleared
+The RLS role-flip is essentially complete. All five buckets fixed under the flip
+(each commit a no-op under the superuser, verified no regression):
+- **A** management CRUD, **B** report-runner worker, **C** notifications +
+  datafee, **D** audience/profile ingestion (ingest worker + mappings + segment
+  export + SSP membership stamping), **E** billing balance batch-debit.
+
+Reusable primitives landed in `pkg/store/postgres`: `QueryTenantDB`,
+`QueryRowTenantDB` (tenant reads), plus per-package `execPlatform`/`claimPlatform`
+for worker writes. The three patterns (discover-owner → hatch; tenant → caller
+GUC; cross-tenant worker/staff → platform hatch) covered every site.
+
+Remaining (the last 2 of 54, NOT blockers):
+- `TestTopupTenantFlow` — balance base = a harness grant amount → **test-state
+  pollution** from repeated flip runs, not RLS (passes on a clean run).
+- `TestBillingDealTypeFeeModifier` — a deal-type-modifier revenue premium in the
+  deep billing engine reads slightly under; a targeted billing-internal follow-up.
+- `TestVideo/AudioTrackerEventReachesReporting` — NOT RLS; a leaked
+  `tracker.signature_validation=true` config (fix in that test's cleanup).
+
+### Finalize the flip (deployment, still to do)
+1. Persist the app services' `DATABASE_URL` → `adtech_app` in `values.yaml`
+   (migrate job stays on the owner/superuser URL).
+2. Wire the `adtech_app` password as a SOPS secret (dev value used for the flip
+   testing was set out-of-band via `ALTER ROLE`).
+3. Un-skip `tests/e2e/rls_test.go` — it can finally enforce.
+4. Run the full `make test-e2e` once green end-to-end.
+
+## Superseded — original per-bucket breakdown (kept for history)
 ## Status (2026-07-26) — buckets A, B, C largely done
 Cleared, committed, all no-ops under the superuser:
 - **A (management CRUD)** — discover-owner lookups → hatch; tenant reads/writes →
