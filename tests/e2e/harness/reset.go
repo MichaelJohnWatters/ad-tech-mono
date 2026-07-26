@@ -58,6 +58,12 @@ func (h *Harness) Reset(t *testing.T) {
 		"reservation_context",
 		"campaign_committed_spend",
 		"ledger_entries",
+		// Data monetization (ADR 0009): parked attributions, accrued
+		// earnings, and seat receivables are money state — leftovers would
+		// skew later tests' balance/ledger deltas.
+		"data_fee_pending",
+		"data_fee_earnings",
+		"data_fee_receivables",
 		"invoices",
 		"payouts",
 		"adjustments",

@@ -85,6 +85,17 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("invoice run complete", "invoices_written", len(ids))
+
+	// Data-monetization receivables (ADR 0009): what each EXTERNAL seat owes
+	// for the period's accrued data fees. Draft rows, idempotent per
+	// (seat, period); issued rows are never rewritten. Runs on the all-
+	// accounts pass only — receivables are seat-keyed, not account-keyed.
+	seats, err := invoicing.GenerateDataFeeReceivables(ctx, db, periodStart, periodEnd)
+	if err != nil {
+		log.Error("data-fee receivable generation failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("data-fee receivables generated", "seats", len(seats))
 }
 
 // resolvePeriod picks the [start, end) invoice window from the flags, defaulting
