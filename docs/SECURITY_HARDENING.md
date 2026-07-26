@@ -119,23 +119,20 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    fresh `postgres:16-alpine` on :55432, isolated from the shared stack); run
    twice to prove the test's own self-cleanup leaves no role/rows behind.**
 
-2. **Create the limited role** (idempotent; migration runs as owner/superuser):
-   ```sql
-   DO $$ BEGIN
-     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='adtech_app') THEN
-       CREATE ROLE adtech_app LOGIN NOSUPERUSER NOBYPASSRLS;
-     END IF;
-   END $$;
-   -- password set out-of-band (SOPS secret), not in the migration
-   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO adtech_app;
-   GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO adtech_app;
-   ALTER DEFAULT PRIVILEGES IN SCHEMA public
-     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO adtech_app;
-   ALTER DEFAULT PRIVILEGES IN SCHEMA public
-     GRANT USAGE ON SEQUENCES TO adtech_app;
-   ```
-   (`FORCE ROW LEVEL SECURITY` is only needed if the querying role owns the table;
-   `adtech_app` won't own anything, so plain `ENABLE` — already in place — suffices.)
+2. ✅ **DONE — the limited role is a migration** (`067_adtech_app_role.sql`):
+   idempotent `CREATE ROLE adtech_app LOGIN NOSUPERUSER NOBYPASSRLS` + `GRANT
+   SELECT/INSERT/UPDATE/DELETE` on all tables + `USAGE` on the schema/sequences +
+   `ALTER DEFAULT PRIVILEGES` so later migrations' tables auto-grant. Pure DDL,
+   **a no-op until the deploy flips `DATABASE_URL`** (the role exists but nothing
+   connects as it). The PASSWORD is deliberately NOT in the migration (it runs in
+   prod too) — set out of band: a SOPS secret in prod/staging, a known dev value
+   locally. `FORCE ROW LEVEL SECURITY` isn't needed (`adtech_app` owns nothing;
+   plain `ENABLE` suffices). **Proven end to end in an isolated throwaway Postgres
+   (2026-07-26, migrated to v67):** the role is NOBYPASSRLS with the right grants,
+   and connecting AS it — a no-GUC read sees NOTHING (RLS bites), `app.current_
+   account_id`=A sees only A, `app.platform_read=on` sees all, INSERT works,
+   cross-tenant DELETE affects 0 rows. The `DATABASE_URL` flip (step 4) is now the
+   ONLY remaining step.
 
 3. ✅ **DONE — `QueryPlatform`/`QueryRowPlatform` helpers + all platform loaders
    rewired** (`pkg/store/postgres/postgres.go`). Each opens a read-only tx, sets
