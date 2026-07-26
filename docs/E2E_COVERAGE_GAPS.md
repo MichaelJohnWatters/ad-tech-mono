@@ -60,9 +60,13 @@ Status key: ✅ done · ⬜ todo.
   competitive-separation invariant (no advertiser repeated across the pod, which
   holds for any fill count so it's deterministic) and pod ordering (sequence
   attributes when >1 ad fills).
-- ⬜ **SSAI beaconing** — `TestSSAIManifestStitched` proves a manifest returns;
-  nothing asserts server-side quartile beacons reach the tracker/reporting, or
-  that a no-bid break yields slate.
+- ⬜ **SSAI beaconing** — MODERATE, deferred. The mechanism is fully unit-proven
+  (`cmd/ssai/main_test.go`: segment fetch fires the signed beacon + redirects),
+  and the harness can query the event (`MediaEventsByTrace`). But an e2e is
+  **fill-dependent** (no ad segment to fetch when the video auction doesn't fill)
+  and needs trace_id propagation through the manifest→segment→beacon chain that
+  isn't verified. An unrun test that silently skips on no-fill would be false
+  confidence, so it's held until it can be run to confirm reliable fill.
 - ⬜ **`transcoder` / `content-packager` / `prewarm`** — the SSAI conditioning
   chain is unexercised (lower priority; internal, SSAI smoke covers the seam).
 
@@ -80,6 +84,12 @@ Status key: ✅ done · ⬜ todo.
   (`fraud_test.go`) but not that a re-published NATS event is dropped downstream,
   despite exactly-once resting on it.
 - ⬜ **Duplicate win-notice** — a double `nurl` must not double-count.
+
+## P2 — input hardening
+- ✅ **SQL-injection safety** — `injection_safety_test.go`. A campaign name
+  carrying a `DROP TABLE` payload is stored/returned verbatim, the target table
+  survives, and the API keeps working — proving the parameterised-queries rule at
+  the live boundary.
 
 ## Not gaps (sub-agent claims that were false on inspection)
 - Cross-tenant isolation **is** already tested for report-jobs, topup,
