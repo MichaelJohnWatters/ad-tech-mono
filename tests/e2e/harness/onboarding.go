@@ -288,3 +288,44 @@ ON CONFLICT (user_id, linked_id, source) DO NOTHING`, id, "em:"+id); err != nil 
 		}
 	}
 }
+
+// UploadAudienceCSVProviderStatus is UploadAudienceCSVStatus with a
+// provider_id form field (ADR 0009): the upload snapshots the provider's
+// party/licence/id_type defaults and enforces its encryption contract.
+// Returns status + body so tests can assert both the accept and the
+// encryption_expected cleartext-reject paths.
+func (h *Harness) UploadAudienceCSVProviderStatus(t *testing.T, accountID, name, visibility, csv, providerID string) (int, string) {
+	t.Helper()
+	email := "aud-csv-" + accountID + "@e2e.local"
+	h.CreateLoginUser(t, accountID, email, "e2e-pass", "owner")
+	client := h.LoginAs(t, email, "e2e-pass")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("name", name)
+	_ = mw.WriteField("visibility", visibility)
+	_ = mw.WriteField("provider_id", providerID)
+	fw, err := mw.CreateFormFile("file", "upload.csv")
+	if err != nil {
+		t.Fatalf("multipart file: %v", err)
+	}
+	if _, err := fw.Write([]byte(csv)); err != nil {
+		t.Fatalf("multipart write: %v", err)
+	}
+	_ = mw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Gateway+routes.APIAudiences, &buf)
+	if err != nil {
+		t.Fatalf("build provider csv upload: %v", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("provider csv upload call: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
