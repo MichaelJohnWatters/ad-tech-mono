@@ -930,10 +930,24 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// shift it into each campaign's pre-resolved location below.
 		reqNow := clk.Now()
 
+		// Blocked advertiser domains (OpenRTB badv) — a campaign whose advertiser
+		// domain the caller excluded must not bid. Powers CTV ad-pod competitive
+		// separation: each pod sub-auction lists the advertisers already picked.
+		var blockedAdv map[string]bool
+		if len(bidReq.BAdv) > 0 {
+			blockedAdv = make(map[string]bool, len(bidReq.BAdv))
+			for _, d := range bidReq.BAdv {
+				blockedAdv[strings.ToLower(d)] = true
+			}
+		}
+
 		for i := range all {
 			c := &all[i]
 			if c.Status != constants.StatusLive {
 				continue
+			}
+			if blockedAdv[strings.ToLower(c.CreativeDomain)] {
+				continue // advertiser already in the pod (OpenRTB badv)
 			}
 
 			// Creative match: display creatives need a size match, video/

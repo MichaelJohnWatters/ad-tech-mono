@@ -432,6 +432,16 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		},
 		TMax: 100,
 	}
+	// Blocked advertiser domains (OpenRTB badv): the CTV pod path passes the
+	// advertisers already selected into the pod so this sub-auction excludes
+	// them, guaranteeing competitive separation instead of relying on variance.
+	if badv := r.URL.Query().Get("badv"); badv != "" {
+		for _, d := range strings.Split(badv, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				bidReq.BAdv = append(bidReq.BAdv, d)
+			}
+		}
+	}
 	switch {
 	case channel == "video":
 		// Standard pre-roll request by default (HTTP-progressive MP4, VAST 4.x,
@@ -913,7 +923,7 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			// DealID rides serve → adserver → tracker beacon (deal=) →
 			// billing, where the deal's TYPE drives contract fee modifiers.
 			// Was dropped here, so deal-won impressions billed as open market.
-			DealID: winner.DealID,
+			DealID:        winner.DealID,
 			PlacementID:   ac.Placement.ID,
 			PublisherID:   ac.Placement.PublisherID,
 			AdvertiserID:  ac.BidResp.SeatBid[0].Seat,

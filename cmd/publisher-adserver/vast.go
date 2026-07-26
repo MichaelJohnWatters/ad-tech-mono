@@ -96,7 +96,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 			return
 		}
 
-		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
+		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query(), nil)
 		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
 			switch {
 			case err != nil:
@@ -175,8 +175,13 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 // auction and parses the winner JSON. Returns nil on no-bid; returns an
 // error only on transport / decode failure (a no-bid is a valid outcome,
 // not an error).
-func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string, incoming url.Values) (*sspVideoWinner, error) {
+func fetchVideoWinner(ctx context.Context, sspURL, placementID, traceID string, incoming url.Values, excludeAdv []string) (*sspVideoWinner, error) {
 	q := forwardSSPQuery(incoming, "video", placementID, "desktop")
+	// Competitive separation: exclude advertisers already in the pod via the
+	// OpenRTB badv (blocked advertiser domains) the SSP threads into the auction.
+	if len(excludeAdv) > 0 {
+		q.Set("badv", strings.Join(excludeAdv, ","))
+	}
 	target := sspURL + routes.SSPServe + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -254,17 +259,25 @@ func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.Macr
 func buildPodVAST(ctx context.Context, sspURL, trackerURL, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), reqLog *slog.Logger) ([]byte, int) {
 	var specs []vast.LinearSpec
 	seenAdv := map[string]bool{}
+	var excludeAdv []string // picked advertiser domains, threaded to each sub-auction as badv
 	maxAttempts := podSize * 3
 	for attempt := 0; attempt < maxAttempts && len(specs) < podSize; attempt++ {
-		winner, err := fetchVideoWinner(ctx, sspURL, placementID, "", incoming)
+		// Each sub-auction excludes the advertisers already in the pod (OpenRTB
+		// badv → SSP → exchange → DSP), so competitive separation is enforced at
+		// the auction, not just skipped post-hoc — a pod fills distinct
+		// advertisers even when one would otherwise win every deterministic bid.
+		winner, err := fetchVideoWinner(ctx, sspURL, placementID, "", incoming, excludeAdv)
 		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
 			continue
 		}
 		adv := strings.ToLower(winner.AdvertiserDomain)
 		if adv != "" && seenAdv[adv] {
-			continue // competitive separation: no repeated advertiser in a pod
+			continue // belt-and-braces: badv should already prevent this
 		}
 		seenAdv[adv] = true
+		if adv != "" {
+			excludeAdv = append(excludeAdv, adv)
+		}
 
 		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL))
 		spec.Sequence = len(specs) + 1

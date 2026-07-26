@@ -61,19 +61,17 @@ Status key: ✅ done · ⬜ todo.
   **Run GREEN live (2026-07-26) with a real fill.** (Root cause of the earlier
   no-fill: `h.Reset()` TRUNCATEs `placements` with no reseed, so the referenced
   seed placement was gone — fixed by self-provisioning inventory.)
-- ✅/🔎 **VMAP ad pods** — `video_pod_test.go`. Now builds two funded video
-  advertisers + a pod request and asserts a well-formed sequenced VAST, real
-  fill, and the no-repeated-advertiser invariant. **Run GREEN live** — and it
-  surfaced a real **FINDING**: `buildPodVAST` (`cmd/publisher-adserver/vast.go`)
-  only SKIPS a repeated advertiser post-hoc; it re-runs each sub-auction with
-  identical params and never EXCLUDES already-picked advertisers. So under
-  concentrated demand (one advertiser wins every deterministic sub-auction) a
-  **pod of 3 fills only 1 ad** (the live run logged "1 ad across 1 distinct
-  advertiser"). Real CTV competitive separation must exclude picked seats from
-  later sub-auctions. FOLLOW-UP (product change, multi-layer): thread a
-  seat/advertiser exclusion from `buildPodVAST` → SSP serve → exchange → DSP bid
-  so the pod actively diversifies. Until then separation is best-effort, reliant
-  on auction variance from diverse demand.
+- ✅ **VMAP ad pods (real competitive separation)** — `video_pod_test.go`. Two
+  funded video advertisers with EQUAL bids, pod=3 → asserts the pod fills BOTH
+  distinct advertisers (not just ≥1) with no repeat. **Run GREEN live** ("2 ads
+  across 2 distinct advertisers"). This required FIXING a real product gap the
+  test first surfaced: `buildPodVAST` used to only SKIP a repeated advertiser
+  post-hoc, so under concentrated demand a pod of 3 filled 1 ad. Now separation
+  is enforced at the auction via OpenRTB **badv** (blocked advertiser domains):
+  `buildPodVAST` threads the already-picked advertiser domains → SSP sets
+  `BidRequest.BAdv` → exchange forwards it → DSP skips any campaign whose
+  advertiser domain is blocked. Landed across `pkg/openrtb`, `cmd/ssp`,
+  `cmd/dsp`, `cmd/publisher-adserver` (exchange transparently forwards).
 - ⬜ **SSAI beaconing** — MODERATE, deferred. The mechanism is fully unit-proven
   (`cmd/ssai/main_test.go`: segment fetch fires the signed beacon + redirects),
   and the harness can query the event (`MediaEventsByTrace`). But an e2e is

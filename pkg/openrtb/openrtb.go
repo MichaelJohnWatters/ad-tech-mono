@@ -18,6 +18,7 @@ type BidRequest struct {
 	Source *Source  `json:"source,omitempty"` // supply-chain / transaction provenance
 	TMax   int      `json:"tmax,omitempty"`   // max response time in ms
 	Cur    []string `json:"cur,omitempty"`    // allowed currencies
+	BAdv   []string `json:"badv,omitempty"`   // blocked advertiser domains — a DSP must not bid an ad whose advertiser domain is listed (OpenRTB 2.x). Used for CTV ad-pod competitive separation: each sub-auction excludes advertisers already in the pod.
 }
 
 // Source carries transaction provenance and the supply chain. Per OpenRTB
