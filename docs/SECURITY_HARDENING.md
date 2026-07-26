@@ -110,9 +110,14 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    `pkg/store/postgres/rls_platform_read_integration_test.go` (build tag
    `integration`, `make test-integration`). It creates a real `NOBYPASSRLS` role
    and asserts, on the real schema: tenant read scoped, platform_read=on sees all,
-   unset-GUC empty (no error), cross-tenant write blocked. This is the first
-   enforcing RLS test — `tests/e2e/rls_test.go` is `t.Skip`ped precisely because
-   the dev role is a BYPASSRLS superuser. Down/Up preserves the subquery forms.
+   unset-GUC empty (no error), cross-tenant write blocked, a real `BalanceLoader`
+   sees all tenants through `QueryPlatform`, and `QueryRowPlatform` scans across
+   tenants (incl. `sql.ErrNoRows` propagation). This is the first enforcing RLS
+   test — `tests/e2e/rls_test.go` is `t.Skip`ped precisely because the dev role is
+   a BYPASSRLS superuser. Down/Up preserves the subquery forms. **All 6 subtests
+   were EXECUTED green (2026-07-26) against a throwaway Postgres migrated to v66 (a
+   fresh `postgres:16-alpine` on :55432, isolated from the shared stack); run
+   twice to prove the test's own self-cleanup leaves no role/rows behind.**
 
 2. **Create the limited role** (idempotent; migration runs as owner/superuser):
    ```sql
