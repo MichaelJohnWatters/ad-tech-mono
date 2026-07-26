@@ -39,7 +39,17 @@ func (s *PostgresStore) ListForAccount(ctx context.Context, accountID string, li
 	if limit <= 0 {
 		limit = defaultListLimit
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant-scoped: set the caller's account GUC so RLS admits their rows under
+	// the NOBYPASSRLS app role (security #77). Read-only tx held open for scan.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, account_id::text, kind, title, COALESCE(body, ''),
 		        COALESCE(ref_id, ''), read, created_at
 		   FROM notifications
@@ -67,7 +77,15 @@ func (s *PostgresStore) UnreadCount(ctx context.Context, accountID string) (int,
 		return 0, sql.ErrConnDone
 	}
 	var count int
-	err := s.db.QueryRowContext(ctx,
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return 0, err
+	}
+	err = tx.QueryRowContext(ctx,
 		`SELECT count(*) FROM notifications WHERE account_id = $1::uuid AND read = false`,
 		accountID).Scan(&count)
 	return count, err

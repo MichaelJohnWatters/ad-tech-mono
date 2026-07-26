@@ -107,6 +107,14 @@ func (a *dataFeeAccrual) AccrueOnImpression(ctx context.Context, traceID string)
 		return
 	}
 	defer tx.Rollback()
+	// Data-fee settlement is inherently cross-tenant — one event credits multiple
+	// data-owner accounts, debits the external seat, and books the platform
+	// margin — so it runs under the platform hatch (security #77). The
+	// tenant_isolation policies are USING-only, so platform_read admits the writes.
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		a.log.Error("data-fee accrual platform-read set failed", "trace_id", traceID, "error", err)
+		return
+	}
 
 	var payload []byte
 	err = tx.QueryRowContext(ctx,
