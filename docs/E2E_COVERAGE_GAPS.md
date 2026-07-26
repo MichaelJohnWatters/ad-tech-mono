@@ -72,15 +72,19 @@ Status key: ✅ done · ⬜ todo.
   `BidRequest.BAdv` → exchange forwards it → DSP skips any campaign whose
   advertiser domain is blocked. Landed across `pkg/openrtb`, `cmd/ssp`,
   `cmd/dsp`, `cmd/publisher-adserver` (exchange transparently forwards).
-- ⬜ **SSAI beaconing** — MODERATE, deferred. The mechanism is fully unit-proven
-  (`cmd/ssai/main_test.go`: segment fetch fires the signed beacon + redirects),
-  and the harness can query the event (`MediaEventsByTrace`). But an e2e is
-  **fill-dependent** (no ad segment to fetch when the video auction doesn't fill)
-  and needs trace_id propagation through the manifest→segment→beacon chain that
-  isn't verified. An unrun test that silently skips on no-fill would be false
-  confidence, so it's held until it can be run to confirm reliable fill.
-- ⬜ **`transcoder` / `content-packager` / `prewarm`** — the SSAI conditioning
-  chain is unexercised (lower priority; internal, SSAI smoke covers the seam).
+- ✅ **SSAI server-side beaconing** — `ssai_beacon_test.go`. Builds real video
+  inventory pointed at a **conditionable** asset (the seed's sintel sample, so
+  the SSAI transcoder can slice it), fetches the manifest until the break fills
+  and stitches an ad segment, extracts the ad's trace from the `/v1/ssai/seg?ad=`
+  URL, fetches that segment as a player would (asserts the 302 redirect), then
+  asserts the server-side quartile beacon lands in reporting
+  (`MediaEventsByTrace(trace,"video") ≥ 1`). **Run GREEN live** — proves the full
+  chain: auction fill → transcode/condition → stitch → segment fetch →
+  server-side beacon → tracker → NATS → reporting. (This also exercises the
+  `transcoder` conditioning path end-to-end.)
+- ⬜ **`content-packager` / `prewarm`** — the remaining SSAI helpers are
+  unexercised directly (lower priority; the beacon test above conditions live via
+  the transcoder, and SSAI smoke covers the manifest seam).
 
 ## P2 — consent / idempotency edges
 - ❌ **Opt-out after win, before impression** — NOT a test, and NOT a bug
