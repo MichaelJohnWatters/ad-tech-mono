@@ -71,15 +71,23 @@ Status key: ✅ done · ⬜ todo.
   chain is unexercised (lower priority; internal, SSAI smoke covers the seam).
 
 ## P2 — consent / idempotency edges
-- ❌ **Opt-out after win, before impression** — NOT a test. Investigated and
-  confirmed the tracker does NOT re-check opt-out at impression time (opt-out is
-  enforced only at DSP bid time — `cmd/dsp/main.go`; the impression handler in
-  `cmd/tracker` validates sig/expiry/fraud/dedup then publishes unconditionally).
-  So "a late impression post-opt-out doesn't bill" is not current behavior — a
-  test would assert fiction. Recorded as a design observation, not a bug: consent
-  is a bid/serve-time gate here, and an already-served impression completing is a
-  seconds-wide race. Revisit only if the privacy model requires tracker-side
-  opt-out enforcement.
+- ❌ **Opt-out after win, before impression** — NOT a test, and NOT a bug
+  (corrected after an industry-standard review 2026-07-26). Consent binds at the
+  bid/serve decision, which is the industry norm (IAB TCF evaluates the TC string
+  per node at bid-request time; GPC/CCPA opt-out is *prospective*; impression
+  counting for billing is measurement, not a "sale," so it is not consent-gated).
+  This platform matches: `publishBehaviour` (`cmd/tracker/main.go:673`) writes a
+  user-level `behaviour_signals` row ONLY if `uid` is present, and the uid is
+  baked into the beacon URL at serve time ONLY for consented serves
+  (`ServeRequest.BehaviourUserID`) — no consent → no uid → no user-level row. The
+  retargeting pixel (`main.go:347`) re-evaluates consent live (fresh GPC params).
+  Billing is aggregate and correctly ungated. Residual = a seconds-wide race (a
+  consented serve whose user opts out before the impression fires writes one
+  behaviour row); negligible, standard-acceptable, purged by Level-3 deletion,
+  and blocked for future serves. OPTIONAL hardening: a warm-cache opt-out lookup
+  on `uid` inside `publishBehaviour` closes the race at one hot-path lookup — not
+  a compliance requirement. (My earlier "real code gap" framing was wrong: it
+  missed the baked-uid consent mechanism.)
 - ⬜ **NATS `Nats-Msg-Id` dedup** — dedup is proven at the tracker/Redis layer
   (`fraud_test.go`) but not that a re-published NATS event is dropped downstream,
   despite exactly-once resting on it.
