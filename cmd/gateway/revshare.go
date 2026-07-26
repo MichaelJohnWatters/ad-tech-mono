@@ -13,6 +13,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // revshareView is one publisher's revenue-share contract as the staff editor
@@ -186,14 +187,16 @@ func (s pgRevshareStore) ListRevshare(ctx context.Context) ([]revshareView, erro
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Staff-wide read (every publisher, no account filter) → platform hatch so
+	// RLS admits all rows under the NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.NewFromDB(s.db).QueryPlatform(ctx,
 		`SELECT id::text, name, domain, revshare_model,
 		        COALESCE(revshare_config::text, '{}'), COALESCE(payment_terms, 'net_30')
 		 FROM publishers WHERE status != 'archived' ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []revshareView{}
 	for rows.Next() {
 		var v revshareView
@@ -231,8 +234,25 @@ func (s pgRevshareStore) UpdateRevshare(ctx context.Context, publisherID, actor 
 	if err != nil {
 		return err
 	}
+	// Staff cross-tenant write: resolve the publisher's account via the platform
+	// hatch, then scope the UPDATE to it so RLS admits the write under the
+	// NOBYPASSRLS app role (security #77).
+	var pubAccount string
+	if err := postgres.NewFromDB(s.db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&pubAccount)
+	}, "SELECT account_id::text FROM publishers WHERE id = $1::uuid", publisherID); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", pubAccount); err != nil {
+		return err
+	}
 	// payment_terms only changes when supplied (empty = leave as-is).
-	res, err := s.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE publishers SET revshare_model = $2, revshare_config = $3::jsonb,
 		        payment_terms = COALESCE(NULLIF($4, ''), payment_terms), updated_at = now()
 		 WHERE id = $1::uuid`,
@@ -242,6 +262,9 @@ func (s pgRevshareStore) UpdateRevshare(ctx context.Context, publisherID, actor 
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	// Money-touching change → audit trail (best-effort; the update already
 	// committed, so a failed audit write is logged by the caller, not fatal).

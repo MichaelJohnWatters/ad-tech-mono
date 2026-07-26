@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // errQCPublisherNotOwned is returned when a create references a publisher the
@@ -146,13 +147,13 @@ func (s pgQualityControlStore) ListQualityControls(ctx context.Context, accountI
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, publisher_id::text, type, values FROM quality_controls
 		 WHERE account_id = $1::uuid ORDER BY type`, accountID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []qualityControlView{}
 	for rows.Next() {
 		var v qualityControlView

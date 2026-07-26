@@ -10,6 +10,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // Agency → managed-advertiser assignments. Staff assign which advertiser
@@ -145,11 +146,14 @@ func (s pgAgencyAccountStore) ListManagedAccounts(ctx context.Context, agencyID 
 		args = append(args, agencyID)
 	}
 	q += ` ORDER BY ag.name, mg.name`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	// Cross-account JOIN (agency ↔ its managed accounts), already scoped by the
+	// agency_account_id filter → platform hatch so RLS admits both sides under
+	// the NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.NewFromDB(s.db).QueryPlatform(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []agencyManagedView{}
 	for rows.Next() {
 		var v agencyManagedView

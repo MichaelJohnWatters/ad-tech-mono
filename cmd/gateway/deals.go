@@ -15,6 +15,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/lib/pq"
 )
 
@@ -296,7 +297,7 @@ func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealVie
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, publisher_id::text, name, deal_type, COALESCE(price,0), status,
 		        COALESCE(advertiser_ids::text[], '{}'), COALESCE(placement_ids::text[], '{}'),
 		        COALESCE(guaranteed_volume, 0), start_date::text, end_date::text
@@ -304,7 +305,7 @@ func (s pgDealStore) ListDeals(ctx context.Context, accountID string) ([]dealVie
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []dealView{}
 	for rows.Next() {
 		var d dealView
