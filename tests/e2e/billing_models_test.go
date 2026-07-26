@@ -247,6 +247,48 @@ func TestBillingDealTypeFeeModifier(t *testing.T) {
 	t.Skip("contract-write helper now exists (harness.SetPublisherContract for deal_type_modifiers); still pending a fixture that lands a deal-won impression AND confirms deal_type propagates from the impression event into the billing SpendEvent — flip once that path is verified on a live stack.")
 }
 
+// TestBillingCurrencyConversion — a non-USD impression books the
+// USD-converted amount (exchange_rates is the truth), and an unknown
+// currency is REFUSED (no booking) rather than treated as dollars.
+// Unskipped 2026-07-26: the exchange_rates table had zero consumers until
+// billing.SetRateSource landed — the "feature" this test waited on never
+// actually existed.
 func TestBillingCurrencyConversion(t *testing.T) {
-	t.Skip("multi-currency flow needs exchange_rates table seeded + a non-USD campaign; pending")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "billing-eur")
+
+	var rate float64
+	if err := h.DB.QueryRow(`
+SELECT rate FROM exchange_rates
+WHERE base_currency='USD' AND target_currency='EUR' AND effective_date <= CURRENT_DATE
+ORDER BY effective_date DESC LIMIT 1`).Scan(&rate); err != nil || rate <= 0 {
+		t.Fatalf("EUR rate not seeded (err=%v rate=%v) — run make seed", err, rate)
+	}
+
+	before := summaryFloat(t, h.BillingSummary(t), "TotalSpend")
+
+	// EUR impression: the clearing CPM is treated as EUR and lands as USD.
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "eur-user-1")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid for the EUR conversion case")
+	}
+	h.FireImpression(t, auc.TraceID, win.CampaignID, win.CreativeID,
+		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "EUR", win.Price)
+	wantDelta := (win.Price / 1000) / rate
+	waitForDelta(t, h, "TotalSpend", before, wantDelta)
+
+	// Unknown currency: refused up front, TotalSpend must NOT move again.
+	afterEUR := summaryFloat(t, h.BillingSummary(t), "TotalSpend")
+	auc2 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "eur-user-2")
+	win2 := h.ExtractWinner(t, auc2)
+	if win2.NoBid {
+		t.Fatal("expected a winning bid for the unknown-currency case")
+	}
+	h.FireImpression(t, auc2.TraceID, win2.CampaignID, win2.CreativeID,
+		auc2.PlacementID, auc2.PublisherID, w.AdvAcc.ID, "ZZZ", win2.Price)
+	time.Sleep(3 * time.Second) // give the async chain time to (not) book it
+	if got := summaryFloat(t, h.BillingSummary(t), "TotalSpend"); got > afterEUR+0.000001 {
+		t.Errorf("unknown-currency impression moved TotalSpend %v -> %v; must be refused, not booked", afterEUR, got)
+	}
 }
