@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -67,7 +68,16 @@ type URLs struct {
 }
 
 // DefaultURLs returns the addresses exposed by the local Tilt stack.
+//
+// E2E_POSTGRES_URL overrides the Postgres DSN — the escape hatch for a stack
+// whose localhost forward is wedged (post-sleep Rancher Desktop) but whose
+// LoadBalancer service is still reachable on the VM IP, e.g.
+// postgres://adtech:adtech-local-dev@192.168.64.2:5432/adtech?sslmode=disable.
 func DefaultURLs() URLs {
+	pgURL := routes.DefaultPostgresURL
+	if v := os.Getenv("E2E_POSTGRES_URL"); v != "" {
+		pgURL = v
+	}
 	return URLs{
 		Gateway:           routes.DefaultGatewayURL,
 		Exchange:          routes.DefaultExchangeURL,
@@ -83,7 +93,7 @@ func DefaultURLs() URLs {
 		NATSURL:           routes.DefaultNATSURL,
 		RedisAddr:         routes.DefaultRedisAddr,
 		MinioEndpt:        routes.DefaultMinioEndpoint,
-		PostgresURL:       routes.DefaultPostgresURL,
+		PostgresURL:       pgURL,
 		ClickHouseHTTP:    routes.DefaultClickHouseHTTPURL,
 
 		// In-cluster DNS — matches the Service names in k8s/base/*/service.yaml.

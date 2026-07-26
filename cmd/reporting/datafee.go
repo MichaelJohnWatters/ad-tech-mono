@@ -87,6 +87,20 @@ func (a *dataFeeAccrual) AccrueOnImpression(ctx context.Context, traceID string)
 	if a == nil || traceID == "" {
 		return
 	}
+	// Cheap non-transactional probe first: ~every impression is a miss, and
+	// paying BEGIN/ROLLBACK round-trips per impression on a small pool just
+	// to discover that is real load. The transactional DELETE below re-checks,
+	// so a concurrent claim between probe and claim stays exactly-once.
+	var one int
+	err := a.db.QueryRowContext(ctx,
+		`SELECT 1 FROM data_fee_pending WHERE trace_id = $1`, traceID).Scan(&one)
+	if err == sql.ErrNoRows {
+		return
+	}
+	if err != nil {
+		a.log.Error("data-fee pending probe failed", "trace_id", traceID, "error", err)
+		return
+	}
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		a.log.Error("data-fee accrual begin failed", "trace_id", traceID, "error", err)

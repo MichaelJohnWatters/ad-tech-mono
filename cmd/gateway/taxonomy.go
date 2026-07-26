@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -123,6 +124,13 @@ func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.
 		if err := store.SetSegmentDataFee(r.Context(), claims.AccountID, req.SegmentID, req.DataFeeMicros); err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				http.Error(w, `{"error":"segment not found"}`, http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, audiencepg.ErrSegmentNotMonetizable) {
+				// A priced-but-ineligible segment would silently never earn
+				// ("label it to sell it") — reject with the preconditions.
+				http.Error(w, `{"error":"segment must be public and taxonomy-labelled before it can carry a data fee"}`,
+					http.StatusUnprocessableEntity)
 				return
 			}
 			log.Error("set segment data fee failed", "segment", req.SegmentID, "error", err)
