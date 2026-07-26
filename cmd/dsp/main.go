@@ -594,24 +594,33 @@ func pickCampaignLoader(cfg *config.Config, log *slog.Logger, profile *DSPProfil
 				return nil, fmt.Errorf("postgres connect: %w", err)
 			}
 			id := dspID
-			if id == "" && len(accountIDs) == 0 {
-				// Boot raced the seed (no dsps row yet, no YAML allowlist).
-				// CampaignLoader's neither-filter mode loads ALL campaigns —
-				// an admin affordance a BIDDER must never fall into: at the
-				// Helm cutover an unscoped competitor pod bid (and won)
-				// other DSPs' campaigns. Re-resolve here instead; an error
-				// keeps the cache EMPTY (no bids) and RetryingLoader retries
-				// next poll, so the pod self-heals the moment the seed lands.
+			if id == "" {
+				// Boot raced Postgres/seed: loadDSPIdentity fell back to the
+				// YAML row, whose ID is empty. Re-resolve EVERY construct —
+				// and refuse to build a loader without a dsps-row scope:
+				//   - unscoped (no id, no allowlist) loads ALL campaigns; at
+				//     the Helm cutover an unscoped competitor pod bid (and
+				//     won) other DSPs' campaigns.
+				//   - the YAML accountIDs allowlist is just as wrong long-term:
+				//     it silently pins the cache to seed-era accounts, so every
+				//     campaign created later under a fresh account is INVISIBLE
+				//     — zero rows, zero errors, no self-heal. Found live on
+				//     2026-07-26: three wedged pods no-bid every e2e world (36
+				//     test failures) after booting before Postgres DNS existed.
+				// Returning an error keeps the cache EMPTY (no bids) and
+				// RetryingLoader retries next poll, so the pod heals the
+				// moment the dsps row is reachable.
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				row, rerr := postgres.DSPByName(ctx, store.Read(), profile.Name)
 				if rerr != nil {
 					store.Close()
-					log.Error("dsp identity unresolved; refusing unscoped campaign load (no bids until the dsps row exists)",
+					log.Error("dsp identity unresolved; refusing mis-scoped campaign load (no bids until the dsps row is readable)",
 						"profile", profile.Name, "error", rerr)
 					return nil, fmt.Errorf("dsp identity unresolved for %q: %w", profile.Name, rerr)
 				}
 				id = row.ID
+				log.Info("dsp identity re-resolved for campaign loader", "profile", profile.Name, "dsp_id", id)
 			}
 			return &postgres.CampaignLoader{Store: store, DSPID: id, AccountIDs: accountIDs}, nil
 		},
