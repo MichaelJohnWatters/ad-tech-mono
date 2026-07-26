@@ -239,7 +239,7 @@ func (b *Bus) SubscribeBroadcast(ctx context.Context, subject, name string, hand
 
 	// Ephemeral: Name (so we can find/observe it) but NO Durable, plus an
 	// InactiveThreshold so JetStream reaps it once the pod stops fetching.
-	consumer, err := b.js.CreateOrUpdateConsumer(ctx, streamForSubject(subject), jetstream.ConsumerConfig{
+	cfg := jetstream.ConsumerConfig{
 		Name:              consumerName,
 		FilterSubject:     subject,
 		DeliverPolicy:     jetstream.DeliverNewPolicy,
@@ -247,7 +247,9 @@ func (b *Bus) SubscribeBroadcast(ctx context.Context, subject, name string, hand
 		AckWait:           30 * time.Second,
 		MaxDeliver:        5,
 		InactiveThreshold: broadcastInactiveThreshold,
-	})
+	}
+	stream := streamForSubject(subject)
+	consumer, err := b.js.CreateOrUpdateConsumer(ctx, stream, cfg)
 	if err != nil {
 		return fmt.Errorf("create broadcast consumer %s on %s: %w", consumerName, subject, err)
 	}
@@ -259,7 +261,21 @@ func (b *Bus) SubscribeBroadcast(ctx context.Context, subject, name string, hand
 				if ctx.Err() != nil {
 					return
 				}
+				// An EPHEMERAL consumer can vanish out from under us where the old
+				// durable one wouldn't: a NATS server restart doesn't restore
+				// ephemerals, and InactiveThreshold reaps one that ever misses a
+				// fetch window. The durable path survived a restart untouched, so
+				// to avoid silently losing real-time invalidation until the pod
+				// bounces we RECREATE on failure (idempotent: a no-op update if it
+				// still exists; a fresh create if it's gone). The 1s backoff bounds
+				// churn while NATS is genuinely unreachable.
 				time.Sleep(time.Second)
+				if c, rerr := b.js.CreateOrUpdateConsumer(ctx, stream, cfg); rerr == nil {
+					consumer = c
+				} else if ctx.Err() == nil {
+					b.log.Warn("broadcast consumer recreate failed",
+						"subject", subject, "consumer", consumerName, "error", rerr)
+				}
 				continue
 			}
 			for msg := range msgs.Messages() {
