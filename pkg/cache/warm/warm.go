@@ -320,13 +320,16 @@ func (c *Cache[T]) onInvalidate(ctx context.Context, msg *events.Message) error 
 	// update just that entry — no DB full-scan. Otherwise reload everything.
 	if id := invalidateID(msg.Data); id != "" && c.cfg.OnRefresh == nil {
 		if sl, ok := c.cfg.Loader.(SingleLoader[T]); ok {
-			if err := c.applyOne(ctx, sl, id); err == nil {
+			err := c.applyOne(ctx, sl, id)
+			if err == nil {
 				c.cfg.Log.Info("warm cache targeted update", "cache", c.cfg.Name, "id", id)
 				_ = msg.Ack()
 				return nil
 			}
 			// applyOne failed → fall through to a full reload (safe default).
-			c.cfg.Log.Warn("warm cache targeted update failed, full reload", "cache", c.cfg.Name, "id", id)
+			// Log the ERROR — swallowing it hid a mis-scoped loader for hours
+			// (2026-07-26: every targeted update "failed" with no clue why).
+			c.cfg.Log.Warn("warm cache targeted update failed, full reload", "cache", c.cfg.Name, "id", id, "error", err)
 		}
 	}
 	c.cfg.Log.Info("warm cache invalidate received, reloading", "cache", c.cfg.Name, "subject", msg.Subject)
