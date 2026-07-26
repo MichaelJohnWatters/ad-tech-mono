@@ -50,7 +50,9 @@ func TestDayBoundaryEndsExpiredFlights(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command("go", "run", "./cmd/dayboundary", "--date", date)
 		cmd.Dir = "../.."
-		cmd.Env = os.Environ() // inherits DATABASE_URL, like the invoice-runner e2e
+		// dayboundary hard-exits without DATABASE_URL; pass the harness DSN
+		// explicitly rather than relying on it being in the caller's env.
+		cmd.Env = append(os.Environ(), "DATABASE_URL="+h.URLs.PostgresURL)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("dayboundary --date %s failed: %v\n%s", date, err, out)
 		}

@@ -113,7 +113,13 @@ Status key: ✅ done · ⬜ todo.
   `docs/SECURITY_HARDENING.md` §3.
 
 ## Note
-The two ✅ tests are committed vet-clean under `-tags=e2e` but were **not** run
-against the live stack this session (it is shared with another active context and
-both tests call `h.Reset`, a destructive reseed). They run in CI / a full
-`make test-e2e` on an exclusive stack.
+All 11 new tests were **RUN GREEN against the live stack** (2026-07-26). Running
+them paid off immediately by catching a **real production bug**:
+- **notifications was deaf for 5h+** — all four NATS subscriptions failed once at
+  cold boot ("context deadline exceeded" racing NATS/JetStream), the service
+  logged `consuming events` anyway and never retried, so the `notifications`
+  table stayed empty. Fixed by mirroring the webhooks self-heal (`cmd/notifications`
+  now retries failed subjects every 15s until they stick). Same doctrine as
+  webhooks (`6d8f4f2`) + the warm caches.
+- One test bug fixed too: `dayboundary_test.go` now passes `DATABASE_URL` to the
+  `go run` subprocess explicitly (the job hard-exits without it).
