@@ -17,9 +17,13 @@
 -- The seed below is a DEMO SUBSET shaped like the official taxonomy,
 -- sufficient for local dev, the portal picker, and e2e. The numeric ids are
 -- stable platform-local stand-ins, NOT certified against the official IAB
--- Tech Lab file — for real cross-party interop, reload this table from the
--- official Audience Taxonomy 1.1 TSV (free licence, iabtechlab.com), keeping
--- the official Unique IDs.
+-- Tech Lab file — for real cross-party interop, load the official Audience
+-- Taxonomy 1.1 export (free licence, iabtechlab.com) with the importer:
+--
+--     go run ./cmd/taxonomy-import --file "Audience Taxonomy 1.1.tsv" [--prune]
+--
+-- (idempotent upsert keeping official Unique IDs; --prune removes demo rows
+-- not in the file, except nodes a segment still references).
 
 CREATE TABLE iab_audience_taxonomy (
     id        BIGINT PRIMARY KEY,
