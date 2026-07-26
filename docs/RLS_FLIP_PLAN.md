@@ -19,6 +19,23 @@ within one tenant sets that tenant's `app.current_account_id` GUC before running
 - ✅ **Report-job Get/List** (`pkg/reportjobs/store.go`) — tenant-scoped → set the
   caller's GUC.
 
+## Bucket A progress (partial — the pattern is proven, ~13 tests cleared)
+Two sub-patterns, both mechanical:
+- **Discover-owner lookups** (read a row by id to find its account before the
+  caller is authorised) → platform hatch. Fixed: `lookupLineItemAccount(AndStatus)`
+  (dsp), `lookupPublisherAccount`/`lookupPlacementAccount` (ssp), moderation
+  `Decide` (staff cross-tenant → hatch-resolve then scope to the creative's
+  account). The SSP publisher/placement fix alone cleared ~9 `*ViaAPI` tests
+  (their setup POSTs a placement).
+- **Tenant writes** — set the caller's GUC at the start of the tx. Fixed: gateway
+  `CreateDeal`, `CreateDirectLineItem`, quality-controls create.
+- ⬜ **STILL OPEN — tenant LIST/read methods** set no GUC, so RLS blanks them
+  ("created X not in list"): `ListDeals`, `ListDirectLineItems`,
+  `ListQualityControls`, data-providers list, agency-managed list, revshare list,
+  and the equivalent read paths across dsp/ssp/gateway. Same one-line fix (set the
+  caller's GUC before the SELECT, in a read-only tx held open while scanning).
+  This is the bulk of A's remaining sites — mechanical but many.
+
 ## Remaining buckets (root cause → tests it blocks)
 
 ### A. Management CRUD store methods don't set the tenant GUC (biggest)

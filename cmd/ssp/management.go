@@ -15,6 +15,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // Placement management endpoints. Mirror the DSP campaign-management pattern
@@ -527,7 +528,13 @@ func handlePlacementDelete(w http.ResponseWriter, r *http.Request, db *sql.DB, b
 // at the application layer, not enforced by the schema).
 func lookupPublisherAccount(ctx context.Context, db *sql.DB, publisherID string) (string, error) {
 	var accountID string
-	err := db.QueryRowContext(ctx, "SELECT account_id::text FROM publishers WHERE id = $1::uuid", publisherID).Scan(&accountID)
+	// Platform-read hatch: this DISCOVERS the publisher's owning account before
+	// the caller is authorised (CallerScope, in the handler) and before
+	// writeNewPlacement scopes its write, so under the NOBYPASSRLS app role
+	// (security #77) it must use the hatch or RLS filters it to nothing.
+	err := postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&accountID)
+	}, "SELECT account_id::text FROM publishers WHERE id = $1::uuid", publisherID)
 	if err == sql.ErrNoRows {
 		return "", errors.New("publisher not found")
 	}
@@ -542,7 +549,11 @@ func lookupPublisherAccount(ctx context.Context, db *sql.DB, publisherID string)
 // lookupLineItemAccount.
 func lookupPlacementAccount(ctx context.Context, db *sql.DB, id string) (string, error) {
 	var accountID string
-	err := db.QueryRowContext(ctx, "SELECT account_id::text FROM placements WHERE id = $1::uuid", id).Scan(&accountID)
+	// Platform-read hatch (security #77): discover-owner lookup before the caller
+	// is authorised and before the write scopes itself.
+	err := postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&accountID)
+	}, "SELECT account_id::text FROM placements WHERE id = $1::uuid", id)
 	if err == sql.ErrNoRows {
 		return "", errors.New("placement not found")
 	}

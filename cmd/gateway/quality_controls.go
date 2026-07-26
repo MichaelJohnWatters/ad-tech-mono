@@ -173,6 +173,11 @@ func (s pgQualityControlStore) UpsertQualityControl(ctx context.Context, account
 		return "", err
 	}
 	defer tx.Rollback()
+	// Scope the tx to the caller's account so RLS admits their publisher + the
+	// write under the NOBYPASSRLS app role (security #77).
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return "", err
+	}
 
 	// The publisher must belong to the caller's account.
 	var pubAccount string
