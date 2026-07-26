@@ -51,9 +51,10 @@ Status key: ✅ done · ⬜ todo.
   VAST 4.2 doc; on fill: a tracked `<Impression>` + `<MediaFile>` + quartile
   beacons through `/v1/t/video`; on no-fill: an honest Ad-less doc with NO
   fabricated `<Impression>` (real-data-only rule).
-- ⬜ **VMAP ad pods** — pod request (`?pod=N`) → N independent auctions, no
-  advertiser repeated across the pod, sequence attributes set. (A step up from
-  the single-VAST test above; the pod path exists in `cmd/publisher-adserver`.)
+- ✅ **VMAP ad pods** — `video_pod_test.go`. `?pod=3` → asserts the core
+  competitive-separation invariant (no advertiser repeated across the pod, which
+  holds for any fill count so it's deterministic) and pod ordering (sequence
+  attributes when >1 ad fills).
 - ⬜ **SSAI beaconing** — `TestSSAIManifestStitched` proves a manifest returns;
   nothing asserts server-side quartile beacons reach the tracker/reporting, or
   that a no-bid break yields slate.
