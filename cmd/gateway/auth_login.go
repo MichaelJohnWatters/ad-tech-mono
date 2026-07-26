@@ -9,6 +9,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -35,11 +36,16 @@ func dbUserLookup(db *sql.DB) userLookupFn {
 		}
 		var u teamMember
 		var acctType, role string
-		err := db.QueryRowContext(ctx,
+		// Inherently pre-tenant: authentication looks a user up by email across
+		// ALL accounts (there is no tenant yet), so under the NOBYPASSRLS app role
+		// (security #77) it must use the platform-read hatch — otherwise RLS on
+		// team_members hides every row and login is impossible. Read-only.
+		err := postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+			return row.Scan(&u.ID, &u.AccountID, &acctType, &role, &u.PasswordHash)
+		},
 			`SELECT tm.id::text, tm.account_id::text, a.type, tm.role, tm.password_hash
 			 FROM team_members tm JOIN accounts a ON a.id = tm.account_id
-			 WHERE tm.email = $1 AND tm.status = 'active'`, email).
-			Scan(&u.ID, &u.AccountID, &acctType, &role, &u.PasswordHash)
+			 WHERE tm.email = $1 AND tm.status = 'active'`, email)
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}

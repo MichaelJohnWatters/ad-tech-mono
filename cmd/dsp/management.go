@@ -216,8 +216,8 @@ type creativeAttach struct {
 // parseModifiers. Keys are device names / country codes; values are percentage
 // adjustments (+20 = bid 20% higher). The engine clamps each to safe bounds.
 type bidModifiersInput struct {
-	Device     map[string]float64  `json:"device,omitempty"`
-	GeoCountry map[string]float64  `json:"geo_country,omitempty"`
+	Device     map[string]float64 `json:"device,omitempty"`
+	GeoCountry map[string]float64 `json:"geo_country,omitempty"`
 	// Audience maps segment id → percentage adjustment, applied when the
 	// bid request's (consent-gated) segment set contains the key. The
 	// profile store's pre-expanded memberships are what make this fire for
@@ -1088,9 +1088,14 @@ func lookupLineItemAccount(ctx context.Context, db *sql.DB, lineItemID string) (
 // state transition and publish CampaignStateEvent only when the value
 // actually changed (no-op patches don't generate noise on the bus).
 func lookupLineItemAccountAndStatus(ctx context.Context, db *sql.DB, lineItemID string) (accountID, status string, err error) {
-	err = db.QueryRowContext(ctx,
-		"SELECT account_id::text, status FROM line_items WHERE id = $1",
-		lineItemID).Scan(&accountID, &status)
+	// Platform-read hatch: this lookup DISCOVERS the row's owning account before
+	// the caller is authorised (scope.CanMutate, below) and before updateLineItem
+	// scopes its write, so under the NOBYPASSRLS app role (security #77) it must
+	// use the platform hatch rather than RLS-filter to nothing. Reading the row
+	// is safe — cross-tenant *mutation* is still gated by CanMutate.
+	err = postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&accountID, &status)
+	}, "SELECT account_id::text, status FROM line_items WHERE id = $1", lineItemID)
 	if err == sql.ErrNoRows {
 		return "", "", errors.New("campaign not found")
 	}
