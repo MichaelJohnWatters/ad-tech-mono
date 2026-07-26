@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -66,10 +67,21 @@ func Start(cfg ServerConfig) {
 		}
 	})
 
+	// A dead gRPC listener must not hide behind a Ready pod: the k8s probes
+	// are HTTP-only, so a pod whose gRPC twin never bound (or died) would
+	// keep taking DNS traffic while every internal RPC to it fails. Exiting
+	// is the honest signal — the restart either fixes it or makes the
+	// failure loud (CrashLoopBackOff) instead of a silent partial outage.
+	// grpc.Server.Serve returns nil after Stop/GracefulStop, so a normal
+	// lifecycle drain never trips this.
+	die := func(msg string, args ...any) {
+		cfg.Log.Error(msg, args...)
+		os.Exit(1)
+	}
 	go func() {
 		if cfg.Listener != nil {
 			if err := srv.Serve(cfg.Listener); err != nil {
-				cfg.Log.Error("grpc server failed", "addr", cfg.Listener.Addr().String(), "error", err)
+				die("grpc server failed", "addr", cfg.Listener.Addr().String(), "error", err)
 			}
 			return
 		}
@@ -85,11 +97,11 @@ func Start(cfg ServerConfig) {
 			}
 			cfg.Log.Info("grpc server listening", "addr", cfg.Addr)
 			if err := srv.Serve(lis); err != nil {
-				cfg.Log.Error("grpc server failed", "addr", cfg.Addr, "error", err)
+				die("grpc server failed", "addr", cfg.Addr, "error", err)
 			}
 			return
 		}
-		cfg.Log.Error("grpc server failed to bind", "addr", cfg.Addr, "error", lastErr)
+		die("grpc server failed to bind, exiting so the restart is visible", "addr", cfg.Addr, "error", lastErr)
 	}()
 }
 

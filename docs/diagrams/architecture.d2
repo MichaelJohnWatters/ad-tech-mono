@@ -117,6 +117,7 @@ events: Async · events {
 # serving publishes async events
 serving.tracker  -> events.nats: events { style.stroke-dash: 4 }
 serving.exchange -> events.nats: auction.win / complete { style.stroke-dash: 4 }
+serving.exchange -> events.reporting: routing warm-start + reseed (dsp_calls aggregate) { style.stroke-dash: 2; style.stroke: "#64748b" }
 serving.ssp      -> events.nats: identity.observed + behaviour.observed (consent-gated) { style.stroke-dash: 4 }
 control.gateway  -> events.nats: profile.signal (audience uploads, batched) { style.stroke-dash: 4 }
 events.pipeline  -> events.nats: profile.signal (drop-zone onboarding) { style.stroke-dash: 4 }

@@ -193,13 +193,7 @@ func main() {
 		k.LatencySoft = keys.Exchange.RoutingLatencySoft.Get(cfg)
 		k.LatencyHard = keys.Exchange.RoutingLatencyHard.Get(cfg)
 		if raw := keys.Exchange.RoutingNeverSkip.Get(cfg); raw != "" {
-			set := make(map[string]struct{})
-			for _, e := range strings.Split(raw, ",") {
-				if e = strings.TrimSpace(e); e != "" {
-					set[e] = struct{}{}
-				}
-			}
-			k.NeverSkip = set
+			k.NeverSkip = parseNeverSkip(raw)
 		}
 		return k
 	})
@@ -808,6 +802,22 @@ func splitDSPEndpoint(entry string) (endpoint, notifyBase string) {
 		return endpoint, strings.TrimSpace(v)
 	}
 	return endpoint, ""
+}
+
+// parseNeverSkip builds the never-skip endpoint set from the CSV config
+// value. Entries run through splitDSPEndpoint so an operator can paste a
+// full exchange.dsp_endpoints entry — ";notify=" suffix and all — and it
+// still matches the CLEAN bid endpoint the router keys stats by. Without
+// the normalisation a suffixed entry silently never matched.
+func parseNeverSkip(raw string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, e := range strings.Split(raw, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			endpoint, _ := splitDSPEndpoint(e)
+			set[endpoint] = struct{}{}
+		}
+	}
+	return set
 }
 
 // notifyBaseFor resolves where a DSP's win/loss notices go: the declared
