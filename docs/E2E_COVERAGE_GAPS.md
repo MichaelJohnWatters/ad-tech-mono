@@ -26,9 +26,12 @@ Status key: ✅ done · ⬜ todo.
   would be a real hole.)
 
 ## P1 — untested built services / jobs
-- ⬜ **`dayboundary`** (`cmd/dayboundary`) — the nightly flight-transition
-  cascade. Built + unit-tested, but no e2e proves a campaign actually flips
-  in/out of flight at the boundary. High blast radius if it silently no-ops.
+- ✅ **`dayboundary`** (`cmd/dayboundary`) — `dayboundary_test.go`. Drives the
+  job as the CronJob does (`go run ./cmd/dayboundary --date …`) and proves a
+  campaign whose flight has ended cascades to `ended` (IO active→ended, line
+  item live→ended), and that a re-run is idempotent. Follow-up: the
+  `ActivateFlights` direction (draft IO → active) needs a direct draft-IO
+  fixture since the API creates IOs `active`.
 - ⬜ **`notifications` (`:8096`)** — consumes budget/balance/campaign/report NATS
   events, writes per-account portal rows. Zero coverage. (The "notification"
   hits in the suite are auction win/loss notices — a different thing.)
