@@ -243,8 +243,46 @@ func TestBillingGuaranteedMinimumSubsidy(t *testing.T) {
 	waitForDelta(t, h, "TotalPublisherRevenue", before, floor/1000)
 }
 
+// TestBillingDealTypeFeeModifier — a deal-won impression bills at the
+// contract's deal-type-modified fee, not the open-market fee. Unskipped
+// 2026-07-26 after wiring the whole propagation chain it was waiting on:
+// SSP now sends DealID in the serve request (it was dropped), the beacon
+// carries deal=<id>, and reporting resolves the id to its deal TYPE for
+// Contract.DealTypeModifiers (the raw id never matched a type key, so
+// deal-won impressions always billed as open market).
 func TestBillingDealTypeFeeModifier(t *testing.T) {
-	t.Skip("contract-write helper now exists (harness.SetPublisherContract for deal_type_modifiers); still pending a fixture that lands a deal-won impression AND confirms deal_type propagates from the impression event into the billing SpendEvent — flip once that path is verified on a live stack.")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "billing-dealfee")
+
+	// Base fee 20%; PMP deals get -5 → 15% fee → publisher keeps 85%.
+	h.SetPublisherContract(t, w.Publisher, "fixed",
+		`{"fee_pct":20,"deal_type_modifiers":{"pmp":-5}}`)
+
+	// PMP deal price is a FLOOR the bid must clear (unlike PG's fixed
+	// price) — keep it under the DSP's 3.50 base bid so the bid qualifies
+	// and the deal preempts the open market on priority.
+	const dealPrice = 2.00
+	dealID := h.CreateDeal(t, w.Publisher, "e2e-fee-pmp", "pmp", dealPrice,
+		[]string{w.AdvAcc.ID}, []string{w.Placement.ID})
+	h.RefreshAllCaches(t)
+
+	before := summaryFloat(t, h.BillingSummary(t), "TotalPublisherRevenue")
+
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "dealfee-user-1")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid on the PMP-deal placement")
+	}
+	if win.DealID != dealID {
+		t.Fatalf("winner deal = %q, want the PMP deal %q (deal must preempt open market)", win.DealID, dealID)
+	}
+
+	h.FireImpressionDeal(t, auc.TraceID, win.CampaignID, win.CreativeID,
+		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price, win.DealID)
+
+	// 15% fee, not 20%: publisher revenue = price × 0.85 per mille. A result
+	// of price × 0.80 means the deal type never reached billing.
+	waitForDelta(t, h, "TotalPublisherRevenue", before, (win.Price/1000)*0.85)
 }
 
 // TestBillingCurrencyConversion — a non-USD impression books the

@@ -36,6 +36,18 @@ func (h *Harness) FireImpressionWithModel(t *testing.T, traceID, campaignID, cre
 	h.fireAndConsume(t, url, "impression")
 }
 
+// FireImpressionDeal is FireImpression with the winning deal's ID stamped
+// as the `deal` query param — production stamps it via
+// pkg/adserving.BuildImpressionURL when the serve context carries a deal.
+// Reporting resolves the id to its deal TYPE (pg/pmp/preferred/open) so
+// billing can apply the contract's deal_type_modifiers.
+func (h *Harness) FireImpressionDeal(t *testing.T, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, currency string, price float64, dealID string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=%s&pubid=%s&advid=%s&price=%.4f&cur=%s&bm=cpm&deal=%s",
+		h.URLs.Tracker, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, price, currency, dealID)
+	h.fireAndConsume(t, url, "impression")
+}
+
 // FireClick hits the click redirect endpoint. Skips following the redirect
 // since the e2e test only cares about the pixel firing and the NATS event,
 // not the landing page.

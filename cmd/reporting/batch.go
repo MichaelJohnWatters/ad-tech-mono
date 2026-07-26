@@ -175,7 +175,7 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 					TraceID: e.TraceID, CampaignID: e.CampaignID, CreativeID: e.CreativeID,
 					PlacementID: e.PlacementID, PublisherID: e.PublisherID, AdvertiserID: e.AccountID,
 					ClearingPrice: e.ClearingPriceUSD, Currency: spendCurrency(e.ClearingCurrency),
-					BidModel: billing.BidModel(e.BidModel), DealType: e.DealID,
+					BidModel: billing.BidModel(e.BidModel), DealType: c.resolveDealType(ctx, e.DealID),
 					EventType: "impression", Timestamp: e.Timestamp,
 				}
 			}

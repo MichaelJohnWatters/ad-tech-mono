@@ -143,6 +143,9 @@ func main() {
 
 	// Event consumer with billing
 	consumer := NewEventConsumer(log, store, billingEngine)
+	// Deal-type fee modifiers: resolve the beacon's deal id to its TYPE so
+	// Contract.DealTypeModifiers can match (the raw id never did).
+	consumer.SetDealTypeResolver(newPGDealTypeSource(cfg.Get(keys.Database.URL.Key(), ""), log).For)
 
 	// Data-monetization accrual (ADR 0009): parked DataFeeEvents settle when
 	// the impression for their trace arrives. Needs Postgres (the durable
@@ -483,6 +486,11 @@ type EventConsumer struct {
 	store   analytics.Store
 	billing *billing.Engine
 
+	// dealTypeFor resolves a beacon deal id to its deal_type so contract
+	// fee modifiers (keyed by TYPE) actually match. Defaults to "" (open
+	// market) when unset. See dealtypes.go.
+	dealTypeFor func(ctx context.Context, dealID string) string
+
 	// Batch-consumer path (opt-in via reporting.clickhouse_batch_consumer).
 	// When enabled, the high-volume core subjects are consumed in bulk (one
 	// atomic block insert per fetch) with per-message dedup; see batch.go.
@@ -506,6 +514,20 @@ func (c *EventConsumer) handleDataFee(ctx context.Context, msg *events.Message) 
 
 func NewEventConsumer(log *slog.Logger, store analytics.Store, billingEngine *billing.Engine) *EventConsumer {
 	return &EventConsumer{log: log, store: store, billing: billingEngine}
+}
+
+// SetDealTypeResolver wires deal-id -> deal_type resolution for billing
+// spend events (contract deal-type fee modifiers).
+func (c *EventConsumer) SetDealTypeResolver(fn func(ctx context.Context, dealID string) string) {
+	c.dealTypeFor = fn
+}
+
+// resolveDealType is nil-safe: no resolver = open-market ("").
+func (c *EventConsumer) resolveDealType(ctx context.Context, dealID string) string {
+	if c.dealTypeFor == nil {
+		return ""
+	}
+	return c.dealTypeFor(ctx, dealID)
 }
 
 // EnableBatchConsumer turns on the bulk NATS consumer path for core events.
@@ -603,7 +625,7 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 			TraceID: e.TraceID, CampaignID: e.CampaignID, CreativeID: e.CreativeID,
 			PlacementID: e.PlacementID, PublisherID: e.PublisherID, AdvertiserID: e.AccountID,
 			ClearingPrice: e.ClearingPriceUSD, Currency: spendCurrency(e.ClearingCurrency),
-			BidModel: billing.BidModel(e.BidModel), DealType: e.DealID,
+			BidModel: billing.BidModel(e.BidModel), DealType: c.resolveDealType(ctx, e.DealID),
 			EventType: "impression", Timestamp: e.Timestamp,
 		})
 	}

@@ -907,9 +907,13 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			return
 		}
 		serveReq := models.ServeRequest{
-			TraceID:       ac.TraceID,
-			CampaignID:    winner.CID,
-			CreativeID:    winner.CrID,
+			TraceID:    ac.TraceID,
+			CampaignID: winner.CID,
+			CreativeID: winner.CrID,
+			// DealID rides serve → adserver → tracker beacon (deal=) →
+			// billing, where the deal's TYPE drives contract fee modifiers.
+			// Was dropped here, so deal-won impressions billed as open market.
+			DealID: winner.DealID,
 			PlacementID:   ac.Placement.ID,
 			PublisherID:   ac.Placement.PublisherID,
 			AdvertiserID:  ac.BidResp.SeatBid[0].Seat,
