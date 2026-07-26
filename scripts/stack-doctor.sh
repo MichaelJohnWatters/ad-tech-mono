@@ -82,15 +82,26 @@ fi
 say "k8s API: ok"
 
 # ---- Stage 3: adtech pods ---------------------------------------------------
-pods_ready() { [ "$(kubectl -n $NS get pods 2>/dev/null | grep -cE '1/1\s+Running|2/2\s+Running')" -ge "$MIN_READY_PODS" ]; }
-wait_for 420 "adtech pods ($MIN_READY_PODS+ ready)" pods_ready \
+# Full convergence, not a count: after a host reboot pods restart in
+# dependency order for several minutes, and a ">= N ready" check passes
+# while clickhouse/adserver are still cycling (first-run lesson: the
+# doctor then probed a container mid-restart and blamed the wrong layer).
+pods_ready() {
+  local out; out=$(kubectl -n $NS get pods 2>/dev/null) || return 1
+  [ "$(echo "$out" | grep -cE '1/1\s+Running|2/2\s+Running')" -ge "$MIN_READY_PODS" ] || return 1
+  [ "$(echo "$out" | grep -vE '1/1\s+Running|2/2\s+Running|Completed|NAME' | grep -cv '^$')" -eq 0 ]
+}
+wait_for 600 "adtech pods (all converged, $MIN_READY_PODS+ ready)" pods_ready \
   || fail "pods not converging — inspect: kubectl -n $NS get pods | grep -v Running"
 
 # ---- Stage 4: localhost tunnels (hostPort-jump signature) --------------------
 all_tunnels() { for p in "${CORE_PORTS[@]}"; do tunnel_up "$p" || return 1; done; }
 if ! all_tunnels; then
   say "localhost tunnels dead — checking layers"
-  kubectl -n $NS exec deploy/gateway -- wget -qO- --timeout=3 "http://reporting:8086/healthz" >/dev/null 2>&1 \
+  # Retried: a one-shot exec can hit a container mid-restart right after
+  # boot and misdiagnose a healthy cluster as "in-cluster path dead".
+  incluster_ok() { kubectl -n $NS exec deploy/gateway -- wget -qO- --timeout=3 "http://reporting:8086/healthz" >/dev/null 2>&1; }
+  wait_for 120 "in-cluster path" incluster_ok \
     || fail "in-cluster path ALSO dead — not a tunnel problem; inspect service pods"
   if ! rdctl shell sudo iptables -t nat -S PREROUTING 2>/dev/null | grep -q CNI-HOSTPORT; then
     say "CNI-HOSTPORT jump rules missing from the VM nat table (k3s rewrote iptables under the svclb pods)"
