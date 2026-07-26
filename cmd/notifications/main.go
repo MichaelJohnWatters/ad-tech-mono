@@ -93,13 +93,40 @@ func main() {
 	} else {
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 		ctx := context.Background()
-		if serr := natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); serr != nil {
-			log.Warn("ensure stream", "error", serr)
-		}
-		for _, subject := range notificationSubjects {
-			if serr := natsBus.Subscribe(ctx, subject, constants.NATSGroupNotifications, eventHandler(store, log)); serr != nil {
-				log.Error("subscribe failed", "subject", subject, "error", serr)
+		// Self-heal, don't latch: a pod that boots racing NATS/JetStream used
+		// to fail every Subscribe once and then stay DEAF until manually
+		// restarted (fresh stack 2026-07-26: all subjects failed "context
+		// deadline exceeded" at boot; the notifications table stayed empty for
+		// 5h). Retry each failed subject until it sticks — same doctrine as
+		// webhooks + the warm caches.
+		subscribeAll := func() []string {
+			var pending []string
+			if serr := natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); serr != nil {
+				log.Warn("ensure stream", "error", serr)
 			}
+			for _, subject := range notificationSubjects {
+				if serr := natsBus.Subscribe(ctx, subject, constants.NATSGroupNotifications, eventHandler(store, log)); serr != nil {
+					log.Error("subscribe failed, will retry", "subject", subject, "error", serr)
+					pending = append(pending, subject)
+				}
+			}
+			return pending
+		}
+		if pending := subscribeAll(); len(pending) > 0 {
+			go func() {
+				for len(pending) > 0 {
+					time.Sleep(15 * time.Second)
+					var still []string
+					for _, subject := range pending {
+						if serr := natsBus.Subscribe(ctx, subject, constants.NATSGroupNotifications, eventHandler(store, log)); serr != nil {
+							still = append(still, subject)
+						} else {
+							log.Info("subscribe established after retry", "subject", subject)
+						}
+					}
+					pending = still
+				}
+			}()
 		}
 		log.Info("notifications consumer consuming events", "subjects", len(notificationSubjects))
 	}
