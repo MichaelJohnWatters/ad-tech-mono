@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down deploy devconsole demosite extbidder demoadv security-harness
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite extbidder demoadv security-harness
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -215,6 +215,9 @@ deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 stack-down: ## Tear the local helm stack down (keeps PVCs; add PURGE=1 to wipe data)
 	helm uninstall adtech || true
 	@if [ "$(PURGE)" = "1" ]; then kubectl -n adtech delete pvc --all; fi
+
+stack-doctor: ## Diagnose + repair the local stack (post-sleep wedge, node-IP flip, stale svclb tunnels, TB wedge)
+	scripts/stack-doctor.sh
 
 # --- Utilities ---
 clean: ## Clean build artifacts
