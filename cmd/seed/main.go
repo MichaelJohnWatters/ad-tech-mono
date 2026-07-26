@@ -115,6 +115,13 @@ func main() {
 		log.Error("seed direct-sold failed", "error", err)
 		os.Exit(1)
 	}
+	// Recent-feature baseline (data providers, labeled segments, agency,
+	// exchange rates, house ads) — entities that used to exist only as
+	// hand-made rows and vanished on the first wipe.
+	if err := in.SeedFeatureBaseline(ctx); err != nil {
+		log.Error("seed feature baseline failed", "error", err)
+		os.Exit(1)
+	}
 	if err := in.SeedDevSecrets(ctx); err != nil {
 		log.Error("seed dev secrets failed", "error", err)
 		os.Exit(1)
