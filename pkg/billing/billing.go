@@ -13,8 +13,10 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -130,9 +132,48 @@ type Engine struct {
 	balances     BalanceSink      // optional; see SetBalanceSink
 	reservations ReservationStore // optional; see SetReservationStore
 	committed    CommittedCounter // optional; see SetCommittedCounter
+	rates        RateSource       // optional; see SetRateSource
 	pacing       *pacingAccumulator
 	clk          clock.Clock
 	log          *slog.Logger
+}
+
+// RateSource answers "how many units of `currency` is 1 USD worth on `on`?"
+// (the exchange_rates table's convention: base USD, rate = target units per
+// USD). ok=false means no rate is known for that currency/date.
+type RateSource func(ctx context.Context, currency string, on time.Time) (rate float64, ok bool)
+
+// SetRateSource wires multi-currency normalization: every SpendEvent whose
+// Currency isn't USD is converted to USD before ANY money moves, so the
+// ledger, balances, pacing and summaries stay single-currency (micro-DOLLAR
+// truth). Without a source, non-USD events are refused rather than silently
+// booked 1:1 — treating EUR as USD is money corruption.
+func (e *Engine) SetRateSource(rs RateSource) { e.rates = rs }
+
+// ErrNoExchangeRate marks a spend event refused because its currency can't
+// be converted (no rate source wired, or no rate row for the currency/date).
+var ErrNoExchangeRate = errors.New("no exchange rate for currency")
+
+// normalizeCurrency converts event money to USD in place. USD/empty pass
+// through untouched.
+func (e *Engine) normalizeCurrency(ctx context.Context, event *SpendEvent) error {
+	cur := strings.ToUpper(strings.TrimSpace(event.Currency))
+	if cur == "" || cur == "USD" {
+		event.Currency = "USD"
+		return nil
+	}
+	if e.rates == nil {
+		return fmt.Errorf("%w: %s (no rate source wired)", ErrNoExchangeRate, cur)
+	}
+	rate, ok := e.rates(ctx, cur, e.clk.Now())
+	if !ok || rate <= 0 {
+		return fmt.Errorf("%w: %s", ErrNoExchangeRate, cur)
+	}
+	e.log.Info("spend event currency normalized",
+		"trace_id", event.TraceID, "from", cur, "amount", event.ClearingPrice, "rate", rate)
+	event.ClearingPrice = event.ClearingPrice / rate
+	event.Currency = "USD"
+	return nil
 }
 
 // SetBalanceSink connects the prepay drawdown: every realized spend
@@ -255,6 +296,13 @@ func (e *Engine) SetPacingHoldTTL(d time.Duration) {
 
 // ProcessEvent handles any spend event according to its bid model.
 func (e *Engine) ProcessEvent(ctx context.Context, event SpendEvent) (*SpendResult, error) {
+	// Normalize to USD BEFORE any money moves — a refused conversion drops
+	// the event loudly instead of booking a foreign amount as dollars.
+	if err := e.normalizeCurrency(ctx, &event); err != nil {
+		e.log.Error("spend event unbillable, dropped",
+			"trace_id", event.TraceID, "currency", event.Currency, "error", err)
+		return nil, err
+	}
 	switch event.BidModel {
 	case BidCPM:
 		return e.billImmediate(ctx, event)
@@ -311,6 +359,14 @@ func (e *Engine) ProcessBatch(ctx context.Context, events []SpendEvent) ([]*Spen
 		// path from the impression consumer) falls back to the per-event path.
 		if event.EventType != "" && event.EventType != "impression" {
 			results[i], _ = e.ProcessEvent(ctx, event)
+			continue
+		}
+
+		// Same USD normalization as ProcessEvent — one unbillable event is
+		// dropped loudly without failing the rest of the batch.
+		if err := e.normalizeCurrency(ctx, &event); err != nil {
+			e.log.Error("spend event unbillable, dropped",
+				"trace_id", event.TraceID, "currency", event.Currency, "error", err)
 			continue
 		}
 

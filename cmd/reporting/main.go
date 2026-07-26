@@ -93,6 +93,10 @@ func main() {
 	}
 	contracts := billing.NewContractStore()
 	billingEngine := billing.NewEngine(ledger, contracts, clk, log)
+	// Multi-currency: normalize non-USD spend events against exchange_rates
+	// before any money moves (unknown currency = loud unbillable drop, never
+	// a silent 1:1 booking). Rates cached per (currency, day).
+	billingEngine.SetRateSource(newPGRateSource(cfg.Get(keys.Database.URL.Key(), ""), log).Rate)
 
 	// Prepay drawdown (money loop): every realized spend the engine bills or
 	// settles also debits advertiser_balances and pings the DSP's balance
@@ -598,7 +602,7 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 		c.billing.ProcessEvent(ctx, billing.SpendEvent{
 			TraceID: e.TraceID, CampaignID: e.CampaignID, CreativeID: e.CreativeID,
 			PlacementID: e.PlacementID, PublisherID: e.PublisherID, AdvertiserID: e.AccountID,
-			ClearingPrice: e.ClearingPriceUSD, Currency: "USD",
+			ClearingPrice: e.ClearingPriceUSD, Currency: spendCurrency(e.ClearingCurrency),
 			BidModel: billing.BidModel(e.BidModel), DealType: e.DealID,
 			EventType: "impression", Timestamp: e.Timestamp,
 		})
@@ -1143,7 +1147,7 @@ func (c *EventConsumer) HTTPHandler() http.HandlerFunc {
 						TraceID: imp.TraceID, CampaignID: imp.CampaignID,
 						PlacementID: imp.PlacementID, PublisherID: imp.PublisherID,
 						AdvertiserID: imp.AccountID, ClearingPrice: imp.ClearingPriceUSD,
-						Currency: "USD", BidModel: billing.BidModel(imp.BidModel),
+						Currency: spendCurrency(imp.ClearingCurrency), BidModel: billing.BidModel(imp.BidModel),
 						EventType: "impression", Timestamp: imp.Timestamp,
 					})
 				}
@@ -1278,4 +1282,15 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 		}
 	}
 	return 300 * time.Second
+}
+
+// spendCurrency returns the impression's REAL clearing currency for the
+// billing engine ("USD" when unstamped). The old hardcoded "USD" bypassed
+// billing's exchange-rate normalization entirely — a EUR impression was
+// booked 1:1 as dollars (caught by TestBillingCurrencyConversion).
+func spendCurrency(cur string) string {
+	if cur == "" {
+		return "USD"
+	}
+	return cur
 }
