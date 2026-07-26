@@ -142,10 +142,12 @@ type BatchDebitResult struct {
 //     partially-replayed batch never double-debits, exactly as DebitSpend's
 //     RowsAffected==0 guard does per event.
 //
-// advertiser_balances and ledger_entries carry no RLS (only tenant-facing
-// tables do), so a batch spanning advertisers needs no per-tenant set_config.
-// In-batch duplicate (traceID,eventType) can't occur: the consumer dedups on
-// NATS stream sequence before billing.
+// This batch spans MANY advertisers (the reporting consumer bills every tenant's
+// wins), so under the NOBYPASSRLS app role (security #77) it runs under the
+// platform hatch — advertiser_balances' tenant_isolation policy is USING-only,
+// so platform_read admits the cross-tenant debits. (ledger_entries carries no
+// RLS.) In-batch duplicate (traceID,eventType) can't occur: the consumer dedups
+// on NATS stream sequence before billing.
 func (s *BalanceStore) DebitSpendBatch(ctx context.Context, debits []BatchDebit) ([]BatchDebitResult, error) {
 	if len(debits) == 0 {
 		return nil, nil
@@ -170,6 +172,10 @@ func (s *BalanceStore) DebitSpendBatch(ctx context.Context, debits []BatchDebit)
 		return nil, err
 	}
 	defer tx.Rollback()
+	// Cross-tenant batch → platform hatch (security #77).
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
 
 	const q = `
 WITH input AS (
