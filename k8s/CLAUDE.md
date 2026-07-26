@@ -34,6 +34,7 @@ staging/prod (values files per env).
 | Command | What it does |
 |---|---|
 | `make stack-up` | Build all images (`scripts/stack-images.sh`) + `helm upgrade --install adtech` + gateway-tls secret |
+| `make stack-doctor` | **Run this FIRST when the stack looks dead** (esp. after laptop sleep). Staged diagnose+repair: RD app/VM wedge (rdctl restart) → k8s API → pod readiness → dead-tunnel signature (in-cluster OK but localhost resets = CNI-HOSTPORT jump rules stripped → bounce klipper svclb pods) → TB readyz. Idempotent, never touches data. Note: node on 192.168.5.x is BY DESIGN (RD pins --node-ip); never restart k3s in-VM as a "fix" — that's what strips the iptables jumps. |
 | `make deploy SVC=pipeline` | Rebuild ONE image + rollout restart (SVC=dsp restarts all three DSP pods) |
 | `make stack-down` | `helm uninstall` (add `PURGE=1` to also drop PVCs) |
 | `make stack-images` | Just build the images |
