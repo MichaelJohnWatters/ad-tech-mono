@@ -184,18 +184,21 @@ func (p *Preloader) lookup(ctx context.Context, userID, visibility string) ([]st
 // SubscribeInvalidate wires adtech.cache.invalidate.audience to a debounced
 // refresh, closing the gap between a membership write (upload, drop-zone,
 // profile-builder) and the bid path seeing it: seconds instead of the poll
-// interval. Per-POD consumer group for broadcast semantics — same rationale
-// as pkg/cache/warm: a shared group would load-balance invalidates so only
-// one pod refreshed per message. Failure degrades to poll-only (the 30s
-// interval remains the staleness ceiling either way).
+// interval. Per-POD consumer for broadcast semantics — same rationale as
+// pkg/cache/warm: a shared group would load-balance invalidates so only one
+// pod refreshed per message. EPHEMERAL via SubscribeBroadcast (the c751a52
+// leak rule: a durable consumer keyed by the ever-changing pod name is never
+// reaped and leaks one JetStream consumer per pod incarnation). Failure
+// degrades to poll-only (the 30s interval remains the staleness ceiling
+// either way).
 func (p *Preloader) SubscribeInvalidate(ctx context.Context, bus events.EventBus, service string) {
 	if bus == nil {
 		return
 	}
-	// Per-REPLICA group (hostname), NOT POD_NAME: POD_NAME is shared across a
+	// Per-REPLICA name (hostname), NOT POD_NAME: POD_NAME is shared across a
 	// service's replicas, which would queue-group them so only one refreshed.
-	group := service + "-audience-" + podid.Replica()
-	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateAudience, group, func(_ context.Context, msg *events.Message) error {
+	name := service + "-audience-" + podid.Replica()
+	err := events.SubscribeBroadcast(ctx, bus, events.SubjectCacheInvalidateAudience, name, func(_ context.Context, msg *events.Message) error {
 		p.requestRefresh()
 		_ = msg.Ack()
 		return nil
@@ -204,7 +207,7 @@ func (p *Preloader) SubscribeInvalidate(ctx context.Context, bus events.EventBus
 		p.log.Warn("audience invalidate subscribe failed (poll-only)", "error", err)
 		return
 	}
-	p.log.Info("audience preloader subscribed to invalidates", "group", group)
+	p.log.Info("audience preloader subscribed to invalidates (ephemeral)", "name", name)
 }
 
 // requestRefresh schedules one debounced preload (~1s) — a burst of
