@@ -212,4 +212,27 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 			t.Errorf("platform loader saw accA=%v accB=%v; want both (hatch failed → RLS filtered the loader)", got[accA], got[accB])
 		}
 	})
+
+	// The SINGLE-ROW helper (QueryRowPlatform) backs CampaignLoader.LoadOne,
+	// CountKnownIdentifiers and GetReservation — exercise it directly under the
+	// NOBYPASSRLS role so its scan-inside-the-tx path has coverage too.
+	t.Run("query_row_platform_single_row", func(t *testing.T) {
+		store := NewFromDB(app)
+		var n int
+		if err := store.QueryRowPlatform(ctx,
+			func(row *sql.Row) error { return row.Scan(&n) },
+			`SELECT count(*) FROM data_providers WHERE name LIKE 'probe-%'`); err != nil {
+			t.Fatalf("QueryRowPlatform: %v", err)
+		}
+		if n != 2 {
+			t.Errorf("QueryRowPlatform saw %d rows; want 2 (both tenants via the platform hatch)", n)
+		}
+		// sql.ErrNoRows must still propagate out of the callback.
+		err := store.QueryRowPlatform(ctx,
+			func(row *sql.Row) error { var x string; return row.Scan(&x) },
+			`SELECT name FROM data_providers WHERE name = 'no-such-provider'`)
+		if err != sql.ErrNoRows {
+			t.Errorf("QueryRowPlatform no-row case: got %v, want sql.ErrNoRows", err)
+		}
+	})
 }
