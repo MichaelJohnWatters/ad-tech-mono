@@ -128,7 +128,19 @@ func (s PostgresJobStore) ClaimOne(ctx context.Context) (*Job, error) {
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx, `
+	// The worker claims ANY tenant's queued job — inherently cross-tenant, so it
+	// runs under the platform hatch (security #77). The report_jobs
+	// tenant_isolation policy is USING-only (no separate WITH CHECK), so
+	// platform_read admits the UPDATE too.
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	row := tx.QueryRowContext(ctx, `
 UPDATE report_jobs
 SET status = 'running', started_at = now(), attempts = attempts + 1,
     lease_expires_at = now() + $1::interval, claimed_by = $2
@@ -140,7 +152,29 @@ RETURNING `+jobColumns,
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	return j, err
+	if err != nil {
+		return nil, err
+	}
+	return j, tx.Commit()
+}
+
+// execPlatform runs a single cross-tenant worker UPDATE under the platform hatch
+// (security #77). The worker legitimately touches any tenant's job; report_jobs'
+// tenant_isolation policy is USING-only (no separate WITH CHECK), so
+// platform_read admits the write. NEVER use for request-path writes.
+func (s PostgresJobStore) execPlatform(ctx context.Context, query string, args ...any) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ExtendLease heartbeats a running job's lease. A worker that dies stops
@@ -149,11 +183,10 @@ func (s PostgresJobStore) ExtendLease(ctx context.Context, id string) error {
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE report_jobs SET lease_expires_at = now() + $1::interval
 WHERE id = $2::uuid AND status = 'running'`,
 		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), id)
-	return err
 }
 
 // MarkDone records a successful run and its artifact.
@@ -161,12 +194,11 @@ func (s PostgresJobStore) MarkDone(ctx context.Context, id string, a Artifact) e
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE report_jobs
 SET status = 'done', finished_at = now(), error = NULL,
     artifact_bucket = $2, artifact_key = $3, artifact_bytes = $4, row_count = $5
 WHERE id = $1::uuid`, id, a.Bucket, a.Key, a.Bytes, a.Rows)
-	return err
 }
 
 // MarkFailed records a failed run.
@@ -174,10 +206,9 @@ func (s PostgresJobStore) MarkFailed(ctx context.Context, id, errMsg string) err
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE report_jobs SET status = 'failed', finished_at = now(), error = $2
 WHERE id = $1::uuid`, id, errMsg)
-	return err
 }
 
 // ListByAccount returns the account's jobs, newest first. Explicit tenant
@@ -251,7 +282,16 @@ func (s PostgresJobStore) Expired(ctx context.Context, now time.Time, limit int)
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	// Cross-tenant sweeper read → platform hatch (held open while scanning).
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+jobColumns+` FROM report_jobs
 		 WHERE expires_at < $1 AND status IN ('done', 'failed')
 		 ORDER BY expires_at LIMIT $2`, now, limit)
@@ -270,13 +310,14 @@ func (s PostgresJobStore) Expired(ctx context.Context, now time.Time, limit int)
 	return out, rows.Err()
 }
 
-// Delete removes a job row.
+// Delete removes a job row. Called by the gateway handler only after
+// GetByAccount has confirmed ownership, and by the expiry sweeper — both
+// legitimately cross-tenant, so it runs under the platform hatch (security #77).
 func (s PostgresJobStore) Delete(ctx context.Context, id string) error {
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM report_jobs WHERE id = $1::uuid`, id)
-	return err
+	return s.execPlatform(ctx, `DELETE FROM report_jobs WHERE id = $1::uuid`, id)
 }
 
 // ReclaimExpired flips running jobs whose LEASE lapsed back to queued.
@@ -288,12 +329,21 @@ func (s PostgresJobStore) ReclaimExpired(ctx context.Context) (int, error) {
 	if s.DB == nil {
 		return 0, sql.ErrConnDone
 	}
-	res, err := s.DB.ExecContext(ctx, `
+	// Cross-tenant worker sweep → platform hatch (security #77).
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
 UPDATE report_jobs SET status = 'queued', started_at = NULL, lease_expires_at = NULL, claimed_by = NULL
 WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now()`)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return int(n), tx.Commit()
 }

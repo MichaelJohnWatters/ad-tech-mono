@@ -36,7 +36,17 @@ SELECT sr.id::text, sr.account_id::text, sr.name, sr.query_config::text,
                  ORDER BY (tm.role = 'owner') DESC, tm.created_at LIMIT 1), '')
 FROM saved_reports sr
 WHERE sr.schedule IS NOT NULL AND sr.schedule <> ''`
-	rows, err := s.DB.QueryContext(ctx, q)
+	// The scheduler reads EVERY tenant's saved reports (inherently cross-tenant)
+	// → platform hatch (security #77), held open while scanning.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -64,9 +74,20 @@ WHERE sr.schedule IS NOT NULL AND sr.schedule <> ''`
 
 // MarkRun stamps last_run_at for a report.
 func (s PostgresStore) MarkRun(ctx context.Context, id string, t time.Time) error {
-	_, err := s.DB.ExecContext(ctx,
-		`UPDATE saved_reports SET last_run_at = $2, updated_at = now() WHERE id = $1::uuid`, id, t)
-	return err
+	// Cross-tenant scheduler write → platform hatch (security #77).
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE saved_reports SET last_run_at = $2, updated_at = now() WHERE id = $1::uuid`, id, t); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // HTTPQuery posts a report's query to the reporting service. account_id is
