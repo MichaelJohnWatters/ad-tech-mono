@@ -56,12 +56,17 @@ func (h *Harness) WithDeterministicCompetitors(t *testing.T) {
 // Restored on t.Cleanup.
 func (h *Harness) MakeDSPAlwaysNoBid(t *testing.T, podID string) {
 	t.Helper()
+	// Snapshot-and-restore, NOT restore-to-zero: competitor pods carry
+	// seeded per-pod no_bid_rate values (comp1=0.2, comp2=0.15), and the
+	// old hardcoded "0" restore clobbered them — TestSeedDefaults then
+	// failed on any stack where a routing test had ever run.
+	before := h.GetResolvedConfig(t, "dsp.no_bid_rate", podID).Value
+	if before == "" {
+		before = "0"
+	}
 	h.SetConfigForPod(t, "dsp.no_bid_rate", "1.0", podID)
 	t.Cleanup(func() {
-		// Restore to 0 — the WithDeterministicCompetitors cleanup will
-		// re-set to the realistic per-pod default if both helpers are in
-		// play. If only this helper was used, 0 is the safe baseline.
-		h.SetConfigForPod(t, "dsp.no_bid_rate", "0", podID)
+		h.SetConfigForPod(t, "dsp.no_bid_rate", before, podID)
 	})
 }
 

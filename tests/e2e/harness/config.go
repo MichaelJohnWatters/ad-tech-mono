@@ -182,3 +182,42 @@ func (h *Harness) DeleteConfig(t *testing.T, key string) {
 	}
 	t.Fatalf("DELETE /v1/config: %v", lastErr)
 }
+
+// ResolvedConfig mirrors the gateway's /v1/config?resolved=true response.
+type ResolvedConfig struct {
+	Value  string `json:"value"`
+	Source string `json:"source"`
+	PodID  string `json:"pod_id"`
+}
+
+// GetResolvedConfig reads a key's resolved value + provenance for a pod via
+// the gateway, AUTHENTICATED — /v1/config is auth-gated since the security
+// hardening, and the old unauthenticated read decoded the 401 error body
+// into an empty struct, which made three seed-defaults tests fail with
+// value="" while the config system was perfectly healthy. Fails the test on
+// any non-200 so an auth regression is loud instead of silently empty.
+func (h *Harness) GetResolvedConfig(t *testing.T, key, pod string) ResolvedConfig {
+	t.Helper()
+	url := h.URLs.Gateway + routes.Config + "?resolved=true&key=" + key + "&pod=" + pod
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build resolved-config request: %v", err)
+	}
+	if tok := h.adminBearer(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("resolved config get %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolved config %s status %d: %s", url, resp.StatusCode, string(body))
+	}
+	var out ResolvedConfig
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode resolved config: %v\nbody: %s", err, string(body))
+	}
+	return out
+}

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
 
 // maybeWrapHotCold wraps the hot ClickHouse store in a HotColdStore that serves
@@ -48,6 +51,23 @@ func maybeWrapHotCold(store analytics.Store, cfg *config.Config, log *slog.Logge
 		Password: keys.Reporting.ClickHousePassword.Get(cfg),
 		Log:      log,
 	}
+	// Ensure the lake bucket exists: BOTH sides of the hot/cold spine go
+	// through ClickHouse s3(), which cannot create buckets — on a fresh
+	// object store every export errored NoSuchBucket and every summary/
+	// rollup read paid a failing cold query until someone hand-made the
+	// bucket (bitten twice: 2026-07-25 after the bucket vanished, and
+	// 2026-07-26 on the factory-reset stack). Reporting owns the export,
+	// so reporting owns the bucket. Fail-open: worst case is the same
+	// degraded hot-only behaviour as before.
+	if obj := objects.Connect(cfg, "", log); obj != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := obj.EnsureBucket(ctx, s3cfg.Bucket); err != nil {
+			log.Error("reporting: lake bucket ensure failed — cold reads/exports will error until it exists",
+				"bucket", s3cfg.Bucket, "error", err)
+		}
+		cancel()
+	}
+
 	cold, err := analytics.NewCHParquetColdReader(chCfg, s3cfg)
 	if err != nil {
 		log.Error("reporting: cold s3() reader failed to open — serving hot-only", "error", err)

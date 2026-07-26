@@ -78,7 +78,20 @@ func main() {
 	bucket := keys.ReportRunner.ArtifactBucket.Get(cfg)
 	if objStore != nil {
 		if err := objStore.EnsureBucket(context.Background(), bucket); err != nil {
-			log.Error("ensure artifact bucket", "bucket", bucket, "error", err)
+			// Self-heal, don't latch: a pod that boots racing Minio used to
+			// ERROR once and then fail every job with "store artifact: The
+			// specified bucket does not exist" until manually restarted
+			// (bit the fresh stack on 2026-07-26 — four e2e suites red).
+			log.Error("ensure artifact bucket failed; retrying in background", "bucket", bucket, "error", err)
+			go func() {
+				for {
+					time.Sleep(15 * time.Second)
+					if err := objStore.EnsureBucket(context.Background(), bucket); err == nil {
+						log.Info("artifact bucket ensured after retry", "bucket", bucket)
+						return
+					}
+				}
+			}()
 		}
 	}
 
