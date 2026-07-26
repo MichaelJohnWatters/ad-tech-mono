@@ -76,7 +76,16 @@ func (s *PostgresStore) ListByAccount(ctx context.Context, accountID string) ([]
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	// Tenant-scoped read → caller's account GUC (security #77), read-only tx.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+mappingColumns+` FROM audience_mappings
 		 WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
 	if err != nil {
@@ -99,10 +108,18 @@ func (s *PostgresStore) GetByAccount(ctx context.Context, accountID, id string) 
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx,
+	// Tenant-scoped read → caller's account GUC (security #77).
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	m, err := scanMapping(tx.QueryRowContext(ctx,
 		`SELECT `+mappingColumns+` FROM audience_mappings
-		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
-	m, err := scanMapping(row.Scan)
+		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -114,7 +131,17 @@ func (s *PostgresStore) DeleteByAccount(ctx context.Context, accountID, id strin
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx,
-		`DELETE FROM audience_mappings WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
-	return err
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM audience_mappings WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

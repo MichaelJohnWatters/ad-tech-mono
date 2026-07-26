@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // reportJobInput is a job submission: either a saved-report template
@@ -359,19 +360,20 @@ func (s pgReportJobStore) SavedReportForJob(ctx context.Context, accountID, id s
 	}
 	var name, format string
 	var config []byte
-	err := s.db.QueryRowContext(ctx,
-		`SELECT name, query_config, COALESCE(format, 'csv') FROM saved_reports
-		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID).
-		Scan(&name, &config, &format)
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&name, &config, &format)
+	}, `SELECT name, query_config, COALESCE(format, 'csv') FROM saved_reports
+		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	return name, config, format, err
 }
 
 // SegmentOwned is the segment-export tenancy check.
 func (s pgReportJobStore) SegmentOwned(ctx context.Context, accountID, segmentID string) (bool, error) {
 	var one int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT 1 FROM audience_segments WHERE id = $1::uuid AND account_id = $2::uuid`,
-		segmentID, accountID).Scan(&one)
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&one)
+	}, `SELECT 1 FROM audience_segments WHERE id = $1::uuid AND account_id = $2::uuid`,
+		segmentID, accountID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -385,10 +387,10 @@ func (s pgReportJobStore) OwnerEmail(ctx context.Context, accountID string) (str
 		return "", sql.ErrConnDone
 	}
 	var email string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE((SELECT tm.email FROM team_members tm
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&email)
+	}, `SELECT COALESCE((SELECT tm.email FROM team_members tm
 		         WHERE tm.account_id = $1::uuid AND tm.status = 'active'
-		         ORDER BY (tm.role = 'owner') DESC, tm.created_at LIMIT 1), '')`, accountID).
-		Scan(&email)
+		         ORDER BY (tm.role = 'owner') DESC, tm.created_at LIMIT 1), '')`, accountID)
 	return email, err
 }

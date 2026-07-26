@@ -241,6 +241,21 @@ func QueryTenantDB(ctx context.Context, db *sql.DB, accountID, query string, arg
 	return rows, func() { rows.Close(); tx.Rollback() }, nil
 }
 
+// QueryRowTenantDB is the single-row form of QueryTenantDB: scan runs inside a
+// read-only tx with the caller's app.current_account_id set (security #77).
+// sql.ErrNoRows propagates out of scan as usual. No-op under the superuser.
+func QueryRowTenantDB(ctx context.Context, db *sql.DB, accountID string, scan func(*sql.Row) error, query string, args ...any) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
+		return err
+	}
+	return scan(tx.QueryRowContext(ctx, query, args...))
+}
+
 // Ping checks both primary and read connections.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := s.primary.PingContext(ctx); err != nil {

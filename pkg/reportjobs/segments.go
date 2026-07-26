@@ -26,7 +26,17 @@ func PGSegmentMembers(db *sql.DB) SegmentMembersFunc {
 		if segmentID == "" {
 			return res, fmt.Errorf("segment export: filters.segment_id required")
 		}
-		rows, err := db.QueryContext(ctx, `
+		// Tenant-scoped worker read → set the job's account GUC so RLS admits the
+		// members + segment under the NOBYPASSRLS app role (security #77).
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return res, fmt.Errorf("segment export begin: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+			return res, fmt.Errorf("segment export tenant: %w", err)
+		}
+		rows, err := tx.QueryContext(ctx, `
 SELECT m.user_id, s.name, s.visibility, m.added_at
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id
