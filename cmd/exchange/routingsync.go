@@ -62,24 +62,40 @@ func startRoutingSync(cfg *config.Config, router *optimise.SmartRouter, bus even
 		// EPHEMERAL via SubscribeBroadcast (the c751a52 leak rule: a durable
 		// consumer keyed by the ever-changing pod name is never reaped).
 		name := "router-stats-" + podid.Replica()
-		err := events.SubscribeBroadcast(context.Background(), bus, events.SubjectCacheInvalidateRouterStats, name,
-			func(ctx context.Context, msg *events.Message) error {
-				var m routerResetMsg
-				_ = json.Unmarshal(msg.Data, &m)
-				if m.AtMs == 0 {
-					m.AtMs = time.Now().UnixMilli()
+		if err := rs.subscribeReset(name); err != nil {
+			// Self-heal like the warm caches' resubscribeLoop: a NATS race at
+			// boot must not permanently disable reset broadcasts for this pod
+			// (observed live 2026-07-25: one Warn, then silent divergence).
+			log.Warn("router reset subscribe failed, retrying in background", "error", err)
+			go func() {
+				for {
+					time.Sleep(30 * time.Second)
+					if rs.subscribeReset(name) == nil {
+						rs.log.Info("router reset subscription established after retry")
+						return
+					}
 				}
-				if rs.applyReset(m.AtMs) {
-					rs.log.Info("smart router reset (broadcast)")
-				}
-				return nil
-			})
-		if err != nil {
-			log.Warn("router reset subscribe failed; resets reach this pod only via its own debug endpoint", "error", err)
+			}()
 		}
 	}
 	go rs.reseedLoop()
 	return rs
+}
+
+// subscribeReset attaches the broadcast handler for router-stats resets.
+func (rs *routingSync) subscribeReset(name string) error {
+	return events.SubscribeBroadcast(context.Background(), rs.bus, events.SubjectCacheInvalidateRouterStats, name,
+		func(ctx context.Context, msg *events.Message) error {
+			var m routerResetMsg
+			_ = json.Unmarshal(msg.Data, &m)
+			if m.AtMs == 0 {
+				m.AtMs = time.Now().UnixMilli()
+			}
+			if rs.applyReset(m.AtMs) {
+				rs.log.Info("smart router reset (broadcast)")
+			}
+			return nil
+		})
 }
 
 // applyReset wipes the router and rebases the reseed watermark to atMs —
