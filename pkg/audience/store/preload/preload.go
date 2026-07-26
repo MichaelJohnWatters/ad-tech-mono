@@ -260,7 +260,17 @@ func (p *Preloader) preloadOnce(ctx context.Context) error {
 SELECT m.user_id, m.segment_id::text, s.visibility
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id`
-	rows, err := p.db.QueryContext(ctx, q)
+	// Cross-tenant preload (every account's memberships → the shared stamping
+	// cache) → platform hatch, held open while scanning (security #77).
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin membership preload: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return fmt.Errorf("membership preload platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, q)
 	if err != nil {
 		return fmt.Errorf("query memberships: %w", err)
 	}

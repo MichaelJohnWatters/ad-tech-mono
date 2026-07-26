@@ -132,11 +132,52 @@ const LeaseTTL = 2 * time.Minute
 // subselect's FOR UPDATE SKIP LOCKED means concurrent claimers take distinct
 // rows. run_at <= now() gates scheduled/held files. The claim carries a lease +
 // claimant identity.
+// execPlatform runs a single cross-tenant worker UPDATE under the platform hatch
+// (security #77). The ingest worker legitimately touches any tenant's job;
+// audience_ingest_jobs' tenant_isolation policy is USING-only, so platform_read
+// admits the write. NEVER for request-path writes.
+func (s PostgresIngestStore) execPlatform(ctx context.Context, query string, args ...any) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// claimPlatform runs a claim UPDATE...RETURNING under the platform hatch and
+// scans the row inside the tx.
+func (s PostgresIngestStore) claimPlatform(ctx context.Context, query string, args ...any) (*Job, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	j, err := scanJob(tx.QueryRowContext(ctx, query, args...).Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return j, tx.Commit()
+}
+
 func (s PostgresIngestStore) ClaimOne(ctx context.Context) (*Job, error) {
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx, `
+	// Worker claims ANY tenant's due job → platform hatch (security #77).
+	return s.claimPlatform(ctx, `
 UPDATE audience_ingest_jobs
 SET status = 'running', started_at = now(), attempts = attempts + 1,
     lease_expires_at = now() + $1::interval, claimed_by = $2
@@ -145,11 +186,6 @@ WHERE id = (SELECT id FROM audience_ingest_jobs
             ORDER BY run_at, created_at FOR UPDATE SKIP LOCKED LIMIT 1)
 RETURNING `+jobColumns,
 		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), s.WorkerID)
-	j, err := scanJob(row.Scan)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return j, err
 }
 
 // ClaimByID claims a specific queued job by id — the same lease + attempts++
@@ -162,18 +198,15 @@ func (s PostgresIngestStore) ClaimByID(ctx context.Context, id string) (*Job, er
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx, `
+	// The inline path claims the row it just enqueued; still a worker action →
+	// platform hatch (security #77).
+	return s.claimPlatform(ctx, `
 UPDATE audience_ingest_jobs
 SET status = 'running', started_at = now(), attempts = attempts + 1,
     lease_expires_at = now() + $1::interval, claimed_by = $2
 WHERE id = $3::uuid AND status = 'queued'
 RETURNING `+jobColumns,
 		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), s.WorkerID, id)
-	j, err := scanJob(row.Scan)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return j, err
 }
 
 // ExtendLease heartbeats a running job's lease. A worker that dies stops
@@ -182,11 +215,10 @@ func (s PostgresIngestStore) ExtendLease(ctx context.Context, id string) error {
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE audience_ingest_jobs SET lease_expires_at = now() + $1::interval
 WHERE id = $2::uuid AND status = 'running'`,
 		fmt.Sprintf("%f seconds", LeaseTTL.Seconds()), id)
-	return err
 }
 
 // MarkDone records a successful run and its result counts.
@@ -198,7 +230,7 @@ func (s PostgresIngestStore) MarkDone(ctx context.Context, id string, r IngestRe
 	if r.SegmentID != "" {
 		segID = r.SegmentID
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE audience_ingest_jobs
 SET status = 'done', finished_at = now(), error = NULL,
     segment_id = $2::uuid, total_rows = $3, valid_rows = $4, rejected_rows = $5,
@@ -206,7 +238,6 @@ SET status = 'done', finished_at = now(), error = NULL,
 WHERE id = $1::uuid`,
 		id, segID, r.TotalRows, r.ValidRows, r.RejectedRows,
 		r.MatchedRows, r.MatchRate, r.RejectedKey)
-	return err
 }
 
 // MarkFailed records a failed run.
@@ -214,10 +245,9 @@ func (s PostgresIngestStore) MarkFailed(ctx context.Context, id, errMsg string) 
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	return s.execPlatform(ctx, `
 UPDATE audience_ingest_jobs SET status = 'failed', finished_at = now(), error = $2
 WHERE id = $1::uuid`, id, errMsg)
-	return err
 }
 
 // ListByAccount returns the account's jobs, newest first. Explicit tenant
@@ -229,7 +259,17 @@ func (s PostgresIngestStore) ListByAccount(ctx context.Context, accountID string
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	// Tenant-scoped read → caller's account GUC (security #77), read-only tx
+	// held open while scanning.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+jobColumns+` FROM audience_ingest_jobs
 		 WHERE account_id = $1::uuid ORDER BY created_at DESC LIMIT $2`, accountID, limit)
 	if err != nil {
@@ -252,10 +292,18 @@ func (s PostgresIngestStore) GetByAccount(ctx context.Context, accountID, id str
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx,
+	// Tenant-scoped read → caller's account GUC (security #77).
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	j, err := scanJob(tx.QueryRowContext(ctx,
 		`SELECT `+jobColumns+` FROM audience_ingest_jobs
-		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
-	j, err := scanJob(row.Scan)
+		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -270,7 +318,16 @@ func (s PostgresIngestStore) ReclaimExpired(ctx context.Context) (int, error) {
 	if s.DB == nil {
 		return 0, sql.ErrConnDone
 	}
-	res, err := s.DB.ExecContext(ctx, `
+	// Cross-tenant worker sweep → platform hatch (security #77).
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
 UPDATE audience_ingest_jobs
 SET status = 'queued', started_at = NULL, lease_expires_at = NULL, claimed_by = NULL
 WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now()`)
@@ -278,5 +335,5 @@ WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return int(n), tx.Commit()
 }
