@@ -11,6 +11,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // moderationItem is a creative awaiting review, as the staff queue sees it.
@@ -157,7 +158,26 @@ func (s pgModerationStore) Decide(ctx context.Context, creativeID, newStatus, re
 	if reason != "" {
 		reasonArg = reason
 	}
-	res, err := s.db.ExecContext(ctx,
+	// Moderation is a STAFF cross-tenant action, but under the NOBYPASSRLS app
+	// role (security #77) the write must run inside the creative's own tenant.
+	// Resolve its account via the platform hatch, then scope the UPDATE to that
+	// account so RLS admits it (a genuinely-absent creative still yields
+	// ErrNoRows → 404).
+	var accountID string
+	if err := postgres.NewFromDB(s.db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&accountID)
+	}, "SELECT account_id::text FROM creatives WHERE id = $1::uuid", creativeID); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE creatives SET review_status = $2, rejection_reason = $3, reviewed_by = $4::uuid, reviewed_at = now(), updated_at = now()
 		 WHERE id = $1::uuid`,
 		creativeID, newStatus, reasonArg, asUUID(reviewerID))
@@ -167,5 +187,5 @@ func (s pgModerationStore) Decide(ctx context.Context, creativeID, newStatus, re
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }

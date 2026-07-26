@@ -407,6 +407,11 @@ func (s pgDealStore) CreateDeal(ctx context.Context, accountID string, in dealIn
 		return "", err
 	}
 	defer tx.Rollback()
+	// Scope the whole tx to the caller's account so RLS admits their publisher +
+	// the deal write under the NOBYPASSRLS app role (security #77).
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return "", err
+	}
 
 	// The publisher must belong to the caller's account.
 	var pubAccount string

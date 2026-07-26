@@ -1073,7 +1073,11 @@ func lookupAccountNames(ctx context.Context, db *sql.DB, ids []string) (map[stri
 // service role with controlled cross-tenant read access.
 func lookupLineItemAccount(ctx context.Context, db *sql.DB, lineItemID string) (string, error) {
 	var accountID string
-	err := db.QueryRowContext(ctx, "SELECT account_id::text FROM line_items WHERE id = $1", lineItemID).Scan(&accountID)
+	// Platform-read hatch (security #77): discover-owner lookup before the caller
+	// is authorised and before the write scopes itself.
+	err := postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&accountID)
+	}, "SELECT account_id::text FROM line_items WHERE id = $1", lineItemID)
 	if err == sql.ErrNoRows {
 		return "", errors.New("campaign not found")
 	}
