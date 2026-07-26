@@ -41,8 +41,9 @@ Status key: ✅ done · ⬜ todo.
   developer-domain seed helper (`harness.HostReachableServer` exists); deferred.
 - ✅ **CSRF cross-site block** — `csrf_test.go`. A cross-site, cookie-authed POST
   → 403; absent-Origin / same-origin / safe-method requests pass (the exemptions
-  that keep legitimate + non-browser traffic working). Session-cookie *tamper*
-  (flip a byte → 401) is still ⬜ — a small add on top of this.
+  that keep legitimate + non-browser traffic working).
+- ✅ **Session-cookie tamper** — `session_auth_test.go`. A valid session is 200;
+  a tampered signature or a garbage cookie → 401 (the JWT signature check).
 
 ## P2 — rich-media depth (Phase 9 is orchestration-tested, not format-tested)
 - ⬜ **VAST/VMAP round-trip** — a real video auction returning VAST 4.2 with
