@@ -123,8 +123,24 @@ func main() {
 		if serr := natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); serr != nil {
 			log.Warn("ensure stream", "error", serr)
 		}
-		if serr := natsBus.Subscribe(ctx, events.SubjectIdentityObserved, constants.NATSGroupIdentityConsumer, observeHandler(observer, log)); serr != nil {
-			log.Error("subscribe failed", "subject", events.SubjectIdentityObserved, "error", serr)
+		// Self-heal, don't latch: a boot race with NATS/JetStream failed this
+		// Subscribe once and left the consumer DEAF for 5h+ (no identity-graph
+		// edges written from adtech.identity.observed) until a manual restart.
+		// Retry until it sticks — same doctrine as webhooks/notifications.
+		subscribe := func() error {
+			return natsBus.Subscribe(ctx, events.SubjectIdentityObserved, constants.NATSGroupIdentityConsumer, observeHandler(observer, log))
+		}
+		if serr := subscribe(); serr != nil {
+			log.Error("subscribe failed, will retry", "subject", events.SubjectIdentityObserved, "error", serr)
+			go func() {
+				for {
+					time.Sleep(15 * time.Second)
+					if serr := subscribe(); serr == nil {
+						log.Info("subscribe established after retry", "subject", events.SubjectIdentityObserved)
+						return
+					}
+				}
+			}()
 		}
 		log.Info("identity-consumer consuming observations")
 	}
