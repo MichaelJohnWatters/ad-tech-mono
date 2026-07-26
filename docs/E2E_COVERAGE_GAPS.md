@@ -46,10 +46,14 @@ Status key: ✅ done · ⬜ todo.
   a tampered signature or a garbage cookie → 401 (the JWT signature check).
 
 ## P2 — rich-media depth (Phase 9 is orchestration-tested, not format-tested)
-- ⬜ **VAST/VMAP round-trip** — a real video auction returning VAST 4.2 with
-  signed quartile beacons; ad-pod competitive separation (no advertiser twice).
-  Today only placement *config* CRUD + a manifest smoke test exist; VAST
-  generation is unit-tested only (`cmd/publisher-adserver`).
+- ✅ **VAST round-trip** — `video_vast_test.go`. GETs the live
+  `/v1/pubad/video/vast` for a seeded video placement and asserts a well-formed
+  VAST 4.2 doc; on fill: a tracked `<Impression>` + `<MediaFile>` + quartile
+  beacons through `/v1/t/video`; on no-fill: an honest Ad-less doc with NO
+  fabricated `<Impression>` (real-data-only rule).
+- ⬜ **VMAP ad pods** — pod request (`?pod=N`) → N independent auctions, no
+  advertiser repeated across the pod, sequence attributes set. (A step up from
+  the single-VAST test above; the pod path exists in `cmd/publisher-adserver`.)
 - ⬜ **SSAI beaconing** — `TestSSAIManifestStitched` proves a manifest returns;
   nothing asserts server-side quartile beacons reach the tracker/reporting, or
   that a no-bid break yields slate.
@@ -57,8 +61,15 @@ Status key: ✅ done · ⬜ todo.
   chain is unexercised (lower priority; internal, SSAI smoke covers the seam).
 
 ## P2 — consent / idempotency edges
-- ⬜ **Opt-out after win, before impression** — a late impression post-opt-out
-  must not bill.
+- ❌ **Opt-out after win, before impression** — NOT a test. Investigated and
+  confirmed the tracker does NOT re-check opt-out at impression time (opt-out is
+  enforced only at DSP bid time — `cmd/dsp/main.go`; the impression handler in
+  `cmd/tracker` validates sig/expiry/fraud/dedup then publishes unconditionally).
+  So "a late impression post-opt-out doesn't bill" is not current behavior — a
+  test would assert fiction. Recorded as a design observation, not a bug: consent
+  is a bid/serve-time gate here, and an already-served impression completing is a
+  seconds-wide race. Revisit only if the privacy model requires tracker-side
+  opt-out enforcement.
 - ⬜ **NATS `Nats-Msg-Id` dedup** — dedup is proven at the tracker/Redis layer
   (`fraud_test.go`) but not that a re-published NATS event is dropped downstream,
   despite exactly-once resting on it.
