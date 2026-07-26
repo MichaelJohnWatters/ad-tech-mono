@@ -189,7 +189,18 @@ func (s PostgresJobStore) ListByAccount(ctx context.Context, accountID string, l
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	// Tenant-scoped: set the caller's account GUC so RLS admits their rows under
+	// the NOBYPASSRLS app role (security #77). Read-only tx keeps the *sql.Rows
+	// valid while scanning and auto-resets the GUC.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+jobColumns+` FROM report_jobs
 		 WHERE account_id = $1::uuid ORDER BY created_at DESC LIMIT $2`, accountID, limit)
 	if err != nil {
@@ -212,7 +223,17 @@ func (s PostgresJobStore) GetByAccount(ctx context.Context, accountID, id string
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := s.DB.QueryRowContext(ctx,
+	// Tenant-scoped: set the caller's account GUC so RLS admits the row under the
+	// NOBYPASSRLS app role (security #77). scan runs inside the read-only tx.
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	row := tx.QueryRowContext(ctx,
 		`SELECT `+jobColumns+` FROM report_jobs
 		 WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	j, err := scanJob(row.Scan)
