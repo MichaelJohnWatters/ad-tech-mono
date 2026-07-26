@@ -19,11 +19,16 @@ Status key: ✅ done · ⬜ todo.
   the external Prebid OpenRTB ingress → 400; wrong method → 405/503; campaign
   create missing required `name` → 400; non-UUID id in a path → 4xx not a leaked
   5xx Postgres cast error.
-- ⬜ **Cross-tenant isolation for creatives + audiences** — extend the same
-  pattern to `/v1/api/creatives/{id}` (PATCH/DELETE) and audience list/export.
-  (Campaigns are the proven-protected path; creatives/audiences need their own
-  handler classified first — a tenant-scoped read wrongly treated as platform
-  would be a real hole.)
+- ✅ **Cross-tenant audience-segment isolation** —
+  `tenant_isolation_audience_test.go`. Account B can't see A's segment via
+  `/v1/api/audiences` (scoped to `claims.AccountID`). Creatives were classified
+  and found to have **no** PATCH/DELETE API (create/list only, and create already
+  binds to `claims.AccountID`), so there's no cross-tenant creative-mutation
+  surface to test.
+- ✅ **Role permission scoping** — `role_permissions_test.go`. A read-only
+  `viewer` can LIST campaigns but is 403'd on PATCH/DELETE (no
+  `campaigns:update`/`:delete`), while the owner can still mutate — proving the
+  gate is the role, not a broken endpoint.
 
 ## P1 — untested built services / jobs
 - ✅ **`dayboundary`** (`cmd/dayboundary`) — `dayboundary_test.go`. Drives the
