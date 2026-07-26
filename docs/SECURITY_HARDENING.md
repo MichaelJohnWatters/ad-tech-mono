@@ -18,6 +18,16 @@ The gated `securityContext` (runAsNonRoot / drop ALL caps / seccomp) is in
 `templates/services.yaml`. It **cannot be enabled until the images run as a
 non-root user**, or `runAsNonRoot: true` refuses to start the pods.
 
+> **STATUS (be precise):** the CODE is done — every `build/Dockerfile*` final
+> stage runs as uid 1000, `reporting` is `hardenedExempt` (tigerbeetle-go CGO
+> SIGSEGVs under drop-ALL-caps/seccomp), and the gating is wired. But the
+> **hardened deploy was never fully validated**: the one attempt (2026-07-25) got
+> the app services rolling with the context, then the migrate hook failed and the
+> mass rollout wedged JetStream (see the NATS incident), so it was reverted. The
+> live stack currently runs **UNHARDENED**. No e2e has run under the hardened
+> context, and other CGO services (e.g. `transcoder`/ffmpeg) may also need
+> `hardenedExempt` — that's unproven. Treat step 3 below as NOT yet done.
+
 **Steps:**
 1. Add a non-root user to every `build/Dockerfile*` final stage, e.g.:
    ```dockerfile
