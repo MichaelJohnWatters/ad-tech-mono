@@ -2,18 +2,12 @@
 
 // CTV ad pods: GET /v1/pubad/video/vast?pod=N assembles a sequenced-ad VAST pod
 // with competitive separation. This builds real video inventory (two funded
-// video advertisers) and a pod request, then asserts the pod is a well-formed
-// sequenced VAST with NO repeated advertiser.
-//
-// FINDING (see docs/E2E_COVERAGE_GAPS.md): buildPodVAST only SKIPS a repeated
-// advertiser post-hoc — it re-runs each sub-auction with identical params and
-// never EXCLUDES already-picked advertisers. So when one advertiser wins
-// deterministically (equal bids, no auction variance), a pod of 3 fills only 1
-// ad. Real competitive separation should exclude picked seats from later
-// sub-auctions. This test therefore asserts the invariant that always holds (no
-// repeat + valid sequenced VAST + real fill) and logs how many distinct
-// advertisers actually filled, rather than assuming diversity the impl can't
-// guarantee under concentrated demand.
+// video advertisers with EQUAL bids — so one would win every deterministic
+// sub-auction) and asserts the pod fills BOTH distinct advertisers with no
+// repeat. That only holds because separation is now enforced at the auction:
+// buildPodVAST threads the already-picked advertisers as OpenRTB badv (blocked
+// advertiser domains) through SSP → exchange → DSP, so each sub-auction excludes
+// them rather than skipping duplicates post-hoc.
 package e2e
 
 import (
@@ -57,9 +51,10 @@ func TestVideoPodCompetitiveSeparation(t *testing.T) {
 		} `xml:"Ad"`
 	}
 
-	// Poll until the pod fills at least one real video ad (we seeded inventory).
+	// Poll until the pod fills both distinct advertisers (badv separation forces
+	// the 2nd auction off the advertiser that won the 1st).
 	var doc podDoc
-	harness.WaitFor(t, 25*time.Second, "pod fills ≥1 real video ad", func() bool {
+	harness.WaitFor(t, 25*time.Second, "pod fills 2 distinct-advertiser ads", func() bool {
 		url := h.URLs.PublisherAdServer + routes.PublisherAdServeVAST + "?placement_id=vp-pl-" + uniq + "&pod=3"
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
 		resp, err := h.HTTP.Do(req)
@@ -72,7 +67,7 @@ func TestVideoPodCompetitiveSeparation(t *testing.T) {
 		if xml.Unmarshal(b, &doc) != nil {
 			return false
 		}
-		return len(doc.Ads) >= 1
+		return len(doc.Ads) >= 2
 	})
 
 	if doc.Version != "4.2" {
@@ -91,6 +86,10 @@ func TestVideoPodCompetitiveSeparation(t *testing.T) {
 			t.Errorf("advertiser %q appears more than once in the pod — competitive separation broken", adv)
 		}
 		seen[adv] = true
+	}
+
+	if len(seen) < 2 {
+		t.Errorf("pod has %d distinct advertisers, want ≥2 — badv separation didn't diversify the pod", len(seen))
 	}
 
 	// Pod ordering: each Ad carries a sequence attribute.
