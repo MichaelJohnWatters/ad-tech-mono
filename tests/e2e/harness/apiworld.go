@@ -139,7 +139,7 @@ func (h *Harness) BuildWorldViaAPI(t *testing.T, suffix string) APIWorld {
 	w := APIWorld{}
 
 	// Publisher side.
-	w.Publisher = h.Signup(t, "API Pub "+suffix, "pub-"+uniq+"@api.test", "pw-e2e", "publisher")
+	w.Publisher = h.Signup(t, "API Pub "+suffix, "pub-"+uniq+"@api.test", "pw-e2e-journey1", "publisher")
 	pub := h.apiJSON(t, w.Publisher, http.MethodPost, "/v1/api/publishers",
 		fmt.Sprintf(`{"name":"API Site %s","domain":"%s.api.test"}`, suffix, uniq))
 	w.PublisherID, _ = pub["id"].(string)
@@ -154,7 +154,7 @@ func (h *Harness) BuildWorldViaAPI(t *testing.T, suffix string) APIWorld {
 	}
 
 	// Advertiser side.
-	w.Advertiser = h.Signup(t, "API Adv "+suffix, "adv-"+uniq+"@api.test", "pw-e2e", "advertiser")
+	w.Advertiser = h.Signup(t, "API Adv "+suffix, "adv-"+uniq+"@api.test", "pw-e2e-journey1", "advertiser")
 	camp := h.apiJSON(t, w.Advertiser, http.MethodPost, "/v1/api/campaigns",
 		fmt.Sprintf(`{"name":"API Campaign %s","base_bid":2.5,"daily_budget":100}`, suffix))
 	w.CampaignID, _ = camp["id"].(string)

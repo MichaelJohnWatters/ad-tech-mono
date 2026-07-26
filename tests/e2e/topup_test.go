@@ -46,8 +46,8 @@ func TestTopupTenantFlow(t *testing.T) {
 	w := harness.BuildBasicWorld(t, h, "topup-flow")
 
 	email := fmt.Sprintf("e2e-topup-%d@login.test", time.Now().UnixNano())
-	h.CreateLoginUser(t, w.AdvAcc.ID, email, "pw-e2e", "owner")
-	client := h.LoginAs(t, email, "pw-e2e")
+	h.CreateLoginUser(t, w.AdvAcc.ID, email, "pw-e2e-journey1", "owner")
+	client := h.LoginAs(t, email, "pw-e2e-journey1")
 
 	call := func(method, body string) (int, map[string]any) {
 		t.Helper()
@@ -156,8 +156,8 @@ func TestTopupTenantFlow(t *testing.T) {
 	// the skip in rls_test.go; the store's explicit account_id predicates
 	// are the enforced tenancy layer.)
 	otherEmail := fmt.Sprintf("e2e-topup-other-%d@login.test", time.Now().UnixNano())
-	h.CreateLoginUser(t, w.PubAcc.ID, otherEmail, "pw-e2e", "owner")
-	other := h.LoginAs(t, otherEmail, "pw-e2e")
+	h.CreateLoginUser(t, w.PubAcc.ID, otherEmail, "pw-e2e-journey1", "owner")
+	other := h.LoginAs(t, otherEmail, "pw-e2e-journey1")
 	req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/billing/topup", nil)
 	resp, err := other.Do(req)
 	if err != nil {

@@ -17,43 +17,18 @@
 package e2e
 
 import (
-	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"testing"
 	"time"
 
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
-type resolvedConfig struct {
-	Value  string `json:"value"`
-	Source string `json:"source"`
-	PodID  string `json:"pod_id"`
-}
-
-func resolveConfig(t *testing.T, h *harness.Harness, key, pod string) resolvedConfig {
+// resolveConfig reads via the harness's AUTHENTICATED helper — /v1/config
+// is auth-gated, and the old raw GET decoded the 401 body into an empty
+// struct (three tests failing on value="" with a healthy config system).
+func resolveConfig(t *testing.T, h *harness.Harness, key, pod string) harness.ResolvedConfig {
 	t.Helper()
-	url := h.URLs.Gateway + routes.Config + "?resolved=true&key=" + key + "&pod=" + pod
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	resp, err := h.HTTP.Do(req)
-	if err != nil {
-		t.Fatalf("config get %s: %v", url, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var out resolvedConfig
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("decode resolved config: %v\nbody: %s", err, string(body))
-	}
-	return out
+	return h.GetResolvedConfig(t, key, pod)
 }
 
 // TestSeedDefaults_CompetitorDSPGetsYAMLNoise — the fix's primary assertion.
