@@ -13,6 +13,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/lib/pq"
 )
 
@@ -274,7 +275,7 @@ func (s pgDirectLineItemStore) ListDirectLineItems(ctx context.Context, accountI
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, publisher_id::text, name, demand_source, priority_tier,
 		        COALESCE(placement_ids::text[], '{}'), impressions_committed,
 		        to_char(delivery_start, 'YYYY-MM-DD'), to_char(delivery_end, 'YYYY-MM-DD'),
@@ -283,7 +284,7 @@ func (s pgDirectLineItemStore) ListDirectLineItems(ctx context.Context, accountI
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []directLineItemView{}
 	for rows.Next() {
 		var v directLineItemView

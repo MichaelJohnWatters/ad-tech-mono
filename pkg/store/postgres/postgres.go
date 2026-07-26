@@ -218,6 +218,29 @@ func (s *Store) QueryRowPlatform(ctx context.Context, scan func(*sql.Row) error,
 	return scan(tx.QueryRowContext(ctx, query, args...))
 }
 
+// QueryTenantDB runs an account-scoped read on a raw *sql.DB with the tenant
+// GUC set — the read-side twin of QueryPlatform, for the management List/Get
+// handlers that filter by account_id but must also set app.current_account_id so
+// RLS admits their rows under the NOBYPASSRLS app role (security #77). The tx is
+// held OPEN until closeFn runs: defer it and finish scanning first (lib/pq
+// invalidates *sql.Rows once the tx ends). No-op under the superuser.
+func QueryTenantDB(ctx context.Context, db *sql.DB, accountID, query string, args ...any) (*sql.Rows, func(), error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
+		tx.Rollback()
+		return nil, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		tx.Rollback()
+		return nil, nil, err
+	}
+	return rows, func() { rows.Close(); tx.Rollback() }, nil
+}
+
 // Ping checks both primary and read connections.
 func (s *Store) Ping(ctx context.Context) error {
 	if err := s.primary.PingContext(ctx); err != nil {
