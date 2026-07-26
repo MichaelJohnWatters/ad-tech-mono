@@ -80,16 +80,17 @@ func (c *taxonomyCache) refresh(ctx context.Context) {
 
 // subscribeInvalidate refreshes the map on adtech.cache.invalidate.audience —
 // the same subject membership writes publish, and what the gateway's
-// taxonomy-label endpoint publishes. Per-REPLICA group (not POD_NAME) for
-// broadcast semantics, same rationale as the preloader's SubscribeInvalidate;
-// the group name carries the subject leaf + "taxonomy" so it can't collide
-// with the preloader's consumer. Failure degrades to poll-only.
+// taxonomy-label and data-fee endpoints publish. Per-REPLICA name (not
+// POD_NAME) for broadcast semantics, EPHEMERAL via SubscribeBroadcast (the
+// c751a52 leak rule: pod-name-keyed durables are never reaped); the name
+// carries the subject leaf + "taxonomy" so it can't collide with the
+// preloader's consumer. Failure degrades to poll-only.
 func (c *taxonomyCache) subscribeInvalidate(ctx context.Context, bus events.EventBus) {
 	if c == nil || bus == nil {
 		return
 	}
-	group := constants.ServiceSSP + "-audience-taxonomy-" + podid.Replica()
-	err := bus.Subscribe(ctx, events.SubjectCacheInvalidateAudience, group, func(_ context.Context, msg *events.Message) error {
+	name := constants.ServiceSSP + "-audience-taxonomy-" + podid.Replica()
+	err := events.SubscribeBroadcast(ctx, bus, events.SubjectCacheInvalidateAudience, name, func(_ context.Context, msg *events.Message) error {
 		c.refresh(ctx)
 		_ = msg.Ack()
 		return nil
@@ -98,7 +99,7 @@ func (c *taxonomyCache) subscribeInvalidate(ctx context.Context, bus events.Even
 		c.log.Warn("taxonomy invalidate subscribe failed (poll-only)", "error", err)
 		return
 	}
-	c.log.Info("taxonomy cache subscribed to audience invalidates", "group", group)
+	c.log.Info("taxonomy cache subscribed to audience invalidates (ephemeral)", "name", name)
 }
 
 // dataSegments maps the request's public segment ids to OpenRTB data

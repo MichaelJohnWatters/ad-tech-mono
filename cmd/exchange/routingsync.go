@@ -57,10 +57,12 @@ type routingSync struct {
 func startRoutingSync(cfg *config.Config, router *optimise.SmartRouter, bus events.EventBus, log *slog.Logger) *routingSync {
 	rs := &routingSync{cfg: cfg, router: router, bus: bus, log: log}
 	if bus != nil {
-		// Per-REPLICA group for broadcast semantics — same rule as the warm
+		// Per-REPLICA name for broadcast semantics — same rule as the warm
 		// caches: a shared group would load-balance the reset to one pod.
-		group := "router-stats-" + podid.Replica()
-		err := bus.Subscribe(context.Background(), events.SubjectCacheInvalidateRouterStats, group,
+		// EPHEMERAL via SubscribeBroadcast (the c751a52 leak rule: a durable
+		// consumer keyed by the ever-changing pod name is never reaped).
+		name := "router-stats-" + podid.Replica()
+		err := events.SubscribeBroadcast(context.Background(), bus, events.SubjectCacheInvalidateRouterStats, name,
 			func(ctx context.Context, msg *events.Message) error {
 				var m routerResetMsg
 				_ = json.Unmarshal(msg.Data, &m)
