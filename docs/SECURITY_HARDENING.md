@@ -158,23 +158,43 @@ explicit, auditable escape hatch, NOT a blanket bypass role.
    only these two helpers + migration 065.
 
 4. **Flip `DATABASE_URL`** to `adtech_app` (EXCLUSIVE stack) and run the full e2e
-   suite: tenant-isolation (`rls_test.go`), the money loop, pacing, and a warm-
-   cache refresh (proves the platform loaders still load cross-tenant). Migrations
-   keep pointing at the owner/superuser `DATABASE_URL` (a separate env for the
-   migrate job) so DDL still works.
+   suite. Migrations keep pointing at the owner/superuser `DATABASE_URL` (a
+   separate env for the migrate job) so DDL still works.
 
-### Pre-flip correctness audit (done 2026-07-26 — both classes clean)
+   > ⚠️ **The flip was ATTEMPTED 2026-07-26 and FAILED — #77 is NOT yet
+   > flip-ready.** All 15 Postgres-connecting deployments were flipped to
+   > `adtech_app` (via `kubectl set env`, migrate Job left on the superuser) and
+   > a critical e2e subset was run. It broke real functionality under RLS and was
+   > reverted immediately:
+   > - **Auth/login 401** — the login flow looks up `team_members` by email
+   >   *before* any tenant is known (inherently pre-tenant), so under RLS it finds
+   >   nothing and rejects every login. Auth is completely broken by the flip.
+   > - **Campaign PATCH/DELETE → 404** — `lookupLineItemAccountAndStatus`
+   >   (cmd/dsp/management.go) reads the row to DISCOVER its `account_id` *before*
+   >   `updateLineItem` sets `SET LOCAL app.current_account_id`, so under RLS the
+   >   lookup itself returns nothing.
+   > - **Report-job GET → 404** — the job lookup isn't tenant-scoped/hatched.
+   >
+   > These are a whole class the audit below MISSED: **request-path lookups that
+   > query a row before (or without) establishing tenant context**, plus anything
+   > inherently pre-tenant (auth). They silently worked only because the superuser
+   > bypassed RLS. Completing #77 needs a full request-path query classification —
+   > the reliable method is iterative: flip → run the FULL e2e → fix each RLS
+   > failure (a pre-tenant lookup gets the `app.platform_read` hatch via
+   > `QueryPlatform`; a genuinely tenant-scoped one must set the GUC before the
+   > read) → repeat until green. This is real multi-service work, not a 15-min flip.
 
-Two bug classes would break silently once RLS is active under the limited role;
-both were swept and are clean, so the flip shouldn't surprise you:
+### Pre-flip correctness audit (2026-07-26) — INCOMPLETE (see the ⚠️ above)
+
+These two classes were swept clean, but they are NOT sufficient — the flip proved
+a third class (pre-tenant request lookups) breaks the app:
 - **Session-level GUC leaks.** All 35 `set_config('app.…')` call sites across
-  `pkg/` + `cmd/` pass `is_local = true` (SET LOCAL) — a session-level set would
-  leak `app.current_account_id`/`app.platform_read` onto the pooled connection
-  and corrupt the next borrower's tenant scope. None do.
-- **Scan-after-commit** (the retired `QueryRead` bug — lib/pq invalidates rows
-  once the tx ends). Audited every function that uses both `tx.Query*` and
-  `tx.Commit`; all scan before the tx ends. `QueryRead` was the only offender and
-  is deleted.
+  `pkg/` + `cmd/` pass `is_local = true` (SET LOCAL). None leak. ✅
+- **Scan-after-commit** (the retired `QueryRead` bug). All functions that use both
+  `tx.Query*` and `tx.Commit` scan before the tx ends. ✅
+- **Pre-tenant / unscoped request lookups.** ❌ NOT audited before the flip —
+  this is the class that broke it (auth login, campaign mutation lookup, report
+  jobs, and — via the full suite — likely more). This is the real remaining work.
 
 ## 4. Image supply chain (pinning + scanning)
 
