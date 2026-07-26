@@ -171,7 +171,20 @@ func main() {
 	// snapshots (broadcast by reporting). Keeps the local win-notice decrement
 	// as the intra-snapshot guard while correcting phantom-win / CPC over-count.
 	if err := startPacingReconcile(context.Background(), bus, campaignCache, budget, cfg, log); err != nil {
-		log.Error("pacing spend reconcile subscribe failed", "error", err)
+		// Self-heal, don't latch: a boot race with NATS/JetStream would fail
+		// this Subscribe once and leave pacing reconcile DEAF (phantom-win /
+		// CPC over-count never corrected) until a manual restart. Retry until
+		// it sticks — same doctrine as webhooks/notifications.
+		log.Error("pacing spend reconcile subscribe failed, will retry", "error", err)
+		go func() {
+			for {
+				time.Sleep(15 * time.Second)
+				if err := startPacingReconcile(context.Background(), bus, campaignCache, budget, cfg, log); err == nil {
+					log.Info("pacing spend reconcile established after retry")
+					return
+				}
+			}
+		}()
 	}
 
 	// Path B: DSP-private audience segments. Looked up per bid request and

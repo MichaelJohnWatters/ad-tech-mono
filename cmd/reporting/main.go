@@ -575,25 +575,57 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 
 	ctx := context.Background()
 
-	// Batch path: when enabled and the bus supports it, the high-volume core
-	// subjects are consumed in bulk (one atomic block insert per fetch). Those
-	// subjects are removed from the per-message map below so they aren't
-	// double-subscribed. Operational-signal subjects always stay per-message.
-	if batchSub, ok := bus.(events.BatchSubscriber); ok && c.batchEnabled && c.batch != nil && c.dedup != nil {
+	// Build the full subscribe work-list. Batch path: when enabled and the bus
+	// supports it, the high-volume core subjects are consumed in bulk (one
+	// atomic block insert per fetch) and removed from the per-message map so
+	// they aren't double-subscribed. Operational-signal subjects stay per-message.
+	// Each work item carries its own typed subscribe call (batch handlers are a
+	// distinct type from per-message handlers), so both paths share one retry.
+	type sub struct {
+		subject   string
+		subscribe func() error
+	}
+	var work []sub
+	batchSub, batchOK := bus.(events.BatchSubscriber)
+	if batchOK && c.batchEnabled && c.batch != nil && c.dedup != nil {
 		for subject, handler := range c.coreBatchHandlers() {
-			if err := batchSub.SubscribeBatch(ctx, subject, constants.NATSGroupReporting, handler); err != nil {
-				return err
-			}
+			subject, handler := subject, handler
+			work = append(work, sub{subject, func() error {
+				return batchSub.SubscribeBatch(ctx, subject, constants.NATSGroupReporting, handler)
+			}})
 			delete(subjects, subject)
-			c.log.Info("subscribed to NATS subject (batch)", "subject", subject)
 		}
 	}
-
 	for subject, handler := range subjects {
-		if err := bus.Subscribe(ctx, subject, constants.NATSGroupReporting, handler); err != nil {
-			return err
+		subject, handler := subject, handler
+		work = append(work, sub{subject, func() error {
+			return bus.Subscribe(ctx, subject, constants.NATSGroupReporting, handler)
+		}})
+	}
+
+	// Self-heal, don't latch: a subscribe that loses the NATS/JetStream boot
+	// race must RETRY, not go deaf — otherwise reporting silently consumes
+	// nothing and NO events land in ClickHouse. Retry only the failed subjects
+	// every 15s until they stick (same doctrine as webhooks/notifications).
+	attempt := func(items []sub) []sub {
+		var pending []sub
+		for _, s := range items {
+			if err := s.subscribe(); err != nil {
+				c.log.Error("subscribe failed, will retry", "subject", s.subject, "error", err)
+				pending = append(pending, s)
+			} else {
+				c.log.Info("subscribed to NATS subject", "subject", s.subject)
+			}
 		}
-		c.log.Info("subscribed to NATS subject", "subject", subject)
+		return pending
+	}
+	if pending := attempt(work); len(pending) > 0 {
+		go func() {
+			for len(pending) > 0 {
+				time.Sleep(15 * time.Second)
+				pending = attempt(pending)
+			}
+		}()
 	}
 	return nil
 }
