@@ -36,6 +36,27 @@ Two sub-patterns, both mechanical:
   caller's GUC before the SELECT, in a read-only tx held open while scanning).
   This is the bulk of A's remaining sites — mechanical but many.
 
+## Status (2026-07-26) — buckets A, B, C largely done
+Cleared, committed, all no-ops under the superuser:
+- **A (management CRUD)** — discover-owner lookups → hatch; tenant reads/writes →
+  caller GUC (`postgres.QueryTenantDB` helper); staff cross-tenant writes →
+  hatch-resolve-then-scope. dsp/ssp/gateway management CRUD passes under the flip.
+- **B (report-runner)** — worker lifecycle + scheduler → platform hatch
+  (`execPlatform`). All 3 report tests pass (were 120s timeouts).
+- **C (event consumers), partial** — notifications reads (bell) + datafee
+  settlement (platform hatch). Notifications test passes.
+
+Three reusable patterns now cover every case: (1) discover-owner → `QueryRowPlatform`;
+(2) tenant read/write → caller GUC (`QueryTenantDB` / tenant tx); (3) cross-tenant
+worker/staff → platform hatch (`execPlatform` / resolve-then-scope). The
+`report_jobs`/`saved_reports`/`data_fee_earnings`/`advertiser_balances` policies
+are USING-only, so `platform_read` admits their writes too.
+
+NOT an RLS issue (red herring): `TestVideoTrackerEventReachesReporting` /
+`...Audio...` return 403 **under the superuser too** — an earlier strict-mode
+test left `tracker.signature_validation=true` in live config and didn't reset it
+(test-isolation leak). Fix belongs in that test's cleanup, not #77.
+
 ## Remaining buckets (root cause → tests it blocks)
 
 ### A. Management CRUD store methods don't set the tenant GUC (biggest)
