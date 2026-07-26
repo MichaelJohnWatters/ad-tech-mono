@@ -74,3 +74,27 @@ ON CONFLICT (id) DO UPDATE SET floor_price = EXCLUDED.floor_price, updated_at = 
 		FloorPrice: floor, Width: width, Height: height,
 	}
 }
+
+// AddVideoPlacement creates a video ad slot (format='video' + a video_config
+// window) so a VAST/CTV serve can actually fill. The DSP's video creative match
+// gates on the request's [minDur,maxDur] (derived from this video_config), so a
+// video creative's duration_seconds must fall inside it. 640x360 pre-roll.
+func (h *Harness) AddVideoPlacement(t *testing.T, pub Publisher, externalKey string, floor float64, minDur, maxDur int) Placement {
+	t.Helper()
+	id := idgen.Derive("placement", externalKey)
+	videoJSON, _ := json.Marshal(map[string]any{
+		"skippable": false, "min_duration": minDur, "max_duration": maxDur,
+		"plcmt": 3, "mimes": []string{"video/mp4"},
+	})
+	h.WithTenant(t, pub.AccountID, func(tx *sql.Tx) {
+		const q = `
+INSERT INTO placements (id, publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, status, video_config, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'video', 640, 360, $5, 'USD', $6, 'active', $7, now(), now())
+ON CONFLICT (id) DO UPDATE SET floor_price = EXCLUDED.floor_price, format = 'video', video_config = EXCLUDED.video_config, updated_at = now()`
+		pageURL := "https://" + pub.Domain + "/v/" + externalKey
+		if _, err := tx.Exec(q, id, pub.ID, pub.AccountID, externalKey, floor, pageURL, videoJSON); err != nil {
+			t.Fatalf("video placements insert: %v", err)
+		}
+	})
+	return Placement{ID: id, ExternalID: externalKey, PublisherID: pub.ID, FloorPrice: floor, Width: 640, Height: 360}
+}
