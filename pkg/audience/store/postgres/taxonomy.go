@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -154,10 +155,18 @@ WHERE visibility = 'public' AND taxonomy_id IS NOT NULL`)
 	return out, rows.Err()
 }
 
+// ErrSegmentNotMonetizable rejects a positive data fee on a segment that can
+// never earn it: only PUBLIC, taxonomy-labelled segments ride user.data
+// ("label it to sell it"), so pricing anything else would silently earn
+// nothing forever. Clearing a fee (nil or 0) is always allowed.
+var ErrSegmentNotMonetizable = errors.New(
+	"segment must be public and taxonomy-labelled to carry a data fee")
+
 // SetSegmentDataFee sets (or, with nil, clears) a segment's data fee — the
 // CPM in micro-dollars the owning account earns when this PUBLIC, labelled
 // segment rides a bid request an external buyer wins. Tenant-scoped like
-// SetSegmentTaxonomy.
+// SetSegmentTaxonomy. A positive fee on an ineligible segment returns
+// ErrSegmentNotMonetizable rather than writing a price that can never earn.
 func (s *Store) SetSegmentDataFee(ctx context.Context, accountID, segmentID string, feeMicros *int64) error {
 	if feeMicros != nil && *feeMicros < 0 {
 		return fmt.Errorf("data fee must be >= 0, got %d", *feeMicros)
@@ -166,17 +175,34 @@ func (s *Store) SetSegmentDataFee(ctx context.Context, accountID, segmentID stri
 	if feeMicros != nil {
 		fee = *feeMicros
 	}
+	pricing := feeMicros != nil && *feeMicros > 0
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
-		const q = `
+		q := `
 UPDATE audience_segments
 SET data_fee_micros = $3, updated_at = now()
 WHERE id = $1 AND account_id = $2::uuid`
+		if pricing {
+			q += ` AND visibility = 'public' AND taxonomy_id IS NOT NULL`
+		}
 		res, err := tx.ExecContext(ctx, q, segmentID, accountID, fee)
 		if err != nil {
 			return err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("segment %s not found for account", segmentID)
+			if !pricing {
+				return fmt.Errorf("segment %s not found for account", segmentID)
+			}
+			// Distinguish "not yours / doesn't exist" from "yours but not
+			// sellable" so the API can say which precondition failed.
+			var exists bool
+			if err := tx.QueryRowContext(ctx,
+				`SELECT true FROM audience_segments WHERE id = $1 AND account_id = $2::uuid`,
+				segmentID, accountID).Scan(&exists); err == sql.ErrNoRows {
+				return fmt.Errorf("segment %s not found for account", segmentID)
+			} else if err != nil {
+				return err
+			}
+			return ErrSegmentNotMonetizable
 		}
 		return nil
 	})

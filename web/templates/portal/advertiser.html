@@ -1438,7 +1438,13 @@ async function putFee(segmentId, micros) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ segment_id: segmentId, data_fee_micros: micros }),
   });
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  if (!resp.ok) {
+    // Surface the server's reason (e.g. the 422 "must be public and
+    // taxonomy-labelled" precondition) instead of a bare status code.
+    let msg = 'HTTP ' + resp.status;
+    try { const body = await resp.json(); if (body && body.error) msg = body.error; } catch {}
+    throw new Error(msg);
+  }
 }
 
 // ---- IAB Audience Taxonomy picker ----

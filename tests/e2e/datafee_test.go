@@ -9,7 +9,9 @@
 //	data_fee_earnings + ledger double-entry + owner balance credit
 //
 // Money math under the default 30% margin, fee $0.50 CPM = 500,000µ:
-// per-impression fee 500µ, platform margin 150µ, owner net 350µ.
+// per-impression fee 500µ, platform margin 150µ, owner net 350µ. The test
+// derives the split from the LIVE reporting.data_fee_margin_pct rather than
+// hardcoding 30, so an ops-tuned stack doesn't fail with the accrual correct.
 package e2e
 
 import (
@@ -54,6 +56,40 @@ func TestDataFeePaysOwnerOnExternalWin(t *testing.T) {
 		return b
 	}
 	balanceBefore := balance()
+
+	// Expected split under the margin the reporting pods actually read. Every
+	// reporting replica seeds its schema default into a per-pod config row at
+	// boot, so rows exist on a healthy stack; divergent values across pods
+	// would make the split depend on which replica consumes the impression —
+	// fail loudly rather than assert a coin flip.
+	marginPct := 30.0 // schema default — used only if no pod has seeded yet
+	{
+		rows, err := h.DB.Query(
+			`SELECT DISTINCT value FROM config WHERE key = 'reporting.data_fee_margin_pct'`)
+		if err != nil {
+			t.Fatalf("margin config read: %v", err)
+		}
+		var values []string
+		for rows.Next() {
+			var v string
+			if err := rows.Scan(&v); err != nil {
+				t.Fatalf("margin config scan: %v", err)
+			}
+			values = append(values, v)
+		}
+		rows.Close()
+		if len(values) > 1 {
+			t.Fatalf("reporting.data_fee_margin_pct diverges across pods (%v) — split indeterminate", values)
+		}
+		if len(values) == 1 {
+			if _, err := fmt.Sscanf(values[0], "%f", &marginPct); err != nil {
+				t.Fatalf("margin config value %q: %v", values[0], err)
+			}
+		}
+	}
+	// Mirrors the accrual's integer math: margin = floor(fee × pct/100).
+	expMargin := int64(500.0 * marginPct / 100)
+	expNet := int64(500) - expMargin
 
 	// Win as the member; retry briefly while the SSP monetization map and
 	// the fee event propagate (same async invalidate as the taxonomy stamp).
@@ -104,14 +140,17 @@ FROM data_fee_earnings WHERE trace_id = $1 AND account_id = $2::uuid`,
 		return err == nil && feeSum > 0
 	})
 
-	// EXACT money: 500µ fee = 150µ margin + 350µ owner net.
-	if feeSum != 500 || marginSum != 150 || netSum != 350 {
-		t.Errorf("accrual micros = fee %d / margin %d / net %d, want 500/150/350", feeSum, marginSum, netSum)
+	// EXACT money: 500µ fee splits into margin + owner net at the live pct
+	// (150µ/350µ under the default 30%).
+	if feeSum != 500 || marginSum != expMargin || netSum != expNet {
+		t.Errorf("accrual micros = fee %d / margin %d / net %d, want 500/%d/%d",
+			feeSum, marginSum, netSum, expMargin, expNet)
 	}
 
 	// The owner's spendable balance grew by exactly the net.
-	if delta := balance() - balanceBefore; !almostEqual(delta, 0.000350, 1e-9) {
-		t.Errorf("owner balance delta = %.9f, want 0.000350", delta)
+	wantDelta := float64(expNet) / 1e6
+	if delta := balance() - balanceBefore; !almostEqual(delta, wantDelta, 1e-9) {
+		t.Errorf("owner balance delta = %.9f, want %.9f", delta, wantDelta)
 	}
 
 	// Ledger double-entry balances: extseat debit == owner credit + margin credit.
