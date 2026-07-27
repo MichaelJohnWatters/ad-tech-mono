@@ -48,13 +48,32 @@ Reusable primitives landed in `pkg/store/postgres`: `QueryTenantDB`,
 for worker writes. The three patterns (discover-owner → hatch; tenant → caller
 GUC; cross-tenant worker/staff → platform hatch) covered every site.
 
-Remaining (the last 2 of 54, NOT blockers):
-- `TestTopupTenantFlow` — balance base = a harness grant amount → **test-state
-  pollution** from repeated flip runs, not RLS (passes on a clean run).
-- `TestBillingDealTypeFeeModifier` — a deal-type-modifier revenue premium in the
-  deep billing engine reads slightly under; a targeted billing-internal follow-up.
-- `TestVideo/AudioTrackerEventReachesReporting` — NOT RLS; a leaked
-  `tracker.signature_validation=true` config (fix in that test's cleanup).
+## STATUS (2026-07-27, pass 2) — all real RLS stragglers CLOSED
+The remaining flip failures were investigated and fixed; each was a genuine
+cross-tenant read/policy gap (not test pollution, as an earlier note guessed):
+
+- ✅ **Staff onboarding monitor** (`cmd/gateway/onboarding_monitor.go`) — both
+  `audience_ingest_jobs` reads (runs list + provider rollup) span every tenant →
+  `QueryPlatform`. Was silently empty under the flip.
+- ✅ **Staff profile-transparency API** (`cmd/gateway/profiles.go`) — the
+  cluster-membership read joins `audience_segments` (RLS) → `QueryPlatform`.
+- ✅ **SSP segtax / data-fee warm cache** (`pkg/audience/store/postgres`) — new
+  `withPlatformRead` helper; `queryByVisibility` (SegmentsForUser /
+  DSPSegmentsForUser bid-request fan-out) and `PublicSegmentMonetization` (the
+  taxonomy+fee map) now use it. This unblocked BOTH `TestSegtaxRidesToExternalBidder`
+  AND the data-fee stamp.
+- ✅ **`data_fee_earnings` RLS policy** (migration 068) — migration 065's hatch
+  DO-loop only matched `policyname = 'tenant_isolation'`, so it skipped
+  `data_fee_earnings_tenant` (migration 063). The un-hatched policy RAISEd
+  "unrecognized configuration parameter" (42704) on the cross-tenant accrual →
+  every data-fee earnings insert failed. Rewrote it to 065's NULLIF+hatch shape.
+- ✅ **`datafee_test.go`** — `config.value` is `jsonb`, so a float key serialises
+  as a JSON string (`"30"`); the old `Sscanf("%f")` choked on the leading quote
+  once the reporting pod seeded the row. Strip quotes → `ParseFloat`.
+- **NOT RLS (confirmed cleared):** the video/audio tracker 403s were a leaked
+  `tracker.signature_validation=true` live-config value; it is now `false`, so
+  those tests pass. `TestTopupTenantFlow` + `TestBillingDealTypeFeeModifier` were
+  real RLS reads (unscoped balance/deal-type lookups), fixed in pass 1.
 
 ### Finalize the flip (deployment, still to do)
 1. Persist the app services' `DATABASE_URL` → `adtech_app` in `values.yaml`
