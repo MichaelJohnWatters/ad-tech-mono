@@ -683,12 +683,17 @@ func TestCompetitiveD3_PMPAllowlistedAtDealPriceVsNonListedOpen(t *testing.T) {
 // one against our matchable placement, one against a non-existent
 // placement. Expect: 1 SeatBid for the valid imp, no bid for the other.
 //
-// Current behaviour: the inbound handler dispatches the WHOLE request to
-// the auction handler, which today treats imp[0] as the auction target.
-// This test will fail until per-imp dispatch lands — it's an aspirational
-// scope marker.
+// Current behaviour: BOTH the exchange auctionHandler (cmd/exchange/main.go)
+// AND the DSP bid handler (cmd/dsp/main.go) hardcode bidReq.Imp[0] end-to-end —
+// floor, format, placement and the response BidObj.ImpID. Per-imp support is
+// therefore a two-service change on the two hottest paths (auction fan-out +
+// DSP bid, the latter shared by every competitor pod), rippling into the
+// per-imp AuctionWinEvent / win-loss notify / impression attribution. It's a
+// real feature with money-hot-path risk, scoped as its own focused effort
+// (needs the full single-imp competitive suite re-run as regression), not a
+// tail-end change. Deliberately deferred — see the session notes.
 func TestCompetitiveG1_PrebidMultiImpRequestPerImpAuction(t *testing.T) {
-	t.Skip("pending per-imp dispatch in auctionHandler — today it processes imp[0] only; Prebid multi-imp requests need a loop")
+	t.Skip("deferred: Prebid multi-imp is a two-service hot-path change (exchange auction + DSP bid), not a single-handler loop — see comment")
 }
 
 // TestCompetitiveG2_PrebidInboundVsInternalDSPsHighestWins — inbound
