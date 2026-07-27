@@ -344,7 +344,11 @@ func (o *onboarder) sweep(ctx context.Context) {
 	if retention <= 0 {
 		return // 0/negative = retention disabled, keep artifacts forever
 	}
-	rows, err := o.db.QueryContext(ctx, `
+	// The sweep spans every tenant's ingest jobs (no account filter), so under
+	// the NOBYPASSRLS app role (security #77) it goes through the platform read
+	// hatch — otherwise RLS blanks the SELECT and the aged jobs never get swept.
+	pg := pgstore.NewFromDB(o.db)
+	rows, closeRows, err := pg.QueryPlatform(ctx, `
 SELECT id::text, COALESCE(provider, ''), file_key, COALESCE(rejected_key, '')
 FROM audience_ingest_jobs
 WHERE swept_at IS NULL AND status IN ('done', 'failed')
@@ -362,7 +366,7 @@ LIMIT 200`, fmt.Sprintf("%f seconds", retention.Seconds()))
 			targets = append(targets, t)
 		}
 	}
-	rows.Close()
+	closeRows()
 
 	swept := 0
 	for _, t := range targets {
@@ -372,7 +376,7 @@ LIMIT 200`, fmt.Sprintf("%f seconds", retention.Seconds()))
 			o.log.Error("onboarding sweep: delete failed (will retry)", "file", t.fileKey, "error", err)
 			continue
 		}
-		if _, err := o.db.ExecContext(ctx, `UPDATE audience_ingest_jobs SET swept_at = now() WHERE id = $1::uuid`, t.id); err != nil {
+		if _, err := pg.ExecPlatform(ctx, `UPDATE audience_ingest_jobs SET swept_at = now() WHERE id = $1::uuid`, t.id); err != nil {
 			o.log.Error("onboarding sweep: mark failed", "job", t.id, "error", err)
 			continue
 		}

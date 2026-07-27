@@ -46,6 +46,10 @@ func TestPlacementVideoConfigViaAPI(t *testing.T) {
 		}
 		return nil
 	}
+	// Create publishes an async cache-invalidate; force the SSP warm cache to
+	// reload synchronously so the list is deterministic (every sibling ViaAPI
+	// test does this — otherwise the GET races the reload).
+	h.RefreshAllCaches(t)
 	vc := findVideo()
 	if vc == nil {
 		t.Fatalf("placement %s not found / no VideoConfig", placementID)
