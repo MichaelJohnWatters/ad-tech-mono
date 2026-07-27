@@ -801,6 +801,13 @@ type BalanceSummary struct {
 type ContractStore struct {
 	mu        sync.RWMutex
 	contracts map[string]*Contract
+	// monthImps is the publisher's month-to-date impression count, kept SEPARATE
+	// from the parsed contract (fee/tiers): the contract config comes from the
+	// warm cache (which re-parses periodically, resetting struct fields), while
+	// the count comes from a distinct analytics refresh. Get merges it in so a
+	// tiered fee is chosen off it, without the two refreshers clobbering each
+	// other.
+	monthImps map[string]int64
 	fallback  *Contract
 }
 
@@ -808,6 +815,7 @@ type ContractStore struct {
 func NewContractStore() *ContractStore {
 	return &ContractStore{
 		contracts: make(map[string]*Contract),
+		monthImps: make(map[string]int64),
 		fallback: &Contract{
 			Model:    ModelFixed,
 			FeePct:   20,
@@ -823,14 +831,31 @@ func (s *ContractStore) Set(publisherID string, c *Contract) {
 	s.contracts[publisherID] = c
 }
 
-// Get returns the contract for a publisher, or the default.
+// SetMonthImpressions records the publisher's running month-to-date impression
+// count, used to pick a tiered revenue-share tier at settle time. Sourced from
+// the analytics store (cluster-global), refreshed independently of the contract
+// config. See Get.
+func (s *ContractStore) SetMonthImpressions(publisherID string, n int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.monthImps[publisherID] = n
+}
+
+// Get returns the contract for a publisher, or the default — as a COPY carrying
+// the current month's impression count, so the tiered fee lookup sees it. A
+// copy (not the shared pointer) keeps the count merge race-free against a
+// concurrent warm-cache Set and lets callers read it without mutating the
+// stored contract.
 func (s *ContractStore) Get(publisherID string) *Contract {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if c, ok := s.contracts[publisherID]; ok {
-		return c
+	c := s.fallback
+	if got, ok := s.contracts[publisherID]; ok {
+		c = got
 	}
-	return s.fallback
+	cp := *c
+	cp.MonthImpressions = s.monthImps[publisherID]
+	return &cp
 }
 
 // RevenueModel is the type of revenue share.

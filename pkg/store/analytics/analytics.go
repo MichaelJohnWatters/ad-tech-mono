@@ -90,6 +90,14 @@ type CommittedReader interface {
 	CommittedByCampaign(ctx context.Context, day string) (map[string]int64, error)
 }
 
+// PublisherImpressionReader is the optional capability behind tiered
+// revenue-share: publisher_id -> impression count since `since` (month start),
+// so a publisher crossing a volume tier mid-month gets the better fee split.
+// ClickHouse + MemoryStore implement it.
+type PublisherImpressionReader interface {
+	ImpressionsByPublisher(ctx context.Context, since time.Time) (map[string]int64, error)
+}
+
 // RollupRow is one aggregated row produced by the rollup engine: a set of
 // dimension values + metric values for a (config, level, time-window).
 // Dimensions and metrics are maps rather than fixed columns so a single

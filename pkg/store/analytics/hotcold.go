@@ -195,6 +195,17 @@ func (t *HotColdStore) CommittedByCampaign(ctx context.Context, day string) (map
 	return cr.CommittedByCampaign(ctx, day)
 }
 
+// ImpressionsByPublisher delegates the tiered-revenue-share month count to the
+// hot store (this month's impressions live in the hot window). Returns nil when
+// the hot store doesn't implement PublisherImpressionReader.
+func (t *HotColdStore) ImpressionsByPublisher(ctx context.Context, since time.Time) (map[string]int64, error) {
+	pr, ok := t.hot.(PublisherImpressionReader)
+	if !ok {
+		return nil, nil
+	}
+	return pr.ImpressionsByPublisher(ctx, since)
+}
+
 // EventsByTrace / RecentImpressions (TraceReader) delegate to the hot store — a
 // trace inspector only ever looks at recent (hot-window) data, so cold is never
 // involved. Forwarding here keeps the capability visible through the wrapper.

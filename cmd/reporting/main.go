@@ -129,7 +129,10 @@ func main() {
 	// re-populates the in-memory ContractStore the billing engine reads from,
 	// so editing a publisher's revshare_config takes effect within one poll
 	// (or instantly via the NATS invalidate subject).
-	contractCache := startContractCache(cfg, clk, log, contracts)
+	// The analytics store feeds tiered revenue-share the publisher's
+	// month-to-date impression count (nil if the backend can't answer).
+	impReader, _ := store.(analytics.PublisherImpressionReader)
+	contractCache := startContractCache(cfg, clk, log, contracts, impReader)
 	if contractCache != nil {
 		lc.OnShutdown("contract-cache", func(_ context.Context) error { contractCache.Stop(); return nil })
 	}
@@ -1268,7 +1271,15 @@ func queryHandler(log *slog.Logger, q querier, queryTimeout func() time.Duration
 // billing hot path stay against the engine's existing store — the cache is
 // the upstream source. Falls back to a no-op loader if Postgres is unreachable
 // so the service still boots and uses the ContractStore's default fallback.
-func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, contracts *billing.ContractStore) *warm.Cache[postgres.ContractRow] {
+// monthStartUTC returns 00:00 on the 1st of now's UTC calendar month — the
+// window start for a publisher's month-to-date impression count (tier reset
+// boundary), matching how the billing day/month boundaries roll on UTC.
+func monthStartUTC(now time.Time) time.Time {
+	u := now.UTC()
+	return time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, contracts *billing.ContractStore, impReader analytics.PublisherImpressionReader) *warm.Cache[postgres.ContractRow] {
 	pollInterval := firstNonZeroDuration(
 		cfg.GetDuration(keys.Reporting.WarmBillingRatesPollInterval.Key(), 0),
 		cfg.GetDuration(keys.CacheWarm.PollInterval.Key(), 300*time.Second),
@@ -1285,8 +1296,27 @@ func startContractCache(cfg *config.Config, clk clock.Clock, log *slog.Logger, c
 		PollInterval:      pollInterval,
 		Log:               log,
 		OnRefresh: func(_ context.Context, rows []postgres.ContractRow) {
+			anyTiered := false
 			for _, r := range rows {
 				contracts.Set(r.PublisherID, r.Contract)
+				if r.Contract != nil && (r.Contract.Model == billing.ModelTiered || r.Contract.Model == billing.ModelHybrid) {
+					anyTiered = true
+				}
+			}
+			// Tiered revenue share picks the fee off month-to-date impressions —
+			// refresh that cluster-global count from analytics. Skip the query
+			// entirely when no publisher is on a volume tier (the common case).
+			if anyTiered && impReader != nil {
+				qctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				since := monthStartUTC(clk.Now())
+				if counts, err := impReader.ImpressionsByPublisher(qctx, since); err != nil {
+					log.Warn("tiered revshare: month-impression refresh failed", "error", err)
+				} else {
+					for pub, n := range counts {
+						contracts.SetMonthImpressions(pub, n)
+					}
+				}
 			}
 		},
 	})

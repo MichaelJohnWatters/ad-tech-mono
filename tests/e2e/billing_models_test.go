@@ -13,6 +13,8 @@
 package e2e
 
 import (
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -211,8 +213,86 @@ func TestBillingReservationExpiry(t *testing.T) {
 	t.Skip("sweep built + unit-tested (pkg/billing); e2e blocked on the local TigerBeetle backend — see comment")
 }
 
+// TestBillingTieredRevenueShareTierFlip — a publisher on a tiered contract earns
+// a better split once its month-to-date impressions cross a volume tier. We fire
+// past the threshold, refresh the contract cache (which re-reads the per-
+// publisher month count from analytics into Contract.MonthImpressions), then a
+// fresh impression must book publisher revenue at the tier-2 fee, not tier-1.
 func TestBillingTieredRevenueShareTierFlip(t *testing.T) {
-	t.Skip("contract-write helper now exists (harness.SetPublisherContract for tiers); still pending: the tier is chosen off Contract.MonthImpressions, which the settle path must populate from the publisher's running impression count — verify that wiring + use FireNAuctions to cross a tier, then flip.")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "billing-tier")
+	h.SetCampaignBidStrategy(t, w.Campaign, "cpm")
+	// Tier 1 (< 5 imps this month): 40% platform fee → publisher keeps 60%.
+	// Tier 2 (>= 5): 10% fee → publisher keeps 90%.
+	const threshold = 5
+	h.SetPublisherContract(t, w.Publisher, "tiered",
+		`{"tiers":[{"min_impressions":0,"max_impressions":5,"fee_pct":40},{"min_impressions":5,"fee_pct":10}]}`)
+	h.RefreshAllCaches(t)
+
+	fireImp := func(user string) harness.BidResponseWinner {
+		auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", user)
+		win := h.ExtractWinner(t, auc)
+		if win.NoBid {
+			t.Fatalf("expected a winning bid for %s", user)
+		}
+		h.FireImpressionWithModel(t, auc.TraceID, win.CampaignID, win.CreativeID,
+			auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price, "cpm")
+		return win
+	}
+	pubRev := func() float64 { return summaryFloat(t, h.BillingSummary(t), "TotalPublisherRevenue") }
+	// waitStable returns TotalPublisherRevenue once it stops moving (billing
+	// consumes impressions async), so a delta measured after it is clean.
+	waitStable := func() float64 {
+		prev := pubRev()
+		stableSince := time.Now()
+		for time.Now().Before(stableSince.Add(6 * time.Second)) {
+			time.Sleep(400 * time.Millisecond)
+			cur := pubRev()
+			if cur == prev {
+				return cur
+			}
+			prev = cur
+		}
+		return prev
+	}
+
+	// Cross the threshold — these bill at tier 1 (count not yet refreshed).
+	for i := 0; i < threshold+1; i++ {
+		fireImp(fmt.Sprintf("tier-cross-%d", i))
+	}
+	waitStable()
+
+	// Refresh the contract cache so the month count (now > threshold in
+	// ClickHouse) flips the publisher to tier 2, then probe with one fresh
+	// impression. Retry the refresh+probe: the count query races ClickHouse
+	// ingestion of the crossing impressions (and each probe adds one more, so it
+	// converges past the threshold).
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		h.RefreshAllCaches(t) // re-reads ImpressionsByPublisher → SetMonthImpressions
+		before := waitStable()
+		win := fireImp("tier-probe")
+		cost := win.Price / 1000
+		// Wait for the probe's revenue to land, then classify the split.
+		var delta float64
+		moved := time.Now().Add(5 * time.Second)
+		for time.Now().Before(moved) {
+			if delta = pubRev() - before; delta > 1e-9 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		tier2 := cost * 0.90
+		tier1 := cost * 0.60
+		if math.Abs(delta-tier2) <= tier2*0.02 {
+			return // flipped to tier 2 ✓
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("probe publisher-revenue delta = %.6f; want tier-2 %.6f (looks like tier-1 %.6f) — tier did not flip",
+				delta, tier2, tier1)
+		}
+		// Still tier 1 (count hadn't crossed in CH yet); loop, refresh, retry.
+	}
 }
 
 // TestBillingGuaranteedMinimumSubsidy — a publisher on a guaranteed-minimum

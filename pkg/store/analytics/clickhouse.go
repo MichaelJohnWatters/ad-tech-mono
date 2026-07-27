@@ -632,6 +632,36 @@ func (c *ClickHouse) CommittedByCampaign(ctx context.Context, day string) (map[s
 	return out, rows.Err()
 }
 
+// ImpressionsByPublisher returns publisher_id -> impression count since `since`
+// (typically the 1st of the current UTC month), across every reporting replica
+// — the cluster-global count the tiered revenue-share fee is chosen off (a
+// publisher crossing a volume tier mid-month gets the better split). Counts all
+// bid models: the tier is about supply volume, not billing model.
+func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time) (map[string]int64, error) {
+	q := `SELECT publisher_id, count() AS n
+		FROM impressions
+		WHERE timestamp >= ?
+		GROUP BY publisher_id`
+	rows, err := c.db.QueryContext(ctx, q, since.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("impressions by publisher: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var pub string
+		var n int64
+		if err := rows.Scan(&pub, &n); err != nil {
+			return nil, fmt.Errorf("scan impressions by publisher: %w", err)
+		}
+		if pub == "" {
+			continue
+		}
+		out[pub] = n
+	}
+	return out, rows.Err()
+}
+
 // queryEventsMV reads the native impression rollup materialized view for the
 // given tier and maps each bucket to a RollupRow the builder re-aggregates
 // like any other rollup. SummingMergeTree rows may be partially merged, so we

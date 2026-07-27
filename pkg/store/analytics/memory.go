@@ -596,6 +596,23 @@ func (s *MemoryStore) ProfileSignals() []ProfileSignalRow {
 	return out
 }
 
+// ImpressionsByPublisher counts in-memory impressions per publisher since a
+// cutoff (PublisherImpressionReader) — the memory-backend twin of the
+// ClickHouse tiered-revenue-share month count.
+func (s *MemoryStore) ImpressionsByPublisher(_ context.Context, since time.Time) (map[string]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]int64{}
+	for _, e := range s.impressions {
+		if since.IsZero() || !e.Timestamp.Before(since) {
+			if e.PublisherID != "" {
+				out[e.PublisherID]++
+			}
+		}
+	}
+	return out, nil
+}
+
 // CreativeStats aggregates in-memory impressions + clicks per creative since a
 // cutoff (CreativeStatAggregator).
 func (s *MemoryStore) CreativeStats(_ context.Context, since time.Time) ([]CreativeStat, error) {
