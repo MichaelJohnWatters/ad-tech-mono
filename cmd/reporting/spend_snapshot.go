@@ -271,6 +271,11 @@ func publishSpendSnapshot(engine *billing.Engine, pub *events.Publisher, clk clo
 	if released := engine.SweepExpiredHolds(); released > 0 {
 		log.Info("swept expired pacing reserves", "released", released)
 	}
+	// Reverse the escrow hold for reservations whose settle event never came
+	// (memory backend only; TigerBeetle auto-voids its pending transfers).
+	if released := engine.SweepExpiredReservations(); released > 0 {
+		log.Info("released expired reservations", "released", released)
+	}
 	committed := engine.SnapshotCommitted()
 	if len(committed) == 0 {
 		return // nothing billed today yet — no DSP counter to correct

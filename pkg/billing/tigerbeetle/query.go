@@ -2,12 +2,20 @@ package tigerbeetle
 
 import (
 	"fmt"
+	"time"
 
 	tbtypes "github.com/tigerbeetle/tigerbeetle-go/pkg/types"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tb"
 )
+
+// ReleaseExpired is a no-op for TigerBeetle: every reservation is a PENDING
+// transfer created with a timeout (pkg/tb.ReservationTimeoutSeconds), so TB
+// auto-voids expired holds server-side — there's nothing for an app-side sweep
+// to release. Returns 0. (The memory backend has no such server-side timer, so
+// its ReleaseExpired does the work; see pkg/billing/ledger.go.)
+func (l *Ledger) ReleaseExpired(_ time.Time, _ time.Duration) int { return 0 }
 
 // queryLimit caps the number of transfers returned per query. TB requires
 // a non-zero Limit; this is comfortable for the billing surfaces (a single

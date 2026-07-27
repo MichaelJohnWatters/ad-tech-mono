@@ -266,6 +266,19 @@ func (e *Engine) SweepExpiredHolds() int {
 	return released
 }
 
+// SweepExpiredReservations releases open ledger reservations older than the
+// pacing hold TTL — impressions whose billable settle event (click/conversion/
+// view) never arrived. On the memory backend this reverses the escrow hold back
+// to the advertiser (reserve never drew the prepay balance — only settle does —
+// so it's a pure ledger reversal); the pacing hold that counts toward committed
+// spend is freed separately by SweepExpiredHolds on the same TTL. On the
+// TigerBeetle backend it's a no-op (TB auto-voids its pending transfers
+// server-side). Runs on the same cadence as SweepExpiredHolds. Returns the
+// count released.
+func (e *Engine) SweepExpiredReservations() int {
+	return e.ledger.ReleaseExpired(e.clk.Now(), e.pacing.holdTTL)
+}
+
 // PacingState returns the UTC day plus the persistable settled and open-reserved
 // cents per campaign. Reporting persists this each snapshot tick so a restart
 // can HydratePacing it back — without it, a restart resets committed to zero and
