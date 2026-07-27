@@ -22,6 +22,7 @@ See `docs/PLAN.md` for the comprehensive project plan.
 - **Object storage:** S3 everywhere - Minio locally, real S3 in staging/prod. One code path.
 - **Caching:** L1 in-process (Go maps) + L2 Redis + L3 Postgres
 - **Infrastructure:** K8s everywhere (Rancher Desktop k3s local, k3s prod), Helm chart `k8s/helm/adtech` (per-env values files), `make stack-up` / `make deploy SVC=x` dev loop (Tilt + kustomize retired 2026-07-18 — see k8s/CLAUDE.md)
+- **Local deploy + seed + reset:** the full command map (deploy · migrate · `make seed`/`demo`/`reset` · the `/dev/reset-and-reseed` API · API-vs-DB-direct seeding · external demo origins) lives in **`k8s/CLAUDE.md` → "Dev loop (Makefile)" / "Seed / reset / demo data"**. Quick refs: `make stack-up` (deploy+migrate), `make demo` (seed+traffic), `make reset` (wipe all 3 stores + reseed), `make deploy SVC=x` (rebuild one service).
 - **Observability:** slog (logging), Prometheus + Grafana (metrics), Loki (log aggregation), Jaeger (tracing)
 
 ## Monorepo Layout
