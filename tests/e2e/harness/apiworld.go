@@ -41,6 +41,7 @@ func (h *Harness) Signup(t *testing.T, name, email, password, accountType string
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		Jar:           jar,
+		Transport:     retryTransport{}, // survive port-forward flaps under full-suite load
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	form := url.Values{

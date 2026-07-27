@@ -111,7 +111,8 @@ func (h *Harness) FireConversion(t *testing.T, traceID, campaignID, convType, cu
 // follows redirects, which is the right default for ad-serve but wrong
 // for the click tracker.
 var noRedirectClient = &http.Client{
-	Timeout: 5 * time.Second,
+	Timeout:   5 * time.Second,
+	Transport: retryTransport{}, // survive port-forward flaps under full-suite load
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
