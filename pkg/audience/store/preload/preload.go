@@ -330,10 +330,7 @@ JOIN audience_segments s ON s.id = m.segment_id`
 		prev[key] = true
 	}
 	tombstoned := 0
-	for key := range prev {
-		if current[key] {
-			continue
-		}
+	for _, key := range keysToTombstone(prev, current) {
 		if err := p.l2.Set(writeCtx, key, "[]", p.ttl); err != nil {
 			p.log.Debug("audience preload tombstone failed", "key", key, "error", err)
 			continue
@@ -372,6 +369,21 @@ func (p *Preloader) loadPrevKeys(ctx context.Context) map[string]bool {
 	}
 	for _, k := range keys {
 		out[k] = true
+	}
+	return out
+}
+
+// keysToTombstone returns the keys that carried memberships last cycle (prev)
+// but none now (current) — the set to overwrite with the negative-cache "[]".
+// Pure, so the multi-pod prev-set semantics (a pod that never wrote a key still
+// tombstones it when it learns the key from the shared prevKeys set) are
+// unit-testable without a Postgres/Redis round-trip.
+func keysToTombstone(prev, current map[string]bool) []string {
+	var out []string
+	for key := range prev {
+		if !current[key] {
+			out = append(out, key)
+		}
 	}
 	return out
 }
