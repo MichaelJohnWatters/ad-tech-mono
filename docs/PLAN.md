@@ -321,21 +321,26 @@ Concrete, sized work items queued for upcoming sessions. Each entry lists the ga
 
 ### Deferred billing / analytics gaps
 
-Carry-over from the analytics-gap audit (2026-06-03). Eight gaps were identified; three (`BudgetDepletedEvent`, video+audio engagement, `ServeNoFillEvent`) shipped that day. These five remain.
+Carry-over from the analytics-gap audit (2026-06-03). Eight gaps were identified; three (`BudgetDepletedEvent`, video+audio engagement, `ServeNoFillEvent`) shipped that day.
 
-**1. Privacy opt-out → `OptOutEvent` propagation** (M)
+> **Status refresh (2026-07-27):** of the five that were "remaining", **four are
+> now DONE** — items 1, 2, 3 shipped since this list was written (the entries
+> below are stale) and item 5 shipped today. Only **item 4 (direct-sold CPC/CPA,
+> XL + product decision)** is genuinely open.
+
+**1. Privacy opt-out → `OptOutEvent` propagation** — ✅ DONE (`cmd/gateway/privacy.go` records to `opt_out_registry` + publishes `OptOutEvent`; consumers clear per-user state).
 - *Gap:* `events.OptOutEvent` + `Publisher.OptOut` are defined but no service ever calls them. Gateway has no opt-out endpoint to receive a user's consent withdrawal.
 - *Why it matters:* GDPR / CCPA compliance — when a user opts out, downstream consumers (DSP audience cache, ad server frequency cap, tracker fraud cache) must drop the user's records within minutes, not "eventually."
 - *Sketch:* Gateway adds `POST /v1/privacy/opt-out` (consent storage in Postgres `consent_records` table that already exists per memory) + publishes `adtech.privacy.opt_out`. DSP, ad server, tracker subscribe and clear any per-user state on receipt. Existing handlers in `pkg/events/publisher.go` are the right shape.
 - *Blocking decision:* opt-out scope per the 3-level model (`docs/PLAN.md` → "User Opt-Out and Data Deletion System"). Just need to commit to which levels the endpoint surfaces.
 
-**2. Tracker fraud-rejection events** (M)
+**2. Tracker fraud-rejection events** — ✅ DONE (`publishRejected` fires from every tracker rejection site — sig/expiry/fraud/dedup in the pixel, view, and media gates; reporting buckets them).
 - *Gap:* When tracker drops a fraudulent pixel (HMAC fail, IP/UA blocklist, dedup hit) it logs but doesn't publish. Reporting can count served impressions but has no signal of "we caught fraud spike."
 - *Why it matters:* Ops can't alert on fraud volume changes; can't show advertisers "we blocked X% of your fraudulent traffic this period"; can't compute true-cost-per-acquisition (need fraud-adjusted denominator).
 - *Sketch:* New subject `adtech.tracker.rejected` + `RejectedEvent{TraceID, EventType, RejectionReason, Timestamp}`. Tracker grows an `events.Publisher` (same pattern pubad uses) and publishes from each rejection site (HMAC validation, fraud realtime middleware, dedup gate). Reporting subscribes + analytics bucket + debug counter + e2e test. Same shape as the analytics-gap closures we just shipped.
 - *Implementation note:* Tracker is the highest-RPS service. Fire-and-forget publish is critical; don't block the pixel response on NATS.
 
-**3. Ad server creative-render failures** (S)
+**3. Ad server creative-render failures** — ✅ DONE (`adtech.adserver.render_failed` published on resolver-miss / render-error; e2e verifies via the `/debug/render_failures` route).
 - *Gap:* When adserver returns 5xx or falls back to default HTML for an unknown creative, no event fires. Silent quality issue.
 - *Why it matters:* Operators can't see "creative X is broken in adserver" without log scraping. Real product impact: a broken creative still bills (impression pixel fires) but renders empty.
 - *Sketch:* New subject `adtech.adserver.render_failed` + payload with creative_id, reason, trace_id. Ad server's existing `eventPublisher` pattern (we have one — see how tracker is structured). Add publishes at the resolver-miss + render-error sites. Reporting subscribes + counter.
@@ -346,8 +351,9 @@ Carry-over from the analytics-gap audit (2026-06-03). Eight gaps were identified
 - *Sketch:* Real question: do we want this feature? If yes, design how billing.Engine recognizes "direct:cpc" / "direct:cpa" reservation patterns and settles on tracker click/conversion. Probably a model-flag on `publisher_line_items` (`bid_model TEXT NOT NULL DEFAULT 'cpm'`). Settle path mirrors what `cmd/reporting/handleClick` already does for programmatic CPC.
 - *Decision needed:* Add to the Publisher-Side Ad Server design entry in PLAN.md, mark as deferred until a real publisher asks. For now document the CPM-only limitation in the publisher-adserver docs.
 
-**5. External Prebid bid viewability beacon injection** (M)
-- *Gap:* When external Prebid bid wins (pubad outbound), we render `bid.adm` verbatim. The external bidder's pixels report to their infrastructure — we have no signal that the impression actually rendered, was viewable, or got clicked.
+**5. External Prebid bid viewability beacon injection** — ✅ DONE (2026-07-27, commit 953eed9)
+- *Resolution:* `writePrebidWinner` now injects a self-contained IntersectionObserver `<script>` (no-SDK port of adtech.js `observeViewability`) into the wrapper alongside the impression pixel, firing the signed `/v1/t/view` on IAB dwell. Also fixed a latent bug: the tracker's view sig validation now excludes the client-measured `dur/pct/area` (appended after signing), so beacons validate under strict signing — which also fixes adtech.js display viewability under strict mode. Unit + e2e covered (`TestPubAdOutboundPrebidViewabilityBeaconFires`, `cmd/tracker/viewsig_test.go`).
+- *Original gap:* When external Prebid bid wins (pubad outbound), we render `bid.adm` verbatim. The external bidder's pixels report to their infrastructure — we have no signal that the impression actually rendered, was viewable, or got clicked.
 - *Why it matters:* "Zero data slippage" is the platform's stated goal but this path slips. Without our own beacon, fill-rate analytics overcounts (we'd record the Prebid win regardless of whether the creative actually rendered).
 - *Sketch:* Pubad's `writePrebidWinner` injects our `<img src="${VIEWABILITY_URL}">` and impression pixel into the bid's `adm` HTML before serving. Tracker beacons fire alongside the external bidder's. Reporting attributes views to the Prebid endpoint via a new `prebid_endpoint` column on `view_events`.
 - *Subtle:* If the external bid's `adm` is a script or iframe (common), simple HTML injection may not work. May need an outer wrapper div with our pixel + the bid contents inside.
