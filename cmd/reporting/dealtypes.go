@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/google/uuid"
 )
 
@@ -78,7 +79,12 @@ func (s *pgDealTypeSource) For(ctx context.Context, dealID string) string {
 	var dealType string
 	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	err := db.QueryRowContext(qctx, `SELECT deal_type FROM deals WHERE id = $1`, dealID).Scan(&dealType)
+	// The billing engine resolves ANY publisher's deal type across all tenants
+	// (deals has RLS), so this runs under the platform hatch (security #77) — a
+	// blanked lookup here silently drops the deal-type fee modifier.
+	err := postgres.NewFromDB(db).QueryRowPlatform(qctx, func(row *sql.Row) error {
+		return row.Scan(&dealType)
+	}, `SELECT deal_type FROM deals WHERE id = $1`, dealID)
 	if err != nil && err != sql.ErrNoRows {
 		// Transient failure: fail open for THIS event, don't cache the miss.
 		s.log.Error("deal type source: lookup failed", "deal_id", dealID, "error", err)
