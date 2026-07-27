@@ -146,25 +146,33 @@ func (h *Harness) SeedStandard(t *testing.T) {
 	// refreshOne does: the gateway port-forward flaps (EOF) under load, and
 	// the reseed is idempotent so re-POSTing is safe.
 	client := newHTTPClient(60 * time.Second)
-	var resp *http.Response
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	// Retry on ANY non-200, not just transport errors: the reset-and-reseed is
+	// fully idempotent (TRUNCATE + reseed to a fixed state), so a transient 500
+	// (seed subprocess hitting momentary DB contention as the suite accumulates
+	// state) or 503 is safe to re-POST. Without this, one such blip fast-failed
+	// whichever test's setup ran at that instant (~1s, before its real WaitFor).
+	var lastStatus int
+	var lastBody, lastErr string
+	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		resp, err = client.Post(url, "application/json", nil)
-		if err == nil {
-			break
+		resp, err := client.Post(url, "application/json", nil)
+		if err != nil {
+			lastErr = err.Error()
+			continue
 		}
-	}
-	if err != nil {
-		t.Fatalf("reseed call after retries: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("reseed status %d: %s", resp.StatusCode, string(body))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return
+		}
+		lastStatus, lastBody = resp.StatusCode, string(body)
 	}
+	if lastStatus != 0 {
+		t.Fatalf("reseed status %d after retries: %s", lastStatus, lastBody)
+	}
+	t.Fatalf("reseed call after retries: %s", lastErr)
 }
 
 // FireNAuctions runs the same auction N times. Used by smart-router tests
