@@ -433,8 +433,14 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 
-		// Same HMAC + fraud + dedup gates as the impression handler.
-		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
+		// Same HMAC + fraud + dedup gates as the impression handler — but the
+		// viewability MEASUREMENT params (dur/pct/area) are computed client-side
+		// and appended AFTER the URL was signed (see web/static/adtech.js
+		// observeViewability and the injected Prebid beacon), so they were never
+		// part of the signed message. Exclude them from validation, or every real
+		// viewability beacon would 403 under strict signing (the signed URL only
+		// covers tid/cid/pid/pubid/uid/exp — see BuildViewabilityURL).
+		if !adserving.ValidateSignatureAny(r.URL.Path, viewSigParams(q), sigKeys()) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -732,6 +738,26 @@ func (p *eventPublisher) publish(ctx context.Context, subject, msgID string, pay
 // not a freshness failure. Skew tolerance is +5s so a slightly fast
 // client clock relative to the tracker doesn't reject borderline-fresh
 // URLs.
+// viewSigParams returns the query params that were part of the SIGNED
+// viewability URL, i.e. all params except the client-measured dur/pct/area,
+// which the browser appends after the URL is signed. Returns q unchanged when
+// none are present (the common no-measurement case) to avoid an allocation.
+func viewSigParams(q url.Values) url.Values {
+	if !q.Has("dur") && !q.Has("pct") && !q.Has("area") {
+		return q
+	}
+	out := make(url.Values, len(q))
+	for k, v := range q {
+		switch k {
+		case "dur", "pct", "area":
+			// measured client-side, appended post-signing — not in the signature
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func isExpired(q url.Values, now time.Time) bool {
 	raw := q.Get("exp")
 	if raw == "" {

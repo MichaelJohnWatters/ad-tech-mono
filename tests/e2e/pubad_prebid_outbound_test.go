@@ -126,3 +126,51 @@ func TestPubAdOutboundPrebidNoBidFallsThroughToSSP(t *testing.T) {
 		t.Errorf("source = prebid; Prebid no_bid should have left SSP as winner")
 	}
 }
+
+// TestPubAdOutboundPrebidViewabilityBeaconFires — the zero-data-slippage fix:
+// a winning external Prebid render must carry OUR viewability beacon, not just
+// the impression pixel, so we observe whether the external creative was
+// actually viewable (fill-rate + vCPM depend on it). Proves the wrapper injects
+// the IntersectionObserver + signed /v1/t/view, and that firing that signed URL
+// with the client-measured dur/pct/area appended yields an IAB-viewable view
+// (i.e. the tracker's signature validation excludes the measured params).
+func TestPubAdOutboundPrebidViewabilityBeaconFires(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "pubad-pb-view")
+
+	prebidStub := harness.NewFakeDSP(t, harness.FakeDSPOpts{
+		Mode:     harness.FakeDSPBidder,
+		BidPrice: 25.00,
+		Seat:     "external-view-seat",
+	})
+	h.SetConfigForPod(t, "publisher_adserver.prebid_servers",
+		prebidStub.URL+"/v1/openrtb/bid", "publisher-adserver-0")
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, "publisher_adserver.prebid_servers", "", "publisher-adserver-0")
+	})
+
+	resp := h.ServePubAdRaw(t, "placement_id="+w.Placement.ExternalID+"&geo=GBR&device=mobile")
+	if resp.Source != "prebid" {
+		t.Fatalf("source = %q; want prebid", resp.Source)
+	}
+
+	// The wrapped HTML must carry BOTH the impression pixel and the injected
+	// viewability observer (was: pixel only → the view never fired).
+	if !strings.Contains(resp.HTML, "/v1/t/imp") {
+		t.Error("wrapped HTML missing the impression pixel")
+	}
+	if !strings.Contains(resp.HTML, "IntersectionObserver") || !strings.Contains(resp.HTML, "/v1/t/view") {
+		t.Errorf("wrapped HTML missing the injected viewability beacon; html=%q", resp.HTML)
+	}
+	if resp.ViewabilityURL == "" {
+		t.Fatal("response carried no viewability URL to fire")
+	}
+
+	// Fire the signed beacon URL exactly as the browser would — with the
+	// measured dur/pct/area appended after signing — and require an IAB view.
+	// (The tracker excludes those measured params from signature validation, so
+	// the signed beacon still validates under strict signing.)
+	if !h.FireViewURL(t, resp.ViewabilityURL+"&dur=1500&pct=80&area=90000") {
+		t.Error("the injected viewability beacon did not produce an IAB-viewable view")
+	}
+}

@@ -70,11 +70,27 @@ func (h *Harness) FireView(t *testing.T, traceID, campaignID, placementID, publi
 	return h.fireAndConsumeReturningHeader(t, url, "view", "X-IAB-Viewable") == "1"
 }
 
+// FireViewURL fires an ALREADY-SIGNED /v1/t/view URL (e.g. the signed
+// viewability URL a served ad injects, with the client-measured dur/pct/area
+// appended) and reports whether the tracker judged it IAB-viewable. Does NOT
+// re-sign — the URL already carries the ad server's HMAC; re-signing would add a
+// second sig param and invalidate it. Proves an injected beacon's URL produces
+// a real view end to end.
+func (h *Harness) FireViewURL(t *testing.T, url string) bool {
+	t.Helper()
+	return h.fireRawReturningHeader(t, url, "view", "X-IAB-Viewable") == "1"
+}
+
 func (h *Harness) fireAndConsumeReturningHeader(t *testing.T, url, eventKind, header string) string {
 	// Sign like production: tracker.signature_validation is enforced on the
 	// local stack (2026-07-19 ratchet), so hand-built beacons must carry a
 	// valid HMAC exactly as adserver-built ones do.
-	url = adserving.SignURL(url, adserving.DefaultSigningKey)
+	return h.fireRawReturningHeader(t, adserving.SignURL(url, adserving.DefaultSigningKey), eventKind, header)
+}
+
+// fireRawReturningHeader fires url AS-IS (no signing) and returns the given
+// response header — for URLs the ad server already signed.
+func (h *Harness) fireRawReturningHeader(t *testing.T, url, eventKind, header string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
