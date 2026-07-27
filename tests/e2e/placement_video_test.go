@@ -46,11 +46,30 @@ func TestPlacementVideoConfigViaAPI(t *testing.T) {
 		}
 		return nil
 	}
-	// Create publishes an async cache-invalidate; force the SSP warm cache to
-	// reload synchronously so the list is deterministic (every sibling ViaAPI
-	// test does this — otherwise the GET races the reload).
-	h.RefreshAllCaches(t)
-	vc := findVideo()
+	// The create/patch publish an async cache-invalidate that fans out to every
+	// SSP replica; the warm caches are eventually consistent, and the list GET
+	// (behind the LB) can land on a pod that hasn't reloaded yet. Poll until the
+	// expected config converges across pods rather than asserting on one shot.
+	pollVideo := func(want func(map[string]any) bool) map[string]any {
+		t.Helper()
+		h.RefreshAllCaches(t)
+		deadline := time.Now().Add(15 * time.Second)
+		var last map[string]any
+		for time.Now().Before(deadline) {
+			if vc := findVideo(); vc != nil {
+				last = vc
+				if want(vc) {
+					return vc
+				}
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return last
+	}
+
+	vc := pollVideo(func(vc map[string]any) bool {
+		return vc["skippable"] == false && vc["min_duration"] == float64(15) && vc["plcmt"] == float64(3)
+	})
 	if vc == nil {
 		t.Fatalf("placement %s not found / no VideoConfig", placementID)
 	}
@@ -61,8 +80,10 @@ func TestPlacementVideoConfigViaAPI(t *testing.T) {
 	// PATCH the config (skippable, longer window).
 	h.APIJSON(t, pub, http.MethodPatch, "/v1/api/placements/"+placementID,
 		`{"video_config":{"skippable":true,"skip_after":5,"min_duration":6,"max_duration":60}}`)
-	vc = findVideo()
-	if vc["skippable"] != true || vc["max_duration"].(float64) != 60 {
+	vc = pollVideo(func(vc map[string]any) bool {
+		return vc["skippable"] == true && vc["max_duration"] == float64(60)
+	})
+	if vc == nil || vc["skippable"] != true || vc["max_duration"].(float64) != 60 {
 		t.Errorf("after patch video_config = %v, want skippable=true max=60", vc)
 	}
 
