@@ -124,7 +124,7 @@ func (c *ClickHouse) createTables() error {
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS views (
 			trace_id String, campaign_id String, creative_id String, placement_id String,
-			publisher_id String, account_id String, duration_ms Int64, percent_visible Int32,
+			publisher_id String, account_id String, channel String, duration_ms Int64, percent_visible Int32,
 			area_px Int64, iab_viewable UInt8, schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS auctions (
@@ -257,6 +257,9 @@ func (c *ClickHouse) createTables() error {
 		// (e.g. adcert_invalid) from being lost in the aggregated no-bid. Old rows
 		// read as empty = "bid or plain no-demand".
 		`ALTER TABLE dsp_calls ADD COLUMN IF NOT EXISTS no_bid_reason String`,
+		// Video viewability: split display (1s dwell) vs video (2s) viewable
+		// events. Old rows read as empty = display.
+		`ALTER TABLE views ADD COLUMN IF NOT EXISTS channel String`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
 			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
@@ -332,10 +335,10 @@ func (c *ClickHouse) InsertConversion(ctx context.Context, e *ConversionEvent) e
 func (c *ClickHouse) InsertView(ctx context.Context, e *ViewEvent) error {
 	return c.exec(ctx, "view",
 		`INSERT INTO views (trace_id, campaign_id, creative_id, placement_id, publisher_id, account_id,
-			duration_ms, percent_visible, area_px, iab_viewable, schema_version, timestamp)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			channel, duration_ms, percent_visible, area_px, iab_viewable, schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID, e.AccountID,
-		e.DurationMs, int32(e.PercentVisible), e.AreaPx, b2u(e.IABViewable), int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+		e.Channel, e.DurationMs, int32(e.PercentVisible), e.AreaPx, b2u(e.IABViewable), int32(schemaVer(e.SchemaVersion)), e.Timestamp)
 }
 
 func (c *ClickHouse) InsertAuction(ctx context.Context, e *AuctionEvent) error {

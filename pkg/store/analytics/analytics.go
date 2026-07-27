@@ -265,13 +265,17 @@ type ClickEvent struct {
 // (and AreaPx when the client passes it) so the analytics row stores the
 // authoritative verdict, not the client's claim.
 type ViewEvent struct {
-	SchemaVersion  int       `json:"schema_version"`
-	TraceID        string    `json:"trace_id"`
-	CampaignID     string    `json:"campaign_id"`
-	CreativeID     string    `json:"creative_id,omitempty"`
-	PlacementID    string    `json:"placement_id"`
-	PublisherID    string    `json:"publisher_id"`
-	AccountID      string    `json:"account_id"`
+	SchemaVersion  int    `json:"schema_version"`
+	TraceID        string `json:"trace_id"`
+	CampaignID     string `json:"campaign_id"`
+	CreativeID     string `json:"creative_id,omitempty"`
+	PlacementID    string `json:"placement_id"`
+	PublisherID    string `json:"publisher_id"`
+	AccountID      string `json:"account_id"`
+	// Channel is "display" (or empty) or "video" — the IAB viewability dwell
+	// differs (1s vs 2s), and it lets reporting split display vs video
+	// viewability instead of conflating them.
+	Channel        string    `json:"channel,omitempty"`
 	DurationMs     int64     `json:"duration_ms"`
 	PercentVisible int       `json:"percent_visible"`
 	AreaPx         int64     `json:"area_px,omitempty"`
@@ -279,17 +283,23 @@ type ViewEvent struct {
 	Timestamp      time.Time `json:"timestamp"`
 }
 
-// IsIABViewable applies the IAB MRC display-ad rule: at least 50% pixels
-// visible for at least 1 continuous second. Large ads (>= 242,500 px²)
-// drop to a 30% threshold per the IAB Large Format Standard. AreaPx == 0
-// means "client didn't tell us the area" and we use the default 50%.
-func IsIABViewable(durationMs int64, percentVisible int, areaPx int64) bool {
-	if durationMs < 1000 {
+// IsIABViewable applies the IAB/MRC viewability rule for the given channel: at
+// least 50% of pixels on-screen for at least the minimum continuous dwell —
+// **1 second for display, 2 seconds for VIDEO** (the standards differ). Large
+// display ads (>= 242,500 px²) drop to a 30% threshold per the IAB Large Format
+// Standard. AreaPx == 0 means "client didn't tell us the area" → default 50%.
+// An empty channel is treated as display (the historical default).
+func IsIABViewable(durationMs int64, percentVisible int, areaPx int64, channel string) bool {
+	minDwellMs := int64(1000) // display: >= 1s
+	if channel == "video" {
+		minDwellMs = 2000 // IAB/MRC video: >= 2s continuous
+	}
+	if durationMs < minDwellMs {
 		return false
 	}
 	threshold := 50
-	if areaPx >= 242500 {
-		threshold = 30
+	if channel != "video" && areaPx >= 242500 {
+		threshold = 30 // large-format display only
 	}
 	return percentVisible >= threshold
 }

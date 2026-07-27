@@ -88,14 +88,20 @@ func (c *ClickHouse) InsertViews(ctx context.Context, es []*ViewEvent) error {
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO views")
+	// Explicit column list (not positional): `channel` was added by ALTER on
+	// existing tables (appended LAST) but sits mid-DDL on a fresh table, so a
+	// column-less INSERT would bind by the wrong order. Named columns bind by
+	// name regardless.
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO views
+		(trace_id, campaign_id, creative_id, placement_id, publisher_id, account_id,
+		 channel, duration_ms, percent_visible, area_px, iab_viewable, schema_version, timestamp)`)
 	if err != nil {
 		return fmt.Errorf("prepare views batch: %w", err)
 	}
 	for _, e := range es {
 		if err := b.Append(
 			e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID, e.AccountID,
-			e.DurationMs, int32(e.PercentVisible), e.AreaPx, b2u(e.IABViewable),
+			e.Channel, e.DurationMs, int32(e.PercentVisible), e.AreaPx, b2u(e.IABViewable),
 			int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
 		); err != nil {
 			b.Abort()

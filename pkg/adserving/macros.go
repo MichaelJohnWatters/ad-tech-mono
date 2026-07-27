@@ -139,6 +139,12 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	if ctx.UserID != "" {
 		params.Set("uid", ctx.UserID)
 	}
+	// Channel rides SIGNED (the server knows it at serve time) so the tracker
+	// applies the right IAB dwell — 2s for video vs 1s for display — and it
+	// can't be downgraded by tampering. Omitted for display (the default).
+	if ctx.Channel == "video" {
+		params.Set("ch", ctx.Channel)
+	}
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/view?" + params.Encode()
 	return SignURL(rawURL, ActiveSigningKey())

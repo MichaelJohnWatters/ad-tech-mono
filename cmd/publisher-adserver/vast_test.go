@@ -170,7 +170,22 @@ func TestVASTHandler(t *testing.T) {
 	// so downstream consumers pick up typed VideoEvent on
 	// adtech.events.video instead of conflating with display
 	// viewability on adtech.events.view. Pin every tracker URI.
+	//
+	// EXCEPTION: the "viewable" tracker is our IAB video-viewability beacon and
+	// deliberately routes to /v1/t/view?ch=video (it settles vCPM via the
+	// ViewEvent path, not the VideoEvent funnel).
+	sawViewable := false
 	for _, te := range cr.Linear.TrackingEvents.Tracking {
+		if te.Event == "viewable" {
+			sawViewable = true
+			if !strings.Contains(te.URI, "/v1/t/view?") || !strings.Contains(te.URI, "ch=video") {
+				t.Errorf("viewable tracker must route to /v1/t/view?ch=video, got %s", te.URI)
+			}
+			if !urlIsHMACValid(t, te.URI) {
+				t.Errorf("viewable tracker URL did not validate: %s", te.URI)
+			}
+			continue
+		}
 		if !strings.Contains(te.URI, "/v1/t/video") {
 			t.Errorf("tracking event %q must route to /v1/t/video, got %s", te.Event, te.URI)
 		}
@@ -180,6 +195,9 @@ func TestVASTHandler(t *testing.T) {
 		if !urlIsHMACValid(t, te.URI) {
 			t.Errorf("tracking event %q URL did not validate: %s", te.Event, te.URI)
 		}
+	}
+	if !sawViewable {
+		t.Error("VAST linear ad missing the viewable (video viewability) tracker")
 	}
 }
 
