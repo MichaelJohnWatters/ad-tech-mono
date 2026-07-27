@@ -111,7 +111,7 @@ services:
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: REDIS_URL
@@ -148,7 +148,7 @@ services:
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: REDIS_URL
@@ -185,7 +185,7 @@ services:
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: REDIS_URL
@@ -226,7 +226,7 @@ services:
       - name: SSP_ADSERVER_URL
         value: "grpc://adserver-grpc:8185"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
@@ -270,7 +270,7 @@ services:
       - name: EXCHANGE_REPORTING_URL
         value: "http://reporting:8086"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
@@ -308,7 +308,7 @@ services:
       - name: REDIS_URL
         value: "redis:6379"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
@@ -348,7 +348,7 @@ services:
       - name: PUBLISHER_ADSERVER_TRACKER_URL
         value: "http://localhost:8080"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
@@ -385,7 +385,7 @@ services:
       - name: REDIS_URL
         value: "redis:6379"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -458,6 +458,11 @@ services:
       - name: S3_ENDPOINT
         value: "minio:9000"
       - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      # Owner/superuser URL for the dev-only reset-and-reseed endpoint (TRUNCATE
+      # + cross-tenant seed) the least-privilege adtech_app role cannot do under
+      # RLS (security #77). Prod: unset / same as the migrate owner URL.
+      - name: DATABASE_ADMIN_URL
         value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
@@ -493,7 +498,7 @@ services:
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: S3_ENDPOINT
         value: "minio:9000"
       - name: S3_ACCESS_KEY
@@ -534,7 +539,7 @@ services:
       - name: WEBHOOKS_NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -561,7 +566,7 @@ services:
       - name: IDENTITY_CONSUMER_NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -584,7 +589,7 @@ services:
       - name: POD_NAME
         value: "report-runner-0"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: REPORT_RUNNER_REPORTING_URL
         value: "http://reporting:8086"
       - name: REPORT_RUNNER_NATS_URL
@@ -623,7 +628,7 @@ services:
       - name: NOTIFICATIONS_NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
@@ -717,7 +722,7 @@ services:
       - name: REPORTING_NATS_URL
         value: "nats://nats:4222"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
@@ -935,7 +940,7 @@ cronjobs:
       - name: POD_NAME
         value: "batch-conductor"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: BATCH_CONDUCTOR_NATS_URL
         value: "nats://nats:4222"
       - name: BATCH_CONDUCTOR_PIPELINE_URL
@@ -982,7 +987,7 @@ cronjobs:
       - name: POD_NAME
         value: "dayboundary"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
         value: "nats://nats:4222"
     resources:
@@ -1008,7 +1013,7 @@ cronjobs:
       - name: POD_NAME
         value: "invoice-runner"
       - name: DATABASE_URL
-        value: "postgres://adtech:adtech-local-dev@postgres:5432/adtech?sslmode=disable"
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }
