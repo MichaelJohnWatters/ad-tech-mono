@@ -133,6 +133,28 @@ type refreshResult struct {
 	} `json:"refreshed"`
 }
 
+// getWithRetry issues a GET with the same port-forward-flap retry as
+// refreshOne: the tunnel to a service flaps (EOF / connection reset) when a
+// pod is briefly busy under full-suite CPU load or the port-forward
+// reconnects, and a single-shot GET would fast-fail a test's SETUP (before
+// its real WaitFor even runs). GET is idempotent, so re-sending is safe.
+// h.HTTP's own timeout bounds each attempt. Returns the last error after 3
+// transport failures; the caller still checks the status code.
+func (h *Harness) getWithRetry(url string) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		resp, err = h.HTTP.Get(url)
+		if err == nil {
+			return resp, nil
+		}
+	}
+	return resp, err
+}
+
 func (h *Harness) refreshOne(t *testing.T, base string) {
 	t.Helper()
 	// Retry transport errors: the Tilt port-forwards flap (EOF / connection

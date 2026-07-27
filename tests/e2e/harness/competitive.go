@@ -188,16 +188,11 @@ func (h *Harness) FireNAuctions(t *testing.T, n int, placement, geo, device stri
 // same Tilt process.
 func (h *Harness) ResetSmartRouter(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		h.URLs.Exchange+routes.DebugExchangeRouting+"?reset=true", nil)
+	// Retry transport flaps: this runs at the TOP of router tests, so a
+	// single-shot failure here fast-fails the whole test in setup.
+	resp, err := h.getWithRetry(h.URLs.Exchange + routes.DebugExchangeRouting + "?reset=true")
 	if err != nil {
-		t.Fatalf("router reset request build: %v", err)
-	}
-	resp, err := h.HTTP.Do(req)
-	if err != nil {
-		t.Fatalf("router reset call: %v", err)
+		t.Fatalf("router reset call after retries: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -221,16 +216,11 @@ type RouterPreview struct {
 // fan-out.
 func (h *Harness) SmartRouterPreview(t *testing.T) RouterPreview {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		h.URLs.Exchange+routes.DebugExchangeRouting+"?preview=true", nil)
+	// Retry transport flaps: this is called REPEATEDLY inside WaitFor loops,
+	// so one blip mid-wait would otherwise fast-fail the test.
+	resp, err := h.getWithRetry(h.URLs.Exchange + routes.DebugExchangeRouting + "?preview=true")
 	if err != nil {
-		t.Fatalf("router preview request build: %v", err)
-	}
-	resp, err := h.HTTP.Do(req)
-	if err != nil {
-		t.Fatalf("router preview call: %v", err)
+		t.Fatalf("router preview call after retries: %v", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
