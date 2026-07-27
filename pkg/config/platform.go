@@ -57,10 +57,18 @@ var ConfigPollInterval = platformSet.Duration("config.poll_interval", "30s", Tie
 // via applyDBPoolKnobsLive.
 var Database = struct {
 	URL          StringKey
+	AdminURL     StringKey
 	MaxOpenConns IntKey
 	MaxIdleConns IntKey
 }{
-	URL:          platformSet.String("database.url", routes.DefaultPostgresURL, TierStatic, "PostgreSQL connection URL used by every service. Set via DATABASE_URL env var in non-dev environments.", Since("v1.0")),
+	URL: platformSet.String("database.url", routes.DefaultPostgresURL, TierStatic, "PostgreSQL connection URL used by every service. Set via DATABASE_URL env var in non-dev environments.", Since("v1.0")),
+	// AdminURL is the owner/superuser connection for ADMIN-only operations that
+	// the least-privilege app role (security #77) can't perform — currently the
+	// dev-only reset-and-reseed endpoint (TRUNCATE + cross-tenant seed). Empty =
+	// fall back to database.url (the pre-#77 behaviour, correct when the app
+	// still runs as the owner). Once DATABASE_URL is flipped to adtech_app, set
+	// DATABASE_ADMIN_URL to the owner URL (same one the migrate job uses).
+	AdminURL:     platformSet.String("database.admin_url", "", TierStatic, "Owner/superuser Postgres URL for dev-only admin ops (reset-and-reseed). Empty falls back to database.url. Set to the migrate/owner URL when the app runs as the limited adtech_app role.", Since("v1.10")),
 	MaxOpenConns: platformSet.Int("database.max_open_conns", "10", TierLive, "Maximum simultaneous Postgres connections this pod will open. Live: applied via db.SetMaxOpenConns on every change. Raise if you see connection-pool waits in traces.", Since("v1.0")),
 	MaxIdleConns: platformSet.Int("database.max_idle_conns", "5", TierLive, "Maximum idle Postgres connections kept open between requests. Live: applied via db.SetMaxIdleConns on every change. Lower trims footprint, higher cuts reconnect cost.", Since("v1.0")),
 }

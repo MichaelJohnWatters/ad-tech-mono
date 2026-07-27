@@ -261,7 +261,14 @@ func main() {
 		// no other reason to talk to NATS.
 		resetBus, _ := natsbus.New(keys.NATS.URL.Get(cfg), constants.ServiceGateway, log)
 		redisAddr := keys.Redis.URL.Get(cfg)
-		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(dbURL, redisAddr, resetBus, log))
+		// Reset-and-reseed is admin tooling (TRUNCATE + cross-tenant seed) the
+		// least-privilege app role can't do — use the owner/admin URL when set,
+		// else fall back to database.url (correct while the app is still owner).
+		adminURL := cfg.Get(keys.Database.AdminURL.Key(), "")
+		if adminURL == "" {
+			adminURL = dbURL
+		}
+		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(adminURL, redisAddr, resetBus, log))
 	}
 	// /dev/console is the canonical command-center URL. /dev/config-manager
 	// is an alias kept for backward compatibility — same template, just
