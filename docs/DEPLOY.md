@@ -112,6 +112,26 @@ kubectl -n adtech get pods
 curl https://gateway.your-domain.com/healthz
 ```
 
+### RLS app role (`adtech_app`) — rotate the password 🔴
+
+Security #77: app services connect as the least-privilege **`adtech_app`**
+(NOSUPERUSER, NOBYPASSRLS) role so RLS tenant isolation actually enforces; only
+the **migrate job** (and the gateway's `DATABASE_ADMIN_URL`, for dev reset)
+connect as the owner. Migration 067 creates the role; migration 069 sets a
+**local dev** password *only when none is set*. In staging/prod you MUST:
+
+1. Set the real password on the role right after migrate (it won't be clobbered
+   on future migrate runs — 069 is guarded on `rolpassword IS NULL`):
+   ```bash
+   kubectl -n adtech exec postgres-0 -- psql -U <owner> -d adtech \
+     -c "ALTER ROLE adtech_app PASSWORD '<value from SOPS>';"
+   ```
+   (Managed Postgres/RDS: run the `ALTER ROLE` via your admin connection.)
+2. Point every app service's `DATABASE_URL` in `values-{staging,prod}.yaml` at
+   `adtech_app` with that same secret; keep the migrate job on the owner URL.
+3. Confirm enforcement: `E2E_APP_POSTGRES_URL=<adtech_app url> go test
+   ./tests/e2e -tags=e2e -run TestRLSIsolation` — all 6 subtests must pass.
+
 ## Step 7 — Cloudflare edge (recommended) 🔵
 
 Put Cloudflare in front for free TLS termination at the edge, DDoS/bot

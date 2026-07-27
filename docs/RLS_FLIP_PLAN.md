@@ -75,13 +75,25 @@ cross-tenant read/policy gap (not test pollution, as an earlier note guessed):
   those tests pass. `TestTopupTenantFlow` + `TestBillingDealTypeFeeModifier` were
   real RLS reads (unscoped balance/deal-type lookups), fixed in pass 1.
 
-### Finalize the flip (deployment, still to do)
-1. Persist the app services' `DATABASE_URL` → `adtech_app` in `values.yaml`
-   (migrate job stays on the owner/superuser URL).
-2. Wire the `adtech_app` password as a SOPS secret (dev value used for the flip
-   testing was set out-of-band via `ALTER ROLE`).
-3. Un-skip `tests/e2e/rls_test.go` — it can finally enforce.
-4. Run the full `make test-e2e` once green end-to-end.
+### Finalize the flip (deployment) — DONE (2026-07-27)
+1. ✅ Persisted the app services' `DATABASE_URL` → `adtech_app` in `values.yaml`
+   (all 18 Postgres-connecting services; the migrate job + gateway's new
+   `DATABASE_ADMIN_URL` stay on the owner URL). A fresh `make stack-up` now comes
+   up flipped. `helm template` renders 18 app-role + 2 owner URLs.
+2. ✅ Dev password: migration **069** sets `adtech_app`'s LOCAL dev password
+   (only when unset, so it never clobbers a rotated one) so a fresh stack can
+   authenticate. PROD/STAGING rotate it from the SOPS secret post-migrate
+   (`ALTER ROLE adtech_app PASSWORD '<sops>'`); `values-{staging,prod}.yaml`
+   `DATABASE_URL` sources that secret. See `docs/DEPLOY.md`.
+3. ✅ Un-skipped `tests/e2e/rls_test.go` — it now opens its OWN NOBYPASSRLS
+   `adtech_app` connection (derived from the harness URL, or `E2E_APP_POSTGRES_URL`)
+   and PROVES isolation: cross-tenant SELECT/INSERT blocked, own-tenant allowed.
+   All 6 subtests green under the flip.
+4. ✅ Full `make test-e2e` under the flip: all RLS-specific tests green across
+   repeated runs. Residual full-suite noise is a **pre-existing** routing/config
+   test-isolation flake (a different fast `Competitive*`/`RoutingKnobs*` test
+   fast-fails ~1/run from shared exchange-router + live-config state; each passes
+   in isolation; not RLS — those tests touch no tenant rows). Tracked separately.
 
 ## Superseded — original per-bucket breakdown (kept for history)
 ## Status (2026-07-26) — buckets A, B, C largely done
