@@ -193,6 +193,30 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 		tx.Commit()
 	})
 
+	// ExecPlatform is the WRITE twin of QueryPlatform — for cross-tenant
+	// background jobs (e.g. the onboarding retention sweep, security #77). On a
+	// USING-only tenant_isolation policy the platform_read hatch admits the
+	// write too. Baseline: a raw no-GUC cross-tenant UPDATE touches nothing;
+	// ExecPlatform's SET LOCAL hatch makes the same UPDATE span both tenants.
+	t.Run("exec_platform_writes_across_tenants", func(t *testing.T) {
+		if res, err := app.ExecContext(ctx,
+			`UPDATE data_providers SET name = name WHERE name LIKE 'probe-%'`); err != nil {
+			t.Fatalf("baseline no-GUC update: %v", err)
+		} else if n, _ := res.RowsAffected(); n != 0 {
+			t.Errorf("no-GUC cross-tenant UPDATE touched %d rows; want 0 (RLS hides all)", n)
+		}
+
+		store := NewFromDB(app)
+		res, err := store.ExecPlatform(ctx,
+			`UPDATE data_providers SET name = name WHERE name LIKE 'probe-%'`)
+		if err != nil {
+			t.Fatalf("ExecPlatform update under NOBYPASSRLS role: %v", err)
+		}
+		if n, _ := res.RowsAffected(); n != 2 {
+			t.Errorf("ExecPlatform updated %d rows; want 2 (hatch must span both tenants)", n)
+		}
+	})
+
 	// End-to-end: a REAL warm-cache loader (BalanceLoader) driven through
 	// QueryPlatform must see EVERY tenant's rows under the NOBYPASSRLS role —
 	// this is the whole point of the platform-read hatch. A raw read with no GUC
