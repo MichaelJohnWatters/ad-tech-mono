@@ -53,6 +53,14 @@ func (b *BudgetTracker) today() string { return b.nowFn().UTC().Format(dateFmt) 
 
 // Spend returns today's spend for a campaign in major units (dollars).
 func (b *BudgetTracker) Spend(campaignID string) float64 {
+	return float64(b.SpendMicros(campaignID)) / microsPerUSD
+}
+
+// SpendMicros returns today's spend for a campaign in the native fixed-point
+// micro-dollar unit — no dollar rounding, so sub-cent spend ($0.005 CPM =
+// 5,000µ) is exact. Used by the /debug/budget endpoint (and tests) that observe
+// the counter the pacing gate and reconcile write.
+func (b *BudgetTracker) SpendMicros(campaignID string) int64 {
 	v, ok, err := b.l2.Get(context.Background(), budgetKey(b.today(), campaignID))
 	if err != nil {
 		b.log.Warn("budget read failed", "campaign", campaignID, "error", err)
@@ -62,7 +70,7 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 		return 0
 	}
 	micros, _ := strconv.ParseInt(v, 10, 64)
-	return float64(micros) / microsPerUSD
+	return micros
 }
 
 // Record adds amount (in major units) to today's spend for a campaign.

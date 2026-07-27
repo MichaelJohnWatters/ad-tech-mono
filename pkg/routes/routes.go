@@ -653,6 +653,11 @@ const (
 	// Read by the pub sim's Billing Rates panel so operators can see why
 	// a settle produced a particular publisher payout.
 	DebugBillingRates = "/debug/billing/rates"
+	// DebugDSPBudget (GET ?campaign_id=…) returns the DSP's per-campaign daily
+	// spend counter (dsp:budget:{day}:{cid}:spent) in micro-dollars — the value
+	// the pacing gate reads and the spend-snapshot reconcile overwrites. Lets
+	// e2e observe pacing/reconcile at the DSP. Gated by debug.endpoints_enabled.
+	DebugDSPBudget = "/debug/budget"
 	// Exchange debug surface — internal-state dumps + router preview/reset.
 	// All gated by debug.endpoints_enabled; do NOT expose externally.
 	DebugExchangeDeals   = "/debug/exchange/deals"

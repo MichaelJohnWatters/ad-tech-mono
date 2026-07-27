@@ -306,6 +306,7 @@ func main() {
 		if audiencePreloader != nil {
 			mux.HandleFunc(routes.DebugAudienceRefresh, audienceRefreshHandler(audiencePreloader, log))
 		}
+		mux.HandleFunc(routes.DebugDSPBudget, dspBudgetDebugHandler(budget))
 	}
 
 	handler := tracing.HTTPMiddleware(constants.ServiceDSP)(metrics.Wrap(middleware.CORS(mux)))
@@ -1357,6 +1358,26 @@ func audienceRefreshHandler(pre *audpreload.Preloader, log *slog.Logger) http.Ha
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"refreshed":true,"duration_ms":` +
 			strconv.FormatInt(time.Since(start).Milliseconds(), 10) + `}`))
+	}
+}
+
+// dspBudgetDebugHandler returns a campaign's current daily spend counter in
+// micro-dollars — the value the pacing gate reads and the spend-snapshot
+// reconcile overwrites. GET /debug/budget?campaign_id=…. Lets the e2e harness
+// observe pacing/reconcile at the DSP (the counter is shared in Redis across
+// all replicas, so any replica answers authoritatively). Gated in the caller.
+func dspBudgetDebugHandler(budget *BudgetTracker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		campaignID := r.URL.Query().Get("campaign_id")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		if campaignID == "" {
+			http.Error(w, `{"error":"campaign_id required"}`, http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"campaign_id":  campaignID,
+			"spent_micros": budget.SpendMicros(campaignID),
+		})
 	}
 }
 
