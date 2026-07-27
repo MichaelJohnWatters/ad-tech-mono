@@ -3,6 +3,7 @@
 package harness
 
 import (
+	"io"
 	"net/http"
 	"time"
 )
@@ -13,12 +14,18 @@ import (
 // one of these used to fast-fail a test in SETUP (well before its real
 // WaitFor), and the failure landed on a different arbitrary test each run.
 //
-// It retries ONLY when RoundTrip returns an error — i.e. no response was
-// received, so the server never processed the request and re-sending is safe
-// for any method. A real non-2xx response is passed straight through untouched,
-// so genuine failures stay loud. Request bodies are rewound via GetBody, which
-// http.NewRequest sets automatically for the bytes/strings readers the harness
-// and tests use; a non-replayable body aborts the retry rather than truncating.
+// It retries on two transient conditions:
+//   - a RoundTrip error — no response received, so the server never processed
+//     the request and re-sending is safe for any method; and
+//   - a 502/503/504 response — pure-infrastructure transients (bad gateway /
+//     unavailable / gateway timeout) from the tunnel or a briefly-busy pod
+//     under load, which NO test legitimately asserts as a success. A 500 or
+//     any 4xx is passed straight through untouched, so genuine application
+//     failures (and expected 400/401/404/409/429) stay loud and immediate.
+//
+// Request bodies are rewound via GetBody, which http.NewRequest sets
+// automatically for the bytes/strings readers the harness and tests use; a
+// non-replayable body aborts the retry rather than truncating.
 //
 // This is the shared, systemic version of the inline retry that refreshOne /
 // putConfig / DeleteConfig / reseed each grew independently — wiring it onto
@@ -38,7 +45,7 @@ func (rt retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if i > 0 {
 			if req.Body != nil {
 				if req.GetBody == nil {
-					return resp, err // can't safely replay; surface the last error
+					return resp, err // can't safely replay; surface the last result
 				}
 				b, gerr := req.GetBody()
 				if gerr != nil {
@@ -49,11 +56,28 @@ func (rt retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			time.Sleep(time.Second)
 		}
 		resp, err = base.RoundTrip(req)
-		if err == nil {
-			return resp, nil
+		if err != nil {
+			continue // transport error → retry
 		}
+		// Retry pure-infra transient statuses, but never on the final attempt
+		// (return whatever we have so the caller sees the real status).
+		if i < attempts-1 && isTransientStatus(resp.StatusCode) {
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck // draining for conn reuse
+			resp.Body.Close()
+			continue
+		}
+		return resp, nil
 	}
 	return resp, err
+}
+
+// isTransientStatus reports whether a status is a pure-infrastructure transient
+// safe to retry: bad gateway, service unavailable, gateway timeout. Explicitly
+// NOT 500 (could be a real bug) or any 4xx (many are expected assertions).
+func isTransientStatus(code int) bool {
+	return code == http.StatusBadGateway ||
+		code == http.StatusServiceUnavailable ||
+		code == http.StatusGatewayTimeout
 }
 
 // newHTTPClient builds an *http.Client with the shared flap-retrying transport.
