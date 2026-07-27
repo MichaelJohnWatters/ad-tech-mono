@@ -315,11 +315,22 @@ JOIN audience_segments s ON s.id = m.segment_id`
 	// a pruned user (replace-by-segment, GDPR purge) must stop matching at
 	// the NEXT preload, not when the TTL runs out. Overwrite with the empty
 	// array (the standard negative-cache value) rather than deleting, so the
-	// read path still short-circuits without Postgres. Restart caveat: a
-	// fresh process has no previous key set, so keys pruned across a restart
-	// fall back to the TTL ceiling.
-	tombstoned := 0
+	// read path still short-circuits without Postgres.
+	//
+	// The "last cycle" key set lives in SHARED Redis, not per-pod memory:
+	// with multiple SSP replicas behind one Redis, the pod that handles a
+	// /refresh may not be the pod that wrote a key, so a per-pod prevKeys would
+	// never tombstone it and a pruned user would keep matching forever. Every
+	// pod reads the same Postgres, so all compute an identical `current` — the
+	// shared set converges regardless of which pod runs. Union in the local set
+	// too, so a one-off shared-key read failure still clears this pod's own
+	// prior writes.
+	prev := p.loadPrevKeys(writeCtx)
 	for key := range p.prevKeys {
+		prev[key] = true
+	}
+	tombstoned := 0
+	for key := range prev {
 		if current[key] {
 			continue
 		}
@@ -330,6 +341,7 @@ JOIN audience_segments s ON s.id = m.segment_id`
 		tombstoned++
 	}
 	p.prevKeys = current
+	p.savePrevKeys(writeCtx, current)
 
 	p.lastLoad.Store(time.Now().UnixMilli())
 	p.log.Info("audience preload complete", "users", len(grouped), "keys_written", written, "keys_tombstoned", tombstoned, "duration_ms", time.Since(start).Milliseconds())
@@ -338,4 +350,42 @@ JOIN audience_segments s ON s.id = m.segment_id`
 
 func redisKey(userID, visibility string) string {
 	return "audience:user:" + userID + ":" + visibility
+}
+
+// prevKeysRedisKey holds the set of (user,visibility) keys written by the most
+// recent preload cycle, shared across all SSP replicas so any pod can compute
+// the tombstone diff (see preloadOnce). One key, JSON array of key strings.
+const prevKeysRedisKey = "audience:preload:prevkeys"
+
+// loadPrevKeys reads the shared "written last cycle" key set. A miss/decode
+// error yields an empty set — tombstoning then falls back to the local
+// prevKeys union and the TTL ceiling.
+func (p *Preloader) loadPrevKeys(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	val, ok, err := p.l2.Get(ctx, prevKeysRedisKey)
+	if err != nil || !ok || val == "" {
+		return out
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(val), &keys); err != nil {
+		return out
+	}
+	for _, k := range keys {
+		out[k] = true
+	}
+	return out
+}
+
+// savePrevKeys publishes the current key set for the next cycle's diff. No
+// expiry (the set is authoritative until the next preload overwrites it).
+// Best-effort: a failure just degrades to per-pod prevKeys.
+func (p *Preloader) savePrevKeys(ctx context.Context, current map[string]bool) {
+	keys := make([]string, 0, len(current))
+	for k := range current {
+		keys = append(keys, k)
+	}
+	payload, _ := json.Marshal(keys)
+	if err := p.l2.Set(ctx, prevKeysRedisKey, string(payload), 0); err != nil {
+		p.log.Debug("audience preload prevkeys save failed", "error", err)
+	}
 }

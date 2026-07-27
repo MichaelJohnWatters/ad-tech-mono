@@ -218,6 +218,29 @@ func (s *Store) QueryRowPlatform(ctx context.Context, scan func(*sql.Row) error,
 	return scan(tx.QueryRowContext(ctx, query, args...))
 }
 
+// ExecPlatform runs a write (UPDATE/DELETE/INSERT) under the platform read
+// hatch — for cross-tenant background jobs (e.g. the onboarding retention
+// sweep stamping swept_at across every tenant's ingest jobs) whose target
+// tables have USING-only tenant_isolation policies, so app.platform_read='on'
+// admits the write too. `SET LOCAL` inside a tx so the flag auto-resets. Only
+// use where the write is legitimately tenant-spanning; a per-account write must
+// set app.current_account_id instead. No-op under the superuser.
+func (s *Store) ExecPlatform(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	tx, err := s.primary.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.platform_read', 'on', true)"); err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return res, tx.Commit()
+}
+
 // QueryTenantDB runs an account-scoped read on a raw *sql.DB with the tenant
 // GUC set — the read-side twin of QueryPlatform, for the management List/Get
 // handlers that filter by account_id but must also set app.current_account_id so
