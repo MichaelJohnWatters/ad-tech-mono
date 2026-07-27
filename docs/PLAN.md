@@ -579,9 +579,24 @@ What landing this needs:
 5. **Per-imp deal evaluation.** Deal matcher already keys on (publisher, placement, advertiser); each imp's matches are evaluated independently. PG preempt for imp A doesn't affect imp B.
 6. **Span/log model.** The current `exchange.auction` span carries one set of `winner_dsp` / `clearing_price` attributes. Multi-imp needs either child spans per imp (cleaner, more traffic) or array-valued attributes (compact, harder to query in Jaeger). Recommend child spans.
 
-Scope estimate: ~1 day of focused work in `cmd/exchange/main.go` + minor downstream adjustments in `cmd/reporting` (per-imp billing accrual) and the e2e harness (a multi-imp request constructor + assertion helper). The Prebid handler itself needs no changes once the auction handles multi-imp natively.
+> **Scope correction (2026-07-27, after reading both hot paths — see
+> [`docs/PREBID_MULTI_IMP.md`](PREBID_MULTI_IMP.md) for the full design note):**
+> the "~1 day, exchange-only" estimate above is TOO LOW, and item 4's "DSP-side
+> handlers don't need changes" is wrong for the BID handler. Two corrections:
+> - **The DSP bid handler also hardcodes `Imp[0]`** (`cmd/dsp/main.go` ~896–1141:
+>   floor/format/dimensions/response `ImpID`), so it must loop over imps and bid
+>   per imp too. And `auction.Bid` has no `ImpID`, so bids can't be grouped per
+>   imp without a core-type change.
+> - **The real blocker is the `trace_id`/billing invariant, not the handlers.**
+>   `AuctionWinEvent` is the single source of truth for cost, keyed on `trace_id`,
+>   and the tracker + billing dedup on it. N wins in one request need N distinct
+>   `trace_id`s threaded through render → track → bill, or two rendered ads
+>   collapse to one billed cost (silent under-billing — the exact "data slippage"
+>   the platform exists to prevent). That makes this a **pipeline-wide** change
+>   (exchange, DSP, SSP, ad server, tracker, billing + the trace-id-per-imp
+>   model), whose FIRST deliverable is the per-imp trace-id design.
 
-Why not done now: every existing test sends single-imp requests, so the gap doesn't break anything today. Real external Prebid integrations would surface it immediately. Build before any first external Prebid publisher onboards. Tracked by skipped `TestCompetitiveG1_PrebidMultiImpRequestPerImpAuction`.
+Why not done now: every existing test sends single-imp requests, so the gap doesn't break anything today (a multi-imp request just fills the first slot — a scoping limitation, not a mis-billing bug). Real external Prebid integrations would surface it immediately. Build before any first external Prebid publisher onboards, as its own focused effort (design the trace-id model first). Tracked by skipped `TestCompetitiveG1_PrebidMultiImpRequestPerImpAuction`; full design in [`docs/PREBID_MULTI_IMP.md`](PREBID_MULTI_IMP.md).
 
 ---
 
