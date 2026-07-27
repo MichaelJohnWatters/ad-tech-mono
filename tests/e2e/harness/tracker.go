@@ -65,9 +65,35 @@ func (h *Harness) FireClick(t *testing.T, traceID, campaignID, redir string) {
 // reservation did/didn't settle in the billing ledger).
 func (h *Harness) FireView(t *testing.T, traceID, campaignID, placementID, publisherID string, durMs, pct int, areaPx int64) bool {
 	t.Helper()
-	url := fmt.Sprintf("%s/v1/t/view?tid=%s&cid=%s&pid=%s&pubid=%s&dur=%d&pct=%d&area=%d",
-		h.URLs.Tracker, traceID, campaignID, placementID, publisherID, durMs, pct, areaPx)
-	return h.fireAndConsumeReturningHeader(t, url, "view", "X-IAB-Viewable") == "1"
+	return h.fireViewMeasured(t, h.viewBase(traceID, campaignID, placementID, publisherID, ""), durMs, pct, areaPx)
+}
+
+// FireVideoView is FireView for the VIDEO channel — the beacon carries a signed
+// ch=video, so the tracker applies the 2s IAB dwell (vs 1s for display). Used to
+// prove video viewability + video vCPM settle.
+func (h *Harness) FireVideoView(t *testing.T, traceID, campaignID, placementID, publisherID string, durMs, pct int, areaPx int64) bool {
+	t.Helper()
+	return h.fireViewMeasured(t, h.viewBase(traceID, campaignID, placementID, publisherID, "video"), durMs, pct, areaPx)
+}
+
+func (h *Harness) viewBase(traceID, campaignID, placementID, publisherID, channel string) string {
+	u := fmt.Sprintf("%s/v1/t/view?tid=%s&cid=%s&pid=%s&pubid=%s",
+		h.URLs.Tracker, traceID, campaignID, placementID, publisherID)
+	if channel != "" {
+		u += "&ch=" + channel
+	}
+	return u
+}
+
+// fireViewMeasured signs the BASE view URL (tid/cid/pid/pubid[/ch]) — exactly
+// what the ad server signs — then appends the CLIENT-measured dur/pct/area,
+// which the tracker excludes from signature validation (viewSigParams). Signing
+// the whole thing (measurement included) would 403 under strict signing.
+func (h *Harness) fireViewMeasured(t *testing.T, base string, durMs, pct int, areaPx int64) bool {
+	t.Helper()
+	signed := adserving.SignURL(base, adserving.DefaultSigningKey)
+	url := fmt.Sprintf("%s&dur=%d&pct=%d&area=%d", signed, durMs, pct, areaPx)
+	return h.fireRawReturningHeader(t, url, "view", "X-IAB-Viewable") == "1"
 }
 
 // FireViewURL fires an ALREADY-SIGNED /v1/t/view URL (e.g. the signed

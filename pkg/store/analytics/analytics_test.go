@@ -12,21 +12,31 @@ func TestIsIABViewable(t *testing.T) {
 		durMs           int64
 		pct             int
 		areaPx          int64
+		channel         string
 		wantIABViewable bool
 	}{
-		{"below time threshold", 999, 100, 0, false},
-		{"at time threshold, 50% visible", 1000, 50, 0, true},
-		{"at time threshold, 49% visible", 1000, 49, 0, false},
-		{"large ad, 30% suffices", 1500, 30, 250_000, true},
-		{"large ad, 29% fails", 1500, 29, 250_000, false},
-		{"large ad below time threshold still fails", 500, 100, 250_000, false},
-		{"zero values fail", 0, 0, 0, false},
+		// Display (1s dwell) — empty channel == display.
+		{"display below time threshold", 999, 100, 0, "", false},
+		{"display at time threshold, 50% visible", 1000, 50, 0, "", true},
+		{"display at time threshold, 49% visible", 1000, 49, 0, "", false},
+		{"display large ad, 30% suffices", 1500, 30, 250_000, "", true},
+		{"display large ad, 29% fails", 1500, 29, 250_000, "", false},
+		{"display large ad below time threshold still fails", 500, 100, 250_000, "", false},
+		{"zero values fail", 0, 0, 0, "", false},
+		{"explicit display channel behaves like default", 1000, 50, 0, "display", true},
+		// Video (2s dwell) — the whole point of this feature.
+		{"video below 2s fails (would pass as display)", 1500, 100, 0, "video", false},
+		{"video at 2s, 50% visible", 2000, 50, 0, "video", true},
+		{"video at 2s, 49% visible", 2000, 49, 0, "video", false},
+		{"video well past 2s", 3200, 75, 0, "video", true},
+		// Large-format 30% relief is display-only; video stays at 50%.
+		{"video large area does NOT drop to 30%", 2200, 30, 250_000, "video", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := IsIABViewable(c.durMs, c.pct, c.areaPx)
+			got := IsIABViewable(c.durMs, c.pct, c.areaPx, c.channel)
 			if got != c.wantIABViewable {
-				t.Errorf("IsIABViewable(%dms, %d%%, %dpx) = %v, want %v", c.durMs, c.pct, c.areaPx, got, c.wantIABViewable)
+				t.Errorf("IsIABViewable(%dms, %d%%, %dpx, %q) = %v, want %v", c.durMs, c.pct, c.areaPx, c.channel, got, c.wantIABViewable)
 			}
 		})
 	}

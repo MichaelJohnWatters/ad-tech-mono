@@ -315,8 +315,15 @@ func firstNonEmpty(vals ...string) string {
 // constructed via the existing macros helpers so the HMAC + exp wiring
 // matches display.
 func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast.LinearSpec {
+	// Force the video channel so the viewability beacon carries a signed
+	// ch=video and the tracker applies the 2s IAB dwell (vs 1s display).
+	macroCtx.Channel = "video"
 	impURL := adserving.BuildImpressionURL(macroCtx)
 	clickURL := adserving.BuildClickURL(macroCtx)
+	// Video viewability beacon → /v1/t/view?ch=video (the player self-measures
+	// ≥50%/≥2s and appends dur/pct/area). Distinct from the quartile beacons
+	// below, which route to /v1/t/video for the VAST tracking funnel.
+	viewURL := adserving.BuildViewabilityURL(macroCtx)
 	// Quartile + interaction beacons route through /v1/t/video so the
 	// tracker publishes typed VideoEvent on adtech.events.video — not
 	// conflated with display viewability on adtech.events.view.
@@ -370,6 +377,7 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 			Resume:        []string{beacon("resume")},
 			Skip:          []string{beacon("skip")},
 			Fullscreen:    []string{beacon("fullscreen")},
+			Viewable:      []string{viewURL},
 		},
 		ErrorURLs: []string{beacon("error")},
 		Click: vast.ClickSpec{

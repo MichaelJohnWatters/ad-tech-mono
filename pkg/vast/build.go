@@ -65,6 +65,14 @@ type LinearTrackers struct {
 	Resume        []string
 	Skip          []string
 	Fullscreen    []string
+	// Viewable is a NON-standard event="viewable" tracker: our own IAB video
+	// viewability beacon (signed /v1/t/view?ch=video), fired by the player when
+	// the ad is ≥50% on-screen for ≥2 continuous seconds. VAST has no native
+	// viewability event (that's OMID's job), but our local player self-measures
+	// with an IntersectionObserver and fires this, so video vCPM can settle
+	// without shipping an external OM SDK. See docs/PLAN.md → "Video/CTV
+	// measurement".
+	Viewable []string
 	// Progress is a list of (offset, URL) pairs that fire at the given
 	// playback offsets. Offset is the player position when the URL
 	// should fire — "00:00:05" to fire 5s in, etc.
@@ -259,6 +267,7 @@ func buildTrackingEvents(t LinearTrackers) *TrackingEvents {
 	add("resume", t.Resume)
 	add("skip", t.Skip)
 	add("fullscreen", t.Fullscreen)
+	add("viewable", t.Viewable)
 	for _, p := range t.Progress {
 		entries = append(entries, Tracking{
 			Event:  "progress",

@@ -199,6 +199,58 @@ func TestBillingViewabilityVCPMSettle(t *testing.T) {
 	}
 }
 
+// TestBillingVideoViewabilityVCPMSettle — VIDEO viewability uses the IAB/MRC
+// 2-second dwell (display is 1s). The tracker applies the right threshold off
+// the signed ch=video on the beacon. Proves the distinction end to end: a
+// 1500ms view — viewable AS DISPLAY but NOT as video — does NOT settle video
+// vCPM, while a 2100ms view does.
+func TestBillingVideoViewabilityVCPMSettle(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "billing-video-vcpm")
+	const bidModel = "vcpm"
+	h.SetCampaignBidStrategy(t, w.Campaign, bidModel)
+	h.RefreshAllCaches(t)
+
+	settledBefore := summaryFloat(t, h.BillingSummary(t), "TotalSettled")
+
+	// 1) 1500ms — over the 1s display threshold but UNDER the 2s video one.
+	//    Reserves on impression, but the video view must NOT settle.
+	reservedBefore := summaryFloat(t, h.BillingSummary(t), "TotalReserved")
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "vidview-user-1")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid on the vCPM campaign")
+	}
+	h.FireImpressionWithModel(t, auc.TraceID, win.CampaignID, win.CreativeID,
+		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price, bidModel)
+	waitForDelta(t, h, "TotalReserved", reservedBefore, win.Price/1000)
+
+	if h.FireVideoView(t, auc.TraceID, win.CampaignID, auc.PlacementID, auc.PublisherID, 1500, 80, 0) {
+		t.Fatal("1500ms is below the 2s VIDEO IAB threshold — must NOT be viewable (it would be as display)")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if d := summaryFloat(t, h.BillingSummary(t), "TotalSettled") - settledBefore; d != 0 {
+		t.Errorf("sub-2s video view settled %.6f; want 0 (2s threshold)", d)
+	}
+
+	// 2) 2100ms / 80% — over the 2s video threshold → viewable → settles vCPM.
+	settledMid := summaryFloat(t, h.BillingSummary(t), "TotalSettled")
+	reservedMid := summaryFloat(t, h.BillingSummary(t), "TotalReserved")
+	auc2 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "vidview-user-2")
+	win2 := h.ExtractWinner(t, auc2)
+	if win2.NoBid {
+		t.Fatal("expected a winning bid on the second auction")
+	}
+	h.FireImpressionWithModel(t, auc2.TraceID, win2.CampaignID, win2.CreativeID,
+		auc2.PlacementID, auc2.PublisherID, w.AdvAcc.ID, "USD", win2.Price, bidModel)
+	waitForDelta(t, h, "TotalReserved", reservedMid, win2.Price/1000)
+
+	if !h.FireVideoView(t, auc2.TraceID, win2.CampaignID, auc2.PlacementID, auc2.PublisherID, 2100, 80, 0) {
+		t.Fatal("2100ms / 80% should be IAB video-viewable")
+	}
+	waitForDelta(t, h, "TotalSettled", settledMid, win2.Price/1000)
+}
+
 func TestBillingReservationExpiry(t *testing.T) {
 	// The reservation-expiry sweep IS built and unit-tested — Engine.
 	// SweepExpiredReservations releases unsettled reserves past the pacing hold

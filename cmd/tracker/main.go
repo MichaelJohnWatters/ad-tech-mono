@@ -473,7 +473,8 @@ func main() {
 		durMs, _ := strconv.ParseInt(q.Get("dur"), 10, 64)
 		pct, _ := strconv.Atoi(q.Get("pct"))
 		areaPx, _ := strconv.ParseInt(q.Get("area"), 10, 64)
-		iabViewable := analytics.IsIABViewable(durMs, pct, areaPx)
+		channel := q.Get("ch") // "video" → 2s IAB dwell; empty/display → 1s
+		iabViewable := analytics.IsIABViewable(durMs, pct, areaPx, channel)
 
 		reqLog.Info("viewability",
 			"duration_ms", durMs,
@@ -501,6 +502,7 @@ func main() {
 			PlacementID:    q.Get("pid"),
 			PublisherID:    q.Get("pubid"),
 			AccountID:      q.Get("advid"),
+			Channel:        channel,
 			DurationMs:     durMs,
 			PercentVisible: pct,
 			AreaPx:         areaPx,
