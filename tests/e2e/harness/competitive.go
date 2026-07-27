@@ -145,7 +145,7 @@ func (h *Harness) SeedStandard(t *testing.T) {
 	// use a dedicated client with a longer cap. Retry transport errors like
 	// refreshOne does: the gateway port-forward flaps (EOF) under load, and
 	// the reseed is idempotent so re-POSTing is safe.
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := newHTTPClient(60 * time.Second)
 	var resp *http.Response
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {

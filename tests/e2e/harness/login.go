@@ -33,8 +33,9 @@ func (h *Harness) LoginAs(t *testing.T, email, password string) *http.Client {
 		t.Fatalf("cookie jar: %v", err)
 	}
 	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Jar:     jar,
+		Timeout:   10 * time.Second,
+		Jar:       jar,
+		Transport: retryTransport{}, // survive port-forward flaps under full-suite load
 		// Don't follow the post-login persona redirect — the cookie is set
 		// on the 303 itself and the redirect target isn't what's under test.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

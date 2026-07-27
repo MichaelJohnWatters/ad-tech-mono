@@ -149,7 +149,7 @@ func New(t *testing.T) *Harness {
 	return &Harness{
 		URLs: urls,
 		DB:   db,
-		HTTP: &http.Client{Timeout: 10 * time.Second},
+		HTTP: newHTTPClient(10 * time.Second),
 	}
 }
 
