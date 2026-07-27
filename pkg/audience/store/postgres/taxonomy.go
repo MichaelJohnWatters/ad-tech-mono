@@ -135,24 +135,29 @@ ORDER BY SUM(e.owner_net_micros) DESC`
 // never earns ("label it to sell it"). Same cross-account service role
 // rationale as SegmentsForUser.
 func (s *Store) PublicSegmentMonetization(ctx context.Context) (map[string]SegmentMonetization, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	out := map[string]SegmentMonetization{}
+	// Cross-account read (labels/fees across every tenant) → platform hatch so
+	// the NOBYPASSRLS app role sees all rows (security #77).
+	err := s.withPlatformRead(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
 SELECT id::text, taxonomy_id, account_id::text, COALESCE(data_fee_micros, 0)
 FROM audience_segments
 WHERE visibility = 'public' AND taxonomy_id IS NOT NULL`)
-	if err != nil {
-		return nil, fmt.Errorf("public segment monetization: %w", err)
-	}
-	defer rows.Close()
-	out := map[string]SegmentMonetization{}
-	for rows.Next() {
-		var id string
-		var m SegmentMonetization
-		if err := rows.Scan(&id, &m.TaxonomyID, &m.OwnerAccountID, &m.FeeMicros); err != nil {
-			return nil, fmt.Errorf("scan segment monetization: %w", err)
+		if err != nil {
+			return fmt.Errorf("public segment monetization: %w", err)
 		}
-		out[id] = m
-	}
-	return out, rows.Err()
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var m SegmentMonetization
+			if err := rows.Scan(&id, &m.TaxonomyID, &m.OwnerAccountID, &m.FeeMicros); err != nil {
+				return fmt.Errorf("scan segment monetization: %w", err)
+			}
+			out[id] = m
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // ErrSegmentNotMonetizable rejects a positive data fee on a segment that can
