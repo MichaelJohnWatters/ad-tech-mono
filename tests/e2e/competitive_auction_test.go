@@ -683,17 +683,25 @@ func TestCompetitiveD3_PMPAllowlistedAtDealPriceVsNonListedOpen(t *testing.T) {
 // one against our matchable placement, one against a non-existent
 // placement. Expect: 1 SeatBid for the valid imp, no bid for the other.
 //
-// Current behaviour: BOTH the exchange auctionHandler (cmd/exchange/main.go)
-// AND the DSP bid handler (cmd/dsp/main.go) hardcode bidReq.Imp[0] end-to-end —
-// floor, format, placement and the response BidObj.ImpID. Per-imp support is
-// therefore a two-service change on the two hottest paths (auction fan-out +
-// DSP bid, the latter shared by every competitor pod), rippling into the
-// per-imp AuctionWinEvent / win-loss notify / impression attribution. It's a
-// real feature with money-hot-path risk, scoped as its own focused effort
-// (needs the full single-imp competitive suite re-run as regression), not a
-// tail-end change. Deliberately deferred — see the session notes.
+// Current behaviour + why this is deferred (after reading both hot paths):
+// BOTH the exchange auctionHandler (cmd/exchange/main.go ~500-778) AND the DSP
+// bid handler (cmd/dsp/main.go ~896-1141) hardcode bidReq.Imp[0] end-to-end —
+// floor, format, placement, deal eval, the single-winner auction, the response
+// BidObj.ImpID, win/loss, and the AuctionWin/Complete events. `auction.Bid`
+// carries no ImpID, so bids can't even be grouped per-imp without a core-type
+// change.
+//
+// The real blocker isn't the two handlers — it's the trace_id/billing model.
+// AuctionWinEvent is "the single source of truth for cost", keyed on trace_id,
+// and the tracker/billing dedup on trace_id. If one request wins N imps (N ads
+// rendered), each win needs its OWN trace_id threaded through render → track →
+// bill, or the two impressions collapse to one cost. So correct per-imp support
+// is a PIPELINE-WIDE change (exchange, DSP, SSP, ad server, tracker, billing +
+// the trace-id-per-imp model) that must preserve the one-AuctionWinEvent-per-
+// cost invariant — a dedicated project, not a tail-end gap fill. Rushing it
+// risks the core money invariant, so it stays deferred.
 func TestCompetitiveG1_PrebidMultiImpRequestPerImpAuction(t *testing.T) {
-	t.Skip("deferred: Prebid multi-imp is a two-service hot-path change (exchange auction + DSP bid), not a single-handler loop — see comment")
+	t.Skip("deferred: correct Prebid multi-imp needs a per-imp trace_id threaded through the whole render→track→bill pipeline to preserve the one-AuctionWinEvent-per-cost invariant — see comment")
 }
 
 // TestCompetitiveG2_PrebidInboundVsInternalDSPsHighestWins — inbound
