@@ -125,21 +125,44 @@ SELECT m.segment_id::text
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id
 WHERE m.user_id = $1 AND s.visibility = $2`
-	rows, err := s.db.QueryContext(ctx, q, userID, visibility)
-	if err != nil {
-		return nil, fmt.Errorf("query %s segments for user %q: %w", visibility, userID, err)
-	}
-	defer rows.Close()
-
 	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan segment id: %w", err)
+	// Cross-account read (bid-request fan-out spans every advertiser's
+	// segments) → platform hatch so the NOBYPASSRLS app role sees all rows
+	// (security #77).
+	err := s.withPlatformRead(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, q, userID, visibility)
+		if err != nil {
+			return fmt.Errorf("query %s segments for user %q: %w", visibility, userID, err)
 		}
-		out = append(out, id)
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan segment id: %w", err)
+			}
+			out = append(out, id)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// withPlatformRead runs fn inside a read-only transaction with the platform
+// read hatch enabled (app.platform_read='on'), so cross-account service-role
+// reads (bid-request fan-out over every tenant's public segments, the SSP
+// taxonomy/monetization warm cache) see all rows under the NOBYPASSRLS app
+// role. Read-only: the hatch admits reads via the tenant_isolation USING
+// clause; it must never wrap a write.
+func (s *Store) withPlatformRead(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
 	}
-	return out, rows.Err()
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return fmt.Errorf("set platform read: %w", err)
+	}
+	return fn(tx)
 }
 
 // --- Write path (CRM upload / behavioural rollup / lookalike publish) ---

@@ -29,6 +29,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 type profileMembership struct {
@@ -158,8 +159,10 @@ func buildProfileView(ctx context.Context, db *sql.DB, resolver identityResolver
 	}
 
 	// Memberships across the whole cluster, with provenance. Platform-wide read
-	// (staff surface) — the same cross-tenant posture as the audit log.
-	mrows, err := db.QueryContext(ctx, `
+	// (staff surface) — the same cross-tenant posture as the audit log. Joins
+	// audience_segments (RLS) so under the NOBYPASSRLS app role it needs the
+	// platform read hatch to see every tenant's segments (security #77).
+	mrows, closeM, err := postgres.NewFromDB(db).QueryPlatform(ctx, `
 SELECT m.user_id, m.segment_id::text, s.name, s.type, s.visibility, COALESCE(s.source,''), s.account_id::text
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id
@@ -168,7 +171,7 @@ ORDER BY s.name, m.user_id`, pq.Array(view.ClusterMembers))
 	if err != nil {
 		return view, err
 	}
-	defer mrows.Close()
+	defer closeM()
 	for mrows.Next() {
 		var m profileMembership
 		if err := mrows.Scan(&m.MemberID, &m.SegmentID, &m.Name, &m.Type, &m.Visibility, &m.Source, &m.AccountID); err == nil {

@@ -12,10 +12,10 @@ package main
 // queued/running/done/failed (was completed/failed).
 //
 // Staff-only (support:read); platform-wide operational telemetry, same
-// posture as the audit log. The read spans all tenants — it relies on the
-// gateway's Postgres role bypassing RLS on audience_ingest_jobs (dev
-// superuser; a prod deployment needs a service role permitted to read every
-// row), the same posture as the ingest worker's queue reads.
+// posture as the audit log. The read spans all tenants — under the
+// least-privilege NOBYPASSRLS app role (security #77) it uses the platform
+// read hatch (QueryPlatform sets app.platform_read='on') to see every
+// tenant's rows, the same posture as the ingest worker's queue reads.
 
 import (
 	"database/sql"
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 type onboardingRunView struct {
@@ -85,7 +86,9 @@ func onboardingMonitorHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 		// upload (source='api') has a NULL provider — surface it as 'api'. The
 		// result counts are NULL until a job reaches 'done', so COALESCE to 0.
 		runs := []onboardingRunView{}
-		rows, err := db.QueryContext(ctx, `
+		// Cross-tenant staff read → platform hatch (security #77).
+		pg := postgres.NewFromDB(db)
+		rows, closeRuns, err := pg.QueryPlatform(ctx, `
 SELECT id::text, COALESCE(provider, 'api'), file_key, COALESCE(account_id::text,''),
        COALESCE(segment_id::text,''), status,
        COALESCE(total_rows,0), COALESCE(valid_rows,0), COALESCE(rejected_rows,0),
@@ -108,10 +111,10 @@ LIMIT 100`, provider)
 				runs = append(runs, v)
 			}
 		}
-		rows.Close()
+		closeRuns()
 
 		providers := []onboardingProviderView{}
-		prows, err := db.QueryContext(ctx, `
+		prows, closeProv, err := pg.QueryPlatform(ctx, `
 SELECT COALESCE(provider, 'api'), count(*),
        count(*) FILTER (WHERE status = 'failed'),
        COALESCE(sum(valid_rows),0), COALESCE(sum(rejected_rows),0),
@@ -132,7 +135,7 @@ LIMIT 50`)
 				providers = append(providers, v)
 			}
 		}
-		prows.Close()
+		closeProv()
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"runs": runs, "providers": providers})
 	}
