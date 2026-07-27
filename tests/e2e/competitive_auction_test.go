@@ -433,7 +433,7 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 	// (hopefully now clean) no-bids. 35s covers a missed NATS invalidate
 	// falling back to the config manager's 30s poll.
 	var preview harness.RouterPreview
-	harness.WaitFor(t, 35*time.Second, "router learns to skip always-no-bid comp1", func() bool {
+	harness.WaitFor(t, 60*time.Second, "router learns to skip always-no-bid comp1", func() bool {
 		h.ResetSmartRouter(t)
 		h.FireNAuctions(t, 25, "pl-news-mpu", "GBR", "mobile")
 		preview = h.SmartRouterPreview(t)

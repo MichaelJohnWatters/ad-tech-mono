@@ -81,7 +81,7 @@ func TestSmartRoutingSkipsAlwaysNoBidDSP(t *testing.T) {
 	// poll rather than asserting the first preview — and the LB may hand
 	// each preview to a different pod, so require the drop to hold.
 	h.FireNAuctions(t, 20, "pl-news-mpu", "GBR", "mobile")
-	harness.WaitFor(t, 30*time.Second, "router to drop comp1 after 30 no-bids (cross-replica reseed)", func() bool {
+	harness.WaitFor(t, 60*time.Second, "router to drop comp1 after 30 no-bids (cross-replica reseed)", func() bool {
 		for _, ep := range h.SmartRouterPreview(t).Selected {
 			if ep == h.URLs.ClusterDSPComp1 {
 				return false

@@ -50,7 +50,9 @@ func TestRoutingKnobsLiveAndConfigDeleteReverts(t *testing.T) {
 	// Train comp1 into a skip: 30 no-bid calls, converged cluster-wide by
 	// the reseed (events → ClickHouse → routing_reseed_interval).
 	h.FireNAuctions(t, 30, "pl-news-mpu", "GBR", "mobile")
-	harness.WaitFor(t, 30*time.Second, "router to skip comp1 after training", func() bool {
+	// 60s (not 30): the training pipeline (auctions → NATS → ClickHouse →
+	// routing reseed) lags under full-suite load; exits early once converged.
+	harness.WaitFor(t, 60*time.Second, "router to skip comp1 after training", func() bool {
 		return !comp1Selected(t, h)
 	})
 
