@@ -84,3 +84,13 @@ func isTransientStatus(code int) bool {
 func newHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: retryTransport{}}
 }
+
+// NewHTTPClient is the exported form of newHTTPClient, for tests (package e2e)
+// that build their own client instead of reusing h.HTTP but still want the
+// flap-retrying transport.
+func NewHTTPClient(timeout time.Duration) *http.Client { return newHTTPClient(timeout) }
+
+// RetryTransport returns the shared flap-retrying RoundTripper, for tests that
+// need a custom *http.Client (e.g. a no-follow CheckRedirect) yet still want
+// transport-level retry. Set it as the client's Transport.
+func RetryTransport() http.RoundTripper { return retryTransport{} }

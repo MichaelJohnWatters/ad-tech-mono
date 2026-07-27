@@ -53,6 +53,7 @@ func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
 	// URL. Extract its `ad` param (the pod ad's trace) to correlate beacons.
 	noRedirect := &http.Client{
 		Timeout:       10 * time.Second,
+		Transport:     harness.RetryTransport(), // survive port-forward flaps under load
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	var segURL, adTrace string
