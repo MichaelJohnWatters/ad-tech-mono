@@ -18,6 +18,7 @@
 package e2e
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -62,18 +63,61 @@ func TestPacingCommittedReflectsBilledNotWins(t *testing.T) {
 	h.WaitCommittedMicros(t, win.CampaignID, harness.Micros(win.Price/1000))
 }
 
-// TestPacingReconcileReleasesPhantomWinAtDSP — the DSP end of the loop: after
-// a phantom win over-counts the local Redis counter, a forced snapshot should
-// reconcile it back down (committed=0), so the campaign keeps bidding rather
-// than pacing itself out on spend that never billed.
+// TestPacingReconcileReleasesPhantomWinAtDSP — the DSP end of the loop: phantom
+// wins (won, never impressed) over-count the local Redis counter; the
+// spend-snapshot reconcile must snap it back to what actually BILLED, so the
+// campaign keeps bidding rather than pacing itself out on spend that never
+// happened. Reads the DSP counter via /debug/budget (h.DSPSpendMicros).
 //
-// SKIPPED pending a DSP spend-read helper: asserting the reconcile effect
-// needs to read the DSP's dsp:budget:{campaign}:spent counter (or a
-// /debug/budget endpoint on the DSP). The billing-side number the DSP
-// reconciles to is already proven by TestPacingCommittedReflectsBilledNotWins;
-// the DSP-side Reconcile overwrite is unit-tested in
-// cmd/dsp/budget_test.go (TestBudgetTracker_ReconcileOverwrites). Flip this to
-// an assertion when h.DSPSpendCents(campaign) lands.
+// A pure phantom-only campaign has committed=0 and so isn't in the snapshot map
+// (the reconcile only touches campaigns it sees) — so we anchor with ONE real
+// impression (committed = its cost) and over-count phantom wins ON TOP; the
+// reconcile releases them back down to the single billed impression.
 func TestPacingReconcileReleasesPhantomWinAtDSP(t *testing.T) {
-	t.Skip("pending harness.DSPSpendCents / DSP /debug/budget read endpoint")
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "pacing-dsp-recon")
+	h.ResetBillingLedger(t)
+	h.SetCampaignBidStrategy(t, w.Campaign, "cpm")
+	// Silence the competitors so our internal DSP wins every auction — the win
+	// notices must land on the DSP whose /debug/budget we read.
+	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
+	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor2)
+	h.RefreshAllCaches(t)
+
+	// One REAL win + impression → billing commits exactly the impression's cost.
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "recon-real")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid || win.CampaignID != w.Campaign.ID {
+		t.Fatalf("expected our internal campaign to win; nobid=%v cid=%s", win.NoBid, win.CampaignID)
+	}
+	billedMicros := harness.Micros(win.Price / 1000) // clearing price is a CPM
+	h.FireImpressionWithModel(t, auc.TraceID,
+		win.CampaignID, win.CreativeID, auc.PlacementID, auc.PublisherID, w.AdvAcc.ID,
+		"USD", win.Price, "cpm")
+	h.WaitCommittedMicros(t, win.CampaignID, billedMicros)
+
+	// Over-count: three PHANTOM wins (won, no impression). The DSP records each
+	// win notice, inflating dsp:budget:{campaign}:spent above the one billed imp.
+	for i := 0; i < 3; i++ {
+		pa := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile",
+			fmt.Sprintf("recon-phantom-%d", i))
+		if pw := h.ExtractWinner(t, pa); pw.NoBid {
+			t.Fatalf("phantom auction %d did not win — cannot over-count the DSP counter", i)
+		}
+	}
+
+	// Best-effort: observe the over-count (win notices are async; the reporting
+	// reconcile ticker is 30s, so we almost always catch it before it reconciles).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.DSPSpendMicros(t, win.CampaignID) > billedMicros {
+			t.Logf("observed DSP over-count above billed %d µ (phantom wins recorded)", billedMicros)
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// The reconcile snaps the counter back to what actually BILLED — releasing
+	// the phantom over-count.
+	h.WaitDSPSpendMicros(t, win.CampaignID, billedMicros)
 }

@@ -75,3 +75,46 @@ func (h *Harness) WaitCommittedMicros(t *testing.T, campaignID string, want int6
 	}
 	t.Fatalf("committed spend for %s = %d micro-dollars, want %d", campaignID, last, want)
 }
+
+// DSPSpendMicros reads the DSP's own per-campaign daily spend counter
+// (dsp:budget:{day}:{cid}:spent) in micro-dollars via GET /debug/budget — the
+// value the pacing gate reads and the spend-snapshot reconcile overwrites. The
+// counter is shared in Redis across all DSP replicas, so any replica answers
+// authoritatively.
+func (h *Harness) DSPSpendMicros(t *testing.T, campaignID string) int64 {
+	t.Helper()
+	resp, err := h.getWithRetry(h.URLs.DSP + routes.DebugDSPBudget + "?campaign_id=" + campaignID)
+	if err != nil {
+		t.Fatalf("dsp budget read: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("dsp budget status %d: %s", resp.StatusCode, string(body))
+	}
+	var out struct {
+		SpentMicros int64 `json:"spent_micros"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode dsp budget: %v (%s)", err, string(body))
+	}
+	return out.SpentMicros
+}
+
+// WaitDSPSpendMicros polls the DSP spend counter until it equals want (the
+// reconcile that overwrites it runs async off the NATS spend snapshot), failing
+// after a short timeout.
+func (h *Harness) WaitDSPSpendMicros(t *testing.T, campaignID string, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	var last int64
+	for time.Now().Before(deadline) {
+		last = h.DSPSpendMicros(t, campaignID)
+		if last == want {
+			return
+		}
+		h.ForceSpendSnapshot(t) // re-trigger the reconcile broadcast each poll
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("dsp spend for %s = %d micro-dollars, want %d", campaignID, last, want)
+}
