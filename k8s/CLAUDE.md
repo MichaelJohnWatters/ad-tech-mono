@@ -40,6 +40,24 @@ staging/prod (values files per env).
 | `make stack-images` | Just build the images |
 | `make devconsole` | Host dev-loop UI (localhost:8099) — buttons over the targets above |
 
+### Seed / reset / demo data
+
+Getting data INTO a running stack (all Postgres unless noted). Migrations run
+automatically inside `make stack-up` (helm hook); `make migrate` /
+`make migrate-status` run them standalone.
+
+| Command | What it does |
+|---|---|
+| `make seed` / `seed-minimal` / `seed-stress` | `go run ./cmd/seed --profile <p>` — **DB-direct** seed from `profiles/{dsps,publishers,deals,direct-sold}/*.yaml`. Needs the **owner** DB URL (cross-tenant inserts; the flipped `adtech_app` role can't do them under RLS). |
+| **`make demo`** | `scripts/demo.sh`: wait for stack → seed standard → refresh warm caches → ~800 realistic auctions via the simulator. The "everyone runs this" rich setup. |
+| **`make reset`** | `scripts/reset.sh`: full clean slate across ALL THREE stores — TRUNCATE Postgres tenant tables → TRUNCATE ClickHouse → Redis FLUSHDB → re-seed + re-populate. |
+| `make traffic` / `simulate` / `simulate-trickle` / `simulate-burst` | `cmd/simulator` — generate live auction traffic (`DEMO_RPS` default 5). |
+
+- **`cmd/seed` big-world knobs:** `--big-world-advertisers/-publishers/-campaigns-per/-placements-per` add an additive large world (each account funded + loginable). `BIGWORLD=1 go test -run TestBuildBigWorld` builds a ~50-campaign world via the **API** instead.
+- **Runtime reseed (API):** `POST /dev/reset-and-reseed` on the gateway (debug-gated) = TRUNCATE tenant tables + Redis FLUSHDB + re-run `cmd/seed` + cache-invalidates. Backs the pub-simulator "Reset & reseed" button and the e2e harness. Runs the seed subprocess against the **admin/owner** URL (`DATABASE_ADMIN_URL`), because the app now connects as `adtech_app` (security #77) which can't cross-tenant seed.
+- **API seeding (tests):** `harness.BuildBasicWorld`/`BuildAPIWorld` create accounts/campaigns/placements through real `POST /v1/api/*` calls (not DB-direct); `harness.SeedStandard` calls the reseed endpoint above.
+- **External demo origins** (host processes; need stack up + seeded): `make demosite` (:9000 publisher), `make demoadv` (:9200 advertiser "Ford"), `cmd/extbidder` (external DSP).
+
 Requirements: Rancher Desktop running (moby engine, k8s enabled, built-in
 traefik DISABLED — the chart ships its own), kubectl context
 `rancher-desktop`. Image builds are host Go cross-compiles baked into tiny
