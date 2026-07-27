@@ -143,6 +143,10 @@ func resetAndReseedHandler(dbURL string, redisAddr string, bus events.EventBus, 
 		} else {
 			cmd = exec.CommandContext(seedCtx, "go", "run", "./cmd/seed", "--profile", "standard")
 		}
+		// The seed does cross-tenant inserts the least-privilege app role can't do
+		// under RLS — run it as the admin/owner (dbURL passed here is the admin URL
+		// when set), overriding the inherited app DATABASE_URL (security #77).
+		cmd.Env = append(os.Environ(), "DATABASE_URL="+dbURL)
 		out, err := cmd.CombinedOutput()
 		detail := strings.TrimSpace(string(out))
 		// Trim very long output; the JSON response shouldn't bloat with
