@@ -76,6 +76,13 @@ type Ledger interface {
 	ReservationByTrace(traceID string) (LedgerEntry, bool)
 	// HasSettlement reports whether trace_id has already been settled.
 	HasSettlement(traceID string) bool
+	// ReleaseExpired records a release for every reservation older than ttl
+	// that was never settled (and isn't already released), reversing the escrow
+	// hold back to the advertiser — the memory-backend equivalent of
+	// TigerBeetle's pending-transfer auto-void. Idempotent across repeated
+	// sweeps. now/ttl are passed in so the caller owns the clock. Returns the
+	// number released.
+	ReleaseExpired(now time.Time, ttl time.Duration) int
 	// BalanceFor computes the net balance for an account.
 	BalanceFor(accountID string) BalanceSummary
 	// Summary returns aggregate billing stats.
@@ -173,6 +180,62 @@ func (l *MemoryLedger) HasSettlement(traceID string) bool {
 		}
 	}
 	return false
+}
+
+// ReleaseExpired — see the Ledger interface. Reserve never drew the
+// advertiser's prepay balance (only settle does), so a release is a pure ledger
+// reversal (escrow → advertiser); the pacing hold that counts toward committed
+// spend is freed separately by the pacing sweep on the same TTL.
+func (l *MemoryLedger) ReleaseExpired(now time.Time, ttl time.Duration) int {
+	if ttl <= 0 {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// A trace that already carries a settlement OR a release is terminal — never
+	// release it (again). Building the set up front keeps repeated sweeps
+	// idempotent and handles a duplicate reservation for one trace.
+	terminal := make(map[string]bool)
+	for i := range l.entries {
+		if t := l.entries[i].Type; t == EntrySettlement || t == EntryRelease {
+			terminal[l.entries[i].TraceID] = true
+		}
+	}
+
+	// Collect first (can't append to l.entries while ranging it), then append.
+	var toRelease []LedgerEntry
+	for i := range l.entries {
+		e := l.entries[i]
+		if e.Type != EntryReservation || terminal[e.TraceID] {
+			continue
+		}
+		if now.Sub(e.Timestamp) < ttl {
+			continue
+		}
+		terminal[e.TraceID] = true
+		toRelease = append(toRelease, e)
+	}
+	for _, e := range toRelease {
+		l.entries = append(l.entries, LedgerEntry{
+			ID:            l.nextID,
+			Timestamp:     now,
+			TraceID:       e.TraceID,
+			CampaignID:    e.CampaignID,
+			PublisherID:   e.PublisherID,
+			AdvertiserID:  e.AdvertiserID,
+			Type:          EntryRelease,
+			DebitAccount:  e.CreditAccount, // escrow:res-…
+			CreditAccount: e.DebitAccount,  // advertiser:…
+			Amount:        e.Amount,
+			Currency:      e.Currency,
+			BidModel:      e.BidModel,
+			DealType:      e.DealType,
+			ReservationID: e.ReservationID,
+		})
+		l.nextID++
+	}
+	return len(toRelease)
 }
 
 // EntriesForTrace returns all entries for a given trace ID.

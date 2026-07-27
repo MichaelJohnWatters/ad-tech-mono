@@ -198,7 +198,17 @@ func TestBillingViewabilityVCPMSettle(t *testing.T) {
 }
 
 func TestBillingReservationExpiry(t *testing.T) {
-	t.Skip("reservation expiry needs a cron helper (RunRollup-like) plus a low TTL config knob; pending")
+	// The reservation-expiry sweep IS built and unit-tested — Engine.
+	// SweepExpiredReservations releases unsettled reserves past the pacing hold
+	// TTL, wired into the reporting spend-snapshot tick (see
+	// pkg/billing.TestSweepExpiredReservations). It can't be asserted end-to-end
+	// here because the LOCAL stack runs billing.ledger_backend=tigerbeetle, whose
+	// reservations are PENDING transfers that TB auto-voids server-side after
+	// pkg/tb.ReservationTimeoutSeconds (24h) — not runtime-tunable to a test-sized
+	// TTL, and the void isn't reflected in the ledger summary the way the memory
+	// backend's release is. An e2e version needs either a memory-backend test
+	// stack or a configurable TB pending-transfer timeout — a separate effort.
+	t.Skip("sweep built + unit-tested (pkg/billing); e2e blocked on the local TigerBeetle backend — see comment")
 }
 
 func TestBillingTieredRevenueShareTierFlip(t *testing.T) {
