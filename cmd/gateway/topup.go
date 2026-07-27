@@ -257,14 +257,25 @@ func (s pgTopupStore) TopupHistory(ctx context.Context, accountID string) (topup
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
-	err := s.db.QueryRowContext(ctx,
+	// Tenant-scoped reads → set the caller's account GUC so RLS admits their
+	// balance + topups under the NOBYPASSRLS app role (security #77). Read-only
+	// tx held open while scanning the topups.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return out, err
+	}
+	err = tx.QueryRowContext(ctx,
 		`SELECT balance, currency, COALESCE(payment_terms, 'prepay'), COALESCE(credit_limit, 0)::float8
 		 FROM advertiser_balances WHERE account_id = $1::uuid`,
 		accountID).Scan(&out.Balance, &out.Currency, &out.PaymentTerms, &out.CreditLimit)
 	if err != nil && err != sql.ErrNoRows {
 		return out, err
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, amount, currency, status, payment_method, created_at::text
 		 FROM topups WHERE account_id = $1::uuid ORDER BY created_at DESC LIMIT 100`,
 		accountID)
