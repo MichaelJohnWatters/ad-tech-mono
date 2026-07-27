@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
@@ -82,7 +83,11 @@ func TestVideoTrackerEventReachesReporting(t *testing.T) {
 	_ = harness.BuildBasicWorld(t, h, "evt-video")
 
 	traceID := "evt-video-trace-001"
-	url := h.URLs.Tracker + routes.TrackerVideo + "?tid=" + traceID + "&event=start"
+	// Sign the beacon like a real player does (the ad server hands out signed
+	// video tracker URLs), so it validates whether or not the stack has strict
+	// tracker.signature_validation on — matching production, not the lax dev
+	// default.
+	url := adserving.SignURL(h.URLs.Tracker+routes.TrackerVideo+"?tid="+traceID+"&event=start", adserving.DefaultSigningKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -107,7 +112,9 @@ func TestAudioTrackerEventReachesReporting(t *testing.T) {
 	_ = harness.BuildBasicWorld(t, h, "evt-audio")
 
 	traceID := "evt-audio-trace-001"
-	url := h.URLs.Tracker + routes.TrackerAudio + "?tid=" + traceID + "&event=complete"
+	// Signed like production (see the video test) so it validates under strict
+	// tracker.signature_validation too.
+	url := adserving.SignURL(h.URLs.Tracker+routes.TrackerAudio+"?tid="+traceID+"&event=complete", adserving.DefaultSigningKey)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
