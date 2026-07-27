@@ -16,6 +16,8 @@ package e2e
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,9 +84,14 @@ func TestDataFeePaysOwnerOnExternalWin(t *testing.T) {
 			t.Fatalf("reporting.data_fee_margin_pct diverges across pods (%v) — split indeterminate", values)
 		}
 		if len(values) == 1 {
-			if _, err := fmt.Sscanf(values[0], "%f", &marginPct); err != nil {
+			// config.value is jsonb — a float key serializes as a JSON string
+			// ("30"), so strip the surrounding quotes before parsing.
+			raw := strings.Trim(values[0], `"`)
+			f, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
 				t.Fatalf("margin config value %q: %v", values[0], err)
 			}
+			marginPct = f
 		}
 	}
 	// Mirrors the accrual's integer math: margin = floor(fee × pct/100).
