@@ -199,16 +199,31 @@ type ResolvedConfig struct {
 func (h *Harness) GetResolvedConfig(t *testing.T, key, pod string) ResolvedConfig {
 	t.Helper()
 	url := h.URLs.Gateway + routes.Config + "?resolved=true&key=" + key + "&pod=" + pod
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("build resolved-config request: %v", err)
+	// Retry transport flaps (port-forward EOF/reset under load) like refreshOne
+	// — GetResolvedConfig runs in test setup (e.g. MakeDSPAlwaysNoBid), so a
+	// single-shot failure fast-fails the whole test. Rebuild the authed request
+	// each attempt; GET is idempotent.
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		var req *http.Request
+		req, err = http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("build resolved-config request: %v", err)
+		}
+		if tok := h.adminBearer(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		resp, err = h.HTTP.Do(req)
+		if err == nil {
+			break
+		}
 	}
-	if tok := h.adminBearer(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-	resp, err := h.HTTP.Do(req)
 	if err != nil {
-		t.Fatalf("resolved config get %s: %v", url, err)
+		t.Fatalf("resolved config get %s after retries: %v", url, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
