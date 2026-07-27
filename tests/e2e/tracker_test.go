@@ -188,7 +188,8 @@ func get(t *testing.T, h *harness.Harness, url string) *http.Response {
 func getNoFollow(t *testing.T, url string) *http.Response {
 	t.Helper()
 	client := &http.Client{
-		Timeout: 3 * time.Second,
+		Timeout:   3 * time.Second,
+		Transport: harness.RetryTransport(), // survive port-forward flaps under load
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

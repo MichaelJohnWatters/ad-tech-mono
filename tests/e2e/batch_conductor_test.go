@@ -46,7 +46,7 @@ func TestBatchConductorChain(t *testing.T) {
 		Lake:         lakeStore(t, h),
 		PipelineURL:  routes.DefaultPipelineURL,
 		ReportingURL: routes.DefaultReportingURL,
-		HTTP:         &http.Client{Timeout: 2 * time.Minute},
+		HTTP:         harness.NewHTTPClient(2 * time.Minute),
 		Log:          quiet,
 		// Postgres-only privacy extras here: this test asserts chain ordering +
 		// the PG identity-edge purge. ClickHouse signal-purge depth (SignalsPurger)

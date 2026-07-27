@@ -40,7 +40,7 @@ func TestSessionCookieTamperRejected(t *testing.T) {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+"/v1/api/notifications", nil)
 		req.AddCookie(&http.Cookie{Name: "adtech_session", Value: cookieVal})
-		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		resp, err := harness.NewHTTPClient(10 * time.Second).Do(req)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
