@@ -5,6 +5,7 @@ package harness
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -34,6 +35,15 @@ import (
 // run the page's JavaScript. Because both sides import pkg/simulator/pages, the
 // slot count and formats it fires are the same the live page requests.
 func (h *Harness) VisitPage(t *testing.T, slug string) PageVisitResult {
+	return h.VisitPageWith(t, slug, nil)
+}
+
+// VisitPageWith is VisitPage with a per-format placement override. The page
+// COMPOSITION (how many slots of each format) always comes from pkg/simulator/
+// pages — that's the single-sourced invariant. Which seeded placement backs each
+// format is an environment detail, so a hermetic test passes its own
+// format→placementKey map here; nil falls back to the layout's declared keys.
+func (h *Harness) VisitPageWith(t *testing.T, slug string, placementFor map[pages.Format]string) PageVisitResult {
 	t.Helper()
 	layout, ok := pages.BySlug(slug)
 	if !ok {
@@ -41,9 +51,24 @@ func (h *Harness) VisitPage(t *testing.T, slug string) PageVisitResult {
 	}
 	// Window start: a moment before the first serve, for time-scoped queries.
 	from := time.Now().Add(-2 * time.Second).UTC()
+	// One visitor per page load: a unique user_id AND a unique end-user IP. The
+	// IP matters because the ad server applies a per-HOUSEHOLD frequency cap
+	// (household = HMAC(salt, IP)) on the display render path — every request from
+	// one IP is one household, so reusing a display placement across pages caps out
+	// at the household limit. A real page view is a distinct visitor on a distinct
+	// device IP; the SSP takes the end-user IP from ?ip= (the ad tag forwards it).
+	n := time.Now().UnixNano()
+	user := fmt.Sprintf("pgu-%s-%d", slug, n)
+	ip := fmt.Sprintf("198.%d.%d.%d", (n>>16)&0xff, (n>>8)&0xff, (n&0xfe)|1)
 	res := PageVisitResult{Slug: slug, Layout: layout, From: from}
 	for _, slot := range layout.Slots {
-		res.Slots = append(res.Slots, h.visitSlot(t, slot))
+		key := slot.PlacementKey
+		if placementFor != nil {
+			if k, ok := placementFor[slot.Format]; ok {
+				key = k
+			}
+		}
+		res.Slots = append(res.Slots, h.visitSlot(t, slot, key, user, ip))
 	}
 	return res
 }
@@ -83,14 +108,16 @@ func (r PageVisitResult) FilledTraces() []string {
 // visitSlot serves one slot by format and fires its beacons. Every format reduces
 // to the same shape: a signed impression URL (fired as-is) and, for viewable
 // formats, a signed viewability base to which the client appends its measurement.
-func (h *Harness) visitSlot(t *testing.T, slot pages.Slot) SlotVisit {
+func (h *Harness) visitSlot(t *testing.T, slot pages.Slot, placementKey, user, ip string) SlotVisit {
 	t.Helper()
 	sv := SlotVisit{Format: slot.Format, Label: slot.Label}
+	base := "placement_id=" + placementKey + "&geo=USA&device=desktop&user_id=" + user + "&ip=" + ip
+	q := "?" + base
 
 	var impURL, viewURL string
 	switch slot.Format {
 	case pages.Display:
-		resp := h.ServePubAdRaw(t, "placement_id="+slot.PlacementKey+"&geo=USA&device=desktop")
+		resp := h.ServePubAdRaw(t, base)
 		if resp.NoBid || resp.ImpressionURL == "" {
 			return sv
 		}
@@ -99,19 +126,19 @@ func (h *Harness) visitSlot(t *testing.T, slot pages.Slot) SlotVisit {
 		// Native returns an HTML fragment with the impression pixel embedded as an
 		// <img>. Pull the /v1/t/imp URL out of the markup (browser fires it on
 		// render). Native has no viewability beacon.
-		htmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeNative+"?placement_id="+slot.PlacementKey+"&geo=USA&device=desktop")
+		htmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeNative+q)
 		impURL = extractPixelURL(htmlBody)
 		if impURL == "" {
 			return sv
 		}
 	case pages.Video:
-		xmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeVAST+"?placement_id="+slot.PlacementKey+"&geo=USA&device=desktop")
+		xmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeVAST+q)
 		impURL, viewURL = extractVASTURLs(xmlBody)
 		if impURL == "" {
 			return sv
 		}
 	case pages.Audio:
-		xmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeAudio+"?placement_id="+slot.PlacementKey+"&geo=USA&device=desktop")
+		xmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeAudio+q)
 		impURL, _ = extractVASTURLs(xmlBody) // audio isn't viewable
 		if impURL == "" {
 			return sv

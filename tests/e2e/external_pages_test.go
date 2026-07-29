@@ -22,13 +22,17 @@ import (
 // it proves a real 3-ad or 6-ad page delivers all of its ads downstream, across
 // display / native / video / audio combined on one page.
 func TestExternalPublisherPagesFlowToClickHouse(t *testing.T) {
-	h := harness.New(t)
-	h.RefreshAllCaches(t)
+	h := harness.WaitReady(t, 60*time.Second)
+	// Hermetic multi-format world: a publisher with a placement + live demand for
+	// every format, so each slot on every page can fill. VisitPageWith maps each
+	// format to this world's placement key; the page composition still comes from
+	// pkg/simulator/pages.
+	w := harness.BuildPagesWorld(t, h)
 
 	for _, layout := range pages.All() {
 		layout := layout
 		t.Run(layout.Slug, func(t *testing.T) {
-			visit := h.VisitPage(t, layout.Slug)
+			visit := h.VisitPageWith(t, layout.Slug, w.PlacementByFormat)
 
 			filled := visit.FilledTraces()
 			if len(filled) == 0 {
