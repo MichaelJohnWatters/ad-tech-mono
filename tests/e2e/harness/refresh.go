@@ -64,10 +64,15 @@ func (h *Harness) RefreshAllCaches(t *testing.T) {
 func (h *Harness) authorizeAllPublishers(t *testing.T) {
 	t.Helper()
 	const entries = `[{"Domain":"adtech.local","AccountID":"adtech-exchange","Relationship":"DIRECT"}]`
+	// DO NOTHING (not DO UPDATE): only authorise publishers that have no ads.txt
+	// row yet. A test that set a CUSTOM authorisation/seller identity for its
+	// domain (e.g. fraud ads.txt tests using adtech.example/seat-1) must not be
+	// clobbered back to the default here. Reset truncates ads_txt_cache and
+	// domains are unique per world, so there's no stale cross-test carryover.
 	if _, err := h.DB.Exec(`
 INSERT INTO ads_txt_cache (domain, entries, status, last_fetched, last_changed)
 SELECT DISTINCT domain, $1::jsonb, 'valid', now(), now() FROM publishers WHERE domain <> ''
-ON CONFLICT (domain) DO UPDATE SET entries = EXCLUDED.entries, status = 'valid', last_fetched = now()`,
+ON CONFLICT (domain) DO NOTHING`,
 		entries); err != nil {
 		t.Fatalf("authorize all publishers ads.txt: %v", err)
 	}

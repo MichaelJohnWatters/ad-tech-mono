@@ -30,6 +30,8 @@ func (h *Harness) PostPrebidAuction(t *testing.T, req openrtb.BidRequest) (openr
 	// requests without one. Inject a well-formed node if the test didn't set one,
 	// exactly as an authorised Prebid publisher would. (The request's site.domain
 	// is a harness publisher, already ads.txt-authorised via RefreshAllCaches.)
+	// Tests that deliberately omit the schain to exercise strict rejection use
+	// PostPrebidAuctionRaw instead.
 	if openrtb.SChainOf(&req) == nil {
 		if req.Source == nil {
 			req.Source = &openrtb.Source{}
@@ -42,6 +44,16 @@ func (h *Harness) PostPrebidAuction(t *testing.T, req openrtb.BidRequest) (openr
 			Nodes: []openrtb.SupplyChainNode{{ASI: "prebid.example", SID: "pbs-1", HP: 1}},
 		}
 	}
+	return h.PostPrebidAuctionRaw(t, req)
+}
+
+// PostPrebidAuctionRaw POSTs the bid request to the exchange's Prebid endpoint
+// EXACTLY as given — no schain injection. Use when a test deliberately omits the
+// SupplyChain to exercise strict schain rejection: the SSP always stamps a
+// schain now (ssp.seller_domain is set), so a missing one only ever reaches the
+// exchange from an external source like Prebid.
+func (h *Harness) PostPrebidAuctionRaw(t *testing.T, req openrtb.BidRequest) (openrtb.BidResponse, int) {
+	t.Helper()
 	body, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal prebid request: %v", err)
