@@ -48,7 +48,34 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, domain = EXCLUDED.domain, u
 			t.Fatalf("publishers insert: %v", err)
 		}
 	})
+	// Authorise this publisher's domain to sell through our exchange, so the
+	// world serves under the prod-shaped strict ads.txt enforcement (values:
+	// exchange.adstxt_enforcement=strict). Without this every auction from a
+	// harness-created publisher no-bids "adstxt_not_authorised". The exchange's
+	// warm ads.txt cache picks it up on the next RefreshAllCaches (world builders
+	// call it after inventory setup). ads_txt_cache is a global (non-RLS) table.
+	h.authorizeAdsTxt(t, domain)
 	return Publisher{ID: id, ExternalID: externalKey, AccountID: owner.ID, Domain: domain}
+}
+
+// authorizeAdsTxt writes the authorising ads.txt line (adtech.local /
+// adtech-exchange / DIRECT — matching the exchange's configured seller identity)
+// for a publisher domain, exactly as the cmd/adstxt crawler would after fetching
+// a real ads.txt. Idempotent. Domains are unique per publisher external key, so
+// this never clobbers another test's authorisation.
+func (h *Harness) authorizeAdsTxt(t *testing.T, domain string) {
+	t.Helper()
+	if domain == "" {
+		return
+	}
+	const entries = `[{"Domain":"adtech.local","AccountID":"adtech-exchange","Relationship":"DIRECT"}]`
+	if _, err := h.DB.Exec(`
+INSERT INTO ads_txt_cache (domain, entries, status, last_fetched, last_changed)
+VALUES ($1, $2::jsonb, 'valid', now(), now())
+ON CONFLICT (domain) DO UPDATE SET entries = EXCLUDED.entries, status = 'valid', last_fetched = now()`,
+		domain, entries); err != nil {
+		t.Fatalf("authorize ads.txt for %s: %v", domain, err)
+	}
 }
 
 // AddPlacement attaches a placement to a publisher with the given format

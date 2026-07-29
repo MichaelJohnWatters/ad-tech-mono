@@ -159,6 +159,16 @@ func main() {
 		log.Error("seed advertiser balances failed", "error", err)
 		os.Exit(1)
 	}
+	// Authorise every seeded publisher (incl. big-world) to sell through us, so
+	// the stack works under the prod-shaped strict ads.txt enforcement. Matches
+	// the exchange's seller identity (values: adtech.local / adtech-exchange).
+	// The exchange's warm cache picks it up on its poll or a cache-refresh.
+	if n, err := in.SeedAdsTxt(ctx, "adtech.local", "adtech-exchange"); err != nil {
+		log.Error("seed ads.txt authorisations failed", "error", err)
+		os.Exit(1)
+	} else {
+		log.Info("seeded ads.txt authorisations", "publishers_authorised", n)
+	}
 
 	campTotal, plTotal, dealTotal := 0, 0, 0
 	for _, p := range profiles {

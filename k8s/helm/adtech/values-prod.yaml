@@ -125,8 +125,23 @@ services:
     replicas: 2
   ssp:
     replicas: 3
+    # Prod supply-chain identity: the schain asi must be the real platform
+    # domain (match global.domain), not the local adtech.local from base.
+    extraEnv:
+      - name: SSP_SELLER_DOMAIN
+        value: "adtech.example.com"   # ← match global.domain
   exchange:
     replicas: 3
+    # Strict ads.txt/schain enforcement is INHERITED from base values. Override
+    # the seller identity to the real platform domain (publishers list THIS in
+    # their ads.txt), and provide the ads.cert signing key from a SOPS secret —
+    # the base dev key is only a fallback the store-provisioned key supersedes.
+    extraEnv:
+      - name: EXCHANGE_ADSTXT_SELLER_DOMAIN
+        value: "adtech.example.com"   # ← match global.domain
+      # EXCHANGE_ADCERT_SIGN_KEY: provision the real Ed25519 key as an
+      # adcert_ed25519 secret (SOPS) — the exchange prefers the store key over
+      # the inherited dev env fallback. Do NOT commit a real key here.
   adserver:
     replicas: 3
     # PUBLIC browser-facing pixel base baked into served ad HTML. MUST be HTTPS

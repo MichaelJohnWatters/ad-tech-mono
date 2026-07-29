@@ -110,6 +110,12 @@ services:
       # (live). Prod-shaped default; also what makes the adcert e2e test possible.
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
+      # ads.cert enforcement: no-bid bid requests the exchange didn't Ed25519-sign
+      # (forged/unsigned). Strict by default so local == prod; the exchange's
+      # public key is fetched from DSP_ADCERT_KEY_URL above. Seeded per-pod from
+      # this env at boot (pkg/config registry), so it survives restarts.
+      - name: DSP_ADCERT_ENFORCEMENT
+        value: "strict"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -147,6 +153,12 @@ services:
         value: "8089"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
+      # ads.cert enforcement: no-bid bid requests the exchange didn't Ed25519-sign
+      # (forged/unsigned). Strict by default so local == prod; the exchange's
+      # public key is fetched from DSP_ADCERT_KEY_URL above. Seeded per-pod from
+      # this env at boot (pkg/config registry), so it survives restarts.
+      - name: DSP_ADCERT_ENFORCEMENT
+        value: "strict"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -184,6 +196,12 @@ services:
         value: "8090"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
+      # ads.cert enforcement: no-bid bid requests the exchange didn't Ed25519-sign
+      # (forged/unsigned). Strict by default so local == prod; the exchange's
+      # public key is fetched from DSP_ADCERT_KEY_URL above. Seeded per-pod from
+      # this env at boot (pkg/config registry), so it survives restarts.
+      - name: DSP_ADCERT_ENFORCEMENT
+        value: "strict"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -225,6 +243,14 @@ services:
         value: "grpc://exchange-grpc:8181"
       - name: SSP_ADSERVER_URL
         value: "grpc://adserver-grpc:8185"
+      # Supply chain (schain): the SSP originates the first SupplyChain node on
+      # every outbound bid request (asi=seller_domain). ssp.seller_domain is a
+      # STATIC-tier key (env-only), so setting it here is durable. Required for
+      # the exchange's schain_enforcement=strict to have something to validate.
+      - name: SSP_SELLER_DOMAIN
+        value: "adtech.local"
+      - name: SSP_SELLER_ID
+        value: "adtech-ssp"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL
@@ -269,6 +295,27 @@ services:
       # key defaults to localhost:8086 and both silently no-op in-cluster.
       - name: EXCHANGE_REPORTING_URL
         value: "http://reporting:8086"
+      # Anti-spoof enforcement (prod-shaped default; local == prod). All TierLive
+      # keys are seeded per-pod from these env values at boot (pkg/config
+      # registry), so enforcement SURVIVES pod restarts instead of reverting to
+      # the off/warn code default.
+      #   ads.txt : no-bid sellers whose ads.txt doesn't authorise us.
+      #   schain  : no-bid requests with a missing/malformed SupplyChain.
+      # The seller identity below is the ads.txt line publishers must list
+      # (adtech.local, adtech-exchange, DIRECT). cmd/seed authorises every seeded
+      # publisher; the e2e harness authorises each world it builds.
+      - name: EXCHANGE_ADSTXT_ENFORCEMENT
+        value: "strict"
+      - name: EXCHANGE_SCHAIN_ENFORCEMENT
+        value: "strict"
+      - name: EXCHANGE_ADSTXT_SELLER_DOMAIN
+        value: "adtech.local"
+      - name: EXCHANGE_ADSTXT_SELLER_ID
+        value: "adtech-exchange"
+      # ads.cert Ed25519 signing key (fallback to the secrets-store key if one is
+      # provisioned). Local dev key — staging/prod override via SOPS secret.
+      - name: EXCHANGE_ADCERT_SIGN_KEY
+        value: "2NJwLroe2MI9bzeybevvfM6gW6PJXKyeG74694z0T9dtZw48XO2f03TC-Hx_NzaiGF0QqCb_QLh8WP49pdKHcA"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL

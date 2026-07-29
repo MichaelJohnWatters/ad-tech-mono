@@ -25,6 +25,15 @@ import (
 //     unexpected.
 func (h *Harness) RefreshAllCaches(t *testing.T) {
 	t.Helper()
+	// Blanket ads.txt authorisation: under the prod-shaped strict enforcement
+	// (exchange.adstxt_enforcement=strict), every publisher must be listed in
+	// ads_txt_cache or its auctions no-bid "adstxt_not_authorised". Authorise
+	// EVERY publisher in the DB here — regardless of how it was created
+	// (AddPublisher, the API, the seed, big-world) — right before the exchange
+	// reloads its ads.txt warm cache below. Idempotent; ads_txt_cache is global
+	// (no RLS). This is the single point that keeps the whole e2e suite green
+	// under strict without touching every world builder.
+	h.authorizeAllPublishers(t)
 	urls := []string{
 		h.URLs.DSP,
 		h.URLs.DSPComp1,
@@ -45,6 +54,23 @@ func (h *Harness) RefreshAllCaches(t *testing.T) {
 	// dedicated endpoint so tests inserting audience_segment_members
 	// rows see them on the next bid without waiting for the 30s tick.
 	h.RefreshAudiencePreloader(t)
+}
+
+// authorizeAllPublishers writes the authorising ads.txt line for every
+// publisher domain in the DB (matching the exchange's seller identity
+// adtech.local / adtech-exchange), so strict ads.txt enforcement lets legit
+// auctions through. The cmd/adstxt crawler does this in prod from real ads.txt
+// files; the harness writes it directly. Idempotent.
+func (h *Harness) authorizeAllPublishers(t *testing.T) {
+	t.Helper()
+	const entries = `[{"Domain":"adtech.local","AccountID":"adtech-exchange","Relationship":"DIRECT"}]`
+	if _, err := h.DB.Exec(`
+INSERT INTO ads_txt_cache (domain, entries, status, last_fetched, last_changed)
+SELECT DISTINCT domain, $1::jsonb, 'valid', now(), now() FROM publishers WHERE domain <> ''
+ON CONFLICT (domain) DO UPDATE SET entries = EXCLUDED.entries, status = 'valid', last_fetched = now()`,
+		entries); err != nil {
+		t.Fatalf("authorize all publishers ads.txt: %v", err)
+	}
 }
 
 // RefreshCache POSTs the debug endpoint on a single service base URL. Use
