@@ -1,0 +1,30 @@
+{{define "pages_index.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main style="grid-template-columns:1fr">
+  <article>
+    <h2>Multi-ad page layouts</h2>
+    <div class="byline">By The Demo Desk · Combos</div>
+    <p>Each layout below is a real page carrying several ad slots in different format combinations —
+       3 ads, 6 ads, mixed display/native/video/audio. They are defined once in
+       <code>pkg/simulator/pages</code>, rendered here for a browser, and replayed by the end-to-end
+       test to verify every slot's impression lands in ClickHouse.</p>
+    {{range .Layouts}}
+    <div class="card" style="margin:12px 0;font-family:sans-serif">
+      <div style="font-size:17px;font-weight:600"><a href="/p/{{.Slug}}" style="color:var(--accent);text-decoration:none">{{.Title}} →</a></div>
+      <div style="color:#6b7280;font-size:14px;margin:4px 0">{{.Desc}}</div>
+      <div style="font-size:12px;color:#9ca3af">{{.Total}} slots:{{range .Slots}} {{.Format}}{{end}}</div>
+    </div>
+    {{end}}
+  </article>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+</body>
+</html>{{end}}

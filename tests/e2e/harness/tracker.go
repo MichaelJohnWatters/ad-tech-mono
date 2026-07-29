@@ -96,6 +96,15 @@ func (h *Harness) fireViewMeasured(t *testing.T, base string, durMs, pct int, ar
 	return h.fireRawReturningHeader(t, url, "view", "X-IAB-Viewable") == "1"
 }
 
+// FireImpressionURL fires an ALREADY-SIGNED /v1/t/imp URL — the exact
+// impression pixel the ad server minted and embedded in the served creative /
+// VAST. Does NOT re-sign (the URL already carries the ad server's HMAC).
+// Proves a served ad's own impression URL records an impression end to end.
+func (h *Harness) FireImpressionURL(t *testing.T, url string) {
+	t.Helper()
+	h.fireRawReturningHeader(t, url, "impression", "")
+}
+
 // FireViewURL fires an ALREADY-SIGNED /v1/t/view URL (e.g. the signed
 // viewability URL a served ad injects, with the client-measured dur/pct/area
 // appended) and reports whether the tracker judged it IAB-viewable. Does NOT
