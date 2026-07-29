@@ -58,6 +58,9 @@ test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs a cold-store
 ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segment (needs tilt up + ffmpeg)
 	./scripts/ssai-smoke.sh
 
+viewability-smoke: ## Real headless-Chrome smoke: a browser plays a video via the adtech.js SDK, its IntersectionObserver fires the viewability beacon, and it lands in ClickHouse (needs stack up + seeded + Chrome). Rebuild the gateway first if you changed web/static/adtech.js.
+	./scripts/viewability-smoke.sh
+
 asciline-demo: ## Ad-free ASCILINE reference testbed on :8000 (clones to third_party/; content only — never the ad path)
 	./scripts/asciline-demo.sh
 

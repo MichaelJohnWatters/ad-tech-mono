@@ -188,6 +188,38 @@
         },
 
         /**
+         * Request and render a VIDEO ad (VAST). Same options as requestAd
+         * (placementId, elementId, geo, device). Renders an inline muted-autoplay
+         * player, fires the impression + quartile beacons, and self-measures IAB
+         * VIDEO viewability (50% on-screen for 2 continuous seconds) — the same
+         * shared observeViewability the display path uses, just a 2s dwell.
+         */
+        requestVideoAd: function(opts) {
+            var el = document.getElementById(opts.elementId);
+            if (!el) {
+                console.error('[adtech] element not found:', opts.elementId);
+                return;
+            }
+            var params = new URLSearchParams({
+                placement_id: opts.placementId,
+                user_id: state.platformId || ''
+            });
+            if (opts.geo) params.set('geo', opts.geo);
+            if (opts.device) params.set('device', opts.device);
+
+            fetch(config.pubadUrl + '/v1/pubad/video/vast?' + params.toString(), { credentials: 'omit' })
+                .then(function(resp) {
+                    if (!resp.ok) throw new Error('pubad video ' + resp.status);
+                    return resp.text();
+                })
+                .then(function(xml) { renderVideoAd(el, xml); })
+                .catch(function(err) {
+                    if (config.debug) console.error('[adtech] video request failed:', err);
+                    el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Video ad unavailable</div>';
+                });
+        },
+
+        /**
          * Opt out at the specified level.
          */
         optOut: function(level) {
@@ -232,43 +264,101 @@
             (imp ? '<img src="' + imp + '" width="1" height="1" style="position:absolute;opacity:0;" alt="" />' : '');
 
         if (data.viewability_url) {
-            observeViewability(el, data.viewability_url);
+            observeViewability(el, data.viewability_url, 1000); // display: 1s dwell
         }
+    }
+
+    // renderVideoAd parses a VAST document, renders a muted-autoplay <video>, and
+    // wires the standard beacons: impression + start on play, quartiles on
+    // timeupdate, complete on ended, and IAB video viewability (2s dwell) once the
+    // ad is playing. The tracker URLs in the VAST are already server-signed.
+    function renderVideoAd(el, xml) {
+        var doc = new DOMParser().parseFromString(xml, 'text/xml');
+        var media = doc.querySelector('MediaFile');
+        if (!media) {
+            el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No video ad</div>';
+            return;
+        }
+        var imp = (doc.querySelector('Impression') || {}).textContent;
+        var track = {};
+        doc.querySelectorAll('Tracking').forEach(function(t) { track[t.getAttribute('event')] = (t.textContent || '').trim(); });
+
+        var v = document.createElement('video');
+        v.setAttribute('playsinline', '');
+        v.muted = true;      // muted autoplay is allowed without a user gesture
+        v.controls = true;
+        v.style.width = '100%';
+        v.src = media.textContent.trim();
+        el.innerHTML = '';
+        el.appendChild(v);
+
+        var fired = {};
+        function beacon(u) { if (u) { (new Image()).src = u; } }
+        v.addEventListener('play', function() {
+            if (!fired.imp) {
+                fired.imp = 1;
+                beacon(imp);
+                beacon(track.start);
+                if (track.viewable) observeViewability(v, track.viewable, 2000); // video: 2s dwell (IAB)
+            }
+        });
+        v.addEventListener('timeupdate', function() {
+            if (!v.duration) return;
+            var p = v.currentTime / v.duration;
+            if (p >= 0.25 && !fired.q1) { fired.q1 = 1; beacon(track.firstQuartile); }
+            if (p >= 0.50 && !fired.q2) { fired.q2 = 1; beacon(track.midpoint); }
+            if (p >= 0.75 && !fired.q3) { fired.q3 = 1; beacon(track.thirdQuartile); }
+        });
+        v.addEventListener('ended', function() { if (!fired.done) { fired.done = 1; beacon(track.complete); } });
+
+        var pp = v.play();
+        if (pp && pp.catch) pp.catch(function() {});
     }
 
     // ============================================================
     // Viewability Observer
     // ============================================================
 
-    function observeViewability(el, viewabilityURL) {
+    // observeViewability self-measures IAB viewability on an element and fires the
+    // signed viewability beacon once it's been >=50% on-screen for dwellMs
+    // continuous milliseconds. dwellMs defaults to 1000 (display); callers pass
+    // 2000 for video (the IAB video standard). The server recomputes the verdict
+    // from the reported dur/pct/area — the client only measures.
+    //
+    // IntersectionObserver callbacks fire only on intersection CHANGES, so a
+    // static (unscrolled) element that lands >=50% visible would never re-trigger
+    // the dwell check. We therefore track visibility in the observer and POLL the
+    // dwell on a timer — so a video sitting still in view still reports.
+    function observeViewability(el, viewabilityURL, dwellMs) {
         if (!('IntersectionObserver' in window)) return;
+        dwellMs = dwellMs || 1000;
 
-        var startTime = null;
-        var reported = false;
-
+        var visibleSince = null, lastRatio = 0, reported = false;
         var observer = new IntersectionObserver(function(entries) {
-            var entry = entries[0];
+            var entry = entries[entries.length - 1];
+            lastRatio = entry.intersectionRatio;
             if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-                if (!startTime) startTime = Date.now();
-            } else if (startTime) {
-                startTime = null;
+                if (!visibleSince) visibleSince = Date.now();
+            } else {
+                visibleSince = null;
             }
-
-            // IAB: 50% of pixels for ≥1 continuous second for display.
-            if (!reported && startTime && (Date.now() - startTime) >= 1000) {
-                reported = true;
-                var dur = Date.now() - startTime;
-                var pct = Math.round(entry.intersectionRatio * 100);
-                var sep = viewabilityURL.indexOf('?') === -1 ? '?' : '&';
-                fetch(viewabilityURL + sep + 'dur=' + dur + '&pct=' + pct, { credentials: 'omit' });
-
-                if (config.debug) {
-                    console.log('[adtech] viewable', { dur: dur, pct: pct });
-                }
-            }
-        }, { threshold: [0, 0.5, 1.0] });
-
+        }, { threshold: [0, 0.25, 0.5, 0.75, 1.0] });
         observer.observe(el);
+
+        var poll = setInterval(function() {
+            if (reported) { clearInterval(poll); return; }
+            if (visibleSince && (Date.now() - visibleSince) >= dwellMs) {
+                reported = true;
+                clearInterval(poll);
+                observer.disconnect();
+                var dur = Date.now() - visibleSince;
+                var pct = Math.round(lastRatio * 100);
+                var area = (el.offsetWidth * el.offsetHeight) || 0;
+                var sep = viewabilityURL.indexOf('?') === -1 ? '?' : '&';
+                fetch(viewabilityURL + sep + 'dur=' + dur + '&pct=' + pct + '&area=' + area, { credentials: 'omit' });
+                if (config.debug) console.log('[adtech] viewable', { dur: dur, pct: pct, area: area, dwellMs: dwellMs });
+            }
+        }, 200);
     }
 
     // ============================================================
