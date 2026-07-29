@@ -52,12 +52,13 @@
       setTimeout(function(){ var ok = box.childElementCount>0; status.textContent = ok?'filled ✓':'no fill'; res(ok); }, 1500);
     });
   }
-  // native: HTML fragment with an embedded impression pixel (fires on render).
+  // native: the endpoint returns a rendered HTML card (text/html, NOT JSON) with
+  // an embedded impression pixel that fires on render. 204 = honest no-fill.
   function loadNative(box, status){
     return fetch(PUBAD + '/v1/pubad/native?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop&_=' + Math.random(), {credentials:'omit'})
-      .then(function(r){ return r.status===204 ? null : r.json(); })
-      .then(function(ad){ if(ad && ad.html){ box.innerHTML=ad.html; status.textContent='filled ✓'; return true; }
-                          box.textContent='No fill.'; status.textContent='no fill'; return false; });
+      .then(function(r){ return r.status===204 ? '' : r.text(); })
+      .then(function(html){ if(html && html.trim()){ box.innerHTML=html; status.textContent='filled ✓'; return true; }
+                            box.textContent='No fill.'; status.textContent='no fill'; return false; });
   }
   // video/audio: VAST → inline player firing impression, quartiles, and (video) the
   // non-standard event="viewable" beacon after 2s continuous play (IAB video rule).

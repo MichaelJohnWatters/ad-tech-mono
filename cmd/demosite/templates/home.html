@@ -51,11 +51,11 @@
     }, 1500);
 
     fetch({{.Cfg.PubadURL}} + '/v1/pubad/native?placement_id=' + encodeURIComponent({{.Cfg.NativePlacement}}) + '&geo=USA&device=desktop', { credentials:'omit' })
-      .then(function(r){ return r.json(); })
-      .then(function(ad){
+      .then(function(r){ return r.status===204 ? '' : r.text(); }) // rendered HTML card, not JSON
+      .then(function(html){
         var el = document.getElementById('native-slot');
-        if (ad && ad.html) { el.innerHTML = ad.html; document.getElementById('native-status').textContent = 'native filled ✓ (cpm ' + (ad.cpm||'?') + ')'; }
-        else { el.textContent = 'No native fill.'; document.getElementById('native-status').textContent = 'no fill: ' + ((ad&&ad.reason)||'unknown'); }
+        if (html && html.trim()) { el.innerHTML = html; document.getElementById('native-status').textContent = 'native filled ✓'; }
+        else { el.textContent = 'No native fill.'; document.getElementById('native-status').textContent = 'no fill'; }
       })
       .catch(function(e){ document.getElementById('native-status').textContent = 'native error: ' + e.message; });
   };

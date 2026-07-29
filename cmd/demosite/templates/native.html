@@ -29,10 +29,11 @@
 {{template "sdkboot" .}}
 <script>
   function loadNative(slotId){
+    // /v1/pubad/native returns a rendered HTML card (text/html), not JSON. 204 = no fill.
     return fetch({{.Cfg.PubadURL}} + '/v1/pubad/native?placement_id=' + encodeURIComponent({{.Cfg.NativePlacement}}) + '&geo=USA&device=desktop&_=' + Math.random(), { credentials:'omit' })
-      .then(function(r){ return r.json(); })
-      .then(function(ad){ var el=document.getElementById(slotId);
-        if(ad&&ad.html){ el.innerHTML=ad.html; return true; } el.textContent='No fill.'; return false; });
+      .then(function(r){ return r.status===204 ? '' : r.text(); })
+      .then(function(html){ var el=document.getElementById(slotId);
+        if(html&&html.trim()){ el.innerHTML=html; return true; } el.textContent='No fill.'; return false; });
   }
   window.__ads.onConsent = function(){
     document.getElementById('n-status').textContent='requesting native…';
