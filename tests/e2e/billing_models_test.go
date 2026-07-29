@@ -472,3 +472,40 @@ ORDER BY effective_date DESC LIMIT 1`).Scan(&rate); err != nil || rate <= 0 {
 		t.Errorf("unknown-currency impression moved TotalSpend %v -> %v; must be refused, not booked", afterEUR, got)
 	}
 }
+
+// TestReportingViewabilityRateMetric — the viewability_rate metric resolves
+// end to end through the live reporting API over ClickHouse: one impression +
+// one IAB-viewable view for a fresh world (Reset clears CH) → 100%.
+func TestReportingViewabilityRateMetric(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "vrate")
+	h.SetCampaignBidStrategy(t, w.Campaign, "vcpm")
+	h.RefreshAllCaches(t)
+	start := time.Now().Add(-2 * time.Minute)
+
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "vrate-user")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid")
+	}
+	h.FireImpressionWithModel(t, auc.TraceID, win.CampaignID, win.CreativeID,
+		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price, "vcpm")
+	if !h.FireView(t, auc.TraceID, win.CampaignID, auc.PlacementID, auc.PublisherID, 2000, 80, 0) {
+		t.Fatal("expected the view to be IAB-viewable")
+	}
+
+	// Impression + view land async (NATS → ClickHouse) — poll until the metric
+	// reflects the viewable.
+	deadline := time.Now().Add(12 * time.Second)
+	var rate float64
+	var ok bool
+	for time.Now().Before(deadline) {
+		if rate, ok = h.ReportViewabilityRate(t, auc.PublisherID, "", start); ok && rate > 0 {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if !ok || rate < 99 || rate > 100.001 {
+		t.Fatalf("viewability_rate = %v (ok=%v), want ~100 (1 viewable / 1 impression)", rate, ok)
+	}
+}
