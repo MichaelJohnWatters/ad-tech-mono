@@ -49,6 +49,10 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 			selectParts = append(selectParts, "AVG(duration_ms) AS avg_duration_ms")
 		case "sum_bids":
 			selectParts = append(selectParts, "SUM(num_bids) AS sum_bids")
+		case "sum_viewable":
+			// views.iab_viewable is 0/1, so SUM == the count of IAB-viewable
+			// views — the numerator for viewability_rate.
+			selectParts = append(selectParts, "SUM(iab_viewable) AS sum_viewable")
 		default:
 			selectParts = append(selectParts, metric)
 		}

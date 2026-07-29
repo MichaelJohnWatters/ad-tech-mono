@@ -88,6 +88,23 @@ var derivedMetrics = map[string]derivedMetric{
 			return imp / auc * 100, true
 		},
 	},
+	// Viewability rate = IAB-viewable views / impressions (percent). Cross-table.
+	// The verdict lives on the views table (iab_viewable, summed); the
+	// denominator is served impressions. Filter the report by channel=video to
+	// get VIDEO viewability (2s dwell) specifically, or channel=display for
+	// display (1s) — the channel filter scopes both sources.
+	"viewability_rate": {
+		name:    "viewability_rate",
+		sources: []metricSource{{"views", "sum_viewable"}, {"impressions", "count"}},
+		compute: func(c computeCtx) (float64, bool) {
+			viewable, _ := c.get("views", "sum_viewable") // absent for a key → 0
+			imp, ok := c.get("impressions", "count")
+			if !ok || imp == 0 {
+				return 0, false
+			}
+			return viewable / imp * 100, true
+		},
+	},
 	// Net revenue = gross × (1 − platform fee), computed via the publisher's
 	// contract. Requires publisher scope (see engine).
 	"net_revenue": {

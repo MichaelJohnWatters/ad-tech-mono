@@ -201,3 +201,48 @@ func TestEngine_TenantIsolation(t *testing.T) {
 		t.Errorf("scoped ecpm = %v, want 3.0 (pubB cost leaked?)", got)
 	}
 }
+
+// TestEngine_ViewabilityRate_VideoChannel — the viewability_rate derived metric
+// (IAB-viewable views / impressions, %) splits by channel: filter channel=video
+// and both the views (sum_viewable) and impressions (count) sources scope to
+// video, giving VIDEO viewability specifically.
+func TestEngine_ViewabilityRate_VideoChannel(t *testing.T) {
+	s := analytics.NewMemory()
+	ctx := context.Background()
+	ts := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		_ = s.InsertImpression(ctx, &analytics.ImpressionEvent{PublisherID: "pubV", Channel: "video", Timestamp: ts})
+		_ = s.InsertImpression(ctx, &analytics.ImpressionEvent{PublisherID: "pubV", Channel: "display", Timestamp: ts})
+	}
+	for i := 0; i < 10; i++ { // 10 video views, 6 viewable
+		_ = s.InsertView(ctx, &analytics.ViewEvent{PublisherID: "pubV", Channel: "video", IABViewable: i < 6, Timestamp: ts})
+	}
+	for i := 0; i < 8; i++ { // 8 display views, all viewable
+		_ = s.InsertView(ctx, &analytics.ViewEvent{PublisherID: "pubV", Channel: "display", IABViewable: true, Timestamp: ts})
+	}
+	eng := NewQueryEngine(s, nil)
+
+	// Video: 6 viewable / 10 video impressions = 60%.
+	res, err := eng.Query(ctx, analytics.QueryParams{
+		Table: "impressions", Metrics: []string{"viewability_rate"},
+		Filters: map[string]string{"publisher_id": "pubV", "channel": "video"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := col(t, res, "viewability_rate"); !approx(got, 60.0) {
+		t.Errorf("video viewability_rate = %v, want 60.0", got)
+	}
+
+	// Overall (no channel filter): (6 video + 8 display) / 20 impressions = 70%.
+	res2, err := eng.Query(ctx, analytics.QueryParams{
+		Table: "impressions", Metrics: []string{"viewability_rate"},
+		Filters: map[string]string{"publisher_id": "pubV"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := col(t, res2, "viewability_rate"); !approx(got, 70.0) {
+		t.Errorf("overall viewability_rate = %v, want 70.0", got)
+	}
+}

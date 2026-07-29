@@ -61,6 +61,59 @@ func (h *Harness) TriggerExport(t *testing.T, when time.Time) {
 	}
 }
 
+// ReportViewabilityRate POSTs a viewability_rate query to the reporting API for
+// one publisher since `from`, optionally scoped to a channel ("video"/"display"/
+// ""), and returns (rate%, ok). ok=false means the metric was null (no
+// impressions in scope). Exercises the full derived-metric path
+// (views.sum_viewable / impressions.count) over live ClickHouse.
+func (h *Harness) ReportViewabilityRate(t *testing.T, publisherID, channel string, from time.Time) (float64, bool) {
+	t.Helper()
+	filters := map[string]string{"publisher_id": publisherID}
+	if channel != "" {
+		filters["channel"] = channel
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"table":     "impressions",
+		"metrics":   []string{"viewability_rate"},
+		"filters":   filters,
+		"time_from": from.UTC().Format(time.RFC3339),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Reporting+routes.ReportingQuery, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("viewability query: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("viewability query status %d", resp.StatusCode)
+	}
+	var out struct {
+		Columns []string        `json:"columns"`
+		Rows    [][]interface{} `json:"rows"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode viewability query: %v", err)
+	}
+	if len(out.Rows) == 0 {
+		return 0, false
+	}
+	for i, c := range out.Columns {
+		if c == "viewability_rate" {
+			v := out.Rows[0][i]
+			if v == nil {
+				return 0, false
+			}
+			if f, ok := v.(float64); ok {
+				return f, true
+			}
+		}
+	}
+	return 0, false
+}
+
 // ReportImpressionCountSince POSTs a count query to the reporting query API
 // (the same endpoint the gateway proxies) scoped to time_from, and returns the
 // scalar count. This routes through the HotColdStore, so the answer comes from

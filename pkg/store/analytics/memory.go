@@ -961,6 +961,7 @@ func (s *MemoryStore) queryViews(params QueryParams) (*QueryResult, error) {
 			"placement_id": v.PlacementID,
 			"publisher_id": v.PublisherID,
 			"account_id":   v.AccountID,
+			"channel":      v.Channel,
 		}) {
 			continue
 		}
@@ -976,9 +977,12 @@ func (s *MemoryStore) queryViews(params QueryParams) (*QueryResult, error) {
 		avgDur = float64(totalDur) / float64(count)
 		viewableRate = float64(viewableCount) / float64(count)
 	}
+	// sum_viewable mirrors the ClickHouse SUM(iab_viewable) base metric the
+	// viewability_rate derived metric consumes (kept alongside the legacy
+	// viewable_count/viewable_rate columns).
 	return &QueryResult{
-		Columns: []string{"count", "viewable_count", "viewable_rate", "avg_duration_ms"},
-		Rows:    [][]interface{}{{count, viewableCount, viewableRate, avgDur}},
+		Columns: []string{"count", "viewable_count", "sum_viewable", "viewable_rate", "avg_duration_ms"},
+		Rows:    [][]interface{}{{count, viewableCount, viewableCount, viewableRate, avgDur}},
 	}, nil
 }
 

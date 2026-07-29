@@ -47,6 +47,7 @@
         {{ template "stat" (dict "label" "Impressions today" "value" "—" "id" "kpiImps") }}
         {{ template "stat" (dict "label" "Fill rate" "value" "—" "id" "kpiFill") }}
         {{ template "stat" (dict "label" "eCPM" "value" "—" "id" "kpiEcpm" "hint" "gross revenue per 1,000 impressions") }}
+        {{ template "stat" (dict "label" "Viewability" "value" "—" "id" "kpiViewability" "hint" "IAB-viewable impressions (display 50%/1s, video 50%/2s)") }}
         {{ template "stat" (dict "label" "Gross earnings today" "value" "—" "id" "kpiEarnings" "hint" "before rev-share") }}
         {{ template "stat" (dict "label" "Net earnings today" "value" "—" "id" "kpiNet" "hint" "after platform fee") }}
       </div>
@@ -876,7 +877,7 @@ async function loadDashboard() {
     // server-side); a tiny auctions.count call feeds the "Ad requests" card.
     const [aucs, imps] = await Promise.all([
       reportQuery({table: 'auctions', metrics: ['count'], time_from: todayStart()}),
-      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue'], time_from: todayStart()}),
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue', 'viewability_rate'], time_from: todayStart()}),
     ]);
     const a = firstRow(aucs), i = firstRow(imps);
     const pct = (v) => v == null ? '—' : (+v).toFixed(1) + '%';
@@ -885,6 +886,7 @@ async function loadDashboard() {
     $('kpiImps').textContent = fmtInt(i.count);
     $('kpiFill').textContent = pct(i.fill_rate);
     $('kpiEcpm').textContent = usd(i.ecpm);
+    $('kpiViewability').textContent = pct(i.viewability_rate);
     $('kpiEarnings').textContent = fmtUSD(+i.sum_cost || 0);
     $('kpiNet').textContent = usd(i.net_revenue);
   } catch (err) { toast('KPIs failed: ' + err.message, 'error'); }
