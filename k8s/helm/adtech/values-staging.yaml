@@ -50,8 +50,17 @@ services:
     replicas: 2
   ssp:
     replicas: 2
+    # Strict enforcement inherited from base; override the seller identity to the
+    # staging platform domain (match global.domain).
+    extraEnv:
+      - name: SSP_SELLER_DOMAIN
+        value: "adtech.staging.example.com"   # ← match global.domain
   exchange:
     replicas: 2
+    extraEnv:
+      - name: EXCHANGE_ADSTXT_SELLER_DOMAIN
+        value: "adtech.staging.example.com"   # ← match global.domain
+      # EXCHANGE_ADCERT_SIGN_KEY: provision via SOPS adcert_ed25519 secret.
   adserver:
     replicas: 2
   publisher-adserver:
