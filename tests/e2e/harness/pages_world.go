@@ -5,6 +5,7 @@ package harness
 import (
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
@@ -59,6 +60,92 @@ func BuildPagesWorld(t *testing.T, h *Harness) PagesWorld {
 	h.createNativeCampaign(t, w.AdvAcc, io, "pgw-li-native", 6.0, 500, "pgw-cr-native", "adv-pgw.test", tgt)
 	h.CreateVideoCampaign(t, w.AdvAcc, io, "pgw-li-video", 6.0, 500, "pgw-cr-video", "adv-pgw.test", 15, tgt)
 	h.createAudioCampaign(t, w.AdvAcc, io, "pgw-li-audio", 6.0, 500, "pgw-cr-audio", "adv-pgw.test", 15, tgt)
+
+	h.RefreshAllCaches(t)
+	return w
+}
+
+// SiteTenant is one seeded external-publisher site: the pages.Site definition,
+// the publisher tenant it maps to, and the format→placement-key map for
+// VisitPageWith.
+type SiteTenant struct {
+	Site              pages.Site
+	Publisher         Publisher
+	PlacementByFormat map[pages.Format]string
+}
+
+// MultiSiteWorld is several publisher tenants (one per pages.Site, each with a
+// distinct revenue share) plus advertiser tenants bidding across all of them.
+// Advertisers are split by format so each deterministically wins and books
+// spend: acme = display+native, globex = video, initech = audio.
+type MultiSiteWorld struct {
+	Sites []SiteTenant
+	// Representative campaign id per advertiser tenant, for per-advertiser
+	// attribution assertions.
+	AcmeDisplayCampaign  string
+	AcmeNativeCampaign   string
+	GlobexVideoCampaign  string
+	InitechAudioCampaign string
+}
+
+// BuildMultiSiteWorld resets state and seeds the full "friends' websites" world:
+// every pages.Site as its own publisher tenant (own placements + revenue share),
+// and three advertiser tenants bidding across all of them. This is the fixture
+// the multi-tenant e2e drives to prove per-publisher zero-slippage, reporting
+// isolation, and correct per-publisher revenue split.
+func BuildMultiSiteWorld(t *testing.T, h *Harness) MultiSiteWorld {
+	t.Helper()
+	h.Reset(t)
+	h.ResetBillingLedger(t)
+
+	admin := h.CreateAdmin(t, "e2e-admin-multisite")
+	_ = admin
+
+	var w MultiSiteWorld
+
+	// One publisher tenant per site, with its own inventory + revenue share.
+	for _, site := range pages.AllSites() {
+		pubAcc := h.CreatePublisher(t, site.Publisher)
+		pub := h.AddPublisher(t, pubAcc, site.Publisher, site.Domain)
+
+		// Distinct revenue share: publisher keeps RevsharePct, platform fee is the
+		// remainder. Proven per-tenant by the net_revenue/gross ratio in the test.
+		feePct := 100 - site.RevsharePct
+		h.SetPublisherContract(t, pub, "fixed",
+			`{"revshare_model":"fixed","fee_pct":`+strconv.Itoa(feePct)+`}`)
+
+		keys := site.PlacementByFormat()
+		h.AddPlacement(t, pub, keys[pages.Display], 300, 250, 0.50, []string{"IAB12"})
+		h.addNativePlacement(t, pub, keys[pages.Native], 0.50)
+		h.AddVideoPlacement(t, pub, keys[pages.Video], 0.50, 5, 40)
+		h.addAudioPlacement(t, pub, keys[pages.Audio], 0.50, 5, 40)
+
+		w.Sites = append(w.Sites, SiteTenant{Site: site, Publisher: pub, PlacementByFormat: keys})
+	}
+
+	tgt := Targeting{Geos: []string{"USA"}, Devices: []string{"desktop"}}
+
+	// Three advertiser tenants (all in the internal DSP allowlist), split by
+	// format so each wins its own inventory rather than contending head-to-head
+	// on one DSP. All fund large, all target USA/desktop.
+	acme := h.CreateAdvertiser(t, "adv-acme")
+	h.GrantBalance(t, acme.ID, 100_000, "e2e-multisite-acme")
+	acmeIO := h.CreateInsertionOrder(t, acme, "e2e-io-acme", 10000)
+	w.AcmeDisplayCampaign = h.CreateCampaign(t, acme, acmeIO, "ms-acme-display", 6.0, 2000, "ms-acme-display-cr", "acme.example", tgt).ID
+	h.createNativeCampaign(t, acme, acmeIO, "ms-acme-native", 6.0, 2000, "ms-acme-native-cr", "acme.example", tgt)
+	w.AcmeNativeCampaign = idgen.Derive("line_item", "ms-acme-native")
+
+	globex := h.CreateAdvertiser(t, "adv-globex")
+	h.GrantBalance(t, globex.ID, 100_000, "e2e-multisite-globex")
+	globexIO := h.CreateInsertionOrder(t, globex, "e2e-io-globex", 10000)
+	h.CreateVideoCampaign(t, globex, globexIO, "ms-globex-video", 6.0, 2000, "ms-globex-video-cr", "globex.example", 15, tgt)
+	w.GlobexVideoCampaign = idgen.Derive("line_item", "ms-globex-video")
+
+	initech := h.CreateAdvertiser(t, "adv-initech")
+	h.GrantBalance(t, initech.ID, 100_000, "e2e-multisite-initech")
+	initechIO := h.CreateInsertionOrder(t, initech, "e2e-io-initech", 10000)
+	h.createAudioCampaign(t, initech, initechIO, "ms-initech-audio", 6.0, 2000, "ms-initech-audio-cr", "initech.example", 15, tgt)
+	w.InitechAudioCampaign = idgen.Derive("line_item", "ms-initech-audio")
 
 	h.RefreshAllCaches(t)
 	return w
