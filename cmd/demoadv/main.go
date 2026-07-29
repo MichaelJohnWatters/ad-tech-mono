@@ -10,8 +10,8 @@
 // your cluster.
 //
 //	Run locally:  go run ./cmd/demoadv        (then open http://localhost:9200)
-//	Config (env): DEMOADV_PORT, DEMOADV_TRACKER_URL, DEMOADV_ACCOUNT_ID,
-//	              DEMOADV_BRAND.
+//	Config (env): DEMOADV_PORT, DEMOADV_TRACKER_URL, DEMOADV_SDK_URL,
+//	              DEMOADV_ACCOUNT_ID, DEMOADV_BRAND.
 package main
 
 import (
@@ -27,6 +27,7 @@ var templatesFS embed.FS
 
 type siteConfig struct {
 	TrackerURL string // public base of the tracker (/v1/t/*), browser-reachable
+	SDKURL     string // where the browser loads the advertiser tag (adtech-adv.js)
 	AccountID  string // the advertiser account id (the `aid` pixel param)
 	Brand      string
 }
@@ -50,6 +51,9 @@ func main() {
 		// Default = the tracker's localhost-exposed port (zero-setup browser use).
 		// For the real public path use https://tracker.<domain> (needs /etc/hosts).
 		TrackerURL: env("DEMOADV_TRACKER_URL", "http://localhost:8083"),
+		// The advertiser tag is served from the platform's static assets (gateway),
+		// the same origin adtech.js ships from.
+		SDKURL: env("DEMOADV_SDK_URL", "http://localhost:8080/static/adtech-adv.js"),
 		// The advertiser account the retargeting audience is scoped to. Use a real
 		// seeded advertiser account id (portal → or the seed's advertiser account);
 		// the placeholder still fires pixels but won't match a real retargeting rule.
