@@ -16,41 +16,46 @@ import (
 // biddable auction is run with enforcement off (must win) and then strict
 // (must no-bid), so the only variable is the gate.
 //
-// Why this is deterministic: the local SSP has no ssp.seller_domain configured
-// (static tier, empty in values.yaml), so it originates NO SupplyChain on the
-// outbound bid request. Under strict enforcement a request with no schain is
-// rejected before fan-out; under off it proceeds and the BuildBasicWorld
-// campaign bids. If the SSP ever started stamping a valid schain, the strict
-// case would win and this test would fail loudly — which is the correct signal
-// that the assumption changed, not a silent pass.
-//
-// The complementary "a VALID schain is accepted under strict" direction depends
-// on the SSP originating a chain (seller_domain set) and is covered by unit
-// tests: pkg/openrtb (ValidateSChain, SChainOf) + cmd/ssp (originSChain).
+// The request path is the EXTERNAL Prebid endpoint (PostPrebidAuctionRaw), not
+// our SSP: ssp.seller_domain is now set (values.yaml), so the SSP always stamps
+// a valid schain — a missing schain only ever reaches the exchange from an
+// external source. The request carries an authorised site.domain so the (also
+// strict) ads.txt gate passes and the ONLY variable is the schain mode.
 func TestSChainStrictRejectsMissing(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "schain")
 	const pod = "exchange-0"
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, "exchange.schain_enforcement", "warn", pod)
+		h.SetConfigForPod(t, "exchange.schain_enforcement", "strict", pod) // restore the deployed default
 		h.RefreshAllCaches(t)
 	})
+
+	// A schain-LESS bid request for the basic world's placement + authorised
+	// publisher domain, geo/device matching its GBR/mobile campaign.
+	noSchain := func() openrtb.BidRequest {
+		return openrtb.BidRequest{
+			ID:     "schain-missing",
+			Imp:    []openrtb.Imp{{ID: "1", TagID: w.Placement.ID, BidFloor: 0.50, Banner: &openrtb.Banner{W: 300, H: 250}}},
+			Site:   &openrtb.Site{Domain: w.Publisher.Domain, Publisher: &openrtb.Publisher{ID: w.Publisher.ID}},
+			Device: &openrtb.Device{Geo: &openrtb.Geo{Country: "GBR"}, DeviceType: 1}, // mobile
+			TMax:   500,
+		}
+	}
 
 	// Baseline: enforcement off → the schain-less request still wins. Proves
 	// demand exists, so a strict no-bid below can only be the gate.
 	h.SetConfigForPod(t, "exchange.schain_enforcement", "off", pod)
 	h.RefreshAllCaches(t)
-	if h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "schain-u1")).NoBid {
-		t.Fatal("baseline (schain off): expected a winning bid for the basic world")
+	if resp, _ := h.PostPrebidAuctionRaw(t, noSchain()); resp.NoBid {
+		t.Fatal("baseline (schain off): expected a winning bid for the schain-less request")
 	}
 
-	// Strict: the missing SupplyChain must now be rejected before fan-out — and
-	// crucially the no-bid must carry NBR=501, so it's provably the schain gate
-	// and not merely absent demand. This is the "tell a true no-bid from an
-	// enforcement block" assertion.
+	// Strict: the missing SupplyChain must now be rejected — and crucially the
+	// no-bid must carry NBR=501, so it's provably the schain gate and not merely
+	// absent demand.
 	h.SetConfigForPod(t, "exchange.schain_enforcement", "strict", pod)
 	h.RefreshAllCaches(t)
-	got := h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "schain-u2"))
+	got, _ := h.PostPrebidAuctionRaw(t, noSchain())
 	if !got.NoBid {
 		t.Error("strict schain: expected NoBid for a request carrying no SupplyChain")
 	}
@@ -59,11 +64,11 @@ func TestSChainStrictRejectsMissing(t *testing.T) {
 			got.NBR, got.NBRReason, openrtb.NBRSChainInvalid)
 	}
 
-	// Back to warn (the local default): the same request wins again — enforcement
-	// is genuinely live-toggled, not a one-way ratchet.
+	// Back to warn: the same request wins again — enforcement is genuinely
+	// live-toggled, not a one-way ratchet.
 	h.SetConfigForPod(t, "exchange.schain_enforcement", "warn", pod)
 	h.RefreshAllCaches(t)
-	if h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "schain-u3")).NoBid {
+	if resp, _ := h.PostPrebidAuctionRaw(t, noSchain()); resp.NoBid {
 		t.Error("warn schain: expected a winning bid (missing schain logged, not rejected)")
 	}
 }
