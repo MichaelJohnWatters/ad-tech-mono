@@ -231,6 +231,19 @@ func extractVASTURLs(xmlBody string) (imp, view string) {
 	return imp, view
 }
 
+// ServeVideoFills serves the video VAST endpoint for a placement as one visitor
+// (user + end-user IP → household) and reports whether an ad filled. Used to
+// prove the ad server's frequency cap now applies to the video render path (it
+// previously bypassed the cap entirely). Distinct users on one IP model
+// co-viewing CTV devices sharing the household cap.
+func (h *Harness) ServeVideoFills(t *testing.T, placementKey, user, ip string) bool {
+	t.Helper()
+	q := "?placement_id=" + placementKey + "&geo=USA&device=desktop&user_id=" + user + "&ip=" + ip
+	xmlBody := h.getBody(t, h.URLs.PublisherAdServer+routes.PublisherAdServeVAST+q)
+	imp, _ := extractVASTURLs(xmlBody)
+	return imp != ""
+}
+
 // ImpressionsByTrace returns how many impression rows in ClickHouse carry this
 // trace — the per-slot anti-slippage assertion (a served ad → exactly one).
 func (h *Harness) ImpressionsByTrace(t *testing.T, traceID string) int {
