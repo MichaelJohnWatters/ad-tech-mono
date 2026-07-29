@@ -369,6 +369,18 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			return
 		}
 
+		// Non-display cap-only path: video/native/audio ads are rendered by the
+		// publisher-adserver (VAST / native markup), not here — the SSP calls us
+		// purely to run the frequency cap (recorded above). Nothing to render, so
+		// acknowledge the allowance and return before creative resolution. This is
+		// what makes the per-user/per-household cap apply to CTV video too, not
+		// just display.
+		if req.Channel != "" && req.Channel != constants.ChannelDisplay {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			_ = json.NewEncoder(w).Encode(map[string]any{"allowed": true, "channel": req.Channel})
+			return
+		}
+
 		creative, ok := resolver.Get(ctx, req.CreativeID)
 		if !ok {
 			reqLog.Warn("unknown creative, falling back to default HTML",

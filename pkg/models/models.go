@@ -379,14 +379,21 @@ type ServeRequest struct {
 	// row is retained profile data. The ad server bakes it into tracker
 	// beacons as uid=; the tracker publishes behaviour rows only when present.
 	BehaviourUserID string `json:"behaviour_user_id,omitempty"`
-	Geo           string  `json:"geo,omitempty"`     // request geo (country) — baked into tracker beacons for analytics
-	Device        string  `json:"device,omitempty"`  // request device type — baked into tracker beacons for analytics
+	Geo             string `json:"geo,omitempty"`    // request geo (country) — baked into tracker beacons for analytics
+	Device          string `json:"device,omitempty"` // request device type — baked into tracker beacons for analytics
 	// HouseholdID is the SSP-derived salted-HMAC household id ("hh:…", see
 	// pkg/identity.HouseholdID). When present the ad server enforces the
 	// frequency cap per household IN ADDITION to per user, so co-viewing
 	// devices (CTV + phones on one IP) share one cap. Not PII: keyed hash,
 	// same legitimate-interest basis as the user-keyed cap.
 	HouseholdID string `json:"household_id,omitempty"`
+	// Channel is the ad format ("display"/"video"/"native"/"audio"; empty =
+	// display). For non-display channels the ad server has nothing to render
+	// (the publisher-adserver builds the VAST/native markup itself), so it runs
+	// the frequency cap and returns allowed/declined WITHOUT rendering — making
+	// the ad server the single freq-cap authority across every format, including
+	// the per-household CTV cap on video.
+	Channel string `json:"channel,omitempty"`
 }
 
 // ServeResponse contains the rendered ad HTML with all macros substituted.

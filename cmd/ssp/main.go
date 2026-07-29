@@ -825,6 +825,30 @@ type serveAdResponse struct {
 	AdM string `json:"adm,omitempty"`
 }
 
+// doAdServe POSTs a ServeRequest to the ad server and returns its
+// HTTP-equivalent status + body. It rides the gRPC twin when adServerURL is a
+// grpc:// target (the envelope carries the status, so the 429 frequency-cap
+// decline behaves identically on either transport), else plain HTTP. Shared by
+// the display render path and the non-display cap-only check.
+func doAdServe(ctx context.Context, adServerURL string, body []byte) (int, []byte, error) {
+	if grpcx.IsURL(adServerURL) {
+		return grpcx.ServeAd(ctx, grpcx.Target(adServerURL), body, nil)
+	}
+	adReq, err := http.NewRequestWithContext(ctx, http.MethodPost, adServerURL+routes.AdServe, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	adReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	tracing.InjectHTTP(ctx, adReq)
+	adResp, err := http.DefaultClient.Do(adReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer adResp.Body.Close()
+	rb, _ := io.ReadAll(adResp.Body)
+	return adResp.StatusCode, rb, nil
+}
+
 // serveAdHandler is the realistic publisher-visitor endpoint. The SSP runs
 // the auction, picks the winner, calls the ad server internally, and
 // returns just the rendered HTML + pixel URLs. The browser never learns
@@ -853,6 +877,37 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 		// Winner picked — call the ad server to render. Browser never sees
 		// these IDs/prices in our response; only the resulting HTML.
 		winner := ac.BidResp.SeatBid[0].Bid[0]
+
+		// Frequency cap for NON-DISPLAY formats. Display is capped inside the ad
+		// server's render call further down; video/native/audio are rendered by
+		// the publisher-adserver, so without this they'd skip the cap entirely —
+		// including the per-household CTV cap that exists specifically for
+		// co-viewing video. Ask the ad server (the single cap authority, same
+		// Redis counters) for a cap-only decision before returning the winner.
+		if ch := r.URL.Query().Get("channel"); ch == constants.ChannelVideo || ch == constants.ChannelAudio || ch == constants.ChannelNative {
+			capReq := models.ServeRequest{
+				TraceID:     ac.TraceID,
+				Channel:     ch,
+				CampaignID:  winner.CID,
+				CreativeID:  winner.CrID,
+				PlacementID: ac.Placement.ID,
+				PublisherID: ac.Placement.PublisherID,
+				UserID:      r.URL.Query().Get("user_id"),
+				HouseholdID: ac.HouseholdID, // co-viewing devices on one IP share the cap
+			}
+			capBody, _ := json.Marshal(capReq)
+			if st, _, err := doAdServe(ctx, adServerURL, capBody); err != nil {
+				// Fail OPEN: a cap-service blip must not black out all video/
+				// native/audio serving (these paths served uncapped until now).
+				// A real cap decision (429) is still honoured below.
+				reqLog.Warn("freq-cap check failed; serving uncapped", "channel", ch, "error", err)
+			} else if st == http.StatusTooManyRequests {
+				reqLog.Debug("freq cap: non-display ad declined", "channel", ch)
+				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
+				return
+			}
+		}
 
 		// Video / audio short-circuit: no HTML to render, just return
 		// the winner's media URL + duration + advertiser fields so the
@@ -945,38 +1000,11 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			Device: r.URL.Query().Get("device"),
 		}
 		body, _ := json.Marshal(serveReq)
-		var adStatus int
-		var adBody []byte
-		if grpcx.IsURL(adServerURL) {
-			// Internal fast path: the ad server is ours, so this edge rides
-			// the gRPC twin of /v1/ad/serve. The envelope carries the
-			// HTTP-equivalent status so the 429 frequency-cap decline below
-			// behaves identically on either transport.
-			st, rb, err := grpcx.ServeAd(ctx, grpcx.Target(adServerURL), body, nil)
-			if err != nil {
-				reqLog.Error("ad server call failed", "error", err)
-				http.Error(w, "ad server unavailable", http.StatusBadGateway)
-				return
-			}
-			adStatus, adBody = st, rb
-		} else {
-			adReq, err := http.NewRequestWithContext(ctx, http.MethodPost, adServerURL+routes.AdServe, bytes.NewReader(body))
-			if err != nil {
-				reqLog.Error("build ad server request", "error", err)
-				http.Error(w, "ad server request build failed", http.StatusInternalServerError)
-				return
-			}
-			adReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			tracing.InjectHTTP(ctx, adReq)
-			adResp, err := http.DefaultClient.Do(adReq)
-			if err != nil {
-				reqLog.Error("ad server call failed", "error", err)
-				http.Error(w, "ad server unavailable", http.StatusBadGateway)
-				return
-			}
-			defer adResp.Body.Close()
-			adStatus = adResp.StatusCode
-			adBody, _ = io.ReadAll(adResp.Body)
+		adStatus, adBody, adErr := doAdServe(ctx, adServerURL, body)
+		if adErr != nil {
+			reqLog.Error("ad server call failed", "error", adErr)
+			http.Error(w, "ad server unavailable", http.StatusBadGateway)
+			return
 		}
 		// The ad server can decline to render even after an auction win — most
 		// commonly a frequency cap (429), which is a normal no-fill, not an
