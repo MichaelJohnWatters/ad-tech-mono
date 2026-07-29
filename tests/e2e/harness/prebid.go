@@ -25,6 +25,23 @@ import (
 // /v1/openrtb/auction directly.
 func (h *Harness) PostPrebidAuction(t *testing.T, req openrtb.BidRequest) (openrtb.BidResponse, int) {
 	t.Helper()
+	// A real Prebid Server sends a SupplyChain (schain) declaring the upstream
+	// path — under the prod-shaped strict schain enforcement the exchange no-bids
+	// requests without one. Inject a well-formed node if the test didn't set one,
+	// exactly as an authorised Prebid publisher would. (The request's site.domain
+	// is a harness publisher, already ads.txt-authorised via RefreshAllCaches.)
+	if openrtb.SChainOf(&req) == nil {
+		if req.Source == nil {
+			req.Source = &openrtb.Source{}
+		}
+		if req.Source.Ext == nil {
+			req.Source.Ext = &openrtb.SourceExt{}
+		}
+		req.Source.Ext.SChain = &openrtb.SupplyChain{
+			Ver: openrtb.SChainVersion, Complete: 1,
+			Nodes: []openrtb.SupplyChainNode{{ASI: "prebid.example", SID: "pbs-1", HP: 1}},
+		}
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal prebid request: %v", err)
