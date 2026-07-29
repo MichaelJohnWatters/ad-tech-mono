@@ -114,6 +114,58 @@ func (h *Harness) ReportViewabilityRate(t *testing.T, publisherID, channel strin
 	return 0, false
 }
 
+// ReportRow POSTs a query to the reporting API (table impressions, scoped to
+// filters + time_from) and returns the requested metrics as a name→value map for
+// the single result row. Numeric metrics arrive as float64; a nil/absent metric
+// is omitted. Used to assert per-publisher isolation (count) and money split
+// (net_revenue vs gross) over the live analytics backend.
+func (h *Harness) ReportRow(t *testing.T, filters map[string]string, metrics []string, from time.Time) map[string]float64 {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{
+		"table":     "impressions",
+		"metrics":   metrics,
+		"filters":   filters,
+		"time_from": from.UTC().Format(time.RFC3339),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.URLs.Reporting+routes.ReportingQuery, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("report row query: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("report row query status %d", resp.StatusCode)
+	}
+	var out struct {
+		Columns []string        `json:"columns"`
+		Rows    [][]interface{} `json:"rows"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode report row: %v", err)
+	}
+	res := map[string]float64{}
+	if len(out.Rows) == 0 {
+		return res
+	}
+	for i, c := range out.Columns {
+		if i >= len(out.Rows[0]) {
+			continue
+		}
+		switch v := out.Rows[0][i].(type) {
+		case float64:
+			res[c] = v
+		case string:
+			var f float64
+			_, _ = fmt.Sscanf(v, "%g", &f)
+			res[c] = f
+		}
+	}
+	return res
+}
+
 // ReportImpressionCountSince POSTs a count query to the reporting query API
 // (the same endpoint the gateway proxies) scoped to time_from, and returns the
 // scalar count. This routes through the HotColdStore, so the answer comes from
