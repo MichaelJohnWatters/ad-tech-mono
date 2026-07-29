@@ -212,10 +212,70 @@
                     if (!resp.ok) throw new Error('pubad video ' + resp.status);
                     return resp.text();
                 })
-                .then(function(xml) { renderVideoAd(el, xml); })
+                .then(function(xml) { renderVASTAd(el, xml, false); })
                 .catch(function(err) {
                     if (config.debug) console.error('[adtech] video request failed:', err);
                     el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Video ad unavailable</div>';
+                });
+        },
+
+        /**
+         * Request and render a NATIVE ad (OpenRTB Native 1.2). The server returns
+         * a ready-to-inject HTML card with the impression pixel already embedded
+         * (fires on render) and the click wrapped in the signed tracker anchor —
+         * so the client just injects it. 204 = honest no-fill.
+         */
+        requestNativeAd: function(opts) {
+            var el = document.getElementById(opts.elementId);
+            if (!el) {
+                console.error('[adtech] element not found:', opts.elementId);
+                return;
+            }
+            var params = new URLSearchParams({
+                placement_id: opts.placementId,
+                user_id: state.platformId || ''
+            });
+            if (opts.geo) params.set('geo', opts.geo);
+            if (opts.device) params.set('device', opts.device);
+
+            fetch(config.pubadUrl + '/v1/pubad/native?' + params.toString(), { credentials: 'omit' })
+                .then(function(resp) { return resp.status === 204 ? '' : resp.text(); })
+                .then(function(html) {
+                    el.innerHTML = (html && html.trim())
+                        ? html
+                        : '<div style="text-align:center;color:#999;padding:20px;">No ad available</div>';
+                })
+                .catch(function(err) {
+                    if (config.debug) console.error('[adtech] native request failed:', err);
+                });
+        },
+
+        /**
+         * Request and render an AUDIO ad (VAST). Renders an inline <audio> player
+         * and fires the impression + quartile beacons. Audio has no viewability.
+         */
+        requestAudioAd: function(opts) {
+            var el = document.getElementById(opts.elementId);
+            if (!el) {
+                console.error('[adtech] element not found:', opts.elementId);
+                return;
+            }
+            var params = new URLSearchParams({
+                placement_id: opts.placementId,
+                user_id: state.platformId || ''
+            });
+            if (opts.geo) params.set('geo', opts.geo);
+            if (opts.device) params.set('device', opts.device);
+
+            fetch(config.pubadUrl + '/v1/pubad/audio?' + params.toString(), { credentials: 'omit' })
+                .then(function(resp) {
+                    if (!resp.ok) throw new Error('pubad audio ' + resp.status);
+                    return resp.text();
+                })
+                .then(function(xml) { renderVASTAd(el, xml, true); })
+                .catch(function(err) {
+                    if (config.debug) console.error('[adtech] audio request failed:', err);
+                    el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">Audio ad unavailable</div>';
                 });
         },
 
@@ -268,51 +328,56 @@
         }
     }
 
-    // renderVideoAd parses a VAST document, renders a muted-autoplay <video>, and
-    // wires the standard beacons: impression + start on play, quartiles on
-    // timeupdate, complete on ended, and IAB video viewability (2s dwell) once the
-    // ad is playing. The tracker URLs in the VAST are already server-signed.
-    function renderVideoAd(el, xml) {
+    // renderVASTAd parses a VAST document and renders an inline linear ad —
+    // <video> (isAudio=false) or <audio> (isAudio=true) — wiring the standard
+    // VAST beacons: impression + start on play, quartiles on timeupdate, complete
+    // on ended. Video additionally self-measures IAB viewability (2s dwell) once
+    // it's playing. Every tracker URL in the VAST is already server-signed; the
+    // client only fires them (pixel = new Image().src, no CORS needed).
+    function renderVASTAd(el, xml, isAudio) {
         var doc = new DOMParser().parseFromString(xml, 'text/xml');
         var media = doc.querySelector('MediaFile');
         if (!media) {
-            el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No video ad</div>';
+            el.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">No ' + (isAudio ? 'audio' : 'video') + ' ad</div>';
             return;
         }
         var imp = (doc.querySelector('Impression') || {}).textContent;
         var track = {};
         doc.querySelectorAll('Tracking').forEach(function(t) { track[t.getAttribute('event')] = (t.textContent || '').trim(); });
 
-        var v = document.createElement('video');
-        v.setAttribute('playsinline', '');
-        v.muted = true;      // muted autoplay is allowed without a user gesture
-        v.controls = true;
-        v.style.width = '100%';
-        v.src = media.textContent.trim();
+        var m = document.createElement(isAudio ? 'audio' : 'video');
+        m.controls = true;
+        m.style.width = '100%';
+        if (!isAudio) {
+            m.setAttribute('playsinline', '');
+            m.muted = true; // muted autoplay is allowed without a user gesture
+        }
+        m.src = media.textContent.trim();
         el.innerHTML = '';
-        el.appendChild(v);
+        el.appendChild(m);
 
         var fired = {};
         function beacon(u) { if (u) { (new Image()).src = u; } }
-        v.addEventListener('play', function() {
+        m.addEventListener('play', function() {
             if (!fired.imp) {
                 fired.imp = 1;
                 beacon(imp);
                 beacon(track.start);
-                if (track.viewable) observeViewability(v, track.viewable, 2000); // video: 2s dwell (IAB)
+                // IAB video viewability: 50% on-screen for 2 continuous seconds.
+                if (!isAudio && track.viewable) observeViewability(m, track.viewable, 2000);
             }
         });
-        v.addEventListener('timeupdate', function() {
-            if (!v.duration) return;
-            var p = v.currentTime / v.duration;
+        m.addEventListener('timeupdate', function() {
+            if (!m.duration) return;
+            var p = m.currentTime / m.duration;
             if (p >= 0.25 && !fired.q1) { fired.q1 = 1; beacon(track.firstQuartile); }
             if (p >= 0.50 && !fired.q2) { fired.q2 = 1; beacon(track.midpoint); }
             if (p >= 0.75 && !fired.q3) { fired.q3 = 1; beacon(track.thirdQuartile); }
         });
-        v.addEventListener('ended', function() { if (!fired.done) { fired.done = 1; beacon(track.complete); } });
+        m.addEventListener('ended', function() { if (!fired.done) { fired.done = 1; beacon(track.complete); } });
 
-        var pp = v.play();
-        if (pp && pp.catch) pp.catch(function() {});
+        // Video autoplays (muted); audio waits for the user's play control.
+        if (!isAudio) { var pp = m.play(); if (pp && pp.catch) pp.catch(function() {}); }
     }
 
     // ============================================================

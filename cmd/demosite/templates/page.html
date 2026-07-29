@@ -42,57 +42,21 @@
 {{template "consentBanner" .}}
 {{template "sdkboot" .}}
 <script>
-  var PUBAD = {{.Cfg.PubadURL}};
-  function fire(u){ if(!u) return; var i=new Image(); i.src=u; }
 
-  // display: the real adtech.js SDK renders into the box (impression + viewability).
-  function loadDisplay(box, status){
-    adtech.requestAd({ placementId: box.dataset.placement, elementId: box.id, geo:'USA', device:'desktop' });
+  // EVERY format is served by the shared adtech.js SDK — the exact library a real
+  // publisher embeds. Each helper just calls the SDK and reports a best-effort
+  // fill status; the SDK owns the fetch, render, and ALL tracking beacons
+  // (impression pixel, VAST quartiles, IAB viewability).
+  function settle(box, status){
     return new Promise(function(res){
       setTimeout(function(){ var ok = box.childElementCount>0; status.textContent = ok?'filled ✓':'no fill'; res(ok); }, 1500);
     });
   }
-  // native: the endpoint returns a rendered HTML card (text/html, NOT JSON) with
-  // an embedded impression pixel that fires on render. 204 = honest no-fill.
-  function loadNative(box, status){
-    return fetch(PUBAD + '/v1/pubad/native?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop&_=' + Math.random(), {credentials:'omit'})
-      .then(function(r){ return r.status===204 ? '' : r.text(); })
-      .then(function(html){ if(html && html.trim()){ box.innerHTML=html; status.textContent='filled ✓'; return true; }
-                            box.textContent='No fill.'; status.textContent='no fill'; return false; });
-  }
-  // video/audio: VAST → inline player firing impression, quartiles, and (video) the
-  // audio: VAST → inline player firing impression + quartiles. Display and VIDEO
-  // go through the shared adtech.js SDK (adtech.requestAd / adtech.requestVideoAd)
-  // — the exact library real publishers embed, incl. its IAB viewability
-  // measurement. Audio has no SDK helper yet, so it stays inline here.
-  function loadAudio(box, status){
-    return fetch(PUBAD + '/v1/pubad/audio?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop', {credentials:'omit'})
-      .then(function(r){ return r.text(); })
-      .then(function(xml){
-        var doc = new DOMParser().parseFromString(xml,'text/xml');
-        var media = doc.querySelector('MediaFile');
-        if(!media){ box.textContent='no fill'; status.textContent='no fill'; return false; }
-        var imp = (doc.querySelector('Impression')||{}).textContent;
-        var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')]=(t.textContent||'').trim(); });
-        var el = document.createElement('audio');
-        el.controls = true; el.src = media.textContent.trim(); box.innerHTML=''; box.appendChild(el);
-        var f = {};
-        el.addEventListener('play', function(){ if(!f.i){ f.i=1; fire(imp); fire(track.start); } });
-        el.addEventListener('ended', function(){ if(!f.d){ f.d=1; fire(track.complete); } });
-        el.play().catch(function(){ status.textContent = 'audio ad ✓ (press play)'; });
-        status.textContent = 'audio ad ✓';
-        return true;
-      })
-      .catch(function(e){ status.textContent='error: '+e.message; return false; });
-  }
-  // Video via the shared SDK. Returns a promise that resolves once the SDK has
-  // put a <video> in the slot (best-effort status for the fill summary).
-  function loadVideo(box, status){
-    adtech.requestVideoAd({ placementId: box.dataset.placement, elementId: box.id, geo:'USA', device:'desktop' });
-    return new Promise(function(res){
-      setTimeout(function(){ var ok = !!box.querySelector('video'); status.textContent = ok?'video ad ✓':'no fill'; res(ok); }, 1500);
-    });
-  }
+  var opts = function(box){ return { placementId: box.dataset.placement, elementId: box.id, geo:'USA', device:'desktop' }; };
+  function loadDisplay(box, status){ adtech.requestAd(opts(box));       return settle(box, status); }
+  function loadNative(box, status){  adtech.requestNativeAd(opts(box)); return settle(box, status); }
+  function loadVideo(box, status){   adtech.requestVideoAd(opts(box));  return settle(box, status); }
+  function loadAudio(box, status){   adtech.requestAudioAd(opts(box));  return settle(box, status); }
 
   window.__ads.onConsent = function(){
     var boxes = document.querySelectorAll('.slot-box'), jobs = [];
