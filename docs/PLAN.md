@@ -3451,7 +3451,7 @@ Fallback logic:
 - Over-frequency alert: if a significant % of users are hitting caps, the line item may need a broader audience or lower budget
 - Under-delivery alert: if caps are blocking too many impressions, the line item won't spend its budget
 
-Implemented in `pkg/adserving/freqcap.go`. Redis keys use short prefixes (`fc:`) to minimise memory.
+Implemented in `cmd/adserver/freqcap.go` (Redis key `adserver:freqcap:{user|hh:…}:{campaign}`). Enforced per-user AND per-household, plus the advertiser's own limit/window from the warm `freq_caps` cache. Applies across every format: display is capped in the ad server's render call; video/native/audio (rendered by the publisher-adserver) are capped via the SSP's cap-only ad-server call before the winner is returned. The richer video dimensions below (per-session / per-content / per-pod) are PLANNED, not built.
 
 ### 5. Targeting Exclusions
 
@@ -5320,7 +5320,7 @@ Implemented in `pkg/billing/revshare.go`. Contract configs loaded into L1 cache.
 |---|---|
 | Bid shading | `pkg/auction/shading.go` - real-time bid reduction model |
 | Campaign hierarchy | `pkg/models/` - InsertionOrder, LineItem models; budget inheritance logic |
-| Frequency cap checks | `pkg/adserving/freqcap.go` - multi-dimensional Redis checks |
+| Frequency cap checks | `cmd/adserver/freqcap.go` - per-user + per-household + advertiser-rule Redis checks (all formats) |
 | Targeting exclusions | `pkg/targeting/` - exclusion evaluation after inclusion matching |
 | Multi-currency | `pkg/currency/` - conversion, rate storage, daily update job |
 | Native ad format | `pkg/openrtb/native.go` - native request/response types |
@@ -7479,7 +7479,7 @@ Bumpers are pre-transcoded publisher-configured creatives. Not auctioned - they'
 | Video creative review | `pkg/adserving/video.go` - extended validation for duration, codec, loudness |
 | Video targeting dimensions | `pkg/targeting/` - break_position, content_genre, live_vs_vod, pod_position |
 | Video bid modifiers | `pkg/targeting/modifiers.go` - break position, live premium modifiers |
-| Video frequency caps | `pkg/adserving/freqcap.go` - session-level, per-content caps |
+| Video frequency caps | Core per-user/household/campaign cap enforced (`cmd/adserver/freqcap.go`, all formats). Session-level / per-content / per-pod dimensions PLANNED — need a session id + content id on the request (not yet modelled). |
 | Video fraud detection | `pkg/fraud/video.go` - auto-play muted, stacked players, bot completion |
 | Video reporting metrics | `pkg/reporting/video.go` - VCR, VTR, skip rate, quartile drop-off |
 | Video deal config | `pkg/deals/` - break position, pod position, skip policy, guaranteed completions |
