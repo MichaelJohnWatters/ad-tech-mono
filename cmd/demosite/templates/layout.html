@@ -29,8 +29,8 @@
 
 {{define "nav"}}
 <header class="masthead">
-  <h1>The Demo Times</h1>
-  <div class="tagline">An external publisher · powered by adtech.js</div>
+  <h1>{{.Cfg.SiteName}}</h1>
+  <div class="tagline">{{.Cfg.SiteTagline}}</div>
 </header>
 <nav>
   <a href="/" class="{{if eq .Active "home"}}active{{end}}">Home</a>
@@ -67,7 +67,7 @@
 
 {{define "consentBanner"}}
 <div class="consent" id="consent" style="display:none">
-  <span>🍪 The Demo Times uses cookies to show personalized ads. Your choice controls whether the ad platform sets an id cookie (TCF purposes 1–4).</span>
+  <span>🍪 {{.Cfg.SiteName}} uses cookies to show personalized ads. Your choice controls whether the ad platform sets an id cookie (TCF purposes 1–4).</span>
   <button class="accept" onclick="applyConsent(true)">Accept personalized</button>
   <button class="reject" onclick="applyConsent(false)">Contextual only</button>
 </div>
