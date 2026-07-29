@@ -1,0 +1,109 @@
+{{define "page.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+<style>
+  .slot-box { min-height:120px; margin:6px auto 2px; background:#f1f0ee; border:1px dashed #d1d5db;
+              display:flex; align-items:center; justify-content:center; color:#9ca3af; font:12px sans-serif; }
+  .slot-box video, .slot-box audio { width:100%; }
+</style>
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>{{.Layout.Title}}</h2>
+    <div class="byline">By The Demo Desk · {{.Layout.Total}} ad slots</div>
+    <p>{{.Layout.Desc}}</p>
+    <p>This page carries <strong>{{.Layout.Total}} real ad slots</strong>. Each is served live from the
+       platform's public endpoints — the very same layout (<code>pkg/simulator/pages</code>) the end-to-end
+       test replays to prove every slot's impression reaches ClickHouse with zero slippage.</p>
+
+    {{range $i, $s := .Layout.Slots}}
+    <div class="ad-label">Advertisement — {{$s.Label}} · {{$s.Format}}</div>
+    <div id="slot-{{$i}}" class="slot-box" data-idx="{{$i}}" data-format="{{$s.Format}}" data-placement="{{$s.PlacementKey}}"
+         {{if $s.Width}}style="max-width:{{$s.Width}}px"{{end}}>Loading {{$s.Format}}…</div>
+    <div class="status" id="status-{{$i}}"></div>
+    {{end}}
+  </article>
+  <aside>
+    <div class="ad-rail">
+      <div class="ad-label">On this page</div>
+      <div class="card" style="font:13px sans-serif">
+        <div id="fill-summary">Awaiting consent…</div>
+        <div style="margin-top:8px;color:#6b7280">Each slot requests a real ad cross-origin. Video/audio
+          self-fire quartile + viewability beacons as they play.</div>
+      </div>
+    </div>
+  </aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  var PUBAD = {{.Cfg.PubadURL}};
+  function fire(u){ if(!u) return; var i=new Image(); i.src=u; }
+
+  // display: the real adtech.js SDK renders into the box (impression + viewability).
+  function loadDisplay(box, status){
+    adtech.requestAd({ placementId: box.dataset.placement, elementId: box.id, geo:'USA', device:'desktop' });
+    return new Promise(function(res){
+      setTimeout(function(){ var ok = box.childElementCount>0; status.textContent = ok?'filled ✓':'no fill'; res(ok); }, 1500);
+    });
+  }
+  // native: HTML fragment with an embedded impression pixel (fires on render).
+  function loadNative(box, status){
+    return fetch(PUBAD + '/v1/pubad/native?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop&_=' + Math.random(), {credentials:'omit'})
+      .then(function(r){ return r.status===204 ? null : r.json(); })
+      .then(function(ad){ if(ad && ad.html){ box.innerHTML=ad.html; status.textContent='filled ✓'; return true; }
+                          box.textContent='No fill.'; status.textContent='no fill'; return false; });
+  }
+  // video/audio: VAST → inline player firing impression, quartiles, and (video) the
+  // non-standard event="viewable" beacon after 2s continuous play (IAB video rule).
+  function loadVAST(box, status, isAudio){
+    var ep = isAudio ? '/v1/pubad/audio' : '/v1/pubad/video/vast';
+    return fetch(PUBAD + ep + '?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop', {credentials:'omit'})
+      .then(function(r){ return r.text(); })
+      .then(function(xml){
+        var doc = new DOMParser().parseFromString(xml,'text/xml');
+        var media = doc.querySelector('MediaFile');
+        if(!media){ box.textContent='no fill'; status.textContent='no fill'; return false; }
+        var imp = (doc.querySelector('Impression')||{}).textContent;
+        var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')]=(t.textContent||'').trim(); });
+        var el = document.createElement(isAudio ? 'audio' : 'video');
+        el.controls = true; if(!isAudio){ el.setAttribute('playsinline',''); el.height = 360; }
+        el.src = media.textContent.trim(); box.innerHTML=''; box.appendChild(el);
+        var f = {}, viewTimer = null;
+        el.addEventListener('play', function(){
+          if(!f.i){ f.i=1; fire(imp); fire(track.start);
+            if(!isAudio && track.viewable){ viewTimer = setTimeout(function(){
+              fire(track.viewable + '&dur=2100&pct=80&area=' + (640*360)); }, 2100); } }
+        });
+        el.addEventListener('pause', function(){ if(viewTimer){ clearTimeout(viewTimer); viewTimer=null; } });
+        el.addEventListener('ended', function(){ if(!f.d){ f.d=1; fire(track.complete); } });
+        el.play().catch(function(){ status.textContent = (isAudio?'audio':'video')+' ad ✓ (press play)'; });
+        status.textContent = (isAudio?'audio':'video') + ' ad ✓';
+        return true;
+      })
+      .catch(function(e){ status.textContent='error: '+e.message; return false; });
+  }
+
+  window.__ads.onConsent = function(){
+    var boxes = document.querySelectorAll('.slot-box'), jobs = [];
+    boxes.forEach(function(box){
+      var status = document.getElementById('status-' + box.dataset.idx);
+      status.textContent = 'requesting…';
+      var fmt = box.dataset.format;
+      if(fmt==='display') jobs.push(loadDisplay(box, status));
+      else if(fmt==='native') jobs.push(loadNative(box, status));
+      else if(fmt==='video') jobs.push(loadVAST(box, status, false));
+      else if(fmt==='audio') jobs.push(loadVAST(box, status, true));
+    });
+    Promise.all(jobs).then(function(res){
+      document.getElementById('fill-summary').textContent = 'Filled ' + res.filter(Boolean).length + '/' + res.length + ' slots ✓';
+    });
+  };
+</script>
+</body>
+</html>{{end}}

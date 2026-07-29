@@ -21,6 +21,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/simulator/pages"
 )
 
 //go:embed templates/*.html
@@ -42,9 +45,11 @@ type siteConfig struct {
 }
 
 type page struct {
-	Cfg    siteConfig
-	Active string // nav highlight
-	Title  string
+	Cfg     siteConfig
+	Active  string // nav highlight
+	Title   string
+	Layout  pages.Layout   // the multi-slot page being rendered (page.html)
+	Layouts []pages.Layout // all layouts (pages_index.html)
 }
 
 func env(k, def string) string {
@@ -94,6 +99,28 @@ func main() {
 	mux.HandleFunc("/video", render("video.html", "Video — The Demo Times", "video"))
 	mux.HandleFunc("/audio", render("audio.html", "Audio — The Demo Times", "audio"))
 	mux.HandleFunc("/native", render("native.html", "Native — The Demo Times", "native"))
+
+	// Multi-slot combo pages, defined once in pkg/simulator/pages (the same
+	// layouts the e2e replays). /pages lists them; /p/{slug} renders one.
+	mux.HandleFunc("/pages", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.ExecuteTemplate(w, "pages_index.html", page{Cfg: cfg, Active: "pages", Title: "Pages — The Demo Times", Layouts: pages.All()}); err != nil {
+			log.Printf("render pages_index: %v", err)
+		}
+	})
+	mux.HandleFunc("/p/", func(w http.ResponseWriter, r *http.Request) {
+		slug := strings.TrimPrefix(r.URL.Path, "/p/")
+		layout, ok := pages.BySlug(slug)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.ExecuteTemplate(w, "page.html", page{Cfg: cfg, Active: "pages", Title: layout.Title + " — The Demo Times", Layout: layout}); err != nil {
+			log.Printf("render page %s: %v", slug, err)
+		}
+	})
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 
 	log.Printf("demosite (external publisher) on :%s → pubad %s", port, cfg.PubadURL)
