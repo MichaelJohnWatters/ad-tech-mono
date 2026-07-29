@@ -61,10 +61,12 @@
                             box.textContent='No fill.'; status.textContent='no fill'; return false; });
   }
   // video/audio: VAST → inline player firing impression, quartiles, and (video) the
-  // non-standard event="viewable" beacon after 2s continuous play (IAB video rule).
-  function loadVAST(box, status, isAudio){
-    var ep = isAudio ? '/v1/pubad/audio' : '/v1/pubad/video/vast';
-    return fetch(PUBAD + ep + '?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop', {credentials:'omit'})
+  // audio: VAST → inline player firing impression + quartiles. Display and VIDEO
+  // go through the shared adtech.js SDK (adtech.requestAd / adtech.requestVideoAd)
+  // — the exact library real publishers embed, incl. its IAB viewability
+  // measurement. Audio has no SDK helper yet, so it stays inline here.
+  function loadAudio(box, status){
+    return fetch(PUBAD + '/v1/pubad/audio?placement_id=' + encodeURIComponent(box.dataset.placement) + '&geo=USA&device=desktop', {credentials:'omit'})
       .then(function(r){ return r.text(); })
       .then(function(xml){
         var doc = new DOMParser().parseFromString(xml,'text/xml');
@@ -72,22 +74,24 @@
         if(!media){ box.textContent='no fill'; status.textContent='no fill'; return false; }
         var imp = (doc.querySelector('Impression')||{}).textContent;
         var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')]=(t.textContent||'').trim(); });
-        var el = document.createElement(isAudio ? 'audio' : 'video');
-        el.controls = true; if(!isAudio){ el.setAttribute('playsinline',''); el.height = 360; }
-        el.src = media.textContent.trim(); box.innerHTML=''; box.appendChild(el);
-        var f = {}, viewTimer = null;
-        el.addEventListener('play', function(){
-          if(!f.i){ f.i=1; fire(imp); fire(track.start);
-            if(!isAudio && track.viewable){ viewTimer = setTimeout(function(){
-              fire(track.viewable + '&dur=2100&pct=80&area=' + (640*360)); }, 2100); } }
-        });
-        el.addEventListener('pause', function(){ if(viewTimer){ clearTimeout(viewTimer); viewTimer=null; } });
+        var el = document.createElement('audio');
+        el.controls = true; el.src = media.textContent.trim(); box.innerHTML=''; box.appendChild(el);
+        var f = {};
+        el.addEventListener('play', function(){ if(!f.i){ f.i=1; fire(imp); fire(track.start); } });
         el.addEventListener('ended', function(){ if(!f.d){ f.d=1; fire(track.complete); } });
-        el.play().catch(function(){ status.textContent = (isAudio?'audio':'video')+' ad ✓ (press play)'; });
-        status.textContent = (isAudio?'audio':'video') + ' ad ✓';
+        el.play().catch(function(){ status.textContent = 'audio ad ✓ (press play)'; });
+        status.textContent = 'audio ad ✓';
         return true;
       })
       .catch(function(e){ status.textContent='error: '+e.message; return false; });
+  }
+  // Video via the shared SDK. Returns a promise that resolves once the SDK has
+  // put a <video> in the slot (best-effort status for the fill summary).
+  function loadVideo(box, status){
+    adtech.requestVideoAd({ placementId: box.dataset.placement, elementId: box.id, geo:'USA', device:'desktop' });
+    return new Promise(function(res){
+      setTimeout(function(){ var ok = !!box.querySelector('video'); status.textContent = ok?'video ad ✓':'no fill'; res(ok); }, 1500);
+    });
   }
 
   window.__ads.onConsent = function(){
@@ -98,8 +102,8 @@
       var fmt = box.dataset.format;
       if(fmt==='display') jobs.push(loadDisplay(box, status));
       else if(fmt==='native') jobs.push(loadNative(box, status));
-      else if(fmt==='video') jobs.push(loadVAST(box, status, false));
-      else if(fmt==='audio') jobs.push(loadVAST(box, status, true));
+      else if(fmt==='video') jobs.push(loadVideo(box, status));
+      else if(fmt==='audio') jobs.push(loadAudio(box, status));
     });
     Promise.all(jobs).then(function(res){
       document.getElementById('fill-summary').textContent = 'Filled ' + res.filter(Boolean).length + '/' + res.length + ' slots ✓';
