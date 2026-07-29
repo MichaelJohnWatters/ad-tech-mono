@@ -59,6 +59,14 @@ programmatic path.
 | `DEMOSITE_MEDIA_URL` | `http://localhost:8080` | base for creative/media assets |
 | `DEMOSITE_PUBLISHER_ID` | `pub-simulator` | seeded demo publisher |
 | `DEMOSITE_{DISPLAY,VIDEO,AUDIO,NATIVE}_PLACEMENT` | `pl-sim-*` | seeded placement external IDs |
+| `DEMOSITE_SITE` | _(unset)_ | render a named "friend's website" property (`chronicle`/`gadget`/`streamhub`, from `pkg/simulator/pages`) — its own branding + page set. Unset = the default "Demo Times" showing every layout. |
+
+**Multiple branded sites at once.** `make demosites` runs three distinct
+branded origins — chronicle (`:9001`), gadget (`:9002`), streamhub (`:9003`) —
+each a separate `DEMOSITE_SITE`. They serve real ads against the local stack; the
+true per-tenant isolation + revenue split is proven by
+`TestMultiSitePublishersEndToEnd` (multi-publisher, multi-advertiser, zero
+slippage).
 
 > Note on mixed content: when the demo page itself is served over HTTPS (e.g.
 > deployed to the cloud), the platform's returned tracker/media URLs must also be

@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite extbidder demoadv security-harness
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite demosites extbidder demoadv security-harness
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -191,6 +191,15 @@ demosite: ## Run the external demo publisher site (host process, :9000). Needs t
 	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
 	@echo "for the public TLS path: see cmd/demosite/README.md"
 	go run ./cmd/demosite
+
+demosites: ## Run the 3 branded external publisher sites as separate origins (chronicle:9001, gadget:9002, streamhub:9003). Needs the stack up + seeded.
+	@echo "3 external publisher sites → chronicle http://localhost:9001 · gadget http://localhost:9002 · streamhub http://localhost:9003"
+	@echo "(Ctrl-C stops all three)"
+	@trap 'kill 0' INT TERM; \
+	 DEMOSITE_SITE=chronicle DEMOSITE_PORT=9001 go run ./cmd/demosite & \
+	 DEMOSITE_SITE=gadget    DEMOSITE_PORT=9002 go run ./cmd/demosite & \
+	 DEMOSITE_SITE=streamhub DEMOSITE_PORT=9003 go run ./cmd/demosite & \
+	 wait
 
 extbidder: ## Run the external DSP partner bidder (host process, :9100). Wire it in: cmd/extbidder/README.md
 	@echo "extbidder (external DSP) → :9100  (Ctrl-C to stop)"

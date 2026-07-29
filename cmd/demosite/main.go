@@ -37,6 +37,13 @@ type siteConfig struct {
 	SDKURL      string // where the browser loads adtech.js from
 	MediaURL    string // base for video/audio media + creative assets
 	PublisherID string // the seeded demo publisher
+	// Branding + which page layouts this instance runs. Driven by DEMOSITE_SITE
+	// (a pkg/simulator/pages Site slug): one demosite binary renders any of the
+	// "friend's website" properties as its own branded origin. Unset = the
+	// default demo property showing every layout.
+	SiteName    string
+	SiteTagline string
+	Layouts     []pages.Layout // the layouts this site shows (its "Pages" nav)
 	// Per-format seeded placement external IDs (idgen-derived server-side).
 	DisplayPlacement string
 	VideoPlacement   string
@@ -76,6 +83,21 @@ func main() {
 		VideoPlacement:   env("DEMOSITE_VIDEO_PLACEMENT", "pl-sim-video"),
 		AudioPlacement:   env("DEMOSITE_AUDIO_PLACEMENT", "pl-sim-audio"),
 		NativePlacement:  env("DEMOSITE_NATIVE_PLACEMENT", "pl-sim-native"),
+		SiteName:         "The Demo Times",
+		SiteTagline:      "An external publisher · powered by adtech.js",
+		Layouts:          pages.All(),
+	}
+	// DEMOSITE_SITE picks one of the named "friend's website" properties
+	// (pkg/simulator/pages) — its branding + its own page set — so the same
+	// binary can be run as several distinct branded origins (see `make demosites`).
+	if slug := env("DEMOSITE_SITE", ""); slug != "" {
+		site, ok := pages.SiteBySlug(slug)
+		if !ok {
+			log.Fatalf("DEMOSITE_SITE=%q is not a known site (have: run `make demosites`)", slug)
+		}
+		cfg.SiteName = site.Name
+		cfg.SiteTagline = site.Tagline
+		cfg.Layouts = site.Layouts()
 	}
 	port := env("DEMOSITE_PORT", "9000")
 
@@ -95,28 +117,37 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", render("home.html", "The Demo Times", "home"))
-	mux.HandleFunc("/video", render("video.html", "Video — The Demo Times", "video"))
-	mux.HandleFunc("/audio", render("audio.html", "Audio — The Demo Times", "audio"))
-	mux.HandleFunc("/native", render("native.html", "Native — The Demo Times", "native"))
+	mux.HandleFunc("/", render("home.html", cfg.SiteName, "home"))
+	mux.HandleFunc("/video", render("video.html", "Video — "+cfg.SiteName, "video"))
+	mux.HandleFunc("/audio", render("audio.html", "Audio — "+cfg.SiteName, "audio"))
+	mux.HandleFunc("/native", render("native.html", "Native — "+cfg.SiteName, "native"))
 
 	// Multi-slot combo pages, defined once in pkg/simulator/pages (the same
-	// layouts the e2e replays). /pages lists them; /p/{slug} renders one.
+	// layouts the e2e replays). /pages lists THIS site's set; /p/{slug} renders one
+	// (restricted to this site's layouts so each branded origin shows its own pages).
+	inSite := func(slug string) (pages.Layout, bool) {
+		for _, l := range cfg.Layouts {
+			if l.Slug == slug {
+				return l, true
+			}
+		}
+		return pages.Layout{}, false
+	}
 	mux.HandleFunc("/pages", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, "pages_index.html", page{Cfg: cfg, Active: "pages", Title: "Pages — The Demo Times", Layouts: pages.All()}); err != nil {
+		if err := tmpl.ExecuteTemplate(w, "pages_index.html", page{Cfg: cfg, Active: "pages", Title: "Pages — " + cfg.SiteName, Layouts: cfg.Layouts}); err != nil {
 			log.Printf("render pages_index: %v", err)
 		}
 	})
 	mux.HandleFunc("/p/", func(w http.ResponseWriter, r *http.Request) {
 		slug := strings.TrimPrefix(r.URL.Path, "/p/")
-		layout, ok := pages.BySlug(slug)
+		layout, ok := inSite(slug)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.ExecuteTemplate(w, "page.html", page{Cfg: cfg, Active: "pages", Title: layout.Title + " — The Demo Times", Layout: layout}); err != nil {
+		if err := tmpl.ExecuteTemplate(w, "page.html", page{Cfg: cfg, Active: "pages", Title: layout.Title + " — " + cfg.SiteName, Layout: layout}); err != nil {
 			log.Printf("render page %s: %v", slug, err)
 		}
 	})
