@@ -7068,7 +7068,16 @@ bid_modifiers:
 
 #### Video Frequency Capping
 
-Additional cap dimensions for video beyond the standard display caps:
+**Status.** The core cap — per-user + per-household + advertiser-configured
+per-campaign limit/window — IS enforced for video (and native/audio), same as
+display, via `cmd/adserver/freqcap.go`. Non-display formats reach it through the
+SSP's cap-only ad-server call (`ServeRequest.Channel` set → the ad server runs
+the cap and returns allowed/429 without rendering; see the "Frequency Capping"
+section above). The additional video-specific dimensions in the table below are
+**PLANNED, not built** — deliberately deferred (see "not needed now" rationale:
+nothing in the sim/demosite would exercise them yet).
+
+Additional cap dimensions for video beyond the standard display caps (PLANNED):
 
 | Dimension | Example | Redis key |
 |---|---|---|
@@ -7076,6 +7085,21 @@ Additional cap dimensions for video beyond the standard display caps:
 | Per user per content | "Max 1 ad per break in this show" | `fc:{user}:{content_id}:break` |
 | Per advertiser per hour (video) | "Max 3 video ads from Acme per hour" | `fc:{user}:{advertiser}:video:h` |
 | Per pod position | "Don't show this creative first-in-pod more than once per session" | `fc:{user}:{creative}:first_pod:{session}` |
+
+**What building this would take** (if/when a use case appears):
+1. A **session id** and **content id** on the ad request — the platform models
+   neither today. The SSP would derive/accept a `session` (e.g. per player load)
+   and the publisher would pass `content_id` (the show/asset); both ride through
+   to `ServeRequest`.
+2. Extend `cmd/adserver/freqcap.go` with the extra keyed counters above (the
+   `fc:` prefix here would join the existing `adserver:freqcap:` scheme).
+3. Pod-position caps additionally need the pod-slot index (the pod builder in
+   `pkg/ssai/pods.go` already has ordering) threaded to the cap check.
+4. Advertiser-facing controls to set these dimensions (today only limit/window
+   per campaign is configurable).
+
+Recommendation: only the per-session cap is likely worth it, and only for a
+deliberate CTV demo — not as gap-fill.
 
 #### Video Billing Integration
 
