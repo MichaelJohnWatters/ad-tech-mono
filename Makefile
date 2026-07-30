@@ -61,6 +61,9 @@ ssai-smoke: ## R1 live smoke: real stack conditions + serves a decodable ad segm
 viewability-smoke: ## Real headless-Chrome smoke: a browser plays a video via the adtech.js SDK, its IntersectionObserver fires the viewability beacon, and it lands in ClickHouse (needs stack up + seeded + Chrome). Rebuild the gateway first if you changed web/static/adtech.js.
 	./scripts/viewability-smoke.sh
 
+advertiser-smoke: ## Real headless-Chrome smoke: a browser on the demo advertiser site fires the retargeting + conversion pixels via the shared adtech-adv.js tag, and both land in ClickHouse (needs stack up + seeded + Chrome).
+	./scripts/advertiser-smoke.sh
+
 asciline-demo: ## Ad-free ASCILINE reference testbed on :8000 (clones to third_party/; content only — never the ad path)
 	./scripts/asciline-demo.sh
 
