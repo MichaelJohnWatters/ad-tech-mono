@@ -62,6 +62,28 @@ func TestAttributionMultiTouchChain(t *testing.T) {
 
 	// But the FULL chain of 3 touchpoints is recorded for multi-touch reporting.
 	waitCHCount(t, h, fmt.Sprintf("SELECT count() FROM adtech.attribution_touchpoints WHERE conversion_trace_id='%s'", convTrace), 3, "3-touchpoint attribution chain")
+
+	// The reporting API apportions credit per model on read: linear splits the 3
+	// exposures evenly (~1/3 each, summing to 1).
+	b := h.GetAttribution(t, convTrace, "linear")
+	if len(b.Touchpoints) != 3 {
+		t.Fatalf("attribution API: got %d touchpoints, want 3", len(b.Touchpoints))
+	}
+	var sum float64
+	for _, tp := range b.Touchpoints {
+		if tp.CreditFraction < 0.32 || tp.CreditFraction > 0.34 {
+			t.Errorf("linear credit = %.4f, want ~0.333 (%s)", tp.CreditFraction, tp.TraceID)
+		}
+		sum += tp.CreditFraction
+	}
+	if sum < 0.999 || sum > 1.001 {
+		t.Errorf("credit fractions sum to %.4f, want 1", sum)
+	}
+	// last_touch gives all credit to the most-recent exposure.
+	lt := h.GetAttribution(t, convTrace, "last_touch")
+	if lt.Touchpoints[len(lt.Touchpoints)-1].CreditFraction != 1 {
+		t.Errorf("last_touch: newest should get 1.0, got %+v", lt.Touchpoints)
+	}
 }
 
 // waitCHCount polls until a COUNT query returns at least `want`, failing at 15s.

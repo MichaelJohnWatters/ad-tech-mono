@@ -589,6 +589,9 @@ const (
 	// caller). ReportingRecentImpressions lists recent impressions to inspect.
 	ReportingTrace             = "/v1/reporting/trace"
 	ReportingRecentImpressions = "/v1/reporting/recent-impressions"
+	// ReportingAttribution returns a conversion's multi-touch chain with
+	// per-touchpoint credit apportioned under a requested model.
+	ReportingAttribution = "/v1/reporting/attribution"
 	BillingSummary             = "/v1/billing/summary"
 	BillingLedger              = "/v1/billing/ledger"
 )

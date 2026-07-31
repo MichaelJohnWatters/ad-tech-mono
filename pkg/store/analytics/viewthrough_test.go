@@ -81,3 +81,29 @@ func TestViewableImpressionsForUsers(t *testing.T) {
 		t.Fatalf("cross-device set: got %d exposures, want 3 (u1 x2 + u2 x1)", len(got))
 	}
 }
+
+// TestViewableImpressionsHouseholdFallback: an exposure recorded under a
+// household id (no matching user id on the row) is still found when the resolved
+// id set contains that household — the cross-device / CTV fallback.
+func TestViewableImpressionsHouseholdFallback(t *testing.T) {
+	ctx := context.Background()
+	s := NewMemory()
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+
+	// Impression carries a household id but a user id we won't resolve to.
+	if err := s.InsertBehaviourSignals(ctx, []*BehaviourSignalRow{
+		{Kind: "impression", TraceID: "t-hh", UserID: "device-xyz", HouseholdID: "hh:home1", AccountID: "acct-A", CampaignID: "camp-1", ObservedAt: now.Add(-3 * time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	since := now.Add(-168 * time.Hour)
+
+	// Resolving the conversion visitor produced the HOUSEHOLD, not the device id.
+	got, err := s.ViewableImpressionsForUsers(ctx, []string{"hh:home1"}, "acct-A", "", since, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TraceID != "t-hh" {
+		t.Fatalf("household fallback: got %+v, want the hh:home1 exposure", got)
+	}
+}

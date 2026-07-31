@@ -587,7 +587,8 @@ func (s *MemoryStore) ViewableImpressionsForUsers(_ context.Context, userIDs []s
 	var out []ViewableImpression
 	for i := range s.behaviourSignals {
 		b := &s.behaviourSignals[i]
-		if b.Kind != "impression" || b.AccountID != accountID || !want[b.UserID] {
+		// Match on user id OR household id (the resolved set can hold both).
+		if b.Kind != "impression" || b.AccountID != accountID || !(want[b.UserID] || want[b.HouseholdID]) {
 			continue
 		}
 		if b.ObservedAt.Before(since) {
@@ -616,6 +617,20 @@ func (s *MemoryStore) InsertAttributionTouchpoints(_ context.Context, rows []*At
 		}
 	}
 	return nil
+}
+
+// AttributionChain returns a conversion's chain rows, oldest first (memory parity).
+func (s *MemoryStore) AttributionChain(_ context.Context, conversionTraceID string) ([]AttributionTouchpointRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []AttributionTouchpointRow
+	for _, r := range s.attributionTouchpoints {
+		if r.ConversionTraceID == conversionTraceID {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TouchpointAt.Before(out[j].TouchpointAt) })
+	return out, nil
 }
 
 // AttributionTouchpoints returns a copy of stored chain rows for test assertions.
