@@ -206,6 +206,17 @@ func (t *HotColdStore) ImpressionsByPublisher(ctx context.Context, since time.Ti
 	return pr.ImpressionsByPublisher(ctx, since)
 }
 
+// ViewableImpressionsForUsers delegates view-through lookback to the hot store —
+// attribution windows (≤30d) sit well inside the hot window. Returns nil when the
+// hot store doesn't implement ViewThroughReader.
+func (t *HotColdStore) ViewableImpressionsForUsers(ctx context.Context, userIDs []string, accountID, campaignID string, since time.Time, requireViewable bool) ([]ViewableImpression, error) {
+	vr, ok := t.hot.(ViewThroughReader)
+	if !ok {
+		return nil, nil
+	}
+	return vr.ViewableImpressionsForUsers(ctx, userIDs, accountID, campaignID, since, requireViewable)
+}
+
 // EventsByTrace / RecentImpressions (TraceReader) delegate to the hot store — a
 // trace inspector only ever looks at recent (hot-window) data, so cold is never
 // involved. Forwarding here keeps the capability visible through the wrapper.

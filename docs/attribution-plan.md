@@ -144,11 +144,40 @@ inside window → settled; duplicate pixel → single settle; organic (no touchp
 
 ---
 
-## Phase 2 — View-through + cross-device (the identity join)
+## Phase 2 — View-through + cross-device (the identity join) — ✅ SHIPPED
 
-**Goal:** credit conversions with no click — a viewable impression days earlier,
-possibly on another device. This is where the advertiser-uid ↔ platform-user join
-must be built.
+Delivered + e2e-green on the live stack (`tests/e2e/attribution_viewthrough_test.go`):
+a click-less conversion carrying only the advertiser's visitor id resolves through
+the identity graph to the publisher-side user, finds the prior VIEWABLE impression
+in the window, and settles CPA against it; an unknown visitor does not settle.
+
+Key decisions/finds while building:
+- **Inline in reporting, not a new service.** Conversions are low-volume and
+  reporting already owns the analytics store + settle. `cmd/reporting/attribution.go`
+  (`viewThroughAttributor`) runs the match; the seam to lift into
+  `cmd/attribution-consumer` is noted there if volume grows.
+- **Lookback source = `behaviour_signals` (kind=impression), NOT `impressions`** —
+  the impressions table has no user_id; only behaviour_signals does. Viewability
+  comes from a LEFT JOIN to the `views` table (`iab_viewable`). New optional store
+  capability `ViewThroughReader.ViewableImpressionsForUsers` (ClickHouse + memory +
+  hotcold), unit-tested.
+- **Bug fixed:** behaviour_signals impression/click/view rows were writing an EMPTY
+  `account_id` (the publish read `aid`, only present on retargeting pixels). Now
+  falls back to `advid`, so view-through can scope a conversion's lookback to the
+  advertiser's own impressions.
+- **The identity bridge is real but demands a shared id.** Resolution is 2-hop over
+  `postgres.Store.ResolveIdentity` (advertiser_uid → shared_id → publisher_user).
+  The edge only exists if a shared id (hashed_email) co-occurs on both sides — the
+  e2e seeds it directly; **increment 2 (still TODO)** is the pixel-side feed that
+  creates it in production (retargeting/conversion pixel publishing an
+  identity.observed with uid + hashed_email). Config knobs (`attribution.*`) folded
+  in here.
+- Billing settle stays reservation-lifetime bounded (see Phase 0 note); windows
+  beyond that credit reporting only.
+
+**Original goal:** credit conversions with no click — a viewable impression days
+earlier, possibly on another device. This is where the advertiser-uid ↔
+platform-user join must be built.
 
 **Design**
 - Feed the advertiser first-party id into the identity graph: when the

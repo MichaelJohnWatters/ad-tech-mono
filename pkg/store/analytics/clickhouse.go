@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -670,6 +671,54 @@ func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time
 			continue
 		}
 		out[pub] = n
+	}
+	return out, rows.Err()
+}
+
+// ViewableImpressionsForUsers finds the ad exposures a click-less (view-through)
+// conversion can be credited to. Source is behaviour_signals (kind='impression')
+// — it carries the consented user_id the impressions table lacks — LEFT JOINed to
+// the views table for the IAB-viewable verdict. Scoped to one advertiser account,
+// optionally one campaign, since a lookback point; most-recent first.
+func (c *ClickHouse) ViewableImpressionsForUsers(ctx context.Context, userIDs []string, accountID, campaignID string, since time.Time, requireViewable bool) ([]ViewableImpression, error) {
+	if len(userIDs) == 0 || accountID == "" {
+		return nil, nil
+	}
+	ph := make([]string, len(userIDs))
+	args := []any{accountID, since.UTC()}
+	for i, u := range userIDs {
+		ph[i] = "?"
+		args = append(args, u)
+	}
+	q := `SELECT b.trace_id, b.campaign_id, b.observed_at, if(v.viewable > 0, 1, 0) AS viewable
+		FROM behaviour_signals AS b
+		LEFT JOIN (SELECT trace_id, max(iab_viewable) AS viewable FROM views GROUP BY trace_id) AS v
+		  ON v.trace_id = b.trace_id
+		WHERE b.kind = 'impression' AND b.account_id = ? AND b.observed_at >= ?
+		  AND b.user_id IN (` + strings.Join(ph, ",") + `)`
+	if campaignID != "" {
+		q += ` AND b.campaign_id = ?`
+		args = append(args, campaignID)
+	}
+	if requireViewable {
+		q += ` AND v.viewable = 1`
+	}
+	q += ` ORDER BY b.observed_at DESC`
+
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("viewable impressions for users: %w", err)
+	}
+	defer rows.Close()
+	var out []ViewableImpression
+	for rows.Next() {
+		var r ViewableImpression
+		var viewable uint8
+		if err := rows.Scan(&r.TraceID, &r.CampaignID, &r.Timestamp, &viewable); err != nil {
+			return nil, fmt.Errorf("scan viewable impression: %w", err)
+		}
+		r.Viewable = viewable == 1
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

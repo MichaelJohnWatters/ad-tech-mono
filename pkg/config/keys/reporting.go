@@ -71,6 +71,25 @@ var Reporting = struct {
 	Port: config.RawString("reporting.port", routes.PortReporting),
 }
 
+// Attribution holds the conversion-attribution keys. Attribution runs inside
+// the reporting service (it settles conversions), so the keys live in the
+// reporting schema but group under the attribution.* prefix.
+var Attribution = struct {
+	Enabled               config.BoolKey
+	Model                 config.StringKey
+	ClickThroughWindowHrs config.IntKey
+	ViewThroughWindowHrs  config.IntKey
+	RequireViewability    config.BoolKey
+	MinViewabilitySeconds config.FloatKey
+}{
+	Enabled:               reportingSet.Bool("attribution.enabled", "true", config.TierLive, "Master switch for conversion attribution. When off, a conversion still records but is not matched to an exposure and does not settle CPA (the deterministic ctid path included).", config.Since("v2.0")),
+	Model:                 reportingSet.String("attribution.model", "last_touch", config.TierLive, "Attribution model. Only 'last_touch' is implemented (most-recent qualifying touchpoint wins: last click within the click window, else last viewable impression within the view window). first_touch/linear/time_decay are future.", config.Since("v2.0")),
+	ClickThroughWindowHrs: reportingSet.Int("attribution.click_through_window_hours", "720", config.TierLive, "Hours after a click within which a conversion can be credited to it (default 720 = 30 days). NOTE: real-time CPA BILLING is separately bounded by the reservation lifetime (reporting.pacing_hold_ttl / TigerBeetle void); windows beyond that credit reporting only, not a live settle.", config.Since("v2.0")),
+	ViewThroughWindowHrs:  reportingSet.Int("attribution.view_through_window_hours", "168", config.TierLive, "Hours after a VIEWABLE impression within which a click-less conversion can be credited to it as view-through (default 168 = 7 days). Same billing-vs-reporting caveat as the click window.", config.Since("v2.0")),
+	RequireViewability:    reportingSet.Bool("attribution.require_viewability", "true", config.TierLive, "Only count IAB-viewable impressions for view-through attribution. When false, any served impression in the window qualifies.", config.Since("v2.0")),
+	MinViewabilitySeconds: reportingSet.Float("attribution.min_viewability_seconds", "1", config.TierLive, "Minimum dwell (seconds) an impression must have been viewable to qualify for view-through. The tracker already applies the IAB dwell (1s display / 2s video) when it stamps iab_viewable; this is an additional floor.", config.Since("v2.0")),
+}
+
 // Billing holds the billing keys. They belong to the reporting service's
 // schema (reporting hosts pkg/billing) but group under the billing.* prefix.
 var Billing = struct {

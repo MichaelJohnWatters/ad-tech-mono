@@ -168,6 +168,26 @@ func main() {
 		log.Warn("data-fee accrual disabled (database.url not set)")
 	}
 
+	// View-through conversion attribution (Phase 2). Credits a click-less
+	// conversion to a prior viewable exposure. Needs the store's view-through
+	// lookback; cross-device resolution additionally needs the Postgres identity
+	// graph (absent → same-id matching only). Both are nil-tolerant.
+	if vr, ok := store.(analytics.ViewThroughReader); ok {
+		var idResolver identityResolver
+		if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
+			if pg, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute}); err == nil {
+				idResolver = pg
+				lc.OnShutdown("attribution-identity-db", func(_ context.Context) error { return pg.Close() })
+			} else {
+				log.Warn("view-through cross-device disabled (identity resolver pg open failed)", "error", err)
+			}
+		}
+		consumer.SetViewThroughAttributor(newViewThroughAttributor(vr, idResolver, cfg, log))
+		log.Info("view-through attribution enabled", "cross_device", idResolver != nil)
+	} else {
+		log.Warn("view-through attribution disabled (analytics store lacks view-through lookback)")
+	}
+
 	// Bulk NATS consumer for high-volume core events. Default ON: single-row
 	// ClickHouse inserts can't keep up with sustained traffic (~2/sec) and pile
 	// up MergeTree parts (the "too many broken parts" failure). Requires a
@@ -505,10 +525,35 @@ type EventConsumer struct {
 	// dataFee settles parked data-monetization attribution at impression
 	// time (datafee.go). nil = feature off (no Postgres) — all hooks no-op.
 	dataFee *dataFeeAccrual
+
+	// viewThrough credits click-less conversions to a prior viewable exposure
+	// (attribution.go). nil = not wired → Phase-0 (deterministic ctid) behaviour
+	// only, and settle is never gated.
+	viewThrough *viewThroughAttributor
 }
 
 // SetDataFeeAccrual connects data-monetization accrual (nil-tolerant).
 func (c *EventConsumer) SetDataFeeAccrual(a *dataFeeAccrual) { c.dataFee = a }
+
+// SetViewThroughAttributor wires view-through conversion attribution (nil-tolerant).
+func (c *EventConsumer) SetViewThroughAttributor(a *viewThroughAttributor) { c.viewThrough = a }
+
+// attributionEnabled reports whether conversion attribution + settle is on.
+// When the attributor isn't wired it defaults ON (Phase-0 deterministic path).
+func (c *EventConsumer) attributionEnabled() bool {
+	if c.viewThrough == nil {
+		return true
+	}
+	return c.viewThrough.enabled()
+}
+
+// attributeConversion gives a click-less conversion its view-through credit in
+// place (no-op when already click-through attributed or the attributor is off).
+func (c *EventConsumer) attributeConversion(ctx context.Context, e *analytics.ConversionEvent) {
+	if c.viewThrough != nil {
+		c.viewThrough.attribute(ctx, e)
+	}
+}
 
 // handleDataFee parks one DataFeeEvent for its impression (datafee.go).
 func (c *EventConsumer) handleDataFee(ctx context.Context, msg *events.Message) error {
@@ -767,6 +812,11 @@ func (c *EventConsumer) handleConversion(ctx context.Context, msg *events.Messag
 		e.SchemaVersion = 1
 	}
 
+	// Attribute BEFORE the insert so the stored row records the linkage. Click-
+	// through (deterministic ctid) is already stamped by the tracker; this fills
+	// in view-through for click-less conversions.
+	c.attributeConversion(ctx, &e)
+
 	if err := c.store.InsertConversion(ctx, &e); err != nil {
 		c.log.Error("failed to write conversion", "error", err, "trace_id", e.TraceID)
 		return msg.Nak()
@@ -775,9 +825,9 @@ func (c *EventConsumer) handleConversion(ctx context.Context, msg *events.Messag
 	// Settle the CPA reservation (if one exists). No-op for other models.
 	// Attribution closes the loop: the reservation lives on the EARNING
 	// exposure's trace (the impression/click), not the conversion's own trace,
-	// so settle against AttributedTraceID when set. Empty (unattributed) falls
-	// back to the conversion trace — legacy behaviour, normally a no-op.
-	if c.billing != nil {
+	// so settle against SettleTraceID (AttributedTraceID when set). Gated by the
+	// attribution kill-switch.
+	if c.billing != nil && c.attributionEnabled() {
 		if _, err := c.billing.SettleByTrace(ctx, e.SettleTraceID(), "conversion"); err != nil {
 			c.log.Warn("conversion settle failed", "trace_id", e.SettleTraceID(), "error", err)
 		}

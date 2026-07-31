@@ -233,12 +233,17 @@ func (c *EventConsumer) handleConversionBatch(ctx context.Context, msgs []*event
 			if e.SchemaVersion == 0 {
 				e.SchemaVersion = 1
 			}
+			// Attribute in place before the row is inserted/settled — the same
+			// *event pointer flows to both the insert and the settle below, so the
+			// stored row records the linkage and the settle credits the exposure.
+			// Click-through (ctid) is already stamped; this adds view-through.
+			c.attributeConversion(ctx, &e)
 			return &e, true
 		},
 		func(e *analytics.ConversionEvent) string { return e.TraceID + ":" + e.ConversionType },
 		c.batch.InsertConversions,
 		func(ctx context.Context, es []*analytics.ConversionEvent) {
-			if c.billing == nil {
+			if c.billing == nil || !c.attributionEnabled() {
 				return
 			}
 			// Attribution closes the loop: settle against the EARNING exposure's
