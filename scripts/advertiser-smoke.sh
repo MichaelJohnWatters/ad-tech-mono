@@ -48,22 +48,15 @@ RT_AFTER="$RT_BEFORE"; CV_AFTER="$CV_BEFORE"
 for i in $(seq 1 20); do
   RT_AFTER="$(ch "SELECT count() FROM adtech.behaviour_signals WHERE kind='site_visit'")"; RT_AFTER="${RT_AFTER:-0}"
   CV_AFTER="$(ch "SELECT count() FROM adtech.conversions")"; CV_AFTER="${CV_AFTER:-0}"
-  [ "$RT_AFTER" -gt "$RT_BEFORE" ] && break
+  [ "$RT_AFTER" -gt "$RT_BEFORE" ] && [ "$CV_AFTER" -gt "$CV_BEFORE" ] && break
   sleep 1
 done
 
 say "[6/6] result: site_visit $RT_BEFORE -> $RT_AFTER  ·  conversions $CV_BEFORE -> $CV_AFTER"
-# Retargeting is the pass condition: it proves the shared adtech-adv.js tag fired
-# a real pixel that flowed browser -> tracker -> reporting -> ClickHouse.
-if [ "$RT_AFTER" -gt "$RT_BEFORE" ]; then
-  echo "✓ PASS — the shared advertiser tag's retargeting pixel fired in a real browser and reached ClickHouse (kind=site_visit)"
-  if [ "$CV_AFTER" -le "$CV_BEFORE" ]; then
-    echo "  ⚠ note: the conversion pixel did NOT land. Advertiser-fired /v1/t/conv is HMAC-signature-gated on the"
-    echo "    tracker, but an advertiser's own site can't sign with our key (its retargeting pixel /v1/t/rt correctly"
-    echo "    isn't gated). Advertiser conversions need a server-issued signed pixel or the same unsigned+fraud-gated"
-    echo "    path as /v1/t/rt. Not a regression from the SDK work — a pre-existing conversion-auth gap."
-  fi
+if [ "$RT_AFTER" -gt "$RT_BEFORE" ] && [ "$CV_AFTER" -gt "$CV_BEFORE" ]; then
+  echo "✓ PASS — the shared advertiser tag fired the retargeting pixel (browser) AND a signed server-to-server"
+  echo "  conversion postback, and both reached ClickHouse (site_visit + conversions)"
 else
-  echo "✗ FAIL — the retargeting pixel did not land. Check /tmp/advertiser-demoadv.log."
+  echo "✗ FAIL — retargeting=$([ "$RT_AFTER" -gt "$RT_BEFORE" ] && echo ok || echo MISSING), conversion=$([ "$CV_AFTER" -gt "$CV_BEFORE" ] && echo ok || echo MISSING). Check /tmp/advertiser-demoadv.log."
   exit 1
 fi

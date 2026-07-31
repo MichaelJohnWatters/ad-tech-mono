@@ -57,20 +57,20 @@ func main() {
 	})
 
 	log.Printf("advertiser-smoke: driving %s (headless=%v)", *url, *headless)
-	var convOK string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(*url),
-		// Wait for the shared advertiser tag to load before calling into it.
-		chromedp.Poll(`typeof window.adtechadv !== 'undefined' && typeof window.adtechadv.conversion === 'function'`, nil, chromedp.WithPollingTimeout(20*time.Second)),
-		// Consent → the tag fires the retargeting pixel (site_visit).
+		// Wait for the shared advertiser tag + the page's convert() helper to load.
+		chromedp.Poll(`typeof window.adtechadv !== 'undefined' && typeof convert === 'function'`, nil, chromedp.WithPollingTimeout(20*time.Second)),
+		// Consent → the tag fires the retargeting pixel (site_visit) + sets the uid cookie.
 		chromedp.Evaluate(`applyConsent(true)`, nil),
 		chromedp.Sleep(1500*time.Millisecond),
-		// Convert → the tag fires the conversion pixel (consent-gated in the tag).
-		chromedp.Evaluate(`(function(){ try { return String(fireConversion('`+*convType+`', `+*rev+`)); } catch (e) { return 'error: ' + e; } })()`, &convOK),
-		chromedp.Sleep(2*time.Second),
+		// Convert → the page POSTs the sale to the advertiser's own /convert, which
+		// signs + fires the conversion server-to-server.
+		chromedp.Evaluate(`convert('`+*convType+`', `+*rev+`)`, nil),
+		chromedp.Sleep(3*time.Second),
 	)
 	if err != nil {
 		log.Fatalf("advertiser-smoke: chrome drive failed: %v", err)
 	}
-	log.Printf("advertiser-smoke: consented (retargeting pixel) + fired conversion — the tag has emitted both beacons")
+	log.Printf("advertiser-smoke: consented (retargeting pixel) + posted conversion (server-to-server, signed)")
 }
