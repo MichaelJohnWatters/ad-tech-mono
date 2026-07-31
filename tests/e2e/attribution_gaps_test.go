@@ -5,7 +5,9 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -89,5 +91,35 @@ func TestAttributionEndpointTenantScoped(t *testing.T) {
 	// No scope header → forbidden.
 	if s := h.AttributionStatusAs(t, convTrace, "", ""); s != http.StatusForbidden {
 		t.Errorf("unscoped request status = %d, want 403", s)
+	}
+}
+
+// G4: the portal's attribution page reaches the endpoint through the gateway —
+// a logged-in advertiser session passes auth + reports:read + scope injection and
+// gets a scoped 200 (proving the /v1/api/attribution route the page fetches).
+func TestAttributionPortalRouteAuthed(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	// Guarantee the seeded dev logins exist (other tests' resets can wipe them).
+	h.SeedStandard(t)
+	client := h.LoginAs(t, harness.DevAdvertiserUser, harness.DevPassword)
+
+	// A trace this advertiser doesn't own → 200 with an empty chain (auth + scope
+	// worked; nothing to show), NOT 401/403/500.
+	url := fmt.Sprintf("%s/v1/api/attribution?conversion_trace=g4-none-%d&model=linear", h.URLs.Gateway, time.Now().UnixNano())
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("gateway attribution GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("advertiser via gateway status %d, want 200 (route/auth/scope wired): %s", resp.StatusCode, body)
+	}
+	var out harness.AttributionBreakdown
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, body)
+	}
+	if len(out.Touchpoints) != 0 {
+		t.Errorf("unknown trace returned %d touchpoints, want 0", len(out.Touchpoints))
 	}
 }
