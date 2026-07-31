@@ -148,10 +148,19 @@ type AttributionWriter interface {
 	InsertAttributionTouchpoints(ctx context.Context, rows []*AttributionTouchpointRow) error
 }
 
+// AttributionReader reads back a conversion's multi-touch chain (oldest→newest),
+// so the reporting API can apportion per-touchpoint credit on read.
+type AttributionReader interface {
+	AttributionChain(ctx context.Context, conversionTraceID string) ([]AttributionTouchpointRow, error)
+}
+
 var (
 	_ AttributionWriter = (*ClickHouse)(nil)
 	_ AttributionWriter = (*MemoryStore)(nil)
 	_ AttributionWriter = (*HotColdStore)(nil)
+	_ AttributionReader = (*ClickHouse)(nil)
+	_ AttributionReader = (*MemoryStore)(nil)
+	_ AttributionReader = (*HotColdStore)(nil)
 )
 
 // RollupRow is one aggregated row produced by the rollup engine: a set of

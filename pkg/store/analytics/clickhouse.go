@@ -704,6 +704,31 @@ func (c *ClickHouse) InsertAttributionTouchpoints(ctx context.Context, rows []*A
 	return b.Send()
 }
 
+// AttributionChain reads a conversion's stored multi-touch chain, oldest first.
+func (c *ClickHouse) AttributionChain(ctx context.Context, conversionTraceID string) ([]AttributionTouchpointRow, error) {
+	if conversionTraceID == "" {
+		return nil, nil
+	}
+	q := `SELECT conversion_trace_id, touchpoint_trace_id, account_id, campaign_id, touchpoint_type,
+			touchpoint_at, conversion_at, conversion_revenue, observed_at
+		FROM attribution_touchpoints WHERE conversion_trace_id = ? ORDER BY touchpoint_at ASC`
+	rows, err := c.db.QueryContext(ctx, q, conversionTraceID)
+	if err != nil {
+		return nil, fmt.Errorf("attribution chain: %w", err)
+	}
+	defer rows.Close()
+	var out []AttributionTouchpointRow
+	for rows.Next() {
+		var r AttributionTouchpointRow
+		if err := rows.Scan(&r.ConversionTraceID, &r.TouchpointTraceID, &r.AccountID, &r.CampaignID,
+			&r.TouchpointType, &r.TouchpointAt, &r.ConversionAt, &r.ConversionRevenue, &r.ObservedAt); err != nil {
+			return nil, fmt.Errorf("scan attribution touchpoint: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ViewableImpressionsForUsers finds the ad exposures a click-less (view-through)
 // conversion can be credited to. Source is behaviour_signals (kind='impression')
 // — it carries the consented user_id the impressions table lacks — LEFT JOINed to
@@ -713,10 +738,18 @@ func (c *ClickHouse) ViewableImpressionsForUsers(ctx context.Context, userIDs []
 	if len(userIDs) == 0 || accountID == "" {
 		return nil, nil
 	}
+	// The resolved id set can hold user ids AND household ids (the identity graph
+	// links both). Match either column so a household-linked exposure counts when
+	// the exact user id doesn't line up (cross-device / CTV fallback).
 	ph := make([]string, len(userIDs))
 	args := []any{accountID, since.UTC()}
 	for i, u := range userIDs {
 		ph[i] = "?"
+		args = append(args, u)
+	}
+	inList := strings.Join(ph, ",")
+	// user id set appears twice (user_id IN … OR household_id IN …).
+	for _, u := range userIDs {
 		args = append(args, u)
 	}
 	q := `SELECT b.trace_id, b.campaign_id, b.observed_at, if(v.viewable > 0, 1, 0) AS viewable
@@ -724,7 +757,7 @@ func (c *ClickHouse) ViewableImpressionsForUsers(ctx context.Context, userIDs []
 		LEFT JOIN (SELECT trace_id, max(iab_viewable) AS viewable FROM views GROUP BY trace_id) AS v
 		  ON v.trace_id = b.trace_id
 		WHERE b.kind = 'impression' AND b.account_id = ? AND b.observed_at >= ?
-		  AND b.user_id IN (` + strings.Join(ph, ",") + `)`
+		  AND (b.user_id IN (` + inList + `) OR b.household_id IN (` + inList + `))`
 	if campaignID != "" {
 		q += ` AND b.campaign_id = ?`
 		args = append(args, campaignID)

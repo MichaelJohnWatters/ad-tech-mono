@@ -740,6 +740,10 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 		TraceID:       q.Get("tid"),
 		Kind:          kind,
 		UserID:        uid,
+		// The household (salted-IP hash) the serve resolved, when the beacon
+		// carries it. Lets view-through fall back to a household match when the
+		// exact user id doesn't line up (cross-device / CTV).
+		HouseholdID:   q.Get("hh"),
 		PlacementID:   q.Get("pid"),
 		PublisherID:   q.Get("pubid"),
 		CampaignID:    q.Get("cid"),

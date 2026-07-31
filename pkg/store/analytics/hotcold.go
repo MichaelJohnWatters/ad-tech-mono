@@ -226,6 +226,15 @@ func (t *HotColdStore) InsertAttributionTouchpoints(ctx context.Context, rows []
 	return aw.InsertAttributionTouchpoints(ctx, rows)
 }
 
+// AttributionChain reads the conversion's multi-touch chain from the hot store.
+func (t *HotColdStore) AttributionChain(ctx context.Context, conversionTraceID string) ([]AttributionTouchpointRow, error) {
+	ar, ok := t.hot.(AttributionReader)
+	if !ok {
+		return nil, nil
+	}
+	return ar.AttributionChain(ctx, conversionTraceID)
+}
+
 // EventsByTrace / RecentImpressions (TraceReader) delegate to the hot store — a
 // trace inspector only ever looks at recent (hot-window) data, so cold is never
 // involved. Forwarding here keeps the capability visible through the wrapper.

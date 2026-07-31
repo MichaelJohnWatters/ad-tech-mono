@@ -52,9 +52,15 @@ func (a *viewThroughAttributor) attribute(ctx context.Context, e *analytics.Conv
 	if a == nil || a.reader == nil || !a.enabled() {
 		return false
 	}
-	if e.AttributedTraceID != "" || e.UserID == "" || e.AccountID == "" {
+	// Needs a visitor id + account to resolve/scope. A click-through conversion
+	// (ctid already stamped by the tracker) still comes through here so its
+	// ASSISTING exposures get recorded in the multi-touch chain; only its
+	// last-touch is fixed (the click).
+	if e.UserID == "" || e.AccountID == "" {
 		return false
 	}
+	clickThrough := e.AttributedTraceID != ""
+
 	users := a.resolveUsers(ctx, e.UserID)
 	base := e.Timestamp
 	if base.IsZero() {
@@ -66,24 +72,27 @@ func (a *viewThroughAttributor) attribute(ctx context.Context, e *analytics.Conv
 
 	imps, err := a.reader.ViewableImpressionsForUsers(ctx, users, e.AccountID, e.CampaignID, since, requireViewable)
 	if err != nil {
-		a.log.Warn("view-through lookback failed", "conv_trace", e.TraceID, "error", err)
+		a.log.Warn("attribution lookback failed", "conv_trace", e.TraceID, "error", err)
 		return false
 	}
-	if len(imps) == 0 {
-		return false
+	if !clickThrough {
+		if len(imps) == 0 {
+			return false // no click, no prior exposure → unattributed
+		}
+		// Last-touch view-through (what settles): reader returns most-recent first.
+		e.AttributedTraceID = imps[0].TraceID
+		e.AttributionType = "view_through"
+		if e.CampaignID == "" {
+			e.CampaignID = imps[0].CampaignID
+		}
 	}
-	// Last-touch (what settles): the reader returns most-recent first.
-	e.AttributedTraceID = imps[0].TraceID
-	e.AttributionType = "view_through"
-	if e.CampaignID == "" {
-		e.CampaignID = imps[0].CampaignID
-	}
-	// Multi-touch (reporting only): record the WHOLE chain of exposures so
-	// fractional credit can be computed per model on read. Billing still settles
-	// last-touch above.
+	// Multi-touch (reporting only): record the exposure chain so fractional credit
+	// can be computed per model on read. For view-through it's the full chain; for
+	// click-through it's the assisting impressions (the click stays last-touch on
+	// the conversion). Billing settles last-touch regardless.
 	a.recordChain(ctx, e, imps)
-	a.log.Debug("view-through attributed", "conv_trace", e.TraceID,
-		"exposure_trace", imps[0].TraceID, "chain", len(imps), "resolved_users", len(users))
+	a.log.Debug("conversion attributed", "conv_trace", e.TraceID, "type", e.AttributionType,
+		"exposure_trace", e.AttributedTraceID, "chain", len(imps), "resolved_users", len(users))
 	return true
 }
 

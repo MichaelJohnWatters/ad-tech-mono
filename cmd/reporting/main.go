@@ -236,6 +236,7 @@ func main() {
 	// this) — registered unconditionally, unlike the /debug alias below.
 	mux.HandleFunc(routes.ReportingRollupRun, rollupRunHandler(rollupEngine, log))
 	// ADR 0006 phase 4: hourly ClickHouse→Parquet export (idempotent per hour).
+	mux.HandleFunc(routes.ReportingAttribution, attributionHandler(store, log))
 	mux.HandleFunc(routes.ReportingExportRun, exportRunHandler(store, cfg, log))
 	// ADR 0006 phase 5: export reconciliation (replaces the retired Delta snapshot).
 	mux.HandleFunc(routes.ReportingExportSnapshot, exportSnapshotHandler(store, cfg, log))
