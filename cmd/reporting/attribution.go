@@ -11,10 +11,12 @@ import (
 )
 
 // identityResolver expands one id to the platform ids linked to it (either
-// direction), via the Postgres identity graph. Optional: nil means same-id-only
-// matching (no cross-device / cross-publisher resolution).
+// direction), via the Postgres identity graph, following only edges at/above a
+// confidence floor and capped at `limit` — because a wrong/poisoned link here
+// mis-attributes real CPA billing. Optional: nil means same-id-only matching (no
+// cross-device / cross-publisher resolution).
 type identityResolver interface {
-	ResolveIdentity(ctx context.Context, id string) ([]string, error)
+	ResolveIdentityConfident(ctx context.Context, id string, minConfidence float64, limit int) ([]string, error)
 }
 
 // viewThroughAttributor credits a click-less conversion to the most-recent
@@ -150,21 +152,34 @@ func (a *viewThroughAttributor) recordChain(ctx context.Context, e *analytics.Co
 func (a *viewThroughAttributor) resolveUsers(ctx context.Context, uid string) []string {
 	set := map[string]struct{}{uid: {}}
 	if a.resolver != nil {
-		first, err := a.resolver.ResolveIdentity(ctx, uid)
+		minConf := keys.Attribution.MinIdentityConfidence.Get(a.cfg)
+		maxIDs := keys.Attribution.MaxResolvedIDs.Get(a.cfg)
+		add := func(ids []string) bool { // returns false once the cap is hit
+			for _, id := range ids {
+				if len(set) >= maxIDs {
+					return false
+				}
+				set[id] = struct{}{}
+			}
+			return true
+		}
+		first, err := a.resolver.ResolveIdentityConfident(ctx, uid, minConf, maxIDs)
 		if err != nil {
 			a.log.Warn("identity resolve failed", "uid", uid, "error", err)
 		}
+		ok := add(first)
 		for _, id := range first {
-			set[id] = struct{}{}
-		}
-		for _, id := range first {
-			second, err := a.resolver.ResolveIdentity(ctx, id)
+			if !ok {
+				break
+			}
+			second, err := a.resolver.ResolveIdentityConfident(ctx, id, minConf, maxIDs)
 			if err != nil {
 				continue
 			}
-			for _, s := range second {
-				set[s] = struct{}{}
-			}
+			ok = add(second)
+		}
+		if len(set) >= maxIDs {
+			a.log.Warn("attribution: resolved-id set hit the cap", "cap", maxIDs, "conv_uid", uid)
 		}
 	}
 	out := make([]string, 0, len(set))

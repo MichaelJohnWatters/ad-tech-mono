@@ -45,6 +45,20 @@ ON CONFLICT (user_id, linked_id, source) DO NOTHING`
 	}
 }
 
+// AddIdentityEdgeWithConfidence seeds an identity_graph link at a specific
+// confidence — for testing the attribution resolver's confidence floor (weak
+// probabilistic links must not drive billing).
+func (h *Harness) AddIdentityEdgeWithConfidence(t *testing.T, userID, linkedID, linkType string, confidence float64) {
+	t.Helper()
+	const q = `
+INSERT INTO identity_graph (user_id, linked_id, source, link_type, confidence)
+VALUES ($1, $2, 'e2e', $3, $4)
+ON CONFLICT (user_id, linked_id, source) DO UPDATE SET confidence = $4`
+	if _, err := h.DB.Exec(q, userID, linkedID, linkType, confidence); err != nil {
+		t.Fatalf("add identity edge %s→%s @%.2f: %v", userID, linkedID, confidence, err)
+	}
+}
+
 // IdentityEdgeCount counts identity_graph rows touching userID (either endpoint).
 func (h *Harness) IdentityEdgeCount(t *testing.T, userID string) int {
 	t.Helper()

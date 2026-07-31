@@ -37,6 +37,15 @@ func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID s
 	if p == nil {
 		return
 	}
+	// Consent gate (mirrors behaviourPublisher.Observe): building identity-graph
+	// edges links a user's identifiers, so it needs personalisation consent — the
+	// same gate the behaviour publish right after this uses. Without it, a
+	// GDPR-no-consent / GPC / opt-out serve would still silently build the graph
+	// (a privacy gap, and — since attribution now reads the graph for billing — a
+	// poisoning surface from unauthenticated browser serves).
+	if !requestConsent(r).Personalise {
+		return
+	}
 	p.pub.Publish(tracing.TraceIDFromContext(r.Context()), gatherSignals(r, userID, uid2, householdID), requestFingerprint(r))
 }
 
