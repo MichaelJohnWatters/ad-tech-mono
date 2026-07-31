@@ -61,10 +61,18 @@
       else log('✗ consent declined — no retargeting pixel (no audience)', 'no');
     });
   }
-  // Checkout → the tag fires the conversion pixel (consent-gated inside the tag).
-  function fireConversion(type, rev){
-    if (adtechadv.conversion(type, rev)) log('▶ CONVERSION pixel fired · '+type+' $'+rev, 'ev');
-    else log('✗ conversion not fired (no consent)', 'no');
+  // Conversions are the platform's BILLING trigger, so they are NOT fired from
+  // the browser (an unsigned conv pixel would be billing fraud). Instead we POST
+  // the sale to OUR OWN server (/convert), which signs the tracker URL with the
+  // advertiser's platform-issued key and fires it server-to-server.
+  function convert(type, rev){
+    if (!adtechadv.hasConsent()) { log('✗ conversion not sent (no consent)', 'no'); return; }
+    fetch('/convert', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
+                        body:'type='+encodeURIComponent(type)+'&rev='+encodeURIComponent(rev) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ log(j.ok ? '▶ CONVERSION recorded (server-to-server · signed) · '+type+' $'+rev
+                                  : '✗ conversion postback failed', j.ok?'ev':'no'); })
+      .catch(function(e){ log('✗ conversion error: '+e.message, 'no'); });
   }
   document.addEventListener('DOMContentLoaded', function(){
     var c = localStorage.getItem('ford_consent');

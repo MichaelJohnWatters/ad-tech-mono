@@ -28,17 +28,24 @@
 
     // First-party visitor id the advertiser owns (a hashed id, persisted). Real
     // advertisers key this on a hashed email / CRM id; here we synthesise one
-    // once and persist it, exactly as a first-party site would.
+    // once and persist it, exactly as a first-party site would. It's persisted in
+    // BOTH localStorage and a first-party cookie so the advertiser's OWN SERVER
+    // can read it to attribute a server-to-server conversion (see below).
     function visitorId() {
         var id = localStorage.getItem('adtechadv_uid');
-        if (id) return Promise.resolve(id);
+        if (id) { setCookie('adtechadv_uid', id); return Promise.resolve(id); }
         return crypto.subtle.digest('SHA-256', new TextEncoder().encode('visitor-' + Math.random() + Date.now()))
             .then(function (buf) {
                 id = 'he_' + Array.from(new Uint8Array(buf)).slice(0, 16)
                     .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
                 localStorage.setItem('adtechadv_uid', id);
+                setCookie('adtechadv_uid', id);
                 return id;
             });
+    }
+    function setCookie(name, value) {
+        var d = new Date(); d.setTime(d.getTime() + 90 * 86400000);
+        document.cookie = name + '=' + value + ';path=/;expires=' + d.toUTCString() + ';SameSite=Lax';
     }
 
     var adtechadv = {
@@ -68,15 +75,14 @@
             });
         },
 
-        // conversion(type, rev) fires a billed conversion event (consent-gated).
-        // Returns false and fires nothing without consent.
-        conversion: function (type, rev) {
-            if (!state.consented) { log('conversion suppressed — no consent'); return false; }
-            pixel(config.trackerUrl + '/v1/t/conv?tid=order-' + Date.now() +
-                '&type=' + encodeURIComponent(type) + '&rev=' + (rev || 0) + '&cur=USD');
-            log('conversion pixel fired', type, rev);
-            return true;
-        },
+        // NOTE: there is deliberately NO browser conversion() method. A conversion
+        // is the platform's CPA BILLING trigger, so /v1/t/conv is HMAC-signed and
+        // MUST be fired server-to-server by the advertiser's backend (which the
+        // platform issues a signing key to) — never from the browser, where an
+        // unsigned pixel would be a billing-fraud surface. The browser tag only
+        // does audience/measurement work (setConsent -> retargeting) and exposes
+        // the visitor id (localStorage + cookie) so the advertiser's server can
+        // attribute its S2S conversion postback. See cmd/demoadv for the pattern.
 
         getVisitorId: function () { return state.uid; },
         hasConsent: function () { return state.consented; }
