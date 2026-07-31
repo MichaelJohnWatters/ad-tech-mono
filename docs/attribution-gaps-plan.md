@@ -15,7 +15,7 @@ integration each side actually needs. Grounded in a current-state investigation
 | G3 | Tenant-scope `/v1/reporting/attribution` | platform | S | **security** | prerequisite for G4 | ✅ shipped |
 | G4 | Portal attribution / MTA view | platform UI | M | low | the visible payoff | ✅ shipped |
 | G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model | todo |
-| G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback | todo |
+| G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback | ✅ shipped |
 | G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud | todo |
 
 **G1–G3 shipped.** Key find while doing G1: `ssp.identity_observe_enabled`

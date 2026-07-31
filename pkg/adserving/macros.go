@@ -35,7 +35,12 @@ type MacroContext struct {
 	// consent (models.ServeRequest.UserID: "empty = no consent"). Baked into
 	// tracker beacons as uid= so interaction events can feed the consent-gated
 	// behaviour_signals table; its presence IS the consent signal downstream.
-	UserID     string
+	UserID string
+	// Household is the SSP-derived salted-IP household id ("hh:…"). Baked onto
+	// consented beacons as hh= so behaviour_signals carries it — the fallback key
+	// view-through attribution matches when the exact user id doesn't line up
+	// (cross-device / CTV). Consent-coupled: only ridden alongside a consented uid.
+	Household  string
 	Channel    string // display|video|native|audio — baked into tracker beacons so analytics label the right channel
 	UserAgent  string
 	IP         string
@@ -138,6 +143,9 @@ func BuildViewabilityURL(ctx MacroContext) string {
 	params.Set("pubid", ctx.PublisherID)
 	if ctx.UserID != "" {
 		params.Set("uid", ctx.UserID)
+		if ctx.Household != "" {
+			params.Set("hh", ctx.Household)
+		}
 	}
 	// Channel rides SIGNED (the server knows it at serve time) so the tracker
 	// applies the right IAB dwell — 2s for video vs 1s for display — and it
@@ -221,8 +229,12 @@ func setGeoDevice(params url.Values, ctx MacroContext) {
 		params.Set("ch", ctx.Channel)
 	}
 	// Consent-gated by construction: UserID is only non-empty when the serve
-	// request carried a consented user (see MacroContext.UserID).
+	// request carried a consented user (see MacroContext.UserID). The household
+	// rides alongside it (never on an unconsented beacon).
 	if ctx.UserID != "" {
 		params.Set("uid", ctx.UserID)
+		if ctx.Household != "" {
+			params.Set("hh", ctx.Household)
+		}
 	}
 }
