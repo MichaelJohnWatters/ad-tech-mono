@@ -562,6 +562,49 @@ func (s *MemoryStore) InsertBehaviourSignals(_ context.Context, es []*BehaviourS
 	return nil
 }
 
+// ViewableImpressionsForUsers is the memory-backend view-through lookback (see
+// the ClickHouse impl): behaviour_signals impressions for the user set + account
+// (optionally one campaign) since `since`, with viewability recovered by
+// correlating the views slice on trace_id. Most-recent first.
+func (s *MemoryStore) ViewableImpressionsForUsers(_ context.Context, userIDs []string, accountID, campaignID string, since time.Time, requireViewable bool) ([]ViewableImpression, error) {
+	if len(userIDs) == 0 || accountID == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	want := make(map[string]bool, len(userIDs))
+	for _, u := range userIDs {
+		want[u] = true
+	}
+	viewable := make(map[string]bool)
+	for i := range s.views {
+		if s.views[i].IABViewable {
+			viewable[s.views[i].TraceID] = true
+		}
+	}
+	var out []ViewableImpression
+	for i := range s.behaviourSignals {
+		b := &s.behaviourSignals[i]
+		if b.Kind != "impression" || b.AccountID != accountID || !want[b.UserID] {
+			continue
+		}
+		if b.ObservedAt.Before(since) {
+			continue
+		}
+		if campaignID != "" && b.CampaignID != campaignID {
+			continue
+		}
+		vw := viewable[b.TraceID]
+		if requireViewable && !vw {
+			continue
+		}
+		out = append(out, ViewableImpression{TraceID: b.TraceID, CampaignID: b.CampaignID, Timestamp: b.ObservedAt, Viewable: vw})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp.After(out[j].Timestamp) })
+	return out, nil
+}
+
 // InsertProfileSignals appends the EXPANDED per-id onboarding rows (ADR 0006
 // phase 1) — memory-backend parity for the ClickHouse bulk insert.
 func (s *MemoryStore) InsertProfileSignals(_ context.Context, es []*ProfileSignalRow) error {

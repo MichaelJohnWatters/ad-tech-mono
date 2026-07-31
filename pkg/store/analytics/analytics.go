@@ -98,6 +98,33 @@ type PublisherImpressionReader interface {
 	ImpressionsByPublisher(ctx context.Context, since time.Time) (map[string]int64, error)
 }
 
+// ViewableImpression is one prior ad exposure a view-through conversion can be
+// credited to: the impression's trace, its campaign, when it was served, and
+// whether it was IAB-viewable. Sourced from behaviour_signals (which carries the
+// consented user_id impressions lack) joined to the views table for the verdict.
+type ViewableImpression struct {
+	TraceID    string
+	CampaignID string
+	Timestamp  time.Time
+	Viewable   bool
+}
+
+// ViewThroughReader is the optional capability behind view-through attribution:
+// the most-recent ad exposures for a set of platform user ids, scoped to an
+// advertiser account (and optionally one campaign), since a lookback point.
+// requireViewable filters to IAB-viewable exposures in the store. Results are
+// ordered most-recent-first so the caller can take the last touch. ClickHouse +
+// MemoryStore implement it; discovered by type assertion.
+type ViewThroughReader interface {
+	ViewableImpressionsForUsers(ctx context.Context, userIDs []string, accountID, campaignID string, since time.Time, requireViewable bool) ([]ViewableImpression, error)
+}
+
+var (
+	_ ViewThroughReader = (*ClickHouse)(nil)
+	_ ViewThroughReader = (*MemoryStore)(nil)
+	_ ViewThroughReader = (*HotColdStore)(nil)
+)
+
 // RollupRow is one aggregated row produced by the rollup engine: a set of
 // dimension values + metric values for a (config, level, time-window).
 // Dimensions and metrics are maps rather than fixed columns so a single

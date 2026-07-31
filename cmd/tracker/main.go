@@ -692,6 +692,16 @@ func (p *eventPublisher) publishRejected(ctx context.Context, eventType, reason,
 	}
 }
 
+// firstNonEmpty returns the first non-empty string, or "".
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // publishBehaviour emits one consent-gated interaction row for the profile
 // store's behaviour_signals lake table. The uid param is ONLY baked into
 // beacon URLs for consented serves (models.ServeRequest.BehaviourUserID), so
@@ -714,9 +724,12 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 		Channel:       channelOrDefault(q.Get("ch")),
 		Geo:           q.Get("geo"),
 		Device:        q.Get("dev"),
-		// Retargeting-pixel attribution (kind site_visit): the advertiser
-		// account whose site fired the pixel + its self-chosen tag.
-		AccountID:  q.Get("aid"),
+		// The advertiser account the row is scoped to. site_visit (retargeting
+		// pixel) carries it as `aid`; impression/click/view beacons carry it as
+		// `advid`. Stamping it on the ad-exposure kinds too is what lets
+		// view-through attribution scope a click-less conversion's lookback to
+		// the advertiser's own prior impressions.
+		AccountID:  firstNonEmpty(q.Get("aid"), q.Get("advid")),
 		Tag:        q.Get("tag"),
 		ObservedAt: time.Now().UTC(),
 	}

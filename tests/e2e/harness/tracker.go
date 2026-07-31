@@ -36,6 +36,30 @@ func (h *Harness) FireImpressionWithModel(t *testing.T, traceID, campaignID, cre
 	h.fireAndConsume(t, url, "impression")
 }
 
+// FireImpressionWithUser is FireImpressionWithModel that also carries the
+// consented visitor id (uid) — the signal that makes the tracker write a
+// behaviour_signals kind='impression' row (user_id + advertiser account), the
+// lookback source view-through attribution reads. Production stamps uid on the
+// beacon only for consented serves (ServeRequest.BehaviourUserID).
+func (h *Harness) FireImpressionWithUser(t *testing.T, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, currency string, price float64, bidModel, userID string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=%s&pubid=%s&advid=%s&price=%.4f&cur=%s&bm=%s&uid=%s",
+		h.URLs.Tracker, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, price, currency, bidModel, userID)
+	h.fireAndConsume(t, url, "impression")
+}
+
+// FireConversionForVisitor fires a click-less conversion the way an advertiser's
+// server-to-server postback does for a view-through: its own (synthetic) trace,
+// the advertiser account (advid) and the advertiser-side visitor id (uid), and
+// NO ctid (no click to thread). Attribution must resolve the visitor to a prior
+// viewable exposure. Signs like production.
+func (h *Harness) FireConversionForVisitor(t *testing.T, convTrace, accountID, uid, convType, currency string, revenue float64) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/conv?tid=%s&type=%s&rev=%.4f&cur=%s&advid=%s&uid=%s",
+		h.URLs.Tracker, convTrace, convType, revenue, currency, accountID, uid)
+	h.fireAndConsume(t, url, "conversion")
+}
+
 // FireImpressionDeal is FireImpression with the winning deal's ID stamped
 // as the `deal` query param — production stamps it via
 // pkg/adserving.BuildImpressionURL when the serve context carries a deal.
