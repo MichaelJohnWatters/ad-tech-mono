@@ -28,15 +28,16 @@ type identityResolver interface {
 // low-volume, and reporting already owns the analytics store + billing settle.
 // If conversion volume grows, this is the seam to lift into cmd/attribution-consumer.
 type viewThroughAttributor struct {
-	reader   analytics.ViewThroughReader
-	writer   analytics.AttributionWriter // may be nil (no multi-touch chain capture)
-	resolver identityResolver             // may be nil (no cross-device)
-	cfg      *config.Config
-	log      *slog.Logger
+	reader    analytics.ViewThroughReader
+	writer    analytics.AttributionWriter // may be nil (no multi-touch chain capture)
+	resolver  identityResolver            // may be nil (no cross-device)
+	overrides *pgAttributionConfigSource  // may be nil (global config only)
+	cfg       *config.Config
+	log       *slog.Logger
 }
 
-func newViewThroughAttributor(reader analytics.ViewThroughReader, writer analytics.AttributionWriter, resolver identityResolver, cfg *config.Config, log *slog.Logger) *viewThroughAttributor {
-	return &viewThroughAttributor{reader: reader, writer: writer, resolver: resolver, cfg: cfg, log: log}
+func newViewThroughAttributor(reader analytics.ViewThroughReader, writer analytics.AttributionWriter, resolver identityResolver, overrides *pgAttributionConfigSource, cfg *config.Config, log *slog.Logger) *viewThroughAttributor {
+	return &viewThroughAttributor{reader: reader, writer: writer, resolver: resolver, overrides: overrides, cfg: cfg, log: log}
 }
 
 func (a *viewThroughAttributor) enabled() bool {
@@ -67,15 +68,32 @@ func (a *viewThroughAttributor) attribute(ctx context.Context, e *analytics.Conv
 		base = time.Now()
 	}
 	windowHrs := keys.Attribution.ViewThroughWindowHrs.Get(a.cfg)
-	since := base.Add(-time.Duration(windowHrs) * time.Hour)
 	requireViewable := keys.Attribution.RequireViewability.Get(a.cfg)
+	// Per-line-item overrides (gap G5): a campaign can tighten the window /
+	// viewability over the global defaults. Only applies when the conversion names
+	// its campaign up front (carries cid, or click-through) — a bare view-through
+	// pixel doesn't know the campaign until AFTER the lookback, so globals apply.
+	overrideApplied := false
+	if a.overrides != nil && e.CampaignID != "" {
+		if ov := a.overrides.Get(ctx, e.CampaignID); ov != nil {
+			overrideApplied = true
+			if ov.ViewWindowHours != nil {
+				windowHrs = *ov.ViewWindowHours
+			}
+			if ov.RequireViewable != nil {
+				requireViewable = *ov.RequireViewable
+			}
+		}
+	}
+	since := base.Add(-time.Duration(windowHrs) * time.Hour)
 
 	imps, err := a.reader.ViewableImpressionsForUsers(ctx, users, e.AccountID, e.CampaignID, since, requireViewable)
 	if err != nil {
 		a.log.Warn("attribution lookback failed", "conv_trace", e.TraceID, "error", err)
 		return false
 	}
-	a.log.Debug("attribution lookback", "conv_trace", e.TraceID,
+	a.log.Debug("attribution lookback", "conv_trace", e.TraceID, "campaign", e.CampaignID,
+		"window_hrs", windowHrs, "override_applied", overrideApplied,
 		"resolved_ids", len(users), "imps", len(imps), "click_through", clickThrough)
 	if !clickThrough {
 		if len(imps) == 0 {

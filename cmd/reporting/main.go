@@ -183,8 +183,12 @@ func main() {
 			}
 		}
 		aw, _ := store.(analytics.AttributionWriter) // nil → no multi-touch chain capture
-		consumer.SetViewThroughAttributor(newViewThroughAttributor(vr, aw, idResolver, cfg, log))
-		log.Info("view-through attribution enabled", "cross_device", idResolver != nil, "multitouch", aw != nil)
+		var attrOverrides *pgAttributionConfigSource
+		if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
+			attrOverrides = newPGAttributionConfigSource(dbURL, log) // per-line-item windows; fail-open to globals
+		}
+		consumer.SetViewThroughAttributor(newViewThroughAttributor(vr, aw, idResolver, attrOverrides, cfg, log))
+		log.Info("view-through attribution enabled", "cross_device", idResolver != nil, "multitouch", aw != nil, "per_campaign_overrides", attrOverrides != nil)
 	} else {
 		log.Warn("view-through attribution disabled (analytics store lacks view-through lookback)")
 	}

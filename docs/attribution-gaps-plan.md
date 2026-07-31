@@ -14,7 +14,7 @@ integration each side actually needs. Grounded in a current-state investigation
 | G2 | Browser demo bridges end-to-end | demo | S | low | visible proof, no seeding | ✅ shipped |
 | G3 | Tenant-scope `/v1/reporting/attribution` | platform | S | **security** | prerequisite for G4 | ✅ shipped |
 | G4 | Portal attribution / MTA view | platform UI | M | low | the visible payoff | ✅ shipped |
-| G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model | todo |
+| G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model | ✅ shipped |
 | G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback | ✅ shipped |
 | G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud | todo |
 
