@@ -125,6 +125,35 @@ var (
 	_ ViewThroughReader = (*HotColdStore)(nil)
 )
 
+// AttributionTouchpointRow is one exposure in a conversion's multi-touch chain.
+// The chain is stored model-agnostically (just the touchpoints + timings);
+// fractional credit per model is computed on read via pkg/attribution, so a new
+// model needs no re-write. Billing still settles last-touch — these rows are the
+// reporting picture only.
+type AttributionTouchpointRow struct {
+	ConversionTraceID string
+	TouchpointTraceID string
+	AccountID         string
+	CampaignID        string
+	TouchpointType    string // impression | click | view
+	TouchpointAt      time.Time
+	ConversionAt      time.Time
+	ConversionRevenue float64
+	ObservedAt        time.Time
+}
+
+// AttributionWriter persists multi-touch attribution chains. Optional capability
+// (ClickHouse + MemoryStore); reporting no-ops when the store lacks it.
+type AttributionWriter interface {
+	InsertAttributionTouchpoints(ctx context.Context, rows []*AttributionTouchpointRow) error
+}
+
+var (
+	_ AttributionWriter = (*ClickHouse)(nil)
+	_ AttributionWriter = (*MemoryStore)(nil)
+	_ AttributionWriter = (*HotColdStore)(nil)
+)
+
 // RollupRow is one aggregated row produced by the rollup engine: a set of
 // dimension values + metric values for a (config, level, time-window).
 // Dimensions and metrics are maps rather than fixed columns so a single

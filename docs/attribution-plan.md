@@ -208,11 +208,29 @@ saw-but-didn't-click path.
 
 ---
 
-## Phase 3 — Multi-touch attribution (reporting only)
+## Phase 3 — Multi-touch attribution (reporting only) — ✅ SHIPPED
 
-**Goal:** report how a set of touchpoints shared credit (linear / time-decay /
-position-based) without changing billing (billing stays last-touch — you can't
-charge a CPA twice).
+Delivered + e2e-green (`tests/e2e/attribution_multitouch_test.go`): a user
+exposed 3× before converting has the WHOLE chain recorded, while billing settles
+exactly once (last-touch). Pieces:
+- **`pkg/attribution`** — pure `Apportion(chain, conversionAt, model)` →
+  per-touchpoint credit fractions summing to 1, for last_touch / first_touch /
+  linear / time_decay (7d half-life) / position_based (40/40/20). Unit-tested.
+  (Supersedes the dead `pkg/billing/attribution.go` prototype.)
+- **`attribution_touchpoints` CH table + `AttributionWriter`** (ClickHouse +
+  memory + hotcold). The chain is stored **model-agnostically** (touchpoints +
+  timings); fractional credit is computed on read, so a new model needs no
+  re-write.
+- The reporting attributor records the full chain when it attributes view-through;
+  the last-touch element still drives the settle.
+
+Not built (deliberate, follow-up): the portal MTA breakdown view (read side +
+UI). Chain capture + apportionment math are done and tested; rendering is a thin
+add. Click-through conversions don't yet record a chain (only view-through does).
+
+**Original goal:** report how a set of touchpoints shared credit (linear /
+time-decay / position-based) without changing billing (billing stays last-touch —
+you can't charge a CPA twice).
 
 **Design**
 - attribution-consumer emits the full `touchpoint_chain` (already envisioned in
