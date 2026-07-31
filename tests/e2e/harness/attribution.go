@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
@@ -32,9 +34,37 @@ type AttributionBreakdown struct {
 	Touchpoints       []AttributionTouchpoint `json:"touchpoints"`
 }
 
-// GetAttribution reads the multi-touch breakdown for a conversion under a model
-// from the live reporting API (/v1/reporting/attribution).
+// GetAttribution reads the multi-touch breakdown as STAFF (unscoped) — the
+// default for tests that just want the data.
 func (h *Harness) GetAttribution(t *testing.T, conversionTrace, model string) AttributionBreakdown {
+	return h.GetAttributionAs(t, conversionTrace, model, string(auth.AccountStaff), "")
+}
+
+// GetAttributionAs reads the breakdown as a given account (type + id) by setting
+// the X-Account-* headers the gateway would inject — so tests can exercise the
+// reporting-side tenant scope directly. Fails on non-200.
+func (h *Harness) GetAttributionAs(t *testing.T, conversionTrace, model, acctType, acctID string) AttributionBreakdown {
+	t.Helper()
+	resp, body := h.getAttributionRaw(t, conversionTrace, model, acctType, acctID)
+	if resp != http.StatusOK {
+		t.Fatalf("attribution GET status %d: %s", resp, body)
+	}
+	var out AttributionBreakdown
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("attribution decode: %v (body: %s)", err, body)
+	}
+	return out
+}
+
+// AttributionStatusAs returns just the HTTP status for a scoped request (for
+// asserting forbidden). acctType/acctID may be empty to send no scope headers.
+func (h *Harness) AttributionStatusAs(t *testing.T, conversionTrace, acctType, acctID string) int {
+	t.Helper()
+	status, _ := h.getAttributionRaw(t, conversionTrace, "linear", acctType, acctID)
+	return status
+}
+
+func (h *Harness) getAttributionRaw(t *testing.T, conversionTrace, model, acctType, acctID string) (int, []byte) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -43,20 +73,19 @@ func (h *Harness) GetAttribution(t *testing.T, conversionTrace, model string) At
 	if err != nil {
 		t.Fatalf("attribution request: %v", err)
 	}
+	if acctType != "" {
+		req.Header.Set(constants.HeaderAccountType, acctType)
+	}
+	if acctID != "" {
+		req.Header.Set(constants.HeaderAccountID, acctID)
+	}
 	resp, err := h.HTTP.Do(req)
 	if err != nil {
 		t.Fatalf("attribution GET: %v", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("attribution GET status %d: %s", resp.StatusCode, body)
-	}
-	var out AttributionBreakdown
-	if err := json.Unmarshal(body, &out); err != nil {
-		t.Fatalf("attribution decode: %v (body: %s)", err, body)
-	}
-	return out
+	return resp.StatusCode, body
 }
 
 // FireConversionAttributedUser is FireConversionAttributed that also carries the

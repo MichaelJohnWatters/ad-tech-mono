@@ -38,6 +38,14 @@ func attributionHandler(store analytics.Store, log *slog.Logger) http.HandlerFun
 			http.Error(w, "conversion_trace required", http.StatusBadRequest)
 			return
 		}
+		// Tenant scope: an advertiser/agency may only read its OWN conversion's
+		// chain; staff/admin are unscoped; publishers (no account scope) are
+		// denied — conversion attribution is advertiser data.
+		scope, unscoped, ok := scopeFromRequest(r)
+		if !ok || (!unscoped && scope.AccountID == "") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 		model := r.URL.Query().Get("model")
 		if model == "" {
 			model = attribution.ModelLinear
@@ -51,6 +59,11 @@ func attributionHandler(store analytics.Store, log *slog.Logger) http.HandlerFun
 			log.Error("attribution chain read failed", "conv_trace", convTrace, "error", err)
 			http.Error(w, "read failed", http.StatusInternalServerError)
 			return
+		}
+		// Don't leak another tenant's conversion: blank the chain when the caller
+		// isn't its owner (indistinguishable from "no chain" on purpose).
+		if !unscoped && len(chain) > 0 && chain[0].AccountID != scope.AccountID {
+			chain = nil
 		}
 
 		resp := attributionResponse{ConversionTraceID: convTrace, Model: model}

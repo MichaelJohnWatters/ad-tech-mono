@@ -251,6 +251,13 @@ services:
         value: "adtech.local"
       - name: SSP_SELLER_ID
         value: "adtech-ssp"
+      # Build the identity graph from serves: publish per-request identity signals
+      # (publisher_user_id, uid2, hashed_email, ifa, IP+UA) to the
+      # identity-consumer. STATIC-tier (env-only) so set here durably. Required for
+      # cross-site / cross-device identity — the publisher half of the bridge
+      # view-through attribution resolves across.
+      - name: SSP_IDENTITY_OBSERVE_ENABLED
+        value: "true"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL

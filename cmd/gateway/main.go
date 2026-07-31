@@ -841,6 +841,13 @@ func main() {
 			middleware.StripPrefix(routes.APIRecentImpressions, middleware.ReverseProxy(reportingURL+routes.ReportingRecentImpressions, log))))
 	mux.Handle(routes.APIRecentImpressions, authMiddleware(recentProxy))
 
+	// Attribution / multi-touch view: same scope-injection as the trace inspector;
+	// reporting enforces the account filter from the injected X-Account-* headers.
+	attrProxy := middleware.RequirePermission("reports:read")(
+		injectTraceScope(tracePubs, log)(
+			middleware.StripPrefix(routes.APIAttribution, middleware.ReverseProxy(reportingURL+routes.ReportingAttribution, log))))
+	mux.Handle(routes.APIAttribution, authMiddleware(attrProxy))
+
 	// Pass-through proxies (Swagger try-it-out, dev tools)
 	mux.Handle(routes.ProxyReporting, middleware.CORS(middleware.ReverseProxy(reportingURL, log)))
 	mux.Handle(routes.ProxyOpenRTB, middleware.CORS(middleware.ReverseProxy(exchangeURL, log)))
