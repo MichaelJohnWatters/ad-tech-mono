@@ -120,7 +120,8 @@ func (c *ClickHouse) createTables() error {
 		`CREATE TABLE IF NOT EXISTS conversions (
 			trace_id String, campaign_id String, creative_id String, placement_id String,
 			account_id String, conversion_type String, revenue Float64, currency String,
-			revenue_usd Float64, schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+			revenue_usd Float64, schema_version Int32 DEFAULT 1, timestamp DateTime64(3),
+			attributed_trace_id String, attribution_type String, user_id String
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS views (
 			trace_id String, campaign_id String, creative_id String, placement_id String,
@@ -260,6 +261,12 @@ func (c *ClickHouse) createTables() error {
 		// Video viewability: split display (1s dwell) vs video (2s) viewable
 		// events. Old rows read as empty = display.
 		`ALTER TABLE views ADD COLUMN IF NOT EXISTS channel String`,
+		// Conversion attribution (Phase 0 — close the trace loop). The exposure
+		// this conversion is credited to + how, and the advertiser-side visitor
+		// id. Old rows read as empty = unattributed.
+		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS attributed_trace_id String`,
+		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS attribution_type String`,
+		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS user_id String`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
 			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
@@ -326,10 +333,12 @@ func (c *ClickHouse) InsertClick(ctx context.Context, e *ClickEvent) error {
 func (c *ClickHouse) InsertConversion(ctx context.Context, e *ConversionEvent) error {
 	return c.exec(ctx, "conversion",
 		`INSERT INTO conversions (trace_id, campaign_id, creative_id, placement_id, account_id,
-			conversion_type, revenue, currency, revenue_usd, schema_version, timestamp)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			conversion_type, revenue, currency, revenue_usd, schema_version, timestamp,
+			attributed_trace_id, attribution_type, user_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.AccountID, e.ConversionType,
-		e.Revenue, e.Currency, e.RevenueUSD, int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+		e.Revenue, e.Currency, e.RevenueUSD, int32(schemaVer(e.SchemaVersion)), e.Timestamp,
+		e.AttributedTraceID, e.AttributionType, e.UserID)
 }
 
 func (c *ClickHouse) InsertView(ctx context.Context, e *ViewEvent) error {

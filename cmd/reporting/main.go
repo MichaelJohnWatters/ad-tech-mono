@@ -773,13 +773,19 @@ func (c *EventConsumer) handleConversion(ctx context.Context, msg *events.Messag
 	}
 
 	// Settle the CPA reservation (if one exists). No-op for other models.
+	// Attribution closes the loop: the reservation lives on the EARNING
+	// exposure's trace (the impression/click), not the conversion's own trace,
+	// so settle against AttributedTraceID when set. Empty (unattributed) falls
+	// back to the conversion trace — legacy behaviour, normally a no-op.
 	if c.billing != nil {
-		if _, err := c.billing.SettleByTrace(ctx, e.TraceID, "conversion"); err != nil {
-			c.log.Warn("conversion settle failed", "trace_id", e.TraceID, "error", err)
+		if _, err := c.billing.SettleByTrace(ctx, e.SettleTraceID(), "conversion"); err != nil {
+			c.log.Warn("conversion settle failed", "trace_id", e.SettleTraceID(), "error", err)
 		}
 	}
 
-	c.log.Debug("conversion recorded", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
+	c.log.Debug("conversion recorded", "trace_id", e.TraceID,
+		"attributed_trace_id", e.AttributedTraceID, "attribution_type", e.AttributionType,
+		"campaign_id", e.CampaignID)
 	return msg.Ack()
 }
 

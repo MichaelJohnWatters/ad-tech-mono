@@ -316,7 +316,30 @@ type ConversionEvent struct {
 	Revenue        float64   `json:"revenue,omitempty"`
 	Currency       string    `json:"currency,omitempty"`
 	RevenueUSD     float64   `json:"revenue_usd,omitempty"`
-	Timestamp      time.Time `json:"timestamp"`
+	// AttributedTraceID is the trace of the ad exposure (impression/click) this
+	// conversion is credited to — the join that closes the attribution loop.
+	// For deterministic click-through it is the earning click's trace, captured
+	// on the landing page and returned by the advertiser (the gclid analog).
+	// Empty = unattributed (billing falls back to the conversion's own trace).
+	AttributedTraceID string `json:"attributed_trace_id,omitempty"`
+	// AttributionType is how the credit was assigned: "click_through" |
+	// "view_through" | "" (unattributed). Phase 0 only sets "click_through".
+	AttributionType string `json:"attribution_type,omitempty"`
+	// UserID is the advertiser-side first-party visitor id carried on the
+	// conversion (used by later phases to resolve view-through/cross-device).
+	UserID    string    `json:"user_id,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// SettleTraceID is the trace the CPA reservation lives on: the attributed
+// exposure trace (impression/click) when attribution resolved it, else the
+// conversion's own trace (legacy / unattributed — normally reservation-less).
+// Both the single and batch conversion consumers settle against this.
+func (e *ConversionEvent) SettleTraceID() string {
+	if e.AttributedTraceID != "" {
+		return e.AttributedTraceID
+	}
+	return e.TraceID
 }
 
 // AuctionEvent records an auction outcome.

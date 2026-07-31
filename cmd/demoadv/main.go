@@ -122,6 +122,15 @@ func main() {
 		if c, err := r.Cookie("adtechadv_uid"); err == nil {
 			uid = c.Value
 		}
+		// The earning click trace the adtech-adv.js tag captured off the landing
+		// URL (?adtech_tid=...) and stored first-party. Returning it as ctid is
+		// what lets the platform attribute this conversion to the impression that
+		// earned it and settle CPA against the right reservation (deterministic
+		// click-through). Absent (no ad click drove this visit) => unattributed.
+		ctid := ""
+		if c, err := r.Cookie("adtech_ctid"); err == nil {
+			ctid = c.Value
+		}
 		params := url.Values{}
 		params.Set("tid", "order-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 		params.Set("type", convType)
@@ -131,13 +140,16 @@ func main() {
 		if uid != "" {
 			params.Set("uid", uid)
 		}
+		if ctid != "" {
+			params.Set("ctid", ctid)
+		}
 		signed := adserving.SignURL(cfg.TrackerURL+"/v1/t/conv?"+params.Encode(), cfg.SigningKey)
 		status := 0
 		if resp, err := http.Get(signed); err == nil {
 			status = resp.StatusCode
 			resp.Body.Close()
 		}
-		log.Printf("demoadv S2S conversion postback: type=%s rev=%s uid=%s → tracker HTTP %d", convType, rev, uid, status)
+		log.Printf("demoadv S2S conversion postback: type=%s rev=%s uid=%s ctid=%s → tracker HTTP %d", convType, rev, uid, ctid, status)
 		w.Header().Set("Content-Type", "application/json")
 		if status == http.StatusOK {
 			_, _ = w.Write([]byte(`{"ok":true}`))

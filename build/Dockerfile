@@ -1,7 +1,7 @@
 # Shared multi-stage Dockerfile for all standard Go services.
 # Usage: docker build --build-arg SERVICE=dsp -f build/Dockerfile -t adtech-dsp .
 
-FROM golang:1.25-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS builder
+FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 ARG SERVICE
 WORKDIR /src
 COPY go.mod go.sum ./
