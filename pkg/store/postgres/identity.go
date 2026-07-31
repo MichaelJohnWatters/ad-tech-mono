@@ -181,6 +181,46 @@ SELECT count(*) FROM (
 	return n, nil
 }
 
+// ResolveIdentityConfident is ResolveIdentity with a confidence floor and a hard
+// result cap — for uses where a wrong/poisoned link has consequences (billing
+// attribution). minConfidence filters out weak edges (probabilistic IP+UA links
+// are 0.5; deterministic hashed-email/uid2/CRM are 1.0), so passing 1.0 follows
+// only deterministic links. limit bounds the result so a hugely-connected
+// (possibly poisoned) cluster can't explode a downstream IN-list.
+func (s *Store) ResolveIdentityConfident(ctx context.Context, id string, minConfidence float64, limit int) ([]string, error) {
+	if id == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	const q = `
+SELECT DISTINCT other FROM (
+    SELECT linked_id AS other FROM identity_graph
+      WHERE user_id = $1 AND confidence >= $2 AND (expires_at IS NULL OR expires_at > now())
+    UNION
+    SELECT user_id AS other FROM identity_graph
+      WHERE linked_id = $1 AND confidence >= $2 AND (expires_at IS NULL OR expires_at > now())
+) t
+WHERE other <> $1
+ORDER BY other
+LIMIT $3`
+	rows, closeRows, err := s.QueryPlatform(ctx, q, id, minConfidence, limit)
+	if err != nil {
+		return nil, fmt.Errorf("resolve identity (confident) %q: %w", id, err)
+	}
+	defer closeRows()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("scan linked id: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // ResolveIdentity returns the distinct identifiers linked to id (in either
 // direction), excluding id itself. Unexpired edges only. Used on the DSP bid
 // path to expand a UID2 / user id to its linked ids for segment lookup.

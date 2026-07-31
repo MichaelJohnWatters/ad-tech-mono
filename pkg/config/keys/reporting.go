@@ -81,6 +81,8 @@ var Attribution = struct {
 	ViewThroughWindowHrs  config.IntKey
 	RequireViewability    config.BoolKey
 	MinViewabilitySeconds config.FloatKey
+	MinIdentityConfidence config.FloatKey
+	MaxResolvedIDs        config.IntKey
 }{
 	Enabled:               reportingSet.Bool("attribution.enabled", "true", config.TierLive, "Master switch for conversion attribution. When off, a conversion still records but is not matched to an exposure and does not settle CPA (the deterministic ctid path included).", config.Since("v2.0")),
 	Model:                 reportingSet.String("attribution.model", "last_touch", config.TierLive, "Attribution model. Only 'last_touch' is implemented (most-recent qualifying touchpoint wins: last click within the click window, else last viewable impression within the view window). first_touch/linear/time_decay are future.", config.Since("v2.0")),
@@ -88,6 +90,8 @@ var Attribution = struct {
 	ViewThroughWindowHrs:  reportingSet.Int("attribution.view_through_window_hours", "168", config.TierLive, "Hours after a VIEWABLE impression within which a click-less conversion can be credited to it as view-through (default 168 = 7 days). Same billing-vs-reporting caveat as the click window.", config.Since("v2.0")),
 	RequireViewability:    reportingSet.Bool("attribution.require_viewability", "true", config.TierLive, "Only count IAB-viewable impressions for view-through attribution. When false, any served impression in the window qualifies.", config.Since("v2.0")),
 	MinViewabilitySeconds: reportingSet.Float("attribution.min_viewability_seconds", "1", config.TierLive, "Minimum dwell (seconds) an impression must have been viewable to qualify for view-through. The tracker already applies the IAB dwell (1s display / 2s video) when it stamps iab_viewable; this is an additional floor.", config.Since("v2.0")),
+	MinIdentityConfidence: reportingSet.Float("attribution.min_identity_confidence", "1", config.TierLive, "Minimum identity-graph edge confidence to follow when resolving a conversion's visitor to platform users for attribution. Deterministic links (hashed_email/uid2/CRM/advertiser id) are 1.0; probabilistic IP+UA links are 0.5. Default 1.0 = deterministic only, so a weak/poisoned probabilistic link can't drive CPA billing.", config.Since("v2.0")),
+	MaxResolvedIDs:        reportingSet.Int("attribution.max_resolved_ids", "50", config.TierLive, "Hard cap on the number of linked ids a conversion's visitor resolves to (across the 2-hop identity expansion). Bounds the view-through lookback's IN-list so a hugely-connected — possibly poisoned — identity cluster can't explode the query or over-match exposures. Truncation is logged.", config.Since("v2.0")),
 }
 
 // Billing holds the billing keys. They belong to the reporting service's
