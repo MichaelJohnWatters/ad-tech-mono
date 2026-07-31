@@ -52,13 +52,22 @@
   function log(msg, cls){ var d=document.getElementById('adxlog'); if(d) d.innerHTML += '<div class="'+(cls||'')+'">'+msg+'</div>'; }
   adtechadv.init({ trackerUrl: {{ .Cfg.TrackerURL }}, accountId: {{ .Cfg.AccountID }}, tag: TAG, debug: true });
 
-  // Consent → the tag fires the retargeting pixel (this visit joins the audience).
+  // The SAME persona email cmd/demosite (the publisher) knows this shopper by —
+  // hashed identically on both sides so the platform bridges the publisher visit
+  // to this advertiser's conversion (cross-site view-through attribution).
+  var DEMO_PERSONA_EMAIL = 'demo.shopper@example.com';
+
+  // Consent → identify the visitor by the hashed persona email, THEN fire the
+  // retargeting pixel (which carries the hash so the advertiser↔publisher bridge
+  // edge is built).
   function applyConsent(personalized){
     localStorage.setItem('ford_consent', personalized ? 'yes' : 'no');
     var b=document.getElementById('consent'); if(b) b.style.display='none';
-    adtechadv.setConsent(personalized).then(function(uid){
-      if (personalized) log('▶ retargeting pixel fired · tag="'+TAG+'" · visitor '+String(uid||'').slice(0,14)+'… → you\'re in the audience', 'ev');
-      else log('✗ consent declined — no retargeting pixel (no audience)', 'no');
+    if (!personalized) { log('✗ consent declined — no retargeting pixel (no audience)', 'no'); return; }
+    adtechadv.setEmail(DEMO_PERSONA_EMAIL).then(function(){
+      return adtechadv.setConsent(true);
+    }).then(function(uid){
+      log('▶ retargeting pixel fired (+hashed email) · tag="'+TAG+'" · visitor '+String(uid||'').slice(0,14)+'… → in the audience & bridgeable', 'ev');
     });
   }
   // Conversions are the platform's BILLING trigger, so they are NOT fired from

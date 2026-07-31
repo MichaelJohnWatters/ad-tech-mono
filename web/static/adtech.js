@@ -162,6 +162,10 @@
             });
             if (opts.geo) params.set('geo', opts.geo);
             if (opts.device) params.set('device', opts.device);
+            // Forward the first-party hashed email (if set via setUserData) so the
+            // SSP can link this publisher user to the same person on other sites —
+            // the publisher half of the cross-site identity bridge attribution uses.
+            if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
 
             var url = config.pubadUrl + '/v1/pubad/serve?' + params.toString();
 
@@ -206,6 +210,10 @@
             });
             if (opts.geo) params.set('geo', opts.geo);
             if (opts.device) params.set('device', opts.device);
+            // Forward the first-party hashed email (if set via setUserData) so the
+            // SSP can link this publisher user to the same person on other sites —
+            // the publisher half of the cross-site identity bridge attribution uses.
+            if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
 
             fetch(config.pubadUrl + '/v1/pubad/video/vast?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) {
@@ -237,6 +245,10 @@
             });
             if (opts.geo) params.set('geo', opts.geo);
             if (opts.device) params.set('device', opts.device);
+            // Forward the first-party hashed email (if set via setUserData) so the
+            // SSP can link this publisher user to the same person on other sites —
+            // the publisher half of the cross-site identity bridge attribution uses.
+            if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
 
             fetch(config.pubadUrl + '/v1/pubad/native?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) { return resp.status === 204 ? '' : resp.text(); })
@@ -266,6 +278,10 @@
             });
             if (opts.geo) params.set('geo', opts.geo);
             if (opts.device) params.set('device', opts.device);
+            // Forward the first-party hashed email (if set via setUserData) so the
+            // SSP can link this publisher user to the same person on other sites —
+            // the publisher half of the cross-site identity bridge attribution uses.
+            if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
 
             fetch(config.pubadUrl + '/v1/pubad/audio?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) {

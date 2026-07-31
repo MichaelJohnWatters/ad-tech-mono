@@ -49,13 +49,32 @@
 <script>
   window.__ads = { onConsent: null };
   adtech.init({ publisherId: {{.Cfg.PublisherID}}, pubadUrl: {{.Cfg.PubadURL}}, debug: true });
+
+  // A shared demo persona: the SAME email the demo advertiser (cmd/demoadv) knows
+  // this visitor by. Both sides hash it identically, so the platform can bridge
+  // this publisher-side visit to the advertiser-side conversion (view-through).
+  var DEMO_PERSONA_EMAIL = 'demo.shopper@example.com';
+  function sha256Hex(v) {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(v).trim().toLowerCase()))
+      .then(function (buf) {
+        return Array.from(new Uint8Array(buf)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+      });
+  }
+
   function applyConsent(personalized) {
     // GDPR applies; personalized = full TCF purposes 1-4, else contextual-only
     // (no cookie/personalization — the SDK drops the id cookie without purpose 1).
     adtech.setConsent({ gdpr: true, purposes: personalized ? [1,2,3,4] : [] });
     localStorage.setItem('demotimes_consent', personalized ? 'personalized' : 'contextual');
     var b = document.getElementById('consent'); if (b) b.style.display = 'none';
-    if (window.__ads.onConsent) window.__ads.onConsent(personalized);
+    var proceed = function () { if (window.__ads.onConsent) window.__ads.onConsent(personalized); };
+    if (personalized) {
+      // Attach the hashed persona email BEFORE requesting ads, so the serve carries
+      // it and the SSP links this publisher user to the shared identity.
+      sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he }); proceed(); });
+    } else {
+      proceed();
+    }
   }
   document.addEventListener('DOMContentLoaded', function() {
     var choice = localStorage.getItem('demotimes_consent');

@@ -8,15 +8,23 @@ integration each side actually needs. Grounded in a current-state investigation
 
 ## The gaps at a glance
 
-| # | Gap | Side | Effort | Risk | Value |
-|---|-----|------|--------|------|-------|
-| G1 | Publisher SDK forwards `hashed_email` | publisher | XS | low | completes the identity bridge |
-| G2 | Browser demo bridges end-to-end | demo | S | low | visible proof, no seeding |
-| G3 | Tenant-scope `/v1/reporting/attribution` | platform | S | **security** | prerequisite for G4 |
-| G4 | Portal attribution / MTA view | platform UI | M | low | the visible payoff |
-| G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model |
-| G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback |
-| G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud |
+| # | Gap | Side | Effort | Risk | Value | Status |
+|---|-----|------|--------|------|-------|--------|
+| G1 | Publisher SDK forwards `hashed_email` | publisher | XS | low | completes the identity bridge | ✅ shipped |
+| G2 | Browser demo bridges end-to-end | demo | S | low | visible proof, no seeding | ✅ shipped |
+| G3 | Tenant-scope `/v1/reporting/attribution` | platform | S | **security** | prerequisite for G4 | ✅ shipped |
+| G4 | Portal attribution / MTA view | platform UI | M | low | the visible payoff | todo |
+| G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model | todo |
+| G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback | todo |
+| G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud | todo |
+
+**G1–G3 shipped.** Key find while doing G1: `ssp.identity_observe_enabled`
+defaulted to **false**, so the SSP never built identity edges from serves — the
+publisher half of the bridge was dead regardless of the SDK. Turned it on in the
+chart (values.yaml, `SSP_IDENTITY_OBSERVE_ENABLED=true`). G3 also self-enforces
+the account filter in the reporting handler (defense in depth), not just at the
+gateway, because the open `ProxyReporting` passthrough exists. e2e:
+`tests/e2e/attribution_gaps_test.go` (serve→publisher edge; owner-only chain read).
 
 Recommended order: **G1 → G2** (finish the bridge, make the demo real), then
 **G3 → G4** (secure + surface the data), then **G5 / G6** (depth), then **G7**

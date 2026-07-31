@@ -36,6 +36,9 @@ const (
 	// gateway proxies them to reporting's ReportingTrace / RecentImpressions.
 	APITrace             = apiPrefix + "/api/trace"
 	APIRecentImpressions = apiPrefix + "/api/impressions/recent"
+	// APIAttribution backs the portal attribution view — proxied to reporting's
+	// ReportingAttribution, tenant-scoped per the injected account headers.
+	APIAttribution = apiPrefix + "/api/attribution"
 
 	// Gateway-local CRUD: secrets management (operator-only). Reads the
 	// secrets table directly and publishes adtech.cache.invalidate.secrets
