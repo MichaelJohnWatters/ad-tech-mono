@@ -21,7 +21,18 @@
     'use strict';
 
     var config = { trackerUrl: '', accountId: '', tag: '', debug: false };
-    var state = { consented: false, uid: null };
+    var state = { consented: false, uid: null, he: null };
+
+    // sha256Hex hashes the normalised (trimmed, lower-cased) value to lowercase
+    // hex — the standard hashed-email form advertisers and publishers share, so
+    // the same person hashes to the same id on both sides (the bridge key).
+    function sha256Hex(value) {
+        return crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value).trim().toLowerCase()))
+            .then(function (buf) {
+                return Array.from(new Uint8Array(buf))
+                    .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+            });
+    }
 
     function pixel(url) { var i = new Image(1, 1); i.src = url; }
     function log() {
@@ -82,6 +93,7 @@
             // Grab the click trace off the landing URL right away, before any
             // client-side routing rewrites the query string.
             captureClickTrace();
+            state.he = localStorage.getItem('adtechadv_he') || null;
             log('init', config.accountId, 'tag=' + config.tag);
         },
 
@@ -94,12 +106,31 @@
             if (!personalized) { log('consent declined — no retargeting'); return Promise.resolve(null); }
             return visitorId().then(function (uid) {
                 state.uid = uid;
+                // he (hashed email) is the shared id that lets the platform bridge
+                // this advertiser visitor to the publisher-side user who saw the
+                // ad — sent only when the advertiser has identified the visitor
+                // (setEmail) and consent is given.
+                var he = state.he ? '&he=' + encodeURIComponent(state.he) : '';
                 pixel(config.trackerUrl + '/v1/t/rt?uid=' + encodeURIComponent(uid) +
                     '&aid=' + encodeURIComponent(config.accountId) +
-                    '&tag=' + encodeURIComponent(config.tag) +
+                    '&tag=' + encodeURIComponent(config.tag) + he +
                     '&tid=rt-' + Date.now());
-                log('retargeting pixel fired', config.tag);
+                log('retargeting pixel fired', config.tag + (state.he ? ' (+hashed email)' : ''));
                 return uid;
+            });
+        },
+
+        // setEmail identifies the visitor by a hashed email (the advertiser knows
+        // its logged-in customer). Stored first-party; included on the next
+        // retargeting pixel so the platform can link this advertiser visitor to
+        // the same person's publisher-side id. Returns a promise of the hash.
+        setEmail: function (email) {
+            if (!email) { return Promise.resolve(null); }
+            return sha256Hex(email).then(function (he) {
+                state.he = he;
+                localStorage.setItem('adtechadv_he', he);
+                log('visitor email hashed', he.slice(0, 12) + '…');
+                return he;
             });
         },
 
