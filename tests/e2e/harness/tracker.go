@@ -48,6 +48,16 @@ func (h *Harness) FireImpressionWithUser(t *testing.T, traceID, campaignID, crea
 	h.fireAndConsume(t, url, "impression")
 }
 
+// FireConversionForVisitorCampaign is FireConversionForVisitor that also names
+// the campaign (cid) up front — so the attributor knows the campaign before the
+// lookback and can apply that campaign's per-line-item attribution overrides.
+func (h *Harness) FireConversionForVisitorCampaign(t *testing.T, convTrace, accountID, campaignID, uid, convType, currency string, revenue float64) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/conv?tid=%s&type=%s&rev=%.4f&cur=%s&advid=%s&cid=%s&uid=%s",
+		h.URLs.Tracker, convTrace, convType, revenue, currency, accountID, campaignID, uid)
+	h.fireAndConsume(t, url, "conversion")
+}
+
 // FireImpressionWithUserHH is FireImpressionWithUser that also carries the
 // household id (hh) the ad server now bakes onto consented beacons — so the
 // behaviour_signals row gets household_id, the fallback key view-through

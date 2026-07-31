@@ -286,6 +286,23 @@ func (h *Harness) SetCampaignBidStrategy(t *testing.T, c Campaign, strategy stri
 	})
 }
 
+// SetCampaignAttributionConfig sets the per-line-item attribution override JSON
+// on the campaign's targeting_rules row (gap G5). Pass e.g.
+// `{"view_window_hours":0}` to tighten the view-through window for this campaign.
+func (h *Harness) SetCampaignAttributionConfig(t *testing.T, c Campaign, jsonConfig string) {
+	t.Helper()
+	h.WithTenant(t, c.AccountID, func(tx *sql.Tx) {
+		const q = `UPDATE targeting_rules SET attribution_config = $1::jsonb, updated_at = now() WHERE line_item_id = $2`
+		res, err := tx.Exec(q, jsonConfig, c.ID)
+		if err != nil {
+			t.Fatalf("set attribution config: %v", err)
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			t.Fatalf("no targeting_rules row for campaign %s", c.ID)
+		}
+	})
+}
+
 func (h *Harness) SetCampaignBaseBid(t *testing.T, c Campaign, baseBid float64) {
 	t.Helper()
 	h.WithTenant(t, c.AccountID, func(tx *sql.Tx) {
