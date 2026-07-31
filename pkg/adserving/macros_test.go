@@ -7,6 +7,45 @@ import (
 	"time"
 )
 
+// TestBeaconHouseholdBaking: the household id is baked onto the impression and
+// viewability beacons ONLY alongside a consented uid — never on an unconsented
+// beacon — so behaviour_signals can carry the household fallback key.
+func TestBeaconHouseholdBaking(t *testing.T) {
+	base := MacroContext{
+		AuctionID: "trace-1", CampaignID: "li-1", CreativeID: "cr-1",
+		PlacementID: "pl-1", PublisherID: "pub-1", AdvertiserID: "adv-1",
+		Currency: "USD", TrackerURL: "http://localhost:8083",
+	}
+	param := func(rawURL, key string) string {
+		u, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatalf("parse %s: %v", rawURL, err)
+		}
+		return u.Query().Get(key)
+	}
+
+	// Consented (uid present) + household → both uid and hh on impression + view.
+	consented := base
+	consented.UserID = "user-abc"
+	consented.Household = "hh:home1"
+	if got := param(BuildImpressionURL(consented), "hh"); got != "hh:home1" {
+		t.Errorf("impression hh = %q, want hh:home1", got)
+	}
+	if got := param(BuildViewabilityURL(consented), "hh"); got != "hh:home1" {
+		t.Errorf("view hh = %q, want hh:home1", got)
+	}
+
+	// No consent (uid empty) but household known → hh MUST NOT be baked.
+	noConsent := base
+	noConsent.Household = "hh:home1"
+	if got := param(BuildImpressionURL(noConsent), "hh"); got != "" {
+		t.Errorf("unconsented impression leaked hh = %q, want empty", got)
+	}
+	if got := param(BuildViewabilityURL(noConsent), "hh"); got != "" {
+		t.Errorf("unconsented view leaked hh = %q, want empty", got)
+	}
+}
+
 func TestSubstituteMacros(t *testing.T) {
 	ctx := MacroContext{
 		AuctionID:    "trace-123",

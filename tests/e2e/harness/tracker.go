@@ -48,6 +48,17 @@ func (h *Harness) FireImpressionWithUser(t *testing.T, traceID, campaignID, crea
 	h.fireAndConsume(t, url, "impression")
 }
 
+// FireImpressionWithUserHH is FireImpressionWithUser that also carries the
+// household id (hh) the ad server now bakes onto consented beacons — so the
+// behaviour_signals row gets household_id, the fallback key view-through
+// attribution matches when the exact user id doesn't line up.
+func (h *Harness) FireImpressionWithUserHH(t *testing.T, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, currency string, price float64, bidModel, userID, household string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=%s&pubid=%s&advid=%s&price=%.4f&cur=%s&bm=%s&uid=%s&hh=%s",
+		h.URLs.Tracker, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, price, currency, bidModel, userID, household)
+	h.fireAndConsume(t, url, "impression")
+}
+
 // FireConversionForVisitor fires a click-less conversion the way an advertiser's
 // server-to-server postback does for a view-through: its own (synthetic) trace,
 // the advertiser account (advid) and the advertiser-side visitor id (uid), and

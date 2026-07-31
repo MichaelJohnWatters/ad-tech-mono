@@ -75,6 +75,8 @@ func (a *viewThroughAttributor) attribute(ctx context.Context, e *analytics.Conv
 		a.log.Warn("attribution lookback failed", "conv_trace", e.TraceID, "error", err)
 		return false
 	}
+	a.log.Debug("attribution lookback", "conv_trace", e.TraceID,
+		"resolved_ids", len(users), "imps", len(imps), "click_through", clickThrough)
 	if !clickThrough {
 		if len(imps) == 0 {
 			return false // no click, no prior exposure → unattributed
