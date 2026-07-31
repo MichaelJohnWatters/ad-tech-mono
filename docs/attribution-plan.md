@@ -42,20 +42,30 @@ Everything below is about establishing, widening, and privacy-hardening that joi
 | Identity ingest (SSP → identity-consumer) | `cmd/ssp/identity.go:36-68`, `cmd/identity-consumer/main.go` | ✅ publisher-side only |
 | Unwired attribution prototype | `pkg/billing/attribution.go` | ❌ dead code |
 
-**Two structural gaps that gate the harder phases:**
+**Two structural gaps that gate the harder phases (Phase 2+). Phase 0/1 sidestep
+both — they run purely on the deterministic `trace_id` join, no identity needed:**
 
 1. **Advertiser-uid ↔ platform-user join is missing.** The advertiser's
    first-party id (set by `adtech-adv.js`) is never fed into the identity graph,
    so a conversion carrying only that id cannot be resolved to the platform user
    who saw the ad. *Deterministic click-through does not need this* (the trace id
-   threads the link). *View-through and cross-device do.*
+   threads the link — this is what Phase 0 ships). *View-through and cross-device
+   do* → Phase 2 must build the advertiser-side identity.observed feed.
 2. **Impressions/clicks carry `user_id` only when the SSP observed a consented
    identity.** So behaviour_signals lookback is reliable only for consented users;
-   household_id is the fallback key.
+   household_id is the fallback key. Phase 2's view-through matcher must handle
+   both (resolve by user_id, fall back to household_id).
 
 ---
 
-## Phase 0 — Close the deterministic trace loop (last-click CPA)
+## Phase 0 — Close the deterministic trace loop (last-click CPA) — ✅ SHIPPED (45ff9ba)
+
+Delivered exactly as specified below and proven e2e on the live stack
+(`tests/e2e/attribution_test.go`): a no-`ctid` conversion does not settle, a
+`ctid` conversion settles CPA against the earning exposure + records the linkage
+(`attributed_trace_id`/`attribution_type=click_through`), retries don't
+double-charge. The settle fix had to land in BOTH reporting conversion consumers
+(the batch path is the active one) via `ConversionEvent.SettleTraceID()`.
 
 **Goal:** a real click → landing → conversion settles CPA against the impression
 that earned it. No identity graph, no windows engine — pure deterministic join on
