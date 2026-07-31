@@ -217,6 +217,15 @@ func (t *HotColdStore) ViewableImpressionsForUsers(ctx context.Context, userIDs 
 	return vr.ViewableImpressionsForUsers(ctx, userIDs, accountID, campaignID, since, requireViewable)
 }
 
+// InsertAttributionTouchpoints writes the multi-touch chain to the hot store.
+func (t *HotColdStore) InsertAttributionTouchpoints(ctx context.Context, rows []*AttributionTouchpointRow) error {
+	aw, ok := t.hot.(AttributionWriter)
+	if !ok {
+		return nil
+	}
+	return aw.InsertAttributionTouchpoints(ctx, rows)
+}
+
 // EventsByTrace / RecentImpressions (TraceReader) delegate to the hot store — a
 // trace inspector only ever looks at recent (hot-window) data, so cold is never
 // involved. Forwarding here keeps the capability visible through the wrapper.

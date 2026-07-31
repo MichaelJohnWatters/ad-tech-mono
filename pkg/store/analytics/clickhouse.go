@@ -129,6 +129,14 @@ func (c *ClickHouse) createTables() error {
 			publisher_id String, account_id String, channel String, duration_ms Int64, percent_visible Int32,
 			area_px Int64, iab_viewable UInt8, schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		// Multi-touch attribution chains (Phase 3): one row per exposure that
+		// preceded a conversion. Model-agnostic — fractional credit is computed on
+		// read (pkg/attribution). Reporting-only; billing settles last-touch.
+		`CREATE TABLE IF NOT EXISTS attribution_touchpoints (
+			conversion_trace_id String, touchpoint_trace_id String, account_id String,
+			campaign_id String, touchpoint_type String, touchpoint_at DateTime64(3),
+			conversion_at DateTime64(3), conversion_revenue Float64, observed_at DateTime64(3)
+		) ENGINE = MergeTree ORDER BY (account_id, conversion_trace_id)`,
 		`CREATE TABLE IF NOT EXISTS auctions (
 			trace_id String, placement_id String, publisher_id String, channel String, num_bids Int32,
 			winning_bid Float64, clearing_price Float64, currency String, clearing_price_usd Float64,
@@ -673,6 +681,27 @@ func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time
 		out[pub] = n
 	}
 	return out, rows.Err()
+}
+
+// InsertAttributionTouchpoints bulk-writes a conversion's multi-touch chain.
+func (c *ClickHouse) InsertAttributionTouchpoints(ctx context.Context, rows []*AttributionTouchpointRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO attribution_touchpoints
+		(conversion_trace_id, touchpoint_trace_id, account_id, campaign_id, touchpoint_type,
+		 touchpoint_at, conversion_at, conversion_revenue, observed_at)`)
+	if err != nil {
+		return fmt.Errorf("prepare attribution_touchpoints batch: %w", err)
+	}
+	for _, r := range rows {
+		if err := b.Append(r.ConversionTraceID, r.TouchpointTraceID, r.AccountID, r.CampaignID,
+			r.TouchpointType, r.TouchpointAt, r.ConversionAt, r.ConversionRevenue, r.ObservedAt); err != nil {
+			b.Abort()
+			return fmt.Errorf("append attribution touchpoint: %w", err)
+		}
+	}
+	return b.Send()
 }
 
 // ViewableImpressionsForUsers finds the ad exposures a click-less (view-through)

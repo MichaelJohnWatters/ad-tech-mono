@@ -32,8 +32,9 @@ type MemoryStore struct {
 	dspCalls             []DSPCallEvent
 	// Profile-store tables (ADR 0006 phase 1) — CI/test parity for the two
 	// new BatchInserter methods (append-only, same as the event slices).
-	behaviourSignals []BehaviourSignalRow
-	profileSignals   []ProfileSignalRow
+	behaviourSignals       []BehaviourSignalRow
+	profileSignals         []ProfileSignalRow
+	attributionTouchpoints []AttributionTouchpointRow
 }
 
 // FreqCapBlock records a serve suppression — adserver's
@@ -603,6 +604,27 @@ func (s *MemoryStore) ViewableImpressionsForUsers(_ context.Context, userIDs []s
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp.After(out[j].Timestamp) })
 	return out, nil
+}
+
+// InsertAttributionTouchpoints appends multi-touch chain rows (memory parity).
+func (s *MemoryStore) InsertAttributionTouchpoints(_ context.Context, rows []*AttributionTouchpointRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range rows {
+		if r != nil {
+			s.attributionTouchpoints = append(s.attributionTouchpoints, *r)
+		}
+	}
+	return nil
+}
+
+// AttributionTouchpoints returns a copy of stored chain rows for test assertions.
+func (s *MemoryStore) AttributionTouchpoints() []AttributionTouchpointRow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]AttributionTouchpointRow, len(s.attributionTouchpoints))
+	copy(out, s.attributionTouchpoints)
+	return out
 }
 
 // InsertProfileSignals appends the EXPANDED per-id onboarding rows (ADR 0006

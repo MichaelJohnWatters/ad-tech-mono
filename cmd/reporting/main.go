@@ -182,8 +182,9 @@ func main() {
 				log.Warn("view-through cross-device disabled (identity resolver pg open failed)", "error", err)
 			}
 		}
-		consumer.SetViewThroughAttributor(newViewThroughAttributor(vr, idResolver, cfg, log))
-		log.Info("view-through attribution enabled", "cross_device", idResolver != nil)
+		aw, _ := store.(analytics.AttributionWriter) // nil → no multi-touch chain capture
+		consumer.SetViewThroughAttributor(newViewThroughAttributor(vr, aw, idResolver, cfg, log))
+		log.Info("view-through attribution enabled", "cross_device", idResolver != nil, "multitouch", aw != nil)
 	} else {
 		log.Warn("view-through attribution disabled (analytics store lacks view-through lookback)")
 	}
