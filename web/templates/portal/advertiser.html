@@ -242,6 +242,34 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Attribution ============ -->
+    <section id="section-attribution" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Multi-touch attribution" "subtitle" "Trace a conversion's exposure chain and see how each touchpoint shares the credit") }}
+      <div class="flex flex-wrap gap-3 items-end">
+        <label class="block text-sm flex-1 min-w-[16rem]">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Conversion trace ID</span>
+          <input id="attrTrace" placeholder="order-… / conversion trace" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" onkeydown="if(event.key==='Enter')queryAttribution()" />
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Model</span>
+          <select id="attrModel" onchange="queryAttribution()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="linear">Linear</option>
+            <option value="last_touch">Last touch</option>
+            <option value="first_touch">First touch</option>
+            <option value="time_decay">Time decay</option>
+            <option value="position_based">Position-based</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Get chain" "size" "sm" "onclick" "queryAttribution()") }}
+      </div>
+      <div id="attrSummary" class="mt-4 text-sm text-gray-500"></div>
+      {{ template "table-start" (dict "headers" (slice "Touchpoint" "Type" "When" "Credit" "Attributed revenue")) }}
+        <tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">Enter a conversion trace id above.</td></tr>
+      {{ template "table-end" . }}
+      <p class="mt-3 text-xs text-gray-400">Billing always settles <strong>last touch</strong>; these models re-apportion the same conversion for reporting only. Credit sums to 100%.</p>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
@@ -803,7 +831,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'reports', 'billing', 'team'];
+const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'attribution', 'reports', 'billing', 'team'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -1840,6 +1868,33 @@ async function loadConversions() {
     tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
+// ---- Attribution (multi-touch) ----
+async function queryAttribution() {
+  const trace = ($('attrTrace').value || '').trim();
+  const model = $('attrModel').value;
+  const tbody = tbodyOf('attribution');
+  if (!trace) { toast('Enter a conversion trace id', 'error'); return; }
+  tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>';
+  try {
+    const res = await fetchJSON('/v1/api/attribution?conversion_trace=' + encodeURIComponent(trace) + '&model=' + encodeURIComponent(model));
+    const tps = res.touchpoints || [];
+    $('attrSummary').innerHTML = tps.length
+      ? `Conversion <span class="font-mono">${esc(res.conversion_trace_id)}</span> · revenue <strong>${fmtUSD(res.revenue)}</strong> · model <strong>${esc(res.model)}</strong> · ${tps.length} touchpoint${tps.length === 1 ? '' : 's'}`
+      : '';
+    tbody.innerHTML = tps.length ? tps.map(tp => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc((tp.trace_id || '').slice(0, 16))}…</td>
+        <td class="px-3 py-2">${esc(tp.type)}</td>
+        <td class="px-3 py-2 text-xs">${esc(new Date(tp.at).toLocaleString())}</td>
+        <td class="px-3 py-2 font-medium">${(tp.credit_fraction * 100).toFixed(1)}%</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(tp.credit_revenue)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No attribution chain for this conversion (or not yours).</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">query failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
 function copyPixel(id, which) {
   const c = conversionCache[id];
   if (!c) return;
