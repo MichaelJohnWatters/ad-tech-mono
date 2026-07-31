@@ -167,11 +167,18 @@ Key decisions/finds while building:
   advertiser's own impressions.
 - **The identity bridge is real but demands a shared id.** Resolution is 2-hop over
   `postgres.Store.ResolveIdentity` (advertiser_uid → shared_id → publisher_user).
-  The edge only exists if a shared id (hashed_email) co-occurs on both sides — the
-  e2e seeds it directly; **increment 2 (still TODO)** is the pixel-side feed that
-  creates it in production (retargeting/conversion pixel publishing an
-  identity.observed with uid + hashed_email). Config knobs (`attribution.*`) folded
-  in here.
+  The edge only exists if a shared id (hashed_email) co-occurs on both sides.
+  **Increment 2 ✅ SHIPPED:** the retargeting pixel now BUILDS the advertiser half
+  of that bridge — `adtech-adv.js setEmail()` sends a SHA-256 `he`, and the tracker
+  publishes an identity observation `(advertiser_user_id, hashed_email)` (new
+  `identity.SourceAdvertiserUserID`) so identity-consumer writes the edge. Proven
+  e2e (`attribution_identity_bridge_test.go`): the pixel creates the edge, and a
+  click-less conversion resolves advertiser_uid → hashed_email → publisher_user →
+  the viewable impression, with NO seeded advertiser edge. Config knobs
+  (`attribution.*`) folded in here.
+  Remaining nicety (not blocking): the live BROWSER demo needs the publisher side
+  (adtech.js/demosite) to send the same hashed_email on serve + a shared persona
+  email, so the two halves meet without any seeding.
 - Billing settle stays reservation-lifetime bounded (see Phase 0 note); windows
   beyond that credit reporting only.
 

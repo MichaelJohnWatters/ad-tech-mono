@@ -29,7 +29,12 @@ const (
 	SourceUID2            = "uid2"         // Unified ID 2.0 token
 	SourceHashedEmail     = "hashed_email" // deterministic email hash
 	SourcePublisherUserID = "publisher_user_id"
-	SourceDeviceID        = "device_id"
+	// SourceAdvertiserUserID is an advertiser's own first-party visitor id, seen
+	// on its retargeting/conversion pixels. Co-observed with a hashed_email it
+	// bridges the advertiser id space to the publisher one — the edge view-through
+	// attribution resolves across.
+	SourceAdvertiserUserID = "advertiser_user_id"
+	SourceDeviceID         = "device_id"
 	SourceProbabilistic   = "probabilistic" // IP + UA heuristic
 	// SourceHousehold is the platform household id (CTV): a salted IP hash
 	// derived at the SSP (see HouseholdID). Edges user↔household cluster the

@@ -60,6 +60,21 @@ func (h *Harness) FireConversionForVisitor(t *testing.T, convTrace, accountID, u
 	h.fireAndConsume(t, url, "conversion")
 }
 
+// FireRetargetingPixel fires the advertiser retargeting pixel (/v1/t/rt) — the
+// buy-side, unsigned pixel adtech-adv.js fires on a consented visit. With a
+// hashed email it also asks the tracker to link the advertiser visitor id to
+// that email in the identity graph (the bridge for view-through). No signing
+// (a third-party page can't sign); no privacy params = consented.
+func (h *Harness) FireRetargetingPixel(t *testing.T, accountID, uid, hashedEmail, tag string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/rt?uid=%s&aid=%s&tag=%s&tid=rt-%d",
+		h.URLs.Tracker, uid, accountID, tag, time.Now().UnixNano())
+	if hashedEmail != "" {
+		url += "&he=" + hashedEmail
+	}
+	h.fireRawReturningHeader(t, url, "retarget", "")
+}
+
 // FireImpressionDeal is FireImpression with the winning deal's ID stamped
 // as the `deal` query param — production stamps it via
 // pkg/adserving.BuildImpressionURL when the serve context carries a deal.

@@ -25,6 +25,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events/natsbus"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -102,6 +104,7 @@ func main() {
 	publisher := &eventPublisher{
 		bus:          bus,
 		typed:        events.NewPublisher(bus, log),
+		identityPub:  identityobserve.NewPublisher(bus, log),
 		reportingURL: reportingURL,
 		log:          log,
 	}
@@ -346,6 +349,9 @@ func main() {
 		if uid != "" && aid != "" &&
 			privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC"))).Personalise {
 			go publisher.publishBehaviour(context.WithoutCancel(ctx), "site_visit", q, reqLog)
+			// If the pixel also carries a hashed email, link it to the advertiser
+			// visitor id so view-through can later bridge to the publisher side.
+			publisher.publishAdvertiserIdentity(q.Get("tid"), uid, q.Get("he"))
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
@@ -616,8 +622,25 @@ func main() {
 type eventPublisher struct {
 	bus          events.EventBus
 	typed        *events.Publisher
+	identityPub  *identityobserve.Publisher
 	reportingURL string
 	log          *slog.Logger
+}
+
+// publishAdvertiserIdentity links an advertiser's first-party visitor id to a
+// hashed email seen on the same pixel, so the identity graph can later resolve
+// that advertiser id to the publisher-side user who saw the ad (the bridge
+// view-through attribution crosses). Fire-and-forget; needs BOTH ids (the
+// identity-consumer only makes an edge from 2+ co-observed signals). Consent is
+// the caller's gate.
+func (p *eventPublisher) publishAdvertiserIdentity(traceID, advUID, hashedEmail string) {
+	if p.identityPub == nil || advUID == "" || hashedEmail == "" {
+		return
+	}
+	p.identityPub.Publish(traceID, []identityobserve.Signal{
+		{Value: advUID, Source: identity.SourceAdvertiserUserID},
+		{Value: hashedEmail, Source: identity.SourceHashedEmail},
+	}, "")
 }
 
 // channelOrDefault maps the beacon's ch= param to a channel, defaulting to
