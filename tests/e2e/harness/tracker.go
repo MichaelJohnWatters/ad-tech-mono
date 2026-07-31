@@ -156,6 +156,18 @@ func (h *Harness) FireConversion(t *testing.T, traceID, campaignID, convType, cu
 	h.fireAndConsume(t, url, "conversion")
 }
 
+// FireConversionAttributed models the REAL deterministic click-through path (the
+// demo advertiser's signed S2S postback shape): the conversion's OWN trace
+// (convTrace, e.g. a synthetic order id) is distinct from the earning exposure's
+// trace, which rides as the signed ctid. Settlement must credit the ctid's
+// reservation, not the conversion's own trace. Both ride inside the HMAC.
+func (h *Harness) FireConversionAttributed(t *testing.T, convTrace, attributedTrace, campaignID, convType, currency string, revenue float64) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/conv?tid=%s&cid=%s&type=%s&rev=%.4f&cur=%s&ctid=%s",
+		h.URLs.Tracker, convTrace, campaignID, convType, revenue, currency, attributedTrace)
+	h.fireAndConsume(t, url, "conversion")
+}
+
 // noRedirectClient is a request-scoped HTTP client that stops at the
 // first 3xx so /v1/t/click (which 302s to the landing URL) doesn't end
 // up dialling a fake domain like landing.test. Pre-existing h.HTTP

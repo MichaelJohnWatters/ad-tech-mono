@@ -394,17 +394,31 @@ func main() {
 			return
 		}
 
+		// ctid = the earning exposure's trace (the click/impression that carried
+		// the CPA reservation), captured on the advertiser's landing page and
+		// returned on the signed postback. It rides INSIDE the HMAC-signed URL,
+		// so it can't be forged. Present => deterministic click-through
+		// attribution; absent => unattributed (reporting falls back to settling
+		// against the conversion's own trace, which normally finds no reservation).
+		attributedTrace := q.Get("ctid")
+		attrType := ""
+		if attributedTrace != "" {
+			attrType = "click_through"
+		}
 		go publisher.publishConversion(context.WithoutCancel(ctx), analytics.ConversionEvent{
-			TraceID:        traceID,
-			CampaignID:     q.Get("cid"),
-			CreativeID:     q.Get("crid"),
-			PlacementID:    q.Get("pid"),
-			AccountID:      q.Get("advid"),
-			ConversionType: convType,
-			Revenue:        revenue,
-			Currency:       q.Get("cur"),
-			RevenueUSD:     revenue,
-			Timestamp:      time.Now().UTC(),
+			TraceID:           traceID,
+			CampaignID:        q.Get("cid"),
+			CreativeID:        q.Get("crid"),
+			PlacementID:       q.Get("pid"),
+			AccountID:         q.Get("advid"),
+			ConversionType:    convType,
+			Revenue:           revenue,
+			Currency:          q.Get("cur"),
+			RevenueUSD:        revenue,
+			AttributedTraceID: attributedTrace,
+			AttributionType:   attrType,
+			UserID:            q.Get("uid"),
+			Timestamp:         time.Now().UTC(),
 		}, reqLog)
 		go publisher.publishBehaviour(context.WithoutCancel(ctx), "conversion", q, reqLog)
 

@@ -10,8 +10,12 @@
  *   <script>
  *     adtechadv.init({ trackerUrl: 'https://tracker.adtech.example', accountId: 'adv-123', tag: 'truck-pdp' });
  *     adtechadv.setConsent(true);                 // consented visit -> retargeting pixel
- *     adtechadv.conversion('purchase', 42999);    // on checkout -> billed conversion
  *   </script>
+ *
+ * Conversions are NOT fired from the browser (they drive CPA billing, so the
+ * conversion URL is HMAC-signed and posted server-to-server by the advertiser's
+ * backend — see the NOTE below and cmd/demoadv). This tag captures the earning
+ * click trace off the landing URL so that server postback can attribute it.
  */
 (function () {
     'use strict';
@@ -43,9 +47,30 @@
                 return id;
             });
     }
-    function setCookie(name, value) {
-        var d = new Date(); d.setTime(d.getTime() + 90 * 86400000);
+    function setCookie(name, value, days) {
+        var d = new Date(); d.setTime(d.getTime() + (days || 90) * 86400000);
         document.cookie = name + '=' + value + ';path=/;expires=' + d.toUTCString() + ';SameSite=Lax';
+    }
+    function getQueryParam(name) {
+        var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(window.location.search);
+        return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    // captureClickTrace closes the attribution loop's first half. When a user
+    // arrives via an ad click, the platform tracker's 302 stamps the earning
+    // exposure's trace onto the landing URL as ?adtech_tid=... (the gclid
+    // analog). We persist it first-party (localStorage + cookie, click-window
+    // TTL) so the advertiser's OWN SERVER can read it and return it on the
+    // signed conversion postback — which is what lets the platform settle CPA
+    // against the impression that actually earned the conversion.
+    function captureClickTrace() {
+        var t = getQueryParam('adtech_tid');
+        if (t) {
+            localStorage.setItem('adtech_ctid', t);
+            setCookie('adtech_ctid', t, 30); // = default click-through window
+            log('captured click trace', t.slice(0, 12) + '…');
+        }
+        return localStorage.getItem('adtech_ctid');
     }
 
     var adtechadv = {
@@ -54,6 +79,9 @@
             config.accountId = opts.accountId || '';
             config.tag = opts.tag || '';
             config.debug = !!opts.debug;
+            // Grab the click trace off the landing URL right away, before any
+            // client-side routing rewrites the query string.
+            captureClickTrace();
             log('init', config.accountId, 'tag=' + config.tag);
         },
 
@@ -85,7 +113,11 @@
         // attribute its S2S conversion postback. See cmd/demoadv for the pattern.
 
         getVisitorId: function () { return state.uid; },
-        hasConsent: function () { return state.consented; }
+        hasConsent: function () { return state.consented; },
+        // The captured earning-click trace (null if this visitor didn't arrive
+        // via a tracked ad click). The advertiser's server reads the matching
+        // first-party cookie to attach it to the S2S conversion postback.
+        getClickTrace: function () { return localStorage.getItem('adtech_ctid'); }
     };
 
     window.adtechadv = adtechadv;

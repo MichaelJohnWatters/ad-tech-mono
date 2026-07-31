@@ -241,9 +241,12 @@ func (c *EventConsumer) handleConversionBatch(ctx context.Context, msgs []*event
 			if c.billing == nil {
 				return
 			}
+			// Attribution closes the loop: settle against the EARNING exposure's
+			// trace (SettleTraceID = AttributedTraceID when resolved), not the
+			// conversion's own (reservation-less) synthetic order trace.
 			reqs := make([]billing.SettleRequest, 0, len(es))
 			for _, e := range es {
-				reqs = append(reqs, billing.SettleRequest{TraceID: e.TraceID, EventType: "conversion"})
+				reqs = append(reqs, billing.SettleRequest{TraceID: e.SettleTraceID(), EventType: "conversion"})
 			}
 			if _, err := c.billing.ProcessSettleBatch(ctx, reqs); err != nil {
 				c.log.Error("batch conversion settle failed", "count", len(reqs), "error", err)

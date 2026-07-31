@@ -68,7 +68,14 @@ func (c *ClickHouse) InsertConversions(ctx context.Context, es []*ConversionEven
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO conversions")
+	// Explicit named columns (not positional): the attribution columns were
+	// added by ALTER on existing tables (appended LAST) but sit at CREATE-time
+	// position on a fresh table, so a column-less INSERT would bind by the wrong
+	// order. Named columns bind by name regardless (same reason as views).
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO conversions
+		(trace_id, campaign_id, creative_id, placement_id, account_id, conversion_type,
+		 revenue, currency, revenue_usd, schema_version, timestamp,
+		 attributed_trace_id, attribution_type, user_id)`)
 	if err != nil {
 		return fmt.Errorf("prepare conversions batch: %w", err)
 	}
@@ -76,6 +83,7 @@ func (c *ClickHouse) InsertConversions(ctx context.Context, es []*ConversionEven
 		if err := b.Append(
 			e.TraceID, e.CampaignID, e.CreativeID, e.PlacementID, e.AccountID, e.ConversionType,
 			e.Revenue, e.Currency, e.RevenueUSD, int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+			e.AttributedTraceID, e.AttributionType, e.UserID,
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append conversion: %w", err)
