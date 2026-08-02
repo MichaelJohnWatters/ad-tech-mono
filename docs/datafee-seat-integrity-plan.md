@@ -1,6 +1,12 @@
 # Data-fee seat integrity — plan
 
-**Status:** building (2026-08-02). Closes the open segtax/data-monetization item:
+**Status:** ✅ SHIPPED (2026-08-02, commits 2895634 · 61822ce · 6470f31).
+Exchange resolves a trusted endpoint-bound seat (`;seat=` suffix, else endpoint
+URL) → `openrtb.BidResponse.SettlementSeat`; the SSP bills that and skips when
+empty (retiring the exploitable UUID heuristic), warning on a declared-vs-trusted
+mismatch. e2e `TestDataFeeSeatIntegrityBillsTrustedSeat` proves a UUID-declared
+seat neither dodges the fee nor gets attributed; existing datafee/segtax e2e stay
+green. Closes the open segtax/data-monetization item:
 the external bidder's **self-declared** seat drives the data-fee receivable, so a
 bidder can dodge or misdirect what it (or a competitor) owes. Grounded in a
 current-state trace (file:line below).
