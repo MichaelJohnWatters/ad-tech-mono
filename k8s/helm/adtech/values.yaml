@@ -430,6 +430,13 @@ services:
     env:
       - name: TRACKER_SIGNATURE_VALIDATION
         value: "true"
+      # Prod-shaped per-advertiser conversion posture (G7): a conversion billed
+      # to an advertiser validates ONLY against that advertiser's own key, so the
+      # shared platform key can't forge another advertiser's CPA. Seeded keys
+      # (SeedAdvertiserConversionKeys) + DevConversionKey signing keep local
+      # traffic working under it.
+      - name: TRACKER_CONVERSION_STRICT_ADVERTISER_KEY
+        value: "true"
       - name: POD_NAME
         value: "tracker-0"
       - name: TRACKER_NATS_URL

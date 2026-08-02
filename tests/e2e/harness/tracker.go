@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"testing"
 	"time"
 
@@ -294,8 +295,20 @@ var noRedirectClient = &http.Client{
 func (h *Harness) fireAndConsume(t *testing.T, url, eventKind string) {
 	// Sign like production: tracker.signature_validation is enforced on the
 	// local stack (2026-07-19 ratchet), so hand-built beacons must carry a
-	// valid HMAC exactly as adserver-built ones do.
-	url = adserving.SignURL(url, adserving.DefaultSigningKey)
+	// valid HMAC exactly as adserver-built ones do. A CONVERSION postback is the
+	// CPA billing trigger and is validated PER-ADVERTISER under the prod-shaped
+	// tracker.conversion_strict_advertiser_key (G7): sign it with the advertiser's
+	// own deterministic dev key (matches the seed / createAccount mint). advid=""
+	// → DevConversionKey returns the platform key, which the tracker accepts for
+	// advertisers with no issued key. Impression/click/view stay on the platform
+	// key (the ad server signs those).
+	signKey := adserving.DefaultSigningKey
+	if eventKind == "conversion" {
+		if u, err := neturl.Parse(url); err == nil {
+			signKey = adserving.DevConversionKey(u.Query().Get("advid"))
+		}
+	}
+	url = adserving.SignURL(url, signKey)
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

@@ -159,6 +159,14 @@ func main() {
 		log.Error("seed advertiser balances failed", "error", err)
 		os.Exit(1)
 	}
+	// Per-advertiser conversion signing keys (G7) so the stack runs the
+	// prod-shaped strict per-advertiser conversion posture: each advertiser's
+	// S2S conversions validate only against its own key. Deterministic dev value
+	// the harness/simulator/demoadv sign with.
+	if err := in.SeedAdvertiserConversionKeys(ctx); err != nil {
+		log.Error("seed advertiser conversion keys failed", "error", err)
+		os.Exit(1)
+	}
 	// Authorise every seeded publisher (incl. big-world) to sell through us, so
 	// the stack works under the prod-shaped strict ads.txt enforcement. Matches
 	// the exchange's seller identity (values: adtech.local / adtech-exchange).
