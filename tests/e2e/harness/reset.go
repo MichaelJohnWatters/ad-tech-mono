@@ -78,6 +78,18 @@ func (h *Harness) Reset(t *testing.T) {
 		t.Fatalf("truncate: %v", err)
 	}
 
+	// Clean per-advertiser secrets (account-scoped, e.g. G7 hmac_conversion keys).
+	// The secrets table isn't truncated (platform api_key / jwt / hmac_tracker must
+	// survive a reset — migration 072 dropped the accounts FK so the truncate no
+	// longer cascades here). But a per-advertiser key keyed on a DETERMINISTIC
+	// account id (the harness's adv-acme) would otherwise persist and re-associate
+	// when the next test recreates that account — so under strict its conversions
+	// (signed with the platform key) would 403. Delete them so harness advertisers
+	// start keyless (platform-key fallback); the reseed re-mints for seed advertisers.
+	if _, err := h.DB.ExecContext(ctx, `DELETE FROM secrets WHERE account_id IS NOT NULL`); err != nil {
+		t.Fatalf("clean per-advertiser secrets: %v", err)
+	}
+
 	// Redis FLUSHDB — keep this fast and silent. Failure is logged but not
 	// fatal so we don't block the test on a transient Redis blip.
 	rdb := redis.NewClient(&redis.Options{Addr: h.URLs.RedisAddr})
