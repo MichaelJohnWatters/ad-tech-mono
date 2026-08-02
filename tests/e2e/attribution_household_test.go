@@ -48,6 +48,12 @@ func TestAttributionHouseholdFallback(t *testing.T) {
 	// The behaviour row carries the household id (proves the beacon threaded hh).
 	waitCH(t, h, fmt.Sprintf("SELECT count() FROM adtech.behaviour_signals WHERE kind='impression' AND household_id='%s' AND account_id='%s'", household, w.AdvAcc.ID),
 		"behaviour impression row with household_id")
+	// AND wait for the viewable views row: the household lookback requires a
+	// VIEWABLE exposure and views persist ASYNC, so without this the conversion
+	// can attribute before the view lands → no match → no settle (mirrors the
+	// view-through test, which already waits for both writes).
+	waitCH(t, h, fmt.Sprintf("SELECT count() FROM adtech.views WHERE trace_id='%s' AND iab_viewable=1", auc.TraceID),
+		"viewable views row")
 
 	// Conversion resolves advUID → household → the exposure (no user-id match).
 	convTrace := "order-g6-" + suffix
