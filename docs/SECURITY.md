@@ -11,15 +11,29 @@ calls use *server-issued signed URLs* + *supply-chain auth* + *fraud checks*. On
 
 | Call path | Origin | Mechanism | Default |
 |---|---|---|---|
-| Tracker `imp`/`click`/`conv` pixels | advertiser (browser) | **HMAC-signed URL** (`sig`, server-issued) — `tracker.signature_validation` | ⚠️ off by default, **on in the seeded stack** |
+| Tracker `imp`/`click`/`view` pixels | advertiser (browser) | **HMAC-signed URL** (`sig`, server-issued) — `tracker.signature_validation` | ⚠️ off by default, **on in the seeded stack** |
+| Tracker `conv` postback (CPA billing trigger) | advertiser (S2S) | **per-advertiser HMAC key** — validated by `advid` against that advertiser's own `hmac_conversion` key (`tracker.conversion_strict_advertiser_key`) | ⚠️ grace by default (advertiser key **or** platform key); strict = advertiser key only |
 | Exchange → external DSP `/bid` | DSP (S2S) | **ads.cert** — Ed25519-signed bid requests, DSP verifies + anti-replay (`dsp.adcert_enforcement`) | ❌ off |
 | Publisher inventory claims | publisher | **ads.txt / sellers.json** supply-chain auth (`exchange.adstxt_enforcement`) | ❌ off |
 | SupplyChain object | SSP→exchange | **schain** structural validation (`exchange.schain_enforcement`) | ⚠️ warn |
 | `/v1/api/*` management | portal/API | **JWT + `X-API-Key`** | ✅ on |
 
 Signing keys / material:
-- **Tracker HMAC**: `tracker.signing_key` (the ad servers sign with the matching
-  key; both default `adtech-dev-signing-key-change-in-prod`).
+- **Tracker HMAC (platform)**: `tracker.signing_key` — signs impression/click/view
+  (WE sign those in the ad server; both default `adtech-dev-signing-key-change-in-prod`).
+- **Per-advertiser conversion key** (`hmac_conversion` secret, one per advertiser
+  account): the S2S conversion postback is the CPA billing trigger, so it's
+  validated against the *signing advertiser's own* key (looked up by `advid`) —
+  not the shared platform key. Otherwise any party holding the shared key could
+  forge a conversion billed to *another* advertiser. Advertisers self-issue/rotate
+  via the portal (Conversions → Conversion signing key → `POST /v1/api/conversion-key`);
+  the tracker's warm cache loads every advertiser's key to validate any incoming
+  conversion. Rollout is staged: `tracker.conversion_strict_advertiser_key=false`
+  (default) accepts the advertiser key **or** the platform key so unmigrated
+  advertisers keep working; `=true` accepts **only** the advertiser's own key once
+  issued, closing the cross-advertiser forgery. An advertiser with no issued key
+  always falls back to the platform key. Proven by
+  `tests/e2e/attribution_peradvertiser_key_test.go`.
 - **ads.cert**: `exchange.adcert_sign_key` (Ed25519 private, base64) → the exchange
   publishes its public key at `GET /v1/adcert/key`; DSPs fetch it via
   `dsp.adcert_key_url` (or a static `dsp.adcert_verify_key`).
