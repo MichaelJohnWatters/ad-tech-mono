@@ -103,6 +103,12 @@ const (
 	// embeddable tracker pixel/snippet per config. JWT-gated on campaigns:read
 	// (read) / campaigns:write (mutate); tenant-scoped to the caller's account.
 	APIConversions = apiPrefix + "/api/conversions"
+	// APIConversionKey is the advertiser's per-account HMAC key for signing S2S
+	// conversion postbacks (G7). GET returns metadata (masked); POST
+	// generates/rotates and returns the value ONCE. Tenant-scoped to the caller's
+	// account — the tracker validates /v1/t/conv against THIS key by advid so no
+	// other advertiser can forge a conversion billed to this one.
+	APIConversionKey = apiPrefix + "/api/conversion-key"
 	// APIIdentityLinks ingests identity-graph edges (link a UID2 token / hashed
 	// email / device id to other identifiers). Operator-API-key auth.
 	APIIdentityLinks = apiPrefix + "/api/identity-links"

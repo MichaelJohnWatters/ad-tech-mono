@@ -356,6 +356,7 @@ func isValidStatus(s string) bool {
 func isValidPurpose(p string) bool {
 	switch p {
 	case secrets.PurposeJWTSigning, secrets.PurposeHMACTracker,
+		secrets.PurposeHMACConversion,
 		secrets.PurposePartnerShared, secrets.PurposeServiceS2S,
 		secrets.PurposeAPIKey:
 		return true
