@@ -856,7 +856,7 @@ services:
 # ============================================================
 infra:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     replicas: 1
     storage: 20Gi
     # Dev credentials, plaintext — same mechanism as the kustomize base
@@ -870,7 +870,7 @@ infra:
       limits: { cpu: "2000m", memory: "4Gi" }
 
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.10-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927
     # Local runs a SINGLE standalone JetStream node (see
     # k8s/overlays/local/nats-single.yaml for the raft-on-one-host rationale).
     # Staging/prod flip cluster.enabled=true + replicas=3 (the base topology).
@@ -888,7 +888,7 @@ infra:
       limits: { cpu: "500m", memory: "1Gi" }
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     maxmemory: 1gb
     maxmemoryPolicy: allkeys-lru
     resources:
@@ -906,7 +906,7 @@ infra:
       limits: { cpu: "1000m", memory: "2Gi" }
 
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43@sha256:aac07eea19a720580a54cbfaba4bf5f90b7c53bfc0805996860bf0c6c26b6ce7
     replicas: 1
     cacheGrid: 256MiB
     storage: 1Gi
@@ -915,7 +915,7 @@ infra:
       limits: { cpu: "1000m", memory: "4Gi" }
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
     db: adtech
     user: adtech
     password: adtech-local-dev
@@ -927,7 +927,7 @@ infra:
   registryMirror:
     # Docker Hub pull-through cache at NodePort 30500 — local-only concern.
     enabled: true
-    image: registry:2
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
     remoteURL: https://registry-1.docker.io
     storage: 20Gi
     nodePort: 30500
@@ -937,7 +937,7 @@ infra:
 
   mailpit:
     enabled: true
-    image: axllent/mailpit:v1.20
+    image: axllent/mailpit:v1.20@sha256:7eef0f38dbc85e4e264f2edf5d70fbb694826791e05cb2cae4fc9e3282f968f5
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "200m", memory: "128Mi" }
@@ -948,7 +948,7 @@ infra:
 observability:
   prometheus:
     enabled: true
-    image: prom/prometheus:v2.53.0
+    image: prom/prometheus:v2.53.0@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc
     retention: 7d
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
@@ -956,7 +956,7 @@ observability:
 
   grafana:
     enabled: true
-    image: grafana/grafana:11.6.0
+    image: grafana/grafana:11.6.0@sha256:62d2b9d20a19714ebfe48d1bb405086081bc602aa053e28cf6d73c7537640dfb
     adminUser: admin
     adminPassword: admin
     resources:
@@ -965,7 +965,7 @@ observability:
 
   loki:
     enabled: true
-    image: grafana/loki:3.1.0
+    image: grafana/loki:3.1.0@sha256:d947e68a84d9e44915dfa08c3bec27e2124efd5ba6c83443eb53578101ec69e3
     # Sized for the REAL log firehose: once promtail actually shipped
     # (2026-07-18 fix), a 200rps load run CPU-throttled the 500m limit until
     # the internal ingester failed healthchecks and the pod flapped.
@@ -975,14 +975,14 @@ observability:
 
   promtail:
     enabled: true
-    image: grafana/promtail:3.1.0
+    image: grafana/promtail:3.1.0@sha256:b3db8e7b1cba0e8c45ce2ae72ebddfd88ebdcae86383f1680edf0074e9010ff6
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "200m", memory: "256Mi" }
 
   jaeger:
     enabled: true
-    image: jaegertracing/all-in-one:1.58
+    image: jaegertracing/all-in-one:1.58@sha256:f015fb34e6742bb46b87c42cf83abfacfdd5dc39864a859a4ba942eb21c4b29c
     resources:
       requests: { cpu: "100m", memory: "128Mi" }
       # See k8s/base/jaeger/deployment.yaml for the 1536Mi rationale.
