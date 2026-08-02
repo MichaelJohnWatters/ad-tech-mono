@@ -23,6 +23,7 @@ import (
 
 type dataFeePublisher struct {
 	pub *events.Publisher
+	log *slog.Logger
 }
 
 // newDataFeePublisher wraps the bus; nil bus → nil publisher (no-op).
@@ -30,14 +31,19 @@ func newDataFeePublisher(bus events.EventBus, log *slog.Logger) *dataFeePublishe
 	if bus == nil {
 		return nil
 	}
-	return &dataFeePublisher{pub: events.NewPublisher(bus, log)}
+	return &dataFeePublisher{pub: events.NewPublisher(bus, log), log: log}
 }
 
 // Observe publishes the attribution record for one auction, fire-and-forget.
 // No-ops on: nil receiver, no fee-bearing stamped segments, no winner, or an
-// INTERNAL winner (internal seats are tenant account UUIDs; internal
-// cross-tenant data fees are a deliberate non-goal for now — they'd have to
-// interact with budget gating).
+// INTERNAL winner (internal cross-tenant data fees are a deliberate non-goal for
+// now — they'd have to interact with budget gating).
+//
+// The billable seat is the exchange's TRUSTED SettlementSeat — bound to which
+// configured endpoint won — NOT bidResp.SeatBid[0].Seat, which the bidder
+// self-declares and could set to dodge (empty/UUID) or misdirect (a competitor's
+// id) the receivable. Empty SettlementSeat = internal or non-exchange caller →
+// skip. See docs/datafee-seat-integrity-plan.md.
 func (p *dataFeePublisher) Observe(r *http.Request, traceID string, pl postgres.PlacementRow, bidResp openrtb.BidResponse, feeSegs []events.DataFeeSegment) {
 	if p == nil || len(feeSegs) == 0 || bidResp.NoBid {
 		return
@@ -45,9 +51,16 @@ func (p *dataFeePublisher) Observe(r *http.Request, traceID string, pl postgres.
 	if len(bidResp.SeatBid) == 0 || len(bidResp.SeatBid[0].Bid) == 0 {
 		return
 	}
-	seat := bidResp.SeatBid[0].Seat
-	if seat == "" || uuidPattern.MatchString(seat) {
-		return // internal winner (tenant account UUID) — out of scope
+	seat := bidResp.SettlementSeat
+	if seat == "" {
+		return // internal winner (our own demand) — out of scope
+	}
+	// A bidder that self-declares a seat different from the trusted one is either
+	// misconfigured or attempting to dodge/misdirect the fee. Bill the trusted
+	// seat regardless; surface the mismatch so ops can see the attempt.
+	if declared := bidResp.SeatBid[0].Seat; declared != "" && declared != seat {
+		p.log.Warn("data-fee seat mismatch: billing the trusted seat, not the self-declared one",
+			"trace_id", traceID, "declared_seat", declared, "trusted_seat", seat)
 	}
 	ev := events.DataFeeEvent{
 		SchemaVersion: events.CurrentSchemaVersion,
