@@ -22,10 +22,13 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
-func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
-	h := harness.WaitReady(t, 60*time.Second)
+// buildSSAIVideoWorld resets the stack and builds a publisher + video placement
+// + advertiser + video campaign whose creative points at the conditionable sintel
+// sample, so an SSAI break can fill and stitch. Returns the unique placement
+// suffix used in ss-pl-<uniq>.
+func buildSSAIVideoWorld(t *testing.T, h *harness.Harness) string {
+	t.Helper()
 	h.Reset(t)
-
 	uniq := fmt.Sprintf("ssai-%d", time.Now().UnixNano())
 	pubAcc := h.CreatePublisher(t, "ss-pub-"+uniq)
 	pub := h.AddPublisher(t, pubAcc, "ss-pub-"+uniq, "ss-"+uniq+".test")
@@ -47,16 +50,12 @@ func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
 		t.Fatalf("point creative at sintel: %v", err)
 	}
 	h.RefreshAllCaches(t)
+	return uniq
+}
 
-	// The stitcher polls the manifest rapidly from ONE IP (→ one household) for
-	// ONE campaign to catch the first-time transcode. The video serve path is now
-	// household-freq-capped (adserver.freq_cap_per_user_per_campaign, default 5) —
-	// SSP returns nobid on a 429 — so within a few polls the cap trips and every
-	// later video auction nobids → the break never fills within the window. A real
-	// CTV viewer requests the manifest once; raise the cap so the poll can fill.
-	const fcPod, fcKey = "adserver-0", "adserver.freq_cap_per_user_per_campaign"
-	h.SetConfigForPod(t, fcKey, "100000", fcPod)
-	t.Cleanup(func() { h.SetConfigForPod(t, fcKey, "5", fcPod) })
+func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	uniq := buildSSAIVideoWorld(t, h)
 
 	// Poll the manifest until the break fills AND the ad is conditioned into
 	// segments (first-time transcode is slow) — an ad segment is a /v1/ssai/seg
@@ -110,5 +109,39 @@ func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
 	// ad's trace (tracker → NATS → reporting is async).
 	harness.WaitFor(t, 20*time.Second, "SSAI quartile beacon lands in reporting", func() bool {
 		return h.MediaEventsByTrace(t, adTrace, "video", "") >= 1
+	})
+}
+
+// TestSSAIFreqCapCountsStitchesNotDecisions is the sharp proof of the freq-cap
+// fix. With the cap set to 1, the stitcher's rapid manifest polling used to
+// exhaust the single slot at the SSP serve decision — including the very first
+// (cold, not-yet-conditioned) poll, which shows NO ad but recorded an impression
+// — so the ad could NEVER stitch. Now the SSP only PEEKs at the decision and the
+// cap is RECORDED at stitch time, so the one allowed ad still shows despite the
+// cold-miss polls before it. If this fills at cap=1, decisions no longer burn
+// the slot; the ad shown is what counts.
+func TestSSAIFreqCapCountsStitchesNotDecisions(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+
+	// Cap the campaign to a SINGLE impression per household. Restore on cleanup.
+	const fcPod, fcKey = "adserver-0", "adserver.freq_cap_per_user_per_campaign"
+	h.SetConfigForPod(t, fcKey, "1", fcPod)
+	t.Cleanup(func() { h.SetConfigForPod(t, fcKey, "5", fcPod) })
+
+	uniq := buildSSAIVideoWorld(t, h)
+
+	// The break must still fill (stitch the one allowed ad) even though the first
+	// polls are cold conditioning-misses that show nothing. Pre-fix, the cold-miss
+	// poll burned the single slot and this never filled.
+	harness.WaitFor(t, 90*time.Second, "SSAI fills at cap=1 despite cold-miss polls", func() bool {
+		req, _ := http.NewRequest(http.MethodGet,
+			h.URLs.SSAI+routes.SSAIManifest+"?placement_id=ss-pl-"+uniq+"&device=ctv&channel=video", nil)
+		resp, err := h.HTTP.Do(req)
+		if err != nil {
+			return false
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return strings.Contains(string(body), routes.SSAISegment)
 	})
 }
