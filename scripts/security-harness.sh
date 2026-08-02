@@ -33,6 +33,21 @@ setcfg() {
         VALUES ('$1','\"$2\"','platform','','security-harness')
         ON CONFLICT (pod_id,key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()" >/dev/null
 }
+# setcfgpods writes the GLOBAL row AND a row for each ENFORCING pod. Pod-scoped
+# rows SHADOW global (pkg/config: FetchAllForPod merges pod on top of global), and
+# every pod seeds a pod-scoped row from its env-or-schema-default at boot — so a
+# key whose default is NOT strict (e.g. exchange.adstxt_enforcement defaults to
+# 'off') silently ignores a global-only 'strict'. Writing the enforcing pod's own
+# row is what actually flips it. (Discovered re-running the harness: ads.txt never
+# enforced because the exchange-0 'off' row shadowed the global 'strict'.)
+setcfgpods() {
+  local key="$1" val="$2"; shift 2
+  for pod in "" "$@"; do
+    psql "INSERT INTO config (key,value,service,pod_id,updated_by)
+          VALUES ('$key','\"$val\"','platform','$pod','security-harness')
+          ON CONFLICT (pod_id,key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()" >/dev/null
+  done
+}
 
 case "${1:-status}" in
 on)
@@ -67,20 +82,24 @@ on)
   done
 
   echo "▶ 4/4 flipping enforcement → strict (live config)…"
-  # Platform seller identity — global rows so BOTH the exchange (enforcement) and
-  # the gateway (publisher-facing /v1/api/integration/adstxt) resolve the same line.
-  setcfg exchange.adstxt_seller_domain "$SELLER_DOMAIN"
-  setcfg exchange.adstxt_seller_id "$EXCHANGE_ID"
-  setcfg dsp.adcert_enforcement strict
-  setcfg exchange.adstxt_enforcement strict
-  setcfg exchange.schain_enforcement strict
-  setcfg tracker.signature_validation true
-  # Per-advertiser conversion keys (G7) are already default-on (values.yaml), but
-  # a churned/dev stack may have a stale pod row — assert it here so the harness
-  # is self-contained. Seeded keys + DevConversionKey signing keep legit traffic
+  # Platform seller identity — the exchange enforces against it (adsTxtGate: does
+  # the publisher's ads.txt list OUR domain/id?) and the gateway surfaces it to
+  # publishers, so write both the enforcing exchange pod AND global.
+  setcfgpods exchange.adstxt_seller_domain "$SELLER_DOMAIN" exchange-0
+  setcfgpods exchange.adstxt_seller_id "$EXCHANGE_ID" exchange-0
+  # Enforcement flags: write the ENFORCING pod's own row (not just global — a
+  # pod-scoped row shadows global). adcert enforces at each DSP; adstxt/schain at
+  # the exchange; sig + conversion-strict at the tracker.
+  setcfgpods dsp.adcert_enforcement strict dsp-internal-0 dsp-competitor1-0 dsp-competitor2-0
+  setcfgpods exchange.adstxt_enforcement strict exchange-0
+  setcfgpods exchange.schain_enforcement strict exchange-0
+  setcfgpods tracker.signature_validation true tracker-0
+  # Per-advertiser conversion keys (G7) are default-on (values.yaml), but a churned
+  # dev stack may hold a stale pod row — assert the tracker-0 row so the harness is
+  # self-contained. Seeded keys + DevConversionKey signing keep legit traffic
   # working; a conversion signed with the shared platform key for an advertiser
   # that HAS a key is rejected.
-  setcfg tracker.conversion_strict_advertiser_key true
+  setcfgpods tracker.conversion_strict_advertiser_key true tracker-0
   echo "✓ enforced. (config poll ≤30s.) Verify:"
   cat <<'EOF'
   # legit fills:   go run ./cmd/simulator run --profile steady --requests 100 --rps 25
@@ -91,15 +110,20 @@ on)
 EOF
   ;;
 off)
-  echo "▶ reverting enforcement to dev defaults…"
-  setcfg dsp.adcert_enforcement off
-  setcfg exchange.adstxt_enforcement off
-  setcfg exchange.schain_enforcement warn
-  # tracker sig validation is left ON (it's the seeded default).
-  echo "✓ enforcement off (adcert off, adstxt off, schain warn). Prereq env/keys remain (harmless)."
+  echo "▶ reverting enforcement to the stack's normal defaults…"
+  # Revert on the ENFORCING pods (pod rows shadow global). adcert/schain/tracker
+  # are strict/on BY DEFAULT now (values.yaml, prod-shaped) — so 'off' returns them
+  # to that default and only drops the ads.txt-strict that 'on' added (its default
+  # is off). This never leaves the stack weaker than a fresh boot.
+  setcfgpods dsp.adcert_enforcement strict dsp-internal-0 dsp-competitor1-0 dsp-competitor2-0
+  setcfgpods exchange.adstxt_enforcement off exchange-0
+  setcfgpods exchange.schain_enforcement strict exchange-0
+  setcfgpods tracker.signature_validation true tracker-0
+  setcfgpods tracker.conversion_strict_advertiser_key true tracker-0
+  echo "✓ reverted to defaults (adstxt off; adcert/schain/tracker stay strict). Prereq env/keys remain (harmless)."
   ;;
 status)
-  psql "SELECT key, value FROM config WHERE key IN ('dsp.adcert_enforcement','exchange.adstxt_enforcement','exchange.schain_enforcement','tracker.signature_validation') ORDER BY key"
+  psql "SELECT COALESCE(NULLIF(pod_id,''),'(global)') AS scope, key, value FROM config WHERE key IN ('dsp.adcert_enforcement','exchange.adstxt_enforcement','exchange.schain_enforcement','tracker.signature_validation','tracker.conversion_strict_advertiser_key') ORDER BY key, pod_id"
   ;;
 *)
   echo "usage: $0 {on|off|status}"; exit 1 ;;
