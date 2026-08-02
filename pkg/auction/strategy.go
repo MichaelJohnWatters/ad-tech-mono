@@ -54,7 +54,12 @@ type Bid struct {
 	MediaURL     string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
 	AdM          string // ad markup — native response JSON (OpenRTB Native), passed through to the winning BidObj.AdM
 	AdvertiserID string
-	AdomainHost  string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
+	// SettlementSeat is the TRUSTED billable seat for data-fee attribution, set
+	// by the exchange from WHICH configured endpoint returned this bid (never the
+	// self-declared response seat). "" for internal demand we own. Not part of the
+	// auction math — carried through so the winner's response can expose it.
+	SettlementSeat string
+	AdomainHost    string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
 	                   // advertiser landing domain into the winner response without re-querying the DSP
 	Category     string // IAB category for competitive separation
 	DealID       string // if bidding on a specific deal

@@ -344,6 +344,13 @@ type BidResponse struct {
 	// — an extension so operators reading a raw response or a captured span don't
 	// have to memorise the numeric codes. Empty for a genuine no-bid.
 	NBRReason string `json:"nbrreason,omitempty"`
+	// SettlementSeat is an exchange EXTENSION (not core OpenRTB): the TRUSTED
+	// billable seat of the winning bid — bound to which operator-configured
+	// endpoint won, not the seat the bidder self-declares in SeatBid.Seat. The
+	// SSP attributes data-monetization fees to this, so a bidder can't self-declare
+	// a seat to dodge or misdirect a receivable. Empty for internal winners (our
+	// own demand) and genuine no-bids. See docs/datafee-seat-integrity-plan.md.
+	SettlementSeat string `json:"settlement_seat,omitempty"`
 }
 
 // No-bid reason codes (BidResponse.NBR). The OpenRTB 2.5 spec reserves codes
