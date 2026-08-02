@@ -12,7 +12,7 @@ calls use *server-issued signed URLs* + *supply-chain auth* + *fraud checks*. On
 | Call path | Origin | Mechanism | Default |
 |---|---|---|---|
 | Tracker `imp`/`click`/`view` pixels | advertiser (browser) | **HMAC-signed URL** (`sig`, server-issued) — `tracker.signature_validation` | ⚠️ off by default, **on in the seeded stack** |
-| Tracker `conv` postback (CPA billing trigger) | advertiser (S2S) | **per-advertiser HMAC key** — validated by `advid` against that advertiser's own `hmac_conversion` key (`tracker.conversion_strict_advertiser_key`) | ⚠️ grace by default (advertiser key **or** platform key); strict = advertiser key only |
+| Tracker `conv` postback (CPA billing trigger) | advertiser (S2S) | **per-advertiser HMAC key** — validated by `advid` against that advertiser's own `hmac_conversion` key (`tracker.conversion_strict_advertiser_key`) | ✅ **strict by default** (values.yaml): an advertiser with an issued key is validated against ONLY that key. Seeded per-advertiser keys + `DevConversionKey` signing (harness/simulator/demoadv) keep local traffic working. An advertiser with no key falls back to the platform key (grace) |
 | Exchange → external DSP `/bid` | DSP (S2S) | **ads.cert** — Ed25519-signed bid requests, DSP verifies + anti-replay (`dsp.adcert_enforcement`) | ❌ off |
 | Data-fee receivable seat | external DSP (bid response) | **trusted endpoint-bound seat** — the data-monetization fee is billed to the seat bound to *which configured `exchange.dsp_endpoints` won* (`;seat=<id>`, else the endpoint URL), **never** the bidder's self-declared `SeatBid.Seat` | ✅ always (bidder can't dodge/misdirect) |
 | Publisher inventory claims | publisher | **ads.txt / sellers.json** supply-chain auth (`exchange.adstxt_enforcement`) | ❌ off |
