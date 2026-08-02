@@ -240,6 +240,14 @@
       {{ template "table-end" . }}
       <p class="mt-3 text-xs text-gray-400">Embed a pixel on your order-confirmation / thank-you page. Substitute the trace id you captured from the click for <code>__TRACE_ID__</code> so the conversion attributes back to the ad that drove it.</p>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Conversion signing key" "subtitle" "Sign server-to-server conversion postbacks with your own HMAC key so no other advertiser can forge a conversion billed to you") }}
+      <div id="convKeyBody" class="text-sm text-gray-400">loading…</div>
+      <div class="flex justify-end mt-3">
+        {{ template "button" (dict "label" "Generate / rotate key" "variant" "secondary" "size" "sm" "onclick" "rotateConversionKey()") }}
+      </div>
+      <p class="mt-3 text-xs text-gray-400">Use this key to <strong>HMAC-sign</strong> your <code>/v1/t/conv</code> postbacks (fired server-to-server, never from the browser). The full value is shown <strong>once</strong> — store it securely. Rotating keeps the previous key valid during a short grace window so in-flight postbacks don't break.</p>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Attribution ============ -->
@@ -1866,6 +1874,40 @@ async function loadConversions() {
       : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No conversions yet — define your first event above.</td></tr>';
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+  loadConversionKey();
+}
+
+// ---- Conversion signing key (per-advertiser S2S HMAC) ----
+async function loadConversionKey() {
+  const body = document.getElementById('convKeyBody');
+  if (!body) return;
+  try {
+    const keys = await fetchJSON('/v1/api/conversion-key') || [];
+    if (!keys.length) {
+      body.innerHTML = 'No signing key yet. Generate one to sign your server-to-server conversion postbacks. Until then, conversions fall back to the shared platform key.';
+      return;
+    }
+    body.innerHTML = keys.map(k => `
+      <div class="flex items-center gap-3 py-1">
+        <span class="font-mono text-xs">${esc(k.value_preview)}</span>
+        <span class="text-xs px-1.5 py-0.5 rounded bg-surface-3 text-gray-500">${esc(k.status)}</span>
+        <span class="text-xs text-gray-400">${k.rotated_at ? 'rotated ' + esc(new Date(k.rotated_at).toLocaleString()) : 'created ' + esc(new Date(k.created_at).toLocaleString())}</span>
+      </div>`).join('');
+  } catch (err) {
+    body.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+async function rotateConversionKey() {
+  if (!confirm('Generate a new conversion signing key? Your current key stays valid during a short grace window, then should be retired.')) return;
+  try {
+    const res = await fetchJSON('/v1/api/conversion-key', {method: 'POST', body: '{}'});
+    // Full value is returned exactly once — surface it prominently for copy.
+    prompt('Your conversion signing key (shown once — store it now):', res.value);
+    toast('New signing key issued', 'success');
+    loadConversionKey();
+  } catch (err) {
+    toast('Key rotation failed: ' + err.message, 'error');
   }
 }
 // ---- Attribution (multi-touch) ----

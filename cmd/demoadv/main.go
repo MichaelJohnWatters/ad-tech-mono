@@ -78,8 +78,13 @@ func main() {
 		// seeded advertiser account id (portal → or the seed's advertiser account);
 		// the placeholder still fires pixels but won't match a real retargeting rule.
 		AccountID: env("DEMOADV_ACCOUNT_ID", "demo-advertiser"),
-		// The platform issues each advertiser a signing key for S2S conversion
-		// postbacks. Demo default = the dev key the tracker validates against.
+		// The platform issues each advertiser its OWN signing key for S2S
+		// conversion postbacks (G7): generate/rotate it in the advertiser portal
+		// (Conversions → Conversion signing key, POST /v1/api/conversion-key) and
+		// set it here as DEMOADV_SIGNING_KEY. Demo default = the shared dev key,
+		// which the tracker still accepts while
+		// tracker.conversion_strict_advertiser_key is off (grace). Once strict is
+		// on, this MUST be the account's issued key or conversions 403.
 		SigningKey: env("DEMOADV_SIGNING_KEY", adserving.DefaultSigningKey),
 		Brand:      env("DEMOADV_BRAND", "Ford"),
 	}

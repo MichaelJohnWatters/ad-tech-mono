@@ -467,6 +467,12 @@ func main() {
 	}
 	mux.Handle(routes.APIConversions, authMiddleware(http.HandlerFunc(conversionsHandler(convStore, publicTrackerURL, log))))
 
+	// Advertiser self-serve HMAC key for signing S2S conversion postbacks (G7).
+	// Tenant-scoped to the caller's account; the tracker validates /v1/t/conv
+	// against this key by advid. Reuses the secrets NATS bus so a rotation
+	// invalidates the tracker warm cache immediately.
+	mux.Handle(routes.APIConversionKey, authMiddleware(http.HandlerFunc(conversionKeyHandler(gwDB, secretsBus, log))))
+
 	// Identity-graph ingestion (link UID2 / hashed-email / device ids). gwDB may
 	// be nil if Postgres was unreachable at boot; the handler 503s.
 	var idStore identityLinkStore
