@@ -345,9 +345,31 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		// user-cap increment that the household cap then blocks leaves the
 		// user counter one high for the window — same increment-then-no-render
 		// drift the cap already has on creative-resolve failure; accepted.
-		allowed := freqCap.AllowAndRecord(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
+		// CapMode splits check from record for formats whose impression is
+		// confirmed after this call (video/audio/native — SSAI stitches + fires the
+		// impression server-side). "peek" = decide without incrementing (so a nobid
+		// / cold conditioning-miss / manifest re-request never burns a slot);
+		// "record" = increment when the ad is actually stitched. Display (empty
+		// mode) stays check-and-record: it renders here, so serve ≈ impression.
+		switch req.CapMode {
+		case models.CapModeRecord:
+			// The ad was stitched → count exactly this impression, no decision.
+			freqCap.Record(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
+			if req.HouseholdID != "" {
+				freqCap.Record(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		allow := freqCap.AllowAndRecord
+		if req.CapMode == models.CapModePeek {
+			allow = func(ctx context.Context, u, c string, lim int, _ time.Duration) bool {
+				return freqCap.Allow(ctx, u, c, lim)
+			}
+		}
+		allowed := allow(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
 		if allowed && req.HouseholdID != "" {
-			allowed = freqCap.AllowAndRecord(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			allowed = allow(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 		}
 		if !allowed {
 			reqLog.Info("ad blocked by freq cap",
