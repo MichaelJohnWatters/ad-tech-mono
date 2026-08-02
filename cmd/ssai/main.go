@@ -956,6 +956,11 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel 
 		q[k] = append([]string(nil), v...)
 	}
 	q.Set("channel", channel)
+	// Defer the frequency-cap count: the SSP should PEEK, not record, at this
+	// auction — the impression is confirmed later when we actually stitch the ad
+	// (recordFreqCap). Without this the SSP records at the decision and every
+	// cold conditioning-miss / re-poll burns a cap slot with no ad shown.
+	q.Set("cap_defer", "1")
 	if q.Get("placement_id") == "" {
 		q.Set("placement_id", d.placementFn())
 	}

@@ -830,6 +830,19 @@ type serveAdResponse struct {
 	AdM string `json:"adm,omitempty"`
 }
 
+// capModeFor picks the frequency-cap mode for a non-display serve decision. The
+// SSAI stitcher passes cap_defer=1 because it records the cap itself at stitch
+// (impression) time, so the decision must only PEEK (never burn a slot on a
+// nobid / cold conditioning-miss / manifest re-request). Every other caller (the
+// publisher-adserver VAST path) has no async gap — serve ≈ impression, like
+// display — so it check-and-records here.
+func capModeFor(r *http.Request) string {
+	if r.URL.Query().Get("cap_defer") == "1" {
+		return models.CapModePeek
+	}
+	return models.CapModeCheckRecord
+}
+
 // doAdServe POSTs a ServeRequest to the ad server and returns its
 // HTTP-equivalent status + body. It rides the gRPC twin when adServerURL is a
 // grpc:// target (the envelope carries the status, so the 429 frequency-cap
@@ -899,12 +912,14 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 				PublisherID: ac.Placement.PublisherID,
 				UserID:      r.URL.Query().Get("user_id"),
 				HouseholdID: ac.HouseholdID, // co-viewing devices on one IP share the cap
-				// PEEK, don't record: the impression for these formats is confirmed
-				// later (SSAI stitches the ad + fires the beacon server-side, then
-				// records against this same cap). Recording at the serve decision
-				// over-counts — a nobid, a cold conditioning-miss, or a manifest
-				// re-request would burn a slot with no ad shown.
-				CapMode: models.CapModePeek,
+				// Only the SSAI stitcher PEEKs (it passes cap_defer=1) — its impression
+				// is confirmed later, at stitch, where it RECORDs against this cap, so a
+				// nobid / cold conditioning-miss / manifest re-request mustn't burn a
+				// slot at the decision. The direct video/audio path (publisher-adserver
+				// VAST) has no such gap — serve ≈ impression, like display — so it
+				// check-and-records here (default). Without this distinction the direct
+				// path would never record and the video cap wouldn't enforce.
+				CapMode: capModeFor(r),
 			}
 			capBody, _ := json.Marshal(capReq)
 			if st, _, err := doAdServe(ctx, adServerURL, capBody); err != nil {
