@@ -48,6 +48,16 @@ func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
 	}
 	h.RefreshAllCaches(t)
 
+	// The stitcher polls the manifest rapidly from ONE IP (→ one household) for
+	// ONE campaign to catch the first-time transcode. The video serve path is now
+	// household-freq-capped (adserver.freq_cap_per_user_per_campaign, default 5) —
+	// SSP returns nobid on a 429 — so within a few polls the cap trips and every
+	// later video auction nobids → the break never fills within the window. A real
+	// CTV viewer requests the manifest once; raise the cap so the poll can fill.
+	const fcPod, fcKey = "adserver-0", "adserver.freq_cap_per_user_per_campaign"
+	h.SetConfigForPod(t, fcKey, "100000", fcPod)
+	t.Cleanup(func() { h.SetConfigForPod(t, fcKey, "5", fcPod) })
+
 	// Poll the manifest until the break fills AND the ad is conditioned into
 	// segments (first-time transcode is slow) — an ad segment is a /v1/ssai/seg
 	// URL. Extract its `ad` param (the pod ad's trace) to correlate beacons.
