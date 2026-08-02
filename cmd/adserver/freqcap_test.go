@@ -25,6 +25,37 @@ func TestFreqCap_AllowAndRecord(t *testing.T) {
 	}
 }
 
+// TestFreqCap_PeekAndRecord proves the video split: Allow (peek) never
+// increments, so repeated serve decisions / cold-misses don't burn the cap; only
+// Record counts. The cap is reached exactly after `limit` Records, matching
+// AllowAndRecord's semantics — not after `limit` decisions.
+func TestFreqCap_PeekAndRecord(t *testing.T) {
+	fc := NewFreqCap(cache.NewMemoryL2(), slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	ctx := context.Background()
+
+	// 100 peeks with zero records: always allowed, nothing burned.
+	for i := 0; i < 100; i++ {
+		if !fc.Allow(ctx, "u1", "c1", 3) {
+			t.Fatalf("peek %d should be allowed (no records yet)", i)
+		}
+	}
+	// Now serve 3 real impressions (peek then record each).
+	for i := 1; i <= 3; i++ {
+		if !fc.Allow(ctx, "u1", "c1", 3) {
+			t.Fatalf("impression %d peek should be allowed", i)
+		}
+		fc.Record(ctx, "u1", "c1", 3, time.Hour)
+	}
+	// The cap is now full: the next peek is blocked.
+	if fc.Allow(ctx, "u1", "c1", 3) {
+		t.Fatal("4th impression peek should be blocked after 3 records")
+	}
+	// A different campaign is independent.
+	if !fc.Allow(ctx, "u1", "c2", 3) {
+		t.Fatal("different campaign must not share the counter")
+	}
+}
+
 func TestFreqCap_NoUserBypass(t *testing.T) {
 	fc := NewFreqCap(cache.NewMemoryL2(), slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()

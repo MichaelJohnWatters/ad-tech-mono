@@ -394,7 +394,23 @@ type ServeRequest struct {
 	// the ad server the single freq-cap authority across every format, including
 	// the per-household CTV cap on video.
 	Channel string `json:"channel,omitempty"`
+	// CapMode controls how the frequency cap is applied on a non-display cap-only
+	// call (video/audio/native), where the impression is confirmed LATER (SSAI
+	// stitches the ad and fires the impression server-side) rather than at this
+	// serve decision. Empty = check-and-record (display, and back-compat). "peek"
+	// = decision only, DON'T increment — so a nobid or a cold conditioning-miss
+	// never burns a cap slot. "record" = increment only (the ad was actually
+	// stitched), no allow/block decision. See CapMode* constants.
+	CapMode string `json:"cap_mode,omitempty"`
 }
+
+// Frequency-cap application modes for ServeRequest.CapMode (non-display cap-only
+// calls). See ServeRequest.CapMode.
+const (
+	CapModeCheckRecord = ""       // display / default: check + increment at serve
+	CapModePeek        = "peek"   // decision only, no increment (video serve decision)
+	CapModeRecord      = "record" // increment only, no decision (video stitch = impression)
+)
 
 // ServeResponse contains the rendered ad HTML with all macros substituted.
 type ServeResponse struct {
