@@ -105,7 +105,7 @@ spec:
         # was invisible during the freq-cap backlog and stream-limit
         # incidents; Grafana's "NATS / Event Bus" dashboard reads these).
         - name: metrics
-          image: natsio/prometheus-nats-exporter:0.15.0
+          image: natsio/prometheus-nats-exporter:0.15.0@sha256:1f6787754b8b083f271adea4bb699b9c9e21279c89d903f1710f7647c604f145
           imagePullPolicy: IfNotPresent
           args: ["-varz", "-jsz=all", "-port=7777", "http://localhost:8222"]
           ports:
