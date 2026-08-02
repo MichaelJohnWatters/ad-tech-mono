@@ -247,27 +247,24 @@ time-decay weights recent higher, last-touch still bills exactly once.
 
 ---
 
-## Phase 4 — Privacy-preserving attribution (Privacy Sandbox ARA)
+## Phase 4 — Privacy-preserving attribution (Privacy Sandbox ARA) — DEFERRED
 
-**Goal:** attribute without cross-site identifiers, aligned with the Privacy
-Sandbox Attribution Reporting API (and the SKAdNetwork/AdAttributionKit analog).
+**Parked on purpose (2026-08-02).** Full scoping/deferral doc:
+[`docs/attribution-phase4-ara.md`](attribution-phase4-ara.md).
 
-**Design (research-heavy — spec before build)**
-- Source registration: ad serve returns `Attribution-Reporting-Register-Source`
-  (destination = advertiser eTLD+1, source event id, aggregation keys).
-- Trigger registration: advertiser conversion returns
-  `Attribution-Reporting-Register-Trigger`.
-- Ingest event-level + aggregatable reports; the browser adds noise/delay, so this
-  is a **separate, low-resolution** attribution stream reconciled against the
-  deterministic/identity streams — not a replacement.
-- Needs an aggregation-service shape (out of scope to build fully locally; stub +
-  document the interface).
-
-**Verification:** interface-level + a documented reconciliation story; full ARA
-needs a real Sandbox-enabled browser.
+Short version: ARA moves the cross-site join *into the browser* (noised,
+aggregated, delayed), so it's the one attribution feature that structurally can't
+honor this project's real + e2e-proven + no-mocks contract — the browser does the
+work and you can't drive Privacy Sandbox from the Go harness. It also outputs
+approximate numbers that collide with the exact-money invariant, so it needs a
+reconciliation decision (reporting-only overlay vs billed estimator) *before* any
+build. The scoping doc has the decision, the honest mock boundary, a concrete
+"real headers, mock boundary documented" build breakdown, and the verification
+story. Everything provable in attribution (Phases 0–3, gaps G1–G7, hardening) is
+done; ARA is the diminishing-returns edge.
 
 **Effort:** L (mostly research/spec). **Risk:** high (external platform surface).
-**Deps:** Phases 1–2; can be planned independently.
+**Deps:** Phases 0–2; plannable independently.
 
 ---
 
