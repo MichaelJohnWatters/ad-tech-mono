@@ -75,6 +75,12 @@ on)
   setcfg exchange.adstxt_enforcement strict
   setcfg exchange.schain_enforcement strict
   setcfg tracker.signature_validation true
+  # Per-advertiser conversion keys (G7) are already default-on (values.yaml), but
+  # a churned/dev stack may have a stale pod row — assert it here so the harness
+  # is self-contained. Seeded keys + DevConversionKey signing keep legit traffic
+  # working; a conversion signed with the shared platform key for an advertiser
+  # that HAS a key is rejected.
+  setcfg tracker.conversion_strict_advertiser_key true
   echo "✓ enforced. (config poll ≤30s.) Verify:"
   cat <<'EOF'
   # legit fills:   go run ./cmd/simulator run --profile steady --requests 100 --rps 25
