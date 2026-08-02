@@ -820,6 +820,11 @@ type serveAdResponse struct {
 	Currency         string `json:"currency,omitempty"`
 	DurationSeconds  int    `json:"duration_seconds,omitempty"`
 	MediaURL         string `json:"media_url,omitempty"`
+	// HouseholdID is the SSP-derived per-household cap key (hh:…). Returned on
+	// video/audio wins so the stitcher (SSAI) can RECORD the frequency cap against
+	// the right household when it actually stitches the ad — the SSP only PEEKed at
+	// the serve decision (CapModePeek).
+	HouseholdID string `json:"household_id,omitempty"`
 	// AdM carries the winner's ad markup for native bids: the OpenRTB Native
 	// response JSON the publisher-adserver renders into HTML + trackers.
 	AdM string `json:"adm,omitempty"`
@@ -894,6 +899,12 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 				PublisherID: ac.Placement.PublisherID,
 				UserID:      r.URL.Query().Get("user_id"),
 				HouseholdID: ac.HouseholdID, // co-viewing devices on one IP share the cap
+				// PEEK, don't record: the impression for these formats is confirmed
+				// later (SSAI stitches the ad + fires the beacon server-side, then
+				// records against this same cap). Recording at the serve decision
+				// over-counts — a nobid, a cold conditioning-miss, or a manifest
+				// re-request would burn a slot with no ad shown.
+				CapMode: models.CapModePeek,
 			}
 			capBody, _ := json.Marshal(capReq)
 			if st, _, err := doAdServe(ctx, adServerURL, capBody); err != nil {
@@ -939,6 +950,7 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 				DurationSeconds:  winner.Dur,
 				MediaURL:         winner.MediaURL,
 				DealID:           winner.DealID,
+				HouseholdID:      ac.HouseholdID, // SSAI records the cap against this on stitch
 			})
 			return
 		}

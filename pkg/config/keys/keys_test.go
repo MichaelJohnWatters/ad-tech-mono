@@ -24,7 +24,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"tracker", TrackerSchema(), 15},
 		{"adserver", AdServerSchema(), 14},
 		{"ssp", SSPSchema(), 14},
-		{"ssai", SSAISchema(), 16},
+		{"ssai", SSAISchema(), 17},
 		{"transcoder", TranscoderSchema(), 5},
 		{"webhooks", WebhooksSchema(), 5},
 		{"notifications", NotificationsSchema(), 2},

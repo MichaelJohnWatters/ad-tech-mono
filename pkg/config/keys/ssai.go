@@ -19,6 +19,7 @@ var SSAI = struct {
 	SSPURL              config.StringKey
 	TrackerURL          config.StringKey
 	PublicURL           config.StringKey
+	AdServerURL         config.StringKey
 	AdPlacementID       config.StringKey
 	OriginURL           config.StringKey
 	TranscoderURL       config.StringKey
@@ -38,6 +39,7 @@ var SSAI = struct {
 	SSPURL:              ssaiSet.String("ssai.ssp_url", routes.DefaultSSPURL, config.TierStatic, "SSP the stitcher calls to run a per-ad-break auction (channel=video). Same endpoint the publisher ad server uses.", config.Since("v1.5")),
 	TrackerURL:          ssaiSet.String("ssai.tracker_url", routes.DefaultTrackerURL, config.TierStatic, "Base URL the stitcher fires impression + quartile beacons at, server-side, on behalf of the player. MUST be reachable from the stitcher.", config.Since("v1.5")),
 	PublicURL:           ssaiSet.String("ssai.public_url", routes.DefaultGatewayURL, config.TierStatic, "Browser-reachable origin the stitched manifest tells the player to fetch ad segments from (points back at the SSAI segment beacon endpoint via the gateway).", config.Since("v1.5")),
+	AdServerURL:         ssaiSet.String("ssai.adserver_url", routes.DefaultAdServerURL, config.TierStatic, "Ad server the stitcher calls to RECORD the frequency cap when it stitches an ad (the SSP only PEEKed at the auction, so video/audio impressions count at stitch time, not at the serve decision). Empty disables cap recording.", config.Since("v1.20")),
 	AdPlacementID:       ssaiSet.String("ssai.ad_placement_id", "pl-sim-video", config.TierLive, "Placement id used for the per-break auction when the manifest request doesn't specify one.", config.Since("v1.5")),
 	OriginURL:           ssaiSet.String("ssai.origin_url", "", config.TierLive, "Origin HLS manifest the stitcher fetches and rewrites (the publisher's content playlist, with #EXT-X-CUE-OUT/CUE-IN ad-break markers). Empty (default) uses the built-in sample manifest; set it (or pass ?origin=<url>) to stitch a real origin. The request's ?origin= param overrides this.", config.Since("v1.6")),
 	TranscoderURL:       ssaiSet.String("ssai.transcoder_url", routes.DefaultTranscoderURL, config.TierStatic, "Runtime ad-conditioning service. On a break the stitcher asks it (cache-only) for the winning ad's segments, byte-compatible with the content; on a miss it warms the conditioner async and keeps content while warming. Empty disables conditioning.", config.Since("v1.6")),
