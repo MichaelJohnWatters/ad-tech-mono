@@ -39,6 +39,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
@@ -147,9 +148,10 @@ func main() {
 	}
 
 	deps := &stitcherDeps{
-		sspURL:     sspURL,
-		trackerURL: trackerURL,
-		publicURL:  publicURL,
+		sspURL:      sspURL,
+		trackerURL:  trackerURL,
+		adserverURL: keys.SSAI.AdServerURL.Get(cfg),
+		publicURL:   publicURL,
 		placementFn: func() string {
 			return keys.SSAI.AdPlacementID.Get(cfg)
 		},
@@ -189,6 +191,7 @@ func main() {
 type stitcherDeps struct {
 	sspURL          string
 	trackerURL      string
+	adserverURL     string // ad server the stitcher RECORDs the freq cap against on stitch ("" = disabled)
 	publicURL       string
 	placementFn     func() string
 	originFn        func() string              // configured origin manifest URL ("" = built-in sample)
@@ -278,6 +281,39 @@ func (d *stitcherDeps) warmCondition(winner *sspWinner, p transcode.Profile) {
 			resp.Body.Close()
 		}
 	}()
+}
+
+// recordFreqCap counts a stitched pod ad against the frequency cap. Video/audio
+// impressions are confirmed at STITCH time (here), not at the SSP serve decision
+// — the SSP CapModePeek'd — so the counter reflects ads actually served, not
+// auctions run. Keyed on the request's user id AND the SSP-derived household id
+// (co-viewing CTV cap). Best-effort + short-timeout: a cap-record blip must never
+// break serving (worst case the cap under-counts one impression).
+func (d *stitcherDeps) recordFreqCap(ctx context.Context, r *http.Request, channel string, winner *sspWinner, adTrace string) {
+	if d.adserverURL == "" || winner.CampaignID == "" {
+		return
+	}
+	if winner.HouseholdID == "" && r.URL.Query().Get("user_id") == "" {
+		return // no cap key → the ad server would no-op anyway
+	}
+	body, _ := json.Marshal(models.ServeRequest{
+		TraceID:     adTrace,
+		Channel:     channel,
+		CampaignID:  winner.CampaignID,
+		UserID:      r.URL.Query().Get("user_id"),
+		HouseholdID: winner.HouseholdID,
+		CapMode:     models.CapModeRecord,
+	})
+	rc, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rc, http.MethodPost, d.adserverURL+routes.AdServe, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := d.client.Do(req); err == nil {
+		resp.Body.Close()
+	}
 }
 
 // originManifest returns the content manifest to stitch: the request's ?origin=
@@ -525,6 +561,10 @@ type sspWinner struct {
 	Height           int     `json:"height"`
 	DurationSeconds  int     `json:"duration_seconds"`
 	MediaURL         string  `json:"media_url"`
+	// HouseholdID (hh:…) is the SSP-derived per-household cap key. The SSP only
+	// PEEKed the freq cap at the auction; the stitcher RECORDs against this when it
+	// actually stitches the ad (the real server-side impression).
+	HouseholdID string `json:"household_id"`
 
 	// podTrace is the fresh 32-hex trace the stitcher mints for this pod ad and
 	// forces onto the auction (not decoded from the SSP JSON). Each pod ad gets a
@@ -749,6 +789,11 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, channel s
 		out = append(out, d.adSegments(cond, mc, channel, session, adTrace, breakIdx, false)...)
 		filledDur += cond.Duration
 		ads++
+		// The ad is actually stitched → this is the (server-side) impression. RECORD
+		// it against the frequency cap now; the SSP only PEEKed at the auction, so
+		// cold-misses / nobids / re-requests didn't burn a slot. One record per pod
+		// ad spliced in.
+		d.recordFreqCap(ctx, r, channel, winner, adTrace)
 	}
 
 	if len(out) > 0 {
