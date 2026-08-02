@@ -16,7 +16,7 @@ integration each side actually needs. Grounded in a current-state investigation
 | G4 | Portal attribution / MTA view | platform UI | M | low | the visible payoff | ✅ shipped |
 | G5 | Per-line-item attribution overrides | platform | M | low | per-campaign windows/model | ✅ shipped |
 | G6 | Household `hh` last-mile on the beacon | platform | S | low | CTV/cross-device fallback | ✅ shipped |
-| G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud | todo |
+| G7 | Per-advertiser signing keys | platform | L | **security** | true multi-tenant + anti-fraud | ✅ shipped |
 
 **G1–G3 shipped.** Key find while doing G1: `ssp.identity_observe_enabled`
 defaulted to **false**, so the SSP never built identity edges from serves — the
@@ -189,6 +189,26 @@ A's key signing a conversion for B's campaign is REJECTED.
 **Deps:** none, but it's the largest change (schema + issuance UI/API + validation
 + demo). **Risk:** security-sensitive; stage behind a config flag + platform-key
 fallback so a bad rollout can't reject real conversions.
+
+**✅ SHIPPED (commits 41faafa · ba64e1d · 70efcdb).** As designed, scoped to the
+S2S **conversion** postback (the CPA billing trigger; impression/click/view stay
+on the platform key we sign). Migration 071 adds `secrets.account_id` (nullable,
+FK accounts, CASCADE) + purpose `hmac_conversion` + a `(purpose, account_id)`
+index — **no RLS** (the tracker validator must load every advertiser's key).
+`pkg/secrets` carries `AccountID` + `NonRevokedByPurposeAndAccount`; the tracker's
+`sigKeysForAdvertiser(advid)` validates `/v1/t/conv` against the advertiser's own
+key, with `tracker.conversion_strict_advertiser_key` gating grace (advertiser key
+**or** platform key) vs strict (advertiser key **only**). Issuance is self-serve:
+`POST /v1/api/conversion-key` (advertiser portal → Conversions → *Conversion
+signing key*), one-time value display, rotate = demote-active-to-rotating +
+insert-active in one tx (overlap grace) + cache-invalidate. demoadv reads its key
+from `DEMOADV_SIGNING_KEY`. e2e:
+`tests/e2e/attribution_peradvertiser_key_test.go` — shared-key forgery for A is
+403 + 0 rows; A's own key is 200 + recorded. **Note on "settles":** the e2e
+proves the auth boundary (forged conversion never enters the pipeline, so it can
+drive no CPA spend); the settle-on-accept path itself is covered by the
+view-through / hardening tests. The retargeting pixel stays unsigned (browser-fired,
+can't hold a secret) — its abuse is bounded to the advertiser's own pool, unchanged.
 
 ---
 
