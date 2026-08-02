@@ -114,6 +114,18 @@ func resetAndReseedHandler(dbURL string, redisAddr string, bus events.EventBus, 
 			return
 		}
 
+		// Clean per-advertiser secrets (account-scoped, e.g. G7 hmac_conversion
+		// keys). `secrets` is intentionally NOT truncated — platform api_key /
+		// jwt_signing / hmac_tracker must survive a reset (migration 072 dropped the
+		// accounts FK so the truncate no longer cascades into secrets). But a
+		// per-advertiser key keyed on a deterministic account id would otherwise
+		// persist and re-associate when that account is recreated, breaking strict
+		// per-advertiser conversion validation. The reseed re-mints them for seeded
+		// advertisers.
+		if _, derr := db.ExecContext(ctx, `DELETE FROM secrets WHERE account_id IS NOT NULL`); derr != nil {
+			log.Warn("reset: clean per-advertiser secrets failed", "error", derr)
+		}
+
 		// Step 2: FLUSHDB on Redis. Best-effort — a Redis blip shouldn't
 		// block the whole reset since services treat Redis as fail-open.
 		t2 := time.Now()
