@@ -77,21 +77,29 @@ func main() {
 		parts := strings.Split(raw, ",")
 		out := make([]string, 0, len(parts))
 		notify := make(map[string]string, len(parts))
+		seats := make(map[string]string, len(parts))
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
 			if p == "" {
 				continue
 			}
-			endpoint, notifyBase := splitDSPEndpoint(p)
+			endpoint, notifyBase, seat := splitDSPEndpoint(p)
 			out = append(out, endpoint)
 			if notifyBase != "" {
 				notify[endpoint] = notifyBase
+			}
+			if seat != "" {
+				seats[endpoint] = seat
 			}
 		}
 		// The clean bid endpoint is the stable key everywhere (router stats,
 		// dsp_calls, warm-start); the notify base rides out-of-band so
 		// win/loss URLs don't inherit a grpc:// scheme they can't use.
 		dspNotifyBases.Store(notify)
+		// The trusted billable seat per external partner (data-fee attribution):
+		// operator-controlled, so a bidder can't self-declare its way out of, or
+		// onto, a receivable.
+		dspSeats.Store(seats)
 		return out
 	}
 
@@ -646,6 +654,10 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,
 			Cur: "USD",
+			// Trusted billable seat (data-fee attribution) — from which configured
+			// endpoint won, not winnerSeat (which is the self-declared response seat).
+			// Empty for internal winners, so the SSP skips them.
+			SettlementSeat: winnerBid.SettlementSeat,
 			SeatBid: []openrtb.SeatBid{{
 				Seat: winnerSeat,
 				Bid: []openrtb.BidObj{{
@@ -790,18 +802,37 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 // notify base. Refreshed by dspEndpointsFn on every auction (live config).
 var dspNotifyBases atomic.Value // map[string]string
 
+// dspSeats maps a bid endpoint → the operator-configured trusted billable seat
+// (from a ";seat=" suffix on its exchange.dsp_endpoints entry). Refreshed by
+// dspEndpointsFn on every auction (live config). This is the identity a
+// data-fee receivable is attributed to — bound to WHICH configured endpoint won,
+// never to the seat a bidder self-declares in its response body.
+var dspSeats atomic.Value // map[string]string
+
 // splitDSPEndpoint separates one exchange.dsp_endpoints entry into the bid
-// endpoint and its optional ";notify=" base.
-func splitDSPEndpoint(entry string) (endpoint, notifyBase string) {
-	endpoint, suffix, found := strings.Cut(entry, ";")
-	endpoint = strings.TrimSpace(endpoint)
-	if !found {
-		return endpoint, ""
+// endpoint and its optional ";"-separated params. Two params are recognised,
+// order-independent, and may coexist:
+//
+//	;notify=<http-base>  — where win/loss notices go (grpc:// bid edges need it)
+//	;seat=<id>           — the operator's canonical BILLABLE seat for this
+//	                       partner: the trusted identity a data-fee receivable is
+//	                       attributed to, so a bidder can't self-declare a seat to
+//	                       dodge or misdirect what it owes (see docs/datafee-seat-integrity-plan.md)
+//
+// e.g. http://partner:9100/bid;seat=acme-dsp;notify=http://partner:9100
+// Unknown params are ignored (forward-compatible).
+func splitDSPEndpoint(entry string) (endpoint, notifyBase, seat string) {
+	parts := strings.Split(entry, ";")
+	endpoint = strings.TrimSpace(parts[0])
+	for _, p := range parts[1:] {
+		p = strings.TrimSpace(p)
+		if v, ok := strings.CutPrefix(p, "notify="); ok {
+			notifyBase = strings.TrimSpace(v)
+		} else if v, ok := strings.CutPrefix(p, "seat="); ok {
+			seat = strings.TrimSpace(v)
+		}
 	}
-	if v, ok := strings.CutPrefix(strings.TrimSpace(suffix), "notify="); ok {
-		return endpoint, strings.TrimSpace(v)
-	}
-	return endpoint, ""
+	return endpoint, notifyBase, seat
 }
 
 // parseNeverSkip builds the never-skip endpoint set from the CSV config
@@ -813,7 +844,7 @@ func parseNeverSkip(raw string) map[string]struct{} {
 	set := make(map[string]struct{})
 	for _, e := range strings.Split(raw, ",") {
 		if e = strings.TrimSpace(e); e != "" {
-			endpoint, _ := splitDSPEndpoint(e)
+			endpoint, _, _ := splitDSPEndpoint(e)
 			set[endpoint] = struct{}{}
 		}
 	}
@@ -829,6 +860,25 @@ func notifyBaseFor(endpoint string) string {
 		}
 	}
 	return endpoint
+}
+
+// trustedSeatFor returns the billable seat for a bid that came from `endpoint`,
+// for data-fee attribution. INTERNAL demand (grpc:// — our own DSP) returns ""
+// (data fees are out of scope for demand we own, and its self-declared advertiser
+// UUID is already trustworthy). For an EXTERNAL (http://) partner it returns the
+// operator-configured ";seat=" id, falling back to the endpoint URL — both
+// un-forgeable, unlike the seat a bidder writes in its response. Empty return =
+// "not a billable external seat", which the SSP uses to skip attribution.
+func trustedSeatFor(endpoint string) string {
+	if grpcx.IsURL(endpoint) {
+		return "" // internal, our own demand
+	}
+	if m, ok := dspSeats.Load().(map[string]string); ok {
+		if v := m[endpoint]; v != "" {
+			return v
+		}
+	}
+	return endpoint // un-forgeable fallback until a ;seat= is configured
 }
 
 // sendWinLossNotifications notifies each DSP whether they won or lost.
@@ -1122,9 +1172,12 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						Height:       b.H,
 						MediaURL:     b.MediaURL,
 						AdM:          b.AdM,
-						AdvertiserID: sb.Seat,
-						AdomainHost:  adomain,
-						ResponseTime: responseTime,
+						AdvertiserID: sb.Seat, // self-declared — display/deal-match only, NOT billing
+						// Trusted billable seat = which configured endpoint this bid
+						// came from (data-fee attribution can't ride the self-declared seat).
+						SettlementSeat: trustedSeatFor(endpoint),
+						AdomainHost:    adomain,
+						ResponseTime:   responseTime,
 					}
 					bids = append(bids, bid)
 					records = append(records, dspBidRecord{
