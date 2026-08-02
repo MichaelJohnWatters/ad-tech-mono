@@ -125,6 +125,7 @@ SELECT
     value,
     purpose,
     owner,
+    account_id::text,
     status,
     rotated_at,
     revokes_at,
@@ -147,11 +148,15 @@ WHERE purpose = ANY($1::text[])
 	for rows.Next() {
 		var s Secret
 		var rotatedAt, revokesAt, expiresAt sql.NullTime
+		var accountID sql.NullString
 		if err := rows.Scan(
-			&s.ID, &s.Name, &s.Value, &s.Purpose, &s.Owner, &s.Status,
+			&s.ID, &s.Name, &s.Value, &s.Purpose, &s.Owner, &accountID, &s.Status,
 			&rotatedAt, &revokesAt, &expiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan secret: %w", err)
+		}
+		if accountID.Valid {
+			s.AccountID = accountID.String
 		}
 		if rotatedAt.Valid {
 			t := rotatedAt.Time

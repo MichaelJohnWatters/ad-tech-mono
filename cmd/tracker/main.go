@@ -132,6 +132,34 @@ func main() {
 		}
 		return ks
 	}
+	// sigKeysForAdvertiser is the validation key set for the S2S CONVERSION
+	// postback — the one tracker beacon the ADVERTISER holds + signs, and the CPA
+	// billing trigger. Per-advertiser keys (G7) stop a party holding the shared
+	// platform key from forging a conversion billed to a DIFFERENT advertiser:
+	//   - advertiser HAS its own hmac_conversion key(s) → validate against those.
+	//       In grace (conversion_strict_advertiser_key=false) the shared platform
+	//       key is ALSO accepted, so migration doesn't break in-flight postbacks;
+	//       in strict mode ONLY the advertiser's key is accepted, closing the
+	//       cross-advertiser forgery hole.
+	//   - advertiser has NO issued key (unmigrated) → fall back to the platform
+	//       key set, exactly as before, regardless of the strict flag.
+	// advid is the advertiser account id carried on the conversion URL (== the
+	// account CPA is billed to), so a forged advid can only ever be validated
+	// against THAT advertiser's key.
+	sigKeysForAdvertiser := func(advid string) []string {
+		advKeys := secretsCache.NonRevokedByPurposeAndAccount(secrets.PurposeHMACConversion, advid)
+		if advid == "" || len(advKeys) == 0 {
+			return sigKeys() // unmigrated advertiser (or no advid) → platform key
+		}
+		ks := make([]string, 0, len(advKeys)+2)
+		for _, s := range advKeys {
+			ks = append(ks, s.Value)
+		}
+		if !keys.Tracker.ConversionStrictAdvKey.Get(cfg) {
+			ks = append(ks, sigKeys()...) // grace: shared platform key still accepted
+		}
+		return ks
+	}
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
 
 	l2 := connectRedis(cfg, log)
@@ -371,8 +399,10 @@ func main() {
 		// CPA billing trigger so an unsigned conv URL is a direct
 		// billing-fraud surface: anyone could fire /v1/t/conv with
 		// arbitrary cid/crid/rev and rack up spend on a campaign that
-		// didn't actually convert.
-		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
+		// didn't actually convert. Validated against the SIGNING ADVERTISER's
+		// own key (by advid) so a party holding another advertiser's key can't
+		// forge a conversion billed to this one (G7).
+		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeysForAdvertiser(q.Get("advid"))) {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),

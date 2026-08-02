@@ -22,13 +22,14 @@ import "time"
 // Purpose taxonomy. New purposes need a migration to extend the CHECK
 // constraint AND the per-service filter helpers below.
 const (
-	PurposeJWTSigning    = "jwt_signing"    // JWT HS256/RS256 keys
-	PurposeHMACTracker   = "hmac_tracker"   // browser-pixel HMAC secrets
-	PurposePartnerShared = "partner_shared" // external partners (Prebid, S2S)
-	PurposeServiceS2S    = "service_s2s"    // internal service-to-service
-	PurposeAPIKey        = "api_key"        // operator-managed CRUD API keys
-	PurposePGPPrivate    = "pgp_private"    // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
-	PurposeAdCertEd25519 = "adcert_ed25519" // Ed25519 private key: signing outbound OpenRTB bid requests (Phase I)
+	PurposeJWTSigning     = "jwt_signing"     // JWT HS256/RS256 keys
+	PurposeHMACTracker    = "hmac_tracker"    // browser-pixel HMAC secrets (platform key)
+	PurposeHMACConversion = "hmac_conversion" // per-advertiser S2S conversion-postback HMAC key (G7)
+	PurposePartnerShared  = "partner_shared"  // external partners (Prebid, S2S)
+	PurposeServiceS2S     = "service_s2s"     // internal service-to-service
+	PurposeAPIKey         = "api_key"         // operator-managed CRUD API keys
+	PurposePGPPrivate     = "pgp_private"     // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)
+	PurposeAdCertEd25519  = "adcert_ed25519"  // Ed25519 private key: signing outbound OpenRTB bid requests (Phase I)
 )
 
 // Status values.
@@ -49,6 +50,7 @@ type Secret struct {
 	Value     string
 	Purpose   string
 	Owner     string
+	AccountID string // "" = platform-wide; non-empty = scoped to one advertiser (G7 hmac_conversion)
 	Status    string
 	RotatedAt *time.Time
 	RevokesAt *time.Time
@@ -110,9 +112,13 @@ func FilterFor(serviceName string) Filter {
 			Purposes: []string{PurposePartnerShared, PurposeServiceS2S, PurposeAdCertEd25519},
 		}
 	case "tracker":
-		// HMAC sigs on every pixel URL.
+		// HMAC sigs on every pixel URL: the platform hmac_tracker key(s) for
+		// impression/click/view, PLUS every advertiser's per-account
+		// hmac_conversion key so /v1/t/conv can be validated by advid (G7). The
+		// conversion keys are owner='platform' rows scoped by account_id — the
+		// tracker needs the whole set to validate any incoming conversion.
 		return Filter{
-			Purposes: []string{PurposeHMACTracker},
+			Purposes: []string{PurposeHMACTracker, PurposeHMACConversion},
 		}
 	case "adserver", "publisher-adserver":
 		// SIGN pixel/click URLs with the active hmac_tracker key (the tracker
