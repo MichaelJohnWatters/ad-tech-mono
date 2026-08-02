@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
 
 // FireImpression hits the tracker's impression pixel endpoint as if a
@@ -79,6 +80,55 @@ func (h *Harness) FireConversionForVisitor(t *testing.T, convTrace, accountID, u
 	url := fmt.Sprintf("%s/v1/t/conv?tid=%s&type=%s&rev=%.4f&cur=%s&advid=%s&uid=%s",
 		h.URLs.Tracker, convTrace, convType, revenue, currency, accountID, uid)
 	h.fireAndConsume(t, url, "conversion")
+}
+
+// IssueConversionKey inserts a per-advertiser hmac_conversion signing key (G7)
+// straight into the secrets table and pokes the tracker's warm cache to reload.
+// The e2e stack runs the secrets cipher in passthrough mode (no
+// SECRETS_ENCRYPTION_KEY), so the value is stored + read as plaintext — the same
+// value the caller signs conversion postbacks with. Scoped to accountID
+// (owner=platform, account-scoped), so the tracker validates ONLY this
+// advertiser's conversions against it. Idempotent across reruns.
+func (h *Harness) IssueConversionKey(t *testing.T, accountID, value string) {
+	t.Helper()
+	if _, err := h.DB.Exec(`DELETE FROM secrets WHERE purpose='hmac_conversion' AND account_id=$1`, accountID); err != nil {
+		t.Fatalf("clear prior conversion key for %s: %v", accountID, err)
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO secrets (name, value, purpose, owner, account_id, status)
+		 VALUES ($1, $2, 'hmac_conversion', 'platform', $3, 'active')`,
+		"e2e-convkey-"+accountID, value, accountID); err != nil {
+		t.Fatalf("issue conversion key for %s: %v", accountID, err)
+	}
+	// Nudge the tracker's secrets warm cache to reload now rather than waiting
+	// for its 30s poll. The WaitFor in the test still covers the reload latency.
+	h.PublishInvalidate(t, events.SubjectCacheInvalidateSecrets)
+}
+
+// FireConversionSignedStatus fires an S2S conversion postback signed with a
+// SPECIFIC key and returns the HTTP status (it does NOT consume NATS). advid is
+// the billed advertiser; signingKey is what the caller signs with. Per-advertiser
+// validation (G7): the advertiser's OWN key is accepted; any other key (e.g. the
+// shared platform key held by a different advertiser) is a forgery and rejected
+// under tracker.conversion_strict_advertiser_key. The sig covers the full query,
+// exactly as demoadv's server-to-server postback signs it.
+func (h *Harness) FireConversionSignedStatus(t *testing.T, convTrace, accountID, uid, convType, currency string, revenue float64, signingKey string) int {
+	t.Helper()
+	base := fmt.Sprintf("%s/v1/t/conv?tid=%s&type=%s&rev=%.4f&cur=%s&advid=%s&uid=%s",
+		h.URLs.Tracker, convTrace, convType, revenue, currency, accountID, uid)
+	signed := adserving.SignURL(base, signingKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, signed, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (e2e-harness)")
+	req.Header.Set("Referer", "https://e2e.test/")
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("fire signed conversion: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
 }
 
 // FireRetargetingPixel fires the advertiser retargeting pixel (/v1/t/rt) — the
