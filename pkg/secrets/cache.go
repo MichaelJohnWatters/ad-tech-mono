@@ -164,6 +164,31 @@ func (c *Cache) NonRevokedByPurpose(purpose string) []Secret {
 	return out
 }
 
+// NonRevokedByPurposeAndAccount is NonRevokedByPurpose narrowed to one
+// advertiser: the overlap set (active + rotating, not expired) for `purpose`
+// whose account_id matches `accountID`. Used by the tracker to validate a
+// conversion postback against ONLY the advertiser named on it (advid), so a
+// party holding some OTHER advertiser's key can't forge it. Empty accountID
+// matches only platform-wide rows (account_id == ""), preserving the
+// pre-per-advertiser meaning. Empty when the cache is unset.
+func (c *Cache) NonRevokedByPurposeAndAccount(purpose, accountID string) []Secret {
+	if c.Cache == nil {
+		return nil
+	}
+	now := time.Now()
+	var out []Secret
+	for _, s := range c.Cache.All() {
+		if s.Purpose != purpose || s.Status == StatusRevoked || s.AccountID != accountID {
+			continue
+		}
+		if s.ExpiresAt != nil && s.ExpiresAt.Before(now) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // WatchActive keeps a signer in sync with the store's ACTIVE secret for a
 // purpose: it calls set(value) immediately (boot) and again every interval,
 // until ctx is done. Signer services (adserver, publisher-adserver) use it to

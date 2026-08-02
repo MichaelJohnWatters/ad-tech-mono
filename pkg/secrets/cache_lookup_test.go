@@ -91,3 +91,39 @@ func TestNonRevokedByPurpose(t *testing.T) {
 		}
 	}
 }
+
+// TestNonRevokedByPurposeAndAccount is the per-advertiser narrowing (G7): a
+// conversion is validated ONLY against its own advertiser's key, so advertiser
+// A's key never appears when validating advertiser B's conversion. Platform-wide
+// rows (empty account_id) belong only to the "" bucket.
+func TestNonRevokedByPurposeAndAccount(t *testing.T) {
+	c := testCache(t, []Secret{
+		{ID: "1", Name: "a-active", Purpose: PurposeHMACConversion, Status: StatusActive, Value: "A-new", AccountID: "acct-A"},
+		{ID: "2", Name: "a-rotating", Purpose: PurposeHMACConversion, Status: StatusRotating, Value: "A-old", AccountID: "acct-A"},
+		{ID: "3", Name: "a-revoked", Purpose: PurposeHMACConversion, Status: StatusRevoked, Value: "A-dead", AccountID: "acct-A"},
+		{ID: "4", Name: "b-active", Purpose: PurposeHMACConversion, Status: StatusActive, Value: "B-key", AccountID: "acct-B"},
+		{ID: "5", Name: "platform", Purpose: PurposeHMACConversion, Status: StatusActive, Value: "plat", AccountID: ""},
+	})
+
+	gotA := map[string]bool{}
+	for _, s := range c.NonRevokedByPurposeAndAccount(PurposeHMACConversion, "acct-A") {
+		gotA[s.Value] = true
+	}
+	if !gotA["A-new"] || !gotA["A-old"] {
+		t.Errorf("A should see its active+rotating keys, got %v", gotA)
+	}
+	for _, no := range []string{"A-dead", "B-key", "plat"} {
+		if gotA[no] {
+			t.Errorf("A's key set must not contain %q (leak across accounts)", no)
+		}
+	}
+
+	// B sees only its own key — not A's, proving the cross-advertiser boundary.
+	gotB := map[string]bool{}
+	for _, s := range c.NonRevokedByPurposeAndAccount(PurposeHMACConversion, "acct-B") {
+		gotB[s.Value] = true
+	}
+	if len(gotB) != 1 || !gotB["B-key"] {
+		t.Errorf("B should see only B-key, got %v", gotB)
+	}
+}
