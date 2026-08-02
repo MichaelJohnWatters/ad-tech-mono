@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 )
 
@@ -72,7 +74,40 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, dsp_id = EXCLUDED.dsp_id, u
 	if _, err := h.DB.Exec(q, id, name, email, accountType, dspID); err != nil {
 		t.Fatalf("createAccount(%s, %s): %v", externalKey, accountType, err)
 	}
+	// Prod-shaped per-advertiser conversion posture (G7): every advertiser has its
+	// own hmac_conversion key, so under tracker.conversion_strict_advertiser_key a
+	// conversion billed to it validates ONLY against that key. Mint the
+	// deterministic dev key (matches fireAndConsume's conversion signing) so
+	// harness-fired conversions settle under strict. Seed does the same for
+	// seed-created advertisers; this covers accounts created post-reseed.
+	if accountType == "advertiser" {
+		h.ensureConversionKey(t, id)
+	}
 	return Account{ID: id, ExternalID: externalKey, Type: accountType, Email: email}
+}
+
+// ensureConversionKey mints the deterministic dev hmac_conversion key for an
+// advertiser account (idempotent) and pokes the tracker's secrets warm cache so
+// it's usable before the test fires a conversion. Value =
+// adserving.DevConversionKey(accountID), the same value fireAndConsume signs
+// conversion postbacks with.
+func (h *Harness) ensureConversionKey(t *testing.T, accountID string) {
+	t.Helper()
+	res, err := h.DB.Exec(
+		`INSERT INTO secrets (name, value, purpose, owner, account_id, status)
+		 SELECT $1, $2, 'hmac_conversion', 'platform', $3::uuid, 'active'
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM secrets
+		   WHERE purpose='hmac_conversion' AND account_id=$3::uuid AND status != 'revoked')`,
+		"dev-conv-key-"+accountID, adserving.DevConversionKey(accountID), accountID)
+	if err != nil {
+		t.Fatalf("ensureConversionKey(%s): %v", accountID, err)
+	}
+	// Only nudge the warm cache when we actually inserted — avoids a needless
+	// NATS round-trip on the common re-create path.
+	if n, _ := res.RowsAffected(); n > 0 {
+		h.PublishInvalidate(t, events.SubjectCacheInvalidateSecrets)
+	}
 }
 
 // ensureInternalDSP looks up (and creates if missing) the "internal" DSP

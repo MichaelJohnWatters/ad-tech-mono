@@ -149,7 +149,11 @@ func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile,
 	nq.Set("cur", "USD")
 	u.Path = routes.TrackerConversion
 	u.RawQuery = nq.Encode()
-	fireGet(client, adserving.SignURL(u.String(), adserving.DefaultSigningKey), traceparent)
+	// A conversion is validated PER-ADVERTISER under the prod-shaped
+	// tracker.conversion_strict_advertiser_key (G7): sign with this advertiser's
+	// own deterministic dev key (the seed minted the matching hmac_conversion
+	// secret). advid="" → DevConversionKey returns the platform key.
+	fireGet(client, adserving.SignURL(u.String(), adserving.DevConversionKey(nq.Get("advid"))), traceparent)
 }
 
 // serveVAST mirrors the web video/audio tabs: GET the VAST, then fire the

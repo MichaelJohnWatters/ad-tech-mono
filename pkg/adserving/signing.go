@@ -12,6 +12,23 @@ import (
 // DefaultSigningKey is used in dev mode. In production, loaded from K8s secret.
 const DefaultSigningKey = "adtech-dev-signing-key-change-in-prod"
 
+// DevConversionKey is the well-known DEV per-advertiser conversion-signing key
+// for account `accountID` — the dev analog of a real advertiser's issued
+// hmac_conversion key (G7). It's DETERMINISTIC so every dev-mode party that signs
+// or seeds a conversion agrees without coordination: the seed mints this exact
+// value as the advertiser's hmac_conversion secret, and the harness / simulator /
+// demoadv sign S2S conversion postbacks with it. Under
+// tracker.conversion_strict_advertiser_key, a conversion billed to `accountID`
+// validates ONLY against this key — so the local stack runs the same
+// per-advertiser posture as prod. Dev only: real advertisers get a random,
+// secret key issued via POST /v1/api/conversion-key; rotate/replace in prod.
+func DevConversionKey(accountID string) string {
+	if accountID == "" {
+		return DefaultSigningKey
+	}
+	return "dev-conv-key-" + accountID
+}
+
 // SignURL generates an HMAC-SHA256 signature for a pixel URL.
 // Signs all query parameters except 'sig' itself.
 func SignURL(rawURL, signingKey string) string {
