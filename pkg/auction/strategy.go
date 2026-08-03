@@ -62,6 +62,12 @@ type Bid struct {
 	AdomainHost    string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
 	                   // advertiser landing domain into the winner response without re-querying the DSP
 	Category     string // IAB category for competitive separation
+	// Relevance is an optional 0..1 quality/relevance score for retail media
+	// (sponsored-product ranking). When >0 the RelevanceWeighted strategy ranks
+	// by Relevance×Price using this value directly; when 0 it derives relevance
+	// from this bid's Category against the request's RetailCategories. Ignored by
+	// every other strategy.
+	Relevance    float64
 	DealID       string // if bidding on a specific deal
 	ResponseTime time.Duration
 }
@@ -79,6 +85,13 @@ type AuctionRequest struct {
 	PriceMode     string // first_price, second_price
 	DealIDs       []string
 	TraceID       string
+	// Retail media (relevance_weighted) knobs. SlotCount is the number of
+	// sponsored-product slots on the results/browse page (1..N; 0 → 1).
+	// RetailCategories are the shopper's browsed/searched IAB categories — the
+	// relevance signal a sponsored product's Bid.Category is scored against.
+	// Both zero/empty for every other channel.
+	SlotCount        int
+	RetailCategories []string
 	// Pod carries pod-specific constraints when this is an ad-break
 	// auction (video/audio Format == "pod"). nil for single-winner
 	// auctions. Populated by the exchange when it sees Imp.Video.PodID

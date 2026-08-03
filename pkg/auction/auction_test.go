@@ -218,14 +218,14 @@ func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
 	engine := auction.NewEngine(clock.Real{})
 	bids := []auction.Bid{{DSPID: "dsp_1", Price: 5.00}}
 
-	// Pod (video/pod) and DOOH (timeslot) are now implemented — covered by
-	// pods_test.go and TestTimeSlotDOOHSingleWinner. The remaining stubs stay
-	// until their channel lands later in Phase 9.
+	// Pod (video/pod), DOOH (timeslot) and retail (relevance_weighted) are now
+	// implemented — covered by pods_test.go, TestTimeSlotDOOHSingleWinner and
+	// relevance_test.go. In-game intrinsic (batch) is the last stub, until that
+	// channel lands later in Phase 9.
 	stubs := []struct {
 		channel string
 		format  string
 	}{
-		{"retail", ""},
 		{"ingame", "intrinsic"},
 	}
 
