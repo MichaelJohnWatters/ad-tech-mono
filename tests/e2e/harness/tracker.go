@@ -49,6 +49,17 @@ func (h *Harness) FireImpressionWithUser(t *testing.T, traceID, campaignID, crea
 	h.fireAndConsume(t, url, "impression")
 }
 
+// FireDOOHPlay fires a DOOH screen's signed proof-of-play beacon: one play that
+// delivers `mult` audience impressions (ch=dooh, mult=N inside the HMAC). The
+// tracker records impression_qty=mult and books the FULL play cost (per-impression
+// cost × mult = cpm/1000 × mult), so one play → N impressions + N× spend.
+func (h *Harness) FireDOOHPlay(t *testing.T, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, currency string, cpm float64, mult int) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/imp?tid=%s&cid=%s&crid=%s&pid=%s&pubid=%s&advid=%s&price=%.4f&cur=%s&bm=cpm&ch=dooh&mult=%d",
+		h.URLs.Tracker, traceID, campaignID, creativeID, placementID, publisherID, advertiserID, cpm, currency, mult)
+	h.fireAndConsume(t, url, "impression")
+}
+
 // FireConversionForVisitorCampaign is FireConversionForVisitor that also names
 // the campaign (cid) up front — so the attributor knows the campaign before the
 // lookback and can apply that campaign's per-line-item attribution overrides.

@@ -31,6 +31,7 @@ type AuctionResult struct {
 // into the OpenRTB request. Empty fields are omitted.
 type AuctionParams struct {
 	Placement string // friendly external key, not the UUID
+	Channel   string // serve channel (video/audio/native/dooh); empty = display
 	Geo       string // ISO country (Device.geo.country)
 	Device    string // device type keyword
 	UserID    string // User.id (drives segment lookup)
@@ -72,6 +73,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 		}
 	}
 	add("placement_id", p.Placement)
+	add("channel", p.Channel)
 	add("geo", p.Geo)
 	add("device", p.Device)
 	add("user_id", p.UserID)
@@ -165,6 +167,7 @@ func (h *Harness) ServeViaSSP(t *testing.T, p AuctionParams) SSPServeResult {
 		}
 	}
 	add("placement_id", p.Placement)
+	add("channel", p.Channel)
 	add("geo", p.Geo)
 	add("device", p.Device)
 	add("user_id", p.UserID)
