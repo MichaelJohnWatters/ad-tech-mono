@@ -450,6 +450,7 @@ func main() {
 	mux.Handle(routes.APIAudienceProviders+"/", authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudienceProviders, authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
+	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +
 	// the tenant-scoped label write. More specific paths than the base
 	// /audiences handler, so neither is swallowed by it.

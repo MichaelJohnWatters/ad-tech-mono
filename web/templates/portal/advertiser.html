@@ -105,6 +105,38 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
+      <!-- Real-time retargeting audiences (cmd/audience-rt): a shopper who fires
+           the /v1/t/rt pixel is enrolled within seconds; a purchase suppresses
+           them; membership ages out after the window. -->
+      {{ template "card-start" (dict "title" "Retargeting audiences" "subtitle" "Re-engage site visitors in real time — the pixel enrolls a shopper in seconds, a purchase removes them, membership ages out after the window") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New retargeting audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newRetarget').classList.toggle('hidden')") }}
+      </div>
+      <div id="newRetarget" class="hidden mb-4 p-4 rounded-lg bg-gray-50 dark:bg-surface-2 border border-gray-200 dark:border-gray-700">
+        <div class="grid md:grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Name</label>
+            <input id="rt_name" placeholder="Cart abandoners" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Pixel tag</label>
+            <input id="rt_tag" placeholder="cart" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Window (days)</label>
+            <input id="rt_window" type="number" value="30" min="1" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" />
+          </div>
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          {{ template "button" (dict "label" "Create audience" "variant" "primary" "size" "sm" "onclick" "createRetargeting()") }}
+          <span id="rt_msg" class="text-xs text-error"></span>
+        </div>
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Pixel tag" "Window" "Enrolled" "Pixel snippet")) }}
+        <tbody id="retargetList"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
       <!-- ADR 0009 data monetization: what this account's fee-bearing public
            segments have earned from external buyers. Accrues per delivered
            impression; owner net = fee minus the platform margin. -->
@@ -1391,6 +1423,7 @@ async function loadAudiences() {
   loadMappings();
   loadProviders();
   loadIngestHistory();
+  loadRetargeting();
   const tbody = tbodyOf('audiences');
   try {
     const list = await fetchJSON('/v1/api/audiences') || [];
@@ -1417,6 +1450,59 @@ async function loadAudiences() {
     tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
   loadDataEarnings();
+}
+
+// ---- Real-time retargeting audiences ----
+async function loadRetargeting() {
+  const tbody = document.getElementById('retargetList');
+  if (!tbody) return;
+  try {
+    const list = await fetchJSON('/v1/api/audiences/retargeting') || [];
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">No retargeting audiences yet — create one, embed the pixel on your product pages, and visitors enrol automatically.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(s => {
+      const snippet = `<img src="https://${location.host}/v1/t/rt?aid=${PORTAL.accountID}&tag=${encodeURIComponent(s.tag)}&uid=VISITOR_ID" width="1" height="1" style="display:none">`;
+      return `<tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(s.tag)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${s.window_days}d</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(s.members)}</td>
+        <td class="px-3 py-2 text-xs"><button data-snippet="${esc(snippet)}" onclick="copyPixel(this)" class="px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy pixel</button></td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+async function createRetargeting() {
+  const name = document.getElementById('rt_name').value.trim();
+  const tag = document.getElementById('rt_tag').value.trim();
+  const window_days = parseInt(document.getElementById('rt_window').value, 10) || 30;
+  const msg = document.getElementById('rt_msg');
+  msg.textContent = '';
+  if (!name || !tag) { msg.textContent = 'Name and tag are required.'; return; }
+  const resp = await fetch('/v1/api/audiences/retargeting', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, tag, window_days }),
+  });
+  if (resp.ok) {
+    document.getElementById('rt_name').value = '';
+    document.getElementById('rt_tag').value = '';
+    document.getElementById('newRetarget').classList.add('hidden');
+    loadRetargeting();
+  } else {
+    const e = await resp.json().catch(() => ({}));
+    msg.textContent = e.error || 'Create failed.';
+  }
+}
+function copyPixel(btn) {
+  navigator.clipboard.writeText(btn.dataset.snippet).then(() => {
+    const prev = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = prev; }, 1500);
+  });
 }
 
 // ---- Data earnings (ADR 0009) ----
