@@ -260,6 +260,7 @@ type createPlacementRequest struct {
 	Format         string            `json:"format"`
 	Width          int               `json:"width"`
 	Height         int               `json:"height"`
+	Surfaces       int               `json:"surfaces,omitempty"` // in-game scene surfaces / retail slots
 	FloorPrice     float64           `json:"floor_price"`
 	PageURLPattern string            `json:"page_url_pattern,omitempty"`
 	FloorConfig    *floorConfigInput `json:"floor_config,omitempty"`
@@ -361,10 +362,10 @@ func writeNewPlacement(ctx context.Context, db *sql.DB, accountID string, req cr
 	floorJSON, _ := req.FloorConfig.validateAndJSON() // already validated in handler
 	videoJSON, _ := req.VideoConfig.validateAndJSON() // already validated in handler
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO placements (publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, floor_config, video_config, status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'USD', $8, $9::jsonb, $10::jsonb, 'active', now(), now())
+INSERT INTO placements (publisher_id, account_id, name, format, width, height, surfaces, floor_price, floor_currency, page_url_pattern, floor_config, video_config, status, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, 'USD', $9, $10::jsonb, $11::jsonb, 'active', now(), now())
 RETURNING id::text`,
-		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.FloorPrice, page, floorJSON, videoJSON,
+		req.PublisherID, accountID, req.Name, req.Format, req.Width, req.Height, req.Surfaces, req.FloorPrice, page, floorJSON, videoJSON,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("placement insert: %w", err)

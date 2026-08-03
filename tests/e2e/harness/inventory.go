@@ -102,6 +102,26 @@ ON CONFLICT (id) DO UPDATE SET floor_price = EXCLUDED.floor_price, updated_at = 
 	}
 }
 
+// AddChannelPlacement is AddPlacement with an explicit channel format (dooh /
+// retail / ingame / …) and a surface/slot count — the publisher-declared channel
+// inventory the SSP serve reads (channel + surfaces default from the placement).
+func (h *Harness) AddChannelPlacement(t *testing.T, pub Publisher, externalKey string, width, height int, floor float64, format string, surfaces int) Placement {
+	t.Helper()
+	id := idgen.Derive("placement", externalKey)
+	floorJSON, _ := json.Marshal(map[string]any{"categories": []string{}})
+	h.WithTenant(t, pub.AccountID, func(tx *sql.Tx) {
+		const q = `
+INSERT INTO placements (id, publisher_id, account_id, name, format, width, height, surfaces, floor_price, floor_currency, page_url_pattern, status, floor_config, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'USD', $10, 'active', $11, now(), now())
+ON CONFLICT (id) DO UPDATE SET format = EXCLUDED.format, surfaces = EXCLUDED.surfaces, updated_at = now()`
+		pageURL := "https://" + pub.Domain + "/p/" + externalKey
+		if _, err := tx.Exec(q, id, pub.ID, pub.AccountID, externalKey, format, width, height, surfaces, floor, pageURL, floorJSON); err != nil {
+			t.Fatalf("channel placement insert: %v", err)
+		}
+	})
+	return Placement{ID: id, ExternalID: externalKey, PublisherID: pub.ID, FloorPrice: floor, Width: width, Height: height}
+}
+
 // AddVideoPlacement creates a video ad slot (format='video' + a video_config
 // window) so a VAST/CTV serve can actually fill. The DSP's video creative match
 // gates on the request's [minDur,maxDur] (derived from this video_config), so a
