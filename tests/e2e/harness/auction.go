@@ -158,6 +158,13 @@ type SSPServeResult struct {
 	TraceID string `json:"trace_id"`
 	NoBid   bool   `json:"nobid,omitempty"`
 	HTML    string `json:"html,omitempty"`
+	// Slots is the retail sponsored-results grid (one entry per filled slot).
+	Slots []struct {
+		Position      int     `json:"position"`
+		CampaignID    string  `json:"campaign_id"`
+		ClearingPrice float64 `json:"clearing_price"`
+		ImpressionID  string  `json:"impression_id"`
+	} `json:"slots,omitempty"`
 }
 
 // ServeViaSSP drives the realistic visitor path (SSP runs the auction AND
