@@ -809,6 +809,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		tReq := targeting.Request{
 			Device:        deviceTypeStr(bidReq.Device),
 			InventoryType: inventoryType(bidReq),
+			Channel:       dspRequestChannel(&bidReq),
 		}
 		if bidReq.Device != nil {
 			if bidReq.Device.Geo != nil {
@@ -1325,6 +1326,33 @@ func inventoryType(req openrtb.BidRequest) string {
 		return "app"
 	}
 	return "site"
+}
+
+// dspRequestChannel derives the request's channel for channel targeting, mirroring
+// the exchange's channelForRequest: the emerging channels (dooh/retail/ingame)
+// ride imp.ext.channel (banner-shaped), everything else is read from the media
+// object. Empty request → display.
+func dspRequestChannel(req *openrtb.BidRequest) string {
+	if len(req.Imp) == 0 {
+		return constants.ChannelDisplay
+	}
+	imp := req.Imp[0]
+	if imp.Ext != nil {
+		switch imp.Ext.Channel {
+		case constants.ChannelDOOH, constants.ChannelRetail, constants.ChannelInGame:
+			return imp.Ext.Channel
+		}
+	}
+	switch {
+	case imp.Video != nil:
+		return "video"
+	case imp.Audio != nil:
+		return "audio"
+	case imp.Native != nil:
+		return "native"
+	default:
+		return constants.ChannelDisplay
+	}
 }
 
 // winHandler processes win notifications from the exchange (the OpenRTB

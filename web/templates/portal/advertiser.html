@@ -560,6 +560,7 @@
         {{ template "form-field" (dict "label" "Keyword exclude" "name" "nc_kw_exc" "placeholder" "gambling") }}
       </div>
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "nc_inv_inc" "placeholder" "blank = site + app") }}
+      {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "nc_chan_inc" "placeholder" "blank = all channels") }}
       <div class="grid grid-cols-2 gap-x-4">
         {{ template "form-field" (dict "label" "Segment include (audience IDs)" "name" "nc_seg_inc" "placeholder" "auto_intenders") }}
         {{ template "form-field" (dict "label" "Segment exclude" "name" "nc_seg_exc" "placeholder" "existing_customers") }}
@@ -792,6 +793,7 @@
         {{ template "form-field" (dict "label" "Keyword exclude" "name" "ec_kw_exc") }}
       </div>
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
+      {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "ec_chan_inc") }}
       <div class="grid grid-cols-2 gap-x-4">
         {{ template "form-field" (dict "label" "Segment include" "name" "ec_seg_inc") }}
         {{ template "form-field" (dict "label" "Segment exclude" "name" "ec_seg_exc") }}
@@ -1192,6 +1194,7 @@ async function createCampaign(ev) {
   // Targeting — comma-separated lists; only send non-empty ones.
   const csv = (id) => $(id).value.split(',').map(s => s.trim()).filter(Boolean);
   const targeting = {
+    include_channels: csv('nc_chan_inc'),
     include_geo: csv('nc_geo_inc'), exclude_geo: csv('nc_geo_exc'),
     include_device: csv('nc_dev_inc'),
     include_domains: csv('nc_dom_inc'), exclude_domains: csv('nc_dom_exc'),
@@ -1240,6 +1243,7 @@ function openEdit(id) {
   $('ec_os_inc').value = join(inc.OS);
   $('ec_kw_inc').value = join(inc.Keywords); $('ec_kw_exc').value = join(exc.Keywords);
   $('ec_inv_inc').value = join(inc.InventoryType);
+  $('ec_chan_inc').value = join(inc.Channels);
   $('ec_seg_inc').value = join(inc.Segments); $('ec_seg_exc').value = join(exc.Segments);
   const mods = c.Modifiers || {};
   $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
@@ -1298,6 +1302,7 @@ async function saveCampaign(ev) {
     include_os: csv('ec_os_inc'),
     include_keywords: csv('ec_kw_inc'), exclude_keywords: csv('ec_kw_exc'),
     include_inventory_type: csv('ec_inv_inc'),
+    include_channels: csv('ec_chan_inc'),
     include_segments: csv('ec_seg_inc'), exclude_segments: csv('ec_seg_exc'),
     // Always send bid_modifiers (empty object replaces) so clearing clears it.
     bid_modifiers: bidModifiersBody('ec_mod_dev', 'ec_mod_geo', 'ec_mod_tod') || {},

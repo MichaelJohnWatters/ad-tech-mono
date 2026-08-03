@@ -326,6 +326,9 @@ type createCampaignRequest struct {
 	IncludeKeywords      []string `json:"include_keywords,omitempty"`
 	ExcludeKeywords      []string `json:"exclude_keywords,omitempty"`
 	IncludeInventoryType []string `json:"include_inventory_type,omitempty"`
+	// Channel allowlist — which channels (display/video/audio/native/dooh/retail/
+	// ingame) this campaign is eligible for. Empty = all channels.
+	IncludeChannels []string `json:"include_channels,omitempty"`
 	// Audience segment targeting — matched against the user's public segments
 	// (SSP-stamped) unioned with the DSP's private segments.
 	IncludeSegments []string `json:"include_segments,omitempty"`
@@ -592,9 +595,9 @@ INSERT INTO targeting_rules (id, line_item_id, account_id,
     include_geo, exclude_geo, include_device, exclude_device,
     include_domains, exclude_domains, include_categories, exclude_categories,
     include_os, include_keywords, exclude_keywords, include_inventory_type,
-    include_segments, exclude_segments,
+    include_segments, exclude_segments, include_channels,
     bid_modifiers, frequency_caps, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, now(), now())`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, now(), now())`,
 		targetingID, lineItemID, accountID,
 		pq.StringArray(req.IncludeGeo), pq.StringArray(req.ExcludeGeo),
 		pq.StringArray(req.IncludeDevice), pq.StringArray(req.ExcludeDevice),
@@ -603,6 +606,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		pq.StringArray(req.IncludeOS), pq.StringArray(req.IncludeKeywords),
 		pq.StringArray(req.ExcludeKeywords), pq.StringArray(req.IncludeInventoryType),
 		pq.StringArray(req.IncludeSegments), pq.StringArray(req.ExcludeSegments),
+		pq.StringArray(req.IncludeChannels),
 		modifiersJSON, freqCapsJSON); err != nil {
 		return fmt.Errorf("targeting insert: %w", err)
 	}
@@ -657,6 +661,7 @@ type patchCampaignRequest struct {
 	IncludeInventoryType *[]string `json:"include_inventory_type,omitempty"`
 	IncludeSegments      *[]string `json:"include_segments,omitempty"`
 	ExcludeSegments      *[]string `json:"exclude_segments,omitempty"`
+	IncludeChannels      *[]string `json:"include_channels,omitempty"`
 	// BidModifiers replaces the whole bid_modifiers JSONB when supplied.
 	BidModifiers *bidModifiersInput `json:"bid_modifiers,omitempty"`
 	// FreqCap replaces the frequency_caps JSONB when supplied (limit <= 0 clears).
@@ -672,6 +677,7 @@ func (p patchCampaignRequest) hasTargeting() bool {
 		p.IncludeOS != nil || p.IncludeKeywords != nil ||
 		p.ExcludeKeywords != nil || p.IncludeInventoryType != nil ||
 		p.IncludeSegments != nil || p.ExcludeSegments != nil ||
+		p.IncludeChannels != nil ||
 		p.BidModifiers != nil || p.FreqCap != nil
 }
 
@@ -964,6 +970,7 @@ func updateTargeting(ctx context.Context, tx *sql.Tx, lineItemID string, req pat
 	add("include_inventory_type", req.IncludeInventoryType)
 	add("include_segments", req.IncludeSegments)
 	add("exclude_segments", req.ExcludeSegments)
+	add("include_channels", req.IncludeChannels)
 	// bid_modifiers / frequency_caps are JSONB, not TEXT[] — handle separately.
 	if req.BidModifiers != nil {
 		j, err := req.BidModifiers.validateAndJSON()
