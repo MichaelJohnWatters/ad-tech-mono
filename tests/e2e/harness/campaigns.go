@@ -246,6 +246,31 @@ func (h *Harness) PatchCampaignStatus(t *testing.T, c Campaign, status string) {
 	}
 }
 
+// PatchProductCategory sets a line item's product_category through the DSP
+// management API (PATCH /v1/dsp/campaigns/{id}), exercising the real update path.
+func (h *Harness) PatchProductCategory(t *testing.T, c Campaign, cat string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"product_category": cat})
+	url := h.URLs.DSP + routes.DSPCampaigns + "/" + c.ID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build PATCH: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", DevAPIKey)
+	resp, err := h.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PATCH product_category status = %d (want 204); body=%s", resp.StatusCode, string(b))
+	}
+}
+
 // SetCampaignDailyBudget updates the daily budget on a line item under the
 // owning tenant's RLS context.
 func (h *Harness) SetCampaignDailyBudget(t *testing.T, c Campaign, budget float64) {
