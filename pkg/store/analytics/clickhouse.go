@@ -235,9 +235,15 @@ func (c *ClickHouse) createTables() error {
 			creative_id String, placement_id String, geo String, device String,
 			count UInt64, sum_cost Float64
 		) ENGINE = SummingMergeTree ORDER BY (hour, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device)`,
+		// count = sum(impression_qty) so a DOOH play (impression_qty = venue
+		// audience per play) rolls up as its audience, not 1 — consistent with the
+		// raw query's count metric. DROP first so the redefinition lands on existing
+		// stacks (CREATE IF NOT EXISTS alone keeps the old count() view); the
+		// SummingMergeTree target table keeps its rows (new inserts use the new sum).
+		`DROP VIEW IF EXISTS impressions_rollup_hourly_mv`,
 		`CREATE MATERIALIZED VIEW IF NOT EXISTS impressions_rollup_hourly_mv TO impressions_rollup_hourly AS
 			SELECT toStartOfHour(timestamp) AS hour, account_id, publisher_id, campaign_id, creative_id,
-				placement_id, geo, device, count() AS count, sum(clearing_price_usd) AS sum_cost
+				placement_id, geo, device, sum(impression_qty) AS count, sum(clearing_price_usd) AS sum_cost
 			FROM impressions
 			GROUP BY hour, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device`,
 		`CREATE TABLE IF NOT EXISTS impressions_rollup_daily (
@@ -245,9 +251,10 @@ func (c *ClickHouse) createTables() error {
 			creative_id String, placement_id String, geo String, device String,
 			count UInt64, sum_cost Float64
 		) ENGINE = SummingMergeTree ORDER BY (day, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device)`,
+		`DROP VIEW IF EXISTS impressions_rollup_daily_mv`,
 		`CREATE MATERIALIZED VIEW IF NOT EXISTS impressions_rollup_daily_mv TO impressions_rollup_daily AS
 			SELECT toStartOfDay(timestamp) AS day, account_id, publisher_id, campaign_id, creative_id,
-				placement_id, geo, device, count() AS count, sum(clearing_price_usd) AS sum_cost
+				placement_id, geo, device, sum(impression_qty) AS count, sum(clearing_price_usd) AS sum_cost
 			FROM impressions
 			GROUP BY day, account_id, publisher_id, campaign_id, creative_id, placement_id, geo, device`,
 	}

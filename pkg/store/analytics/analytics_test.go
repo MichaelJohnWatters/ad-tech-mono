@@ -358,12 +358,14 @@ func TestBuildQuery(t *testing.T) {
 		want   string
 	}{
 		{
+			// impressions "count" = SUM(impression_qty) so a DOOH play (qty=N)
+			// counts as its audience; equals COUNT(*) for every qty=1 row.
 			name: "simple count",
 			params: QueryParams{
 				Table:   "impressions",
 				Metrics: []string{"count"},
 			},
-			want: "SELECT COUNT(*) AS count FROM impressions",
+			want: "SELECT SUM(impression_qty) AS count FROM impressions",
 		},
 		{
 			name: "grouped with filter",
@@ -373,7 +375,7 @@ func TestBuildQuery(t *testing.T) {
 				Dimensions: []string{"campaign_id"},
 				Filters:    map[string]string{"geo": "GBR"},
 			},
-			want: "SELECT campaign_id, COUNT(*) AS count, SUM(clearing_price_usd) AS sum_cost FROM impressions WHERE geo = ? GROUP BY campaign_id",
+			want: "SELECT campaign_id, SUM(impression_qty) AS count, SUM(clearing_price_usd) AS sum_cost FROM impressions WHERE geo = ? GROUP BY campaign_id",
 		},
 		{
 			name: "day dimension",
@@ -385,7 +387,16 @@ func TestBuildQuery(t *testing.T) {
 				OrderDir:   "desc",
 				Limit:      7,
 			},
-			want: "SELECT CAST(timestamp AS DATE) AS day, COUNT(*) AS count FROM impressions GROUP BY CAST(timestamp AS DATE) ORDER BY day DESC LIMIT 7",
+			want: "SELECT CAST(timestamp AS DATE) AS day, SUM(impression_qty) AS count FROM impressions GROUP BY CAST(timestamp AS DATE) ORDER BY day DESC LIMIT 7",
+		},
+		{
+			// Non-impressions tables keep COUNT(*) — only impressions carry qty.
+			name: "clicks count stays row count",
+			params: QueryParams{
+				Table:   "clicks",
+				Metrics: []string{"count"},
+			},
+			want: "SELECT COUNT(*) AS count FROM clicks",
 		},
 	}
 

@@ -38,7 +38,16 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 	for _, metric := range params.Metrics {
 		switch metric {
 		case "count":
-			selectParts = append(selectParts, "COUNT(*) AS count")
+			if params.Table == "impressions" {
+				// DOOH proof-of-play carries impression_qty > 1 (the venue audience
+				// per play); every other row is 1, so SUM(impression_qty) is the
+				// true delivered-impression count and equals COUNT(*) for all
+				// non-DOOH rows. Also feeds the app-side rollup engine (rollup.go
+				// computes via store.Query), so rollups stay consistent.
+				selectParts = append(selectParts, "SUM(impression_qty) AS count")
+			} else {
+				selectParts = append(selectParts, "COUNT(*) AS count")
+			}
 		case "sum_cost":
 			selectParts = append(selectParts, "SUM(clearing_price_usd) AS sum_cost")
 		case "avg_cost":
