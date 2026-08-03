@@ -71,6 +71,10 @@ type Campaign struct {
 	DailyBudget    float64
 	TotalBudget    float64
 	Format         string // display, native, video, audio (line_items.format)
+	// ProductCategory is the advertised product's OWN IAB category (line_items.
+	// product_category) — the retail relevance signal, distinct from the content-
+	// targeting Include.Categories. Empty → the DSP falls back to Include.Categories.
+	ProductCategory string
 	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
 	PacingMode     string // even, asap, front_loaded
 	Status         string // live, paused, ended, ...

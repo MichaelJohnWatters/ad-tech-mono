@@ -1118,7 +1118,9 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				H:        match.Height,
 				Dur:      match.Duration,
 				MediaURL: match.MediaURL,
-				Cat:      append([]string(nil), c.Targeting.Include.Categories...),
+				// Product category for retail relevance: the product's OWN category
+				// (product_category) when set, else the content-targeting categories.
+				Cat: productCategories(c),
 			}
 			// Native creatives carry their markup in AdM: an OpenRTB Native
 			// response built from the creative's asset set. Impression/click
@@ -1326,6 +1328,16 @@ func inventoryType(req openrtb.BidRequest) string {
 		return "app"
 	}
 	return "site"
+}
+
+// productCategories returns the IAB categories the bid advertises for retail
+// relevance: the product's own category when set, else its content-targeting
+// include categories (backward compatible when product_category is unset).
+func productCategories(c *models.Campaign) []string {
+	if c.ProductCategory != "" {
+		return []string{c.ProductCategory}
+	}
+	return append([]string(nil), c.Targeting.Include.Categories...)
 }
 
 // dspRequestChannel derives the request's channel for channel targeting, mirroring
