@@ -49,6 +49,9 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIStaffRetargeting is the staff oversight of retargeting audiences across
+	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
+	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
 	// APIAudienceRetargeting manages real-time retargeting audiences (the target
 	// of the /v1/t/rt pixel): GET lists them with live enrollment counts, POST
 	// creates one {name, tag, window_days}. Tenant-scoped.

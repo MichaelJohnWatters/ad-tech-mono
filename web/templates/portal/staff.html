@@ -206,6 +206,15 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Retargeting oversight ============ -->
+    <section id="section-retargeting" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Retargeting audiences" "subtitle" "Real-time retargeting pools across ALL advertisers — tag, window, and live enrollment (cmd/audience-rt enrolls on site_visit, suppresses on purchase)") }}
+      {{ template "table-start" (dict "headers" (slice "Advertiser" "Audience" "Pixel tag" "Window" "Enrolled" "Updated")) }}
+        <tbody id="staffRetargetList"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Onboarding monitor ============ -->
     <section id="section-onboarding" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Providers" "subtitle" "Drop-zone health by data partner") }}
@@ -546,7 +555,7 @@ const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'moderation';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -557,7 +566,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -1716,6 +1725,25 @@ function minioLink(bucket, key, label) {
   const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
   const href = `${MINIO_CONSOLE}/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(prefix)}`;
   return `<a class="underline decoration-dotted hover:text-brand" href="${href}" target="_blank" title="open in Minio console">${esc(label)}</a>`;
+}
+async function loadStaffRetargeting() {
+  const tbody = document.getElementById('staffRetargetList');
+  if (!tbody) return;
+  try {
+    const list = await fetchJSON('/v1/api/staff/retargeting') || [];
+    tbody.innerHTML = list.length ? list.map(s => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(s.advertiser)}</td>
+        <td class="px-3 py-2">${esc(s.segment)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(s.tag)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${s.window_days}d</td>
+        <td class="px-3 py-2 font-mono">${(s.members || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(s.updated_at)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">No retargeting audiences on the platform yet.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
 }
 async function loadOnboarding() {
   try {
