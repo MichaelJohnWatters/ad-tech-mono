@@ -627,10 +627,14 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			}
 			if routingChannel == constants.ChannelRetail {
 				// The shopper's browsed categories (Site.Cat) feed the relevance-
-				// weighted ranking across the DSP's product slate. SlotCount is 1
-				// here because the winner path returns the top sponsored slot;
-				// rendering positions 2..N is a documented follow-up.
+				// weighted ranking across the DSP's product slate; SlotCount is the
+				// number of sponsored slots on the results page (imp.ext.surfaces),
+				// each returned as a ranked multi-winner and billed on its own
+				// sub-trace.
 				auctionReq.SlotCount = 1
+				if bidReq.Imp[0].Ext != nil && bidReq.Imp[0].Ext.Surfaces > 0 {
+					auctionReq.SlotCount = bidReq.Imp[0].Ext.Surfaces
+				}
 				if bidReq.Site != nil {
 					auctionReq.RetailCategories = bidReq.Site.Cat
 				}
