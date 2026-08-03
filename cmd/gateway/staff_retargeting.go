@@ -1,15 +1,48 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
+
+// staffChannelsHandler serves GET /v1/api/staff/channels — the platform-wide
+// per-channel activity breakdown (impressions + cost by channel). Staff only
+// (support:read); proxies to reporting's unscoped ReportingChannels.
+func staffChannelsHandler(reportingURL string, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if !can(claims, "support:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, reportingURL+routes.ReportingChannels, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Error("staff channels proxy failed", "error", err)
+			http.Error(w, `{"error":"reporting unavailable"}`, http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
 
 // staffRetargetingRow is one advertiser's retargeting audience as the staff
 // oversight console renders it (platform-wide).

@@ -213,6 +213,12 @@
         <tbody id="staffRetargetList"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Channel activity — platform-wide (7 days)" "subtitle" "Delivered impressions + spend by channel across ALL advertisers (display / video / audio / native / dooh / retail / ingame)") }}
+      {{ template "table-start" (dict "headers" (slice "Channel" "Impressions" "Spend")) }}
+        <tbody id="staffChannelList"><tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Onboarding monitor ============ -->
@@ -1727,6 +1733,7 @@ function minioLink(bucket, key, label) {
   return `<a class="underline decoration-dotted hover:text-brand" href="${href}" target="_blank" title="open in Minio console">${esc(label)}</a>`;
 }
 async function loadStaffRetargeting() {
+  loadStaffChannels();
   const tbody = document.getElementById('staffRetargetList');
   if (!tbody) return;
   try {
@@ -1743,6 +1750,25 @@ async function loadStaffRetargeting() {
       : '<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">No retargeting audiences on the platform yet.</td></tr>';
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+async function loadStaffChannels() {
+  const tbody = document.getElementById('staffChannelList');
+  if (!tbody) return;
+  try {
+    const res = await fetchJSON('/v1/api/staff/channels') || {};
+    const cols = res.columns || [];
+    const ci = cols.indexOf('channel'), ni = cols.indexOf('count'), si = cols.indexOf('sum_cost');
+    const rows = res.rows || [];
+    tbody.innerHTML = rows.length ? rows.map(r => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(String(r[ci] || 'display'))}</td>
+        <td class="px-3 py-2 font-mono">${(Number(r[ni]) || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono">$${(Number(r[si]) || 0).toFixed(2)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">No impressions in the last 7 days.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 async function loadOnboarding() {
