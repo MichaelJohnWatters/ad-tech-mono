@@ -33,11 +33,65 @@ func TestRelevanceWeighted_RelevanceBeatsHigherBid(t *testing.T) {
 	if len(res.Winners) != 1 || res.Winners[0].Bid.CampaignID != "shoes" {
 		t.Fatalf("want the relevant cheaper product 'shoes' to win, got %+v", res.Winners)
 	}
-	if res.Winners[0].ClearingPrice != 2.00 {
-		t.Errorf("first-price clearing = %v, want 2.00 (winner pays its own bid)", res.Winners[0].ClearingPrice)
+	// GSP: shoes pays only the minimum to hold rank 1 = loans' score (0.1×5=0.5)
+	// divided by shoes' relevance (1.0) = 0.50 — NOT its own 2.00 bid.
+	if res.Winners[0].ClearingPrice != 0.50 {
+		t.Errorf("GSP clearing = %v, want 0.50 (next score / own relevance)", res.Winners[0].ClearingPrice)
 	}
 	if res.Winners[0].Position != 1 {
 		t.Errorf("winner position = %d, want 1", res.Winners[0].Position)
+	}
+}
+
+// GSP ladder across multiple slots: each slot pays the next-ranked score / its
+// own relevance; the last filled slot clears at the floor.
+func TestRelevanceWeighted_GSPLadder(t *testing.T) {
+	engine := auction.NewEngine(clock.Real{})
+	// All in-category (relevance 1.0), so score == bid: a=5, b=3, c=2.
+	bids := []auction.Bid{
+		{DSPID: "d1", CampaignID: "a", Price: 5.00, Category: "IAB18"},
+		{DSPID: "d2", CampaignID: "b", Price: 3.00, Category: "IAB18"},
+		{DSPID: "d3", CampaignID: "c", Price: 2.00, Category: "IAB18"},
+	}
+	res, err := engine.RunAuction(context.Background(), bids, auction.AuctionRequest{
+		Channel: "retail", SlotCount: 2, RetailCategories: []string{"IAB18"}, FloorPrice: 0.50,
+	})
+	if err != nil {
+		t.Fatalf("retail auction errored: %v", err)
+	}
+	// a (pos1) pays b's score 3.00; b (pos2) pays c's score 2.00.
+	if res.Winners[0].ClearingPrice != 3.00 {
+		t.Errorf("pos1 GSP = %v, want 3.00 (next score)", res.Winners[0].ClearingPrice)
+	}
+	if res.Winners[1].ClearingPrice != 2.00 {
+		t.Errorf("pos2 GSP = %v, want 2.00 (next score)", res.Winners[1].ClearingPrice)
+	}
+}
+
+// MinRelevance floor: a product below the floor doesn't show, even bidding high.
+func TestRelevanceWeighted_MinRelevanceFloor(t *testing.T) {
+	engine := auction.NewEngine(clock.Real{})
+	bids := []auction.Bid{
+		{DSPID: "d1", CampaignID: "shoes", Price: 2.00, Category: "IAB18-5"}, // rel 1.0
+		{DSPID: "d2", CampaignID: "loans", Price: 50.00, Category: "IAB13"},  // rel 0.1 — below floor
+	}
+	res, err := engine.RunAuction(context.Background(), bids, auction.AuctionRequest{
+		Channel: "retail", SlotCount: 2, RetailCategories: []string{"IAB18-5"}, MinRelevance: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("retail auction errored: %v", err)
+	}
+	if len(res.Winners) != 1 || res.Winners[0].Bid.CampaignID != "shoes" {
+		t.Fatalf("only 'shoes' clears the relevance floor, got %+v", res.Winners)
+	}
+	var blocked bool
+	for _, l := range res.LossBids {
+		if l.Bid.CampaignID == "loans" && l.Reason == auction.LossBlocked {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Errorf("'loans' should be blocked below MinRelevance, losses=%+v", res.LossBids)
 	}
 }
 

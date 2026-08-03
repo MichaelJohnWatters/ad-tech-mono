@@ -38,6 +38,7 @@ var Exchange = struct {
 	AdsTxtSellerID         config.StringKey
 	WarmAdsTxtPollInterval config.DurationKey
 	PrebidMinBidFloor      config.FloatKey
+	RetailMinRelevance     config.FloatKey
 	PrebidEnabled          config.BoolKey
 	SchainEnforcement      config.StringKey
 	SchainAppendNode       config.BoolKey
@@ -74,6 +75,7 @@ var Exchange = struct {
 	AdsTxtSellerID:         exchangeSet.String("exchange.adstxt_seller_id", "", config.TierLive, "Our seller account ID as it appears in publishers' ads.txt files (the second field). Consulted only when exchange.adstxt_enforcement != off. Live-tier so the gateway can surface the exact ads.txt line to publishers from the same shared value the exchange enforces on.", config.Since("v1.3")),
 	WarmAdsTxtPollInterval: exchangeSet.Duration("cache.warm.ads_txt.poll_interval", "300s", config.TierStatic, "How often the exchange refreshes the ads_txt_cache warm cache from Postgres. Long interval is fine — ads.txt files change rarely and the cmd/adstxt crawler is the slow-moving source of truth.", config.Since("v1.3")),
 	PrebidMinBidFloor:      exchangeSet.Float("prebid.min_bid_floor", "0", config.TierLive, "Platform-wide minimum CPM floor applied to inbound Prebid Server bid requests. Effective floor per impression = max(inbound bidfloor, this value). Raise to enforce a global quality floor on Prebid demand.", config.Since("v1.3")),
+	RetailMinRelevance:     exchangeSet.Float("exchange.retail_min_relevance", "0", config.TierLive, "Retail-media eligibility floor (0-1): a sponsored product whose relevance to the shopper's browsed categories scores below this doesn't show, however high its bid. 0 = no floor (rank everything by relevance × bid).", config.Since("v1.20")),
 	PrebidEnabled:          exchangeSet.Bool("prebid.enabled", "true", config.TierLive, "Toggle the inbound Prebid bidder endpoint. Disable to stop accepting external Prebid Server traffic without restarting the exchange.", config.Since("v1.3")),
 	SchainEnforcement:      exchangeSet.String("exchange.schain_enforcement", "warn", config.TierLive, "SupplyChain (schain) validation before fan-out: 'off' (no check), 'warn' (log requests with a missing/malformed schain but allow), or 'strict' (no-bid them). Default 'warn' because the SSP only emits schain once ssp.seller_domain is set — start in warn, ratchet to strict once every source populates it.", config.Since("v1.4")),
 	SchainAppendNode:       exchangeSet.Bool("exchange.schain_append_node", "false", config.TierLive, "When true, append this exchange as an additional schain node using adstxt_seller_domain/id. Only correct when the exchange is a distinct reselling entity from the SSP — with the single-platform default (SSP already emits the platform node) leave this off to avoid inflating the chain.", config.Since("v1.4")),

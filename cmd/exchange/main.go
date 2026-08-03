@@ -301,7 +301,8 @@ func main() {
 		}
 		return sampleTrace(traceID, ratio)
 	}
-	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn)
+	retailMinRelFn := func() float64 { return keys.Exchange.RetailMinRelevance.Get(cfg) }
+	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn, retailMinRelFn)
 	mux.HandleFunc(routes.OpenRTBAuction, auction)
 	mux.HandleFunc(routes.AdCertKey, adCertKeyHandler(adcertSigner))
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -391,7 +392,7 @@ func firstNonZeroDuration(ds ...time.Duration) time.Duration {
 	return 30 * time.Second
 }
 
-func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), schainGate func(*openrtb.BidRequest, string) (bool, string), signReq func(*openrtb.BidRequest), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallFn func(traceID string) bool) http.HandlerFunc {
+func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, client *http.Client, bidTimeoutFn func() time.Duration, dspEndpointsFn func() []string, channelFn func() string, debugEnabledFn func() bool, pub *events.Publisher, adsTxt *fraud.AdsTxtCache, adsTxtGate func(string) (bool, string), schainGate func(*openrtb.BidRequest, string) (bool, string), signReq func(*openrtb.BidRequest), dealCache *warm.Cache[models.Deal], router *optimise.SmartRouter, am *auctionMetrics, emitDSPCallFn func(traceID string) bool, retailMinRelFn func() float64) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -638,6 +639,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				if bidReq.Site != nil {
 					auctionReq.RetailCategories = bidReq.Site.Cat
 				}
+				auctionReq.MinRelevance = retailMinRelFn()
 			}
 			if routingChannel == constants.ChannelInGame {
 				// An intrinsic in-game placement is a whole scene of surfaces filled
