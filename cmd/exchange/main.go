@@ -620,6 +620,16 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				FloorPrice: bidReq.Imp[0].BidFloor,
 				TraceID:    traceID,
 			}
+			if routingChannel == constants.ChannelRetail {
+				// The shopper's browsed categories (Site.Cat) feed the relevance-
+				// weighted ranking across the DSP's product slate. SlotCount is 1
+				// here because the winner path returns the top sponsored slot;
+				// rendering positions 2..N is a documented follow-up.
+				auctionReq.SlotCount = 1
+				if bidReq.Site != nil {
+					auctionReq.RetailCategories = bidReq.Site.Cat
+				}
+			}
 			result, err := engine.RunAuction(ctx, eligibleBids, auctionReq)
 			if err != nil {
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -1000,6 +1010,16 @@ func placementPublisherFromReq(req *openrtb.BidRequest) (placementID, publisherI
 	return placementID, publisherID
 }
 
+// firstOrEmpty returns the first element of a string slice, or "" when empty.
+// Used to collapse OpenRTB BidObj.Cat ([]string) into the single primary product
+// category the retail relevance scorer compares against.
+func firstOrEmpty(s []string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
+}
+
 func channelForRequest(req *openrtb.BidRequest) string {
 	if len(req.Imp) == 0 {
 		return constants.ChannelDisplay
@@ -1187,7 +1207,10 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						// came from (data-fee attribution can't ride the self-declared seat).
 						SettlementSeat: trustedSeatFor(endpoint),
 						AdomainHost:    adomain,
-						ResponseTime:   responseTime,
+						// Product category (OpenRTB BidObj.Cat) — the retail relevance
+						// signal scored against the shopper's browsed categories.
+						Category:     firstOrEmpty(b.Cat),
+						ResponseTime: responseTime,
 					}
 					bids = append(bids, bid)
 					records = append(records, dspBidRecord{
