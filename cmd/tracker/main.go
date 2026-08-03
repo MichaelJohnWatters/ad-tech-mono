@@ -270,6 +270,18 @@ func main() {
 		// previously converted only in the reporting consumer, so the lake kept
 		// the raw CPM and hot/cold disagreed 1000×.)
 		impCost := price / 1000
+		// DOOH audience multiplier: a screen's single proof-of-play delivers `mult`
+		// impressions to the people in front of it. mult rides INSIDE the signed
+		// beacon (the ad server bakes it per venue), so it can't be forged, and only
+		// applies to the dooh channel. The event then represents `qty` impressions at
+		// the full play cost (per-impression cost × qty) — billing books the play,
+		// reporting sums the audience. Every other format is 1:1 (qty=1, cost=impCost).
+		qty := 1
+		if channelOrDefault(q.Get("ch")) == constants.ChannelDOOH {
+			if m, err := strconv.Atoi(q.Get("mult")); err == nil && m > 1 {
+				qty = m
+			}
+		}
 		go publisher.publishImpression(context.WithoutCancel(ctx), analytics.ImpressionEvent{
 			TraceID:          traceID,
 			CampaignID:       q.Get("cid"),
@@ -280,9 +292,10 @@ func main() {
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
 			Channel:          channelOrDefault(q.Get("ch")),
-			ClearingPrice:    impCost,
+			ClearingPrice:    impCost,                    // per-impression (CPM/1000)
 			ClearingCurrency: q.Get("cur"),
-			ClearingPriceUSD: impCost,
+			ClearingPriceUSD: impCost * float64(qty),     // full play cost — billing books this
+			ImpressionQty:    qty,                         // audience impressions this play delivered
 			BidModel:         bidModel,
 			DealID:           q.Get("deal"),
 			SchemaVersion:    1,

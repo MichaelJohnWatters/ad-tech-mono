@@ -35,7 +35,7 @@ func (c *ClickHouse) InsertImpressions(ctx context.Context, es []*ImpressionEven
 			e.TraceID, e.InsertionOrderID, e.CampaignID, e.CreativeID, e.PlacementID,
 			e.PublisherID, e.AccountID, e.Geo, e.Device, e.Channel, e.Format,
 			e.ClearingPrice, e.ClearingCurrency, e.ClearingPriceUSD, e.BidModel, e.DealID,
-			int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+			int32(impQty(e.ImpressionQty)), int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append impression: %w", err)

@@ -111,6 +111,7 @@ func (c *ClickHouse) createTables() error {
 			placement_id String, publisher_id String, account_id String, geo String, device String,
 			channel String, format String, clearing_price Float64, clearing_currency String,
 			clearing_price_usd Float64, bid_model String, deal_id String,
+			impression_qty Int32 DEFAULT 1,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS clicks (
@@ -276,6 +277,13 @@ func (c *ClickHouse) createTables() error {
 		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS attributed_trace_id String`,
 		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS attribution_type String`,
 		`ALTER TABLE conversions ADD COLUMN IF NOT EXISTS user_id String`,
+		// DOOH audience multiplier: how many impressions one served event (proof-of-
+		// play) represents. Old rows read as 0 → normalised to 1 on query (a served
+		// event is at least one impression); new rows carry the venue audience.
+		// AFTER deal_id so the column lands in the SAME position as a freshly
+		// CREATE-d table — the batch insert appends by column order, so a mismatch
+		// (ALTER defaults to appending at the end) would corrupt every batched row.
+		`ALTER TABLE impressions ADD COLUMN IF NOT EXISTS impression_qty Int32 DEFAULT 1 AFTER deal_id`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
 			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
@@ -324,11 +332,11 @@ func (c *ClickHouse) InsertImpression(ctx context.Context, e *ImpressionEvent) e
 	return c.exec(ctx, "impression",
 		`INSERT INTO impressions (trace_id, insertion_order_id, campaign_id, creative_id, placement_id,
 			publisher_id, account_id, geo, device, channel, format, clearing_price, clearing_currency,
-			clearing_price_usd, bid_model, deal_id, schema_version, timestamp)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			clearing_price_usd, bid_model, deal_id, impression_qty, schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.InsertionOrderID, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID,
 		e.AccountID, e.Geo, e.Device, e.Channel, e.Format, e.ClearingPrice, e.ClearingCurrency,
-		e.ClearingPriceUSD, e.BidModel, e.DealID, int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+		e.ClearingPriceUSD, e.BidModel, e.DealID, int32(impQty(e.ImpressionQty)), int32(schemaVer(e.SchemaVersion)), e.Timestamp)
 }
 
 func (c *ClickHouse) InsertClick(ctx context.Context, e *ClickEvent) error {
@@ -949,6 +957,16 @@ func sig(t time.Time) time.Time {
 
 func schemaVer(v int) int {
 	if v == 0 {
+		return 1
+	}
+	return v
+}
+
+// impQty normalises the impression audience multiplier: a served event is at
+// least one impression, so 0 (unset / legacy) becomes 1. DOOH carries the venue
+// audience per play.
+func impQty(v int) int {
+	if v <= 0 {
 		return 1
 	}
 	return v
