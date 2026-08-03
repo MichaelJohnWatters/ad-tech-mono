@@ -88,7 +88,7 @@ func main() {
 		// leave the consumer DEAF forever — retry until it sticks (same doctrine
 		// as identity-consumer / webhooks).
 		subscribeAll := func() error {
-			if e := natsBus.Subscribe(ctx, events.SubjectBehaviourObserved, constants.NATSGroupAudienceRT, behaviourHandler(svc, log)); e != nil {
+			if e := natsBus.Subscribe(ctx, events.SubjectBehaviourObserved, constants.NATSGroupAudienceRT, behaviourHandler(svc, natsBus, log)); e != nil {
 				return e
 			}
 			return natsBus.Subscribe(ctx, events.SubjectConversion, constants.NATSGroupAudienceRT, conversionHandler(svc, log))
@@ -149,16 +149,32 @@ func main() {
 // behaviourHandler enrolls a site visitor into matching retargeting segments.
 // Malformed payload = poison (ack, no redelivery); a transient store error naks
 // so JetStream redelivers.
-func behaviourHandler(svc *retargeting.Service, log *slog.Logger) events.Handler {
+func behaviourHandler(svc *retargeting.Service, bus events.EventBus, log *slog.Logger) events.Handler {
 	return func(ctx context.Context, msg *events.Message) error {
 		var ev events.BehaviourSignalEvent
 		if err := json.Unmarshal(msg.Data, &ev); err != nil {
 			log.Warn("dropping malformed behaviour event", "error", err)
 			return msg.Ack()
 		}
-		if _, err := svc.OnSiteVisit(ctx, ev); err != nil {
+		enrolled, err := svc.OnSiteVisit(ctx, ev)
+		if err != nil {
 			log.Warn("real-time enroll failed, will redeliver", "account", ev.AccountID, "error", err)
 			return msg.Nak()
+		}
+		// Emit an account-scoped enrolled event per segment so the advertiser can
+		// trigger an abandoned-cart push (via a webhook) the moment it happens.
+		for _, segID := range enrolled {
+			payload, _ := json.Marshal(events.RetargetingEnrolledEvent{
+				SchemaVersion: events.CurrentSchemaVersion,
+				AccountID:     ev.AccountID,
+				SegmentID:     segID,
+				UserID:        ev.UserID,
+				Tag:           ev.Tag,
+				EnrolledAt:    time.Now().UTC(),
+			})
+			if perr := bus.Publish(ctx, events.SubjectRetargetingEnrolled, payload); perr != nil {
+				log.Warn("publish retargeting.enrolled failed", "account", ev.AccountID, "segment", segID, "error", perr)
+			}
 		}
 		return msg.Ack()
 	}

@@ -24,6 +24,7 @@ a customer puts in a subscription's `events` list (`POST /v1/api/webhooks`).
 | `adtech.budget.depleted` | `budget.depleted` | a campaign exhausts its budget |
 | `adtech.balance.depleted` | `balance.depleted` | an advertiser's prepay balance hits zero |
 | `adtech.campaign.state_changed` | `campaign.state_changed` | a campaign is paused/resumed/etc. |
+| `adtech.retargeting.enrolled` | `retargeting.enrolled` | a shopper is enrolled into a real-time retargeting audience (abandoned-cart push hook) |
 
 Add a new event = one entry in `eventRoutes` + a row here. The source payload
 must carry `account_id`.

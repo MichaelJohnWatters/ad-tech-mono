@@ -40,6 +40,7 @@ var eventRoutes = map[string]string{
 	events.SubjectBalanceDepleted:      "balance.depleted",
 	events.SubjectCampaignStateChanged: "campaign.state_changed",
 	events.SubjectReportCompleted:      "report.completed",
+	events.SubjectRetargetingEnrolled:  "retargeting.enrolled",
 }
 
 func main() {

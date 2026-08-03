@@ -86,6 +86,12 @@ const (
 	// Campaign lifecycle (DSP → Reporting, Webhooks)
 	SubjectCampaignStateChanged = "adtech.campaign.state_changed"
 
+	// SubjectRetargetingEnrolled (audience-rt → Webhooks): a shopper was enrolled
+	// into an advertiser's real-time retargeting audience (fired the /v1/t/rt
+	// pixel). Account-scoped; lets the advertiser trigger an abandoned-cart push
+	// (email / re-engagement) the moment it happens, via a webhook.
+	SubjectRetargetingEnrolled = "adtech.retargeting.enrolled"
+
 	// Privacy (Gateway → ALL services)
 	SubjectPrivacyOptOut    = "adtech.privacy.opt_out"
 	SubjectPrivacyDeletion  = "adtech.privacy.deletion_requested"
