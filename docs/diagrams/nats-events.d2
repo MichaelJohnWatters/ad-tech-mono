@@ -130,6 +130,10 @@ subjects: Subjects {
     style.fill: "#9a3412"
     style.font-color: "#fff"
   }
+  rtenrolled: adtech.retargeting.enrolled {
+    style.fill: "#7c2d12"
+    style.font-color: "#fff"
+  }
   datafee: adtech.datafee.observed {
     style.fill: "#9a3412"
     style.font-color: "#fff"
@@ -248,6 +252,8 @@ subjects.behaviour -> consumers.reporting
 subjects.behaviour -> consumers.audience_rt: site_visit → enroll
 subjects.conv -> consumers.audience_rt: purchase → suppress
 consumers.audience_rt -> subjects.cache: invalidate.audience { style.stroke-dash: 2 }
+consumers.audience_rt -> subjects.rtenrolled: on enroll { style.stroke-dash: 2 }
+subjects.rtenrolled -> consumers.webhooks: abandoned-cart push
 subjects.batchrun -> consumers.webhooks
 
 # ============================================================

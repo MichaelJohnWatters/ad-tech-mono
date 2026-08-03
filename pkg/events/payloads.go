@@ -295,6 +295,19 @@ type DirectWinEvent struct {
 	Timestamp           time.Time `json:"timestamp"`
 }
 
+// RetargetingEnrolledEvent is emitted by audience-rt when a shopper is enrolled
+// into an advertiser's real-time retargeting audience. Account-scoped
+// (AccountID = the advertiser) so the webhooks dispatcher can deliver it to the
+// advertiser's registered endpoints — the hook for an abandoned-cart push.
+type RetargetingEnrolledEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	AccountID     string    `json:"account_id"`
+	SegmentID     string    `json:"segment_id"`
+	UserID        string    `json:"user_id"`
+	Tag           string    `json:"tag,omitempty"`
+	EnrolledAt    time.Time `json:"enrolled_at"`
+}
+
 // BehaviourSignalEvent is one consent-gated behavioural observation — a
 // self-contained row for the behaviour_signals Delta table. Kind "request"
 // rows come from the SSP (content categories stamped at event time from its
