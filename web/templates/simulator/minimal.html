@@ -358,6 +358,9 @@
                 <button type="button" id="tab-native" class="channel-tab" onclick="switchChannel('native')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Native</button>
                 <button type="button" id="tab-audio" class="channel-tab" onclick="switchChannel('audio')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Audio (DAAST)</button>
                 <button type="button" id="tab-ssai" class="channel-tab" onclick="switchChannel('ssai')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">SSAI (CTV)</button>
+                <button type="button" id="tab-dooh" class="channel-tab" onclick="switchChannel('dooh')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">DOOH</button>
+                <button type="button" id="tab-retail" class="channel-tab" onclick="switchChannel('retail')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">Retail</button>
+                <button type="button" id="tab-ingame" class="channel-tab" onclick="switchChannel('ingame')" style="padding: 8px 16px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted, #8b949e); cursor: pointer; font-size: 13px;">In-game</button>
             </div>
 
             <!-- Display pane: the original 300x250 ad slot. -->
@@ -369,6 +372,28 @@
                     <span id="adSlotLabel">300x250 Ad Slot</span>
                     <span style="color: #999; font-size: 12px; margin-top: 8px;">Click "Load Ad" to fill</span>
                 </div>
+            </div>
+
+            <!-- DOOH pane: a digital screen plays one banner-shaped ad; the
+                 audience multiplier is applied at proof-of-play, not here. -->
+            <div id="pane-dooh" class="channel-pane" style="display: none;">
+                <p>A digital-out-of-home screen (billboard / transit panel) requests one ad. The auction runs through the <strong>TimeSlot</strong> strategy — a single first-price winner per screen play. "Load" fires the request; the venue-audience multiplier is applied downstream at proof-of-play.</p>
+                <button class="btn btn-primary" onclick="loadEmergingChannel('dooh')">Load DOOH screen</button>
+                <div id="emerging-dooh" style="margin-top: 12px;"></div>
+            </div>
+
+            <!-- Retail pane: N sponsored slots ranked by relevance × bid. -->
+            <div id="pane-retail" class="channel-pane" style="display: none;">
+                <p>A retailer's search/browse page with <strong>3 sponsored slots</strong> (shopper browsing IAB18-5). The <strong>relevance-weighted</strong> strategy ranks the product slate by relevance × bid and returns the top 3, each priced by GSP. "Load" fires the request.</p>
+                <button class="btn btn-primary" onclick="loadEmergingChannel('retail')">Load sponsored results</button>
+                <div id="emerging-retail" style="margin-top: 12px;"></div>
+            </div>
+
+            <!-- In-game pane: N scene surfaces with competitive separation. -->
+            <div id="pane-ingame" class="channel-pane" style="display: none;">
+                <p>An in-game scene with <strong>3 intrinsic surfaces</strong> (stadium hoardings). The <strong>Batch</strong> strategy fills all surfaces in one auction with competitive separation — one advertiser per scene. "Load" fires the request.</p>
+                <button class="btn btn-primary" onclick="loadEmergingChannel('ingame')">Load scene surfaces</button>
+                <div id="emerging-ingame" style="margin-top: 12px;"></div>
             </div>
 
             <!-- Video pane: HLS-served content video + IMA SDK overlays
@@ -3578,7 +3603,53 @@
         // Channels the simulator can drive. Each has a tab button, a content
         // pane, and a control-group class, all named by convention so
         // switchChannel can toggle them generically.
-        var SIM_CHANNELS = ['display', 'video', 'native', 'audio', 'ssai'];
+        var SIM_CHANNELS = ['display', 'video', 'native', 'audio', 'ssai', 'dooh', 'retail', 'ingame'];
+
+        // loadEmergingChannel fires a serve for DOOH / retail / in-game via the
+        // SSP request path (which returns the winner(s)) and renders each as a
+        // screen / sponsored slot / scene surface. Reuses the page's placement,
+        // geo, device + trace helpers so it lands in the same debug timeline.
+        async function loadEmergingChannel(channel) {
+            const sel = currentPlacement();
+            if (!sel) { debugLog([{ label: 'Status', value: 'No placement selected — wait for the SSP to load or pick one.', status: 'fail' }]); return; }
+            const geo = document.getElementById('geoSelect').value;
+            const dv = parseInt(document.getElementById('deviceSelect').value);
+            const device = dv === 2 ? 'desktop' : dv === 5 ? 'tablet' : 'mobile';
+            const uid = 'sim-user-' + Math.floor(Math.random() * 1000);
+            const { traceID, traceparent } = newW3CTraceparent();
+            currentTraceID = traceID;
+            traceReset(); traceHeader(traceID);
+            const box = document.getElementById('emerging-' + channel);
+            box.innerHTML = '<span style="color:#8b949e">Loading…</span>';
+            let q = `?placement_id=${encodeURIComponent(sel.ID)}&geo=${encodeURIComponent(geo)}&device=${device}&user_id=${encodeURIComponent(uid)}&channel=${channel}`;
+            if (channel === 'retail') q += '&cat=IAB18-5';
+            if (channel === 'retail' || channel === 'ingame') q += '&surfaces=3';
+            traceLog('browser', channel + ' request sent to SSP', { detail: `${geo} / ${device}`, meta: { 'placement.id': sel.ID, 'channel': channel, 'trace.id': traceID } });
+            debugLog([{ label: 'Trace ID', value: `<span class="trace-link">${traceID}</span>` }, { label: 'Status', value: 'Requesting ' + channel + '…', status: 'pending' }]);
+            try {
+                const resp = await fetch(SSP_URL + '/v1/ssp/request' + q, { headers: { 'traceparent': traceparent } });
+                const data = await resp.json();
+                const winners = (data.bid_response && data.bid_response.seatbid || []).flatMap(function (sb) { return sb.bid || []; });
+                if (!winners.length) {
+                    box.innerHTML = '<span style="color:#f0506e">No fill (nobid).</span>';
+                    debugLog([{ label: 'Result', value: 'nobid', status: 'fail' }]);
+                    return;
+                }
+                box.innerHTML = winners.map(function (b, i) { return renderEmergingSlot(channel, b, i); }).join('');
+                debugLog([{ label: channel + ' winners', value: winners.length, status: 'success' }]);
+            } catch (e) {
+                box.innerHTML = '<span style="color:#f0506e">Error: ' + e.message + '</span>';
+                debugLog([{ label: 'Status', value: 'Error: ' + e.message, status: 'fail' }]);
+            }
+        }
+        function renderEmergingSlot(channel, bid, i) {
+            const label = channel === 'dooh' ? 'DOOH screen' : channel === 'retail' ? ('Sponsored slot ' + (i + 1)) : ('Scene surface ' + (i + 1));
+            const price = bid.price != null ? ('$' + Number(bid.price).toFixed(2) + ' CPM') : '';
+            return `<div style="border:1px solid #2d8cf0;border-radius:6px;padding:12px;margin:6px 0;background:var(--bg-inset,#0d1117)">
+                <div style="font-weight:600;color:#2d8cf0">${label}</div>
+                <div style="font-size:12px;color:var(--fg-muted,#8b949e)">campaign ${bid.cid || '?'} · ${price}</div>
+            </div>`;
+        }
 
         function switchChannel(channel) {
             SIM_CHANNELS.forEach(function(ch) {
