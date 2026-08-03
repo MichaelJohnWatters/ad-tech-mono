@@ -2271,6 +2271,23 @@ The identity graph powers:
 - Cross-device attribution (saw ad on mobile, converted on desktop)
 - Advertiser retargeting across the publisher network
 
+#### Real-Time Retargeting (Built) — status 2026-08
+
+Abandoned-cart retargeting normally lags: the `/v1/t/rt` pixel publishes a
+`site_visit` behaviour signal, but membership is written by the hourly batch
+profile-builder — so a visit at 2:05 doesn't become targetable until ~3:00.
+`cmd/audience-rt` closes that gap. It's a one-replica consumer that, on each
+`site_visit`, enrolls the visitor into the advertiser's retargeting segment(s)
+immediately (single-visit rules, `min_count<=1`) and broadcasts
+`cache.invalidate.audience`, so the DSP retargets within **seconds**, not an
+hour. On a `purchase` conversion it suppresses the buyer (removes them) so we
+stop paying to chase a converted user. It writes the same
+`audience_segment_members` the batch builder would — the DSP bid path is
+unchanged, only the latency. Frequency-threshold rules (`min_count>1`) stay with
+the batch builder. e2e: `tests/e2e/retargeting_realtime_test.go` (visit → enrolled
+in seconds without running the builder → DSP retargets → purchase → suppressed).
+Core: `pkg/retargeting`.
+
 ### Privacy and Consent
 
 | Control | How it works |

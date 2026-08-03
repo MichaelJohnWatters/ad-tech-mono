@@ -301,6 +301,7 @@ const (
 	ServiceTranscoder        = "transcoder"
 	ServiceReportRunner      = "report-runner"
 	ServiceNotifications     = "notifications"
+	ServiceAudienceRT        = "audience-rt"
 )
 
 // ============================================================
@@ -344,6 +345,10 @@ const (
 	// changed, report completed) that it persists as per-account in-app
 	// notifications.
 	NATSGroupNotifications = "notifications"
+	// NATSGroupAudienceRT — audience-rt's consumers of behaviour + conversion
+	// events, from which it enrolls site visitors into (and suppresses converters
+	// from) retargeting segments in real time.
+	NATSGroupAudienceRT = "audience-rt"
 )
 
 // ============================================================

@@ -325,3 +325,59 @@ ON CONFLICT (segment_id, user_id) DO NOTHING`
 	}
 	return added, nil
 }
+
+// RetargetingSegmentRow is a retargeting segment's id + raw rule JSON, for the
+// real-time enroller (cmd/audience-rt) to match against a site visit.
+type RetargetingSegmentRow struct {
+	ID   string
+	Rule []byte
+}
+
+// RetargetingSegments returns the account's ACTIVE retargeting segments (id +
+// rule JSON). The real-time enroller evaluates each rule against a site_visit.
+func (s *Store) RetargetingSegments(ctx context.Context, accountID string) ([]RetargetingSegmentRow, error) {
+	out := []RetargetingSegmentRow{}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+SELECT id::text, COALESCE(rule, '{}'::jsonb)::text
+FROM audience_segments
+WHERE account_id = $1::uuid AND type = 'retargeting' AND status = 'active'`
+		rows, err := tx.QueryContext(ctx, q, accountID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r RetargetingSegmentRow
+			var ruleStr string
+			if err := rows.Scan(&r.ID, &ruleStr); err != nil {
+				return err
+			}
+			r.Rule = []byte(ruleStr)
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// RemoveMember deletes one user's membership in a segment — retargeting
+// suppression when a shopper converts. Returns rows affected (0 = not a member).
+func (s *Store) RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error) {
+	var removed int
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM audience_segment_members WHERE segment_id = $1 AND user_id = $2 AND account_id = $3::uuid`,
+			segmentID, userID, accountID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		removed = int(n)
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("remove member from %s: %w", segmentID, err)
+	}
+	return removed, nil
+}
