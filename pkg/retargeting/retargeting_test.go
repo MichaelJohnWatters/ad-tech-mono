@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
@@ -25,9 +26,11 @@ type fakeEnroller struct {
 	added       []call
 	removed     []call
 	invalidated int
+	lastTTL     time.Duration
 }
 
-func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string) (int, error) {
+func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string, ttl time.Duration) (int, error) {
+	f.lastTTL = ttl
 	for _, u := range users {
 		f.added = append(f.added, call{segmentID, u})
 	}
@@ -69,6 +72,26 @@ func TestOnSiteVisit_EnrollsMatchingSegmentAndInvalidates(t *testing.T) {
 	}
 	if enr.invalidated != 1 {
 		t.Errorf("invalidated = %d, want 1 (so the DSP refreshes)", enr.invalidated)
+	}
+	// TTL comes from the rule's window (none set here → default 30 days) so the
+	// member ages out instead of being retargeted forever.
+	if enr.lastTTL != 30*24*time.Hour {
+		t.Errorf("enroll TTL = %v, want 30d (default window)", enr.lastTTL)
+	}
+}
+
+// A rule's window_days sets the retargeting TTL.
+func TestOnSiteVisit_RuleWindowSetsTTL(t *testing.T) {
+	src := &fakeSource{segs: map[string][]Segment{
+		"adv": {{ID: "seg", Rule: []byte(`{"event":"site_visit","window_days":7}`)}},
+	}}
+	enr := &fakeEnroller{}
+	s := New(src, enr, testLog())
+	if _, err := s.OnSiteVisit(context.Background(), visitEvent("adv", "u1", "")); err != nil {
+		t.Fatalf("OnSiteVisit: %v", err)
+	}
+	if enr.lastTTL != 7*24*time.Hour {
+		t.Errorf("enroll TTL = %v, want 7d (rule window)", enr.lastTTL)
 	}
 }
 
@@ -145,7 +168,7 @@ func TestOnSiteVisit_AlreadyMemberNoInvalidate(t *testing.T) {
 
 type zeroAddEnroller struct{ invalidated int }
 
-func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string) (int, error) {
+func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration) (int, error) {
 	return 0, nil
 }
 func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _ string) (int, error) { return 0, nil }

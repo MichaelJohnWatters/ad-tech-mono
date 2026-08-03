@@ -85,6 +85,36 @@ RETURNING id::text`, w.AdvAcc.ID, fmt.Sprintf("rrt-seg-%d", uniq), tag).Scan(&se
 		t.Error("DSP did not retarget the freshly-enrolled visitor")
 	}
 
+	// TTL: the enrolled member carries an expiry ~30 days out (the default
+	// window) so an abandoner who never converts ages out instead of being
+	// chased forever.
+	var expiresIn *float64
+	if err := h.DB.QueryRow(`SELECT extract(epoch FROM (expires_at - now())) FROM audience_segment_members WHERE segment_id = $1 AND user_id = $2`,
+		segID, visitor).Scan(&expiresIn); err != nil {
+		t.Fatalf("expires_at query: %v", err)
+	}
+	if expiresIn == nil {
+		t.Error("enrolled member has no expires_at — real-time members must carry a TTL")
+	} else if d := time.Duration(*expiresIn) * time.Second; d < 29*24*time.Hour || d > 31*24*time.Hour {
+		t.Errorf("member expires in %v, want ~30d", d)
+	}
+
+	// Age the member out (simulate the window elapsing): once expired, the read
+	// paths exclude it, so the DSP stops retargeting even before any purge.
+	if _, err := h.DB.Exec(`UPDATE audience_segment_members SET expires_at = now() - interval '1 minute' WHERE segment_id = $1 AND user_id = $2`,
+		segID, visitor); err != nil {
+		t.Fatalf("expire member: %v", err)
+	}
+	if retargets() {
+		t.Error("DSP retargeted an EXPIRED member — TTL read-side filtering not applied")
+	}
+	// Re-visiting refreshes the window, bringing them back.
+	if _, err := h.DB.Exec(`DELETE FROM audience_segment_members WHERE segment_id = $1 AND user_id = $2`, segID, visitor); err != nil {
+		t.Fatalf("reset member: %v", err)
+	}
+	fireVisit(t, w.AdvAcc.ID, tag, visitor)
+	waitMember(true, "re-enroll on repeat visit")
+
 	// The shopper buys → a purchase conversion suppresses them so we stop paying
 	// to chase a converted user.
 	h.FireConversionForVisitor(t, fmt.Sprintf("rrt-conv-%d", uniq), w.AdvAcc.ID, visitor, "purchase", "USD", 42.00)

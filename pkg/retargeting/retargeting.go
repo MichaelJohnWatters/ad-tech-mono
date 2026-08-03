@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 )
@@ -34,10 +35,16 @@ type Segment struct {
 // enrollment. It mirrors pkg/profilebuilder.Rule's JSON so the two agree on what
 // a site_visit segment means.
 type rule struct {
-	Event    string `json:"event"`
-	Tag      string `json:"tag,omitempty"`
-	MinCount int    `json:"min_count,omitempty"`
+	Event      string `json:"event"`
+	Tag        string `json:"tag,omitempty"`
+	MinCount   int    `json:"min_count,omitempty"`
+	WindowDays int    `json:"window_days,omitempty"`
 }
+
+// defaultWindowDays matches pkg/profilebuilder.Rule's default window: a
+// retargeting member ages out this many days after the visit unless the rule
+// sets its own window_days.
+const defaultWindowDays = 30
 
 // SegmentSource lists an advertiser's active retargeting segments.
 type SegmentSource interface {
@@ -47,7 +54,9 @@ type SegmentSource interface {
 // Enroller writes/removes segment membership and invalidates the audience cache
 // so the DSP's preloader refreshes and the change is live within seconds.
 type Enroller interface {
-	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string) (int, error)
+	// AddMembers enrolls users into a segment with a time-to-live: after ttl the
+	// member ages out (read paths exclude expired rows). ttl<=0 means no expiry.
+	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration) (int, error)
 	RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error)
 	InvalidateAudience(ctx context.Context) error
 }
@@ -91,7 +100,14 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 		if r.Tag != "" && !strings.EqualFold(strings.TrimSpace(r.Tag), strings.TrimSpace(ev.Tag)) {
 			continue
 		}
-		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID})
+		// TTL so an abandoner who never converts ages out of the audience after
+		// the rule's window (default 30 days) instead of being chased forever.
+		windowDays := r.WindowDays
+		if windowDays <= 0 {
+			windowDays = defaultWindowDays
+		}
+		ttl := time.Duration(windowDays) * 24 * time.Hour
+		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl)
 		if err != nil {
 			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "error", err)
 			continue

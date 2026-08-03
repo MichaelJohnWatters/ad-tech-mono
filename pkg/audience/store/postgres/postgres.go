@@ -124,7 +124,8 @@ func (s *Store) queryByVisibility(ctx context.Context, userID, visibility string
 SELECT m.segment_id::text
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id
-WHERE m.user_id = $1 AND s.visibility = $2`
+WHERE m.user_id = $1 AND s.visibility = $2
+  AND (m.expires_at IS NULL OR m.expires_at > now())`
 	var out []string
 	// Cross-account read (bid-request fan-out spans every advertiser's
 	// segments) → platform hatch so the NOBYPASSRLS app role sees all rows
@@ -322,6 +323,41 @@ ON CONFLICT (segment_id, user_id) DO NOTHING`
 	})
 	if err != nil {
 		return 0, fmt.Errorf("add members to %s: %w", segmentID, err)
+	}
+	return added, nil
+}
+
+// AddMembersWithExpiry is AddMembers with a TTL: members enrolled with a
+// non-nil expiresAt age out (read paths exclude expired rows). Used by the
+// real-time retargeting enroller so an abandoner who never converts stops being
+// retargeted at expires_at. On CONFLICT it refreshes expires_at (a repeat visit
+// extends the window).
+func (s *Store) AddMembersWithExpiry(ctx context.Context, accountID, segmentID string, userIDs []string, expiresAt *time.Time) (int, error) {
+	if len(userIDs) == 0 {
+		return 0, nil
+	}
+	added := 0
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at, expires_at)
+VALUES ($1, $2, $3, now(), $4)
+ON CONFLICT (segment_id, user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at`
+		for _, uid := range userIDs {
+			if uid == "" {
+				continue
+			}
+			res, err := tx.ExecContext(ctx, q, segmentID, uid, accountID, expiresAt)
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n > 0 {
+				added++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("add members (ttl) to %s: %w", segmentID, err)
 	}
 	return added, nil
 }

@@ -181,8 +181,13 @@ type pgEnroller struct {
 	log   *slog.Logger
 }
 
-func (e pgEnroller) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string) (int, error) {
-	return e.store.AddMembers(ctx, accountID, segmentID, userIDs)
+func (e pgEnroller) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration) (int, error) {
+	var expiresAt *time.Time
+	if ttl > 0 {
+		t := time.Now().Add(ttl)
+		expiresAt = &t
+	}
+	return e.store.AddMembersWithExpiry(ctx, accountID, segmentID, userIDs, expiresAt)
 }
 
 func (e pgEnroller) RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error) {
