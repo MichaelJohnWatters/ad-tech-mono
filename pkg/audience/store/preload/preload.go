@@ -259,7 +259,8 @@ func (p *Preloader) preloadOnce(ctx context.Context) error {
 	const q = `
 SELECT m.user_id, m.segment_id::text, s.visibility
 FROM audience_segment_members m
-JOIN audience_segments s ON s.id = m.segment_id`
+JOIN audience_segments s ON s.id = m.segment_id
+WHERE m.expires_at IS NULL OR m.expires_at > now()`
 	// Cross-tenant preload (every account's memberships → the shared stamping
 	// cache) → platform hatch, held open while scanning (security #77).
 	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
