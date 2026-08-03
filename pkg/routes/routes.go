@@ -49,6 +49,10 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIAudienceRetargeting manages real-time retargeting audiences (the target
+	// of the /v1/t/rt pixel): GET lists them with live enrollment counts, POST
+	// creates one {name, tag, window_days}. Tenant-scoped.
+	APIAudienceRetargeting = apiPrefix + "/api/audiences/retargeting"
 	// APITaxonomy lists the IAB Audience Taxonomy reference nodes (migration
 	// 062) for the portal's segment-labelling picker. GET only; global
 	// reference data, same list for every account.

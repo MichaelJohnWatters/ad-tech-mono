@@ -417,3 +417,70 @@ func (s *Store) RemoveMember(ctx context.Context, accountID, segmentID, userID s
 	}
 	return removed, nil
 }
+
+// RetargetingSegmentUI is a retargeting segment for the advertiser portal: its
+// rule (pixel tag + TTL window) plus the LIVE enrollment count (non-expired
+// members).
+type RetargetingSegmentUI struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Tag        string    `json:"tag"`
+	WindowDays int       `json:"window_days"`
+	Members    int       `json:"members"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ListRetargetingSegments returns the account's retargeting segments with their
+// tag/window and current (non-expired) enrollment count, for the portal.
+func (s *Store) ListRetargetingSegments(ctx context.Context, accountID string) ([]RetargetingSegmentUI, error) {
+	out := []RetargetingSegmentUI{}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+SELECT s.id::text, s.name, COALESCE(s.rule->>'tag', ''),
+       COALESCE((s.rule->>'window_days')::int, 30), COALESCE(c.n, 0), s.updated_at
+FROM audience_segments s
+LEFT JOIN (
+    SELECT segment_id, count(*) AS n FROM audience_segment_members
+    WHERE expires_at IS NULL OR expires_at > now()
+    GROUP BY segment_id
+) c ON c.segment_id = s.id
+WHERE s.account_id = $1::uuid AND s.type = 'retargeting'
+ORDER BY s.updated_at DESC`
+		rows, err := tx.QueryContext(ctx, q, accountID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r RetargetingSegmentUI
+			if err := rows.Scan(&r.ID, &r.Name, &r.Tag, &r.WindowDays, &r.Members, &r.UpdatedAt); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// CreateRetargetingSegment creates a single-visit retargeting segment (the target
+// of the /v1/t/rt pixel): type retargeting, dsp_private, rule {site_visit, tag,
+// min_count 1, window_days}. cmd/audience-rt enrolls visitors into it in real time.
+func (s *Store) CreateRetargetingSegment(ctx context.Context, accountID, name, tag string, windowDays int) (string, error) {
+	if windowDays <= 0 {
+		windowDays = 30
+	}
+	var id string
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+INSERT INTO audience_segments (account_id, name, type, status, source, visibility, rule)
+VALUES ($1::uuid, $2, 'retargeting', 'active', 'portal', 'dsp_private',
+        jsonb_build_object('event', 'site_visit', 'tag', $3::text, 'min_count', 1, 'window_days', $4::int))
+RETURNING id::text`
+		return tx.QueryRowContext(ctx, q, accountID, name, tag, windowDays).Scan(&id)
+	})
+	if err != nil {
+		return "", fmt.Errorf("create retargeting segment: %w", err)
+	}
+	return id, nil
+}
