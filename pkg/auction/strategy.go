@@ -89,9 +89,12 @@ type AuctionRequest struct {
 	// sponsored-product slots on the results/browse page (1..N; 0 → 1).
 	// RetailCategories are the shopper's browsed/searched IAB categories — the
 	// relevance signal a sponsored product's Bid.Category is scored against.
-	// Both zero/empty for every other channel.
+	// MinRelevance is the eligibility floor: a product scoring below it doesn't
+	// show even at a high bid (0 = no floor). Both zero/empty for every other
+	// channel.
 	SlotCount        int
 	RetailCategories []string
+	MinRelevance     float64
 	// Pod carries pod-specific constraints when this is an ad-break
 	// auction (video/audio Format == "pod"). nil for single-winner
 	// auctions. Populated by the exchange when it sees Imp.Video.PodID

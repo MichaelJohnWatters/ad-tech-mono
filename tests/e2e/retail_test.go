@@ -52,8 +52,10 @@ func TestRetailRelevanceBeatsHigherBid(t *testing.T) {
 		}
 		t.Fatalf("retail slot went to %s, want the relevant 'shoes' product (%s)", which, shoes.ID)
 	}
-	// First-price per slot: winner pays its own bid (2.00), not the loser's 5.50.
-	if win.Price < 1.99 || win.Price > 2.01 {
-		t.Errorf("clearing price = %.2f, want ~2.00 (shoes' own first-price bid)", win.Price)
+	// GSP: shoes pays only the minimum to hold rank 1 — loans' score (0.1×5.50=0.55)
+	// / shoes' relevance (1.0) = 0.55, which is below the placement's 1.00 reserve,
+	// so it clears at the reserve. Either way, far below its own 2.00 bid.
+	if win.Price < 0.99 || win.Price > 1.01 {
+		t.Errorf("clearing price = %.2f, want ~1.00 (GSP floored at the reserve)", win.Price)
 	}
 }

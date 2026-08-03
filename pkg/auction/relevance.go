@@ -50,11 +50,24 @@ func (s *RelevanceWeightedStrategy) Select(ctx context.Context, bids []Bid, requ
 
 	type scored struct {
 		bid   Bid
+		rel   float64
 		score float64
 	}
-	ranked := make([]scored, len(bids))
-	for i, b := range bids {
-		ranked[i] = scored{bid: b, score: retailRelevance(request, b) * b.Price}
+	result := Result{IsMultiWinner: true}
+	var ranked []scored
+	for _, b := range bids {
+		rel := retailRelevance(request, b)
+		// Eligibility floor: too irrelevant to show, even at a high bid.
+		if request.MinRelevance > 0 && rel < request.MinRelevance {
+			result.LossBids = append(result.LossBids, LossBid{
+				Bid: b, Reason: LossBlocked, ReasonText: "below minimum relevance",
+			})
+			continue
+		}
+		ranked = append(ranked, scored{bid: b, rel: rel, score: rel * b.Price})
+	}
+	if len(ranked) == 0 {
+		return result, ErrNoBids
 	}
 	// Highest relevance-weighted score wins; ties break by raw bid (the retailer
 	// prefers the higher-paying of two equally-ranked products).
@@ -70,12 +83,31 @@ func (s *RelevanceWeightedStrategy) Select(ctx context.Context, bids []Bid, requ
 		n = len(ranked)
 	}
 
-	result := Result{IsMultiWinner: true}
+	// Generalized second-price: each slot pays the MINIMUM bid that would hold its
+	// rank — i.e. the price at which its relevance-weighted score just matches the
+	// next-ranked product's score (score_{i+1} / relevance_i). The last filled slot
+	// clears at the floor. Capped at the product's own bid (never pays more).
+	floor := request.FloorPrice
 	for i := 0; i < n; i++ {
+		var nextScore float64
+		if i+1 < len(ranked) {
+			nextScore = ranked[i+1].score
+		} else {
+			nextScore = floor * ranked[i].rel // no next contender → floor
+		}
+		price := ranked[i].bid.Price
+		if ranked[i].rel > 0 {
+			if gsp := nextScore / ranked[i].rel; gsp < price {
+				price = gsp
+			}
+		}
+		if price < floor {
+			price = floor
+		}
 		result.Winners = append(result.Winners, Winner{
 			Bid:           ranked[i].bid,
-			ClearingPrice: ranked[i].bid.Price, // first-price per slot
-			Position:      i + 1,               // 1 = top sponsored slot
+			ClearingPrice: price,
+			Position:      i + 1, // 1 = top sponsored slot
 			TraceID:       request.TraceID,
 		})
 	}
