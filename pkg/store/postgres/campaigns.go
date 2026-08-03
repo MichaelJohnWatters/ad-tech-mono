@@ -80,6 +80,7 @@ SELECT
     COALESCE(tr.exclude_keywords, '{}'),
     COALESCE(tr.include_inventory_type, '{}'),
     COALESCE(tr.include_channels, '{}'),
+    COALESCE(li.product_category, ''),
     COALESCE(tr.bid_modifiers::text, '{}'),
     COALESCE(cr.id::text, '') AS creative_id,
     -- Brand domain: prefer the explicit advertiser_domain column (set
@@ -171,6 +172,7 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 		&incSeg, &excSeg, &incDom, &excDom,
 		&incCat, &excCat,
 		&incOS, &incKw, &excKw, &incInv, &incChan,
+		&c.ProductCategory,
 		&modifiersJSON,
 		&c.CreativeID, &c.CreativeDomain,
 		&viewTarget,

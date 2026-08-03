@@ -309,7 +309,10 @@ type createCampaignRequest struct {
 	// non-display campaign starts with no creative — attach one via PATCH
 	// `creatives` (only approved, format-matching creatives serve).
 	Format        string   `json:"format,omitempty"`
-	IncludeGeo    []string `json:"include_geo,omitempty"`
+	// ProductCategory is the advertised product's own IAB category (retail
+	// relevance signal), distinct from include_categories (content targeting).
+	ProductCategory string   `json:"product_category,omitempty"`
+	IncludeGeo      []string `json:"include_geo,omitempty"`
 	ExcludeGeo    []string `json:"exclude_geo,omitempty"`
 	IncludeDevice []string `json:"include_device,omitempty"`
 	ExcludeDevice []string `json:"exclude_device,omitempty"`
@@ -581,9 +584,9 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 		initialStatus = "draft"
 	}
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $13, $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget, initialStatus); err != nil {
+INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, product_category, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, NULLIF($14, ''), now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget, initialStatus, req.ProductCategory); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
