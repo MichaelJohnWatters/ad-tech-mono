@@ -404,6 +404,16 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		http.Error(w, "placement not found", http.StatusNotFound)
 		return auctionContext{}, false
 	}
+	// Fall back to the placement's DECLARED channel so a publisher's DOOH / retail
+	// / in-game placement serves that channel without an explicit ?channel= — the
+	// query param stays an override (e.g. the simulator). Only the emerging
+	// channels are placement-declared; video/audio/native ride the media object.
+	if channel == "" {
+		switch p.Format {
+		case constants.ChannelDOOH, constants.ChannelRetail, constants.ChannelInGame:
+			channel = p.Format
+		}
+	}
 
 	traceID := tracing.TraceIDFromContext(r.Context())
 	if traceID == "" {
@@ -477,7 +487,8 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		// channel=ingame + placement_type=intrinsic routes the exchange to the
 		// Batch strategy, which fills the scene's surfaces in one auction with
 		// one-advertiser / one-category-per-scene competitive separation.
-		// ?surfaces=N declares how many surfaces the scene has (default 1).
+		// The scene's surface count comes from the placement (surfaces column);
+		// ?surfaces=N overrides it. Default 1.
 		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
 		if bidReq.Imp[0].Ext == nil {
 			bidReq.Imp[0].Ext = &openrtb.ImpExt{}
@@ -485,6 +496,9 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		bidReq.Imp[0].Ext.Channel = constants.ChannelInGame
 		bidReq.Imp[0].Ext.PlacementType = "intrinsic"
 		surfaces := 1
+		if p.Surfaces > 0 {
+			surfaces = p.Surfaces
+		}
 		if s := r.URL.Query().Get("surfaces"); s != "" {
 			if n, err := strconv.Atoi(s); err == nil && n > 0 {
 				surfaces = n

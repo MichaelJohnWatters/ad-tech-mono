@@ -381,12 +381,16 @@
       <label class="block text-sm">
         <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Format</span>
         <select id="np_format" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-          <option>display</option><option>native</option><option>video</option>
+          <option>display</option><option>native</option><option>video</option><option>audio</option>
+          <option value="dooh">dooh (screen)</option>
+          <option value="retail">retail (sponsored)</option>
+          <option value="ingame">ingame (surfaces)</option>
         </select>
       </label>
       {{ template "form-field" (dict "label" "Width" "name" "np_width" "type" "number" "value" "728") }}
       {{ template "form-field" (dict "label" "Height" "name" "np_height" "type" "number" "value" "90") }}
     </div>
+    {{ template "form-field" (dict "label" "Surfaces / slots (in-game scene surfaces or retail sponsored slots — blank = 1)" "name" "np_surfaces" "type" "number" "placeholder" "e.g. 3 hoardings") }}
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "np_floor" "type" "number" "value" "0.50") }}
     <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
       <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Floor overrides (optional — raise the floor for specific device/geo)</summary>
@@ -1121,6 +1125,7 @@ async function createPlacement(ev) {
     format: $('np_format').value,
     width: parseInt($('np_width').value, 10) || 0,
     height: parseInt($('np_height').value, 10) || 0,
+    surfaces: parseInt($('np_surfaces').value, 10) || 0,
     floor_price: parseFloat($('np_floor').value) || 0,
   };
   const fc = floorConfigBody('np_floor_device', 'np_floor_geo', 'np_floor_dayparts', 'np_floor_tz');

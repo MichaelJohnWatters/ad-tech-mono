@@ -43,6 +43,7 @@ SELECT
     pl.status,
     COALESCE(pl.floor_config::text, '{}'),
     COALESCE(pl.video_config::text, '{}'),
+    COALESCE(pl.surfaces, 0),
     pl.created_at,
     pl.updated_at,
     pub.name,
@@ -65,6 +66,7 @@ WHERE pl.status = 'active'`
 			&r.ID, &r.PublisherID, &r.AccountID, &r.Name, &r.Format,
 			&r.Width, &r.Height, &r.FloorPrice, &r.FloorCurrency,
 			&r.PageURLPattern, &r.Status, &floorJSON, &videoJSON,
+			&r.Surfaces,
 			&r.CreatedAt, &r.UpdatedAt,
 			&r.PublisherName, &r.PublisherDomain,
 		); err != nil {

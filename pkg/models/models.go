@@ -220,9 +220,10 @@ type Placement struct {
 	PublisherID    string
 	AccountID      string
 	Name           string
-	Format         string // display, native, video, audio, dooh
+	Format         string // display, native, video, audio, dooh, retail, ingame
 	Width          int
 	Height         int
+	Surfaces       int // in-game: scene surfaces; retail: sponsored slots. 0 = single.
 	FloorPrice     float64
 	FloorCurrency  string
 	PageURLPattern string
