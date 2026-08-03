@@ -214,30 +214,22 @@ func TestAuction_SelectStrategy(t *testing.T) {
 	}
 }
 
-func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
+// Every channel strategy — single_winner, pod, timeslot, relevance_weighted,
+// batch — is now implemented and covered by its own test. No strategy returns
+// ErrNotImplemented, so the former TestStubbedStrategies_ReturnNotImplemented is
+// gone. This assertion pins that: nothing routed by SelectStrategy stays stubbed.
+func TestNoStubbedStrategiesRemain(t *testing.T) {
 	engine := auction.NewEngine(clock.Real{})
-	bids := []auction.Bid{{DSPID: "dsp_1", Price: 5.00}}
-
-	// Pod (video/pod), DOOH (timeslot) and retail (relevance_weighted) are now
-	// implemented — covered by pods_test.go, TestTimeSlotDOOHSingleWinner and
-	// relevance_test.go. In-game intrinsic (batch) is the last stub, until that
-	// channel lands later in Phase 9.
-	stubs := []struct {
-		channel string
-		format  string
-	}{
-		{"ingame", "intrinsic"},
+	bids := []auction.Bid{{DSPID: "dsp_1", CampaignID: "c1", AdvertiserID: "adv", Price: 5.00}}
+	channels := []struct{ channel, format string }{
+		{"display", "banner"}, {"video", "pod"}, {"dooh", ""},
+		{"retail", ""}, {"ingame", "intrinsic"},
 	}
-
-	for _, tt := range stubs {
-		request := auction.AuctionRequest{
-			Channel:    tt.channel,
-			Format:     tt.format,
-			FloorPrice: 0,
-		}
-		_, err := engine.RunAuction(context.Background(), bids, request)
-		if err != auction.ErrNotImplemented {
-			t.Errorf("RunAuction(%s/%s) should return ErrNotImplemented, got %v", tt.channel, tt.format, err)
+	for _, c := range channels {
+		_, err := engine.RunAuction(context.Background(), bids,
+			auction.AuctionRequest{Channel: c.channel, Format: c.format, SlotCount: 1, FloorPrice: 0})
+		if err == auction.ErrNotImplemented {
+			t.Errorf("channel %s/%s still returns ErrNotImplemented", c.channel, c.format)
 		}
 	}
 }
