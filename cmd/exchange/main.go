@@ -729,7 +729,10 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				seatBids = append(seatBids, openrtb.SeatBid{
 					Seat: seat,
 					Bid: []openrtb.BidObj{{
-						ID:       fmt.Sprintf("win-%s-%d", traceID, wr.Position),
+						// ID is the per-surface impression id (sub-trace): the
+						// renderer fires this surface's impression with tid=ID so it
+						// bills independently of the other surfaces.
+						ID:       surfaceTrace(traceID, wr.Position),
 						ImpID:    bidReq.Imp[0].ID,
 						Price:    wr.ClearingPrice,
 						CID:      wb.CampaignID,
@@ -810,22 +813,41 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			// trace_id value but isolates lifecycle.
 			pubCtx := context.WithoutCancel(ctx)
 			go func() {
-				// AuctionWinEvent - single source of truth for cost
-				pub.AuctionWin(pubCtx, events.AuctionWinEvent{
-					TraceID:       traceID,
-					AuctionID:     traceID,
-					WinnerDSP:     winnerBid.DSPID,
-					CampaignID:    winnerBid.CampaignID,
-					CreativeID:    winnerBid.CreativeID,
-					PlacementID:   placementID,
-					PublisherID:   publisherID,
-					ClearingPrice: clearingPrice,
-					Currency:      "USD",
-					BidModel:      winnerBid.BidModel,
-					Channel:       routingChannel,
-					DealID:        winningDealID,
-					Timestamp:     clk.Now(),
-				})
+				// AuctionWinEvent - single source of truth for cost. Multi-winner
+				// auctions (in-game surfaces, retail slots) emit ONE per winner,
+				// each on its own sub-trace so every surface bills independently;
+				// single-winner auctions emit exactly one on the main trace (all
+				// other channels unchanged).
+				type winRec struct {
+					bid   auction.Bid
+					price float64
+					trace string
+				}
+				var wins []winRec
+				if len(multiWinners) > 1 {
+					for _, wr := range multiWinners {
+						wins = append(wins, winRec{bid: wr.Bid, price: wr.ClearingPrice, trace: surfaceTrace(traceID, wr.Position)})
+					}
+				} else {
+					wins = []winRec{{bid: winnerBid, price: clearingPrice, trace: traceID}}
+				}
+				for _, wn := range wins {
+					pub.AuctionWin(pubCtx, events.AuctionWinEvent{
+						TraceID:       wn.trace,
+						AuctionID:     traceID,
+						WinnerDSP:     wn.bid.DSPID,
+						CampaignID:    wn.bid.CampaignID,
+						CreativeID:    wn.bid.CreativeID,
+						PlacementID:   placementID,
+						PublisherID:   publisherID,
+						ClearingPrice: wn.price,
+						Currency:      "USD",
+						BidModel:      wn.bid.BidModel,
+						Channel:       routingChannel,
+						DealID:        wn.bid.DealID,
+						Timestamp:     clk.Now(),
+					})
+				}
 
 				// AuctionCompleteEvent - all bids for analytics
 				var bidSummaries []events.BidSummary
@@ -1063,6 +1085,16 @@ func placementPublisherFromReq(req *openrtb.BidRequest) (placementID, publisherI
 		}
 	}
 	return placementID, publisherID
+}
+
+// surfaceTrace derives a distinct per-surface impression id for a multi-winner
+// auction (in-game scene surfaces, retail sponsored slots) so each surface's
+// impression bills INDEPENDENTLY — billing dedups on trace_id, so distinct
+// sub-traces = distinct billed impressions. Single-winner auctions keep the main
+// trace unchanged (no suffix), so the exactly-once path for every other channel
+// is untouched. The `::s{n}` suffix stays greppable back to the parent auction.
+func surfaceTrace(mainTrace string, position int) string {
+	return fmt.Sprintf("%s::s%d", mainTrace, position)
 }
 
 // firstOrEmpty returns the first element of a string slice, or "" when empty.
