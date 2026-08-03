@@ -2911,10 +2911,12 @@ slot over an off-category product bidding ~3× more, live through SSP → DSP �
 | Soft category | On retail the DSP drops category as a HARD targeting filter (a shoe ad stays eligible on a different-category page, it just ranks lower); geo/device/audience still gate. | `cmd/dsp` (`tRules` category strip) |
 | Serve | SSP `channel=retail` builds a banner-shaped sponsored-product imp (`imp.ext.channel=retail`, `?cat=` → `Site.Cat`); exchange routes retail → relevance_weighted, feeds `Site.Cat` as `RetailCategories`. | `cmd/ssp`, `cmd/exchange` |
 
-**Follow-ups (documented, not built):** the exchange returns the position-1 winner
-through the normal single-bid response — rendering positions 2..N on the page (the
-full sponsored-results grid) + per-position impression/click tracking is next.
-`MinRelevance` eligibility floor, `OrganicRatio`, generalized-second-price pricing
+**Multi-slot billing SHIPPED** (2026-08): `imp.ext.surfaces` (placement slot count)
+→ exchange `SlotCount` → the top-N ranked products return as multi-winners, each on
+its own sub-trace so every slot bills independently (see in-game per-surface billing
+for the mechanism). Still deferred: rendering the sponsored-results grid UI +
+per-position CLICK tracking; `MinRelevance` eligibility floor, `OrganicRatio`,
+generalized-second-price pricing
 (each product pays the minimum to hold its rank, as in search ads), and a proper
 per-product category (distinct from `include_categories`) are also deferred.
 
@@ -2966,9 +2968,13 @@ top TWO prices still gets only one surface.
 | Product SLATE | `imp.ext.channel=ingame` makes the DSP return ALL eligible products across advertisers (grouped by seat), so the scene has multiple advertisers to separate. Category is soft (not a hard filter) for in-game too. | `cmd/dsp` slate path (shared with retail) |
 | Serve | SSP `channel=ingame` builds a banner-shaped scene imp (`imp.ext.channel=ingame`, `placement_type=intrinsic`, `?surfaces=N` → `imp.ext.surfaces`); exchange sets `Format=intrinsic` + `SlotCount=surfaces` → Batch, and returns EVERY winner (one SeatBid per advertiser) so the caller sees the whole filled scene. | `cmd/ssp`, `cmd/exchange` |
 
-**Follow-ups (documented, not built):** the win event / billing bind to position 1
-only — per-surface billing (N surfaces → N impressions) is next, alongside the SSP
-scene render and a per-product category distinct from `include_categories`.
+**Per-surface billing SHIPPED** (2026-08): multi-winner auctions publish one
+AuctionWinEvent per surface, each on a distinct **sub-trace** (`<trace>::s<n>`, in
+`cmd/exchange` `surfaceTrace`) exposed as the winning `BidObj.ID`; the renderer fires
+each surface's impression on its sub-trace, so N surfaces = N billed impressions
+(billing dedups on trace_id — additive, single-winner path unchanged). Still
+deferred: the SSP scene render + a per-product category distinct from
+`include_categories`.
 
 #### Strategy 5: TimeSlot (DOOH Screen Rotation)
 
@@ -8008,13 +8014,14 @@ detail above is still planned. What's live and e2e-proven
 | Proof-of-play → audience multiplier | One signed beacon (`/v1/t/imp?ch=dooh&mult=N`) = **one** impression row carrying `impression_qty=N` (venue audience per play), and books the **full play cost** = per-impression cost × N. The row count stays 1 (one play); the audience is `SUM(impression_qty)`. | `cmd/tracker/main.go` (reads `mult` for `ch=dooh` only), `ImpressionEvent.ImpressionQty`, ClickHouse `impressions.impression_qty Int32 DEFAULT 1` |
 | Money | `clearing_price_usd` on the row is the full play cost, so billing (books on impression) and prepay drawdown are lossless with no rollup change. | `ClearingPriceUSD = impCost × qty` |
 
-**Known follow-up (not the money — the aggregate count metric):** the reporting
-QueryEngine's impression *count* metric is still `COUNT(*)` (rows), so it reports
-1 for a DOOH play rather than the `SUM(impression_qty)` audience. Cost/eCPM are
-correct (they use `clearing_price_usd`); only the raw impression-count column
-under-reads for DOOH. Rewire `COUNT → SUM(impression_qty)` in the query engine +
-rollup MVs when DOOH volume warrants (deferred: needs an MV recreate + golden-test
-updates). `mult` defaults to 1, so every non-DOOH channel is unaffected.
+**Count metric SHIPPED** (2026-08): the reporting QueryEngine's impression *count*
+metric is now `SUM(impression_qty)` for the impressions table (`query.go`,
+table-aware — equals `COUNT(*)` for every `qty=1` row, so non-DOOH channels are
+unaffected), so a DOOH play reports as its audience. This also fixes the app-side
+rollup (computed via `store.Query`); the ClickHouse rollup MVs
+(`impressions_rollup_hourly/daily`) were rewired to `sum(impression_qty)` too (DROP
++ recreate; historical rollup rows are forward-only, not backfilled). Cost/eCPM were
+already exact via `clearing_price_usd`.
 
 ### DOOH Cross-System Integration Detail
 
