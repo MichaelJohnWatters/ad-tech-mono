@@ -332,6 +332,13 @@ ON CONFLICT (segment_id, user_id) DO NOTHING`
 // real-time retargeting enroller so an abandoner who never converts stops being
 // retargeted at expires_at. On CONFLICT it refreshes expires_at (a repeat visit
 // extends the window).
+//
+// Returns the count of NEWLY-INSERTED members only (not window refreshes) — via
+// the `xmax = 0` idiom, true iff the row was inserted rather than updated. This
+// is what makes real-time retargeting FIRST-ENROLL-only: the enroller invalidates
+// the audience cache and fires the enrolled webhook only when someone genuinely
+// enters the pool, not on every repeat visit (which would flood the preloader
+// reload + the webhook). A returning member's window is still silently extended.
 func (s *Store) AddMembersWithExpiry(ctx context.Context, accountID, segmentID string, userIDs []string, expiresAt *time.Time) (int, error) {
 	if len(userIDs) == 0 {
 		return 0, nil
@@ -341,16 +348,17 @@ func (s *Store) AddMembersWithExpiry(ctx context.Context, accountID, segmentID s
 		const q = `
 INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at, expires_at)
 VALUES ($1, $2, $3, now(), $4)
-ON CONFLICT (segment_id, user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at`
+ON CONFLICT (segment_id, user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
+RETURNING (xmax = 0)`
 		for _, uid := range userIDs {
 			if uid == "" {
 				continue
 			}
-			res, err := tx.ExecContext(ctx, q, segmentID, uid, accountID, expiresAt)
-			if err != nil {
+			var inserted bool
+			if err := tx.QueryRowContext(ctx, q, segmentID, uid, accountID, expiresAt).Scan(&inserted); err != nil {
 				return err
 			}
-			if n, _ := res.RowsAffected(); n > 0 {
+			if inserted {
 				added++
 			}
 		}

@@ -106,6 +106,20 @@ builder.expand -> pg_members: AddMembers + replace-by-segment prune
 builder.expand -> nats: cache.invalidate.audience {style.stroke-dash: 3}
 
 # ============================================================
+# REAL-TIME loop - audience-rt (seconds, not the hourly batch)
+# ============================================================
+audiencert: audience-rt :8097 (pkg/retargeting) {
+  style.fill: "#a78bfa"
+  what: |md
+    site_visit -> enroll (first-visit only, +TTL)
+    purchase   -> suppress
+  |
+}
+nats -> audiencert: behaviour.observed (site_visit) + conversion {style.stroke-dash: 3}
+audiencert -> pg_members: enroll (TTL) / suppress / purge-expired
+audiencert -> nats: cache.invalidate.audience + retargeting.enrolled (push) {style.stroke-dash: 3}
+
+# ============================================================
 # OUTPUT 1 - loaded back into live auctions
 # ============================================================
 pg_members: audience_segment_members (PG) {shape: cylinder}

@@ -40,22 +40,34 @@ RETURNING id::text`, w.AdvAcc.ID).Scan(&hookID); err != nil {
 		t.Fatalf("seed webhook: %v", err)
 	}
 
-	// A shopper visits → enrolled → audience-rt emits retargeting.enrolled →
-	// webhooks delivers it.
-	fireVisit(t, w.AdvAcc.ID, tag, fmt.Sprintf("hook-visitor-%d", uniq))
+	visitor := fmt.Sprintf("hook-visitor-%d", uniq)
 
-	deadline := time.Now().Add(30 * time.Second)
-	for {
+	// One dispatched event = one attempt=1 delivery row (retries add attempts
+	// 2..3 to the same event, so attempt=1 counts distinct dispatches).
+	dispatches := func() int {
 		var n int
-		if err := h.DB.QueryRow(`SELECT count(*) FROM webhook_deliveries WHERE webhook_id=$1 AND event_type='retargeting.enrolled'`, hookID).Scan(&n); err != nil {
+		if err := h.DB.QueryRow(`SELECT count(*) FROM webhook_deliveries WHERE webhook_id=$1 AND event_type='retargeting.enrolled' AND attempt=1`, hookID).Scan(&n); err != nil {
 			t.Fatalf("delivery query: %v", err)
 		}
-		if n > 0 {
-			break
-		}
+		return n
+	}
+
+	// A shopper visits → enrolled → audience-rt emits retargeting.enrolled →
+	// webhooks delivers it.
+	fireVisit(t, w.AdvAcc.ID, tag, visitor)
+	deadline := time.Now().Add(30 * time.Second)
+	for dispatches() < 1 {
 		if time.Now().After(deadline) {
-			t.Fatal("retargeting.enrolled webhook was never delivered (no delivery attempt logged)")
+			t.Fatal("retargeting.enrolled webhook was never delivered")
 		}
 		time.Sleep(2 * time.Second)
+	}
+
+	// First-enroll-only: the SAME shopper visiting again is already a member, so
+	// no second event fires (silent window refresh) — the webhook does NOT re-fire.
+	fireVisit(t, w.AdvAcc.ID, tag, visitor)
+	time.Sleep(8 * time.Second) // ample for a would-be second dispatch to land
+	if n := dispatches(); n != 1 {
+		t.Errorf("webhook dispatched %d times, want 1 — a repeat visit re-fired the enrolled event (first-enroll-only broken)", n)
 	}
 }
