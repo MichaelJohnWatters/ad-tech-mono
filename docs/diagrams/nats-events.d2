@@ -183,6 +183,18 @@ consumers: Consumers {
     style.font-color: "#fff"
     what: Purge user data from all systems
   }
+
+  audience_rt: audience-rt :8097 {
+    style.fill: "#a78bfa"
+    style.font-color: "#000"
+    what: |md
+      Real-time retargeting:
+      site_visit → enroll,
+      purchase → suppress
+      (writes audience_segment_members
+      + invalidate.audience)
+    |
+  }
 }
 
 # ============================================================
@@ -233,6 +245,9 @@ subjects.cache -> consumers.all_services
 
 subjects.profilesig -> consumers.reporting
 subjects.behaviour -> consumers.reporting
+subjects.behaviour -> consumers.audience_rt: site_visit → enroll
+subjects.conv -> consumers.audience_rt: purchase → suppress
+consumers.audience_rt -> subjects.cache: invalidate.audience { style.stroke-dash: 2 }
 subjects.batchrun -> consumers.webhooks
 
 # ============================================================

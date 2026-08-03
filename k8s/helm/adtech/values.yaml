@@ -90,6 +90,7 @@ localExpose:
     transcoder: { ports: [{ name: http, port: 8094 }] }
     report-runner: { ports: [{ name: http, port: 8095 }] }
     notifications: { ports: [{ name: http, port: 8096 }] }
+    audience-rt: { ports: [{ name: http, port: 8097 }] }
 
 services:
   dsp-internal:
@@ -639,6 +640,29 @@ services:
       periodSeconds: 10
     readinessProbe:
       httpGet: { path: /readyz, port: 8092 }
+      periodSeconds: 2
+      failureThreshold: 3
+
+  audience-rt:
+    image: adtech-audience-rt
+    replicas: 1
+    ports: [{ name: http, port: 8097 }]
+    env:
+      - name: AUDIENCE_RT_NATS_URL
+        value: "nats://nats:4222"
+      - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8097 }
+      initialDelaySeconds: 5
+      periodSeconds: 10
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8097 }
       periodSeconds: 2
       failureThreshold: 3
 
