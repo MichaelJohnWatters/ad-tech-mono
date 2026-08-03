@@ -2880,6 +2880,27 @@ With relevance weighting:
     -> Better for shoppers, better for retailer, better long-term for platform
 ```
 
+##### Built (MVP) — status 2026-08
+
+The relevance-weighted auction ships and is e2e-proven (`tests/e2e/retail_test.go`,
+`TestRetailRelevanceBeatsHigherBid`): a relevant, cheaper product wins the sponsored
+slot over an off-category product bidding ~3× more, live through SSP → DSP → exchange.
+
+| Concern | What ships | Where |
+|---|---|---|
+| Strategy | `RelevanceWeightedStrategy.Select` ranks by relevance × bid, returns the top `SlotCount` as multi-winners (positions 1..N), first-price per slot; extras → outranked losses; `ShortFill` = unfilled slots. | `pkg/auction/relevance.go` (+ `relevance_test.go`) |
+| Relevance | Explicit `Bid.Relevance` (0..1) when supplied, else derived from `Bid.Category` vs the request's `RetailCategories` (browsed categories): match = 1.0, miss = 0.1×, no signal → pure price. | `retailRelevance()` |
+| Product SLATE | For `imp.ext.channel=retail` the DSP returns ALL eligible products (grouped by advertiser seat), not a single best bid, so the exchange can rank across the slate. Product category rides `BidObj.Cat` from the campaign's `include_categories`. | `cmd/dsp` retail-slate path |
+| Soft category | On retail the DSP drops category as a HARD targeting filter (a shoe ad stays eligible on a different-category page, it just ranks lower); geo/device/audience still gate. | `cmd/dsp` (`tRules` category strip) |
+| Serve | SSP `channel=retail` builds a banner-shaped sponsored-product imp (`imp.ext.channel=retail`, `?cat=` → `Site.Cat`); exchange routes retail → relevance_weighted, feeds `Site.Cat` as `RetailCategories`. | `cmd/ssp`, `cmd/exchange` |
+
+**Follow-ups (documented, not built):** the exchange returns the position-1 winner
+through the normal single-bid response — rendering positions 2..N on the page (the
+full sponsored-results grid) + per-position impression/click tracking is next.
+`MinRelevance` eligibility floor, `OrganicRatio`, generalized-second-price pricing
+(each product pays the minimum to hold its rank, as in search ads), and a proper
+per-product category (distinct from `include_categories`) are also deferred.
+
 #### Strategy 4: Batch (In-Game Intrinsic Billboards)
 
 Multiple placements auctioned in one request with cross-placement constraints.

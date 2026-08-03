@@ -917,6 +917,17 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
+		// Retail media returns a SLATE, not a single best bid: the exchange ranks
+		// every eligible sponsored product by relevance × bid across N slots, so
+		// the DSP surfaces all of its eligible products (grouped by advertiser
+		// seat) instead of pre-selecting the highest bidder. Every other channel
+		// keeps the single-best-bid path below.
+		isRetail := len(bidReq.Imp) > 0 && bidReq.Imp[0].Ext != nil &&
+			bidReq.Imp[0].Ext.Channel == constants.ChannelRetail
+		retailBySeat := map[string][]openrtb.BidObj{}
+		var retailSeatOrder []string
+		var retailCur string
+
 		all := campaigns.All()
 		var bestBid *openrtb.BidObj
 		var bestCampaign *models.Campaign
@@ -966,7 +977,17 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 			crid := match.ID
 
-			result := targeting.Evaluate(c.Targeting, tReq)
+			// Retail media treats the product category as a SOFT relevance signal
+			// (ranked at the exchange), not a hard content filter — a shoe ad stays
+			// eligible on a page where the shopper browses a different category, it
+			// just ranks lower. So drop category targeting for retail; every other
+			// dimension (geo/device/audience) still gates normally.
+			tRules := c.Targeting
+			if isRetail {
+				tRules.Include.Categories = nil
+				tRules.Exclude.Categories = nil
+			}
+			result := targeting.Evaluate(tRules, tReq)
 			if !result.Matched {
 				reqLog.Debug("campaign excluded by targeting", "campaign", c.ID, "dimension", result.FailedDimension)
 				continue
@@ -1078,47 +1099,80 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				continue
 			}
 
+			// Build the candidate bid once. Cat carries the sponsored product's IAB
+			// category so the exchange can score retail relevance (product category
+			// vs the shopper's browsed categories); harmless on other channels.
+			cand := &openrtb.BidObj{
+				ID:       "bid-" + bidReq.ID + "-" + c.ID,
+				ImpID:    bidReq.Imp[0].ID,
+				Price:    adjustedBid,
+				CID:      c.ID,
+				CrID:     crid,
+				ADomain:  []string{c.CreativeDomain},
+				BidModel: c.BidModel,
+				W:        match.Width,
+				H:        match.Height,
+				Dur:      match.Duration,
+				MediaURL: match.MediaURL,
+				Cat:      append([]string(nil), c.Targeting.Include.Categories...),
+			}
+			// Native creatives carry their markup in AdM: an OpenRTB Native
+			// response built from the creative's asset set. Impression/click
+			// trackers are injected downstream (like banner HTML / VAST),
+			// so none are added here.
+			if reqFormat == "native" && match.Native != nil {
+				na := match.Native
+				resp := native.BuildResponse(native.AssetSet{
+					Title:      na.Title,
+					MainImage:  na.MainImage,
+					MainImageW: na.MainImageW,
+					MainImageH: na.MainImageH,
+					Icon:       na.Icon,
+					Sponsored:  na.Sponsored,
+					Body:       na.Body,
+					CTA:        na.CTA,
+					LandingURL: na.LandingURL,
+				}, nil, nil)
+				if adm, err := native.MarshalResponse(resp); err == nil {
+					cand.AdM = adm
+				} else {
+					reqLog.Error("native response marshal failed", "campaign", c.ID, "error", err)
+				}
+			}
+
+			// Retail: every eligible product goes into the slate (grouped by seat).
+			if isRetail {
+				if _, seen := retailBySeat[c.AccountID]; !seen {
+					retailSeatOrder = append(retailSeatOrder, c.AccountID)
+				}
+				retailBySeat[c.AccountID] = append(retailBySeat[c.AccountID], *cand)
+				if retailCur == "" {
+					retailCur = c.Currency
+				}
+			}
+
 			if adjustedBid > bestPrice {
 				bestPrice = adjustedBid
 				bestCampaign = c
 				pickedCreativeID = crid
-				bestBid = &openrtb.BidObj{
-					ID:       "bid-" + bidReq.ID + "-" + c.ID,
-					ImpID:    bidReq.Imp[0].ID,
-					Price:    adjustedBid,
-					CID:      c.ID,
-					CrID:     crid,
-					ADomain:  []string{c.CreativeDomain},
-					BidModel: c.BidModel,
-					W:        match.Width,
-					H:        match.Height,
-					Dur:      match.Duration,
-					MediaURL: match.MediaURL,
-				}
-				// Native creatives carry their markup in AdM: an OpenRTB Native
-				// response built from the creative's asset set. Impression/click
-				// trackers are injected downstream (like banner HTML / VAST),
-				// so none are added here.
-				if reqFormat == "native" && match.Native != nil {
-					na := match.Native
-					resp := native.BuildResponse(native.AssetSet{
-						Title:      na.Title,
-						MainImage:  na.MainImage,
-						MainImageW: na.MainImageW,
-						MainImageH: na.MainImageH,
-						Icon:       na.Icon,
-						Sponsored:  na.Sponsored,
-						Body:       na.Body,
-						CTA:        na.CTA,
-						LandingURL: na.LandingURL,
-					}, nil, nil)
-					if adm, err := native.MarshalResponse(resp); err == nil {
-						bestBid.AdM = adm
-					} else {
-						reqLog.Error("native response marshal failed", "campaign", c.ID, "error", err)
-					}
-				}
+				bestBid = cand
 			}
+		}
+
+		// Retail slate response: one SeatBid per advertiser, all eligible products.
+		// The exchange applies relevance × bid ranking across the whole slate.
+		if isRetail && len(retailSeatOrder) > 0 {
+			seatBids := make([]openrtb.SeatBid, 0, len(retailSeatOrder))
+			for _, seat := range retailSeatOrder {
+				seatBids = append(seatBids, openrtb.SeatBid{Seat: seat, Bid: retailBySeat[seat]})
+			}
+			if retailCur == "" {
+				retailCur = "USD"
+			}
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, Cur: retailCur, SeatBid: seatBids})
+			reqLog.Info("retail slate bid", "seats", len(seatBids), "products", len(all))
+			return
 		}
 
 		if bestBid == nil {

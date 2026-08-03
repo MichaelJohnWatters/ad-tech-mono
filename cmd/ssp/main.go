@@ -455,6 +455,22 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			bidReq.Imp[0].Ext = &openrtb.ImpExt{}
 		}
 		bidReq.Imp[0].Ext.Channel = constants.ChannelDOOH
+	case channel == constants.ChannelRetail:
+		// Retail media: a sponsored-product slot on a retailer's search/browse
+		// page. Banner-shaped creative; imp.ext.channel=retail routes the exchange
+		// to the relevance-weighted strategy, which ranks the DSP's product slate
+		// by relevance × bid. The shopper's browsed/searched categories ride
+		// Site.Cat — a ?cat= override lets the results page declare what's being
+		// browsed (the relevance signal each sponsored product is scored against).
+		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
+		if bidReq.Imp[0].Ext == nil {
+			bidReq.Imp[0].Ext = &openrtb.ImpExt{}
+		}
+		bidReq.Imp[0].Ext.Channel = constants.ChannelRetail
+		bidReq.Imp[0].Ext.PlacementType = "sponsored_product"
+		if cat := r.URL.Query().Get("cat"); cat != "" {
+			bidReq.Site.Cat = strings.Split(cat, ",")
+		}
 	case channel == "video":
 		// Standard pre-roll request by default (HTTP-progressive MP4, VAST 4.x,
 		// 5–30s, 640x360, skippable), overridden by the placement's video_config
