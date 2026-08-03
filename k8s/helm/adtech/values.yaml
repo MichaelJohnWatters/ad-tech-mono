@@ -645,7 +645,10 @@ services:
 
   audience-rt:
     image: adtech-audience-rt
-    replicas: 1
+    # Safe to run multi-replica: enrollment is idempotent (AddMembersWithExpiry
+    # upsert + xmax first-enroll), events are queue-group consumed (each processed
+    # once), and the purge is an idempotent cross-tenant DELETE. 2 = HA.
+    replicas: 2
     ports: [{ name: http, port: 8097 }]
     env:
       - name: AUDIENCE_RT_NATS_URL
