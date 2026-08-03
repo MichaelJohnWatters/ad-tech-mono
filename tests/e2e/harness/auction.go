@@ -233,6 +233,10 @@ type BidResponseWinner struct {
 	CampaignID string
 	CreativeID string
 	DealID     string
+	// ImpressionID is the OpenRTB BidObj.ID. For multi-winner auctions (in-game
+	// surfaces, retail slots) this is the per-surface sub-trace the renderer fires
+	// the impression on, so each surface bills independently.
+	ImpressionID string
 	// NBR is the OpenRTB no-bid reason code (0 = genuine no-bid / no demand;
 	// ≥500 = an enforcement gate blocked the request — see pkg/openrtb). Lets a
 	// test assert WHY a request no-bid without inferring it from a bare nobid.
@@ -289,6 +293,7 @@ func (h *Harness) ExtractAllWinners(t *testing.T, r AuctionResult) []BidResponse
 		SeatBid []struct {
 			Seat string `json:"seat"`
 			Bid  []struct {
+				ID    string  `json:"id"`
 				Price float64 `json:"price"`
 				CID   string  `json:"cid"`
 				CrID  string  `json:"crid"`
@@ -301,7 +306,7 @@ func (h *Harness) ExtractAllWinners(t *testing.T, r AuctionResult) []BidResponse
 	var out []BidResponseWinner
 	for _, sb := range br.SeatBid {
 		for _, b := range sb.Bid {
-			out = append(out, BidResponseWinner{Seat: sb.Seat, Price: b.Price, CampaignID: b.CID, CreativeID: b.CrID})
+			out = append(out, BidResponseWinner{Seat: sb.Seat, Price: b.Price, CampaignID: b.CID, CreativeID: b.CrID, ImpressionID: b.ID})
 		}
 	}
 	return out
