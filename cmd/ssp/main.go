@@ -481,6 +481,19 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		if cat := r.URL.Query().Get("cat"); cat != "" {
 			bidReq.Site.Cat = strings.Split(cat, ",")
 		}
+		// Number of sponsored slots on the results page (placement.surfaces;
+		// ?surfaces= overrides). Default 1. The exchange ranks the product slate
+		// and returns the top-N; each slot bills on its own sub-trace.
+		slots := 1
+		if p.Surfaces > 0 {
+			slots = p.Surfaces
+		}
+		if s := r.URL.Query().Get("surfaces"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				slots = n
+			}
+		}
+		bidReq.Imp[0].Ext.Surfaces = slots
 	case channel == constants.ChannelInGame:
 		// In-game intrinsic: ad surfaces embedded in a 3D scene (a stadium's
 		// hoardings, a racetrack's signage). Banner-shaped creatives; imp.ext
