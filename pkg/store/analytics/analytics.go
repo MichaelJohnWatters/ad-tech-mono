@@ -302,7 +302,16 @@ type ImpressionEvent struct {
 	ClearingPriceUSD float64   `json:"clearing_price_usd"`
 	BidModel         string    `json:"bid_model,omitempty"`
 	DealID           string    `json:"deal_id,omitempty"`
-	Timestamp        time.Time `json:"timestamp"`
+	// ImpressionQty is how many audience impressions this single served event
+	// represents. 1 for a 1:1 format (display/video/etc — one render = one
+	// impression). For DIGITAL OUT-OF-HOME it's the venue's estimated audience per
+	// play: a screen plays the ad ONCE (one proof-of-play beacon) but delivers N
+	// impressions to the people in front of it, priced per that audience
+	// (ClearingPriceUSD already carries the full play cost = per-imp cost × qty).
+	// Reporting sums this for the true impression count; billing books the play
+	// cost. 0 is normalised to 1 on ingest for back-compat with old events.
+	ImpressionQty int       `json:"impression_qty,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
 }
 
 // ClickEvent records a click on a served ad.
