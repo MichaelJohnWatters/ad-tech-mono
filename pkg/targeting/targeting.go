@@ -33,6 +33,7 @@ type TargetingSet struct {
 	Languages      []string          // language codes
 	InventoryType  []string          // site, app
 	Keywords       []string          // page keywords
+	Channels       []string          // display, video, audio, native, dooh, retail, ingame — empty = all channels
 	Custom         map[string]string // custom key-value pairs
 }
 
@@ -49,6 +50,7 @@ type Request struct {
 	Language      string   // content language
 	InventoryType string   // site or app
 	Keywords      []string // page keywords
+	Channel       string   // display, video, audio, native, dooh, retail, ingame
 }
 
 // Result of a targeting evaluation.
@@ -107,6 +109,9 @@ func checkInclusions(include TargetingSet, req Request) bool {
 		return false
 	}
 	if len(include.Keywords) > 0 && !containsAny(include.Keywords, req.Keywords) {
+		return false
+	}
+	if len(include.Channels) > 0 && !contains(include.Channels, req.Channel) {
 		return false
 	}
 	return true

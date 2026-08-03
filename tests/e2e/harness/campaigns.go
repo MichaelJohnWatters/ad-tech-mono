@@ -44,6 +44,7 @@ type Targeting struct {
 	Geos       []string
 	Devices    []string
 	Categories []string // include_categories — a hard content filter on display/video, a soft relevance signal on retail
+	Channels   []string // include_channels — per-campaign channel allowlist (empty = all channels)
 }
 
 // CreateInsertionOrder creates an IO under the given advertiser account.
@@ -88,10 +89,10 @@ ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, base_bid = EXCLUDED.bas
 		}
 
 		const trQ = `
-INSERT INTO targeting_rules (id, line_item_id, account_id, include_geo, include_device, include_categories, bid_modifiers, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, '{}', now(), now())
-ON CONFLICT (line_item_id) DO UPDATE SET include_geo = EXCLUDED.include_geo, include_device = EXCLUDED.include_device, include_categories = EXCLUDED.include_categories, updated_at = now()`
-		if _, err := tx.Exec(trQ, targetingID, lineItemID, owner.ID, pq.StringArray(targeting.Geos), pq.StringArray(targeting.Devices), pq.StringArray(targeting.Categories)); err != nil {
+INSERT INTO targeting_rules (id, line_item_id, account_id, include_geo, include_device, include_categories, include_channels, bid_modifiers, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', now(), now())
+ON CONFLICT (line_item_id) DO UPDATE SET include_geo = EXCLUDED.include_geo, include_device = EXCLUDED.include_device, include_categories = EXCLUDED.include_categories, include_channels = EXCLUDED.include_channels, updated_at = now()`
+		if _, err := tx.Exec(trQ, targetingID, lineItemID, owner.ID, pq.StringArray(targeting.Geos), pq.StringArray(targeting.Devices), pq.StringArray(targeting.Categories), pq.StringArray(targeting.Channels)); err != nil {
 			t.Fatalf("targeting_rules insert: %v", err)
 		}
 

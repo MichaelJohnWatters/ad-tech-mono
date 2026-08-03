@@ -79,6 +79,7 @@ SELECT
     COALESCE(tr.include_keywords, '{}'),
     COALESCE(tr.exclude_keywords, '{}'),
     COALESCE(tr.include_inventory_type, '{}'),
+    COALESCE(tr.include_channels, '{}'),
     COALESCE(tr.bid_modifiers::text, '{}'),
     COALESCE(cr.id::text, '') AS creative_id,
     -- Brand domain: prefer the explicit advertiser_domain column (set
@@ -158,7 +159,7 @@ func (l *CampaignLoader) LoadAll(ctx context.Context) ([]models.Campaign, error)
 func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 	var c models.Campaign
 	var incGeo, excGeo, incDev, excDev, incSeg, excSeg, incDom, excDom, incCat, excCat pq.StringArray
-	var incOS, incKw, excKw, incInv pq.StringArray
+	var incOS, incKw, excKw, incInv, incChan pq.StringArray
 	var modifiersJSON string
 	var viewTarget sql.NullInt32
 	var creativesJSON string
@@ -169,7 +170,7 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 		&incGeo, &excGeo, &incDev, &excDev,
 		&incSeg, &excSeg, &incDom, &excDom,
 		&incCat, &excCat,
-		&incOS, &incKw, &excKw, &incInv,
+		&incOS, &incKw, &excKw, &incInv, &incChan,
 		&modifiersJSON,
 		&c.CreativeID, &c.CreativeDomain,
 		&viewTarget,
@@ -186,7 +187,7 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 		Include: targeting.TargetingSet{
 			Geo: incGeo, Device: incDev, Segments: incSeg,
 			Domains: incDom, Categories: incCat,
-			OS: incOS, Keywords: incKw, InventoryType: incInv,
+			OS: incOS, Keywords: incKw, InventoryType: incInv, Channels: incChan,
 		},
 		Exclude: targeting.TargetingSet{
 			Geo: excGeo, Device: excDev, Segments: excSeg,
