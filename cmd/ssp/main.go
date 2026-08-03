@@ -471,6 +471,26 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		if cat := r.URL.Query().Get("cat"); cat != "" {
 			bidReq.Site.Cat = strings.Split(cat, ",")
 		}
+	case channel == constants.ChannelInGame:
+		// In-game intrinsic: ad surfaces embedded in a 3D scene (a stadium's
+		// hoardings, a racetrack's signage). Banner-shaped creatives; imp.ext
+		// channel=ingame + placement_type=intrinsic routes the exchange to the
+		// Batch strategy, which fills the scene's surfaces in one auction with
+		// one-advertiser / one-category-per-scene competitive separation.
+		// ?surfaces=N declares how many surfaces the scene has (default 1).
+		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
+		if bidReq.Imp[0].Ext == nil {
+			bidReq.Imp[0].Ext = &openrtb.ImpExt{}
+		}
+		bidReq.Imp[0].Ext.Channel = constants.ChannelInGame
+		bidReq.Imp[0].Ext.PlacementType = "intrinsic"
+		surfaces := 1
+		if s := r.URL.Query().Get("surfaces"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				surfaces = n
+			}
+		}
+		bidReq.Imp[0].Ext.Surfaces = surfaces
 	case channel == "video":
 		// Standard pre-roll request by default (HTTP-progressive MP4, VAST 4.x,
 		// 5–30s, 640x360, skippable), overridden by the placement's video_config

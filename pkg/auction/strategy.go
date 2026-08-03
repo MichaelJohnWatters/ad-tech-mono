@@ -3,12 +3,12 @@
 // The Exchange selects a strategy based on the impression type, runs the common
 // filter pipeline, then delegates to the strategy for winner selection.
 //
-// Strategies:
-//   - SingleWinner: display, native, video single, rewarded, interstitial (implemented)
-//   - Pod: video/audio ad breaks with multiple winners (stubbed, Phase 9)
-//   - RelevanceWeighted: retail sponsored products, relevance * bid (stubbed, Phase 9)
-//   - Batch: in-game intrinsic billboards, multiple placements (stubbed, Phase 9)
-//   - TimeSlot: DOOH screen rotation slots (stubbed, Phase 9)
+// Strategies (all implemented):
+//   - SingleWinner: display, native, video single, rewarded, interstitial
+//   - Pod: video/audio ad breaks with multiple winners
+//   - RelevanceWeighted: retail sponsored products, relevance * bid
+//   - Batch: in-game intrinsic scene surfaces, competitive separation
+//   - TimeSlot: DOOH screen rotation slots
 package auction
 
 import (

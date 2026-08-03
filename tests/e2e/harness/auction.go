@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,9 @@ type AuctionResult struct {
 // into the OpenRTB request. Empty fields are omitted.
 type AuctionParams struct {
 	Placement  string // friendly external key, not the UUID
-	Channel    string // serve channel (video/audio/native/dooh/retail); empty = display
+	Channel    string // serve channel (video/audio/native/dooh/retail/ingame); empty = display
 	Categories string // retail: the shopper's browsed IAB categories (?cat=) → Site.Cat
+	Surfaces   int    // in-game intrinsic: number of scene surfaces (?surfaces=) → imp.ext.surfaces
 	Geo        string // ISO country (Device.geo.country)
 	Device    string // device type keyword
 	UserID    string // User.id (drives segment lookup)
@@ -76,6 +78,9 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("placement_id", p.Placement)
 	add("channel", p.Channel)
 	add("cat", p.Categories)
+	if p.Surfaces > 0 {
+		add("surfaces", strconv.Itoa(p.Surfaces))
+	}
 	add("geo", p.Geo)
 	add("device", p.Device)
 	add("user_id", p.UserID)
@@ -171,6 +176,9 @@ func (h *Harness) ServeViaSSP(t *testing.T, p AuctionParams) SSPServeResult {
 	add("placement_id", p.Placement)
 	add("channel", p.Channel)
 	add("cat", p.Categories)
+	if p.Surfaces > 0 {
+		add("surfaces", strconv.Itoa(p.Surfaces))
+	}
 	add("geo", p.Geo)
 	add("device", p.Device)
 	add("user_id", p.UserID)
@@ -268,4 +276,33 @@ func (h *Harness) ExtractWinner(t *testing.T, r AuctionResult) BidResponseWinner
 		CampaignID: b.CID, CreativeID: b.CrID, DealID: b.DealID,
 		NBR: br.NBR, NBRReason: br.NBRReason,
 	}
+}
+
+// ExtractAllWinners flattens EVERY bid across all SeatBids in a BidResponse — for
+// multi-winner auctions (in-game scene surfaces, retail slate) where the response
+// carries one SeatBid per winning advertiser. Order is response order (position 1
+// first). Empty on a no-bid.
+func (h *Harness) ExtractAllWinners(t *testing.T, r AuctionResult) []BidResponseWinner {
+	t.Helper()
+	var br struct {
+		NoBid   bool `json:"nobid,omitempty"`
+		SeatBid []struct {
+			Seat string `json:"seat"`
+			Bid  []struct {
+				Price float64 `json:"price"`
+				CID   string  `json:"cid"`
+				CrID  string  `json:"crid"`
+			} `json:"bid"`
+		} `json:"seatbid"`
+	}
+	if err := json.Unmarshal(r.BidResponse, &br); err != nil {
+		t.Fatalf("decode bid response: %v\nraw: %s", err, string(r.BidResponse))
+	}
+	var out []BidResponseWinner
+	for _, sb := range br.SeatBid {
+		for _, b := range sb.Bid {
+			out = append(out, BidResponseWinner{Seat: sb.Seat, Price: b.Price, CampaignID: b.CID, CreativeID: b.CrID})
+		}
+	}
+	return out
 }

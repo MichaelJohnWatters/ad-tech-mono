@@ -595,6 +595,11 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			eligibleBids = append(eligibleBids, b)
 		}
 
+		// multiWinners holds every winner when the strategy fills more than one
+		// slot in a single auction (in-game scene surfaces, retail sponsored
+		// slots). The response exposes them all; the win event / billing still
+		// fire for position 1 (multi-winner billing is a documented follow-up).
+		var multiWinners []auction.Winner
 		var (
 			winnerBid     auction.Bid
 			clearingPrice float64
@@ -630,6 +635,16 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					auctionReq.RetailCategories = bidReq.Site.Cat
 				}
 			}
+			if routingChannel == constants.ChannelInGame {
+				// An intrinsic in-game placement is a whole scene of surfaces filled
+				// in one auction (Format "intrinsic" → batch strategy). Surfaces is
+				// the number of billboards; the batch strategy applies one-advertiser
+				// and one-category-per-scene competitive separation across them.
+				if bidReq.Imp[0].Ext != nil {
+					auctionReq.Format = bidReq.Imp[0].Ext.PlacementType
+					auctionReq.SlotCount = bidReq.Imp[0].Ext.Surfaces
+				}
+			}
 			result, err := engine.RunAuction(ctx, eligibleBids, auctionReq)
 			if err != nil {
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -642,6 +657,9 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			winnerBid = winner.Bid
 			clearingPrice = winner.ClearingPrice
 			winningDealID = winner.Bid.DealID
+			if result.IsMultiWinner && len(result.Winners) > 1 {
+				multiWinners = result.Winners
+			}
 		}
 
 		// Seat = the winning advertiser's UUID (sb.Seat from DSP). Falls back
@@ -690,6 +708,43 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					DealID: winningDealID,
 				}},
 			}},
+		}
+		// Multi-winner strategies (in-game scene surfaces, retail slate) expose
+		// EVERY winner in the response — one SeatBid per winning advertiser, in
+		// rank/position order — so the caller sees the whole filled scene. Position
+		// 1 stays first (its SeatBid built above); the rest are appended. Win event /
+		// billing above still bind to position 1 (multi-winner billing is a follow-up).
+		if len(multiWinners) > 1 {
+			seatBids := make([]openrtb.SeatBid, 0, len(multiWinners))
+			for _, wr := range multiWinners {
+				wb := wr.Bid
+				seat := wb.AdvertiserID
+				if seat == "" {
+					seat = wb.DSPID
+				}
+				var wadomain []string
+				if wb.AdomainHost != "" {
+					wadomain = []string{wb.AdomainHost}
+				}
+				seatBids = append(seatBids, openrtb.SeatBid{
+					Seat: seat,
+					Bid: []openrtb.BidObj{{
+						ID:       fmt.Sprintf("win-%s-%d", traceID, wr.Position),
+						ImpID:    bidReq.Imp[0].ID,
+						Price:    wr.ClearingPrice,
+						CID:      wb.CampaignID,
+						CrID:     wb.CreativeID,
+						W:        wb.Width,
+						H:        wb.Height,
+						MediaURL: wb.MediaURL,
+						AdM:      wb.AdM,
+						ADomain:  wadomain,
+						BidModel: wb.BidModel,
+						DealID:   wb.DealID,
+					}},
+				})
+			}
+			resp.SeatBid = seatBids
 		}
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)

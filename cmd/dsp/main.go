@@ -917,13 +917,15 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
-		// Retail media returns a SLATE, not a single best bid: the exchange ranks
-		// every eligible sponsored product by relevance × bid across N slots, so
-		// the DSP surfaces all of its eligible products (grouped by advertiser
-		// seat) instead of pre-selecting the highest bidder. Every other channel
-		// keeps the single-best-bid path below.
-		isRetail := len(bidReq.Imp) > 0 && bidReq.Imp[0].Ext != nil &&
-			bidReq.Imp[0].Ext.Channel == constants.ChannelRetail
+		// Multi-winner channels (retail sponsored slots, in-game scene surfaces)
+		// take a SLATE, not a single best bid: the exchange ranks/assigns every
+		// eligible product across N slots (relevance × bid for retail; price +
+		// competitive separation for in-game), so the DSP surfaces all of its
+		// eligible products (grouped by advertiser seat) instead of pre-selecting
+		// the highest bidder. Every other channel keeps the single-best-bid path.
+		isSlate := len(bidReq.Imp) > 0 && bidReq.Imp[0].Ext != nil &&
+			(bidReq.Imp[0].Ext.Channel == constants.ChannelRetail ||
+				bidReq.Imp[0].Ext.Channel == constants.ChannelInGame)
 		retailBySeat := map[string][]openrtb.BidObj{}
 		var retailSeatOrder []string
 		var retailCur string
@@ -977,13 +979,14 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 			crid := match.ID
 
-			// Retail media treats the product category as a SOFT relevance signal
-			// (ranked at the exchange), not a hard content filter — a shoe ad stays
-			// eligible on a page where the shopper browses a different category, it
-			// just ranks lower. So drop category targeting for retail; every other
+			// Multi-winner channels treat the product category as a SOFT signal
+			// (ranked/separated at the exchange), not a hard content filter — a shoe
+			// ad stays eligible on a page browsing another category (it just ranks
+			// lower), and an in-game product isn't excluded by the scene's category.
+			// So drop category targeting for the slate channels; every other
 			// dimension (geo/device/audience) still gates normally.
 			tRules := c.Targeting
-			if isRetail {
+			if isSlate {
 				tRules.Include.Categories = nil
 				tRules.Exclude.Categories = nil
 			}
@@ -1140,8 +1143,9 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				}
 			}
 
-			// Retail: every eligible product goes into the slate (grouped by seat).
-			if isRetail {
+			// Slate channels: every eligible product goes into the slate (grouped
+			// by seat) for the exchange to rank/assign across slots.
+			if isSlate {
 				if _, seen := retailBySeat[c.AccountID]; !seen {
 					retailSeatOrder = append(retailSeatOrder, c.AccountID)
 				}
@@ -1159,9 +1163,10 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
-		// Retail slate response: one SeatBid per advertiser, all eligible products.
-		// The exchange applies relevance × bid ranking across the whole slate.
-		if isRetail && len(retailSeatOrder) > 0 {
+		// Slate response: one SeatBid per advertiser, all eligible products. The
+		// exchange ranks/assigns across slots (relevance for retail, competitive
+		// separation for in-game).
+		if isSlate && len(retailSeatOrder) > 0 {
 			seatBids := make([]openrtb.SeatBid, 0, len(retailSeatOrder))
 			for _, seat := range retailSeatOrder {
 				seatBids = append(seatBids, openrtb.SeatBid{Seat: seat, Bid: retailBySeat[seat]})
@@ -1171,7 +1176,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, Cur: retailCur, SeatBid: seatBids})
-			reqLog.Info("retail slate bid", "seats", len(seatBids), "products", len(all))
+			reqLog.Info("slate bid", "channel", bidReq.Imp[0].Ext.Channel, "seats", len(seatBids), "products", len(all))
 			return
 		}
 

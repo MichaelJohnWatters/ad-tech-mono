@@ -195,6 +195,7 @@ type Native struct {
 type ImpExt struct {
 	Channel       string `json:"channel,omitempty"`        // display, video, audio, dooh, retail, ingame
 	PlacementType string `json:"placement_type,omitempty"` // rewarded, interstitial, intrinsic, sponsored_product
+	Surfaces      int    `json:"surfaces,omitempty"`       // in-game intrinsic: number of scene ad surfaces to fill in one auction
 }
 
 // Site represents a web publisher.

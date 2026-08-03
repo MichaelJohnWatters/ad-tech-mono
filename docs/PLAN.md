@@ -2936,6 +2936,23 @@ func (s *BatchStrategy) Select(bids []Bid) AuctionResult {
 }
 ```
 
+##### Built (MVP) — status 2026-08
+
+The batch scene auction ships and is e2e-proven (`tests/e2e/ingame_test.go`,
+`TestInGameSceneCompetitiveSeparation`): a 3-surface scene with 4 competing
+products fills 3 surfaces with 3 DISTINCT advertisers — an advertiser bidding the
+top TWO prices still gets only one surface.
+
+| Concern | What ships | Where |
+|---|---|---|
+| Strategy | `BatchStrategy.Select` sorts by price, greedily assigns the top bids to `SlotCount` surfaces with competitive separation (one advertiser AND one category per scene), first-price per surface; blocked/overflow bids → losses; `ShortFill` = surfaces left for house ads. | `pkg/auction/batch.go` (+ `batch_test.go`) |
+| Product SLATE | `imp.ext.channel=ingame` makes the DSP return ALL eligible products across advertisers (grouped by seat), so the scene has multiple advertisers to separate. Category is soft (not a hard filter) for in-game too. | `cmd/dsp` slate path (shared with retail) |
+| Serve | SSP `channel=ingame` builds a banner-shaped scene imp (`imp.ext.channel=ingame`, `placement_type=intrinsic`, `?surfaces=N` → `imp.ext.surfaces`); exchange sets `Format=intrinsic` + `SlotCount=surfaces` → Batch, and returns EVERY winner (one SeatBid per advertiser) so the caller sees the whole filled scene. | `cmd/ssp`, `cmd/exchange` |
+
+**Follow-ups (documented, not built):** the win event / billing bind to position 1
+only — per-surface billing (N surfaces → N impressions) is next, alongside the SSP
+scene render and a per-product category distinct from `include_categories`.
+
 #### Strategy 5: TimeSlot (DOOH Screen Rotation)
 
 Bid for a time slot in a screen's rotation. Different from page-load auctions because the screen continuously rotates through ads.
