@@ -7940,6 +7940,27 @@ Example:
 | Audience estimation | `pkg/dooh/audience.go` - mobile proximity data, foot traffic models |
 | Creative validation | `pkg/adserving/dooh.go` - screen resolution matching, safe zones |
 
+#### Built (MVP) — status 2026-08
+
+The end-to-end money spine ships; the audience-estimation/creative-validation
+detail above is still planned. What's live and e2e-proven
+(`tests/e2e/dooh_test.go`, `TestDOOHAudienceMultiplier`):
+
+| Concern | What ships | Where |
+|---|---|---|
+| Auction | `channel=dooh` routes to the **TimeSlot** strategy — one screen play = a single winner (first-price), not a pod. | `pkg/auction/timeslot.go` (delegates to SingleWinner), `SelectStrategy`; `cmd/exchange` `channelForRequest` reads `imp.ext.channel` |
+| Serve | SSP `channel=dooh` builds a banner-shaped screen imp (`imp.ext.channel=dooh`) and short-circuits to return the winner. | `cmd/ssp/main.go` DOOH serve branch |
+| Proof-of-play → audience multiplier | One signed beacon (`/v1/t/imp?ch=dooh&mult=N`) = **one** impression row carrying `impression_qty=N` (venue audience per play), and books the **full play cost** = per-impression cost × N. The row count stays 1 (one play); the audience is `SUM(impression_qty)`. | `cmd/tracker/main.go` (reads `mult` for `ch=dooh` only), `ImpressionEvent.ImpressionQty`, ClickHouse `impressions.impression_qty Int32 DEFAULT 1` |
+| Money | `clearing_price_usd` on the row is the full play cost, so billing (books on impression) and prepay drawdown are lossless with no rollup change. | `ClearingPriceUSD = impCost × qty` |
+
+**Known follow-up (not the money — the aggregate count metric):** the reporting
+QueryEngine's impression *count* metric is still `COUNT(*)` (rows), so it reports
+1 for a DOOH play rather than the `SUM(impression_qty)` audience. Cost/eCPM are
+correct (they use `clearing_price_usd`); only the raw impression-count column
+under-reads for DOOH. Rewire `COUNT → SUM(impression_qty)` in the query engine +
+rollup MVs when DOOH volume warrants (deferred: needs an MV recreate + golden-test
+updates). `mult` defaults to 1, so every non-DOOH channel is unaffected.
+
 ### DOOH Cross-System Integration Detail
 
 #### DOOH Creative Review
