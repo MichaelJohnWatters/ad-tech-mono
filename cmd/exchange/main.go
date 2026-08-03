@@ -1004,12 +1004,22 @@ func channelForRequest(req *openrtb.BidRequest) string {
 	if len(req.Imp) == 0 {
 		return constants.ChannelDisplay
 	}
+	imp := req.Imp[0]
+	// The emerging channels (DOOH / retail / in-game) have no distinct OpenRTB
+	// media object — a DOOH screen carries a banner-shaped creative — so they ride
+	// imp.ext.channel. Honour it before falling back to media-type detection.
+	if imp.Ext != nil {
+		switch imp.Ext.Channel {
+		case constants.ChannelDOOH, constants.ChannelRetail, constants.ChannelInGame:
+			return imp.Ext.Channel
+		}
+	}
 	switch {
-	case req.Imp[0].Video != nil:
+	case imp.Video != nil:
 		return "video"
-	case req.Imp[0].Audio != nil:
+	case imp.Audio != nil:
 		return "audio"
-	case req.Imp[0].Native != nil:
+	case imp.Native != nil:
 		return "native"
 	default:
 		return constants.ChannelDisplay

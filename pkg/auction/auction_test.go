@@ -218,14 +218,13 @@ func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
 	engine := auction.NewEngine(clock.Real{})
 	bids := []auction.Bid{{DSPID: "dsp_1", Price: 5.00}}
 
-	// Pod (video/pod) is now implemented in step 84 — covered by the
-	// dedicated tests in pods_test.go. The remaining stubs stay until
-	// their channel lands later in Phase 9.
+	// Pod (video/pod) and DOOH (timeslot) are now implemented — covered by
+	// pods_test.go and TestTimeSlotDOOHSingleWinner. The remaining stubs stay
+	// until their channel lands later in Phase 9.
 	stubs := []struct {
 		channel string
 		format  string
 	}{
-		{"dooh", ""},
 		{"retail", ""},
 		{"ingame", "intrinsic"},
 	}
@@ -240,6 +239,32 @@ func TestStubbedStrategies_ReturnNotImplemented(t *testing.T) {
 		if err != auction.ErrNotImplemented {
 			t.Errorf("RunAuction(%s/%s) should return ErrNotImplemented, got %v", tt.channel, tt.format, err)
 		}
+	}
+}
+
+// TestTimeSlotDOOHSingleWinner: a DOOH screen request fills its slot with the top
+// bid (single winner per play; the audience multiplier applies downstream at
+// proof-of-play, not in the auction).
+func TestTimeSlotDOOHSingleWinner(t *testing.T) {
+	engine := auction.NewEngine(clock.Real{})
+	bids := []auction.Bid{
+		{DSPID: "dsp_1", CampaignID: "c1", Price: 4.00},
+		{DSPID: "dsp_2", CampaignID: "c2", Price: 6.50},
+		{DSPID: "dsp_3", CampaignID: "c3", Price: 5.00},
+	}
+	res, err := engine.RunAuction(context.Background(), bids,
+		auction.AuctionRequest{Channel: "dooh", FloorPrice: 1.0, PriceMode: "first_price"})
+	if err != nil {
+		t.Fatalf("DOOH auction errored: %v", err)
+	}
+	if res.StrategyType != "timeslot" {
+		t.Errorf("strategy = %q, want timeslot", res.StrategyType)
+	}
+	if len(res.Winners) != 1 || res.Winners[0].Bid.CampaignID != "c2" {
+		t.Fatalf("want single winner c2 (highest), got %+v", res.Winners)
+	}
+	if res.Winners[0].ClearingPrice != 6.50 {
+		t.Errorf("first-price clearing = %v, want 6.50", res.Winners[0].ClearingPrice)
 	}
 }
 
