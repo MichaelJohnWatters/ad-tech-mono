@@ -644,6 +644,8 @@ type patchCampaignRequest struct {
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
 	Timezone    *string  `json:"timezone,omitempty"`
+	// ProductCategory replaces line_items.product_category (retail relevance).
+	ProductCategory *string `json:"product_category,omitempty"`
 	// CreativeRotation changes the rotation mode; Creatives replaces the
 	// campaign's attached creatives (line_item_creatives) with the given set.
 	CreativeRotation *string           `json:"creative_rotation,omitempty"`
@@ -701,7 +703,7 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
 		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil &&
-		req.CreativeRotation == nil && req.Creatives == nil && !req.hasTargeting() {
+		req.CreativeRotation == nil && req.Creatives == nil && req.ProductCategory == nil && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
 	}
@@ -836,6 +838,12 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if req.CreativeRotation != nil {
 		args = append(args, *req.CreativeRotation)
 		sets = append(sets, fmt.Sprintf("creative_rotation = $%d", len(args)))
+	}
+	if req.ProductCategory != nil {
+		// Empty string clears it — the loader COALESCEs NULL/'' the same and the
+		// DSP treats '' as unset (falls back to include_categories).
+		args = append(args, *req.ProductCategory)
+		sets = append(sets, fmt.Sprintf("product_category = NULLIF($%d, '')", len(args)))
 	}
 	args = append(args, lineItemID)
 	q := fmt.Sprintf("UPDATE line_items SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args))
