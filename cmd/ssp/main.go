@@ -903,6 +903,22 @@ type serveAdResponse struct {
 	// AdM carries the winner's ad markup for native bids: the OpenRTB Native
 	// response JSON the publisher-adserver renders into HTML + trackers.
 	AdM string `json:"adm,omitempty"`
+	// Slots is the retail sponsored-results grid: one entry per filled slot,
+	// ranked (position 1 = top). The retailer's page renders its own product
+	// cards and fires each slot's impression on its ImpressionID (sub-trace).
+	Slots []serveAdSlot `json:"slots,omitempty"`
+}
+
+// serveAdSlot is one filled slot in a retail sponsored-results grid.
+type serveAdSlot struct {
+	Position      int     `json:"position"`
+	CampaignID    string  `json:"campaign_id"`
+	CreativeID    string  `json:"creative_id"`
+	AdvertiserID  string  `json:"advertiser_id"`
+	ClearingPrice float64 `json:"clearing_price"`
+	// ImpressionID is the per-slot sub-trace — the page fires this slot's
+	// impression on it so each slot bills independently.
+	ImpressionID string `json:"impression_id"`
 }
 
 // capModeFor picks the frequency-cap mode for a non-display serve decision. The
@@ -1041,6 +1057,29 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 				DealID:           winner.DealID,
 				HouseholdID:      ac.HouseholdID, // SSAI records the cap against this on stitch
 			})
+			return
+		}
+
+		// Retail sponsored-results grid: return EVERY winning slot (structured),
+		// so the retailer's page renders its own product cards and fires each
+		// slot's impression on its per-slot sub-trace (BidObj.ID) — each slot
+		// bills independently.
+		if r.URL.Query().Get("channel") == constants.ChannelRetail && len(ac.BidResp.SeatBid) > 0 {
+			var slots []serveAdSlot
+			for _, sb := range ac.BidResp.SeatBid {
+				for _, b := range sb.Bid {
+					slots = append(slots, serveAdSlot{
+						Position:      len(slots) + 1,
+						CampaignID:    b.CID,
+						CreativeID:    b.CrID,
+						AdvertiserID:  sb.Seat,
+						ClearingPrice: b.Price,
+						ImpressionID:  b.ID,
+					})
+				}
+			}
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, Channel: constants.ChannelRetail, Slots: slots})
 			return
 		}
 
