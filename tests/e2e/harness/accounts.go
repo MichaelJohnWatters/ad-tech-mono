@@ -30,6 +30,14 @@ func (h *Harness) CreateAdmin(t *testing.T, externalKey string) Account {
 	return h.createAccount(t, externalKey, "admin")
 }
 
+// CreateStaff inserts a staff-type account. Platform-staff perms are keyed
+// "staff:<role>" (e.g. staff:owner → support:read), so staff-only endpoint tests
+// need a staff account, not an admin one.
+func (h *Harness) CreateStaff(t *testing.T, externalKey string) Account {
+	t.Helper()
+	return h.createAccount(t, externalKey, "staff")
+}
+
 // CreatePublisher creates a publisher-type account.
 func (h *Harness) CreatePublisher(t *testing.T, externalKey string) Account {
 	t.Helper()

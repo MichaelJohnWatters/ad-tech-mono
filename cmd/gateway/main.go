@@ -490,6 +490,7 @@ func main() {
 	mux.Handle(routes.APIProfiles+"/", authMiddleware(http.HandlerFunc(
 		profilesHandler(gwDB, profileResolver, keys.Gateway.PipelineURL.Get(cfg), log))))
 	mux.Handle(routes.APIOnboardingRuns, authMiddleware(http.HandlerFunc(onboardingMonitorHandler(gwDB, log))))
+	mux.Handle(routes.APIStaffRetargeting, authMiddleware(http.HandlerFunc(staffRetargetingHandler(gwDB, log))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic
 	// account). GET support:read (state), POST /run support:update (reset+run).
