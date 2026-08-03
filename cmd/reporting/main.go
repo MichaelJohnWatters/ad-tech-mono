@@ -256,6 +256,7 @@ func main() {
 	mux.HandleFunc(routes.ReportingQuery, queryHandler(log, engine, func() time.Duration {
 		return keys.Reporting.QueryTimeout.Get(cfg)
 	}))
+	mux.HandleFunc(routes.ReportingChannels, channelBreakdownHandler(engine, log))
 
 	// HTTP event ingestion
 	mux.HandleFunc(routes.ReportingEvents, consumer.HTTPHandler())

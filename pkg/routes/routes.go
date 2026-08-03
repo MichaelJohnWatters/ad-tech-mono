@@ -52,6 +52,9 @@ const (
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
+	// APIStaffChannels is the staff platform-wide per-channel activity breakdown
+	// (proxies to reporting's ReportingChannels).
+	APIStaffChannels = apiPrefix + "/api/staff/channels"
 	// APIAudienceRetargeting manages real-time retargeting audiences (the target
 	// of the /v1/t/rt pixel): GET lists them with live enrollment counts, POST
 	// creates one {name, tag, window_days}. Tenant-scoped.
@@ -594,6 +597,10 @@ const (
 
 const (
 	ReportingQuery  = "/v1/reporting/query"
+	// ReportingChannels is the platform-wide per-channel activity breakdown
+	// (impressions + cost grouped by channel, last 7 days). Unscoped (no account
+	// filter) — the gateway staff-gates it before proxying.
+	ReportingChannels = "/v1/reporting/channels"
 	ReportingEvents = "/v1/reporting/events"
 	// ReportingRollupRun triggers a synchronous rollup for
 	// ?level=minute|hourly|daily|monthly (&lookback=N completed windows,
