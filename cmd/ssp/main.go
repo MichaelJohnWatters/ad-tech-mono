@@ -443,6 +443,18 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		}
 	}
 	switch {
+	case channel == constants.ChannelDOOH:
+		// Digital-out-of-home: a screen shows a banner-shaped creative (image or
+		// short looping video rendered as a frame), so the imp is a Banner sized to
+		// the screen; the DOOH channel rides imp.ext.channel so the exchange routes
+		// it to the TimeSlot strategy. No user object — DOOH is venue/contextual, so
+		// the per-user/household frequency cap simply doesn't apply. The venue's
+		// audience multiplier (one play = N impressions) is applied at proof-of-play.
+		bidReq.Imp[0].Banner = &openrtb.Banner{W: p.Width, H: p.Height}
+		if bidReq.Imp[0].Ext == nil {
+			bidReq.Imp[0].Ext = &openrtb.ImpExt{}
+		}
+		bidReq.Imp[0].Ext.Channel = constants.ChannelDOOH
 	case channel == "video":
 		// Standard pre-roll request by default (HTTP-progressive MP4, VAST 4.x,
 		// 5–30s, 640x360, skippable), overridden by the placement's video_config
@@ -935,12 +947,11 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			}
 		}
 
-		// Video / audio short-circuit: no HTML to render, just return
-		// the winner's media URL + duration + advertiser fields so the
-		// publisher-adserver can build VAST. Tracker URLs are signed
-		// inside publisher-adserver too, not here — keeps the SSP
-		// format-agnostic and avoids duplicating the macros plumbing.
-		if ch := r.URL.Query().Get("channel"); ch == "video" || ch == "audio" {
+		// Video / audio / DOOH short-circuit: no HTML to render, just return the
+		// winner's fields (creative + media URL + advertiser). Video/audio → the
+		// publisher-adserver builds VAST; DOOH → the screen/CMS displays the winning
+		// creative and fires a proof-of-play beacon. Keeps the SSP format-agnostic.
+		if ch := r.URL.Query().Get("channel"); ch == "video" || ch == "audio" || ch == constants.ChannelDOOH {
 			advDomain := ""
 			if len(winner.ADomain) > 0 {
 				advDomain = winner.ADomain[0]

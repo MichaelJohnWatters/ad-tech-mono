@@ -22,6 +22,11 @@ func TestChannelForRequest(t *testing.T) {
 		{"native", openrtb.Imp{Native: &openrtb.Native{}}, "native"},
 		{"banner", openrtb.Imp{Banner: &openrtb.Banner{}}, "display"},
 		{"empty imp", openrtb.Imp{}, "display"},
+		// Emerging channels have no distinct media object — they ride
+		// imp.ext.channel (a DOOH screen carries a banner-shaped creative).
+		{"dooh", openrtb.Imp{Banner: &openrtb.Banner{}, Ext: &openrtb.ImpExt{Channel: "dooh"}}, "dooh"},
+		{"retail via ext", openrtb.Imp{Banner: &openrtb.Banner{}, Ext: &openrtb.ImpExt{Channel: "retail"}}, "retail"},
+		{"ext.channel display doesn't override media", openrtb.Imp{Video: &openrtb.Video{}, Ext: &openrtb.ImpExt{Channel: "display"}}, "video"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
