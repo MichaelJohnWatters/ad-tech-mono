@@ -108,6 +108,31 @@ func main() {
 		log.Info("audience-rt consuming behaviour + conversions")
 	}
 
+	// Storage hygiene: periodically delete retargeting members past their TTL.
+	// Correctness doesn't depend on this (the read paths already exclude expired
+	// rows) — it just stops dead rows accumulating. Runs on a ticker; a longer
+	// interval is fine.
+	purgeEvery := keys.AudienceRT.PurgeInterval.Get(cfg)
+	purgeCtx, stopPurge := context.WithCancel(context.Background())
+	lc.OnShutdown("purge-loop", func(_ context.Context) error { stopPurge(); return nil })
+	go func() {
+		t := time.NewTicker(purgeEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-purgeCtx.Done():
+				return
+			case <-t.C:
+				n, err := store.PurgeExpiredMembers(purgeCtx)
+				if err != nil {
+					log.Warn("expired-member purge failed", "error", err)
+				} else if n > 0 {
+					log.Info("purged expired retargeting members", "rows", n)
+				}
+			}
+		}
+	}()
+
 	metrics := middleware.NewMetrics(constants.ServiceAudienceRT)
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())

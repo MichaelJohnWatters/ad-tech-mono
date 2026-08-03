@@ -362,6 +362,32 @@ ON CONFLICT (segment_id, user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
 	return added, nil
 }
 
+// PurgeExpiredMembers physically deletes retargeting members past their TTL. The
+// read paths already exclude expired rows (expires_at <= now()), so this is pure
+// storage hygiene. It's cross-tenant, so it runs under the platform hatch — the
+// audience_segment_members tenant_isolation policy is USING-only, so
+// app.platform_read='on' admits the delete (same pattern as the data-fee settle).
+// Returns the number of rows deleted.
+func (s *Store) PurgeExpiredMembers(ctx context.Context) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin purge: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, fmt.Errorf("purge platform-read: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM audience_segment_members WHERE expires_at IS NOT NULL AND expires_at <= now()`)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired members: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit purge: %w", err)
+	}
+	return int(n), nil
+}
+
 // RetargetingSegmentRow is a retargeting segment's id + raw rule JSON, for the
 // real-time enroller (cmd/audience-rt) to match against a site visit.
 type RetargetingSegmentRow struct {
