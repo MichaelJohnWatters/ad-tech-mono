@@ -13,9 +13,11 @@ func AudienceRTSchema() []config.SchemaEntry { return audienceRTSet.Entries() }
 
 // AudienceRT holds the audience-rt (real-time retargeting consumer) config keys.
 var AudienceRT = struct {
-	Port    config.StringKey
-	NATSURL config.StringKey
+	Port          config.StringKey
+	NATSURL       config.StringKey
+	PurgeInterval config.DurationKey
 }{
-	Port:    audienceRTSet.String("audience_rt.port", routes.PortAudienceRT, config.TierStatic, "HTTP port for /healthz, /readyz, /metrics.", config.Since("v1.5")),
-	NATSURL: audienceRTSet.String("audience_rt.nats_url", routes.DefaultNATSURL, config.TierStatic, "NATS JetStream URL. Without it no behaviour/conversion events are consumed and readiness fails.", config.Since("v1.5")),
+	Port:          audienceRTSet.String("audience_rt.port", routes.PortAudienceRT, config.TierStatic, "HTTP port for /healthz, /readyz, /metrics.", config.Since("v1.5")),
+	NATSURL:       audienceRTSet.String("audience_rt.nats_url", routes.DefaultNATSURL, config.TierStatic, "NATS JetStream URL. Without it no behaviour/conversion events are consumed and readiness fails.", config.Since("v1.5")),
+	PurgeInterval: audienceRTSet.Duration("audience_rt.purge_interval", "60s", config.TierStatic, "How often to physically delete expired retargeting members (audience_segment_members past their TTL). Read paths already exclude expired rows, so this is storage hygiene — a longer interval is fine.", config.Since("v1.5")),
 }
