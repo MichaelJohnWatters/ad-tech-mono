@@ -27,9 +27,11 @@ spec:
               value: "true"
             # In-memory storage is unbounded by default; with sample_ratio=1
             # a 200rps load run OOMKilled the pod in ~15min. Ring-buffer cap:
-            # oldest traces evict, memory stays flat.
+            # oldest traces evict, memory stays flat. 20000 held ~615Mi RSS on
+            # the RAM-tight 12GiB laptop VM — 6000 keeps a few minutes of
+            # full-mix load traces at a third of the memory.
             - name: MEMORY_MAX_TRACES
-              value: "20000"
+              value: "6000"
           ports:
             - containerPort: 16686
               name: ui

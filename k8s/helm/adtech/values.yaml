@@ -939,10 +939,19 @@ infra:
     image: ghcr.io/tigerbeetle/tigerbeetle:0.16.43@sha256:aac07eea19a720580a54cbfaba4bf5f90b7c53bfc0805996860bf0c6c26b6ce7
     replicas: 1
     cacheGrid: 256MiB
+    # development=true shrinks TB's static allocations (batch/journal/caches):
+    # ~2.4GiB anon → a few hundred MiB. On the 12GiB laptop VM that 2.4GiB was
+    # the single biggest RAM block and pushed the node into page-cache thrash
+    # (pgmajfault storms → 10-250ms stalls in EVERY service) under load.
+    # Flipping this requires a REFORMAT (delete the PVC) — batch size is baked
+    # into the data file at format time. tigerbeetle-go (same 0.16.x) negotiates
+    # batch size at connect; money invariants re-proven via `simulator --verify`.
+    # Prod overrides its whole tigerbeetle block and never sets this → off.
+    development: true
     storage: 1Gi
     resources:
-      requests: { cpu: "100m", memory: "512Mi" }
-      limits: { cpu: "1000m", memory: "4Gi" }
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits: { cpu: "1000m", memory: "2Gi" }
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b

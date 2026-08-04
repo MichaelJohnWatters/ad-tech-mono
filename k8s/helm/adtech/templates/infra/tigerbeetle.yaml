@@ -41,6 +41,9 @@ spec:
                   --cluster=0 \
                   --replica=0 \
                   --replica-count={{ $tb.replicas }} \
+                  {{- if $tb.development }}
+                  --development \
+                  {{- end }}
                   /data/0_0.tigerbeetle
               else
                 echo "data file already exists, skipping format"
@@ -57,6 +60,12 @@ spec:
             - "start"
             - "--addresses=0.0.0.0:3000"
             - "--cache-grid={{ $tb.cacheGrid }}"
+            {{- if $tb.development }}
+            # Shrinks TB's static allocations (~2.4GiB anon → hundreds of MiB)
+            # for RAM-tight local VMs. The data file must be formatted with the
+            # SAME flag (see init container) — flipping it = delete the PVC.
+            - "--development"
+            {{- end }}
             - "/data/0_0.tigerbeetle"
           ports:
             - containerPort: 3000

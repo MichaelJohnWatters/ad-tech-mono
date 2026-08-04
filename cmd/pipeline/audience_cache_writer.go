@@ -288,7 +288,23 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 	}
 	current := make(map[string]bool, len(grouped))
 	users := 0
+	rewritten := 0
 	for key, segs := range grouped {
+		// Diff-and-skip: most sets don't change between reconciles, and a
+		// wholesale ReplaceSet (MULTI: DEL+SADD+EXPIRE) per user per cycle is
+		// pure Redis write churn — at fleet scale it showed up as slowlog
+		// entries and event-loop pressure. Read the live set first; when the
+		// membership already matches, just refresh the TTL (so an unchanged
+		// user doesn't expire before the next reconcile) and move on.
+		if live, e := w.l2.SMembers(rctx, key); e == nil && sameMembers(live, segs) {
+			if e := w.l2.Expire(rctx, key, w.ttl); e == nil {
+				current[key] = true
+				users++
+				continue
+			}
+			// Expire failed (e.g. key vanished between reads) → fall through
+			// to the full rewrite below.
+		}
 		// Atomic replace (MULTI: DEL+SADD+EXPIRE) so a concurrent bid-time SMEMBERS
 		// never sees an empty/half-built set during a rebuild.
 		if e := w.l2.ReplaceSet(rctx, key, segs, w.ttl); e != nil {
@@ -297,6 +313,7 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 		}
 		current[key] = true
 		users++
+		rewritten++
 	}
 	// Tombstone keys written last reconcile that have NO members now — a user
 	// pruned by the profile-builder or aged out by TTL vanishes from the scan, so
@@ -312,7 +329,30 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 		}
 	}
 	w.prevKeys = current
-	w.log.Info("audience cache writer: reconcile complete", "keys", users, "tombstoned", tombstoned)
+	w.log.Info("audience cache writer: reconcile complete",
+		"keys", users, "rewritten", rewritten, "unchanged", users-rewritten, "tombstoned", tombstoned)
+}
+
+// sameMembers reports whether the live Redis set and the Postgres-truth slice
+// hold exactly the same segment ids (order-free; tolerates duplicates in the
+// scan, which SADD would collapse anyway).
+func sameMembers(live, truth []string) bool {
+	if len(live) == 0 && len(truth) == 0 {
+		return false // empty live set = missing key; let ReplaceSet decide
+	}
+	truthSet := make(map[string]bool, len(truth))
+	for _, s := range truth {
+		truthSet[s] = true
+	}
+	if len(live) != len(truthSet) {
+		return false
+	}
+	for _, s := range live {
+		if !truthSet[s] {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *audienceCacheWriter) loadWatermark(ctx context.Context) int64 {
