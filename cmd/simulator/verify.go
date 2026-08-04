@@ -119,10 +119,12 @@ func queryMetric(client *http.Client, reportingURL, table, metric string, from t
 	}
 }
 
-// verifyPipeline reads impressions + auctions back from reporting and asserts
-// they match what this run fired. The async tracker→NATS→reporting hop means
-// the count lags, so it polls until stable (unchanged across two reads) or a
-// timeout. Returns true when the core invariant (impressions == wins) holds.
+// verifyPipeline reads impressions, auctions, and server-recorded wins back
+// from reporting and asserts the run's money invariants: no client-observed
+// win lost (imps >= wins), no unbacked impression (imps <= auction_wins), and
+// every request audited (auctions == sent − errors). The async
+// tracker→NATS→reporting hop lags — minutes under saturation — so it polls
+// until the targets are met or counts hold still, capped at 5 minutes.
 func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int) bool {
 	client := &http.Client{Timeout: 5 * time.Second}
 	log.Info("verifying pipeline — polling reporting for recorded events", "reporting", reportingURL)
@@ -135,7 +137,7 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 	// "Drained" now means: targets met (imps ≥ wins AND auctions ≥ sent−errors
 	// — on a quiescent stack they then match exactly), or three consecutive
 	// unchanged reads 3s apart, or a 5-minute ceiling.
-	var imps, auctions int
+	var imps, auctions, serverWins int
 	target := func() bool { return imps >= wins && auctions >= sent-errors }
 	prevImps, prevAuc, stable := -1, -1, 0
 	deadline := time.Now().Add(5 * time.Minute)
@@ -143,11 +145,12 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 		time.Sleep(3 * time.Second)
 		ni, ierr := queryCount(client, reportingURL, "impressions", start)
 		na, aerr := queryCount(client, reportingURL, "auctions", start)
-		if ierr != nil || aerr != nil {
-			log.Warn("verify: count query failed", "impressions_err", ierr, "auctions_err", aerr)
+		nw, werr := queryCount(client, reportingURL, "auction_wins", start)
+		if ierr != nil || aerr != nil || werr != nil {
+			log.Warn("verify: count query failed", "impressions_err", ierr, "auctions_err", aerr, "wins_err", werr)
 			continue
 		}
-		imps, auctions = ni, na
+		imps, auctions, serverWins = ni, na, nw
 		if target() {
 			break
 		}
@@ -161,9 +164,18 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 		prevImps, prevAuc = ni, na
 	}
 
-	// Report. The load-bearing invariant is impressions == wins (every win the
-	// exchange handed back must have recorded exactly one impression).
-	ok := imps == wins
+	// The load-bearing invariants, in money order:
+	//   1. No lost impressions: imps >= client wins (a win the client observed
+	//      must have landed as an impression).
+	//   2. No phantom impressions: imps <= SERVER-recorded wins (billing
+	//      accrues on impression; an impression without an auction_wins row
+	//      would be unbacked money). imps may legitimately EXCEED client wins:
+	//      video/audio serves the client timed out on still deliver server-side
+	//      (SSAI stitch fires the beacon) — those are real, win-backed
+	//      impressions the client never counted.
+	//   3. Every request audited: auctions == sent − errors.
+	surplus := imps - wins
+	ok := imps >= wins && imps <= serverWins
 	fill := 0.0
 	if auctions > 0 {
 		fill = 100 * float64(imps) / float64(auctions)
@@ -182,8 +194,9 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 	}
 
 	fmt.Println("\n── Pipeline verification ─────────────────────────────")
-	fmt.Printf("  Wins fired:            %d\n", wins)
-	fmt.Printf("  Impressions recorded:  %d   %s\n", imps, checkMark(imps == wins))
+	fmt.Printf("  Wins (client-counted): %d\n", wins)
+	fmt.Printf("  Wins (server-recorded):%d\n", serverWins)
+	fmt.Printf("  Impressions recorded:  %d   %s (≥ client wins, ≤ server wins)\n", imps, checkMark(imps >= wins && imps <= serverWins))
 	fmt.Printf("  Auctions recorded:     %d   %s (requests sent − errors = %d)\n", auctions, checkMark(auctions == sent-errors), sent-errors)
 	fmt.Printf("  Fill rate:             %.1f%%  (impressions / auctions)\n", fill)
 	if ferr != nil {
@@ -192,14 +205,22 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 		fmt.Printf("  Engine fill_rate:      %.1f%%  %s (server-computed; matches local %.1f%%)\n", engineFill, checkMark(engineMatch), fill)
 	}
 	switch {
-	case imps != wins:
-		fmt.Printf("  ✗ MISMATCH: recorded impressions (%d) ≠ wins fired (%d).\n", imps, wins)
-		fmt.Println("    → pipeline slippage, OR concurrent traffic in the window (verify against a quiescent stack).")
+	case imps < wins:
+		fmt.Printf("  ✗ SLIPPAGE: %d client-observed wins never landed as impressions.\n", wins-imps)
+		fmt.Println("    → real pipeline loss; inspect tracker/NATS/reporting for that window.")
+	case imps > serverWins:
+		fmt.Printf("  ✗ PHANTOM: %d impressions exceed even server-recorded wins (%d).\n", imps-serverWins, serverWins)
+		fmt.Println("    → unbacked impressions/billing, OR concurrent traffic in the window (verify against a quiescent stack).")
 	case engineChecked && !engineMatch:
 		fmt.Printf("  ✗ MISMATCH: engine fill_rate (%.1f%%) ≠ local fill_rate (%.1f%%).\n", engineFill, fill)
 		fmt.Println("    → metrics engine disagrees with raw counts (derived-metric path drift).")
 	default:
-		fmt.Println("  ✓ pipeline lossless: every win landed as one impression; engine metrics agree.")
+		if surplus > 0 {
+			fmt.Printf("  ✓ pipeline lossless: every client win landed; %d extra impressions are\n", surplus)
+			fmt.Println("    server-side deliveries (SSAI/late video) the client timed out on — all win-backed.")
+		} else {
+			fmt.Println("  ✓ pipeline lossless: every win landed as one impression; engine metrics agree.")
+		}
 	}
 	fmt.Println("──────────────────────────────────────────────────────")
 	return ok
