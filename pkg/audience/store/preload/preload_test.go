@@ -75,6 +75,14 @@ func (f *fakeL2) SMembers(_ context.Context, key string) ([]string, error) {
 	}
 	return strings.Split(f.m[key], "\n"), nil
 }
+func (f *fakeL2) ReplaceSet(_ context.Context, key string, members []string, _ time.Duration) error {
+	if len(members) == 0 {
+		delete(f.m, key)
+		return nil
+	}
+	f.m[key] = strings.Join(members, "\n")
+	return nil
+}
 func (f *fakeL2) Ping(context.Context) error { return nil }
 func (f *fakeL2) Close() error               { return nil }
 

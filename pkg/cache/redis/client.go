@@ -109,6 +109,25 @@ func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return c.rdb.SMembers(ctx, key).Result()
 }
 
+// ReplaceSet atomically swaps the set at key via a MULTI/EXEC (DEL + SADD +
+// EXPIRE) so a concurrent SMEMBERS never sees an empty or half-built set.
+func (c *Client) ReplaceSet(ctx context.Context, key string, members []string, ttl time.Duration) error {
+	pipe := c.rdb.TxPipeline()
+	pipe.Del(ctx, key)
+	if len(members) > 0 {
+		args := make([]any, len(members))
+		for i, m := range members {
+			args[i] = m
+		}
+		pipe.SAdd(ctx, key, args...)
+		if ttl > 0 {
+			pipe.Expire(ctx, key, ttl)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (c *Client) SIsMember(ctx context.Context, key, member string) (bool, error) {
 	return c.rdb.SIsMember(ctx, key, member).Result()
 }

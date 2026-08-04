@@ -43,6 +43,24 @@ func setKey(userID, visibility string) string {
 	return "audience:set:" + userID + ":" + visibility
 }
 
+// waitForRedis blocks (bounded) until Redis answers a Ping, so the single writer
+// starts on the real backend rather than the silent in-memory fallback. Proceeds
+// anyway after the cap (self-heal keeps retrying) rather than wedging pipeline boot.
+func waitForRedis(cfg cacheredis.Config, log *slog.Logger) {
+	for i := 0; i < 30; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		c, err := cacheredis.New(ctx, cfg)
+		cancel()
+		if err == nil {
+			_ = c.Close()
+			return
+		}
+		log.Warn("audience cache writer: waiting for redis", "attempt", i, "error", err)
+		time.Sleep(2 * time.Second)
+	}
+	log.Error("audience cache writer: redis still unreachable after wait; proceeding (self-heal will retry)")
+}
+
 // startAudienceCacheWriter wires the single writer if a DB + Redis are available,
 // returning it so main can expose a debug drain endpoint (nil if disabled).
 func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) *audienceCacheWriter {
@@ -55,11 +73,16 @@ func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycl
 	db.SetMaxOpenConns(4)
 	lc.OnShutdown("audience-cache-writer-db", func(context.Context) error { return db.Close() })
 
+	redisCfg := cacheredis.Config{
+		Addr: keys.Redis.URL.Get(cfg), Password: keys.Redis.Password.Get(cfg), DB: keys.Redis.DB.Get(cfg),
+	}
+	// The SINGLE writer must never silently run on the in-memory fallback — nothing
+	// else writes the audience sets, so a fallback = lost writes. Wait for Redis to
+	// be reachable before building the (self-healing) client, so it starts ON Redis.
+	waitForRedis(redisCfg, log)
 	l2 := cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
-		return cacheredis.New(ctx, cacheredis.Config{
-			Addr: keys.Redis.URL.Get(cfg), Password: keys.Redis.Password.Get(cfg), DB: keys.Redis.DB.Get(cfg),
-		})
-	}, 10*time.Second, keys.Redis.URL.Get(cfg), log)
+		return cacheredis.New(ctx, redisCfg)
+	}, 10*time.Second, redisCfg.Addr, log)
 
 	w := &audienceCacheWriter{
 		store:          audiencepg.New(db),
@@ -180,17 +203,12 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 	}
 	users := 0
 	for key, segs := range grouped {
-		if e := w.l2.Delete(rctx, key); e != nil {
-			w.log.Debug("audience cache writer: reconcile delete failed", "key", key, "error", e)
-		}
-		if len(segs) == 0 {
+		// Atomic replace (MULTI: DEL+SADD+EXPIRE) so a concurrent bid-time SMEMBERS
+		// never sees an empty/half-built set during a rebuild.
+		if e := w.l2.ReplaceSet(rctx, key, segs, w.ttl); e != nil {
+			w.log.Debug("audience cache writer: reconcile ReplaceSet failed", "key", key, "error", e)
 			continue
 		}
-		if e := w.l2.SAdd(rctx, key, segs...); e != nil {
-			w.log.Debug("audience cache writer: reconcile SADD failed", "key", key, "error", e)
-			continue
-		}
-		_ = w.l2.Expire(rctx, key, w.ttl)
 		users++
 	}
 	w.log.Info("audience cache writer: reconcile complete", "keys", users)

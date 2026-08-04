@@ -120,6 +120,10 @@ func (s *SelfHealingL2) SMembers(ctx context.Context, key string) ([]string, err
 	return s.get().SMembers(ctx, key)
 }
 
+func (s *SelfHealingL2) ReplaceSet(ctx context.Context, key string, members []string, ttl time.Duration) error {
+	return s.get().ReplaceSet(ctx, key, members, ttl)
+}
+
 func (s *SelfHealingL2) Ping(ctx context.Context) error {
 	return s.get().Ping(ctx)
 }
