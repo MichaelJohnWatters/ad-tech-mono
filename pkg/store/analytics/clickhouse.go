@@ -273,7 +273,7 @@ func (c *ClickHouse) createTables() error {
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS data_party String`,
 		// Batch-lineage correlation for uploaded rows ("ing_<32hex>" → the ingest
 		// job). Distinct from trace_id (a real request trace); old rows read as
-		// empty. See pkg/ingest.ingestJobTrace.
+		// empty. See pkg/ingestjobs Job.Trace.
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS ingest_trace_id String`,
 		// Per-DSP no-bid reason (Phase H) — keeps a DSP-level enforcement block
 		// (e.g. adcert_invalid) from being lost in the aggregated no-bid. Old rows

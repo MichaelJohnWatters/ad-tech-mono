@@ -317,7 +317,7 @@ func (o *onboarder) enqueueFile(ctx context.Context, provider, key string) {
 		return
 	}
 	if id != "" {
-		log.Info("onboarding: file enqueued", "job", id)
+		log.Info("onboarding: file enqueued", "trace_id", ingestjobs.TraceForID(id), "job", id)
 	}
 }
 

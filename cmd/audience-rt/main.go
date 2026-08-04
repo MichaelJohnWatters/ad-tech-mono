@@ -233,13 +233,15 @@ type pgEnroller struct {
 // (migration 078) appends to the change-log in the same transaction, so there is
 // no explicit changelog call here. The visibility arg is unused (the trigger reads
 // it from the segment) but kept on the interface for callers that want it.
-func (e pgEnroller) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration, _ string) (int, error) {
+func (e pgEnroller) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration, _, originTrace string) (int, error) {
 	var expiresAt *time.Time
 	if ttl > 0 {
 		t := time.Now().Add(ttl)
 		expiresAt = &t
 	}
-	return e.store.AddMembersWithExpiry(ctx, accountID, segmentID, userIDs, expiresAt)
+	// Lineage (migration 080): the enrolling site-visit's trace — first-enroll
+	// only, a repeat visit refreshes expires_at without touching the origin.
+	return e.store.AddMembersWithExpiry(ctx, accountID, segmentID, userIDs, expiresAt, "retargeting", originTrace)
 }
 
 func (e pgEnroller) RemoveMember(ctx context.Context, accountID, segmentID, userID, _ string) (int, error) {

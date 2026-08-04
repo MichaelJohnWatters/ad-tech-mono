@@ -297,21 +297,26 @@ WHERE id = $1 AND account_id = $2::uuid`
 
 // AddMembers bulk-inserts user memberships into a segment (idempotent) and
 // returns how many were newly added. The segment must belong to accountID.
-func (s *Store) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string) (int, error) {
+// source / originTrace are the lineage stamp (migration 080): which writer
+// enrolled the user and under what correlation id (an "ing_…" ingest job, a
+// 32-hex request trace, a "batch_…" conductor run — self-typed by format).
+// ON CONFLICT DO NOTHING makes lineage FIRST-WRITER-WINS: a re-run or a second
+// writer re-adding an existing member never overwrites the original origin.
+func (s *Store) AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, source, originTrace string) (int, error) {
 	if len(userIDs) == 0 {
 		return 0, nil
 	}
 	added := 0
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
-INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at)
-VALUES ($1, $2, $3, now())
+INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at, source, origin_trace)
+VALUES ($1, $2, $3, now(), $4, $5)
 ON CONFLICT (segment_id, user_id) DO NOTHING`
 		for _, uid := range userIDs {
 			if uid == "" {
 				continue
 			}
-			res, err := tx.ExecContext(ctx, q, segmentID, uid, accountID)
+			res, err := tx.ExecContext(ctx, q, segmentID, uid, accountID, source, originTrace)
 			if err != nil {
 				return err
 			}
@@ -339,15 +344,18 @@ ON CONFLICT (segment_id, user_id) DO NOTHING`
 // the audience cache and fires the enrolled webhook only when someone genuinely
 // enters the pool, not on every repeat visit (which would flood the preloader
 // reload + the webhook). A returning member's window is still silently extended.
-func (s *Store) AddMembersWithExpiry(ctx context.Context, accountID, segmentID string, userIDs []string, expiresAt *time.Time) (int, error) {
+// source / originTrace stamp lineage as in AddMembers; the conflict arm only
+// refreshes expires_at, so a repeat visit extends the window WITHOUT
+// overwriting the first enrolment's origin (first-writer-wins).
+func (s *Store) AddMembersWithExpiry(ctx context.Context, accountID, segmentID string, userIDs []string, expiresAt *time.Time, source, originTrace string) (int, error) {
 	if len(userIDs) == 0 {
 		return 0, nil
 	}
 	added := 0
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
-INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at, expires_at)
-VALUES ($1, $2, $3, now(), $4)
+INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at, expires_at, source, origin_trace)
+VALUES ($1, $2, $3, now(), $4, $5, $6)
 ON CONFLICT (segment_id, user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at
 RETURNING (xmax = 0)`
 		for _, uid := range userIDs {
@@ -355,7 +363,7 @@ RETURNING (xmax = 0)`
 				continue
 			}
 			var inserted bool
-			if err := tx.QueryRowContext(ctx, q, segmentID, uid, accountID, expiresAt).Scan(&inserted); err != nil {
+			if err := tx.QueryRowContext(ctx, q, segmentID, uid, accountID, expiresAt, source, originTrace).Scan(&inserted); err != nil {
 				return err
 			}
 			if inserted {

@@ -58,8 +58,11 @@ type Enroller interface {
 	// AddMembers enrolls users into a segment with a time-to-live: after ttl the
 	// member ages out (read paths exclude expired rows). ttl<=0 means no expiry.
 	// visibility is the segment's (public|dsp_private) — the cache change-log needs
-	// it so the delta lands in the right Redis set.
-	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration, visibility string) (int, error)
+	// it so the delta lands in the right Redis set. originTrace is the enrolling
+	// site-visit's trace_id, stamped as the membership row's lineage (migration
+	// 080) so "why is this user in this segment" survives past the transient
+	// retargeting.enrolled event.
+	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration, visibility, originTrace string) (int, error)
 	RemoveMember(ctx context.Context, accountID, segmentID, userID, visibility string) (int, error)
 	// InvalidateAudience announces a membership change for one user so the DSP/SSP
 	// preloader re-materializes just that user's Redis keys (delta refresh), rather
@@ -113,7 +116,7 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 			windowDays = defaultWindowDays
 		}
 		ttl := time.Duration(windowDays) * 24 * time.Hour
-		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl, seg.Visibility)
+		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl, seg.Visibility, ev.TraceID)
 		if err != nil {
 			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			continue

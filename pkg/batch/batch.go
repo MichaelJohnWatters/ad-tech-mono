@@ -66,6 +66,9 @@ func RunChain(ctx context.Context, steps []Step, rec *Recorder, log *slog.Logger
 		log = slog.Default()
 	}
 	res := ChainResult{RunID: uuid.NewString()}
+	// Steps read the run id via RunIDFromContext to stamp lineage (e.g. the
+	// profile-builder's membership origin_trace) with the batch_runs.run_id.
+	ctx = context.WithValue(ctx, runIDKey{}, res.RunID)
 	start := time.Now()
 	aborted := false
 
@@ -103,6 +106,16 @@ func RunChain(ctx context.Context, steps []Step, rec *Recorder, log *slog.Logger
 		return res, fmt.Errorf("batch chain aborted: a critical step failed")
 	}
 	return res, nil
+}
+
+// runIDKey carries the chain's run id in the step context.
+type runIDKey struct{}
+
+// RunIDFromContext returns the batch_runs.run_id RunChain injected into the
+// step context, or "" outside a chain run.
+func RunIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(runIDKey{}).(string)
+	return id
 }
 
 // Recorder persists step outcomes to batch_runs. Nil-safe: a nil recorder

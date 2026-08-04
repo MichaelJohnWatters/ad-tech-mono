@@ -131,25 +131,15 @@ func IsReject(err error) bool {
 // via MarkDone (the terminal counts fold the old onboarding_runs table, ADR 0007
 // Phase 4). An INFRA error is returned wrapped so the caller retries; content
 // failures return a result with nil error.
-// ingestJobTrace is the batch-lineage correlation for the rows an upload produces —
-// deliberately NOT a trace_id and deliberately a DISTINCT format so the two are never
-// confused. Uploaded data is batch: it has no single request trace spanning it (the
-// async worker processes it later, under no request), so its lineage is the ingest
-// JOB. We format that as "ing_<32hex>": audience_ingest_jobs.id is a UUID (128 bits),
-// dash-stripped to 32 hex and prefixed with ing_ — the prefix makes it self-identifying
-// (never a 32-hex request trace) while still mapping deterministically back to the job.
-// A row's real request trace, when one exists (inline upload), rides trace_id separately.
-func ingestJobTrace(job ingestjobs.Job) string {
-	return "ing_" + strings.ReplaceAll(job.ID, "-", "")
-}
-
 func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs.IngestResult, error) {
 	started := time.Now().UTC()
 	provider, key := job.Provider, job.FileKey
 	bucket := job.FileBucket
 	spec := job.SegmentSpec
 	accountID := job.AccountID
-	log := p.Log.With("provider", provider, "file", key, "job", job.ID)
+	// trace_id carries the job's "ing_<32hex>" lineage id (Job.Trace) so the
+	// SAME string found on a profile_signals row greps these log lines.
+	log := p.Log.With("trace_id", job.Trace(), "provider", provider, "file", key, "job", job.ID)
 
 	body, err := p.readObject(ctx, bucket, key)
 	if err != nil {
@@ -162,21 +152,21 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	body, wasEncrypted, derr := pgp.MaybeDecrypt(body, p.PGPKeyring)
 	if derr != nil {
 		log.Error("ingest: pgp decrypt failed", "encrypted", wasEncrypted, "error", derr)
-		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, pgpRejectReason)
+		return p.quarantineStaged(ctx, log, bucket, provider, key, accountID, started, pgpRejectReason)
 	}
 	// ADR 0009: enforce the provider's encryption contract. A cleartext file from
 	// an encryption_expected provider is a content reject (defense for the async /
 	// drop-zone paths; the gateway pre-flight rejects it up front too).
 	if spec.EncryptionExpected && !wasEncrypted {
 		log.Warn("ingest: cleartext file from encryption-required provider rejected")
-		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, encryptionRequiredReason)
+		return p.quarantineStaged(ctx, log, bucket, provider, key, accountID, started, encryptionRequiredReason)
 	}
 	records, err := DecodeFile(ctx, path.Base(key), body)
 	if err != nil {
-		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, fmt.Sprintf("decode: %v", err))
+		return p.quarantineStaged(ctx, log, bucket, provider, key, accountID, started, fmt.Sprintf("decode: %v", err))
 	}
 	if len(records) == 0 {
-		return p.quarantineStaged(ctx, bucket, provider, key, accountID, started, "no data rows")
+		return p.quarantineStaged(ctx, log, bucket, provider, key, accountID, started, "no data rows")
 	}
 
 	mappings, required := buildMappings(spec)
@@ -210,7 +200,7 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		// REJECT: the file parsed but no row had a usable id. Quarantine the
 		// whole file (move to rejected/) and fail the job with a reason so the
 		// monitor shows WHY — rather than silently importing zero members.
-		if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
+		if _, err := p.finishFile(ctx, log, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
 			"no valid rows after validation"); err != nil {
 			return ingestjobs.IngestResult{}, err // infra move failure → retry
 		}
@@ -226,7 +216,7 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	// long as ≤20% quarantined (messy-partner-feed mode).
 	total := len(result.Valid) + len(result.Quarantine)
 	if len(result.Quarantine) > 0 && len(result.Quarantine)*100 > p.MaxRejectPct*total {
-		if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
+		if _, err := p.finishFile(ctx, log, bucket, provider, key, accountID, started, "", 0, result, rejectedKey,
 			"rejected rows exceed threshold"); err != nil {
 			return ingestjobs.IngestResult{}, err // infra move failure → retry
 		}
@@ -287,7 +277,9 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		// itself — a failure here shouldn't retry the whole import.
 		log.Warn("ingest: set segment provenance failed", "segment", segID, "error", err)
 	}
-	added, err := p.Audience.AddMembers(ctx, accountID, segID, values)
+	// Lineage: source = api|dropzone (same vocabulary as profile_signals.source),
+	// origin_trace = the job's ing_ id — a member row maps back to its upload.
+	added, err := p.Audience.AddMembers(ctx, accountID, segID, values, signalSource(job), job.Trace())
 	if err != nil {
 		log.Error("ingest: add members failed (will retry)", "segment", segID, "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
@@ -313,6 +305,15 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		access = defaultAccess(job)
 	}
 	source := signalSource(job)
+	// trace_id: the real request trace — from the live ctx when inline, else the
+	// enqueue-time snapshot on the job (the async worker has no request context;
+	// inline-vs-async is a threshold, not a lineage difference). Empty only for
+	// drop-zone files, which have no originating request. ingest_trace_id: the
+	// always-present, distinct-format batch lineage (never confusable).
+	reqTrace := tracing.TraceIDFromContext(ctx)
+	if reqTrace == "" {
+		reqTrace = job.TraceID
+	}
 	if p.Bus != nil && len(ids) > 0 {
 		pub := events.NewPublisher(p.Bus, p.Log)
 		for start := 0; start < len(ids); start += signalChunk {
@@ -322,11 +323,8 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 			}
 			ev := events.ProfileSignalEvent{
 				SchemaVersion: events.CurrentSchemaVersion,
-				// trace_id: the real request trace ONLY (upload request when inline;
-				// empty when the async worker has no request). ingest_trace_id: the
-				// always-present, distinct-format batch lineage (never confusable).
-				TraceID:       tracing.TraceIDFromContext(ctx),
-				IngestTraceID: ingestJobTrace(job),
+				TraceID:       reqTrace,
+				IngestTraceID: job.Trace(),
 				AccountID:     accountID,
 				Provider:      provider,
 				ProviderID:    job.ProviderID,
@@ -341,7 +339,7 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 				IDs:           ids[start:end],
 			}
 			if err := pub.PublishJSON(ctx, events.SubjectProfileSignal, ev); err != nil {
-				p.Log.Error("ingest: profile signal publish failed",
+				log.Error("ingest: profile signal publish failed",
 					"segment", segID, "chunk_start", start, "error", err)
 			}
 		}
@@ -351,7 +349,7 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	// these adds to the change-log and the single pipeline writer applies them to
 	// Redis — the membership cache is no longer invalidate-driven.
 
-	res, err := p.finishFile(ctx, bucket, provider, key, accountID, started, segID, matched, result, rejectedKey, "")
+	res, err := p.finishFile(ctx, log, bucket, provider, key, accountID, started, segID, matched, result, rejectedKey, "")
 	if err != nil {
 		return ingestjobs.IngestResult{}, err
 	}
@@ -415,7 +413,7 @@ func processedPrefix(provider string) string {
 // on the audience_ingest_jobs row (MarkDone for a clean run, MarkFailed with
 // errMsg for a content failure). Returns an infraErr if the source move fails
 // (retryable — nothing was recorded).
-func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accountID string, started time.Time,
+func (p *Processor) finishFile(ctx context.Context, log *slog.Logger, bucket, provider, key, accountID string, started time.Time,
 	segID string, matched int, result pipeline.Result, rejectedKey, errMsg string,
 ) (ingestjobs.IngestResult, error) {
 	dest := processedPrefix(provider) + path.Base(key)
@@ -423,7 +421,7 @@ func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accou
 		dest = rejectedPrefix(provider) + path.Base(key)
 	}
 	if err := p.moveObject(ctx, bucket, key, dest); err != nil {
-		p.Log.Error("ingest: move file failed (will retry)", "file", key, "error", err)
+		log.Error("ingest: move file failed (will retry)", "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
 	}
 	rate := 0.0
@@ -441,17 +439,17 @@ func (p *Processor) finishFile(ctx context.Context, bucket, provider, key, accou
 // data rows): it quarantines the whole file (move to rejected/ + an .error.txt
 // marker) and returns a rejectErr so the job is marked FAILED with the reason,
 // not retried and not silently "done".
-func (p *Processor) quarantineStaged(ctx context.Context, bucket, provider, key, accountID string, started time.Time, reason string) (ingestjobs.IngestResult, error) {
+func (p *Processor) quarantineStaged(ctx context.Context, log *slog.Logger, bucket, provider, key, accountID string, started time.Time, reason string) (ingestjobs.IngestResult, error) {
 	base := path.Base(key)
 	rejectedKey := rejectedPrefix(provider) + base
-	if _, err := p.finishFile(ctx, bucket, provider, key, accountID, started, "", 0, pipeline.Result{}, rejectedKey, reason); err != nil {
+	if _, err := p.finishFile(ctx, log, bucket, provider, key, accountID, started, "", 0, pipeline.Result{}, rejectedKey, reason); err != nil {
 		return ingestjobs.IngestResult{}, err // infra move failure → retry
 	}
 	marker := rejectedKey + ".error.txt"
 	if err := p.Objects.Put(ctx, bucket, marker, strings.NewReader(reason), int64(len(reason)), "text/plain"); err != nil {
-		p.Log.Warn("ingest: quarantine marker write failed", "file", key, "error", err)
+		log.Warn("ingest: quarantine marker write failed", "error", err)
 	}
-	p.Log.Error("ingest: file rejected", "provider", provider, "file", key, "reason", reason)
+	log.Error("ingest: file rejected", "reason", reason)
 	// REJECT: fail the job with the reason (shown in the monitor / returned 422
 	// on the sync path), not marked done.
 	return ingestjobs.IngestResult{RejectedKey: rejectedKey}, rejectErr{reason}
