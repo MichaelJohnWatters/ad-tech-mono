@@ -29,7 +29,6 @@ package profilebuilder
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -193,19 +192,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
-	if cfg.Bus != nil {
-		for segID, accountID := range changed {
-			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
-				SchemaVersion: events.CurrentSchemaVersion,
-				Source:        "profile-builder",
-				SegmentID:     segID,
-				AccountID:     accountID,
-			})
-			if err := cfg.Bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
-				log.Warn("profile-builder: invalidate publish failed", "segment", segID, "error", err)
-			}
-		}
-	}
+	// No cache-invalidate publish: the audience_segment_members trigger records the
+	// builder's adds/prunes to the change-log and the single pipeline writer applies
+	// them to Redis — membership freshness is no longer invalidate-driven.
+	_ = changed
 
 	log.Info("profile-builder run complete",
 		"clusters", res.Clusters, "cluster_members", res.ClusterMembers, "dropped_clusters", res.DroppedClusters,

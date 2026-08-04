@@ -119,6 +119,11 @@ type audienceCacheWriter struct {
 	pollEvery      func() time.Duration
 	reconcileEvery func() time.Duration
 	watermark      int64
+	// prevKeys is the set of Redis set-keys the last reconcile wrote. A user who
+	// lost ALL memberships (prune / TTL expiry) vanishes from the scan, so their
+	// stale key is tombstoned by diffing against this. Single writer → in-memory
+	// is sufficient (no cross-pod coherence needed).
+	prevKeys map[string]bool
 }
 
 func (w *audienceCacheWriter) run(ctx context.Context) {
@@ -201,6 +206,7 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 		key := setKey(r.UserID, r.Visibility)
 		grouped[key] = append(grouped[key], r.SegmentID)
 	}
+	current := make(map[string]bool, len(grouped))
 	users := 0
 	for key, segs := range grouped {
 		// Atomic replace (MULTI: DEL+SADD+EXPIRE) so a concurrent bid-time SMEMBERS
@@ -209,9 +215,24 @@ func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 			w.log.Debug("audience cache writer: reconcile ReplaceSet failed", "key", key, "error", e)
 			continue
 		}
+		current[key] = true
 		users++
 	}
-	w.log.Info("audience cache writer: reconcile complete", "keys", users)
+	// Tombstone keys written last reconcile that have NO members now — a user
+	// pruned by the profile-builder or aged out by TTL vanishes from the scan, so
+	// diff against prevKeys and delete the stragglers (else they'd match forever).
+	tombstoned := 0
+	for key := range w.prevKeys {
+		if !current[key] {
+			if e := w.l2.Delete(rctx, key); e != nil {
+				w.log.Debug("audience cache writer: reconcile tombstone failed", "key", key, "error", e)
+				continue
+			}
+			tombstoned++
+		}
+	}
+	w.prevKeys = current
+	w.log.Info("audience cache writer: reconcile complete", "keys", users, "tombstoned", tombstoned)
 }
 
 func (w *audienceCacheWriter) loadWatermark(ctx context.Context) int64 {

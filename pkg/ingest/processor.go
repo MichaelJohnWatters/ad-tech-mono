@@ -12,7 +12,6 @@ package ingest
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -348,17 +347,9 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		}
 	}
 
-	if p.Bus != nil {
-		payload, _ := json.Marshal(events.AudienceInvalidateEvent{
-			SchemaVersion: events.CurrentSchemaVersion,
-			Source:        "ingest",
-			SegmentID:     segID,
-			AccountID:     accountID,
-		})
-		if err := p.Bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
-			p.Log.Warn("ingest: invalidate publish failed", "segment", segID, "error", err)
-		}
-	}
+	// No cache-invalidate publish: the audience_segment_members trigger records
+	// these adds to the change-log and the single pipeline writer applies them to
+	// Redis — the membership cache is no longer invalidate-driven.
 
 	res, err := p.finishFile(ctx, bucket, provider, key, accountID, started, segID, matched, result, rejectedKey, "")
 	if err != nil {
