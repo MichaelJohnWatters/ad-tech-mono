@@ -158,14 +158,17 @@ func behaviourHandler(svc *retargeting.Service, bus events.EventBus, log *slog.L
 		}
 		enrolled, err := svc.OnSiteVisit(ctx, ev)
 		if err != nil {
-			log.Warn("real-time enroll failed, will redeliver", "account", ev.AccountID, "error", err)
+			log.Warn("real-time enroll failed, will redeliver", "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			return msg.Nak()
 		}
 		// Emit an account-scoped enrolled event per segment so the advertiser can
 		// trigger an abandoned-cart push (via a webhook) the moment it happens.
+		// ctx carries the site_visit's OTel trace context (NATS headers), so the
+		// published event stays on the same trace; TraceID makes it explicit too.
 		for _, segID := range enrolled {
 			payload, _ := json.Marshal(events.RetargetingEnrolledEvent{
 				SchemaVersion: events.CurrentSchemaVersion,
+				TraceID:       ev.TraceID,
 				AccountID:     ev.AccountID,
 				SegmentID:     segID,
 				UserID:        ev.UserID,
@@ -173,7 +176,7 @@ func behaviourHandler(svc *retargeting.Service, bus events.EventBus, log *slog.L
 				EnrolledAt:    time.Now().UTC(),
 			})
 			if perr := bus.Publish(ctx, events.SubjectRetargetingEnrolled, payload); perr != nil {
-				log.Warn("publish retargeting.enrolled failed", "account", ev.AccountID, "segment", segID, "error", perr)
+				log.Warn("publish retargeting.enrolled failed", "account", ev.AccountID, "segment", segID, "trace_id", ev.TraceID, "error", perr)
 			}
 		}
 		return msg.Ack()
@@ -192,8 +195,8 @@ func conversionHandler(svc *retargeting.Service, log *slog.Logger) events.Handle
 		if ev.ConversionType != conversionPurchase {
 			return msg.Ack() // only a buy suppresses the chase
 		}
-		if _, err := svc.OnConversion(ctx, ev.AccountID, ev.UserID); err != nil {
-			log.Warn("real-time suppress failed, will redeliver", "account", ev.AccountID, "error", err)
+		if _, err := svc.OnConversion(ctx, ev.AccountID, ev.UserID, ev.TraceID); err != nil {
+			log.Warn("real-time suppress failed, will redeliver", "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			return msg.Nak()
 		}
 		return msg.Ack()

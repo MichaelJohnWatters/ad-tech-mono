@@ -109,7 +109,7 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 		ttl := time.Duration(windowDays) * 24 * time.Hour
 		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl)
 		if err != nil {
-			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "error", err)
+			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			continue
 		}
 		if n > 0 {
@@ -118,9 +118,9 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 	}
 	if len(enrolled) > 0 {
 		if err := s.enr.InvalidateAudience(ctx); err != nil {
-			s.log.Warn("audience invalidate after enroll failed", "error", err)
+			s.log.Warn("audience invalidate after enroll failed", "trace_id", ev.TraceID, "error", err)
 		}
-		s.log.Info("real-time retargeting enroll", "account", ev.AccountID, "user", ev.UserID, "segments", len(enrolled))
+		s.log.Info("real-time retargeting enroll", "account", ev.AccountID, "user", ev.UserID, "segments", len(enrolled), "trace_id", ev.TraceID)
 	}
 	return enrolled, nil
 }
@@ -128,7 +128,7 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 // OnConversion suppresses a converter: it removes the user from the advertiser's
 // retargeting segments so we stop paying to chase someone who already bought.
 // Returns the segment ids the user was removed from.
-func (s *Service) OnConversion(ctx context.Context, accountID, userID string) ([]string, error) {
+func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID string) ([]string, error) {
 	if accountID == "" || userID == "" {
 		return nil, nil
 	}
@@ -140,7 +140,7 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID string) ([
 	for _, seg := range segs {
 		n, err := s.enr.RemoveMember(ctx, accountID, seg.ID, userID)
 		if err != nil {
-			s.log.Warn("retargeting suppress failed", "segment", seg.ID, "account", accountID, "error", err)
+			s.log.Warn("retargeting suppress failed", "segment", seg.ID, "account", accountID, "trace_id", traceID, "error", err)
 			continue
 		}
 		if n > 0 {
@@ -149,9 +149,9 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID string) ([
 	}
 	if len(removed) > 0 {
 		if err := s.enr.InvalidateAudience(ctx); err != nil {
-			s.log.Warn("audience invalidate after suppress failed", "error", err)
+			s.log.Warn("audience invalidate after suppress failed", "trace_id", traceID, "error", err)
 		}
-		s.log.Info("real-time retargeting suppress", "account", accountID, "user", userID, "segments", len(removed))
+		s.log.Info("real-time retargeting suppress", "account", accountID, "user", userID, "segments", len(removed), "trace_id", traceID)
 	}
 	return removed, nil
 }

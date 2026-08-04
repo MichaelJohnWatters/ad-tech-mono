@@ -63,6 +63,17 @@ RETURNING id::text`, w.AdvAcc.ID).Scan(&hookID); err != nil {
 		time.Sleep(2 * time.Second)
 	}
 
+	// trace_id flows all the way downstream: the pixel had no ?tid=, so the
+	// behaviour event took the tracker's OTel trace, which rode through audience-rt
+	// into the retargeting.enrolled event → the delivered webhook payload's data.
+	var traceID string
+	if err := h.DB.QueryRow(`SELECT COALESCE(payload->'data'->>'trace_id','') FROM webhook_deliveries WHERE webhook_id=$1 AND event_type='retargeting.enrolled' AND attempt=1 LIMIT 1`, hookID).Scan(&traceID); err != nil {
+		t.Fatalf("payload trace_id query: %v", err)
+	}
+	if len(traceID) != 32 {
+		t.Errorf("webhook payload trace_id = %q (len %d), want a 32-hex OTel trace flowed from the visit", traceID, len(traceID))
+	}
+
 	// First-enroll-only: the SAME shopper visiting again is already a member, so
 	// no second event fires (silent window refresh) — the webhook does NOT re-fire.
 	fireVisit(t, w.AdvAcc.ID, tag, visitor)

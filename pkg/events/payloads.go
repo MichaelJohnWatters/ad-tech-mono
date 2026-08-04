@@ -300,12 +300,16 @@ type DirectWinEvent struct {
 // (AccountID = the advertiser) so the webhooks dispatcher can deliver it to the
 // advertiser's registered endpoints — the hook for an abandoned-cart push.
 type RetargetingEnrolledEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	AccountID     string    `json:"account_id"`
-	SegmentID     string    `json:"segment_id"`
-	UserID        string    `json:"user_id"`
-	Tag           string    `json:"tag,omitempty"`
-	EnrolledAt    time.Time `json:"enrolled_at"`
+	SchemaVersion int    `json:"schema_version"`
+	// TraceID is the originating site_visit's trace, so the webhook delivery is
+	// linkable back to the visit that triggered it (and rides the same OTel trace
+	// the NATS headers already propagate).
+	TraceID    string    `json:"trace_id,omitempty"`
+	AccountID  string    `json:"account_id"`
+	SegmentID  string    `json:"segment_id"`
+	UserID     string    `json:"user_id"`
+	Tag        string    `json:"tag,omitempty"`
+	EnrolledAt time.Time `json:"enrolled_at"`
 }
 
 // BehaviourSignalEvent is one consent-gated behavioural observation — a
