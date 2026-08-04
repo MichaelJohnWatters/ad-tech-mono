@@ -191,12 +191,9 @@ func main() {
 	// unioned with SSP-stamped segments before targeting evaluation. Nil
 	// store = no enrichment, DSP keeps bidding on whatever the SSP sent.
 	audienceStore, audiencePreloader, audienceStop := openAudienceStore(cfg, l2, log)
-	// Membership invalidates → near-immediate preloader refresh (same
-	// wiring as the SSP): the DSP's private-segment union sees uploads /
-	// profile-builder output in seconds, not the 30s poll.
-	if bus != nil && audiencePreloader != nil {
-		audiencePreloader.SubscribeInvalidate(context.Background(), bus, constants.ServiceDSP)
-	}
+	// Membership freshness is owned by the single append-based cache writer
+	// (cmd/pipeline) via the change-log; the DSP just reads the Redis sets, so
+	// there is no per-pod invalidate subscription here anymore.
 	lc.OnShutdown("audience-store", func(_ context.Context) error { audienceStop(); return nil })
 
 	// Consent / opt-out registry warm cache — enforced on the bid path so

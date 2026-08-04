@@ -246,14 +246,8 @@ func (e pgEnroller) RemoveMember(ctx context.Context, accountID, segmentID, user
 	return e.store.RemoveMember(ctx, accountID, segmentID, userID)
 }
 
-func (e pgEnroller) InvalidateAudience(ctx context.Context, userID string) error {
-	// Name the exact user who changed so the DSP/SSP preloader re-materializes only
-	// that user's Redis keys (delta refresh), not the whole members table — this is
-	// the highest-frequency membership-change path.
-	payload, _ := json.Marshal(events.AudienceInvalidateEvent{
-		SchemaVersion: events.CurrentSchemaVersion,
-		Source:        "audience-rt",
-		UserIDs:       []string{userID},
-	})
-	return e.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload)
-}
+// InvalidateAudience is now a no-op: the audience_segment_members trigger records
+// enroll/suppress to the change-log and the single pipeline writer applies them to
+// Redis within seconds, so there is nothing to publish. Kept to satisfy the
+// retargeting.Enroller interface.
+func (e pgEnroller) InvalidateAudience(_ context.Context, _ string) error { return nil }
