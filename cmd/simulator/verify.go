@@ -127,29 +127,39 @@ func verifyPipeline(reportingURL string, start time.Time, sent, wins, errors int
 	client := &http.Client{Timeout: 5 * time.Second}
 	log.Info("verifying pipeline — polling reporting for recorded events", "reporting", reportingURL)
 
-	// Poll impressions until the count stops changing (pipeline drained) or 30s.
-	var imps, auctions, prev int
-	stable := 0
-	for i := 0; i < 20; i++ {
-		time.Sleep(1500 * time.Millisecond)
-		n, err := queryCount(client, reportingURL, "impressions", start)
-		if err != nil {
-			log.Warn("verify: impressions query failed", "error", err)
+	// Poll BOTH counts until the run's targets are reached or ingestion has
+	// genuinely drained. Under saturation the tracker→NATS→reporting backlog
+	// takes MINUTES to flush and plateaus between batch inserts, so the old
+	// 30s / stable-after-two-reads loop routinely declared slippage on counts
+	// that were still rising (and read auctions exactly ONCE, unpolled).
+	// "Drained" now means: targets met (imps ≥ wins AND auctions ≥ sent−errors
+	// — on a quiescent stack they then match exactly), or three consecutive
+	// unchanged reads 3s apart, or a 5-minute ceiling.
+	var imps, auctions int
+	target := func() bool { return imps >= wins && auctions >= sent-errors }
+	prevImps, prevAuc, stable := -1, -1, 0
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		ni, ierr := queryCount(client, reportingURL, "impressions", start)
+		na, aerr := queryCount(client, reportingURL, "auctions", start)
+		if ierr != nil || aerr != nil {
+			log.Warn("verify: count query failed", "impressions_err", ierr, "auctions_err", aerr)
 			continue
 		}
-		if n == prev {
-			stable++
-			if stable >= 2 {
-				imps = n
+		imps, auctions = ni, na
+		if target() {
+			break
+		}
+		if ni == prevImps && na == prevAuc {
+			if stable++; stable >= 3 {
 				break
 			}
 		} else {
 			stable = 0
 		}
-		prev = n
-		imps = n
+		prevImps, prevAuc = ni, na
 	}
-	auctions, _ = queryCount(client, reportingURL, "auctions", start)
 
 	// Report. The load-bearing invariant is impressions == wins (every win the
 	// exchange handed back must have recorded exactly one impression).
