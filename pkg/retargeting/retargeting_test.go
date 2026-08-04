@@ -29,7 +29,7 @@ type fakeEnroller struct {
 	lastTTL     time.Duration
 }
 
-func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string, ttl time.Duration, _ string) (int, error) {
+func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string, ttl time.Duration, _, _ string) (int, error) {
 	f.lastTTL = ttl
 	for _, u := range users {
 		f.added = append(f.added, call{segmentID, u})
@@ -168,7 +168,7 @@ func TestOnSiteVisit_AlreadyMemberNoInvalidate(t *testing.T) {
 
 type zeroAddEnroller struct{ invalidated int }
 
-func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration, _ string) (int, error) {
+func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration, _, _ string) (int, error) {
 	return 0, nil
 }
 func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _, _ string) (int, error) { return 0, nil }

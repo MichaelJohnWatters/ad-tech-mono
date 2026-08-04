@@ -12,6 +12,7 @@ package ingestjobs
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -92,6 +93,11 @@ type Job struct {
 	ProviderID  string      `json:"provider_id,omitempty"`
 	FileBucket  string      `json:"file_bucket"`
 	FileKey     string      `json:"file_key"`
+	// TraceID is the uploader's REAL request trace (32-hex OTel), snapshotted
+	// at enqueue so an upload that runs ASYNC (large file / future run_at)
+	// keeps the same request lineage an inline run gets from its HTTP context.
+	// Empty for drop-zone jobs — they have no originating request.
+	TraceID     string      `json:"trace_id,omitempty"`
 	SegmentSpec SegmentSpec `json:"segment_spec"`
 	RunAt       time.Time   `json:"run_at"`
 	Status      string      `json:"status"`
@@ -119,6 +125,23 @@ type Job struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
+
+// Trace is the job's batch-lineage correlation id ("ing_<32hex>") —
+// deliberately NOT a trace_id and deliberately a DISTINCT format so the two
+// are never confused. Uploaded data is batch: it has no single request trace
+// spanning it (the async worker processes it later, under no request), so its
+// lineage is the ingest JOB. The job id is a UUID (128 bits), dash-stripped to
+// 32 hex and prefixed with ing_ — the prefix makes it self-identifying (never
+// a 32-hex request trace) while still mapping deterministically back to the
+// job. It is stamped on profile_signals rows (ingest_trace_id), membership
+// lineage (origin_trace), and every ingest-path log line (trace_id), so ONE
+// string correlates all three. A row's real request trace, when one exists,
+// rides trace_id separately (Job.TraceID).
+func (j Job) Trace() string { return TraceForID(j.ID) }
+
+// TraceForID builds the "ing_<32hex>" lineage id from a raw job id, for
+// callers that hold only the id (e.g. the gateway right after Enqueue).
+func TraceForID(id string) string { return "ing_" + strings.ReplaceAll(id, "-", "") }
 
 // Store is the queue + job registry. Enqueue/ListByAccount/GetByAccount are
 // tenant-facing; ClaimOne/ExtendLease/MarkDone/MarkFailed/ReclaimExpired are

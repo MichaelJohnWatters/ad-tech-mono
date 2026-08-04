@@ -30,6 +30,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
 // audiencePGPKeyResponse is the GET /v1/api/audiences/pgp-key body (ADR 0008):
@@ -460,9 +461,14 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 	}
 
 	job := ingestjobs.Job{
-		AccountID:    accountID,
-		Source:       ingestjobs.SourceAPI,
-		ProviderID:   providerID,
+		AccountID:  accountID,
+		Source:     ingestjobs.SourceAPI,
+		ProviderID: providerID,
+		// Snapshot the upload request's trace so an ASYNC run (big file /
+		// future run_at) carries the same request lineage an inline run gets
+		// from its live context — inline-vs-async is a threshold, not a
+		// lineage difference.
+		TraceID:      tracing.TraceIDFromContext(r.Context()),
 		FileBucket:   deps.bucket,
 		FileKey:      fileKey,
 		SegmentSpec:  spec,
@@ -495,8 +501,8 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 	}
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusQueued, RunAt: held})
-	deps.log.Info("audience upload queued", "job", jobID, "name", req.Name, "rows", rowCount,
-		"run_at", runAt.Format(time.RFC3339))
+	deps.log.Info("audience upload queued", "trace_id", ingestjobs.TraceForID(jobID), "job", jobID,
+		"name", req.Name, "rows", rowCount, "run_at", runAt.Format(time.RFC3339))
 }
 
 // runInline claims the row it just enqueued (taking the worker's lease) and
@@ -504,9 +510,13 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 // inline Process error → MarkFailed + 500. If the row can't be claimed (a peer
 // worker beat us to it) the job is already being processed — return 202.
 func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID string, req audienceUploadRequest) {
+	// trace_id: the job's ing_ lineage id — the same string on the resulting
+	// profile_signals rows greps these lines (the request's 32-hex trace is on
+	// the job row / event separately).
+	log := deps.log.With("trace_id", ingestjobs.TraceForID(jobID), "job", jobID)
 	claimed, err := deps.ingestStore.ClaimByID(r.Context(), jobID)
 	if err != nil {
-		deps.log.Error("audience upload: claim failed", "job", jobID, "error", err)
+		log.Error("audience upload: claim failed", "error", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -522,13 +532,13 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 		// Infra failure mid-inline: leave the lease to lapse so the worker
 		// reprocesses (idempotent AddMembers), UNLESS attempts are exhausted.
 		if ingest.IsInfra(err) && claimed.Attempts < claimed.MaxAttempts {
-			deps.log.Warn("audience upload: inline run left for worker retry", "job", jobID, "error", err)
+			log.Warn("audience upload: inline run left for worker retry", "error", err)
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(audienceEnqueuedResponse{JobID: jobID, Status: ingestjobs.StatusRunning})
 			return
 		}
 		if markErr := deps.ingestStore.MarkFailed(r.Context(), jobID, err.Error()); markErr != nil {
-			deps.log.Error("audience upload: mark failed", "job", jobID, "error", markErr)
+			log.Error("audience upload: mark failed", "error", markErr)
 		}
 		// Best-effort completion email (ADR 0008). Background ctx so it isn't
 		// cancelled when the HTTP response returns; a send failure never fails
@@ -537,16 +547,16 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 		// A content REJECT (bad file) is a 422 client error, not a 500 — though
 		// the pre-flight ValidateSample catches nearly all of these before here.
 		if ingest.IsReject(err) {
-			deps.log.Info("audience upload rejected", "name", req.Name, "job", jobID, "reason", err.Error())
+			log.Info("audience upload rejected", "name", req.Name, "reason", err.Error())
 			http.Error(w, `{"error":`+jsonStr("file rejected: "+err.Error())+`}`, http.StatusUnprocessableEntity)
 			return
 		}
-		deps.log.Error("audience upload failed", "name", req.Name, "job", jobID, "error", err)
+		log.Error("audience upload failed", "name", req.Name, "error", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 	if err := deps.ingestStore.MarkDone(r.Context(), jobID, result); err != nil {
-		deps.log.Error("audience upload: mark done", "job", jobID, "error", err)
+		log.Error("audience upload: mark done", "error", err)
 	}
 	// Best-effort completion email (ADR 0008). Background ctx so it isn't
 	// cancelled when the HTTP response returns.
@@ -559,7 +569,7 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 		Matched:      result.MatchedRows,
 		MatchRate:    result.MatchRate,
 	}
-	deps.log.Info("audience upload", "segment", resp.SegmentID, "name", req.Name, "job", jobID,
+	log.Info("audience upload", "segment", resp.SegmentID, "name", req.Name,
 		"added", resp.MembersAdded, "sent", resp.MembersSent,
 		"matched", resp.Matched, "match_rate", resp.MatchRate)
 	w.WriteHeader(http.StatusOK)

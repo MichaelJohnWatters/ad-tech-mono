@@ -86,6 +86,9 @@ func (o *onboarder) drainIngest(ctx context.Context) {
 // case it is marked failed so it stops cycling. A content failure returns nil
 // error with a terminal result and is marked done.
 func (o *onboarder) runIngestJob(ctx context.Context, job ingestjobs.Job) {
+	// trace_id: the job's ing_ lineage id — the same string on the resulting
+	// profile_signals rows greps these lines.
+	log := o.log.With("trace_id", job.Trace(), "job", job.ID)
 	// Heartbeat: extend the lease while processing so a long file doesn't get
 	// reclaimed out from under us.
 	hbCtx, stopHB := context.WithCancel(ctx)
@@ -99,7 +102,7 @@ func (o *onboarder) runIngestJob(ctx context.Context, job ingestjobs.Job) {
 				return
 			case <-t.C:
 				if err := o.jobs.ExtendLease(ctx, job.ID); err != nil {
-					o.log.Warn("ingest worker: extend lease failed", "job", job.ID, "error", err)
+					log.Warn("ingest worker: extend lease failed", "error", err)
 				}
 			}
 		}
@@ -111,19 +114,19 @@ func (o *onboarder) runIngestJob(ctx context.Context, job ingestjobs.Job) {
 		if ingest.IsInfra(err) && job.Attempts < job.MaxAttempts {
 			// Retryable + attempts remain: leave it. The lease lapses and a
 			// worker reclaims it; nothing is recorded (the run never happened).
-			o.log.Warn("ingest worker: job left for retry", "job", job.ID,
+			log.Warn("ingest worker: job left for retry",
 				"attempts", job.Attempts, "max", job.MaxAttempts, "error", err)
 			return
 		}
 		if markErr := o.jobs.MarkFailed(ctx, job.ID, err.Error()); markErr != nil {
-			o.log.Error("ingest worker: mark failed", "job", job.ID, "error", markErr)
+			log.Error("ingest worker: mark failed", "error", markErr)
 		}
 		// Best-effort completion email (ADR 0008 Feature 3).
 		ingest.NotifyResult(ctx, o.emailSender, o.emailFrom, job, result, err, o.log)
 		return
 	}
 	if err := o.jobs.MarkDone(ctx, job.ID, result); err != nil {
-		o.log.Error("ingest worker: mark done", "job", job.ID, "error", err)
+		log.Error("ingest worker: mark done", "error", err)
 	}
 	// Best-effort completion email (ADR 0008 Feature 3).
 	ingest.NotifyResult(ctx, o.emailSender, o.emailFrom, job, result, nil, o.log)

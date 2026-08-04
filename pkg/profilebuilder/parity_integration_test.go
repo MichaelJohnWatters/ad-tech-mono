@@ -238,7 +238,7 @@ RETURNING id::text`, acct, name, typ, ruleArg).Scan(&id); err != nil {
 func addMember(t *testing.T, db *sql.DB, acct, seg, uid string) {
 	t.Helper()
 	aud := audiencepg.New(db)
-	if _, err := aud.AddMembers(context.Background(), acct, seg, []string{uid}); err != nil {
+	if _, err := aud.AddMembers(context.Background(), acct, seg, []string{uid}, "test-seed", ""); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
@@ -67,6 +68,13 @@ type Config struct {
 	MinConfidence  float64 // identity edges below this don't link (default 0.5)
 	MaxClusterSize int     // clusters above this are dropped as pathological (default 100)
 	Now            time.Time
+
+	// RunID is the conductor chain's batch run id (batch_runs.run_id) when the
+	// builder runs as a chain step — stamped as "batch_<32hex>" onto the
+	// origin_trace of every membership this run writes, so a member row joins
+	// back to the exact batch_runs row that enrolled it. Empty (standalone /
+	// manual runs) → origin_trace is empty; source still says who wrote it.
+	RunID string
 }
 
 // Result is the per-run outcome, logged and returned for e2e assertions.
@@ -129,6 +137,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	aud := audiencepg.New(cfg.DB)
 	changed := map[string]string{} // segment id → account id, for invalidates
+	originTrace := ""
+	if cfg.RunID != "" {
+		originTrace = "batch_" + strings.ReplaceAll(cfg.RunID, "-", "")
+	}
 
 	// --- Job 2a: behavioural rules (+ derived: composite/lookalike) ---
 	// A failed read FAILS the run rather than silently skipping rule
@@ -148,7 +160,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		} else {
 			res.WindowDays = window
 		}
-		if err := runRuleSegments(ctx, cfg.DB, aud, cfg.Behaviour, clusters, nil, now, log, &res, changed); err != nil {
+		if err := runRuleSegments(ctx, cfg.DB, aud, cfg.Behaviour, clusters, nil, now, originTrace, log, &res, changed); err != nil {
 			return res, err
 		}
 	} else if cfg.Lake != nil {
@@ -168,13 +180,13 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		if err != nil {
 			return res, fmt.Errorf("read behaviour_signals: %w", err)
 		}
-		if err := runRuleSegments(ctx, cfg.DB, aud, nil, clusters, rows, now, log, &res, changed); err != nil {
+		if err := runRuleSegments(ctx, cfg.DB, aud, nil, clusters, rows, now, originTrace, log, &res, changed); err != nil {
 			return res, err
 		}
 	}
 
 	// --- Job 2b: cluster expansion for plain (onboarded) segments ---
-	if err := expandPlainSegments(ctx, cfg.DB, aud, clusters, log, &res, changed); err != nil {
+	if err := expandPlainSegments(ctx, cfg.DB, aud, clusters, originTrace, log, &res, changed); err != nil {
 		return res, err
 	}
 
@@ -183,11 +195,11 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// set (this was the worst offender — an UNWINDOWED whole-table lake read);
 	// nil falls back to the lake replay.
 	if cfg.Behaviour != nil {
-		if err := reconcileFromQuerier(ctx, cfg.Behaviour, aud, log, &res, changed); err != nil {
+		if err := reconcileFromQuerier(ctx, cfg.Behaviour, aud, originTrace, log, &res, changed); err != nil {
 			log.Error("profile-builder: reconcile failed", "error", err)
 		}
 	} else if cfg.Lake != nil {
-		if err := reconcileProfileSignals(ctx, cfg.Lake, aud, log, &res, changed); err != nil {
+		if err := reconcileProfileSignals(ctx, cfg.Lake, aud, originTrace, log, &res, changed); err != nil {
 			log.Error("profile-builder: reconcile failed", "error", err)
 		}
 	}
@@ -290,7 +302,7 @@ func expandKeys(c Clusters, keys []string) []string {
 // ClickHouse (server-side GROUP BY, ADR 0006 phase 2); when q == nil they come
 // from the in-Go lake rows (fallback). Exactly one of q / rows is used.
 func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q BehaviourQuerier, clusters Clusters,
-	rows []datalake.Record, now time.Time, log *slog.Logger, res *Result, changed map[string]string,
+	rows []datalake.Record, now time.Time, originTrace string, log *slog.Logger, res *Result, changed map[string]string,
 ) error {
 	segs, err := db.QueryContext(ctx,
 		`SELECT id::text, account_id::text, name, rule FROM audience_segments
@@ -317,7 +329,7 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q B
 	// referencing another derived segment sees the previous run's members
 	// (single derived pass — documented on CompositeRule).
 	apply := func(s ruleSeg, members []string) {
-		added, err := aud.AddMembers(ctx, s.accountID, s.id, members)
+		added, err := aud.AddMembers(ctx, s.accountID, s.id, members, "profile-builder", originTrace)
 		if err != nil {
 			log.Error("profile-builder: enroll failed — segment skipped", "segment", s.id, "error", err)
 			return
@@ -426,7 +438,7 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q B
 // segment's memberships — the write-time pre-expansion that gives SSP
 // stamping cross-device coverage without a bid-path graph walk. Additive
 // only: onboarded member rows are ground truth, never pruned here.
-func expandPlainSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clusters Clusters,
+func expandPlainSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, clusters Clusters, originTrace string,
 	log *slog.Logger, res *Result, changed map[string]string,
 ) error {
 	if len(clusters.PersonOf) == 0 {
@@ -460,7 +472,7 @@ WHERE s.rule IS NULL AND s.status = 'active'`)
 		if len(expanded) == len(uids) {
 			continue // no cluster brought new ids
 		}
-		added, err := aud.AddMembers(ctx, k.accountID, k.id, expanded)
+		added, err := aud.AddMembers(ctx, k.accountID, k.id, expanded, "identity-expansion", originTrace)
 		if err != nil {
 			log.Error("profile-builder: expansion failed", "segment", k.id, "error", err)
 			continue
@@ -483,7 +495,7 @@ WHERE s.rule IS NULL AND s.status = 'active'`)
 // semantics to reconcileProfileSignals — AddMembers per (account, segment),
 // skip-if-deleted, count restored rows.
 func reconcileFromQuerier(ctx context.Context, q BehaviourQuerier, aud *audiencepg.Store,
-	log *slog.Logger, res *Result, changed map[string]string,
+	originTrace string, log *slog.Logger, res *Result, changed map[string]string,
 ) error {
 	groups, err := q.SegmentMemberships(ctx)
 	if err != nil {
@@ -493,7 +505,7 @@ func reconcileFromQuerier(ctx context.Context, q BehaviourQuerier, aud *audience
 		if g.AccountID == "" || g.SegmentID == "" || len(g.IDValues) == 0 {
 			continue
 		}
-		added, err := aud.AddMembers(ctx, g.AccountID, g.SegmentID, g.IDValues)
+		added, err := aud.AddMembers(ctx, g.AccountID, g.SegmentID, g.IDValues, "reconcile", originTrace)
 		if err != nil {
 			// Segment may have been deleted since the signal landed — the
 			// analytics store keeps the record; nothing to reconcile into.
@@ -509,7 +521,7 @@ func reconcileFromQuerier(ctx context.Context, q BehaviourQuerier, aud *audience
 }
 
 func reconcileProfileSignals(ctx context.Context, lake datalake.Store, aud *audiencepg.Store,
-	log *slog.Logger, res *Result, changed map[string]string,
+	originTrace string, log *slog.Logger, res *Result, changed map[string]string,
 ) error {
 	rows, err := lake.Read(ctx, "profile_signals", datalake.Filter{})
 	if err != nil {
@@ -526,7 +538,7 @@ func reconcileProfileSignals(ctx context.Context, lake datalake.Store, aud *audi
 		ids[k] = append(ids[k], v)
 	}
 	for k, values := range ids {
-		added, err := aud.AddMembers(ctx, k.accountID, k.segID, values)
+		added, err := aud.AddMembers(ctx, k.accountID, k.segID, values, "reconcile", originTrace)
 		if err != nil {
 			// Segment may have been deleted since the signal landed — the lake
 			// keeps the record; nothing to reconcile into.

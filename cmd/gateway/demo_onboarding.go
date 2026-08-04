@@ -337,7 +337,7 @@ func (o *demoOrchestrator) demoUploadDirect(ctx context.Context, acct, idType, i
 	if err != nil {
 		return "", 0, fmt.Errorf("upsert segment: %w", err)
 	}
-	added, err := o.aud.AddMembers(ctx, acct, segID, []string{idValue})
+	added, err := o.aud.AddMembers(ctx, acct, segID, []string{idValue}, "demo_upload", tracing.TraceIDFromContext(ctx))
 	if err != nil {
 		return "", 0, fmt.Errorf("add members: %w", err)
 	}
