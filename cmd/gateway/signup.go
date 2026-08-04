@@ -84,7 +84,7 @@ func signupHandler(store signupStore, signingKey string, log *slog.Logger) http.
 		now := time.Now()
 		at := auth.AccountType(in.AccountType)
 		claims := &auth.Claims{
-			UserID:      "user-" + userID,
+			UserID:      auth.MintUserID(userID),
 			AccountID:   accountID,
 			AccountType: at,
 			Role:        auth.RoleOwner,

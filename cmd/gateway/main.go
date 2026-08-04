@@ -1006,7 +1006,7 @@ func tokenHandler(signingKey string) http.HandlerFunc {
 		permissions := auth.RolePermissions(accountType, role)
 
 		claims := &auth.Claims{
-			UserID:      "user-" + req.AccountID,
+			UserID:      auth.MintUserID(req.AccountID),
 			AccountID:   req.AccountID,
 			AccountType: accountType,
 			Role:        role,

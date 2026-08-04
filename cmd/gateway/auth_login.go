@@ -129,7 +129,7 @@ func loginSubmitHandler(lookup userLookupFn, signingKey string, log *slog.Logger
 
 		now := time.Now()
 		claims := &auth.Claims{
-			UserID:          "user-" + u.ID,
+			UserID:          auth.MintUserID(u.ID),
 			AccountID:       u.AccountID,
 			AccountType:     u.AccountType,
 			Role:            u.Role,

@@ -733,10 +733,10 @@ func parseMultipartUpload(w http.ResponseWriter, r *http.Request, maxBytes int) 
 // tenant-filtered because team_members has no RLS and the id is the JWT's own
 // (a caller can't spoof another user's UserID).
 func (deps audienceDeps) resolveUploaderEmail(ctx context.Context, userID string) []string {
-	// The JWT UserID is "user-<team_members.id>" (auth_login.go), so strip the
-	// prefix before the uuid cast — otherwise every lookup throws 22P02 and the
-	// uploader is silently never notified.
-	userID = strings.TrimPrefix(strings.TrimSpace(userID), "user-")
+	// The JWT UserID is "user-<team_members.id>", so recover the bare id before the
+	// uuid cast — otherwise every lookup throws 22P02 and the uploader is silently
+	// never notified.
+	userID = auth.TeamMemberID(userID)
 	if deps.db == nil || userID == "" {
 		return nil
 	}
