@@ -57,8 +57,14 @@ export default function () {
     check(imp, { 'imp accepted': (r) => r.status >= 200 && r.status < 300 });
 
     // ~5% of impressions click through, mirroring the simulator's click rate.
+    // The click endpoint is a REDIRECT handler — it requires a redir= target
+    // and answers 302; redirects:0 stops k6 following to the (fake) landing
+    // page, and 3xx counts as expected via responseCallback below.
     if (Math.random() < 0.05) {
-        const clk = http.get(`${TRACKER_URL}/v1/t/click?${common}`);
+        const clk = http.get(
+            `${TRACKER_URL}/v1/t/click?${common}&redir=${encodeURIComponent('https://advertiser.example/landing')}`,
+            { redirects: 0, responseCallback: http.expectedStatuses({ min: 200, max: 399 }) },
+        );
         beaconLatency.add(clk.timings.duration);
         check(clk, { 'click accepted': (r) => r.status >= 200 && r.status < 400 });
     }

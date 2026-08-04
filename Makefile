@@ -138,9 +138,7 @@ perf-tracker: ## k6 load on tracker pixel ingest (tweak: RPS=200 DURATION=2m)
 	k6 run tests/k6/tracker-load.js
 
 perf-exchange: ## k6 load on exchange auctions with REAL seeded placements + schain (tweak: RPS=100 DURATION=5m)
-	PLACEMENTS="$$(kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tAc \
-	  "SELECT string_agg(x.pair, ',') FROM (SELECT p.id::text || '|' || p.publisher_id::text || '|' || pb.domain AS pair FROM placements p JOIN publishers pb ON pb.id=p.publisher_id WHERE p.status='active' AND p.format='display' LIMIT 8) x" 2>/dev/null)" \
-	  k6 run tests/k6/exchange-load.js
+	PLACEMENTS="$$(scripts/k6-placements.sh)" k6 run tests/k6/exchange-load.js
 
 perf-all: perf-tracker perf-exchange ## Run all k6 load tests
 
