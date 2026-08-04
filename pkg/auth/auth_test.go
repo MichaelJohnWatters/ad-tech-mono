@@ -157,3 +157,25 @@ func TestRolePermissions(t *testing.T) {
 		t.Error("unknown role should return nil")
 	}
 }
+
+// TestUserIDMintAndRecover locks the JWT-subject prefix convention: MintUserID
+// namespaces a team_members id and TeamMemberID recovers the bare id (so callers
+// never cast a "user-<id>" subject straight to ::uuid — the 22P02 bug that
+// silently killed the ingest-completion email).
+func TestUserIDMintAndRecover(t *testing.T) {
+	const id = "fcb4d101-6ddd-475a-97bb-d89683cf0812"
+	minted := auth.MintUserID(id)
+	if minted != "user-"+id {
+		t.Fatalf("MintUserID = %q, want %q", minted, "user-"+id)
+	}
+	if got := auth.TeamMemberID(minted); got != id {
+		t.Errorf("TeamMemberID(%q) = %q, want %q", minted, got, id)
+	}
+	// Idempotent / tolerant: a bare id (or padded) round-trips unchanged.
+	if got := auth.TeamMemberID(id); got != id {
+		t.Errorf("TeamMemberID(bare) = %q, want %q", got, id)
+	}
+	if got := auth.TeamMemberID("  " + minted + "  "); got != id {
+		t.Errorf("TeamMemberID(padded) = %q, want %q", got, id)
+	}
+}

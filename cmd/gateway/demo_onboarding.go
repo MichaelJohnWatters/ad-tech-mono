@@ -42,6 +42,7 @@ import (
 	"github.com/lib/pq"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
@@ -227,9 +228,9 @@ func (o *demoOrchestrator) demoUpload(ctx context.Context, acct string, notify [
 // runner's account context (transaction-local) — the standard admit pattern under
 // the least-privilege adtech_app role. Empty when unknown; the demo still runs.
 func (o *demoOrchestrator) runnerEmail(ctx context.Context, userID, accountID string) []string {
-	// The JWT UserID is "user-<team_members.id>" (auth_login.go); strip the prefix
-	// before the uuid cast (else 22P02 → no recipient).
-	userID = strings.TrimPrefix(strings.TrimSpace(userID), "user-")
+	// The JWT UserID is "user-<team_members.id>"; recover the bare id before the
+	// uuid cast (else 22P02 → no recipient).
+	userID = auth.TeamMemberID(userID)
 	if o.db == nil || userID == "" || strings.TrimSpace(accountID) == "" {
 		return []string{}
 	}

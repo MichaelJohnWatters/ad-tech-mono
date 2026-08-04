@@ -13,10 +13,27 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 )
+
+// userIDPrefix namespaces the JWT subject (Claims.UserID) for human-typed users,
+// e.g. "user-<team_members.id>". Mint with MintUserID and read the bare id back
+// with TeamMemberID — never inline the prefix, and never cast Claims.UserID to a
+// uuid directly (that throws 22P02: the prefix makes it a non-uuid string).
+const userIDPrefix = "user-"
+
+// MintUserID builds a JWT subject (Claims.UserID) from a team_members id.
+func MintUserID(teamMemberID string) string { return userIDPrefix + teamMemberID }
+
+// TeamMemberID recovers the bare team_members id from a JWT subject, stripping the
+// MintUserID prefix so the value can be matched against team_members.id (::uuid).
+// Prefix-free input is returned unchanged.
+func TeamMemberID(jwtUserID string) string {
+	return strings.TrimPrefix(strings.TrimSpace(jwtUserID), userIDPrefix)
+}
 
 // AccountType represents the type of account.
 type AccountType string
