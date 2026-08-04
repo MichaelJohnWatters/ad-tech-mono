@@ -497,7 +497,14 @@ func main() {
 	// account). GET support:read (state), POST /run support:update (reset+run).
 	// The exact route (/run) must register before the GET path so it doesn't
 	// fall through to the GET handler.
-	demoOrch := &demoOrchestrator{db: gwDB, aud: audStore, resolver: profileResolver, bus: secretsBus, log: log}
+	demoOrch := &demoOrchestrator{
+		db: gwDB, aud: audStore, resolver: profileResolver, bus: secretsBus, log: log,
+		// Same ingest deps as the real audience upload, so the demo's UPLOAD step
+		// runs the real ingest path (and its profile_signal carries ingest_trace_id),
+		// including the completion email to whoever runs the demo.
+		proc: ingestProc, ingestStore: ingestStore, objects: ingestObjects, bucket: onboardingBucket,
+		emailSender: ingestEmailSender, emailFrom: ingestEmailFrom,
+	}
 	demoOnboarding := authMiddleware(http.HandlerFunc(demoOnboardingHandler(demoOrch)))
 	mux.Handle(routes.APIDemoOnboardingRun, demoOnboarding)
 	mux.Handle(routes.APIDemoOnboarding, demoOnboarding)

@@ -35,16 +35,22 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingest"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ingestjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/profilebuilder"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	pgstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
@@ -122,6 +128,21 @@ type demoOrchestrator struct {
 	resolver identityResolver
 	bus      events.EventBus
 	log      *slog.Logger
+
+	// Ingest deps let the UPLOAD step run the REAL ingest path (stage → enqueue →
+	// claim → process) instead of a hand-written direct member add — so the demo
+	// exercises the same code a customer upload does, and its profile_signal
+	// carries a proper ingest_trace_id. All nil (e.g. in unit tests) → the direct
+	// fallback in demoUpload.
+	proc        *ingest.Processor
+	ingestStore ingestjobs.Store
+	objects     objects.Store
+	bucket      string
+	// emailSender + emailFrom deliver the demo's ingest-completion email to the
+	// staff runner (same as a real upload notifies its uploader). nil sender =
+	// no email (best-effort), so the demo never fails on mail.
+	emailSender email.Sender
+	emailFrom   string
 }
 
 // resetDemo makes the demo repeatable and deterministic: it wipes the demo
@@ -185,14 +206,129 @@ ON CONFLICT (id) DO NOTHING`,
 	return nil
 }
 
-// demoUpload does the demo's UPLOAD step directly against the audience store:
-// upsert the "Demo Newsletter" segment for the isolated demo account, add the
-// single hashed-email member, and publish the profile.signal (so the row lands
-// in the analytical store like a real upload). It's a thin, self-contained
-// version of the real ingest path — the demo needs one row added synchronously,
-// not the full stage+enqueue+worker machinery. Returns (segmentID, membersAdded).
-func (o *demoOrchestrator) demoUpload(ctx context.Context, acct string) (string, int, error) {
+// demoUpload runs the demo's UPLOAD step. When the ingest deps are wired (the
+// real gateway), it routes through the SAME ingest path a customer upload takes
+// (stage → enqueue → claim → process inline), so the demo is honest end-to-end
+// and its profile_signal carries a proper ingest_trace_id. Without those deps
+// (e.g. unit tests), it falls back to a direct member add. Returns
+// (segmentID, membersAdded).
+func (o *demoOrchestrator) demoUpload(ctx context.Context, acct string, notify []string) (string, int, error) {
 	const idType, idValue = "hashed_email", demoEmailID
+	if o.proc != nil && o.ingestStore != nil && o.objects != nil {
+		return o.demoUploadViaIngest(ctx, acct, idType, idValue, notify)
+	}
+	return o.demoUploadDirect(ctx, acct, idType, idValue)
+}
+
+// runnerEmail resolves the staff runner's own email (team_members by JWT user id),
+// so the demo's UPLOAD step sends the SAME ingest-completion email a real upload
+// does — to whoever ran the demo, and no one else (never a hard-coded address).
+// team_members is RLS tenant-isolated, so the lookup runs in a tx that sets the
+// runner's account context (transaction-local) — the standard admit pattern under
+// the least-privilege adtech_app role. Empty when unknown; the demo still runs.
+func (o *demoOrchestrator) runnerEmail(ctx context.Context, userID, accountID string) []string {
+	// The JWT UserID is "user-<team_members.id>" (auth_login.go); strip the prefix
+	// before the uuid cast (else 22P02 → no recipient).
+	userID = strings.TrimPrefix(strings.TrimSpace(userID), "user-")
+	if o.db == nil || userID == "" || strings.TrimSpace(accountID) == "" {
+		return []string{}
+	}
+	tx, err := o.db.BeginTx(ctx, nil)
+	if err != nil {
+		return []string{}
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return []string{}
+	}
+	var e string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT email FROM team_members WHERE id = $1::uuid`, userID).Scan(&e); err != nil {
+		if err != sql.ErrNoRows {
+			o.log.Warn("demo upload: runner email lookup failed", "user", userID, "error", err)
+		}
+		return []string{}
+	}
+	if e = strings.TrimSpace(e); e != "" {
+		return []string{e}
+	}
+	return []string{}
+}
+
+// demoUploadViaIngest stages a one-row list and runs the shared ingest processor
+// inline — byte-for-byte the small-upload path — so the demo exercises the real
+// decode → validate → segment/member → profile.signal flow (the processor emits
+// the profile_signal itself, with its ingest_trace_id).
+func (o *demoOrchestrator) demoUploadViaIngest(ctx context.Context, acct, idType, idValue string, notify []string) (string, int, error) {
+	if notify == nil {
+		notify = []string{} // column is NOT NULL
+	}
+	csv := idType + "\n" + idValue + "\n"
+	// Unique key per run so a re-run never dedup-collides on the staged object.
+	fileKey := "demo/" + acct + "/" + uuid.NewString() + "/demo-newsletter.csv"
+	if err := o.objects.Put(ctx, o.bucket, fileKey, strings.NewReader(csv), int64(len(csv)), "text/csv"); err != nil {
+		return "", 0, fmt.Errorf("stage demo file: %w", err)
+	}
+	job := ingestjobs.Job{
+		AccountID:    acct,
+		Source:       ingestjobs.SourceAPI,
+		FileBucket:   o.bucket,
+		FileKey:      fileKey,
+		RunAt:        time.Now().UTC(),
+		NotifyEmails: notify, // the staff runner (real upload path emails the uploader); never nil
+
+		SegmentSpec: ingestjobs.SegmentSpec{
+			Name:       demoSegmentName,
+			Type:       "first_party", // match resetDemo's segment (else defaults to cdp_imported)
+			Visibility: "dsp_private",
+			Consent:    true,
+			IDType:     idType,
+			Access:     "first_party",
+		},
+	}
+	jobID, err := o.ingestStore.Enqueue(ctx, job)
+	if err != nil {
+		return "", 0, fmt.Errorf("enqueue demo ingest: %w", err)
+	}
+	claimed, err := o.ingestStore.ClaimByID(ctx, jobID)
+	if err != nil {
+		return "", 0, fmt.Errorf("claim demo ingest job %s: %w", jobID, err)
+	}
+	if claimed == nil {
+		return "", 0, fmt.Errorf("demo ingest job %s could not be claimed", jobID)
+	}
+	result, err := o.proc.Process(ctx, *claimed)
+	if err != nil {
+		if markErr := o.ingestStore.MarkFailed(ctx, jobID, err.Error()); markErr != nil {
+			o.log.Warn("demo upload: mark failed", "job", jobID, "error", markErr)
+		}
+		return "", 0, fmt.Errorf("process demo ingest: %w", err)
+	}
+	if err := o.ingestStore.MarkDone(ctx, jobID, result); err != nil {
+		o.log.Warn("demo upload: mark done", "job", jobID, "error", err)
+	}
+	// Send the same ingest-completion email a real upload sends, to the staff
+	// runner (claimed.NotifyEmails). Background ctx so it isn't cancelled when the
+	// demo response returns; a nil sender or empty recipient list is a no-op.
+	ingest.NotifyResult(context.Background(), o.emailSender, o.emailFrom, *claimed, result, nil, o.log)
+	// The processor already published the profile.signal (with ingest_trace_id).
+	// The demo runs synchronously and doesn't wait for the pipeline, so nudge the
+	// audience cache so the DSP sees the new member immediately.
+	if o.bus != nil {
+		payload := []byte(`{"segment_id":"` + result.SegmentID + `","account_id":"` + acct + `"}`)
+		if err := o.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
+			o.log.Warn("demo upload: invalidate publish failed", "segment", result.SegmentID, "error", err)
+		}
+	}
+	return result.SegmentID, result.MembersAdded, nil
+}
+
+// demoUploadDirect is the fallback used when the ingest deps aren't wired (unit
+// tests): it adds the member straight through the audience store and publishes
+// the profile.signal by hand. This synchronous path has a real request context,
+// so it stamps the request's trace_id (there is no ingest job to derive an
+// ingest_trace_id from).
+func (o *demoOrchestrator) demoUploadDirect(ctx context.Context, acct, idType, idValue string) (string, int, error) {
 	segID, err := o.aud.UpsertSegment(ctx, acct, demoSegmentName, "first_party", "demo_upload", "dsp_private")
 	if err != nil {
 		return "", 0, fmt.Errorf("upsert segment: %w", err)
@@ -229,7 +365,7 @@ func (o *demoOrchestrator) demoUpload(ctx context.Context, acct string) (string,
 
 // run executes the reset then the 5 steps synchronously and returns the
 // assembled timeline.
-func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
+func (o *demoOrchestrator) run(ctx context.Context, runnerUserID, runnerAccountID string) (demoResponse, error) {
 	acct := demoAccountID()
 	if err := o.resetDemo(ctx); err != nil {
 		return demoResponse{}, err
@@ -251,7 +387,7 @@ func (o *demoOrchestrator) run(ctx context.Context) (demoResponse, error) {
 
 	// --- Step 2: UPLOAD — 1-row list of ONLY the hashed email → plain segment. ---
 	// The real audience store path, tenant-scoped to the isolated demo account.
-	upSegID, upAdded, err := o.demoUpload(ctx, acct)
+	upSegID, upAdded, err := o.demoUpload(ctx, acct, o.runnerEmail(ctx, runnerUserID, runnerAccountID))
 	if err != nil {
 		return demoResponse{}, fmt.Errorf("demo upload: %w", err)
 	}
@@ -407,7 +543,7 @@ func demoOnboardingHandler(o *demoOrchestrator) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(resp)
 
 		case http.MethodPost:
-			resp, err := o.run(r.Context())
+			resp, err := o.run(r.Context(), claims.UserID, claims.AccountID)
 			if err != nil {
 				o.log.Error("demo onboarding run failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

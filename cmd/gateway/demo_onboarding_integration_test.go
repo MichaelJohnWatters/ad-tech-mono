@@ -59,7 +59,7 @@ func TestDemoOnboardingRun_RealExpansion(t *testing.T) {
 		}
 	})
 
-	resp, err := o.run(ctx)
+	resp, err := o.run(ctx, "", "") // no runner id → no completion email
 	if err != nil {
 		t.Fatalf("demo run: %v", err)
 	}

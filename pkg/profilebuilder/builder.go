@@ -216,7 +216,13 @@ func persistClustersPG(ctx context.Context, db *sql.DB, c Clusters, now time.Tim
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `TRUNCATE identity_clusters`); err != nil {
+	// DELETE, not TRUNCATE: this runs under the least-privilege adtech_app role
+	// (it has DELETE but not TRUNCATE) when the builder is invoked in-process —
+	// e.g. the staff onboarding demo runs it inside the gateway. identity_clusters
+	// is a small, global, wholesale-rebuilt serving copy, so a full DELETE inside
+	// the same tx is equivalent (readers still never see a half-built state) and
+	// keeps the builder runnable without granting the app role TRUNCATE.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM identity_clusters`); err != nil {
 		return err
 	}
 	stmt, err := tx.PrepareContext(ctx,
