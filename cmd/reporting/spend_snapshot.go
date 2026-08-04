@@ -42,7 +42,14 @@ import (
 // The persistStore (may be nil) backs restart-safety: each tick persists the
 // settled portion, and boot calls hydrateCommittedSpend before consumption so a
 // restart doesn't reset committed to zero (which would reconcile DSPs down).
-func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, persistStore *lazyCommittedSpendStore, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
+// authoritativeSettled (nil in single-replica / shared-counter-off mode) is the
+// cluster-global per-campaign settled query returned by startSharedPacingCounter.
+// When present, ONLY the elected publisher persists, and it persists THAT map —
+// persisting each pod's local accumulator at 3 replicas meant three partial
+// views (each ~a third of the queue-group stream) overwriting one row,
+// last-writer-wins: settled_micros — the number INVOICES bill from — sat at a
+// uniform ~32% of cleared spend (measured 2026-08-04).
+func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, persistStore *lazyCommittedSpendStore, authoritativeSettled func(context.Context) (map[string]int64, error), cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
 	if !keys.Reporting.SpendSnapshotEnabled.Get(cfg) {
 		log.Info("spend snapshot publisher disabled (reporting.spend_snapshot_enabled=false)")
 		return
@@ -73,12 +80,22 @@ func startSpendSnapshotPublisher(engine *billing.Engine, bus events.EventBus, pe
 				if ttl := keys.Reporting.PacingHoldTTL.Get(cfg); ttl > 0 {
 					engine.SetPacingHoldTTL(ttl)
 				}
-				if guard.acquire() {
+				won := guard.acquire()
+				if won {
 					publishSpendSnapshot(engine, pub, clk, log)
 				}
-				// Persistence is idempotent and replica-local state must not
-				// go stale on standbys — every replica persists.
-				persistCommittedSpend(persistStore, engine, log)
+				if authoritativeSettled != nil {
+					// Shared mode: one writer, cluster-global settled. The
+					// non-elected replicas persist nothing — their local maps
+					// are partial views of the queue-group stream.
+					if won {
+						persistCommittedSpendShared(persistStore, engine, authoritativeSettled, log)
+					}
+				} else {
+					// Single-replica mode: the local accumulator IS the whole
+					// stream; every replica persisting is idempotent.
+					persistCommittedSpend(persistStore, engine, log)
+				}
 			}
 		}
 	}()
@@ -119,6 +136,32 @@ func persistCommittedSpend(store *lazyCommittedSpendStore, engine *billing.Engin
 	day, settled, reserved := engine.PacingState()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := store.Save(ctx, day, settled, reserved); err != nil {
+		log.Error("committed-spend persist failed", "error", err)
+	}
+}
+
+// persistCommittedSpendShared persists settled from the cluster-global
+// analytics query (what invoices must bill) and reserved from THIS pod's
+// engine. Reserved is knowingly approximate at >1 replica (each pod holds only
+// its share of open CPC/vCPM/CPA holds — same blind spot as the counter
+// reconcile, which is also CPM-derived); holds are short-lived, TTL-swept, and
+// zero in an all-CPM world, so the error is bounded — settled is the
+// money-bearing column and is now exact.
+func persistCommittedSpendShared(store *lazyCommittedSpendStore, engine *billing.Engine, settledSource func(context.Context) (map[string]int64, error), log *slog.Logger) {
+	if store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	settled, err := settledSource(ctx)
+	if err != nil {
+		// Skip rather than fall back to the partial local map: a stale row is
+		// recoverable next tick, a partial overwrite is the bug we fixed.
+		log.Error("committed-spend persist skipped (authoritative settled query failed)", "error", err)
+		return
+	}
+	day, _, reserved := engine.PacingState()
 	if err := store.Save(ctx, day, settled, reserved); err != nil {
 		log.Error("committed-spend persist failed", "error", err)
 	}
