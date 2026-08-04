@@ -890,3 +890,142 @@ data:
         ]
       }
     }
+
+  adtech-lag.json: |
+    {
+      "title": "Ad Tech \u2014 Freshness & Lag",
+      "uid": "adtech-lag",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Event pipeline freshness (NATS consumers)",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          }
+        },
+        {
+          "id": 1,
+          "title": "Consumer lag \u2014 pending messages by consumer",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 1
+          },
+          "description": "jetstream_consumer_num_pending: how far behind each event consumer is (reporting, billing, webhooks, notifications, identity-consumer, audience-rt, report-runner). Steady near 0 is healthy; a climbing line = that pipeline is falling behind.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "jetstream_consumer_num_pending > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Audience membership cache (single append-writer)",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 10
+          }
+        },
+        {
+          "id": 2,
+          "title": "Change-log lag (oldest un-drained row, s)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 11
+          },
+          "description": "Age of the oldest pending membership change \u2014 the audience-cache staleness ceiling. Red past 30s; the writer WARNs and it's the signal to shard the writer.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 30
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_changelog_lag_seconds{service=\"pipeline\"}",
+              "legendFormat": "oldest lag (s)"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Change-log backlog (un-drained rows)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 11
+          },
+          "description": "Rows in audience_membership_changelog not yet applied by the single writer. Steady ~0 healthy; a sustained climb = the writer can't keep up.",
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_changelog_backlog{service=\"pipeline\"}",
+              "legendFormat": "backlog rows"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Writer drain age (liveness, s)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 11
+          },
+          "description": "Seconds since the writer last drained. Should hover near the poll interval (3s). A rising value = the single writer is stalled or dead.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          },
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_drain_age_seconds{service=\"pipeline\"}",
+              "legendFormat": "drain age (s)"
+            }
+          ]
+        }
+      ]
+    }
