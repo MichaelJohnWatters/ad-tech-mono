@@ -69,6 +69,28 @@ request we send them.
 `min_count ≤ 1` can fire instantly (a single visit is self-contained). Anything
 needing history/aggregation is a ClickHouse `GROUP BY` → the hourly profile-builder.
 
+## 3b. IN PROGRESS — append-based change-log cache (the end-state)
+
+Being built as a safe parallel migration (write new path → verify → flip read → delete old):
+- **Stage 1 (done):** L2 set-ops, `audience_membership_changelog` table + store methods.
+- **Stage 2 (done):** a DB trigger on `audience_segment_members` appends every write
+  (enroll/suppress/upload/profile-builder/prune/TTL-purge) to the change-log — the
+  transactional outbox, no per-writer code. A SINGLE writer in `pipeline` drains it,
+  applying atomic SADD/SREM to a parallel Redis-SET namespace (`audience:set:…`) +
+  a full-scan reconcile. Verified: the SET keys match the live `audience:user` JSON.
+- **Stage 3 (deferred — read NOT flipped):** the DSP/SSP read still uses the JSON
+  path. Flip `preload.lookup` to `SMEMBERS(audience:set)` only after hardening, because
+  a flip surfaced two bid-hot-path reliability gaps:
+  1. **Reconcile is non-atomic** — `Delete(key)` then `SAdd(key, …)` leaves a
+     transient-empty window; a bid landing in it mis-targets. Fix: build into a temp
+     key + atomic `RENAME`, or `SADD` current + `SREM` only the stale diff (no delete).
+  2. **Writer Redis reliability** — the pipeline `SelfHealingL2` was observed serving
+     from the in-memory fallback after a transient dial issue, silently dropping
+     writes (reconcile logged "keys:N" while Redis had 0). Needs a readiness gate /
+     hard-fail-if-not-on-Redis for the single writer, since nothing else writes it.
+  The append/trigger/single-writer machinery is all in place and running in parallel;
+  only the read-flip + these two fixes remain.
+
 ## 4. DONE — delta preloader (commit b8d00ae)
 
 The DSP/SSP preloader used to full-scan `audience_segment_members` + rewrite every

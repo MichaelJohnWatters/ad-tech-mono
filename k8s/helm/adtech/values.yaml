@@ -66,6 +66,7 @@ localExpose:
     nats: { ports: [{ name: client, port: 4222 }, { name: monitor, port: 8222 }] }
     redis: { ports: [{ name: redis, port: 6379 }] }
     minio: { ports: [{ name: s3, port: 9000 }, { name: console, port: 9001 }] }
+    pipeline: { ports: [{ name: http, port: 8087 }] }
     clickhouse: { ports: [{ name: native, port: 9010, targetPort: 9000 }, { name: http, port: 8123 }] }
     tigerbeetle: { ports: [{ name: tb, port: 3033, targetPort: 3000 }] }
     grafana: { ports: [{ name: http, port: 3000 }] }

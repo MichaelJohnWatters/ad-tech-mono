@@ -29,7 +29,7 @@ type fakeEnroller struct {
 	lastTTL     time.Duration
 }
 
-func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string, ttl time.Duration) (int, error) {
+func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users []string, ttl time.Duration, _ string) (int, error) {
 	f.lastTTL = ttl
 	for _, u := range users {
 		f.added = append(f.added, call{segmentID, u})
@@ -37,7 +37,7 @@ func (f *fakeEnroller) AddMembers(_ context.Context, _, segmentID string, users 
 	return len(users), nil // default: all newly added
 }
 
-func (f *fakeEnroller) RemoveMember(_ context.Context, _, segmentID, userID string) (int, error) {
+func (f *fakeEnroller) RemoveMember(_ context.Context, _, segmentID, userID, _ string) (int, error) {
 	f.removed = append(f.removed, call{segmentID, userID})
 	return 1, nil
 }
@@ -168,10 +168,10 @@ func TestOnSiteVisit_AlreadyMemberNoInvalidate(t *testing.T) {
 
 type zeroAddEnroller struct{ invalidated int }
 
-func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration) (int, error) {
+func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration, _ string) (int, error) {
 	return 0, nil
 }
-func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _ string) (int, error) { return 0, nil }
+func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _, _ string) (int, error) { return 0, nil }
 func (z *zeroAddEnroller) InvalidateAudience(_ context.Context, _ string) error        { z.invalidated++; return nil }
 
 func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {

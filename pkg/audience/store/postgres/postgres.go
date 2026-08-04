@@ -535,8 +535,9 @@ func (s *Store) TrimMembershipChanges(ctx context.Context, uptoSeq int64) (int, 
 // RetargetingSegmentRow is a retargeting segment's id + raw rule JSON, for the
 // real-time enroller (cmd/audience-rt) to match against a site visit.
 type RetargetingSegmentRow struct {
-	ID   string
-	Rule []byte
+	ID         string
+	Rule       []byte
+	Visibility string
 }
 
 // RetargetingSegments returns the account's ACTIVE retargeting segments (id +
@@ -545,7 +546,7 @@ func (s *Store) RetargetingSegments(ctx context.Context, accountID string) ([]Re
 	out := []RetargetingSegmentRow{}
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
-SELECT id::text, COALESCE(rule, '{}'::jsonb)::text
+SELECT id::text, COALESCE(rule, '{}'::jsonb)::text, visibility
 FROM audience_segments
 WHERE account_id = $1::uuid AND type = 'retargeting' AND status = 'active'`
 		rows, err := tx.QueryContext(ctx, q, accountID)
@@ -556,7 +557,7 @@ WHERE account_id = $1::uuid AND type = 'retargeting' AND status = 'active'`
 		for rows.Next() {
 			var r RetargetingSegmentRow
 			var ruleStr string
-			if err := rows.Scan(&r.ID, &ruleStr); err != nil {
+			if err := rows.Scan(&r.ID, &ruleStr, &r.Visibility); err != nil {
 				return err
 			}
 			r.Rule = []byte(ruleStr)

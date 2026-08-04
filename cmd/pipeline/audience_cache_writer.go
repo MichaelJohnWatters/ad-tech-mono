@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -42,13 +43,14 @@ func setKey(userID, visibility string) string {
 	return "audience:set:" + userID + ":" + visibility
 }
 
-// startAudienceCacheWriter wires the single writer if a DB + Redis are available.
-func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) {
+// startAudienceCacheWriter wires the single writer if a DB + Redis are available,
+// returning it so main can expose a debug drain endpoint (nil if disabled).
+func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) *audienceCacheWriter {
 	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Error("audience cache writer: open postgres — disabled", "error", err)
-		return
+		return nil
 	}
 	db.SetMaxOpenConns(4)
 	lc.OnShutdown("audience-cache-writer-db", func(context.Context) error { return db.Close() })
@@ -72,6 +74,18 @@ func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycl
 	lc.OnShutdown("audience-cache-writer", func(context.Context) error { cancel(); return nil })
 	go w.run(ctx)
 	log.Info("audience cache writer running (append-based, single writer)")
+	return w
+}
+
+// DebugRefreshHandler forces a synchronous drain + reconcile so e2e tests get a
+// deterministic fresh cache without waiting for the poll tick. Same route the
+// DSP/SSP preloader used to expose; the harness now targets the single writer.
+func (w *audienceCacheWriter) DebugRefreshHandler(rw http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	w.drain(ctx)
+	w.reconcile(ctx)
+	rw.WriteHeader(http.StatusOK)
 }
 
 type audienceCacheWriter struct {

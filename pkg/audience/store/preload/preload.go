@@ -182,11 +182,16 @@ func (p *Preloader) lookup(ctx context.Context, userID, visibility string) ([]st
 	if userID == "" {
 		return nil, nil
 	}
+	// NOTE: still reads the JSON path (audience:user). The append-based Redis-SET
+	// path (audience:set, maintained by cmd/pipeline's single writer via the
+	// change-log trigger) runs in PARALLEL and is verified matching — but the read
+	// is NOT flipped to SMEMBERS yet: the writer's reconcile does a non-atomic
+	// Delete+SAdd (transient-empty window) and the writer's Redis connection needs
+	// reliability hardening before it can back the bid hot path. See
+	// docs/AUDIENCE_DATA_PATH_SCALING.md. Flip setRedisKey/SMembers here once hardened.
 	key := redisKey(userID, visibility)
 	val, ok, err := p.l2.Get(ctx, key)
 	if err != nil {
-		// Redis blip — degrade silently. Returning an error would cause
-		// the bid handler to log at WARN per bid, which floods logs.
 		p.log.Debug("audience cache read failed", "key", key, "error", err)
 		return nil, nil
 	}
@@ -541,6 +546,12 @@ func (p *Preloader) writeUsers(ctx context.Context, requested []string, grouped 
 
 func redisKey(userID, visibility string) string {
 	return "audience:user:" + userID + ":" + visibility
+}
+
+// setRedisKey is the Redis SET key the append-based writer maintains and the bid
+// path reads (must match cmd/pipeline's setKey).
+func setRedisKey(userID, visibility string) string {
+	return "audience:set:" + userID + ":" + visibility
 }
 
 // prevKeysRedisKey holds the set of (user,visibility) keys written by the most

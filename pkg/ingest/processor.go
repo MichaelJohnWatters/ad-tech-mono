@@ -293,20 +293,9 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 		log.Error("ingest: add members failed (will retry)", "segment", segID, "error", err)
 		return ingestjobs.IngestResult{}, infraErr{err}
 	}
-	// Record the adds on the membership change-log (the outbox the append-based
-	// audience cache consumes). Best-effort — the cache writer's reconcile catches
-	// anything dropped here.
-	if len(values) > 0 {
-		changes := make([]audiencepg.MembershipChange, 0, len(values))
-		for _, v := range values {
-			changes = append(changes, audiencepg.MembershipChange{
-				UserID: v, SegmentID: segID, Visibility: visibility, Op: "add",
-			})
-		}
-		if cerr := p.Audience.AppendMembershipChanges(ctx, accountID, changes); cerr != nil {
-			log.Warn("ingest: changelog append failed", "segment", segID, "error", cerr)
-		}
-	}
+	// The audience_segment_members trigger (migration 078) appends these adds to
+	// the change-log in the same write, so the append-based cache picks them up —
+	// no explicit changelog call here.
 
 	matched := 0
 	if p.Matcher != nil {

@@ -99,7 +99,10 @@ func (h *Harness) RefreshCache(t *testing.T, serviceBaseURL string) {
 //     the real assertion failure to an opaque "got NoBid".
 func (h *Harness) RefreshAudiencePreloader(t *testing.T) {
 	t.Helper()
-	for _, base := range []string{h.URLs.DSP, h.URLs.SSP, h.URLs.DSPComp1, h.URLs.DSPComp2} {
+	// Pipeline FIRST: it hosts the single append-based cache writer, so draining
+	// it makes the Redis sets fresh; the DSP/SSP refreshes are legacy no-ops now
+	// (they read the sets the writer maintains).
+	for _, base := range []string{h.URLs.Pipeline, h.URLs.DSP, h.URLs.SSP, h.URLs.DSPComp1, h.URLs.DSPComp2} {
 		h.audienceRefreshOne(t, base)
 	}
 }

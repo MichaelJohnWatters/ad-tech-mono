@@ -38,9 +38,12 @@ func main() {
 	// The SINGLE writer of the append-based audience membership cache: drains the
 	// membership change-log to Redis SETs (SADD/SREM) + periodic reconcile.
 	// pipeline is single-replica, so this is the one writer for the whole cluster.
-	startAudienceCacheWriter(cfg, log, lc)
+	acw := startAudienceCacheWriter(cfg, log, lc)
 
 	mux := http.NewServeMux()
+	if acw != nil {
+		mux.HandleFunc(routes.DebugAudienceRefresh, acw.DebugRefreshHandler)
+	}
 	// pprof: the 2026-07-18 wedge was undiagnosable post-mortem because
 	// nothing could dump goroutines. Debug surface only (cluster network).
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
