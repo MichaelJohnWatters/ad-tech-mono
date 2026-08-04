@@ -20,7 +20,13 @@
 -- docs/RLS_FLIP_PLAN.md → "Finalize the flip".
 DO $$
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'adtech_app' AND rolpassword IS NULL) THEN
+  -- GOTCHA (found on the first true fresh-disk boot, fixed here + healed by
+  -- 081 for DBs already past this version): this originally checked
+  -- pg_roles.rolpassword IS NULL, but the pg_roles VIEW masks rolpassword as
+  -- the literal '********' for EVERY role — the check was never true and the
+  -- ALTER never ran (28P01 fleet-wide on fresh disks). pg_authid has the real
+  -- nullable column; migrations run as superuser so it's readable.
+  IF EXISTS (SELECT FROM pg_authid WHERE rolname = 'adtech_app' AND rolpassword IS NULL) THEN
     ALTER ROLE adtech_app PASSWORD 'adtech-app-local';
   END IF;
 END
