@@ -384,7 +384,12 @@ func main() {
 	// aid account at rule evaluation).
 	mux.HandleFunc(routes.TrackerRetarget, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		ctx := logger.WithTraceID(r.Context(), q.Get("tid"))
+		// A retargeting site visit has no upstream auction, so it carries no
+		// baked-in tid. The tracker mints the trace via HTTPMiddleware (a real
+		// 32-hex OTel id); fall back to that when the beacon has no tid, so this
+		// visit's trace_id is always a real trace — never a client-invented value.
+		traceID := firstNonEmpty(q.Get("tid"), tracing.TraceIDFromContext(r.Context()))
+		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		uid, aid := q.Get("uid"), q.Get("aid")
 		if uid != "" && aid != "" &&
@@ -392,7 +397,7 @@ func main() {
 			go publisher.publishBehaviour(context.WithoutCancel(ctx), "site_visit", q, reqLog)
 			// If the pixel also carries a hashed email, link it to the advertiser
 			// visitor id so view-through can later bridge to the publisher side.
-			publisher.publishAdvertiserIdentity(q.Get("tid"), uid, q.Get("he"))
+			publisher.publishAdvertiserIdentity(traceID, uid, q.Get("he"))
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
