@@ -21,7 +21,10 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
@@ -63,8 +66,9 @@ func waitForRedis(cfg cacheredis.Config, log *slog.Logger) {
 }
 
 // startAudienceCacheWriter wires the single writer if a DB + Redis are available,
-// returning it so main can expose a debug drain endpoint (nil if disabled).
-func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) *audienceCacheWriter {
+// returning it so main can expose a debug drain endpoint (nil if disabled). reg
+// receives the writer's lag/backlog gauges (nil = no metrics).
+func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle, reg *prometheus.Registry) *audienceCacheWriter {
 	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -92,11 +96,14 @@ func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycl
 		ttl:            keys.Audience.CacheTTL.Get(cfg),
 		pollEvery:      func() time.Duration { return keys.Audience.ChangelogPoll.Get(cfg) },
 		reconcileEvery: func() time.Duration { return keys.Audience.ChangelogReconcile.Get(cfg) },
+		lagWarn:        func() time.Duration { return keys.Audience.ChangelogLagWarn.Get(cfg) },
 	}
+	w.registerMetrics(reg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	lc.OnShutdown("audience-cache-writer", func(context.Context) error { cancel(); return nil })
 	go w.run(ctx)
+	go w.monitorLag(ctx)
 	log.Info("audience cache writer running (append-based, single writer)")
 	return w
 }
@@ -119,6 +126,7 @@ type audienceCacheWriter struct {
 	ttl            time.Duration
 	pollEvery      func() time.Duration
 	reconcileEvery func() time.Duration
+	lagWarn        func() time.Duration
 	// mu serializes drain/reconcile so the background loop and the debug-refresh
 	// HTTP handler never run concurrently (they share watermark + prevKeys and
 	// both write Redis).
@@ -129,6 +137,62 @@ type audienceCacheWriter struct {
 	// stale key is tombstoned by diffing against this. Single writer → in-memory
 	// is sufficient (no cross-pod coherence needed).
 	prevKeys map[string]bool
+
+	lastDrain    atomic.Int64 // unix millis of the last successful drain (writer liveness)
+	backlogGauge prometheus.Gauge
+	lagGauge     prometheus.Gauge
+	drainAge     prometheus.Gauge
+}
+
+// registerMetrics registers the writer's lag/backlog gauges. These are the
+// "is the single writer keeping up?" signals — if backlog/lag climb, shard it.
+func (w *audienceCacheWriter) registerMetrics(reg *prometheus.Registry) {
+	if reg == nil {
+		return
+	}
+	g := func(name, help string) prometheus.Gauge {
+		return prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "adtech", Subsystem: "audience_cache", Name: name, Help: help,
+			ConstLabels: prometheus.Labels{"service": "pipeline"},
+		})
+	}
+	w.backlogGauge = g("changelog_backlog", "Un-drained audience membership change-log rows (writer behind if growing).")
+	w.lagGauge = g("changelog_lag_seconds", "Age of the oldest un-drained change-log row.")
+	w.drainAge = g("drain_age_seconds", "Seconds since the writer last successfully drained (liveness).")
+	reg.MustRegister(w.backlogGauge, w.lagGauge, w.drainAge)
+}
+
+// monitorLag periodically publishes the backlog/lag/liveness gauges and logs a
+// WARN when the oldest un-drained change is older than lagWarn — visible even
+// without Grafana.
+func (w *audienceCacheWriter) monitorLag(ctx context.Context) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		mctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		count, oldestSec, err := w.store.ChangelogBacklog(mctx)
+		cancel()
+		if err != nil {
+			w.log.Debug("audience cache writer: backlog query failed", "error", err)
+			continue
+		}
+		if w.backlogGauge != nil {
+			w.backlogGauge.Set(float64(count))
+			w.lagGauge.Set(oldestSec)
+			if ms := w.lastDrain.Load(); ms > 0 {
+				w.drainAge.Set(time.Since(time.UnixMilli(ms)).Seconds())
+			}
+		}
+		if warn := w.lagWarn(); warn > 0 && oldestSec > warn.Seconds() {
+			w.log.Warn("audience cache writer falling behind — consider sharding the writer",
+				"backlog", count, "oldest_lag_seconds", oldestSec, "warn_threshold_seconds", warn.Seconds())
+		}
+	}
 }
 
 func (w *audienceCacheWriter) run(ctx context.Context) {
@@ -164,6 +228,7 @@ func (w *audienceCacheWriter) drain(ctx context.Context) {
 	// low-seq rows against a stale in-memory cursor. In production seq is monotonic
 	// so this is just a cheap GET.
 	w.watermark = w.loadWatermark(ctx)
+	w.lastDrain.Store(time.Now().UnixMilli()) // liveness: the drain loop is alive
 	for {
 		changes, err := w.store.ReadMembershipChangesSince(ctx, w.watermark, changeBatch)
 		if err != nil {

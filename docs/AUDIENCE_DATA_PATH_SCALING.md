@@ -165,6 +165,22 @@ industry-standard; at millions-of-QPS / billions-of-users these are the frontier
 | **Postgres** as membership source of truth | write straight to the KV store (no relational truth for user data) | A relational truth for user data caps write rate — the preloader-scan / write-heavy-retargeting pressure is this limit. Trigger: Postgres write throughput on membership saturates. |
 | **Shared Redis** read by all DSP pods | **shard the bidder by user** (route each request to the pod holding that user's slice in RAM) | Removes the network hop; makes the bidder stateful and requires the exchange to route by user id. Trigger: the Redis hop dominates bid latency even with an L1. |
 
+## 6b. Monitoring in place (the "when to act" signals)
+
+Decisions (2026-08-04): stay mid-scale-ready — **stay on Redis**, **keep Postgres as
+the write truth**, and **monitor the single writer** so we know when it needs sharding
+(Aerospike / KV-as-truth are deferred until the signals say so).
+
+The writer exports (pipeline `/metrics`, scraped by Prometheus, graphed on the "Ad Tech
+Overview" Grafana dashboard → "Audience Cache Writer" row):
+- `adtech_audience_cache_changelog_backlog` — un-drained change-log rows (writer behind if climbing).
+- `adtech_audience_cache_changelog_lag_seconds` — age of the oldest un-drained change (the staleness ceiling; red past 30s).
+- `adtech_audience_cache_drain_age_seconds` — seconds since the last drain (writer liveness).
+
+It also logs a WARN past `audience.changelog_lag_warn` (30s). **Sustained lag/backlog
+growth = the signal to shard the writer** (partition the change-log by user hash into N
+writers) — the first frontier below.
+
 ## 7. When to reach for each (signal → action)
 
 - Invalidate storm / preloader CPU high → **5.1 write-through** (removes the broadcast).
