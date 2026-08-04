@@ -25,10 +25,11 @@ import (
 // Segment is an advertiser's audience segment plus its raw rule JSON
 // (audience_segments.rule).
 type Segment struct {
-	ID        string
-	AccountID string
-	Type      string // always "retargeting" for the sources we query
-	Rule      []byte // JSONB rule; see rule below
+	ID         string
+	AccountID  string
+	Type       string // always "retargeting" for the sources we query
+	Rule       []byte // JSONB rule; see rule below
+	Visibility string // public | dsp_private — for the cache change-log's Redis-set key
 }
 
 // rule is the subset of a segment's rule this package evaluates for real-time
@@ -56,8 +57,10 @@ type SegmentSource interface {
 type Enroller interface {
 	// AddMembers enrolls users into a segment with a time-to-live: after ttl the
 	// member ages out (read paths exclude expired rows). ttl<=0 means no expiry.
-	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration) (int, error)
-	RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error)
+	// visibility is the segment's (public|dsp_private) — the cache change-log needs
+	// it so the delta lands in the right Redis set.
+	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration, visibility string) (int, error)
+	RemoveMember(ctx context.Context, accountID, segmentID, userID, visibility string) (int, error)
 	// InvalidateAudience announces a membership change for one user so the DSP/SSP
 	// preloader re-materializes just that user's Redis keys (delta refresh), rather
 	// than rescanning the whole table. userID is the enrolled/suppressed visitor.
@@ -110,7 +113,7 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 			windowDays = defaultWindowDays
 		}
 		ttl := time.Duration(windowDays) * 24 * time.Hour
-		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl)
+		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl, seg.Visibility)
 		if err != nil {
 			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			continue
@@ -141,7 +144,7 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID s
 	}
 	var removed []string
 	for _, seg := range segs {
-		n, err := s.enr.RemoveMember(ctx, accountID, seg.ID, userID)
+		n, err := s.enr.RemoveMember(ctx, accountID, seg.ID, userID, seg.Visibility)
 		if err != nil {
 			s.log.Warn("retargeting suppress failed", "segment", seg.ID, "account", accountID, "trace_id", traceID, "error", err)
 			continue
