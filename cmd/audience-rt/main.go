@@ -231,11 +231,34 @@ func (e pgEnroller) AddMembers(ctx context.Context, accountID, segmentID string,
 		t := time.Now().Add(ttl)
 		expiresAt = &t
 	}
-	return e.store.AddMembersWithExpiry(ctx, accountID, segmentID, userIDs, expiresAt)
+	n, err := e.store.AddMembersWithExpiry(ctx, accountID, segmentID, userIDs, expiresAt)
+	if err == nil && n > 0 {
+		e.appendChangelog(ctx, accountID, segmentID, userIDs, "add")
+	}
+	return n, err
 }
 
 func (e pgEnroller) RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error) {
-	return e.store.RemoveMember(ctx, accountID, segmentID, userID)
+	n, err := e.store.RemoveMember(ctx, accountID, segmentID, userID)
+	if err == nil && n > 0 {
+		e.appendChangelog(ctx, accountID, segmentID, []string{userID}, "remove")
+	}
+	return n, err
+}
+
+// appendChangelog records the membership change on the outbox that drives the
+// append-based audience cache (retargeting segments are dsp_private). Best-effort
+// — a dropped append is caught by the cache writer's reconcile.
+func (e pgEnroller) appendChangelog(ctx context.Context, accountID, segmentID string, userIDs []string, op string) {
+	changes := make([]postgres.MembershipChange, 0, len(userIDs))
+	for _, u := range userIDs {
+		changes = append(changes, postgres.MembershipChange{
+			UserID: u, SegmentID: segmentID, Visibility: "dsp_private", Op: op,
+		})
+	}
+	if err := e.store.AppendMembershipChanges(ctx, accountID, changes); err != nil {
+		e.log.Warn("audience changelog append failed", "account", accountID, "segment", segmentID, "op", op, "error", err)
+	}
 }
 
 func (e pgEnroller) InvalidateAudience(ctx context.Context, userID string) error {
