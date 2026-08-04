@@ -14,8 +14,14 @@ var Audience = struct {
 	CacheTTL        config.DurationKey
 	TaxonomyRefresh config.DurationKey
 }{
-	PreloadInterval: config.RawDuration("audience.preload_interval", 30*time.Second),
-	CacheTTL:        config.RawDuration("audience.cache_ttl", 90*time.Second),
+	// PreloadInterval is now the RECONCILE interval — the full membership scan is
+	// a self-heal backstop, since freshness comes from the delta path (writers
+	// name the changed users/segment via AudienceInvalidateEvent; the preloader
+	// re-materializes just those keys in ~1s). So it can be minutes, not seconds.
+	PreloadInterval: config.RawDuration("audience.preload_interval", 5*time.Minute),
+	// CacheTTL must outlive the reconcile interval, or a stable (unchanged) user —
+	// only re-SET once per reconcile — would expire between reconciles.
+	CacheTTL: config.RawDuration("audience.cache_ttl", 15*time.Minute),
 	// TaxonomyRefresh paces the SSP's warm map of public segment → IAB
 	// Audience Taxonomy id used to stamp user.data on bid requests.
 	TaxonomyRefresh: config.RawDuration("audience.taxonomy_refresh", 30*time.Second),

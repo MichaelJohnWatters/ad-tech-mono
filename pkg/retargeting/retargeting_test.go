@@ -42,7 +42,7 @@ func (f *fakeEnroller) RemoveMember(_ context.Context, _, segmentID, userID stri
 	return 1, nil
 }
 
-func (f *fakeEnroller) InvalidateAudience(_ context.Context) error {
+func (f *fakeEnroller) InvalidateAudience(_ context.Context, _ string) error {
 	f.invalidated++
 	return nil
 }
@@ -172,7 +172,7 @@ func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string,
 	return 0, nil
 }
 func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _ string) (int, error) { return 0, nil }
-func (z *zeroAddEnroller) InvalidateAudience(_ context.Context) error                  { z.invalidated++; return nil }
+func (z *zeroAddEnroller) InvalidateAudience(_ context.Context, _ string) error        { z.invalidated++; return nil }
 
 func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 	src := &fakeSource{segs: map[string][]Segment{

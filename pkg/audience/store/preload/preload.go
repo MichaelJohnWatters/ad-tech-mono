@@ -19,11 +19,13 @@
 //   - Empty result for a user → cached as the empty JSON array so we
 //     don't accidentally re-query Postgres for users with no segments.
 //
-// What we deliberately don't do here: per-user invalidation on writes.
-// The preloader's interval is the staleness ceiling (default 30s); a
-// segment membership added between preloads becomes visible at the next
-// tick. If we want sub-30s freshness later we can layer NATS invalidates
-// on top — for now the interval is plenty.
+// Freshness model: the periodic scan is a RECONCILER, not the primary freshness
+// path. Membership writers publish adtech.cache.invalidate.audience naming WHICH
+// users/segment changed (events.AudienceInvalidateEvent); the preloader re-
+// materializes only those Redis keys — O(changed users) — within ~a second. The
+// full scan then runs on a much longer interval purely as a self-heal for anything
+// a delta misses (silent TTL expiry, batch prunes, a dropped event). An id-less
+// invalidate still triggers a full refresh, so older publishers keep working.
 package preload
 
 import (
@@ -36,10 +38,17 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/podid"
 )
+
+// allVisibilities is every visibility a (user → segments) Redis key can carry.
+// A targeted delta refresh writes/tombstones both so a user removed from their
+// last segment of a given visibility is negative-cached, not left stale.
+var allVisibilities = []string{"public", "dsp_private"}
 
 // Preloader periodically pumps audience_segment_members into Redis and
 // satisfies the store.Lookup interface for the bid hot path. Start the
@@ -86,6 +95,13 @@ func New(cfg Config) *Preloader {
 	}
 	if cfg.TTL <= 0 {
 		cfg.TTL = 3 * cfg.Interval
+	}
+	// The periodic scan is now a RECONCILER, not the freshness mechanism (deltas
+	// keep changed users fresh in seconds). A stable, unchanged user is only re-SET
+	// once per reconcile, so the TTL must comfortably outlive the reconcile interval
+	// or stable members would expire and stop matching between reconciles.
+	if cfg.TTL < 2*cfg.Interval {
+		cfg.TTL = 2 * cfg.Interval
 	}
 	return &Preloader{
 		db:       cfg.DB,
@@ -199,7 +215,27 @@ func (p *Preloader) SubscribeInvalidate(ctx context.Context, bus events.EventBus
 	// service's replicas, which would queue-group them so only one refreshed.
 	name := service + "-audience-" + podid.Replica()
 	err := events.SubscribeBroadcast(ctx, bus, events.SubjectCacheInvalidateAudience, name, func(_ context.Context, msg *events.Message) error {
-		p.requestRefresh()
+		// Delta refresh: re-materialize only what changed (the writer named the
+		// users or the segment). Only an id-less/garbled payload falls back to the
+		// debounced full reconcile — the expensive path we're avoiding on the
+		// hot membership-change loop.
+		plan := planFromInvalidate(msg.Data)
+		switch {
+		case len(plan.userIDs) > 0:
+			dctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			if err := p.refreshUsers(dctx, plan.userIDs); err != nil {
+				p.log.Debug("audience delta refresh (users) failed — reconcile will catch it", "error", err)
+			}
+			cancel()
+		case plan.segment != "":
+			dctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			if err := p.refreshSegment(dctx, plan.segment); err != nil {
+				p.log.Debug("audience delta refresh (segment) failed — reconcile will catch it", "error", err)
+			}
+			cancel()
+		default:
+			p.requestRefresh()
+		}
 		_ = msg.Ack()
 		return nil
 	})
@@ -344,6 +380,159 @@ WHERE m.expires_at IS NULL OR m.expires_at > now()`
 	p.lastLoad.Store(time.Now().UnixMilli())
 	p.log.Info("audience preload complete", "users", len(grouped), "keys_written", written, "keys_tombstoned", tombstoned, "duration_ms", time.Since(start).Milliseconds())
 	return nil
+}
+
+// refreshPlan is the decision derived from an invalidate payload (pure, so it's
+// unit-testable): re-materialize a specific set of users, a whole segment's users,
+// or fall back to a full reconcile.
+type refreshPlan struct {
+	full    bool
+	userIDs []string
+	segment string
+}
+
+// planFromInvalidate decodes an AudienceInvalidateEvent into a refreshPlan.
+// UserIDs win (precise, handles removals); else a SegmentID; else full reconcile
+// (empty/garbled payload, or a legacy publisher that named no ids).
+func planFromInvalidate(data []byte) refreshPlan {
+	var ev events.AudienceInvalidateEvent
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return refreshPlan{full: true}
+	}
+	if len(ev.UserIDs) > 0 {
+		return refreshPlan{userIDs: ev.UserIDs}
+	}
+	if ev.SegmentID != "" {
+		return refreshPlan{segment: ev.SegmentID}
+	}
+	return refreshPlan{full: true}
+}
+
+// refreshUsers re-materializes the Redis keys for exactly these users — O(changed
+// users), not O(all members). Each user's FULL current segment list (across all
+// segments) is re-read and written; a visibility with no memberships is negative-
+// cached ("[]") so a suppressed/removed user stops matching immediately.
+func (p *Preloader) refreshUsers(ctx context.Context, userIDs []string) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	grouped, err := p.readUserMemberships(ctx, userIDs)
+	if err != nil {
+		return err
+	}
+	written, tombstoned := p.writeUsers(ctx, userIDs, grouped)
+	p.log.Debug("audience delta refresh (users)", "users", len(userIDs), "keys_written", written, "keys_tombstoned", tombstoned)
+	return nil
+}
+
+// refreshSegment re-materializes every user currently in a segment (bounded by
+// segment size). Used for bulk changes (uploads, profile-builder rebuilds) where
+// listing individual user ids in the event would be too large. Only sees CURRENT
+// members, so it covers additions; removals ride the user-targeted path instead.
+func (p *Preloader) refreshSegment(ctx context.Context, segmentID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	users, err := p.readSegmentUsers(ctx, segmentID)
+	if err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return nil
+	}
+	return p.refreshUsers(ctx, users)
+}
+
+// readUserMemberships returns userID → visibility → []segmentID for the given
+// users, in one cross-tenant (platform-read) query.
+func (p *Preloader) readUserMemberships(ctx context.Context, userIDs []string) (map[string]map[string][]string, error) {
+	const q = `
+SELECT m.user_id, m.segment_id::text, s.visibility
+FROM audience_segment_members m
+JOIN audience_segments s ON s.id = m.segment_id
+WHERE m.user_id = ANY($1) AND (m.expires_at IS NULL OR m.expires_at > now())`
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, q, pq.Array(userIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	grouped := map[string]map[string][]string{}
+	for rows.Next() {
+		var userID, segmentID, visibility string
+		if err := rows.Scan(&userID, &segmentID, &visibility); err != nil {
+			return nil, err
+		}
+		if grouped[userID] == nil {
+			grouped[userID] = map[string][]string{}
+		}
+		grouped[userID][visibility] = append(grouped[userID][visibility], segmentID)
+	}
+	return grouped, rows.Err()
+}
+
+// readSegmentUsers lists the current (non-expired) member user ids of a segment.
+func (p *Preloader) readSegmentUsers(ctx context.Context, segmentID string) ([]string, error) {
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT DISTINCT user_id FROM audience_segment_members
+WHERE segment_id = $1::uuid AND (expires_at IS NULL OR expires_at > now())`, segmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// writeUsers SETs each requested user's (user,visibility) keys from grouped, and
+// negative-caches ("[]") any visibility with no current membership so a removed
+// user stops matching. Bounded: 2 keys per user.
+func (p *Preloader) writeUsers(ctx context.Context, requested []string, grouped map[string]map[string][]string) (written, tombstoned int) {
+	for _, userID := range requested {
+		byVis := grouped[userID]
+		for _, vis := range allVisibilities {
+			key := redisKey(userID, vis)
+			segs := byVis[vis]
+			val := "[]"
+			if len(segs) > 0 {
+				b, _ := json.Marshal(segs)
+				val = string(b)
+			}
+			if err := p.l2.Set(ctx, key, val, p.ttl); err != nil {
+				p.log.Debug("audience delta set failed", "key", key, "error", err)
+				continue
+			}
+			if len(segs) > 0 {
+				written++
+			} else {
+				tombstoned++
+			}
+		}
+	}
+	return written, tombstoned
 }
 
 func redisKey(userID, visibility string) string {

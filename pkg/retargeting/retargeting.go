@@ -58,7 +58,10 @@ type Enroller interface {
 	// member ages out (read paths exclude expired rows). ttl<=0 means no expiry.
 	AddMembers(ctx context.Context, accountID, segmentID string, userIDs []string, ttl time.Duration) (int, error)
 	RemoveMember(ctx context.Context, accountID, segmentID, userID string) (int, error)
-	InvalidateAudience(ctx context.Context) error
+	// InvalidateAudience announces a membership change for one user so the DSP/SSP
+	// preloader re-materializes just that user's Redis keys (delta refresh), rather
+	// than rescanning the whole table. userID is the enrolled/suppressed visitor.
+	InvalidateAudience(ctx context.Context, userID string) error
 }
 
 // Service applies visit → enroll and conversion → suppress against a segment
@@ -117,7 +120,7 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 		}
 	}
 	if len(enrolled) > 0 {
-		if err := s.enr.InvalidateAudience(ctx); err != nil {
+		if err := s.enr.InvalidateAudience(ctx, ev.UserID); err != nil {
 			s.log.Warn("audience invalidate after enroll failed", "trace_id", ev.TraceID, "error", err)
 		}
 		s.log.Info("real-time retargeting enroll", "account", ev.AccountID, "user", ev.UserID, "segments", len(enrolled), "trace_id", ev.TraceID)
@@ -148,7 +151,7 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID s
 		}
 	}
 	if len(removed) > 0 {
-		if err := s.enr.InvalidateAudience(ctx); err != nil {
+		if err := s.enr.InvalidateAudience(ctx, userID); err != nil {
 			s.log.Warn("audience invalidate after suppress failed", "trace_id", traceID, "error", err)
 		}
 		s.log.Info("real-time retargeting suppress", "account", accountID, "user", userID, "segments", len(removed), "trace_id", traceID)

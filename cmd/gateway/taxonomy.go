@@ -138,7 +138,10 @@ func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.
 			return
 		}
 		if bus != nil {
-			payload := []byte(`{"segment_id":"` + req.SegmentID + `","account_id":"` + claims.AccountID + `"}`)
+			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+				SchemaVersion: events.CurrentSchemaVersion, Source: "data-fee",
+				SegmentID: req.SegmentID, AccountID: claims.AccountID,
+			})
 			if err := bus.Publish(r.Context(), events.SubjectCacheInvalidateAudience, payload); err != nil {
 				log.Warn("data-fee invalidate publish failed", "segment", req.SegmentID, "error", err)
 			}
@@ -189,7 +192,10 @@ func audienceTaxonomyHandler(store *audiencepg.Store, bus events.EventBus, log *
 			return
 		}
 		if bus != nil {
-			payload := []byte(`{"segment_id":"` + req.SegmentID + `","account_id":"` + claims.AccountID + `"}`)
+			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+				SchemaVersion: events.CurrentSchemaVersion, Source: "taxonomy",
+				SegmentID: req.SegmentID, AccountID: claims.AccountID,
+			})
 			if err := bus.Publish(r.Context(), events.SubjectCacheInvalidateAudience, payload); err != nil {
 				log.Warn("taxonomy invalidate publish failed", "segment", req.SegmentID, "error", err)
 			}

@@ -316,7 +316,10 @@ func (o *demoOrchestrator) demoUploadViaIngest(ctx context.Context, acct, idType
 	// The demo runs synchronously and doesn't wait for the pipeline, so nudge the
 	// audience cache so the DSP sees the new member immediately.
 	if o.bus != nil {
-		payload := []byte(`{"segment_id":"` + result.SegmentID + `","account_id":"` + acct + `"}`)
+		payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+			SchemaVersion: events.CurrentSchemaVersion, Source: "demo-upload",
+			SegmentID: result.SegmentID, AccountID: acct,
+		})
 		if err := o.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
 			o.log.Warn("demo upload: invalidate publish failed", "segment", result.SegmentID, "error", err)
 		}
@@ -356,7 +359,10 @@ func (o *demoOrchestrator) demoUploadDirect(ctx context.Context, acct, idType, i
 		if err := pub.PublishJSON(ctx, events.SubjectProfileSignal, ev); err != nil {
 			o.log.Error("demo upload: profile signal publish failed", "segment", segID, "error", err)
 		}
-		payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + acct + `"}`)
+		payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+			SchemaVersion: events.CurrentSchemaVersion, Source: "demo-upload",
+			SegmentID: segID, AccountID: acct,
+		})
 		if err := o.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
 			o.log.Warn("demo upload: invalidate publish failed", "segment", segID, "error", err)
 		}
