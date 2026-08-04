@@ -26,6 +26,10 @@
 // full scan then runs on a much longer interval purely as a self-heal for anything
 // a delta misses (silent TTL expiry, batch prunes, a dropped event). An id-less
 // invalidate still triggers a full refresh, so older publishers keep working.
+//
+// Scaling notes + future work (write-through for retargeting, visibility-aware
+// invalidates, bounded L1 LRU, and the Aerospike / KV-as-truth / user-sharding
+// frontiers): docs/AUDIENCE_DATA_PATH_SCALING.md.
 package preload
 
 import (
