@@ -7,6 +7,15 @@
 #                                (docker sock + k8s API both dead) → clean
 #                                rdctl shutdown/start. The ONLY big hammer.
 #   Stage 2  k8s API answering?  wait
+#   Stage 2b locally-built images present? kubelet image-GC under disk
+#                                pressure evicts adtech-* images not pinned by
+#                                a running pod — i.e. the JOB images (migrate,
+#                                batch-conductor, dayboundary) — and the next
+#                                helm hook / hourly conductor dies in
+#                                ImagePullBackOff ("pull access denied": bare
+#                                local tags have nothing to pull from).
+#                                Rebuild the missing ones + delete backoff'd
+#                                jobs so they re-run. (Seen 2026-08-04.)
 #   Stage 3  adtech pods Ready?  wait (they restart in dependency order)
 #   Stage 4  localhost tunnels?  THE SIGNATURE: in-cluster ClusterIP works but
 #                                localhost/hostPort connections RESET. Cause:
@@ -80,6 +89,34 @@ if ! api_up; then
   fi
 fi
 say "k8s API: ok"
+
+# ---- Stage 2b: locally-built job images present? ----------------------------
+# Must run BEFORE pod convergence: an ImagePullBackOff'd job pod would block
+# Stage 3 forever. Service images are pinned by their running pods; if one of
+# THOSE goes missing after a reschedule, the stuck-pod sweep below names it —
+# rebuild with `make deploy SVC=<name>`.
+if docker_up; then
+  job_images=(adtech-migrate adtech-batch-conductor adtech-dayboundary)
+  missing=()
+  for img in "${job_images[@]}"; do
+    docker image inspect "$img" >/dev/null 2>&1 || missing+=("${img#adtech-}")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    say "job images missing from the local daemon (kubelet image-GC): ${missing[*]} — rebuilding"
+    "$(dirname "$0")/stack-images.sh" "${missing[@]}" || fail "image rebuild failed"
+  fi
+  stuck=$(kubectl -n $NS get pods 2>/dev/null | grep -E 'ImagePullBackOff|ErrImagePull' | awk '{print $1}')
+  for p in $stuck; do
+    kind=$(kubectl -n $NS get pod "$p" -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null)
+    owner=$(kubectl -n $NS get pod "$p" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null)
+    if [ "$kind" = "Job" ] && [ -n "$owner" ]; then
+      say "deleting stuck job $owner (pod $p in ImagePullBackOff — cron/helm recreates it)"
+      kubectl -n $NS delete job "$owner" >/dev/null 2>&1 || true
+    else
+      say "NOTE: pod $p is stuck in ImagePullBackOff — if it's a service, rebuild its image: make deploy SVC=<name>"
+    fi
+  done
+fi
 
 # ---- Stage 3: adtech pods ---------------------------------------------------
 # Full convergence, not a count: after a host reboot pods restart in

@@ -134,13 +134,21 @@ simulate-burst: ## Start burst simulation
 	go run ./cmd/simulator --profile burst
 
 # --- Performance Testing ---
-perf-tracker: ## Run k6 load test on tracker
+perf-tracker: ## k6 load on tracker pixel ingest (tweak: RPS=200 DURATION=2m)
 	k6 run tests/k6/tracker-load.js
 
-perf-exchange: ## Run k6 load test on exchange
-	k6 run tests/k6/exchange-load.js
+perf-exchange: ## k6 load on exchange auctions with REAL seeded placements + schain (tweak: RPS=100 DURATION=5m)
+	PLACEMENTS="$$(kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tAc \
+	  "SELECT string_agg(x.pair, ',') FROM (SELECT p.id::text || '|' || p.publisher_id::text || '|' || pb.domain AS pair FROM placements p JOIN publishers pb ON pb.id=p.publisher_id WHERE p.status='active' AND p.format='display' LIMIT 8) x" 2>/dev/null)" \
+	  k6 run tests/k6/exchange-load.js
 
 perf-all: perf-tracker perf-exchange ## Run all k6 load tests
+
+loadtest: ## Full-path load via the simulator (auction→serve→beacons→reporting): make loadtest RPS=100 DURATION=10m; add VERIFY=1 to assert reporting counts match
+	go run ./cmd/simulator run --profile steady --rps $${RPS:-100} --duration $${DURATION:-10m} $$( [ "$${VERIFY}" = "1" ] && echo --verify )
+
+loadtest-ramp: ## Progressive full-path load: stages through RPS_STAGES (default "100 150 250") × STAGE_DURATION (default 5m), verifying pipeline counts between stages; aborts on degradation
+	scripts/loadtest-ramp.sh
 
 # --- Chaos Testing ---
 chaos: ## Run chaos test (usage: make chaos profile=redis_failure)

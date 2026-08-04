@@ -90,7 +90,7 @@ Run flags:
   --duration <dur>    Duration: 30s, 5m, 1h (default: 1m)
   --requests <n>      Stop after N requests (0 = use duration)
   --rps <n>           Aggregate rate cap (0 = spam: fire as fast as the backend takes it)
-  --concurrency <n>   Parallel in-flight requests / worker pool size (default 64)
+  --concurrency <n>   Parallel in-flight requests / worker pool size (default: 2×rps, floor 64)
   --conv-rate <f>     Override conversion rate (fraction of clicks that convert)
   --ssp-url <u>       SSP URL (default: http://localhost:8084)
   --pubad-url <u>     Publisher ad server URL (default: http://localhost:8088)
@@ -258,9 +258,16 @@ func runSimulation() {
 	// (~25/sec locally) no matter what --rps says — this removes that wall.
 	// --rps still caps the AGGREGATE rate via a shared token ticker; --rps 0
 	// removes the cap → spam as fast as the backend can take it.
-	concurrency := parseInt(getFlag("--concurrency", "64"))
+	// Default scales with the requested rate: a full win iteration (serve +
+	// beacons) runs ~0.5-1s locally, so a fixed 64-worker pool silently capped
+	// real throughput at ~100/s however high --rps was set. 2×rps keeps the
+	// requested rate reachable up to ~2s per iteration; 64 stays the floor.
+	concurrency := parseInt(getFlag("--concurrency", "0"))
 	if concurrency < 1 {
-		concurrency = 1
+		concurrency = 2 * p.RPS
+		if concurrency < 64 {
+			concurrency = 64
+		}
 	}
 	var tokens <-chan time.Time
 	if p.RPS > 0 {
@@ -271,9 +278,12 @@ func runSimulation() {
 	log.Info("worker pool", "concurrency", concurrency, "rps_cap", p.RPS, "spam", p.RPS == 0)
 
 	stop := make(chan struct{})
-	time.AfterFunc(duration, func() { close(stop) })
+	var stopOnce sync.Once
+	halt := func() { stopOnce.Do(func() { close(stop) }) }
+	time.AfterFunc(duration, halt)
 
 	var dispatched, completed, wins64, errors64 int64
+	var abortedAllErrors atomic.Bool
 	var wg sync.WaitGroup
 	start := time.Now()
 
@@ -311,6 +321,14 @@ func runSimulation() {
 					// burst was undiagnosable when only requests 1-3 logged.
 					if e <= 5 || e%1000 == 0 {
 						log.Error("request failed", "error", err, "trace_id", traceID, "errors_so_far", e)
+					}
+					// Fail fast when EVERY early request errors: that's a dead
+					// stack or an unseeded/reset world (e.g. placement 404s),
+					// and burning the whole run at full rate proves nothing.
+					if e >= 100 && e == atomic.LoadInt64(&completed) {
+						abortedAllErrors.Store(true)
+						halt()
+						return
 					}
 					continue
 				}
@@ -351,6 +369,14 @@ func runSimulation() {
 	wins := int(atomic.LoadInt64(&wins64))
 	errors := int(atomic.LoadInt64(&errors64))
 
+	if abortedAllErrors.Load() {
+		printResults(sent, wins, errors, time.Since(start))
+		fmt.Println("\nABORTED: the first requests ALL failed — the stack is down or the world is")
+		fmt.Println("unseeded (a fresh install or a post-e2e reset leaves no placements: serve 404s).")
+		fmt.Println("Fix with `make stack-doctor` (stack health) or `make reset` / `make demo` (seed),")
+		fmt.Println("then rerun.")
+		os.Exit(1)
+	}
 	printResults(sent, wins, errors, time.Since(start))
 	// --verify: read the counts back out of reporting and assert the pipeline
 	// recorded what we fired (impressions == wins). Exit non-zero on mismatch so
