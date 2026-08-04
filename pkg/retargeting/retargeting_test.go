@@ -181,7 +181,7 @@ func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 	enr := &fakeEnroller{}
 	s := New(src, enr, testLog())
 
-	removed, err := s.OnConversion(context.Background(), "adv", "u1")
+	removed, err := s.OnConversion(context.Background(), "adv", "u1", "trace-xyz")
 	if err != nil {
 		t.Fatalf("OnConversion: %v", err)
 	}

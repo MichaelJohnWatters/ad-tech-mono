@@ -780,9 +780,13 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 	}
 	ev := events.BehaviourSignalEvent{
 		SchemaVersion: events.CurrentSchemaVersion,
-		TraceID:       q.Get("tid"),
-		Kind:          kind,
-		UserID:        uid,
+		// Prefer the beacon's tid; fall back to the request's OTel trace (set by
+		// the tracker's HTTPMiddleware) so a retargeting pixel with no ?tid= (an
+		// advertiser page tag) still carries a trace_id all the way downstream —
+		// behaviour event → audience-rt → retargeting.enrolled → webhook.
+		TraceID: firstNonEmpty(q.Get("tid"), tracing.TraceIDFromContext(ctx)),
+		Kind:    kind,
+		UserID:  uid,
 		// The household (salted-IP hash) the serve resolved, when the beacon
 		// carries it. Lets view-through fall back to a household match when the
 		// exact user id doesn't line up (cross-device / CTV).
