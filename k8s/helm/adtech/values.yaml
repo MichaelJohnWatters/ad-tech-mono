@@ -554,6 +554,8 @@ services:
         value: "pipeline-0"
       - name: PIPELINE_NATS_URL
         value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
       # ADR 0008: audience-ingest completion emails (async worker) via Mailpit.
       - name: PIPELINE_SMTP_HOST
         value: "mailpit:1025"

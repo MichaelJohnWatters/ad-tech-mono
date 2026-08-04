@@ -396,6 +396,46 @@ func (s *Store) PurgeExpiredMembers(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// MembershipRow is one live (non-expired) membership: which user is in which
+// segment, at what visibility. Used by the audience cache writer's reconcile to
+// rebuild the Redis sets from Postgres truth.
+type MembershipRow struct {
+	UserID     string
+	Visibility string
+	SegmentID  string
+}
+
+// AllMemberships returns every live membership across all accounts (platform-read
+// hatch), for the single cache writer's full-scan reconcile.
+func (s *Store) AllMemberships(ctx context.Context) ([]MembershipRow, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin memberships scan: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("memberships scan platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT m.user_id, s.visibility, m.segment_id::text
+FROM audience_segment_members m
+JOIN audience_segments s ON s.id = m.segment_id
+WHERE m.expires_at IS NULL OR m.expires_at > now()`)
+	if err != nil {
+		return nil, fmt.Errorf("query memberships: %w", err)
+	}
+	defer rows.Close()
+	var out []MembershipRow
+	for rows.Next() {
+		var r MembershipRow
+		if err := rows.Scan(&r.UserID, &r.Visibility, &r.SegmentID); err != nil {
+			return nil, fmt.Errorf("scan membership: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // MembershipChange is one appended row of audience_membership_changelog — the
 // outbox that drives the audience cache's append-based refresh.
 type MembershipChange struct {

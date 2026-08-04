@@ -35,6 +35,11 @@ func main() {
 	// hourly ClickHouse→Parquet export owned by reporting.)
 	startOnboarding(cfg, log, lc)
 
+	// The SINGLE writer of the append-based audience membership cache: drains the
+	// membership change-log to Redis SETs (SADD/SREM) + periodic reconcile.
+	// pipeline is single-replica, so this is the one writer for the whole cluster.
+	startAudienceCacheWriter(cfg, log, lc)
+
 	mux := http.NewServeMux()
 	// pprof: the 2026-07-18 wedge was undiagnosable post-mortem because
 	// nothing could dump goroutines. Debug surface only (cluster network).
