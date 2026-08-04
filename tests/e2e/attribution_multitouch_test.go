@@ -64,8 +64,19 @@ func TestAttributionMultiTouchChain(t *testing.T) {
 	waitCHCount(t, h, fmt.Sprintf("SELECT count() FROM adtech.attribution_touchpoints WHERE conversion_trace_id='%s'", convTrace), 3, "3-touchpoint attribution chain")
 
 	// The reporting API apportions credit per model on read: linear splits the 3
-	// exposures evenly (~1/3 each, summing to 1).
-	b := h.GetAttribution(t, convTrace, "linear")
+	// exposures evenly (~1/3 each, summing to 1). Poll the API: waitCHCount above
+	// confirmed the 3 rows are in ClickHouse, but the API's read can momentarily
+	// lag them under load (the reporting replica's CH view catching up), so re-call
+	// until it sees all 3 rather than asserting on a single racy read.
+	var b harness.AttributionBreakdown
+	apiDeadline := time.Now().Add(5 * time.Second)
+	for {
+		b = h.GetAttribution(t, convTrace, "linear")
+		if len(b.Touchpoints) == 3 || time.Now().After(apiDeadline) {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 	if len(b.Touchpoints) != 3 {
 		t.Fatalf("attribution API: got %d touchpoints, want 3", len(b.Touchpoints))
 	}
