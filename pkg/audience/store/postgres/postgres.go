@@ -509,6 +509,28 @@ WHERE seq > $1 ORDER BY seq ASC LIMIT $2`, afterSeq, limit)
 	return out, rows.Err()
 }
 
+// ChangelogBacklog reports how far behind the single cache writer is: the number
+// of un-drained change-log rows and the age (seconds) of the oldest one. Rows are
+// trimmed after they're applied, so a growing backlog / rising oldest-age means
+// the writer can't keep up — the signal that it's time to shard the writer.
+func (s *Store) ChangelogBacklog(ctx context.Context) (count int, oldestAgeSec float64, err error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin backlog: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, 0, fmt.Errorf("backlog platform-read: %w", err)
+	}
+	err = tx.QueryRowContext(ctx, `
+SELECT count(*), COALESCE(EXTRACT(EPOCH FROM (now() - min(changed_at))), 0)
+FROM audience_membership_changelog`).Scan(&count, &oldestAgeSec)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query backlog: %w", err)
+	}
+	return count, oldestAgeSec, nil
+}
+
 // TrimMembershipChanges deletes consumed changelog rows (seq <= uptoSeq) across
 // all accounts, so the outbox stays bounded. Called by the single writer after
 // it has applied + advanced its watermark.

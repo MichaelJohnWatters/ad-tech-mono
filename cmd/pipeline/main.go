@@ -14,6 +14,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/health"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
@@ -35,12 +36,15 @@ func main() {
 	// hourly ClickHouse→Parquet export owned by reporting.)
 	startOnboarding(cfg, log, lc)
 
+	metrics := middleware.NewMetrics(constants.ServicePipeline)
+
 	// The SINGLE writer of the append-based audience membership cache: drains the
 	// membership change-log to Redis SETs (SADD/SREM) + periodic reconcile.
 	// pipeline is single-replica, so this is the one writer for the whole cluster.
-	acw := startAudienceCacheWriter(cfg, log, lc)
+	acw := startAudienceCacheWriter(cfg, log, lc, metrics.Registry())
 
 	mux := http.NewServeMux()
+	mux.Handle(routes.Metrics, metrics.Handler())
 	if acw != nil {
 		mux.HandleFunc(routes.DebugAudienceRefresh, acw.DebugRefreshHandler)
 	}
