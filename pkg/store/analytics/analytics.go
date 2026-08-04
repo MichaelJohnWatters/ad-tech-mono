@@ -629,9 +629,10 @@ type BehaviourSignalRow struct {
 // (profileSignalRecord), so the ClickHouse profile_signals table holds the same
 // one-row-per-id record and phase 2's membership rebuild queries match.
 type ProfileSignalRow struct {
-	TraceID     string    `json:"trace_id"`
-	AccountID   string    `json:"account_id"`
-	Provider    string    `json:"provider,omitempty"`
+	TraceID       string    `json:"trace_id"`                  // real request trace (inline upload) or empty (async)
+	IngestTraceID string    `json:"ingest_trace_id,omitempty"` // "ing_<32hex>" batch lineage → audience_ingest_jobs.id
+	AccountID     string    `json:"account_id"`
+	Provider      string    `json:"provider,omitempty"`
 	ProviderID  string    `json:"provider_id,omitempty"` // data_providers.id (ADR 0009)
 	DataParty   string    `json:"data_party,omitempty"`  // first | second | third (ADR 0009)
 	Source      string    `json:"source"`

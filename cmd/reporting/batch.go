@@ -525,7 +525,7 @@ func (c *EventConsumer) handleProfileSignalBatch(ctx context.Context, msgs []*ev
 			for _, ev := range evs {
 				for _, id := range ev.IDs {
 					rows = append(rows, &analytics.ProfileSignalRow{
-						TraceID: ev.TraceID, AccountID: ev.AccountID, Provider: ev.Provider,
+						TraceID: ev.TraceID, IngestTraceID: ev.IngestTraceID, AccountID: ev.AccountID, Provider: ev.Provider,
 						ProviderID: ev.ProviderID, DataParty: ev.DataParty,
 						Source: ev.Source, Access: ev.Access, SegmentID: ev.SegmentID,
 						SegmentName: ev.SegmentName, Visibility: ev.Visibility, Consent: ev.Consent,
@@ -593,7 +593,7 @@ func (c *EventConsumer) handleProfileSignal(ctx context.Context, msg *events.Mes
 	rows := make([]*analytics.ProfileSignalRow, 0, len(ev.IDs))
 	for _, id := range ev.IDs {
 		rows = append(rows, &analytics.ProfileSignalRow{
-			TraceID: ev.TraceID, AccountID: ev.AccountID, Provider: ev.Provider,
+			TraceID: ev.TraceID, IngestTraceID: ev.IngestTraceID, AccountID: ev.AccountID, Provider: ev.Provider,
 			ProviderID: ev.ProviderID, DataParty: ev.DataParty,
 			Source: ev.Source, Access: ev.Access, SegmentID: ev.SegmentID,
 			SegmentName: ev.SegmentName, Visibility: ev.Visibility, Consent: ev.Consent,
