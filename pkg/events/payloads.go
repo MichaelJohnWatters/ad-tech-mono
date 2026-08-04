@@ -300,7 +300,7 @@ type DirectWinEvent struct {
 // (AccountID = the advertiser) so the webhooks dispatcher can deliver it to the
 // advertiser's registered endpoints — the hook for an abandoned-cart push.
 type RetargetingEnrolledEvent struct {
-	SchemaVersion int    `json:"schema_version"`
+	SchemaVersion int `json:"schema_version"`
 	// TraceID is the originating site_visit's trace, so the webhook delivery is
 	// linkable back to the visit that triggered it (and rides the same OTel trace
 	// the NATS headers already propagate).
@@ -395,6 +395,28 @@ type ProfileSignalEvent struct {
 	Consent       bool              `json:"consent"`    // declared consent basis permits personalisation
 	ObservedAt    time.Time         `json:"observed_at"`
 	IDs           []ProfileSignalID `json:"ids"`
+}
+
+// AudienceInvalidateEvent is the payload of adtech.cache.invalidate.audience. It
+// tells the DSP/SSP audience preloader WHAT changed so it can re-materialize only
+// the affected Redis keys instead of rescanning the whole membership table:
+//   - UserIDs set     → re-materialize exactly those users (real-time retargeting
+//     enroll/suppress — the high-frequency path; removals MUST take this route,
+//     since a segment-scoped refresh can't see a user already gone from a segment).
+//   - else SegmentID  → re-materialize the users currently in that segment (uploads,
+//     profile-builder segment rebuilds — bounded by segment, avoids stuffing a bulk
+//     upload's ids into one message).
+//   - else (empty)    → full reconcile (unknown/legacy source).
+//
+// The periodic full reconcile in the preloader is the backstop for anything a delta
+// misses (silent TTL expiry, batch prunes) — deltas give speed, the reconcile gives
+// eventual correctness. All fields optional; an empty/garbled payload → full refresh.
+type AudienceInvalidateEvent struct {
+	SchemaVersion int      `json:"schema_version"`
+	Source        string   `json:"source,omitempty"`
+	AccountID     string   `json:"account_id,omitempty"`
+	SegmentID     string   `json:"segment_id,omitempty"`
+	UserIDs       []string `json:"user_ids,omitempty"`
 }
 
 // PrebidOutboundWinEvent is published by cmd/publisher-adserver when an

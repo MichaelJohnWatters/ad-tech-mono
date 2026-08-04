@@ -29,6 +29,7 @@ package profilebuilder
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -194,7 +195,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	if cfg.Bus != nil {
 		for segID, accountID := range changed {
-			payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + accountID + `"}`)
+			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+				SchemaVersion: events.CurrentSchemaVersion,
+				Source:        "profile-builder",
+				SegmentID:     segID,
+				AccountID:     accountID,
+			})
 			if err := cfg.Bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
 				log.Warn("profile-builder: invalidate publish failed", "segment", segID, "error", err)
 			}

@@ -238,8 +238,14 @@ func (e pgEnroller) RemoveMember(ctx context.Context, accountID, segmentID, user
 	return e.store.RemoveMember(ctx, accountID, segmentID, userID)
 }
 
-func (e pgEnroller) InvalidateAudience(ctx context.Context) error {
-	// Same broadcast the batch builder uses — the DSP's audience preloader
-	// refreshes the whole members table, making the new membership live in seconds.
-	return e.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, []byte(`{"source":"audience-rt"}`))
+func (e pgEnroller) InvalidateAudience(ctx context.Context, userID string) error {
+	// Name the exact user who changed so the DSP/SSP preloader re-materializes only
+	// that user's Redis keys (delta refresh), not the whole members table — this is
+	// the highest-frequency membership-change path.
+	payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+		SchemaVersion: events.CurrentSchemaVersion,
+		Source:        "audience-rt",
+		UserIDs:       []string{userID},
+	})
+	return e.bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload)
 }

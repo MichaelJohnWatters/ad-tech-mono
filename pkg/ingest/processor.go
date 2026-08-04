@@ -12,6 +12,7 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -345,7 +346,12 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	}
 
 	if p.Bus != nil {
-		payload := []byte(`{"segment_id":"` + segID + `","account_id":"` + accountID + `"}`)
+		payload, _ := json.Marshal(events.AudienceInvalidateEvent{
+			SchemaVersion: events.CurrentSchemaVersion,
+			Source:        "ingest",
+			SegmentID:     segID,
+			AccountID:     accountID,
+		})
 		if err := p.Bus.Publish(ctx, events.SubjectCacheInvalidateAudience, payload); err != nil {
 			p.Log.Warn("ingest: invalidate publish failed", "segment", segID, "error", err)
 		}
