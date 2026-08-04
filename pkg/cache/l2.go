@@ -7,6 +7,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,6 +43,17 @@ type L2Cache interface {
 
 	// Expire sets a TTL on an existing key.
 	Expire(ctx context.Context, key string, ttl time.Duration) error
+
+	// SAdd adds members to the set at key (creating it if absent). Used by the
+	// audience membership cache (a user's segments are a Redis set so enroll/
+	// suppress are atomic SADD/SREM appends, not a read-modify-write rebuild).
+	SAdd(ctx context.Context, key string, members ...string) error
+
+	// SRem removes members from the set at key. A no-op if key/member absent.
+	SRem(ctx context.Context, key string, members ...string) error
+
+	// SMembers returns all members of the set at key ([]nil if absent).
+	SMembers(ctx context.Context, key string) ([]string, error)
 
 	// Ping checks the connection.
 	Ping(ctx context.Context) error
@@ -137,6 +149,65 @@ func (m *MemoryL2) Expire(_ context.Context, key string, ttl time.Duration) erro
 		m.expires[key] = time.Now().Add(ttl)
 	}
 	return nil
+}
+
+func (m *MemoryL2) SAdd(_ context.Context, key string, members ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.decodeSet(key)
+	for _, mem := range members {
+		set[mem] = struct{}{}
+	}
+	m.encodeSet(key, set)
+	return nil
+}
+
+func (m *MemoryL2) SRem(_ context.Context, key string, members ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.decodeSet(key)
+	for _, mem := range members {
+		delete(set, mem)
+	}
+	if len(set) == 0 {
+		delete(m.data, key)
+		return nil
+	}
+	m.encodeSet(key, set)
+	return nil
+}
+
+func (m *MemoryL2) SMembers(_ context.Context, key string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := m.decodeSet(key)
+	out := make([]string, 0, len(set))
+	for mem := range set {
+		out = append(out, mem)
+	}
+	return out, nil
+}
+
+// decodeSet/encodeSet back the memory set ops with the same string map as the
+// other ops (newline-joined members) so tests need no separate storage.
+func (m *MemoryL2) decodeSet(key string) map[string]struct{} {
+	set := map[string]struct{}{}
+	if v, ok := m.data[key]; ok && v != "" {
+		for _, mem := range strings.Split(v, "\n") {
+			if mem != "" {
+				set[mem] = struct{}{}
+			}
+		}
+	}
+	return set
+}
+
+func (m *MemoryL2) encodeSet(key string, set map[string]struct{}) {
+	parts := make([]string, 0, len(set))
+	for mem := range set {
+		parts = append(parts, mem)
+	}
+	m.data[key] = strings.Join(parts, "\n")
 }
 
 func (m *MemoryL2) Ping(_ context.Context) error { return nil }

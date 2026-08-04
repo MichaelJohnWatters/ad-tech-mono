@@ -46,13 +46,15 @@ func (f *fakeCommittedRedis) Set(_ context.Context, key, value string, _ time.Du
 	return nil
 }
 
-func (f *fakeCommittedRedis) SAdd(_ context.Context, key, member string) error {
+func (f *fakeCommittedRedis) SAdd(_ context.Context, key string, members ...string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sets[key] == nil {
 		f.sets[key] = map[string]bool{}
 	}
-	f.sets[key][member] = true
+	for _, member := range members {
+		f.sets[key][member] = true
+	}
 	return nil
 }
 

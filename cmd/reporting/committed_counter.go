@@ -22,7 +22,7 @@ type committedRedis interface {
 	IncrBy(ctx context.Context, key string, n int64) (int64, error)
 	Get(ctx context.Context, key string) (string, bool, error)
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
-	SAdd(ctx context.Context, key, member string) error
+	SAdd(ctx context.Context, key string, members ...string) error
 	SMembers(ctx context.Context, key string) ([]string, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 }

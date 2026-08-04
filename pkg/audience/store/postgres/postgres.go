@@ -396,6 +396,102 @@ func (s *Store) PurgeExpiredMembers(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// MembershipChange is one appended row of audience_membership_changelog — the
+// outbox that drives the audience cache's append-based refresh.
+type MembershipChange struct {
+	Seq        int64
+	AccountID  string
+	UserID     string
+	SegmentID  string
+	Visibility string // public | dsp_private
+	Op         string // add | remove
+}
+
+// AppendMembershipChanges appends outbox rows for one account's membership change
+// (retargeting enroll/suppress, upload, profile-builder add/prune), under the
+// account's tenant context so RLS admits the insert. A best-effort companion to
+// the members write; a dropped append is caught by the reconcile.
+func (s *Store) AppendMembershipChanges(ctx context.Context, accountID string, changes []MembershipChange) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin changelog append: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return fmt.Errorf("changelog append account-scope: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO audience_membership_changelog (account_id, user_id, segment_id, visibility, op)
+VALUES ($1::uuid, $2, $3::uuid, $4, $5)`)
+	if err != nil {
+		return fmt.Errorf("prepare changelog append: %w", err)
+	}
+	defer stmt.Close()
+	for _, c := range changes {
+		if _, err := stmt.ExecContext(ctx, accountID, c.UserID, c.SegmentID, c.Visibility, c.Op); err != nil {
+			return fmt.Errorf("append changelog row: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ReadMembershipChangesSince returns up to limit changelog rows past afterSeq, in
+// seq order, across all accounts (platform-read hatch — the single cache writer
+// applies every tenant's changes to the one shared Redis).
+func (s *Store) ReadMembershipChangesSince(ctx context.Context, afterSeq int64, limit int) ([]MembershipChange, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin changelog read: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("changelog read platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT seq, account_id::text, user_id, segment_id::text, visibility, op
+FROM audience_membership_changelog
+WHERE seq > $1 ORDER BY seq ASC LIMIT $2`, afterSeq, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query changelog: %w", err)
+	}
+	defer rows.Close()
+	var out []MembershipChange
+	for rows.Next() {
+		var c MembershipChange
+		if err := rows.Scan(&c.Seq, &c.AccountID, &c.UserID, &c.SegmentID, &c.Visibility, &c.Op); err != nil {
+			return nil, fmt.Errorf("scan changelog row: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// TrimMembershipChanges deletes consumed changelog rows (seq <= uptoSeq) across
+// all accounts, so the outbox stays bounded. Called by the single writer after
+// it has applied + advanced its watermark.
+func (s *Store) TrimMembershipChanges(ctx context.Context, uptoSeq int64) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin changelog trim: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, fmt.Errorf("changelog trim platform-read: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM audience_membership_changelog WHERE seq <= $1`, uptoSeq)
+	if err != nil {
+		return 0, fmt.Errorf("trim changelog: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit changelog trim: %w", err)
+	}
+	return int(n), nil
+}
+
 // RetargetingSegmentRow is a retargeting segment's id + raw rule JSON, for the
 // real-time enroller (cmd/audience-rt) to match against a site visit.
 type RetargetingSegmentRow struct {

@@ -108,6 +108,18 @@ func (s *SelfHealingL2) Expire(ctx context.Context, key string, ttl time.Duratio
 	return s.get().Expire(ctx, key, ttl)
 }
 
+func (s *SelfHealingL2) SAdd(ctx context.Context, key string, members ...string) error {
+	return s.get().SAdd(ctx, key, members...)
+}
+
+func (s *SelfHealingL2) SRem(ctx context.Context, key string, members ...string) error {
+	return s.get().SRem(ctx, key, members...)
+}
+
+func (s *SelfHealingL2) SMembers(ctx context.Context, key string) ([]string, error) {
+	return s.get().SMembers(ctx, key)
+}
+
 func (s *SelfHealingL2) Ping(ctx context.Context) error {
 	return s.get().Ping(ctx)
 }
