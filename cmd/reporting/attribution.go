@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/lifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // identityResolver expands one id to the platform ids linked to it (either
@@ -17,6 +20,47 @@ import (
 // cross-device / cross-publisher resolution).
 type identityResolver interface {
 	ResolveIdentityConfident(ctx context.Context, id string, minConfidence float64, limit int) ([]string, error)
+}
+
+// lazyIdentityResolver opens the identity-graph Postgres store on FIRST use and
+// retries a failed open on every later call, instead of pinging once at boot.
+// Boot-latch doctrine: reporting used to construct the store at startup and,
+// on any transient failure (fresh-install DNS not up yet, DB briefly
+// unavailable), permanently disable cross-device attribution while the pod
+// reported ready. A resolve while the DB is down returns an error, which the
+// attributor already degrades to same-id matching (WARN) — identical behaviour
+// to a nil resolver, but it heals the moment Postgres is reachable.
+type lazyIdentityResolver struct {
+	url string
+	lc  *lifecycle.Lifecycle
+	log *slog.Logger
+
+	mu sync.Mutex
+	pg *postgres.Store
+}
+
+func (l *lazyIdentityResolver) store() (*postgres.Store, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.pg != nil {
+		return l.pg, nil
+	}
+	pg, err := postgres.New(postgres.Config{PrimaryURL: l.url, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute})
+	if err != nil {
+		return nil, err
+	}
+	l.pg = pg
+	l.lc.OnShutdown("attribution-identity-db", func(_ context.Context) error { return pg.Close() })
+	l.log.Info("view-through cross-device resolver connected")
+	return pg, nil
+}
+
+func (l *lazyIdentityResolver) ResolveIdentityConfident(ctx context.Context, id string, minConfidence float64, limit int) ([]string, error) {
+	pg, err := l.store()
+	if err != nil {
+		return nil, err
+	}
+	return pg.ResolveIdentityConfident(ctx, id, minConfidence, limit)
 }
 
 // viewThroughAttributor credits a click-less conversion to the most-recent
