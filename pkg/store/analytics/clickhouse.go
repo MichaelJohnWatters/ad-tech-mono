@@ -209,7 +209,7 @@ func (c *ClickHouse) createTables() error {
 		// the same way; the lake is still the keep-forever copy, this just keeps
 		// a year of the onboarding record queryable in-engine.
 		`CREATE TABLE IF NOT EXISTS profile_signals (
-			trace_id String, account_id String, provider String, provider_id String, data_party String,
+			trace_id String, ingest_trace_id String, account_id String, provider String, provider_id String, data_party String,
 			source String, access String,
 			segment_id String, segment_name String, visibility String, consent UInt8,
 			id_type String, id_value String, observed_at DateTime64(3)
@@ -271,6 +271,10 @@ func (c *ClickHouse) createTables() error {
 	for _, ddl := range []string{
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS provider_id String`,
 		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS data_party String`,
+		// Batch-lineage correlation for uploaded rows ("ing_<32hex>" → the ingest
+		// job). Distinct from trace_id (a real request trace); old rows read as
+		// empty. See pkg/ingest.ingestJobTrace.
+		`ALTER TABLE profile_signals ADD COLUMN IF NOT EXISTS ingest_trace_id String`,
 		// Per-DSP no-bid reason (Phase H) — keeps a DSP-level enforcement block
 		// (e.g. adcert_invalid) from being lost in the aggregated no-bid. Old rows
 		// read as empty = "bid or plain no-demand".

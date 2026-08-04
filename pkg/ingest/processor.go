@@ -131,19 +131,16 @@ func IsReject(err error) bool {
 // via MarkDone (the terminal counts fold the old onboarding_runs table, ADR 0007
 // Phase 4). An INFRA error is returned wrapped so the caller retries; content
 // failures return a result with nil error.
-// ingestTraceID is the trace_id stamped on rows/events an upload produces. It stays
-// a real 32-hex W3C trace_id — same field, same format everything downstream keys on
-// (Jaeger derived-fields, log pivots) — never a renamed or prefixed variant.
-//   - INLINE (synchronous gateway upload): the upload request's OTel trace.
-//   - ASYNC worker (background context, no request trace): the ingest JOB's own id.
-//     audience_ingest_jobs.id is a UUID — 128 bits, exactly a trace_id's width — so
-//     dash-stripping it yields a valid 32-hex trace that maps deterministically back
-//     to the job that produced the row. One format in the column, always traceable.
-func ingestTraceID(ctx context.Context, job ingestjobs.Job) string {
-	if t := tracing.TraceIDFromContext(ctx); t != "" {
-		return t
-	}
-	return strings.ReplaceAll(job.ID, "-", "")
+// ingestJobTrace is the batch-lineage correlation for the rows an upload produces —
+// deliberately NOT a trace_id and deliberately a DISTINCT format so the two are never
+// confused. Uploaded data is batch: it has no single request trace spanning it (the
+// async worker processes it later, under no request), so its lineage is the ingest
+// JOB. We format that as "ing_<32hex>": audience_ingest_jobs.id is a UUID (128 bits),
+// dash-stripped to 32 hex and prefixed with ing_ — the prefix makes it self-identifying
+// (never a 32-hex request trace) while still mapping deterministically back to the job.
+// A row's real request trace, when one exists (inline upload), rides trace_id separately.
+func ingestJobTrace(job ingestjobs.Job) string {
+	return "ing_" + strings.ReplaceAll(job.ID, "-", "")
 }
 
 func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs.IngestResult, error) {
@@ -322,7 +319,11 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 			}
 			ev := events.ProfileSignalEvent{
 				SchemaVersion: events.CurrentSchemaVersion,
-				TraceID:       ingestTraceID(ctx, job),
+				// trace_id: the real request trace ONLY (upload request when inline;
+				// empty when the async worker has no request). ingest_trace_id: the
+				// always-present, distinct-format batch lineage (never confusable).
+				TraceID:       tracing.TraceIDFromContext(ctx),
+				IngestTraceID: ingestJobTrace(job),
 				AccountID:     accountID,
 				Provider:      provider,
 				ProviderID:    job.ProviderID,

@@ -374,8 +374,15 @@ type ProfileSignalID struct {
 // memberships recomputable (replay signals → rebuild memberships); the PG
 // membership rows are written synchronously by the uploader.
 type ProfileSignalEvent struct {
-	SchemaVersion int               `json:"schema_version"`
-	TraceID       string            `json:"trace_id"`
+	SchemaVersion int `json:"schema_version"`
+	// TraceID is the real request trace ONLY: the upload request's OTel trace when
+	// the file is processed inline (synchronous), empty when the async worker
+	// processes it (no request → no fake trace). Use IngestTraceID for lineage.
+	TraceID string `json:"trace_id"`
+	// IngestTraceID is the batch-lineage correlation for uploaded data, always set:
+	// "ing_<32hex>" derived from the ingest job id (audience_ingest_jobs.id). Its
+	// distinct ing_ prefix means it is never confused with a 32-hex request trace_id.
+	IngestTraceID string            `json:"ingest_trace_id,omitempty"`
 	AccountID     string            `json:"account_id"`
 	Provider      string            `json:"provider,omitempty"`    // drop-zone provider name; empty = first-party
 	ProviderID    string            `json:"provider_id,omitempty"` // data_providers.id (ADR 0009); empty = no provider
