@@ -79,8 +79,26 @@ func (c *Client) Expire(ctx context.Context, key string, ttl time.Duration) erro
 // Set operations — used by the identity-consumer's Redis-backed fingerprint
 // buckets so probabilistic matching stays coherent across multiple replicas.
 
-func (c *Client) SAdd(ctx context.Context, key, member string) error {
-	return c.rdb.SAdd(ctx, key, member).Err()
+func (c *Client) SAdd(ctx context.Context, key string, members ...string) error {
+	if len(members) == 0 {
+		return nil
+	}
+	args := make([]any, len(members))
+	for i, m := range members {
+		args[i] = m
+	}
+	return c.rdb.SAdd(ctx, key, args...).Err()
+}
+
+func (c *Client) SRem(ctx context.Context, key string, members ...string) error {
+	if len(members) == 0 {
+		return nil
+	}
+	args := make([]any, len(members))
+	for i, m := range members {
+		args[i] = m
+	}
+	return c.rdb.SRem(ctx, key, args...).Err()
 }
 
 func (c *Client) SCard(ctx context.Context, key string) (int64, error) {

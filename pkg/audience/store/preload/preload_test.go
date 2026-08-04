@@ -3,6 +3,7 @@ package preload
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,8 +34,49 @@ func (f *fakeL2) Incr(context.Context, string) (int64, error)          { return 
 func (f *fakeL2) IncrBy(context.Context, string, int64) (int64, error) { return 0, nil }
 func (f *fakeL2) DecrBy(context.Context, string, int64) (int64, error) { return 0, nil }
 func (f *fakeL2) Expire(context.Context, string, time.Duration) error  { return nil }
-func (f *fakeL2) Ping(context.Context) error                           { return nil }
-func (f *fakeL2) Close() error                                         { return nil }
+func (f *fakeL2) SAdd(_ context.Context, key string, members ...string) error {
+	cur := map[string]struct{}{}
+	if v := f.m[key]; v != "" {
+		for _, s := range strings.Split(v, "\n") {
+			cur[s] = struct{}{}
+		}
+	}
+	for _, s := range members {
+		cur[s] = struct{}{}
+	}
+	parts := make([]string, 0, len(cur))
+	for s := range cur {
+		parts = append(parts, s)
+	}
+	sort.Strings(parts)
+	f.m[key] = strings.Join(parts, "\n")
+	return nil
+}
+func (f *fakeL2) SRem(_ context.Context, key string, members ...string) error {
+	if f.m[key] == "" {
+		return nil
+	}
+	rm := map[string]struct{}{}
+	for _, s := range members {
+		rm[s] = struct{}{}
+	}
+	var parts []string
+	for _, s := range strings.Split(f.m[key], "\n") {
+		if _, drop := rm[s]; !drop && s != "" {
+			parts = append(parts, s)
+		}
+	}
+	f.m[key] = strings.Join(parts, "\n")
+	return nil
+}
+func (f *fakeL2) SMembers(_ context.Context, key string) ([]string, error) {
+	if f.m[key] == "" {
+		return nil, nil
+	}
+	return strings.Split(f.m[key], "\n"), nil
+}
+func (f *fakeL2) Ping(context.Context) error { return nil }
+func (f *fakeL2) Close() error               { return nil }
 
 func TestKeysToTombstone(t *testing.T) {
 	tests := []struct {
