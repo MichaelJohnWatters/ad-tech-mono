@@ -175,12 +175,10 @@ func main() {
 	if vr, ok := store.(analytics.ViewThroughReader); ok {
 		var idResolver identityResolver
 		if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
-			if pg, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 3, MaxIdleConns: 1, ConnMaxLifetime: 5 * time.Minute}); err == nil {
-				idResolver = pg
-				lc.OnShutdown("attribution-identity-db", func(_ context.Context) error { return pg.Close() })
-			} else {
-				log.Warn("view-through cross-device disabled (identity resolver pg open failed)", "error", err)
-			}
+			// Lazy + self-healing: opens on first resolve, retries on later ones.
+			// Never latch cross-device attribution off on a boot-time DB blip
+			// (a fresh install starts this pod before Postgres resolves).
+			idResolver = &lazyIdentityResolver{url: dbURL, lc: lc, log: log}
 		}
 		aw, _ := store.(analytics.AttributionWriter) // nil → no multi-touch chain capture
 		var attrOverrides *pgAttributionConfigSource

@@ -110,23 +110,56 @@ func loadPGPKeyring(db *sql.DB, log *slog.Logger) openpgp.EntityList {
 	return keyring
 }
 
+// onboardingBootRetry is how often a failed boot-time dependency check retries.
+const onboardingBootRetry = 10 * time.Second
+
 // startOnboarding wires the drop-zone poller: object store, Postgres
 // (the audience_ingest_jobs queue + memberships + match rate), NATS (cache
-// invalidates), and the interval ticker. Degrades explicitly: no object store or no Postgres
-// disables the zone with an ERROR (files would silently pile up otherwise);
-// no NATS only disables invalidates (warm caches still refresh on interval).
+// invalidates), and the interval ticker. No NATS only disables invalidates
+// (warm caches still refresh on interval).
+//
+// Boot-latch doctrine: a fresh install starts this pod before minio/postgres
+// DNS resolves. A boot-time dependency failure must NEVER disable the
+// drop-zone for the pod's lifetime (files would silently pile up while the pod
+// reports ready — exactly what happened on the first true fresh-disk boot);
+// instead the whole init retries until the deps come up, then the poller +
+// ingest worker start normally.
 func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) {
 	if !keys.Pipeline.OnboardingEnabled.Get(cfg) {
 		return
 	}
+	stop := make(chan struct{})
+	lc.OnShutdown("onboarding-boot-retry", func(_ context.Context) error { close(stop); return nil })
+	go func() {
+		for {
+			err := initOnboarding(cfg, log, lc)
+			if err == nil {
+				return
+			}
+			log.Warn("onboarding: boot dependency unavailable — will retry",
+				"error", err, "retry_in", onboardingBootRetry.String())
+			select {
+			case <-stop:
+				return
+			case <-time.After(onboardingBootRetry):
+			}
+		}
+	}()
+}
+
+// initOnboarding performs one attempt at wiring the drop-zone + ingest worker.
+// A missing/unreachable dependency returns an error (the caller retries); on
+// success the poller, sweep, and worker are running and it returns nil.
+func initOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycle) error {
 	obj := connectObjects(cfg, log)
 	if obj == nil {
-		log.Error("onboarding drop-zone disabled: no object store")
-		return
+		return fmt.Errorf("no object store configured/reachable")
 	}
 	bucket := keys.Pipeline.OnboardingBucket.Get(cfg)
 	if err := obj.EnsureBucket(context.Background(), bucket); err != nil {
-		log.Warn("onboarding: ensure bucket failed", "bucket", bucket, "error", err)
+		// Without the bucket every tick's List fails — treat as a boot
+		// dependency and retry rather than starting a poller that can only error.
+		return fmt.Errorf("ensure bucket %s: %w", bucket, err)
 	}
 
 	dbURL := cfg.Get(keys.Database.URL.Key(), "")
@@ -135,8 +168,10 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 		err = db.Ping()
 	}
 	if err != nil {
-		log.Error("onboarding drop-zone disabled: postgres unavailable", "error", err)
-		return
+		if db != nil {
+			db.Close()
+		}
+		return fmt.Errorf("postgres unavailable: %w", err)
 	}
 	lc.OnShutdown("onboarding-db", func(_ context.Context) error { return db.Close() })
 
@@ -211,6 +246,7 @@ func startOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecyc
 	// poller enqueues into — decoupling enqueue (list + manifest) from process
 	// (decode → match → memberships), durable + N-replica safe via SKIP LOCKED.
 	startIngestWorker(cfg, o, log, lc)
+	return nil
 }
 
 // onboardingManifest is the per-provider contract at {provider}/manifest.json.
