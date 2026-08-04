@@ -39,7 +39,7 @@ data:
           "description": "Auctions per second hitting the exchange.",
           "targets": [
             {
-              "expr": "sum(rate(adtech_http_requests_total{service=\"exchange\",handler=\"/v1/openrtb/auction\"}[1m]))",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",service=\"exchange\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[1m]))",
               "legendFormat": "auctions/s"
             }
           ]
@@ -57,15 +57,15 @@ data:
           "description": "Exchange auction handler p50/p95/p99 from the request_duration_seconds histogram.",
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[1m])) by (le))",
               "legendFormat": "p99"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[1m])) by (le))",
               "legendFormat": "p95"
             },
             {
-              "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{handler=\"/v1/openrtb/auction\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[1m])) by (le))",
               "legendFormat": "p50"
             }
           ],
@@ -88,7 +88,7 @@ data:
           "description": "OpenRTB bid requests per second per DSP pod. Each pod is a separate scrape target with a 'pod' label set in the Prometheus scrape config.",
           "targets": [
             {
-              "expr": "sum(rate(adtech_http_requests_total{service=\"dsp\",handler=\"/v1/openrtb/bid\"}[1m])) by (pod)",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",service=\"dsp\",handler=~\"/v1/openrtb/bid|/adtech.internalrpc.InternalBidService/Bid\"}[1m])) by (pod)",
               "legendFormat": "{{pod}}"
             }
           ]
@@ -142,7 +142,7 @@ data:
           "description": "p95 OpenRTB bid handler latency per DSP pod. Spikes here are the leading indicator of fan-out timeouts on the exchange side.",
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=\"dsp\",handler=\"/v1/openrtb/bid\"}[1m])) by (pod, le))",
+              "expr": "histogram_quantile(0.95, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",service=\"dsp\",handler=~\"/v1/openrtb/bid|/adtech.internalrpc.InternalBidService/Bid\"}[1m])) by (pod, le))",
               "legendFormat": "{{pod}}"
             }
           ],
@@ -165,7 +165,7 @@ data:
           "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter.",
           "targets": [
             {
-              "expr": "sum(rate(adtech_http_requests_total{status=~\"[45]..\"}[5m])) by (service, status)",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=~\"[45]..\"}[5m])) by (service, status)",
               "legendFormat": "{{service}} {{status}}"
             }
           ]
@@ -452,7 +452,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(adtech_http_requests_total{service=~\"$service\"}[1m])) by (handler, method)",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",service=~\"$service\"}[1m])) by (handler, method)",
               "legendFormat": "{{method}} {{handler}}"
             }
           ]
@@ -470,15 +470,15 @@ data:
           "description": "Latency histogram quantiles across all handlers for the selected service.",
           "targets": [
             {
-              "expr": "histogram_quantile(0.99, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.99, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",service=~\"$service\"}[1m])) by (le))",
               "legendFormat": "p99"
             },
             {
-              "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",service=~\"$service\"}[1m])) by (le))",
               "legendFormat": "p95"
             },
             {
-              "expr": "histogram_quantile(0.50, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",service=~\"$service\"}[1m])) by (le))",
               "legendFormat": "p50"
             }
           ],
@@ -501,7 +501,7 @@ data:
           "description": "Errors per second derived from adtech_http_requests_total with status=~\"[45]..\" (we don't keep a separate counter).",
           "targets": [
             {
-              "expr": "sum(rate(adtech_http_requests_total{service=~\"$service\",status=~\"[45]..\"}[1m])) by (status, handler)",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",service=~\"$service\",status=~\"[45]..\"}[1m])) by (status, handler)",
               "legendFormat": "{{status}} {{handler}}"
             }
           ]
@@ -519,7 +519,7 @@ data:
           "description": "Breaks down latency per handler so you can spot which endpoint is causing the service-wide tail.",
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(adtech_http_request_duration_seconds_bucket{service=~\"$service\"}[1m])) by (handler, le))",
+              "expr": "histogram_quantile(0.95, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",service=~\"$service\"}[1m])) by (handler, le))",
               "legendFormat": "{{handler}}"
             }
           ],
