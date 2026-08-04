@@ -111,10 +111,13 @@
                 // ad — sent only when the advertiser has identified the visitor
                 // (setEmail) and consent is given.
                 var he = state.he ? '&he=' + encodeURIComponent(state.he) : '';
+                // No tid: a site visit has no upstream auction trace to reference.
+                // The tracker mints a real 32-hex trace for this visit server-side
+                // (its HTTPMiddleware), so we never invent a client-side id that
+                // would pollute the trace_id column with a non-standard format.
                 pixel(config.trackerUrl + '/v1/t/rt?uid=' + encodeURIComponent(uid) +
                     '&aid=' + encodeURIComponent(config.accountId) +
-                    '&tag=' + encodeURIComponent(config.tag) + he +
-                    '&tid=rt-' + Date.now());
+                    '&tag=' + encodeURIComponent(config.tag) + he);
                 log('retargeting pixel fired', config.tag + (state.he ? ' (+hashed email)' : ''));
                 return uid;
             });
