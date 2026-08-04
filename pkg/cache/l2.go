@@ -55,6 +55,12 @@ type L2Cache interface {
 	// SMembers returns all members of the set at key ([]nil if absent).
 	SMembers(ctx context.Context, key string) ([]string, error)
 
+	// ReplaceSet atomically replaces the set at key with members (+ optional TTL) —
+	// readers never see a half-built or empty intermediate. Empty members deletes
+	// the key. Used by the audience cache reconcile so a rebuild has no transient
+	// gap on the bid hot path.
+	ReplaceSet(ctx context.Context, key string, members []string, ttl time.Duration) error
+
 	// Ping checks the connection.
 	Ping(ctx context.Context) error
 
@@ -186,6 +192,25 @@ func (m *MemoryL2) SMembers(_ context.Context, key string) ([]string, error) {
 		out = append(out, mem)
 	}
 	return out, nil
+}
+
+func (m *MemoryL2) ReplaceSet(_ context.Context, key string, members []string, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(members) == 0 {
+		delete(m.data, key)
+		delete(m.expires, key)
+		return nil
+	}
+	set := make(map[string]struct{}, len(members))
+	for _, mem := range members {
+		set[mem] = struct{}{}
+	}
+	m.encodeSet(key, set)
+	if ttl > 0 {
+		m.expires[key] = time.Now().Add(ttl)
+	}
+	return nil
 }
 
 // decodeSet/encodeSet back the memory set ops with the same string map as the

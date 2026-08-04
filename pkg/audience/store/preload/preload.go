@@ -182,28 +182,18 @@ func (p *Preloader) lookup(ctx context.Context, userID, visibility string) ([]st
 	if userID == "" {
 		return nil, nil
 	}
-	// NOTE: still reads the JSON path (audience:user). The append-based Redis-SET
-	// path (audience:set, maintained by cmd/pipeline's single writer via the
-	// change-log trigger) runs in PARALLEL and is verified matching — but the read
-	// is NOT flipped to SMEMBERS yet: the writer's reconcile does a non-atomic
-	// Delete+SAdd (transient-empty window) and the writer's Redis connection needs
-	// reliability hardening before it can back the bid hot path. See
-	// docs/AUDIENCE_DATA_PATH_SCALING.md. Flip setRedisKey/SMembers here once hardened.
-	key := redisKey(userID, visibility)
-	val, ok, err := p.l2.Get(ctx, key)
+	// The membership cache is a Redis SET maintained by the single append-based
+	// writer (cmd/pipeline): the change-log trigger records every write, the writer
+	// applies atomic SADD/SREM and rebuilds via atomic ReplaceSet (no transient
+	// gap). Read it with SMEMBERS. A Redis blip degrades silently (empty = "no
+	// segments") — an error here would WARN per bid and flood.
+	key := setRedisKey(userID, visibility)
+	members, err := p.l2.SMembers(ctx, key)
 	if err != nil {
 		p.log.Debug("audience cache read failed", "key", key, "error", err)
 		return nil, nil
 	}
-	if !ok || val == "" {
-		return nil, nil
-	}
-	var out []string
-	if err := json.Unmarshal([]byte(val), &out); err != nil {
-		p.log.Debug("audience cache value garbled", "key", key, "error", err)
-		return nil, nil
-	}
-	return out, nil
+	return members, nil
 }
 
 // SubscribeInvalidate wires adtech.cache.invalidate.audience to a debounced
