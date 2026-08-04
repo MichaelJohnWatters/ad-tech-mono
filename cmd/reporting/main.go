@@ -123,7 +123,7 @@ func main() {
 	// run without fragmenting DSP pacing. Opt-in; off = in-memory accumulator,
 	// single-replica behaviour unchanged. Runs before the snapshot publisher so
 	// its boot seed lands first. See committed_counter.go.
-	startSharedPacingCounter(billingEngine, store, cfg, clk, log, lc)
+	authoritativeSettled := startSharedPacingCounter(billingEngine, store, cfg, clk, log, lc)
 
 	// Publisher contracts come from Postgres via a warm cache. Each refresh
 	// re-populates the in-memory ContractStore the billing engine reads from,
@@ -228,7 +228,7 @@ func main() {
 		}
 		// Broadcast per-campaign committed spend so DSPs reconcile pacing to
 		// billed reality. Needs NATS, so it lives inside this branch.
-		startSpendSnapshotPublisher(billingEngine, natsBus, committedSpendStore, cfg, clk, log, lc)
+		startSpendSnapshotPublisher(billingEngine, natsBus, committedSpendStore, authoritativeSettled, cfg, clk, log, lc)
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceReporting)

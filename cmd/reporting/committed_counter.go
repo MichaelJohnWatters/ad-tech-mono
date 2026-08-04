@@ -128,9 +128,18 @@ func (r *redisCommittedCounter) Reconcile(ctx context.Context, day string, total
 //
 // When off, or if Redis is unreachable, the engine keeps its in-memory
 // accumulator and single-replica behaviour is completely unchanged.
-func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) {
+//
+// Returns an authoritative-settled getter (the same store query the reconcile
+// uses) when shared mode is live, else nil. The spend-snapshot persister uses
+// it so campaign_committed_spend.settled_micros — which the INVOICE RUNNER
+// bills from — is written from the cluster-global analytics truth rather than
+// each pod's partial in-memory map (three replicas overwriting one row with
+// their ~third of the stream is exactly the bug this returns nil to avoid
+// reintroducing: measured 2026-08-04 as settled ≈ 32% of cleared, uniformly,
+// per campaign).
+func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg *config.Config, clk clock.Clock, log *slog.Logger, lc *lifecycle.Lifecycle) func(context.Context) (map[string]int64, error) {
 	if !keys.Reporting.SharedPacingCounter.Get(cfg) {
-		return
+		return nil
 	}
 	addr := keys.Redis.URL.Get(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -141,7 +150,7 @@ func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg
 		// accumulator. That is only correct at 1 replica, so log LOUD — running
 		// multiple replicas past this point risks pacing fragmentation.
 		log.Error("shared pacing counter enabled but Redis unreachable; falling back to in-memory accumulator (SAFE ONLY AT 1 REPLICA)", "addr", addr, "error", err)
-		return
+		return nil
 	}
 	ttl := keys.Reporting.PacingCounterTTL.Get(cfg)
 	counter := newRedisCommittedCounter(rdb, ttl)
@@ -151,6 +160,12 @@ func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg
 	reader, hasReader := store.(analytics.CommittedReader)
 	if !hasReader {
 		log.Warn("analytics backend has no CommittedReader; shared pacing counter runs additive-only (no store self-heal)")
+	}
+	var settledSource func(context.Context) (map[string]int64, error)
+	if hasReader {
+		settledSource = func(ctx context.Context) (map[string]int64, error) {
+			return reader.CommittedByCampaign(ctx, clk.Now().UTC().Format("2006-01-02"))
+		}
 	}
 	reconcile := func() {
 		if !hasReader {
@@ -191,4 +206,5 @@ func startSharedPacingCounter(engine *billing.Engine, store analytics.Store, cfg
 			}
 		}
 	}()
+	return settledSource
 }
