@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
@@ -118,7 +119,11 @@ type audienceCacheWriter struct {
 	ttl            time.Duration
 	pollEvery      func() time.Duration
 	reconcileEvery func() time.Duration
-	watermark      int64
+	// mu serializes drain/reconcile so the background loop and the debug-refresh
+	// HTTP handler never run concurrently (they share watermark + prevKeys and
+	// both write Redis).
+	mu        sync.Mutex
+	watermark int64
 	// prevKeys is the set of Redis set-keys the last reconcile wrote. A user who
 	// lost ALL memberships (prune / TTL expiry) vanishes from the scan, so their
 	// stale key is tombstoned by diffing against this. Single writer → in-memory
@@ -151,6 +156,14 @@ func (w *audienceCacheWriter) run(ctx context.Context) {
 // drain applies changelog rows past the watermark as atomic SADD/SREM, advances
 // + persists the watermark, and trims consumed rows.
 func (w *audienceCacheWriter) drain(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Redis is the source of truth for the watermark, reloaded each drain: if Redis
+	// is flushed (e.g. an e2e reset) the watermark drops to 0 and we re-apply the
+	// (now also truncated/restarted) change-log from the start, rather than skipping
+	// low-seq rows against a stale in-memory cursor. In production seq is monotonic
+	// so this is just a cheap GET.
+	w.watermark = w.loadWatermark(ctx)
 	for {
 		changes, err := w.store.ReadMembershipChangesSince(ctx, w.watermark, changeBatch)
 		if err != nil {
@@ -194,6 +207,8 @@ func (w *audienceCacheWriter) drain(ctx context.Context) {
 // for dropped appends / batch prunes / TTL expiry. Rewrites keys wholesale under
 // a fresh TTL; stale members are dropped because a full replace clears them.
 func (w *audienceCacheWriter) reconcile(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	rows, err := w.store.AllMemberships(rctx)
