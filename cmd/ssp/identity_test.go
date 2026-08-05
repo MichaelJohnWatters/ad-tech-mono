@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
@@ -74,6 +75,23 @@ func TestRequestFingerprint(t *testing.T) {
 	}
 }
 
+// waitPublished polls for want messages — Observe publishes on a goroutine
+// (the serve path must not block on the JetStream ack), so assertions wait.
+func waitPublished(t *testing.T, bus *capBus, subject string, want int) [][]byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		msgs := bus.published(subject)
+		if len(msgs) >= want {
+			return msgs
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("published %d messages, want %d", len(msgs), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestIdentityPublisher(t *testing.T) {
 	bus := newCapBus()
 	p := newIdentityPublisher(bus, quietLog())
@@ -81,10 +99,7 @@ func TestIdentityPublisher(t *testing.T) {
 	t.Run("publishes an event with ids + fingerprint", func(t *testing.T) {
 		r := httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1.2.3.4&ua=Moz", nil)
 		p.Observe(r, "USER", "U", "")
-		msgs := bus.published(events.SubjectIdentityObserved)
-		if len(msgs) != 1 {
-			t.Fatalf("published %d messages, want 1", len(msgs))
-		}
+		msgs := waitPublished(t, bus, events.SubjectIdentityObserved, 1)
 		ev, err := identityobserve.Unmarshal(msgs[0])
 		if err != nil {
 			t.Fatalf("decode: %v", err)
@@ -98,6 +113,7 @@ func TestIdentityPublisher(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
 		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "", "") // one id, no fp
+		time.Sleep(50 * time.Millisecond)                                   // grace for the async goroutine to (not) publish
 		if n := len(bus.published(events.SubjectIdentityObserved)); n != 0 {
 			t.Errorf("published %d, want 0", n)
 		}
@@ -107,9 +123,7 @@ func TestIdentityPublisher(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
 		p.Observe(httptest.NewRequest("GET", "/serve?ip=1.2.3.4&ua=Moz", nil), "solo", "", "")
-		if n := len(bus.published(events.SubjectIdentityObserved)); n != 1 {
-			t.Errorf("published %d, want 1", n)
-		}
+		waitPublished(t, bus, events.SubjectIdentityObserved, 1)
 	})
 
 	t.Run("nil publisher is a no-op", func(t *testing.T) {

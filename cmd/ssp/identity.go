@@ -46,7 +46,17 @@ func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID s
 	if !requestConsent(r).Personalise {
 		return
 	}
-	p.pub.Publish(tracing.TraceIDFromContext(r.Context()), gatherSignals(r, userID, uid2, householdID), requestFingerprint(r))
+	// Everything request-derived is extracted HERE, synchronously — r is dead
+	// once the handler returns. The publish itself moves off the serve path:
+	// Publisher.Publish is a JetStream publish that BLOCKS for the broker ack
+	// (up to 1s), and phase profiling showed it as most of pre_auction's
+	// non-segment cost under load (~38ms p50 at 110rps — the bus is busy with
+	// impression/auction events). Graph edges are best-effort observability;
+	// the auction must not wait on them. Mirrors behaviourPublisher.Observe.
+	traceID := tracing.TraceIDFromContext(r.Context())
+	ids := gatherSignals(r, userID, uid2, householdID)
+	fp := requestFingerprint(r)
+	go p.pub.Publish(traceID, ids, fp)
 }
 
 // gatherSignals collects the distinct identifiers present on a request, in a
