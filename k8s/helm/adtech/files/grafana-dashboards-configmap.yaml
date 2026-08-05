@@ -162,11 +162,33 @@ data:
             "x": 0,
             "y": 17
           },
-          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter.",
+          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter. NB: adserver 429s here are usually FREQUENCY CAPS working as designed, not failures \u2014 the '429 breakdown' panel separates them from rate-limiter throttling.",
           "targets": [
             {
               "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=~\"[45]..\"}[5m])) by (service, status)",
               "legendFormat": "{{service}} {{status}}"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "title": "Adserver 429 breakdown \u2014 freq caps vs rate limiter",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 17
+          },
+          "description": "The adserver has TWO 429 sources with opposite meanings: frequency caps (product working \u2014 a household/user hit its impression limit) and the per-IP rate limiter (traffic being throttled). The generic error-rate panel can't tell them apart. freq-cap series come from the dedicated counter; 'rate limiter / other' is total 429s minus freq-cap blocks.",
+          "targets": [
+            {
+              "expr": "sum(rate(adtech_adserver_freqcap_blocked_total[$__rate_interval])) by (scope)",
+              "legendFormat": "freq cap \u2014 {{scope}}"
+            },
+            {
+              "expr": "clamp_min(sum(rate(adtech_http_requests_total{exported_service=\"adserver\",status=\"429\"}[$__rate_interval])) - sum(rate(adtech_adserver_freqcap_blocked_total[$__rate_interval])), 0)",
+              "legendFormat": "rate limiter / other 429s"
             }
           ]
         },
@@ -178,7 +200,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 17
+            "y": 25
           },
           "description": "Number of concurrent HTTP requests being handled. A sustained climb usually means a downstream is slow + requests are pooling.",
           "targets": [
