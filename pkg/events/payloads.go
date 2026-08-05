@@ -216,13 +216,18 @@ type AudioEvent struct {
 // (alert on suppression-rate change) + advertiser reports
 // ("we suppressed N over-cap impressions").
 type AdserverFreqCapBlockedEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	TraceID       string    `json:"trace_id"`
-	UserID        string    `json:"user_id"`
-	CampaignID    string    `json:"campaign_id"`
-	PlacementID   string    `json:"placement_id,omitempty"`
-	PublisherID   string    `json:"publisher_id,omitempty"`
-	Timestamp     time.Time `json:"timestamp"`
+	SchemaVersion int    `json:"schema_version"`
+	TraceID       string `json:"trace_id"`
+	UserID        string `json:"user_id"`
+	// HouseholdID is the hh:-prefixed household proxy (salted IP hash) when
+	// the block was household-scoped — CTV/co-viewing blocks often have NO
+	// user_id, so without this the blocked row can't be attributed to a
+	// household (e.g. one fixed-IP flow burning a single household's caps).
+	HouseholdID string    `json:"household_id,omitempty"`
+	CampaignID  string    `json:"campaign_id"`
+	PlacementID string    `json:"placement_id,omitempty"`
+	PublisherID string    `json:"publisher_id,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 type AdserverRenderFailedEvent struct {

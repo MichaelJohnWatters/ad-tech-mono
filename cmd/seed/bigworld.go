@@ -24,6 +24,11 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 	geoSets := [][]string{{"USA"}, {"GBR"}, {"USA", "CAN"}, {"DEU", "FRA"}, nil}
 	devSets := [][]string{{"mobile"}, {"desktop"}, {"mobile", "desktop"}, nil}
 	formats := []string{"display", "display", "display", "native", "video"} // display-weighted so most serve immediately
+	// Budget SPREAD (not flat): small budgets deplete mid-run — a realistic
+	// marketplace has some advertisers exit during the day (visible in
+	// budget_depletions + dsp_calls no_bid_reason=budget_depleted) — while
+	// the bigger strata keep fill from collapsing on sustained load runs.
+	budgets := []float64{150, 300, 500, 1000, 2500}
 
 	campN, plN := 0, 0
 	for a := 0; a < advertisers; a++ {
@@ -52,7 +57,7 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 				Name:        fmt.Sprintf("BigWorld Adv%03d Campaign %d (%s)", a, c, format),
 				BaseBid:     1.5 + float64(n%12)*0.4, // 1.5–5.9, overlapping strata → real competition
 				Currency:    "USD",
-				DailyBudget: 1000,
+				DailyBudget: budgets[n%len(budgets)],
 				BidModel:    "cpm",
 				PacingMode:  "even",
 				Status:      "live",

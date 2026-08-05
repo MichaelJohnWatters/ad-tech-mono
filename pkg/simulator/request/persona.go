@@ -22,6 +22,7 @@ package request
 import (
 	"fmt"
 	"math/rand"
+	"time"
 )
 
 // Channel is the ad format/channel a simulated request targets. It selects
@@ -123,6 +124,14 @@ type Persona struct {
 	// all EXCHANGE-CLEARED wins (2026-07-19 run #2 — 100k cleared, 52k
 	// served), which no real population would.
 	HouseholdPool int
+	// HouseholdShared picks the pool slot from the WALL CLOCK (10-minute
+	// slots) instead of randomly, so two personas with the same IP + pool
+	// land in the SAME household at any moment — co-viewing across devices
+	// still works — while the household itself rotates over time. Without
+	// this the co-viewing pair kept ONE fixed IP forever; at 150rps that
+	// single household absorbed ~8% of ALL traffic and its freq caps were
+	// permanently saturated (the 2026-08-05 "wall of adserver 429s").
+	HouseholdShared bool
 	// Weight is the relative sampling frequency in a mix (higher = more common).
 	Weight int
 }
@@ -140,9 +149,14 @@ func (p Persona) RequestIP(rng *rand.Rand) string {
 		return p.IP
 	}
 	n := 0
-	if rng != nil {
+	switch {
+	case p.HouseholdShared:
+		// Time-slotted so every persona sharing this IP+pool derives the
+		// same slot right now (co-viewing), rotating households every 10m.
+		n = int(time.Now().Unix()/600) % p.HouseholdPool
+	case rng != nil:
 		n = rng.Intn(p.HouseholdPool)
-	} else {
+	default:
 		n = rand.Intn(p.HouseholdPool) // query-param path has no seeded rng
 	}
 	return fmt.Sprintf("%d.%d.%d.%d", a, b, (c+n/254)%256, 1+(d+n)%254)
@@ -157,55 +171,59 @@ var Personas = []Persona{
 	{
 		Name: "us-personalised-mobile", Regime: RegimeUSClear, Identity: IdentityUID2,
 		Geo: "USA", Region: "NY", City: "New York", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,3",
-		Segments: []string{"in_market_auto", "sports_enthusiast"}, HouseholdPool: 4096, IP: "203.0.113.10", Weight: 24,
+		Segments: []string{"in_market_auto", "sports_enthusiast"}, HouseholdPool: 16384, IP: "203.0.113.10", Weight: 24,
 	},
 	{
 		Name: "us-personalised-desktop", Regime: RegimeUSClear, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "CA", City: "San Francisco", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "high_income"}, HouseholdPool: 4096, IP: "203.0.113.11", Weight: 18,
+		Segments: []string{"finance_intender", "high_income"}, HouseholdPool: 16384, IP: "203.0.113.11", Weight: 18,
 	},
 	{
 		Name: "us-firstparty-tablet", Regime: RegimeUSClear, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "TX", City: "Austin", Device: "tablet", OS: "Android", Make: "Samsung", Model: "SM-T870",
-		Segments: []string{"parenting", "in_market_auto"}, HouseholdPool: 4096, IP: "203.0.113.12", Weight: 8,
+		Segments: []string{"parenting", "in_market_auto"}, HouseholdPool: 16384, IP: "203.0.113.12", Weight: 8,
 	},
 	{
 		Name: "us-ccpa-optout", Regime: RegimeCCPAOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "CA", City: "Los Angeles", Device: "mobile", OS: "Android", Make: "Google", Model: "Pixel 8",
-		Segments: []string{"sports_enthusiast"}, HouseholdPool: 4096, IP: "203.0.113.13", Weight: 6,
+		Segments: []string{"sports_enthusiast"}, HouseholdPool: 16384, IP: "203.0.113.13", Weight: 6,
 	},
 	{
 		Name: "us-gpc-optout", Regime: RegimeGPC, Identity: IdentityHashedEmail,
 		Geo: "USA", Region: "WA", City: "Seattle", Device: "desktop", OS: "Windows",
-		Segments: []string{"tech_early_adopter"}, HouseholdPool: 4096, IP: "203.0.113.14", Weight: 4,
+		Segments: []string{"tech_early_adopter"}, HouseholdPool: 16384, IP: "203.0.113.14", Weight: 4,
 	},
 	{
 		Name: "us-gpp-optout", Regime: RegimeGPPOptOut, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "IL", City: "Chicago", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone14,5",
-		Segments: []string{"travel_intender"}, HouseholdPool: 4096, IP: "203.0.113.15", Weight: 3,
+		Segments: []string{"travel_intender"}, HouseholdPool: 16384, IP: "203.0.113.15", Weight: 3,
 	},
 	{
 		Name: "eu-consented-mobile", Regime: RegimeGDPRConsented, Identity: IdentityUID2,
 		Geo: "DEU", Region: "BE", City: "Berlin", Device: "mobile", OS: "Android", Make: "Samsung", Model: "SM-S911B",
-		Segments: []string{"in_market_auto", "luxury_goods"}, HouseholdPool: 4096, IP: "203.0.113.16", Weight: 10,
+		Segments: []string{"in_market_auto", "luxury_goods"}, HouseholdPool: 16384, IP: "203.0.113.16", Weight: 10,
 	},
 	{
 		Name: "eu-noconsent-desktop", Regime: RegimeGDPRNoConsent, Identity: IdentityAnonymous,
-		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", HouseholdPool: 4096, IP: "203.0.113.17", Weight: 8,
+		Geo: "FRA", Region: "IDF", City: "Paris", Device: "desktop", OS: "Windows", HouseholdPool: 16384, IP: "203.0.113.17", Weight: 8,
 	},
 	{
 		Name: "uk-consented-desktop", Regime: RegimeGDPRConsented, Identity: IdentityHashedEmail,
 		Geo: "GBR", Region: "ENG", City: "London", Device: "desktop", OS: "macOS", Make: "Apple",
-		Segments: []string{"finance_intender", "travel_intender"}, HouseholdPool: 4096, IP: "203.0.113.18", Weight: 9,
+		Segments: []string{"finance_intender", "travel_intender"}, HouseholdPool: 16384, IP: "203.0.113.18", Weight: 9,
 	},
 	{
 		Name: "coppa-kids-tablet", Regime: RegimeCOPPA, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", HouseholdPool: 4096, IP: "203.0.113.19", Weight: 2,
+		Geo: "USA", Region: "FL", City: "Miami", Device: "tablet", OS: "iPadOS", Make: "Apple", Model: "iPad13,1", HouseholdPool: 16384, IP: "203.0.113.19", Weight: 2,
 	},
 	{
+		// Shares IP+pool+HouseholdShared with us-ctv-household-mobile: at any
+		// moment both derive the SAME household (co-viewing), and the pair
+		// rotates through 512 households over time instead of pinning one
+		// forever (which saturated that household's caps at load rates).
 		Name: "us-ctv-household", Regime: RegimeUSClear, Identity: IdentityPublisherID,
 		Geo: "USA", Region: "GA", City: "Atlanta", Device: "ctv", OS: "Roku", Make: "Roku", Model: "Ultra",
-		Segments: []string{"sports_enthusiast", "streaming_subscriber"}, IP: "203.0.113.20", Weight: 5,
+		Segments: []string{"sports_enthusiast", "streaming_subscriber"}, IP: "203.0.113.20", HouseholdPool: 512, HouseholdShared: true, Weight: 2,
 	},
 	{
 		// Same IP as us-ctv-household: a second viewer in the SAME household
@@ -213,11 +231,11 @@ var Personas = []Persona{
 		// reaching a different device/user through the shared household id.
 		Name: "us-ctv-household-mobile", Regime: RegimeUSClear, Identity: IdentityUID2,
 		Geo: "USA", Region: "GA", City: "Atlanta", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,2",
-		Segments: []string{"streaming_subscriber"}, IP: "203.0.113.20", Weight: 3,
+		Segments: []string{"streaming_subscriber"}, IP: "203.0.113.20", HouseholdPool: 512, HouseholdShared: true, Weight: 1,
 	},
 	{
 		Name: "anon-mobile-open", Regime: RegimeUSClear, Identity: IdentityAnonymous,
-		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", HouseholdPool: 4096, IP: "203.0.113.21", Weight: 6,
+		Geo: "USA", Region: "OH", City: "Columbus", Device: "mobile", OS: "Android", Make: "Motorola", HouseholdPool: 16384, IP: "203.0.113.21", Weight: 6,
 	},
 }
 

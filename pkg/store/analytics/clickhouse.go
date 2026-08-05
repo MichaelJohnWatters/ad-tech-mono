@@ -158,8 +158,8 @@ func (c *ClickHouse) createTables() error {
 			trace_id String, publisher_id String, placement_id String, reason String, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS freq_cap_blocks (
-			trace_id String, user_id String, campaign_id String, placement_id String,
-			publisher_id String, timestamp DateTime64(3)
+			trace_id String, user_id String, household_id String, campaign_id String,
+			placement_id String, publisher_id String, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS render_failures (
 			trace_id String, campaign_id String, creative_id String, placement_id String,
@@ -279,6 +279,7 @@ func (c *ClickHouse) createTables() error {
 		// (e.g. adcert_invalid) from being lost in the aggregated no-bid. Old rows
 		// read as empty = "bid or plain no-demand".
 		`ALTER TABLE dsp_calls ADD COLUMN IF NOT EXISTS no_bid_reason String`,
+		`ALTER TABLE freq_cap_blocks ADD COLUMN IF NOT EXISTS household_id String AFTER user_id`,
 		// Video viewability: split display (1s dwell) vs video (2s) viewable
 		// events. Old rows read as empty = display.
 		`ALTER TABLE views ADD COLUMN IF NOT EXISTS channel String`,
@@ -449,8 +450,8 @@ func (c *ClickHouse) InsertServeNoFill(n ServeNoFill) {
 		n.TraceID, n.PublisherID, n.PlacementID, n.Reason, sig(n.Timestamp))
 }
 func (c *ClickHouse) InsertFreqCapBlock(b FreqCapBlock) {
-	c.signal("freq_cap_block", `INSERT INTO freq_cap_blocks (trace_id, user_id, campaign_id, placement_id, publisher_id, timestamp) VALUES (?,?,?,?,?,?)`,
-		b.TraceID, b.UserID, b.CampaignID, b.PlacementID, b.PublisherID, sig(b.Timestamp))
+	c.signal("freq_cap_block", `INSERT INTO freq_cap_blocks (trace_id, user_id, household_id, campaign_id, placement_id, publisher_id, timestamp) VALUES (?,?,?,?,?,?,?)`,
+		b.TraceID, b.UserID, b.HouseholdID, b.CampaignID, b.PlacementID, b.PublisherID, sig(b.Timestamp))
 }
 
 // PurgeFreqCapBlocks removes every freq-cap block row for the user — the

@@ -382,6 +382,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				events.AdserverFreqCapBlockedEvent{
 					TraceID:     req.TraceID,
 					UserID:      req.UserID,
+					HouseholdID: req.HouseholdID,
 					CampaignID:  req.CampaignID,
 					PlacementID: req.PlacementID,
 					PublisherID: req.PublisherID,

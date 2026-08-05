@@ -1047,6 +1047,7 @@ func (c *EventConsumer) handleFreqCapBlocked(ctx context.Context, msg *events.Me
 		obs.InsertFreqCapBlock(analytics.FreqCapBlock{
 			TraceID:     src.TraceID,
 			UserID:      src.UserID,
+			HouseholdID: src.HouseholdID,
 			CampaignID:  src.CampaignID,
 			PlacementID: src.PlacementID,
 			PublisherID: src.PublisherID,
