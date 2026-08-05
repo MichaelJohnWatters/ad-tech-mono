@@ -56,23 +56,25 @@ the baselines — worse than no run.
 
 ## Baselines (110rps, warm, 73-campaign world, 10m steady-state)
 
-Post auction-speed push + competitor CPU rebalance (2026-08-05, fd4e471):
+Post scenario-market + freqcap-Lua (2026-08-06 morning):
 
-- Exchange: **fanout p95 208ms** (p50 ~60); other phases ≤2.7ms
-- SSP: pre_auction p95 ~50-63ms (p50 8.9) | auction p95 **231ms** (p50 58.5)
-  | render p95 110-160
-- DSP: parse ≤5.6 | audience p95 **46.5** | campaign_loop p95 ~1ms | encode
-  0.5; internal leg avg 22.6 / p95 76ms; competitor legs avg 35 / p95 ~118ms
-- Adserver: freqcap p95 80ms (← next target: serial cap Redis ops) |
-  creative 1.0 | assemble 2.4
-- Fill 92.0%, 0 errors, money-lossless; canary depth −$0.06 (10m); sched
-  latency p99 ~8-10ms on the auction path
-- 30-min soak reference: fill 82.1% sustained (demand exhaustion), canary
-  drifts ~1.4¢/min post-depletion (rebase optimism window)
+- Exchange: **fanout p50 27.7ms / p95 225ms** (router skips the scenario
+  slow legs instead of waiting); other phases ≤3ms
+- SSP: pre_auction p95 ~49ms (p50 ~9) | auction p95 260 | render p95 ~100
+- DSP: audience p95 46.5 | campaign_loop ~1ms; internal leg avg 22.6/p95 76
+- Adserver: freqcap p95 72.3 (p50 6.3 — remaining tail is the SHARED Redis
+  server's latency under load, p99 188 with sched p99 2.9ms; next lever is
+  Redis capacity, not app code) | creative 1.0 | assemble 2.4
+- Fill 92.0%, 0 errors, money-lossless; canary −$0.06 (10m)
+- 30-min soak reference: fill 82.1% sustained; canary drifts ~1.4¢/min
+  post-depletion (rebase optimism window)
+- Router rehab (live demo, repeatable): flip competitor1's
+  dsp.response_delay 500ms→0 mid-run → probe trickle (~60/min) back to
+  full fan-out (~6,600/min) in ~4 minutes; restore to 500ms after.
 
-Pre-push reference (HEAD 1e4af7f): SSP pre_auction p95 237ms / auction 348;
-DSP campaign_loop p95 68.6ms, audience 75.9; fanout p50 91ms; competitor
-legs p95 ~320ms; 30-min soak 83.7% fill.
+Session-start reference (HEAD 1e4af7f): SSP pre_auction p95 237ms / auction
+348; DSP campaign_loop p95 68.6ms; fanout p50 91ms; competitor legs p95
+~320ms; adserver freqcap p95 80ms; 30-min soak 83.7% fill.
 
 Block/mutex profiling: arm via `/debug/pprof/rates?block=10000&mutex=5` on
 the pod's internal port (kubectl exec wget), capture /debug/pprof/{block,
