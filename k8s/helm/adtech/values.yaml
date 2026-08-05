@@ -127,7 +127,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 96Mi }
+      requests: { cpu: 250m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8082 }
@@ -170,7 +170,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 96Mi }
+      requests: { cpu: 100m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8089 }
@@ -213,7 +213,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 96Mi }
+      requests: { cpu: 100m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8090 }
@@ -267,7 +267,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 64Mi }
+      requests: { cpu: 250m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8084 }
@@ -332,7 +332,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 100m, memory: 96Mi }
+      requests: { cpu: 400m, memory: 96Mi }
       limits: { cpu: 3000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8081 }
@@ -374,7 +374,7 @@ services:
       - name: S3_BUCKET
         value: "adtech-creatives"
     resources:
-      requests: { cpu: 50m, memory: 64Mi }
+      requests: { cpu: 250m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8085 }
@@ -410,7 +410,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 64Mi }
+      requests: { cpu: 100m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8088 }
@@ -452,7 +452,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 64Mi }
+      requests: { cpu: 150m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8083 }
@@ -534,7 +534,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 50m, memory: 64Mi }
+      requests: { cpu: 150m, memory: 64Mi }
       limits: { cpu: 500m, memory: 256Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8080 }
@@ -794,7 +794,7 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 200m, memory: 128Mi }
+      requests: { cpu: 50m, memory: 128Mi }
       limits: { cpu: "2", memory: 1Gi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8094 }
@@ -864,7 +864,7 @@ services:
       - name: BILLING_TIGERBEETLE_ADDRESSES
         value: "tigerbeetle:3000"
     resources:
-      requests: { cpu: 100m, memory: 128Mi }
+      requests: { cpu: 50m, memory: 128Mi }
       limits: { cpu: 2000m, memory: 768Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8086 }
@@ -896,7 +896,7 @@ infra:
       username: adtech
       password: adtech-local-dev
     resources:
-      requests: { cpu: "500m", memory: "1Gi" }
+      requests: { cpu: "300m", memory: "1Gi" }
       limits: { cpu: "2000m", memory: "4Gi" }
 
   nats:
@@ -932,7 +932,7 @@ infra:
     rootPassword: adtech-local-dev
     storage: 20Gi
     resources:
-      requests: { cpu: "250m", memory: "512Mi" }
+      requests: { cpu: "100m", memory: "512Mi" }
       limits: { cpu: "1000m", memory: "2Gi" }
 
   tigerbeetle:
@@ -960,7 +960,7 @@ infra:
     password: adtech-local-dev
     storage: 10Gi
     resources:
-      requests: { cpu: "200m", memory: "512Mi" }
+      requests: { cpu: "100m", memory: "512Mi" }
       limits: { cpu: "1", memory: "2Gi" }
 
   registryMirror:
@@ -990,7 +990,7 @@ observability:
     image: prom/prometheus:v2.53.0@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc
     retention: 7d
     resources:
-      requests: { cpu: "100m", memory: "256Mi" }
+      requests: { cpu: "50m", memory: "256Mi" }
       limits: { cpu: "500m", memory: "1Gi" }
 
   grafana:
@@ -999,7 +999,7 @@ observability:
     adminUser: admin
     adminPassword: admin
     resources:
-      requests: { cpu: "100m", memory: "128Mi" }
+      requests: { cpu: "25m", memory: "128Mi" }
       limits: { cpu: "500m", memory: "512Mi" }
 
   loki:
@@ -1009,7 +1009,7 @@ observability:
     # (2026-07-18 fix), a 200rps load run CPU-throttled the 500m limit until
     # the internal ingester failed healthchecks and the pod flapped.
     resources:
-      requests: { cpu: "200m", memory: "256Mi" }
+      requests: { cpu: "50m", memory: "256Mi" }
       limits: { cpu: "1500m", memory: "1Gi" }
 
   promtail:
@@ -1023,7 +1023,7 @@ observability:
     enabled: true
     image: jaegertracing/all-in-one:1.58@sha256:f015fb34e6742bb46b87c42cf83abfacfdd5dc39864a859a4ba942eb21c4b29c
     resources:
-      requests: { cpu: "100m", memory: "128Mi" }
+      requests: { cpu: "50m", memory: "128Mi" }
       # See k8s/base/jaeger/deployment.yaml for the 1536Mi rationale.
       limits: { cpu: "500m", memory: "1536Mi" }
 
