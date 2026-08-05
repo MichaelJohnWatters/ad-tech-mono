@@ -31,9 +31,23 @@ type Client struct {
 
 // New constructs a Client. Does not pre-create buckets — call EnsureBucket.
 func New(cfg Config) (*Client, error) {
-	mc, err := minio.New(cfg.Endpoint, &minio.Options{
+	endpoint := cfg.Endpoint
+	secure := cfg.UseSSL
+	// Tolerate a scheme'd endpoint ("http://minio:9000"). The documented shape
+	// is host:port, but env values drift and minio-go rejects URLs outright
+	// ("Endpoint url cannot have fully qualified paths") — 2026-08-05: the
+	// adserver + transcoder helm env carried the scheme, so every pod failed S3
+	// init deterministically and silently latched the filesystem fallback.
+	// https implies TLS.
+	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" && u.Host != "" {
+		endpoint = u.Host
+		if u.Scheme == "https" {
+			secure = true
+		}
+	}
+	mc, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
+		Secure: secure,
 		Region: cfg.Region,
 	})
 	if err != nil {
