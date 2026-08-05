@@ -43,6 +43,9 @@ data:
       scrape_interval: 15s
       evaluation_interval: 15s
 
+    rule_files:
+      - /etc/prometheus/rules.yml
+
     scrape_configs:
       # K8s pods scrape (container mode / production overlay where
       # services are deployed as K8s Deployments with prometheus.io/port
@@ -80,6 +83,37 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
 
+  # Trust-the-graphs rules: a zero on a dashboard is ambiguous (real zero /
+  # missing data / broken query). These alerts distinguish the cases so a dead
+  # panel can't sit silently empty (the Bid-RPS panel did exactly that after a
+  # label drift). No Alertmanager locally — they surface in the Prometheus UI
+  # and Grafana's alert list, which is enough for a laptop stack.
+  rules.yml: |
+    groups:
+      - name: observability-self-check
+        rules:
+          - alert: ScrapeTargetDown
+            expr: up{job="adtech-pods"} == 0
+            for: 2m
+            annotations:
+              summary: "{{`{{ $labels.pod }}`}} not scraped — its graphs will show gaps/zeros that are NOT real traffic drops"
+          - alert: CoreMetricAbsent
+            # Fires when the exchange's auction counter series vanish entirely:
+            # either the exchange fleet is down (real incident) or a label/
+            # query drift broke the metric pipeline (graphs lying). Both need
+            # a human.
+            expr: absent(adtech_grpc_requests_total{exported_service="exchange"}) and absent(adtech_http_requests_total{exported_service="exchange"})
+            for: 5m
+            annotations:
+              summary: "exchange request counters absent — fleet down OR metrics/label drift; check ClickHouse auctions table for ground truth"
+          - alert: ReportingConsumerBacklog
+            # The event-bus layer's independent view: JetStream pending count
+            # for reporting consumers. Sustained growth = dashboards behind
+            # reality (ingest lag), even though serving is fine.
+            expr: sum(jetstream_consumer_num_pending) > 50000
+            for: 5m
+            annotations:
+              summary: "JetStream consumer backlog >50k — reporting/dashboard numbers lag live traffic"
 
 ---
 apiVersion: apps/v1
