@@ -18,9 +18,11 @@ package events
 //
 // Deployment shape: EVENT_SPOOL_DIR should point at an emptyDir volume —
 // emptyDir survives CONTAINER restarts (what probe-kill storms actually do),
-// which is the failure mode observed. Pod eviction loses the spool; that
-// residual window is the accepted trade against putting a database write on
-// the auction hot path.
+// which is the failure mode observed. Pod EVICTION loses the spool; that
+// residual window is a documented, deliberate trade — see docs/PLAN.md →
+// "Build Status & Outstanding Work" → "Event-spool residual" for the full
+// analysis (PVC vs transactional-outbox options, costs, and the revisit
+// triggers). Monitor: spool_bytes > 0 during an eviction = at-risk events.
 //
 // Pressure (spool fill fraction) feeds the front-door throttle: the SSP sheds
 // incoming serve requests as pressure rises, so the spool drains instead of
