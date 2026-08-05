@@ -33,7 +33,13 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// freqcapBlockedTotal counts serves blocked by the frequency cap, by scope
+// (user|household). Set in main once the metrics registry exists; nil-checked
+// at the increment so unit tests that build handlers directly don't need it.
+var freqcapBlockedTotal *prometheus.CounterVec
 
 // AdCreative is the rendered creative the ad server returns. Its source is
 // the postgres-backed warm cache (metadata) plus html_content from the row
@@ -131,6 +137,14 @@ func main() {
 	go warmStartBandit(cfg, bandit, log)
 
 	metrics := middleware.NewMetrics(constants.ServiceAdServer)
+	// Freq-cap block counter — scope=user|household. Registered here (single
+	// process) and read by the serve handler via the package-level var; keeps
+	// serveHandler's already-long signature from growing again.
+	freqcapBlockedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "adserver", Name: "freqcap_blocked_total",
+		Help: "Serves blocked by the frequency cap, by scope (user|household). Subtract from the handler's total 429s to isolate rate-limiter 429s.",
+	}, []string{"scope"})
+	metrics.Registry().MustRegister(freqcapBlockedTotal)
 	// Event spool: freq_cap_blocked now feeds post-run cap attribution
 	// (household skew analysis), so losing it under a NATS stall degrades
 	// real analysis, not just vanity dashboards. Cheap insurance.
@@ -376,11 +390,23 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				return freqCap.Allow(ctx, u, c, lim)
 			}
 		}
+		blockedScope := ""
 		allowed := allow(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
-		if allowed && req.HouseholdID != "" {
-			allowed = allow(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+		if !allowed {
+			blockedScope = "user"
+		} else if req.HouseholdID != "" {
+			if allowed = allow(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow); !allowed {
+				blockedScope = "household"
+			}
 		}
 		if !allowed {
+			// Prometheus counter so the dashboard can tell freq-cap 429s
+			// apart from rate-limiter 429s (both land as status=429 in the
+			// generic HTTP counters — indistinguishable on the error-rate
+			// graph without this).
+			if freqcapBlockedTotal != nil {
+				freqcapBlockedTotal.WithLabelValues(blockedScope).Inc()
+			}
 			reqLog.Info("ad blocked by freq cap",
 				"user", req.UserID,
 				"household", req.HouseholdID,
