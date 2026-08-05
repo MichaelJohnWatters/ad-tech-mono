@@ -98,6 +98,14 @@ See `docs/PLAN.md` for the comprehensive project plan.
 - Integration tests: use testcontainers-go for real Postgres/Redis/NATS
 - Never mock Postgres, Redis, NATS, or filesystem
 - Tag integration tests with `-tags=integration`
+- **Performance / load testing:** the full protocol (reset → seed big-world →
+  warm caches → `make loadtest RPS=… VERIFY=1` → read phase metrics + canary,
+  plus the hands-off-host rules that make runs comparable) is the
+  `/perf-loadtest` skill — `.claude/skills/perf-loadtest/SKILL.md`. Don't
+  improvise a load run; a skipped step makes the numbers incomparable.
+- **Hot-path iron rule (thrice-proven):** nothing in the per-campaign bid loop
+  may do per-call network I/O — hot loops read in-process copies kept warm by
+  background bulk refreshers (see `cmd/dsp/refresh.go`).
 
 ## Key Design Decisions
 
