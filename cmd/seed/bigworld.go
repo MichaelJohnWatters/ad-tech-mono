@@ -50,12 +50,23 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 		for c := 0; c < campaignsPer; c++ {
 			n := a*campaignsPer + c
 			format := formats[n%len(formats)]
+			baseBid := 1.5 + float64(n%12)*0.4 // 1.5–5.9, overlapping strata → real competition
+			// Premium stratum: ~1 in 7 campaigns bids 9–19.5 CPM. Without it
+			// the whole market topped out at ~$5.9 and premium placements
+			// ($12/$18 floors) were DEAD inventory — every DSP declined
+			// below_floor on 100% of their auctions. Premium CPM × the small
+			// budget strata also means these deplete fastest, which is the
+			// realistic degradation arc on sustained load.
+			premium := n%7 == 6
+			if premium {
+				baseBid = 9 + float64(n%4)*3.5 // 9 / 12.5 / 16 / 19.5
+			}
 			cc := CampaignConfig{
 				ID:          fmt.Sprintf("%s-c%d", acctKey, c),
 				AccountID:   acctKey,
 				IOId:        ioKey,
 				Name:        fmt.Sprintf("BigWorld Adv%03d Campaign %d (%s)", a, c, format),
-				BaseBid:     1.5 + float64(n%12)*0.4, // 1.5–5.9, overlapping strata → real competition
+				BaseBid:     baseBid,
 				Currency:    "USD",
 				DailyBudget: budgets[n%len(budgets)],
 				BidModel:    "cpm",
@@ -83,6 +94,17 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 						Device: devSets[n%len(devSets)],
 					},
 				},
+			}
+			// Premium buyers buy premium-shaped slices, not the whole market:
+			// broad-targeted 9-19.5 CPM campaigns won EVERYTHING they matched
+			// (first soak with the stratum: one premium account took 17k
+			// impressions while the standard demo advertisers won ZERO —
+			// terrible demo portals and unrealistic concentration). Narrow
+			// them to USA+desktop: they still clear the $12/$18 premium
+			// floors on that slice, and the 1.5-5.9 market keeps the rest.
+			if premium {
+				cc.Targeting.Include.Geo = []string{"USA"}
+				cc.Targeting.Include.Device = []string{"desktop"}
 			}
 			if err := in.upsertCampaign(ctx, cc); err != nil {
 				return fmt.Errorf("bigworld campaign %s: %w", cc.ID, err)

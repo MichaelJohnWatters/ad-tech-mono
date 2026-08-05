@@ -10,7 +10,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - UK Mobile"
     creative_domain: acme-shoes.com
-    base_bid: 5.00
+    base_bid: 6.00
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -33,7 +33,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - Native In-Feed"
     creative_domain: acme-shoes.com
-    base_bid: 5.00
+    base_bid: 6.00
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -68,7 +68,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - Audio Podcast Spot"
     creative_domain: acme-shoes.com
-    base_bid: 5.60
+    base_bid: 6.60
     currency: USD
     daily_budget: 500
     total_budget: 10000
@@ -92,7 +92,7 @@ campaigns:
     io_id: io-001
     name: "Acme Shoes - US All Devices"
     creative_domain: acme-shoes.com
-    base_bid: 5.40
+    base_bid: 6.90
     currency: USD
     daily_budget: 1000
     total_budget: 25000
@@ -106,6 +106,12 @@ campaigns:
       device:
         mobile: 15
         tablet: -10
+      # USA boost keeps the flagship demo advertiser competitive on its home
+      # market: without it Initech RON (mobile+25, USA+15 ≈ 9.2 effective) and
+      # VPN (USA+50 ≈ 8.0) outbid Acme's 7.9 on EVERY US-mobile auction and
+      # the demo portal shows zero delivery (2026-08-05 investigation).
+      geo_country:
+        USA: 40
     # Run of network US — every common size.
     creatives:
       - { id: cr-shoes-002, width: 300, height: 250 }
@@ -119,7 +125,7 @@ campaigns:
     io_id: io-002
     name: "Globex Tech - Desktop Worldwide"
     creative_domain: globex-tech.com
-    base_bid: 5.50
+    base_bid: 6.50
     currency: USD
     daily_budget: 300
     total_budget: 5000
@@ -156,7 +162,7 @@ campaigns:
     io_id: io-003
     name: "Initech SaaS - Run of Network"
     creative_domain: initech.io
-    base_bid: 5.60
+    base_bid: 6.60
     currency: USD
     daily_budget: 200
     total_budget: 3000

@@ -512,7 +512,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
 		}
 
-		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID))
+		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID), am)
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
 
@@ -1152,7 +1152,7 @@ func parseSlowDSPs(csv string) map[int]bool {
 	return out
 }
 
-func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool) ([]auction.Bid, []dspBidRecord) {
+func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool, am *auctionMetrics) ([]auction.Bid, []dspBidRecord) {
 	type dspResult struct {
 		dspID       string
 		endpoint    string
@@ -1337,6 +1337,21 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			// can shift if config changes, URLs don't).
 			bidReceived := len(result.bids) > 0
 			router.RecordCall(channel, result.endpoint, bidReceived, result.topBid, result.latency, result.timedOut)
+			// Prometheus mirror of the router's per-DSP view. This counter was
+			// registered (and charted by "Bids / Wins / No-bids by DSP") but
+			// never incremented — the panel showed wins only. "error" is a
+			// third decision the panel can add: transport failure/deadline,
+			// distinct from an explicit no-bid.
+			if am != nil {
+				decision := "no_bid"
+				switch {
+				case result.err != nil:
+					decision = "error"
+				case bidReceived:
+					decision = "bid"
+				}
+				am.bidsReceivedTotal.WithLabelValues(result.endpoint, decision).Inc()
+			}
 			if emitEvents {
 				callEvents = append(callEvents, events.DSPCallEvent{
 					TraceID: traceID, AuctionID: traceID, Channel: channel,
