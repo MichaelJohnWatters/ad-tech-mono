@@ -451,6 +451,11 @@ const (
 // ============================================================
 
 const (
+	// TrackerPrefix covers every tracker pixel path — used by the tracker's
+	// response stamp (X-Adtech-Tracker) so beacon clients can verify a 2xx
+	// actually came from the tracker, not a transient tunnel/proxy.
+	TrackerPrefix = "/v1/t/"
+
 	TrackerImpression = "/v1/t/imp"
 	TrackerClick      = "/v1/t/click"
 	TrackerConversion = "/v1/t/conv"

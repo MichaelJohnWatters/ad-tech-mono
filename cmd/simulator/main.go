@@ -672,6 +672,12 @@ func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch
 // auction (so the tracker span joins the auction trace) plus a browser-shaped
 // User-Agent + Referer so the tracker's fraud check doesn't drop the headless
 // client as a bot.
+//
+// Delivery = 2xx AND the tracker's X-Adtech-Tracker response stamp. A bare
+// status is not proof: the 2026-08-05 30-min soak lost 492 impression beacons
+// to <300 responses no tracker pod ever served (localhost svclb path under
+// load) — with status-only checking those counted as delivered, the retry
+// never fired, and VERIFY reported the client-side loss as pipeline slippage.
 func fireGet(client *http.Client, url, traceparent string) bool {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -685,7 +691,7 @@ func fireGet(client *http.Client, url, traceparent string) bool {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode < 300
+	return resp.StatusCode < 300 && resp.Header.Get("X-Adtech-Tracker") == "1"
 }
 
 func firstNonEmpty(vals ...string) string {
