@@ -162,10 +162,14 @@ data:
             "x": 0,
             "y": 17
           },
-          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter. NB: adserver 429s here are usually FREQUENCY CAPS working as designed, not failures \u2014 the '429 breakdown' panel separates them from rate-limiter throttling.",
+          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter. Adserver 429s are EXCLUDED here: they're almost always frequency caps working as designed and at load they drown every real error \u2014 they live in the dedicated '429 breakdown' panel to the right (which also splits caps from rate-limiter throttling).",
           "targets": [
             {
-              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=~\"[45]..\"}[5m])) by (service, status)",
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=~\"[45]..\",status!=\"429\"}[5m])) by (service, status)",
+              "legendFormat": "{{service}} {{status}}"
+            },
+            {
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=\"429\",exported_service!=\"adserver\"}[5m])) by (service, status)",
               "legendFormat": "{{service}} {{status}}"
             }
           ]
