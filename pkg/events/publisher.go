@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 )
 
 // Publisher wraps an EventBus with typed publishing methods.
 // All services use this instead of raw bus.Publish().
 type Publisher struct {
-	bus EventBus
-	log *slog.Logger
+	bus   EventBus
+	log   *slog.Logger
+	spool *Spool
 }
 
 // NewPublisher creates a typed event publisher.
@@ -18,9 +20,61 @@ func NewPublisher(bus EventBus, log *slog.Logger) *Publisher {
 	return &Publisher{bus: bus, log: log}
 }
 
+// EnableSpool arms the disk spool: a failed publish is appended to disk
+// instead of dropped, and a background drainer republishes once the bus
+// answers again (replays dedupe via the spooled Nats-Msg-Id + reporting's
+// business keys). Call once at service boot, before traffic. The returned
+// stop function halts the drainer (graceful shutdown).
+func (p *Publisher) EnableSpool(ctx context.Context, s *Spool) (stop func()) {
+	p.spool = s
+	dctx, cancel := context.WithCancel(ctx)
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-dctx.Done():
+				return
+			case <-t.C:
+				n, err := s.drainBatch(dctx, 500, func(c context.Context, subject, msgID string, data []byte) error {
+					return PublishDedup(c, p.bus, subject, msgID, data)
+				})
+				if n > 0 {
+					p.log.Info("event spool drained", "events", n, "pressure_pct", s.Pressure())
+				}
+				if err != nil {
+					p.log.Debug("event spool drain attempt failed (bus still down?)", "error", err)
+				}
+			}
+		}
+	}()
+	return cancel
+}
+
+// Pressure reports the spool fill 0–100 (0 when no spool is armed). Feeds the
+// front-door throttle: the exchange stamps it on auction responses and the
+// SSP sheds serve requests as it rises.
+func (p *Publisher) Pressure() int {
+	if p.spool == nil {
+		return 0
+	}
+	return p.spool.Pressure()
+}
+
 // PublishJSON marshals the payload and publishes to the given subject.
 func (p *Publisher) PublishJSON(ctx context.Context, subject string, payload interface{}) error {
 	return p.publishJSONID(ctx, subject, "", payload)
+}
+
+// PublishJSONID is PublishJSON with a stable dedup message ID — the public
+// entry for callers that construct their own payload envelopes (the tracker's
+// beacon path). Routing through here (not raw PublishDedup) matters: this is
+// the spool-armed path, so a failed publish is absorbed to disk instead of
+// surfacing an error that tempts callers into side-channel fallbacks (the
+// tracker's old HTTP fallback double-delivered ~1k impressions per NATS
+// bounce when the "failed" publish had actually reached the stream).
+func (p *Publisher) PublishJSONID(ctx context.Context, subject, msgID string, payload interface{}) error {
+	return p.publishJSONID(ctx, subject, msgID, payload)
 }
 
 // publishJSONID publishes with an optional stable message ID: JetStream
@@ -35,6 +89,14 @@ func (p *Publisher) publishJSONID(ctx context.Context, subject, msgID string, pa
 		return err
 	}
 	if err := PublishDedup(ctx, p.bus, subject, msgID, data); err != nil {
+		// Publish failed (NATS down/stalled/deadline). With a spool armed the
+		// event is preserved on disk and republished by the drainer — this
+		// WAS a silent permanent loss (146,757 events in the 2026-08-05 VM
+		// seizure). Absorbed = success from the caller's point of view.
+		if p.spool != nil && p.spool.Append(subject, msgID, data) {
+			p.log.Warn("publish failed — event spooled for replay", "subject", subject, "error", err, "pressure_pct", p.spool.Pressure())
+			return nil
+		}
 		p.log.Error("failed to publish event", "subject", subject, "error", err)
 		return err
 	}

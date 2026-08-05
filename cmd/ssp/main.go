@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
@@ -224,7 +226,7 @@ func main() {
 	}
 	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn))
+	mux.HandleFunc(routes.SSPServe, shedOnEventPressure(log, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)))
 
 	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
 	sspRL := middleware.NewLiveRateLimiter(func() middleware.RateLimitConfig {
@@ -738,6 +740,13 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	var bidResp openrtb.BidResponse
 	json.Unmarshal(respBody, &bidResp)
 
+	// Event-layer backpressure: the exchange stamps its spool pressure on
+	// every response (body extension — survives the gRPC twin, which carries
+	// no headers). Remember the latest reading; the front-door shed
+	// middleware throttles NEW serve requests as it rises. Every response
+	// updates the value, so recovery self-clears it.
+	downstreamEventPressure.Store(int64(bidResp.EventPressure))
+
 	// Data monetization: if fee-bearing audience data rode this request and
 	// an EXTERNAL bidder won, publish the attribution record (fire-and-
 	// forget; accrual happens at impression time in reporting).
@@ -851,6 +860,43 @@ func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.Placemen
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(result)
+	}
+}
+
+// downstreamEventPressure is the exchange's last-reported event-spool fill
+// (0–100), updated on every auction response. Read by shedOnEventPressure.
+var downstreamEventPressure atomic.Int64
+
+// shedOnEventPressure is the FRONT-DOOR throttle for event-layer stress: when
+// the exchange's event spool fills (NATS down/stalled), a growing fraction of
+// incoming serve requests is answered with an immediate no-fill BEFORE any
+// auction runs. Each shed request prevents the ~5 downstream events a full
+// serve produces, so the spool drains instead of hitting its cap (where
+// events would drop — the 2026-08-05 loss mode). Publishers see a normal
+// no-bid and fall back to house ads; a refused fill costs one impression, an
+// unrecorded one costs data integrity.
+//
+// Shed curve: 0 below 60% pressure, linear 0→100% across 60–90%, everything
+// at 90%+.
+func shedOnEventPressure(log *slog.Logger, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := int(downstreamEventPressure.Load())
+		var frac float64
+		switch {
+		case p < 60:
+			frac = 0
+		case p >= 90:
+			frac = 1
+		default:
+			frac = float64(p-60) / 30
+		}
+		if frac > 0 && rand.Float64() < frac {
+			log.Warn("serve shed: event-layer backpressure", "pressure_pct", p, "shed_fraction", frac)
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			json.NewEncoder(w).Encode(serveAdResponse{NoBid: true})
+			return
+		}
+		next(w, r)
 	}
 }
 

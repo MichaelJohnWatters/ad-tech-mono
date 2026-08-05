@@ -100,10 +100,15 @@ func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) 
 		MaxAge:    24 * time.Hour,
 		Storage:   jetstream.FileStorage,
 		Replicas:  b.streamReplicas, // 1 local (standalone), 3 in a prod cluster (NATS_STREAM_REPLICAS)
-		// Server-side dedup window for Nats-Msg-Id (PublishWithID): a client
-		// republish after an ambiguous ack lands within seconds, so 2m is
-		// generous while keeping the server's ID-tracking memory small.
-		Duplicates: 2 * time.Minute,
+		// Server-side dedup window for Nats-Msg-Id (PublishWithID). Must be
+		// WIDER than any realistic outage + spool-drain cycle: the disk spool
+		// replays failed publishes after NATS recovers, and an AMBIGUOUS
+		// publish (entered the stream, ack lost) replayed outside this window
+		// becomes a second stream entry — the 2026-08-05 chaos run produced
+		// 1,212 duplicate impressions exactly this way with the old 2m
+		// window. 30m covers a full 256MiB spool draining at ~15k events/min.
+		// Cost is server-side ID-map memory only.
+		Duplicates: 30 * time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("create stream %s: %w", name, err)

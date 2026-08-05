@@ -352,6 +352,14 @@ type BidResponse struct {
 	// a seat to dodge or misdirect a receivable. Empty for internal winners (our
 	// own demand) and genuine no-bids. See docs/datafee-seat-integrity-plan.md.
 	SettlementSeat string `json:"settlement_seat,omitempty"`
+	// EventPressure is an exchange EXTENSION: the exchange's event-spool fill
+	// (0–100) at auction time. Rides the response body (not a header) so it
+	// survives BOTH transports — the gRPC twin's JSON envelope carries no
+	// response headers. The SSP's front-door throttle sheds incoming serve
+	// requests as this rises, letting a stressed spool drain instead of
+	// growing to its cap (each serve spawns ~5 downstream events). 0/omitted
+	// = no pressure.
+	EventPressure int `json:"event_pressure,omitempty"`
 }
 
 // No-bid reason codes (BidResponse.NBR). The OpenRTB 2.5 spec reserves codes
