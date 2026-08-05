@@ -83,11 +83,24 @@ func (s PostgresScopeLookup) AccountType(ctx context.Context, accountID string) 
 }
 
 // PublisherIDs lists the non-archived publishers the account owns.
+//
+// RLS: callers are often NOT the tenant (staff impersonation, report-runner
+// scoping), and the app role is NOBYPASSRLS — a bare query silently blanks to
+// zero rows (the "account has multiple publishers" red herring, 2026-08-05).
+// Scope the read to the target account; authorization happened upstream.
 func (s PostgresScopeLookup) PublisherIDs(ctx context.Context, accountID string) ([]string, error) {
 	if s.DB == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.DB.QueryContext(ctx,
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only tx
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text FROM publishers WHERE account_id = $1::uuid AND status != 'archived'`, accountID)
 	if err != nil {
 		return nil, err

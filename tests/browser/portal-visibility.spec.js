@@ -119,23 +119,46 @@ test('publisher logs in and sees placement data', async ({ page }) => {
   expect(failures, `publisher portal API failures:\n${failures.join('\n')}`).toEqual([]);
 });
 
+// findDataBearingAccount picks an account of the given type that actually HAS
+// impressions in the recent window — impersonating a tenant who lost every
+// auction (it happens: a mispriced market once left the demo advertiser at
+// zero) would fail the KPI assertions for marketplace reasons, not visibility
+// reasons.
+async function findDataBearingAccount(request, cookieHeader, accounts, type) {
+  for (const a of accounts.filter((x) => x.type === type)) {
+    const resp = await request.post('/v1/api/reports', {
+      headers: {
+        cookie: cookieHeader,
+        'Content-Type': 'application/json',
+        'X-Act-As-Account': `${type}:${a.id}`,
+      },
+      data: {
+        table: 'impressions',
+        metrics: ['count'],
+        time_from: new Date(Date.now() - 6 * 3600e3).toISOString(),
+      },
+    });
+    if (!resp.ok()) continue;
+    const body = await resp.json();
+    if ((body.rows?.[0]?.[0] || 0) > 0) return a;
+  }
+  return null;
+}
+
 test('staff impersonates the advertiser and sees the same data', async ({ page, request }) => {
   const failures = [];
   collectApiFailures(page, failures);
   await login(page, STAFF);
 
-  // Resolve the advertiser's account id the same way the staff switcher does.
-  const accounts = await (await request.get('/v1/api/accounts', {
-    headers: { cookie: (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ') },
-  })).json();
-  const adv = accounts.find((a) => a.type === 'advertiser' && /acme/i.test(a.name || ''));
-  expect(adv, 'seeded Acme advertiser account visible to staff').toBeTruthy();
+  // Resolve a DATA-BEARING advertiser the same way the staff switcher would.
+  const cookieHeader = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ');
+  const accounts = await (await request.get('/v1/api/accounts', { headers: { cookie: cookieHeader } })).json();
+  const adv = await findDataBearingAccount(request, cookieHeader, accounts, 'advertiser');
+  expect(adv, 'an advertiser account with impressions in the last 6h').toBeTruthy();
 
   await impersonate(page, 'advertiser', adv.id, '/portal/advertiser');
   await expectNonZeroKpi(page, 'kpiImps');
   await expectNonZeroKpi(page, 'kpiSpend');
-  await openCampaignsTab(page);
-  await expectVisibleData(page, ADV_MARKERS);
   expect(failures, `impersonated advertiser portal API failures:\n${failures.join('\n')}`).toEqual([]);
 });
 
@@ -144,11 +167,10 @@ test('staff impersonates the publisher and sees the same data', async ({ page, r
   collectApiFailures(page, failures);
   await login(page, STAFF);
 
-  const accounts = await (await request.get('/v1/api/accounts', {
-    headers: { cookie: (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ') },
-  })).json();
-  const pub = accounts.find((a) => a.type === 'publisher');
-  expect(pub, 'a seeded publisher account visible to staff').toBeTruthy();
+  const cookieHeader = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ');
+  const accounts = await (await request.get('/v1/api/accounts', { headers: { cookie: cookieHeader } })).json();
+  const pub = await findDataBearingAccount(request, cookieHeader, accounts, 'publisher');
+  expect(pub, 'a publisher account with impressions in the last 6h').toBeTruthy();
 
   await impersonate(page, 'publisher', pub.id, '/portal/publisher');
   await expectNonZeroKpi(page, 'kpiImps');

@@ -96,6 +96,12 @@ func enforceReportTenant(pubs reportTenantPublisherLookup, log *slog.Logger) fun
 					}
 				} else if len(owned) == 1 {
 					filters["publisher_id"] = owned[0]
+				} else if len(owned) == 0 {
+					// Distinct from the multi-publisher case: zero owned is
+					// either a truly publisher-less account or an RLS-blanked
+					// lookup — never tell the user they have "multiple".
+					http.Error(w, `{"error":"no publishers on this account"}`, http.StatusForbidden)
+					return
 				} else {
 					http.Error(w, `{"error":"publisher_id filter required (your account has multiple publishers)"}`, http.StatusBadRequest)
 					return
@@ -198,7 +204,22 @@ func (s pgPublisherLookup) PublisherIDs(ctx context.Context, accountID string) (
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// RLS: this runs as the NOBYPASSRLS app role, and the caller (staff
+	// impersonation / act-as) is not the tenant — a bare query is silently
+	// blanked to zero rows, which then surfaced as the misleading "account
+	// has multiple publishers" error on accounts with exactly ONE (found
+	// 2026-08-05 via the portal-visibility browser suite: publisher KPIs
+	// empty despite 2k impressions). Scope the transaction to the TARGET
+	// account — the caller was already authorized via CanAccessAccount.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only tx
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text FROM publishers WHERE account_id = $1::uuid AND status != 'archived'`, accountID)
 	if err != nil {
 		return nil, err
