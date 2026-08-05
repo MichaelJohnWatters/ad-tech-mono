@@ -16,6 +16,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 )
 
 // EventBus is the core abstraction for async event publishing and consumption.
@@ -51,6 +52,14 @@ type PublisherWithID interface {
 // events — derive it from the trace ID plus whatever disambiguates the event
 // within a trace (subject, endpoint, conversion type…).
 func PublishDedup(ctx context.Context, bus EventBus, subject, msgID string, data []byte) error {
+	// Nil-bus guard at the single choke point: a service that booted before
+	// NATS latches bus=nil, and a nil interface here SIGSEGVed all three
+	// tracker pods on the 2026-08-05 fresh-disk boot (typed video/audio
+	// publishes don't pre-check the bus the way the tracker's beacon path
+	// does). An error return lets the spool absorb the event instead.
+	if bus == nil {
+		return fmt.Errorf("publish %s: event bus not connected", subject)
+	}
 	if p, ok := bus.(PublisherWithID); ok && msgID != "" {
 		return p.PublishWithID(ctx, subject, msgID, data)
 	}

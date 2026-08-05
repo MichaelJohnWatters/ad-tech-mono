@@ -88,17 +88,30 @@ func main() {
 		log.Warn("nats unavailable, using HTTP bridge to reporting", "error", err)
 		bus = nil // will use HTTP fallback
 	} else {
-		// Ensure the adtech stream exists
+		// Ensure the adtech stream exists. A failure here (NATS still booting
+		// on a fresh-disk stack) must NOT latch bus=nil for the pod's life —
+		// that latch is what SIGSEGVed all 3 tracker pods on 2026-08-05 (the
+		// typed video/audio publishes hit the nil bus once beacons arrived)
+		// and, pre-spool, silently rerouted a healthy pod to the HTTP bridge
+		// forever. Keep the bus (the NATS client reconnects forever) and
+		// retry the ensure in the background until it sticks; meanwhile
+		// publishes fail into the disk spool and drain once the stream is up.
 		ctx := context.Background()
 		if err := natsBus.EnsureStream(ctx, "adtech", []string{"adtech.>"}); err != nil {
-			log.Warn("failed to create stream, using HTTP bridge", "error", err)
-			natsBus.Close()
-			bus = nil
-		} else {
-			bus = natsBus
-			lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
-			log.Info("nats connected, publishing events to JetStream")
+			log.Warn("stream ensure failed at boot — keeping bus, retrying until it sticks (publishes spool meanwhile)", "error", err)
+			go func() {
+				for {
+					time.Sleep(2 * time.Second)
+					if err := natsBus.EnsureStream(context.Background(), "adtech", []string{"adtech.>"}); err == nil {
+						log.Info("stream ensured after boot-time retry")
+						return
+					}
+				}
+			}()
 		}
+		bus = natsBus
+		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
+		log.Info("nats connected, publishing events to JetStream")
 	}
 
 	publisher := &eventPublisher{
