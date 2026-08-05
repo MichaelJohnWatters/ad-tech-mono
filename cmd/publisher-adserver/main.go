@@ -155,7 +155,7 @@ func main() {
 	var pub *events.Publisher
 	if pubBus, err := natsbus.New(natsURL, constants.ServicePublisherAdServer+"-events", log); err == nil {
 		ctx := context.Background()
-		pubBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects})
+		pubBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
 		pub = events.NewPublisher(pubBus, log)
 		lc.OnShutdown("pubad-publisher", func(_ context.Context) error { return pubBus.Close() })
 	} else {

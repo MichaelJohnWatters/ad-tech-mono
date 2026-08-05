@@ -134,7 +134,7 @@ func main() {
 	natsURL := cfg.Get(keys.DSP.NATSURL.Key(), keys.Exchange.NATSURL.Get(cfg))
 	var pub *events.Publisher
 	if pubBus, err := natsbus.New(natsURL, constants.ServiceDSP+"-events", log); err == nil {
-		pubBus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects})
+		pubBus.EnsureStreamWithRetry(context.Background(), events.StreamName, []string{events.StreamSubjects})
 		pub = events.NewPublisher(pubBus, log)
 		lc.OnShutdown("dsp-publisher", func(_ context.Context) error { return pubBus.Close() })
 	} else {

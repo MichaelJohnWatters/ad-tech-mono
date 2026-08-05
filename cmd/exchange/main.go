@@ -122,7 +122,7 @@ func main() {
 		log.Warn("nats unavailable, auction events will not be published", "error", err)
 	} else {
 		ctx := context.Background()
-		natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects})
+		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
 		pub = events.NewPublisher(natsBus, log)
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 	}

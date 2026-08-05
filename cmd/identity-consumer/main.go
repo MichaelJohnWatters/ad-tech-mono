@@ -120,9 +120,7 @@ func main() {
 	} else {
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 		ctx := context.Background()
-		if serr := natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); serr != nil {
-			log.Warn("ensure stream", "error", serr)
-		}
+		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
 		// Self-heal, don't latch: a boot race with NATS/JetStream failed this
 		// Subscribe once and left the consumer DEAF for 5h+ (no identity-graph
 		// edges written from adtech.identity.observed) until a manual restart.

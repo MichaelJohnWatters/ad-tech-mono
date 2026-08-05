@@ -96,19 +96,9 @@ func main() {
 		// forever. Keep the bus (the NATS client reconnects forever) and
 		// retry the ensure in the background until it sticks; meanwhile
 		// publishes fail into the disk spool and drain once the stream is up.
-		ctx := context.Background()
-		if err := natsBus.EnsureStream(ctx, "adtech", []string{"adtech.>"}); err != nil {
-			log.Warn("stream ensure failed at boot — keeping bus, retrying until it sticks (publishes spool meanwhile)", "error", err)
-			go func() {
-				for {
-					time.Sleep(2 * time.Second)
-					if err := natsBus.EnsureStream(context.Background(), "adtech", []string{"adtech.>"}); err == nil {
-						log.Info("stream ensured after boot-time retry")
-						return
-					}
-				}
-			}()
-		}
+		// The retry helper embodies the fix (see the comment above): never
+		// close the bus on a boot race, retry the ensure until it sticks.
+		natsBus.EnsureStreamWithRetry(context.Background(), "adtech", []string{"adtech.>"})
 		bus = natsBus
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 		log.Info("nats connected, publishing events to JetStream")

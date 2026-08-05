@@ -81,9 +81,7 @@ func main() {
 		svc := retargeting.New(pgSource{store}, pgEnroller{store: store, bus: natsBus, log: log}, log)
 
 		ctx := context.Background()
-		if serr := natsBus.EnsureStream(ctx, events.StreamName, []string{events.StreamSubjects}); serr != nil {
-			log.Warn("ensure stream", "error", serr)
-		}
+		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
 		// Self-heal, don't latch: a boot race that fails Subscribe once must not
 		// leave the consumer DEAF forever — retry until it sticks (same doctrine
 		// as identity-consumer / webhooks).
