@@ -37,6 +37,14 @@ type Knobs struct {
 	// avg latency above soft multiplies the score ×0.8, above hard ×0.5.
 	LatencySoft time.Duration
 	LatencyHard time.Duration
+	// RecencyWindow is the effective sample horizon (in calls) for the
+	// rolling stats. Stats were lifetime cumulative averages, which made the
+	// ε-probe's "earns its way back in" promise hollow: after 100k bad
+	// calls, a recovered DSP's cumulative bid rate needs ~forever at a 1%
+	// probe rate to climb back over MinBidRate. With an EWMA horizon of N
+	// calls, behaviour changes show in ~N samples regardless of history —
+	// a skipped-then-recovered DSP rehabilitates in minutes of probing.
+	RecencyWindow int64
 }
 
 // DefaultKnobs returns the historical hardcoded thresholds.
@@ -49,6 +57,7 @@ func DefaultKnobs() Knobs {
 		ExplorePct:     1,
 		LatencySoft:    50 * time.Millisecond,
 		LatencyHard:    80 * time.Millisecond,
+		RecencyWindow:  200,
 	}
 }
 
@@ -157,17 +166,40 @@ func (r *SmartRouter) RecordCall(channel, dspID string, bidReceived bool, bidPri
 	}
 
 	s.TotalCalls++
-	if bidReceived {
-		s.TotalBids++
-		s.AvgBid = (s.AvgBid*float64(s.TotalBids-1) + bidPrice) / float64(s.TotalBids)
-	}
 	if timedOut {
 		s.TotalTimeouts++
 	}
 
-	s.BidRate = float64(s.TotalBids) / float64(s.TotalCalls)
-	s.TimeoutRate = float64(s.TotalTimeouts) / float64(s.TotalCalls)
-	s.AvgLatency = (s.AvgLatency*time.Duration(s.TotalCalls-1) + latency) / time.Duration(s.TotalCalls)
+	// Rolling stats with an adaptive EWMA: α = 1/n until n reaches the
+	// recency window (which IS the exact cumulative mean — warm-up behaviour
+	// unchanged), then α = 1/window so the horizon stays ~window calls and a
+	// DSP whose behaviour changes is re-judged on its recent self, not its
+	// lifetime record. Totals stay cumulative (warm-up gate + observability).
+	window := r.currentKnobs().RecencyWindow
+	if window <= 0 {
+		window = 200
+	}
+	alpha := 1 / float64(s.TotalCalls)
+	if s.TotalCalls > window {
+		alpha = 1 / float64(window)
+	}
+	bid := 0.0
+	if bidReceived {
+		bid = 1.0
+		s.TotalBids++
+		alphaBid := 1 / float64(s.TotalBids)
+		if s.TotalBids > window {
+			alphaBid = 1 / float64(window)
+		}
+		s.AvgBid += alphaBid * (bidPrice - s.AvgBid)
+	}
+	timeout := 0.0
+	if timedOut {
+		timeout = 1.0
+	}
+	s.BidRate += alpha * (bid - s.BidRate)
+	s.TimeoutRate += alpha * (timeout - s.TimeoutRate)
+	s.AvgLatency += time.Duration(alpha * float64(latency-s.AvgLatency))
 }
 
 // RecordWin records a DSP winning an auction on the given channel.

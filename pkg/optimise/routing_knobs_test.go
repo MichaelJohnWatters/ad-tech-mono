@@ -133,3 +133,50 @@ func TestSmartRouterExploreProbe(t *testing.T) {
 func traceN(i int) string {
 	return "trace-" + string(rune('a'+i%26)) + "-" + time.Duration(i).String()
 }
+
+// Recency window: a DSP with a long bad history rehabilitates after ~window
+// GOOD calls (the ε-probe's "second chance" made real). With the old
+// lifetime-cumulative averages this test never passes — 5,000 bad calls
+// would need ~95k good ones to drag the cumulative bid rate over 5%.
+func TestSmartRouterRecencyWindowRehabilitates(t *testing.T) {
+	r := NewSmartRouter()
+	r.SetKnobs(func() Knobs {
+		k := DefaultKnobs()
+		k.RecencyWindow = 200
+		return k
+	})
+	all := []string{"dsp-good", "dsp-flaky"}
+
+	// A long deadbeat history → skipped.
+	trainNoBids(r, "display", "dsp-flaky", 5000)
+	if contains(r.SelectDSPs("display", all), "dsp-flaky") {
+		t.Fatal("deadbeat DSP should be skipped after warm-up")
+	}
+
+	// The DSP recovers: ~2 windows of solid bidding (as ε-probes would
+	// deliver over minutes) lifts the ROLLING bid rate back over the skip
+	// threshold.
+	for i := 0; i < 400; i++ {
+		r.RecordCall("display", "dsp-flaky", true, 4.0, 5*time.Millisecond, false)
+	}
+	if !contains(r.SelectDSPs("display", all), "dsp-flaky") {
+		t.Fatal("recovered DSP must rehabilitate within ~recency-window calls")
+	}
+
+	// Timeout-rate skip recovers the same way (the slowpoke scenario).
+	trainTimeouts := func(n int) {
+		for i := 0; i < n; i++ {
+			r.RecordCall("display", "dsp-slow", false, 0, 600*time.Millisecond, true)
+		}
+	}
+	trainTimeouts(5000)
+	if contains(r.SelectDSPs("display", append(all, "dsp-slow")), "dsp-slow") {
+		t.Fatal("chronic-timeout DSP should be skipped")
+	}
+	for i := 0; i < 400; i++ {
+		r.RecordCall("display", "dsp-slow", true, 4.0, 20*time.Millisecond, false)
+	}
+	if !contains(r.SelectDSPs("display", append(all, "dsp-slow")), "dsp-slow") {
+		t.Fatal("fast-again DSP must rehabilitate within ~recency-window calls")
+	}
+}

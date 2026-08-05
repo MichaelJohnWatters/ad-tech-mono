@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
@@ -49,7 +50,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
 )
-
 
 // dspBidPhases is the bid-handler phase histogram (parse|audience|
 // campaign_loop|encode). Set in main once the metrics registry exists;
@@ -112,24 +112,41 @@ func main() {
 	dspProfile, dspRow := loadDSPIdentity(cfg, profile, log)
 	isCompetitor := dspRow.IsCompetitor()
 
+	// The dsps row is re-resolved periodically, not latched at boot: a
+	// reseed (make reset / demo scenarios) rewrites noise_pct/no_bid_rate
+	// under a RUNNING pod, and the boot snapshot silently kept the OLD
+	// market behaviour until a manual bounce (caught 2026-08-05 when the
+	// deadbeat scenario DSP kept bidding at its pre-reseed 15% no-bid rate).
+	// Same crash/retry/re-resolve doctrine as the boot-time identity check.
+	var dspRowLive atomic.Pointer[postgres.DSPRow]
+	dspRowLive.Store(dspRow)
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			if row := dspRowFromEnvDB(profile, log); row != nil {
+				dspRowLive.Store(row)
+			}
+		}
+	}()
+
 	// noise_pct and no_bid_rate are TierLive — both should re-read per
 	// request so SetConfigForPod can flip them at runtime (e.g. e2e tests
 	// switching a DSP into "always no-bid" mode). The dspRow values from
 	// loadDSPIdentity seed Postgres defaults via the registry but the
-	// runtime path goes through the config map.
+	// runtime path goes through the config map, then the LIVE dsps row.
 	noisePctFn := func() float64 {
 		// Knobs.NoisePct reads "dsp.noise_pct" from cfg with default 0; we
 		// fall back to the dspRow value if the key is unset (fresh DB).
 		if v := cfg.GetFloat(keys.DSP.NoisePct.Key(), -1); v >= 0 {
 			return v
 		}
-		return float64(dspRow.NoisePct)
+		return float64(dspRowLive.Load().NoisePct)
 	}
 	noBidRateFn := func() float64 {
 		if v := cfg.GetFloat(keys.DSP.NoBidRate.Key(), -1); v >= 0 {
 			return v
 		}
-		return dspRow.NoBidRate
+		return dspRowLive.Load().NoBidRate
 	}
 
 	// Redis budget tracker.
@@ -276,7 +293,8 @@ func main() {
 	identityResolver, identityStop := openIdentityResolver(cfg, log)
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
-	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked)
+	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked)
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
@@ -767,7 +785,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	}, 10*time.Second, addr, log)
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -780,6 +798,15 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		}
 
 		handlerStart := time.Now()
+		// Scenario knob (dsp.response_delay, live): make this pod a
+		// deliberately slow market participant — the SmartRouter slowpoke
+		// scenario. Jittered ±25% so a value near the exchange bid_timeout
+		// produces a MIX of timeouts and slow-but-landed bids rather than a
+		// metronomic all-or-nothing.
+		if d := responseDelayFn(); d > 0 {
+			jitter := 0.75 + 0.5*rand.Float64()
+			time.Sleep(time.Duration(float64(d) * jitter))
+		}
 		var bidReq openrtb.BidRequest
 		if err := json.NewDecoder(r.Body).Decode(&bidReq); err != nil {
 			http.Error(w, "invalid bid request", http.StatusBadRequest)

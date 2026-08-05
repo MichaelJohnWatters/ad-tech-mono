@@ -216,6 +216,29 @@ ON CONFLICT (name) DO UPDATE SET
 		); err != nil {
 			return nil, fmt.Errorf("upsert dsp %s: %w", p.Name, err)
 		}
+		// Propagate the knobs into the pod-scoped CONFIG rows too. At first
+		// boot each DSP pod seeds dsp.noise_pct/dsp.no_bid_rate config rows
+		// from its then-current dsps row, and config rows OUTLIVE reseeds —
+		// so a reseed that retunes a DSP's market behaviour was silently
+		// shadowed by the stale rows until a manual pod bounce (caught
+		// 2026-08-05: the deadbeat scenario DSP kept bidding at its
+		// pre-reseed 15% no-bid rate). The config tier stays authoritative;
+		// the seed just makes it agree with the dsps row it re-wrote.
+		// Update-only (no insert): a pod that never booted has no row to
+		// shadow with. Pod-id convention matches the helm POD_NAME env.
+		// (pod_id+key is the identity; the service column holds the SCHEMA
+		// set name — these keys registered under 'platform', not 'dsp'.)
+		const cfgQ = `UPDATE config SET value = to_jsonb($3::text), updated_at = now(), updated_by = 'seed'
+	WHERE pod_id = $1 AND key = $2`
+		podID := "dsp-" + p.Name + "-0"
+		for key, val := range map[string]string{
+			"dsp.noise_pct":   fmt.Sprintf("%d", int(p.NoisePct)),
+			"dsp.no_bid_rate": fmt.Sprintf("%g", p.NoBidRate),
+		} {
+			if _, err := in.db.ExecContext(ctx, cfgQ, podID, key, val); err != nil {
+				return nil, fmt.Errorf("sync config %s for %s: %w", key, podID, err)
+			}
+		}
 		out[p.Name] = id
 		in.log.Debug("seeded dsp", "name", p.Name, "id", id, "type", profileType)
 	}

@@ -215,6 +215,7 @@ func main() {
 		k.ExplorePct = keys.Exchange.RoutingExplorePct.Get(cfg)
 		k.LatencySoft = keys.Exchange.RoutingLatencySoft.Get(cfg)
 		k.LatencyHard = keys.Exchange.RoutingLatencyHard.Get(cfg)
+		k.RecencyWindow = int64(keys.Exchange.RoutingRecencyWindow.Get(cfg))
 		if raw := keys.Exchange.RoutingNeverSkip.Get(cfg); raw != "" {
 			k.NeverSkip = parseNeverSkip(raw)
 		}
@@ -1372,6 +1373,8 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 	var allBids []auction.Bid
 	var allRecords []dspBidRecord
 	received := 0
+	fanoutStart := time.Now()
+	reported := make(map[string]bool, len(endpoints))
 	// Early-finish: once the fan-out context deadline elapses, stop waiting
 	// for in-flight DSP goroutines. They'll be cancelled via ctx propagation
 	// and exit on their own (their channel sends become wasted writes into a
@@ -1384,6 +1387,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		case result := <-ch:
 			// Endpoint URL is the stable key for routing stats (DSP indexes
 			// can shift if config changes, URLs don't).
+			reported[result.endpoint] = true
 			bidReceived := len(result.bids) > 0
 			router.RecordCall(channel, result.endpoint, bidReceived, result.topBid, result.latency, result.timedOut)
 			// Prometheus mirror of the router's per-DSP view. This counter was
@@ -1419,6 +1423,32 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		case <-ctx.Done():
 			log.Debug("fan-out deadline elapsed before all DSPs reported",
 				"received", received, "total", len(endpoints))
+			// Record a timeout for every leg still in flight. Without this
+			// the router was BLIND to the worst offenders: a DSP slower than
+			// the whole fan-out deadline never got a RecordCall, so its
+			// timeout rate read 0 and MaxTimeoutRate could never skip it —
+			// every auction kept paying the full deadline for a DSP that
+			// never answers in time. (Caught by the slowpoke scenario DSP on
+			// its first run: 500ms±25% delay, timeout_rate stuck at 0.)
+			elapsed := time.Since(fanoutStart)
+			for _, ep := range endpoints {
+				ep = strings.TrimSpace(ep)
+				if reported[ep] {
+					continue
+				}
+				router.RecordCall(channel, ep, false, 0, elapsed, true)
+				if am != nil {
+					am.bidsReceivedTotal.WithLabelValues(ep, "timeout").Inc()
+				}
+				if emitEvents {
+					callEvents = append(callEvents, events.DSPCallEvent{
+						TraceID: traceID, AuctionID: traceID, Channel: channel,
+						DSPEndpoint: ep, BidReceived: false,
+						LatencyMs: elapsed.Milliseconds(), TimedOut: true,
+						NoBidReason: "fanout_deadline", Timestamp: time.Now(),
+					})
+				}
+			}
 			return allBids, allRecords
 		}
 	}

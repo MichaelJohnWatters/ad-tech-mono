@@ -85,6 +85,7 @@ localExpose:
     publisher-adserver: { ports: [{ name: http, port: 8088 }] }
     dsp-competitor1: { ports: [{ name: http, port: 8089 }] }
     dsp-competitor2: { ports: [{ name: http, port: 8090 }] }
+    dsp-competitor3: { ports: [{ name: http, port: 8098 }] }
     webhooks: { ports: [{ name: http, port: 8091 }] }
     identity-consumer: { ports: [{ name: http, port: 8092 }] }
     ssai: { ports: [{ name: http, port: 8093 }] }
@@ -151,6 +152,13 @@ services:
         value: "dsp-competitor1-0"
       - name: DSP_PROFILE
         value: "competitor1"
+      # SLOWPOKE scenario (see profiles/dsps/competitor1.yaml): jittered
+      # ±25% around 500ms, straddling exchange.bid_timeout — most calls time
+      # out, so the SmartRouter's timeout-rate skip engages after warm-up
+      # every run. Live key: zero dsp.response_delay on this pod to watch
+      # the ε-probe + recency window rehabilitate it in minutes.
+      - name: DSP_RESPONSE_DELAY
+        value: "500ms"
       - name: DSP_PORT
         value: "8089"
       - name: DSP_ADCERT_KEY_URL
@@ -170,12 +178,12 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      # 250m (was 100m): under node saturation cpu.weight IS the scheduler
-      # priority (c840cf6), and each single-replica competitor absorbs the
-      # FULL fan-out rate — 3x the per-pod load of dsp-internal at 40% of the
-      # weight made them the fanout p95 tail (legs p95 ~320ms vs internal
-      # ~106ms, 2026-08-05). Same weight as a dsp-internal pod now.
-      requests: { cpu: 250m, memory: 96Mi }
+      # 100m: this is a SCENARIO DSP (slowpoke/deadbeat — see its profile
+      # yaml). Its latency/no-bid behaviour is artificial, so CPU weight
+      # doesn't shape the market; the competitive fan-out weight lives on
+      # dsp-competitor3 (250m, same as a dsp-internal pod — the c840cf6
+      # cpu.weight finding).
+      requests: { cpu: 100m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8089 }
@@ -218,12 +226,12 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      # 250m (was 100m): under node saturation cpu.weight IS the scheduler
-      # priority (c840cf6), and each single-replica competitor absorbs the
-      # FULL fan-out rate — 3x the per-pod load of dsp-internal at 40% of the
-      # weight made them the fanout p95 tail (legs p95 ~320ms vs internal
-      # ~106ms, 2026-08-05). Same weight as a dsp-internal pod now.
-      requests: { cpu: 250m, memory: 96Mi }
+      # 100m: this is a SCENARIO DSP (slowpoke/deadbeat — see its profile
+      # yaml). Its latency/no-bid behaviour is artificial, so CPU weight
+      # doesn't shape the market; the competitive fan-out weight lives on
+      # dsp-competitor3 (250m, same as a dsp-internal pod — the c840cf6
+      # cpu.weight finding).
+      requests: { cpu: 100m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8090 }
@@ -237,6 +245,51 @@ services:
       failureThreshold: 5
     ingress:
       subdomains: [dsp-comp2]
+
+  # The HEALTHY scenario competitor (see profiles/dsps/competitor3.yaml):
+  # fast, bids 92% of the time — the market maker the SmartRouter keeps in
+  # every fan-out while it skips the slowpoke (comp1) and deadbeat (comp2).
+  dsp-competitor3:
+    image: adtech-dsp
+    containerName: dsp
+    ports: [{ name: http, port: 8098 }]
+    env:
+      - name: POD_NAME
+        value: "dsp-competitor3-0"
+      - name: DSP_PROFILE
+        value: "competitor3"
+      - name: DSP_PORT
+        value: "8098"
+      - name: DSP_ADCERT_KEY_URL
+        value: "http://exchange:8081/v1/adcert/key"
+      - name: DSP_ADCERT_ENFORCEMENT
+        value: "strict"
+      - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      # Full competitive weight (the c840cf6 cpu.weight finding): this pod
+      # absorbs the whole fan-out rate single-replica, like dsp-internal
+      # pods do at 250m each.
+      requests: { cpu: 250m, memory: 96Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8098 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8098 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      subdomains: [dsp-comp3]
 
   ssp:
     image: adtech-ssp
@@ -307,7 +360,7 @@ services:
       # nurl/lurl stay HTTP by design) — required whenever the bid edge
       # is grpc://, or notices are undeliverable and budget caps break.
       - name: EXCHANGE_DSP_ENDPOINTS
-        value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
+        value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090,http://dsp-competitor3:8098"
       - name: EXCHANGE_ADSERVER_URL
         value: "http://adserver:8085"
       # Routing warm-start + cross-replica reseed source. Without this the
