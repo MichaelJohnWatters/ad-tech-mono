@@ -56,21 +56,27 @@ the baselines — worse than no run.
 
 ## Baselines (110rps, warm, 73-campaign world, 10m steady-state)
 
-Post auction-speed push (2026-08-05 evening — deadline binding + bid loop off
-Redis + async identity publish):
+Post auction-speed push + competitor CPU rebalance (2026-08-05, fd4e471):
 
-- SSP: pre_auction p95 **49.5ms** (p50 8.9) | pre_auction_segments p95 48.3 |
-  auction p95 471.8 (p50 118.5) | render p95 162.7
-- DSP: parse 5.6 | audience p95 82 (p50 6.7) | **campaign_loop p95 1.2ms** |
-  encode 0.5
-- Exchange: fanout p50 92.2 / p95 444.8; other phases ≤3.3ms
-- Fill 92.0%, 0 errors, money-lossless; canary depth −$0.06
-- Known watch item: fanout p95 varies run-to-run (354↔445ms) — DSP-leg tail
-  on the saturated VM, not the SSP/DSP phases themselves.
+- Exchange: **fanout p95 208ms** (p50 ~60); other phases ≤2.7ms
+- SSP: pre_auction p95 ~50-63ms (p50 8.9) | auction p95 **231ms** (p50 58.5)
+  | render p95 110-160
+- DSP: parse ≤5.6 | audience p95 **46.5** | campaign_loop p95 ~1ms | encode
+  0.5; internal leg avg 22.6 / p95 76ms; competitor legs avg 35 / p95 ~118ms
+- Adserver: freqcap p95 80ms (← next target: serial cap Redis ops) |
+  creative 1.0 | assemble 2.4
+- Fill 92.0%, 0 errors, money-lossless; canary depth −$0.06 (10m); sched
+  latency p99 ~8-10ms on the auction path
+- 30-min soak reference: fill 82.1% sustained (demand exhaustion), canary
+  drifts ~1.4¢/min post-depletion (rebase optimism window)
 
-Pre-push reference (same protocol, HEAD 1e4af7f): SSP pre_auction p95 237ms,
-DSP campaign_loop p95 68.6ms, audience p95 75.9ms, fanout p50 91ms; 30-min
-soak 83.7% fill sustained.
+Pre-push reference (HEAD 1e4af7f): SSP pre_auction p95 237ms / auction 348;
+DSP campaign_loop p95 68.6ms, audience 75.9; fanout p50 91ms; competitor
+legs p95 ~320ms; 30-min soak 83.7% fill.
+
+Block/mutex profiling: arm via `/debug/pprof/rates?block=10000&mutex=5` on
+the pod's internal port (kubectl exec wget), capture /debug/pprof/{block,
+mutex}, disarm with ?block=0&mutex=0.
 
 ## Hands-off host rules (violations invalidate the run)
 
