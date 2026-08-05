@@ -148,6 +148,9 @@ loadtest: ## Full-path load via the simulator (auction→serve→beacons→repor
 loadtest-ramp: ## Progressive full-path load: stages through RPS_STAGES (default "100 150 250") × STAGE_DURATION (default 5m), verifying pipeline counts between stages; aborts on degradation
 	scripts/loadtest-ramp.sh
 
+browser-test: ## Portal data-visibility in a real browser (advertiser + publisher logins, staff impersonation of both); run after seed/traffic. Needs node>=20 (uses brew node@23 if nvm default is older)
+	cd tests/browser && PATH=/usr/local/opt/node@23/bin:$$PATH npm install --silent && PATH=/usr/local/opt/node@23/bin:$$PATH npx playwright test
+
 # --- Chaos Testing ---
 chaos: ## Run chaos test (usage: make chaos profile=redis_failure)
 	go run ./cmd/simulator --profile steady --duration 5m --chaos $(profile)

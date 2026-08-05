@@ -1,0 +1,11 @@
+{
+  "name": "adtech-browser-tests",
+  "private": true,
+  "description": "Portal data-visibility checks in a real browser: advertiser + publisher logins, and staff impersonation of both. Run after a load run to prove tenants can SEE their data. `make browser-test` from the repo root.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
