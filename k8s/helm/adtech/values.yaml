@@ -170,7 +170,12 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 100m, memory: 96Mi }
+      # 250m (was 100m): under node saturation cpu.weight IS the scheduler
+      # priority (c840cf6), and each single-replica competitor absorbs the
+      # FULL fan-out rate — 3x the per-pod load of dsp-internal at 40% of the
+      # weight made them the fanout p95 tail (legs p95 ~320ms vs internal
+      # ~106ms, 2026-08-05). Same weight as a dsp-internal pod now.
+      requests: { cpu: 250m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8089 }
@@ -213,7 +218,12 @@ services:
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:
-      requests: { cpu: 100m, memory: 96Mi }
+      # 250m (was 100m): under node saturation cpu.weight IS the scheduler
+      # priority (c840cf6), and each single-replica competitor absorbs the
+      # FULL fan-out rate — 3x the per-pod load of dsp-internal at 40% of the
+      # weight made them the fanout p95 tail (legs p95 ~320ms vs internal
+      # ~106ms, 2026-08-05). Same weight as a dsp-internal pod now.
+      requests: { cpu: 250m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
       httpGet: { path: /healthz, port: 8090 }
