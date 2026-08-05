@@ -38,8 +38,13 @@ the baselines — worse than no run.
 4. **Read the results:**
    - Grafana **"Phase profiling"** row (exchange gates/routing/fanout/dealeval/
      finalize; DSP parse/audience/campaign_loop/encode; SSP pre_auction/
-     pre_auction_segments/auction/render) + **"Per-pod"** row (a sick replica
-     can't hide in an average).
+     pre_auction_segments/auction/render; adserver freqcap/creative/assemble)
+     + **"Per-pod"** row (a sick replica can't hide in an average).
+   - **"Stack pressure"** row — the is-it-code-or-is-it-the-VM discriminator:
+     Go scheduler latency p99 by service, fleet CPU/RSS by service, node CPU
+     by mode (iowait = thrash, irq ~23% = virtio ceiling), node MemAvailable
+     (~1.5GiB = page-cache-thrash danger zone). If these climb with your
+     phase p95s, the fix is cores/replicas, not code.
    - pprof during load: `/debug/pprof/profile?seconds=20` on 8081/8082/8084.
    - After the run: consumer drain (`jetstream_consumer_num_pending` → 0),
      spool counters (spooled == drained, dropped == 0).

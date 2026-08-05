@@ -1,0 +1,51 @@
+{{- $ns := include "adtech.namespace" . -}}
+{{- $ne := .Values.observability.nodeExporter }}
+{{- if $ne.enabled }}
+# node-exporter: VM-level CPU modes / MemAvailable / disk + network pressure.
+# This stack has NO cadvisor metrics, so before this the only way to see node
+# saturation (iowait thrash, irq ceiling, MemAvailable collapse — the
+# 2026-08-04 diagnosis trail) was /proc spelunking inside the VM. Scraped by
+# the existing annotation-driven 'adtech-pods' job (role: pod covers
+# DaemonSet pods); the app=node-exporter pod label becomes the service label.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: {{ $ns }}
+spec:
+  selector:
+    matchLabels: { app: node-exporter }
+  template:
+    metadata:
+      labels: { app: node-exporter }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: {{ $ne.image }}
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            # The VM's overlay/container mounts are noise; keep real filesystems.
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+          ports:
+            - name: metrics
+              containerPort: 9100
+          resources: {{ toYaml $ne.resources | nindent 12 }}
+          volumeMounts:
+            - { name: proc, mountPath: /host/proc, readOnly: true }
+            - { name: sys, mountPath: /host/sys, readOnly: true }
+            - { name: root, mountPath: /host/root, readOnly: true, mountPropagation: HostToContainer }
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      volumes:
+        - { name: proc, hostPath: { path: /proc } }
+        - { name: sys, hostPath: { path: /sys } }
+        - { name: root, hostPath: { path: / } }
+{{- end }}
