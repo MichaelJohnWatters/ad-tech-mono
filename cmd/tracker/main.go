@@ -672,7 +672,7 @@ func main() {
 			Allowlist:   keys.Tracker.RateLimitAllowlist.Get(cfg),
 		}
 	}, log)
-	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(trkRL.Wrap(mux))))
+	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(trkRL.Wrap(stampTracker(mux)))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
 	mode := "NATS JetStream"
@@ -717,6 +717,24 @@ func (p *eventPublisher) publishAdvertiserIdentity(traceID, advUID, hashedEmail 
 // channelOrDefault maps the beacon's ch= param to a channel, defaulting to
 // display when absent (display beacons don't bother setting it; video/native/
 // audio beacons do, so their impressions are labelled correctly).
+// stampTracker marks every /v1/t/* response with X-Adtech-Tracker so a beacon
+// client can tell a real tracker answer from a transient tunnel/proxy 2xx.
+// 2026-08-05 30-min soak: 492 impression beacons got a <300 status the tracker
+// never served (localhost svclb path under load) — the simulator's delivery
+// check trusted the bare status, so the loss was invisible client-side and
+// VERIFY flagged it as pipeline slippage. The header is set on EVERY tracker
+// response — including fraud/dedup silent-pixel paths — so it means "the
+// tracker handled this", never "this was recorded" (a distinct recorded-marker
+// would let bots detect fraud filtering by header diffing).
+func stampTracker(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, routes.TrackerPrefix) {
+			w.Header().Set("X-Adtech-Tracker", "1")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func channelOrDefault(ch string) string {
 	if ch == "" {
 		return constants.ChannelDisplay
