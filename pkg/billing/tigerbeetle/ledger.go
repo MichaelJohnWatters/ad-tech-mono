@@ -62,6 +62,11 @@ type Ledger struct {
 	// compatibility with MemoryLedger.
 	nextID atomic.Int64
 
+	// maxPerReq is the adaptive CreateTransfers chunk cap (0 = use the
+	// compile-time production default). Shrinks when the server rejects a
+	// chunk as oversized (--development mode has a smaller wire limit).
+	maxPerReq atomic.Int64
+
 	// accountCache remembers TB account IDs we've already ensured exist
 	// this process lifetime, so the second and subsequent transfers to
 	// an account skip the LookupAccounts round-trip.
@@ -147,9 +152,47 @@ func (l *Ledger) buildTransfers(entry billing.LedgerEntry) ([]tbtypes.Transfer, 
 }
 
 // maxTransfersPerRequest bounds a single CreateTransfers call. TigerBeetle's
-// wire limit is 8190 transfers/request; stay just under it. Each entry's group
-// is <= 3 transfers, and RecordBatch never splits a group across this boundary.
+// PRODUCTION wire limit is 8190 transfers/request; stay just under it. Each
+// entry's group is <= 3 transfers, and RecordBatch never splits a group across
+// this boundary.
+//
+// The REAL limit is a server config: `tigerbeetle --development` (the local
+// stack since 2026-08-05) shrinks message_size_max, and a chunk sized for prod
+// gets "Maximum batch size exceeded" — which degraded every flush to the
+// per-entry fallback (500 round-trips instead of 1) and crawled the reporting
+// impression consumer into a 58k-message backlog mid-soak. The ledger learns
+// the actual cap adaptively: on that error it halves a sticky per-process cap
+// (perReqCap) and future chunks size to it.
 const maxTransfersPerRequest = 8189
+
+// perReqCap is the current adaptive chunk bound (see maxTransfersPerRequest).
+func (l *Ledger) perReqCap() int {
+	if v := l.maxPerReq.Load(); v > 0 {
+		return int(v)
+	}
+	return maxTransfersPerRequest
+}
+
+// shrinkPerReqCap halves the sticky cap after a batch-size rejection of a
+// chunk with failedLen transfers. Floor of 3 — an entry's transfer group must
+// always fit whole.
+func (l *Ledger) shrinkPerReqCap(failedLen int) {
+	next := int64(failedLen / 2)
+	if next < 3 {
+		next = 3
+	}
+	cur := l.maxPerReq.Load()
+	if cur == 0 || next < cur {
+		l.maxPerReq.Store(next)
+		l.log.Warn("tigerbeetle max batch exceeded — shrinking per-request cap (server likely runs --development)",
+			"failed_transfers", failedLen, "new_cap", next)
+	}
+}
+
+// isBatchSizeExceeded matches TB's oversized-request rejection.
+func isBatchSizeExceeded(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "batch size exceeded")
+}
 
 // RecordBatch submits many entries in as few CreateTransfers requests as
 // possible: it builds each entry's transfer group, concatenates groups into
@@ -178,6 +221,12 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 		defer func() { l.recordStats(recorded) }()
 		byIdx, err := l.createTransfersResults(chunk)
 		if err != nil {
+			// Oversized chunk (server's message limit smaller than ours, e.g.
+			// --development): learn the real cap so every FUTURE chunk fits in
+			// one request; this chunk still drains per-entry below.
+			if isBatchSizeExceeded(err) {
+				l.shrinkPerReqCap(len(chunk))
+			}
 			// Transport-level error (the whole request didn't land) — retry each
 			// entry alone so a single connection hiccup doesn't drop the batch.
 			l.log.Error("tigerbeetle batch chunk transport error; retrying per-entry",
@@ -238,7 +287,7 @@ func (l *Ledger) RecordBatch(entries []billing.LedgerEntry) []int64 {
 			continue
 		}
 		ids[i] = entry.ID
-		if len(chunk)+len(transfers) > maxTransfersPerRequest {
+		if len(chunk)+len(transfers) > l.perReqCap() {
 			flush()
 		}
 		chunk = append(chunk, transfers...)
