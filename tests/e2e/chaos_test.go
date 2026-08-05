@@ -15,6 +15,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -39,10 +40,14 @@ func TestChaosRedisDownBudgetFailOpen(t *testing.T) {
 	})
 }
 
-// NATS down → the tracker falls back to POSTing events straight to reporting
-// and never fails the pixel response. FireImpression fails the test on a 5xx,
-// so its success while NATS is down is the graceful-degradation assertion.
-func TestChaosNATSDownTrackerHTTPFallback(t *testing.T) {
+// NATS down → the pixel response never fails (the browser already showed the
+// ad; failing the beacon can't undo that, only lose the record). The event
+// itself lands on the tracker's disk spool for replay — delivery is asserted
+// by TestChaosNATSOutageSpoolLossless below; this test only pins the
+// "pixel always answers" half. (The old HTTP-fallback-to-reporting path this
+// test used to describe was retired in e9256bf: it double-delivered whenever
+// a "failed" publish had actually reached the stream.)
+func TestChaosNATSDownPixelNeverFails(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	harness.RequireKubectl(t)
 	w := harness.BuildBasicWorld(t, h, "chaos-nats")
@@ -51,6 +56,65 @@ func TestChaosNATSDownTrackerHTTPFallback(t *testing.T) {
 		h.FireImpression(t, "chaos-nats-trace", w.Campaign.ID, w.Campaign.CreativeID,
 			w.Placement.ID, w.Publisher.ID, w.AdvAcc.ID, "USD", 3.50)
 	})
+}
+
+// The 2026-08-05 loss mode, pinned as a test: NATS dies mid-traffic, and every
+// impression fired during the outage must STILL be recorded EXACTLY ONCE after
+// recovery. The disk spool absorbs the failed publishes and the drainer
+// replays them with their original Nats-Msg-Id once NATS returns.
+//
+// The == assertion is the whole point: fewer rows = the spool lost events
+// (the pre-spool behavior — 146,757 dropped in one VM seizure), more rows =
+// something double-delivered (the retired HTTP fallback produced ~1k
+// duplicate impressions per NATS bounce; a spool replay outside the stream's
+// Duplicates window did the same until it was widened to 30m).
+func TestChaosNATSOutageSpoolLossless(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	harness.RequireKubectl(t)
+
+	// A FRESH advertiser account scopes the count query to exactly this
+	// test's impressions — no other traffic can pollute the == assertion.
+	advEmail := fmt.Sprintf("chaos-spool-%d@e2e.test", time.Now().UnixNano())
+	adv := h.Signup(t, "Chaos Spool Adv", advEmail, "pw-e2e-1", "advertiser")
+	advID := accountIDByEmail(t, h, advEmail)
+
+	const imps = 10
+	h.WithChaos(t, "nats", func() {
+		// Fired INTO the outage: every publish fails and must hit the spool.
+		for i := 0; i < imps; i++ {
+			h.FireImpression(t, fmt.Sprintf("%032x", time.Now().UnixNano()+int64(i)),
+				"chaos-spool-camp", "chaos-spool-cr", "chaos-spool-pl", "chaos-spool-pub",
+				advID, "USD", 2.50)
+		}
+	})
+
+	// NATS is back (WithChaos waited for ready). The spool drains on a ~2s
+	// tick and reporting consumes the replays; the count must converge to
+	// EXACTLY imps.
+	query := `{"table":"impressions","metrics":["count"],"time_from":"` +
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339) + `"}`
+	count := func() float64 {
+		res := h.APIJSON(t, adv, http.MethodPost, "/v1/api/reports", query)
+		rows, _ := res["rows"].([]any)
+		if len(rows) == 0 {
+			return -1
+		}
+		row, _ := rows[0].([]any)
+		if len(row) == 0 {
+			return -1
+		}
+		n, _ := row[0].(float64)
+		return n
+	}
+	harness.WaitFor(t, 120*time.Second, "spooled impressions to drain into reporting", func() bool {
+		return count() == float64(imps)
+	})
+	// Duplicate guard: give any straggling replay time to land, then the
+	// count must STILL be exactly imps.
+	time.Sleep(5 * time.Second)
+	if n := count(); n != float64(imps) {
+		t.Fatalf("impression count moved after convergence: want exactly %d, got %v (loss<%d, dupes>%d)", imps, n, imps, imps)
+	}
 }
 
 // Postgres down → DSP campaigns and SSP placements are served from warm
