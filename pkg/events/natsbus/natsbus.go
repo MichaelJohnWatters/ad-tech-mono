@@ -91,6 +91,39 @@ func New(url, service string, log *slog.Logger) (*Bus, error) {
 	return &Bus{conn: nc, js: js, service: service, log: log, streamReplicas: streamReplicasFromEnv()}, nil
 }
 
+// EnsureStreamWithRetry is EnsureStream that survives a fresh-disk boot race:
+// the first attempt runs inline; on failure (NATS still coming up — the
+// JetStream API errors while the client is reconnecting) it retries in the
+// background every 2s until it sticks, and NEVER invalidates the bus. This is
+// the boot-latch doctrine applied to stream provisioning: the tracker used to
+// CLOSE the bus on this failure and latch the HTTP bridge for the pod's life,
+// which SIGSEGVed the fleet on 2026-08-05 (see cmd/tracker c6535dd). Callers
+// that need to block on readiness should keep using EnsureStream + their own
+// policy; everyone else should use this.
+func (b *Bus) EnsureStreamWithRetry(ctx context.Context, name string, subjects []string) {
+	if err := b.EnsureStream(ctx, name, subjects); err == nil {
+		return
+	} else {
+		b.log.Warn("stream ensure failed at boot — retrying in background until it sticks (publishes spool/fail-soft meanwhile)",
+			"stream", name, "error", err)
+	}
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := b.EnsureStream(context.Background(), name, subjects); err == nil {
+					b.log.Info("stream ensured after boot-time retry", "stream", name)
+					return
+				}
+			}
+		}
+	}()
+}
+
 // EnsureStream creates a JetStream stream if it doesn't exist.
 func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) error {
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{

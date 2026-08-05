@@ -132,7 +132,7 @@ func main() {
 	if bus, err := natsbus.New(keys.ReportRunner.NATSURL.Get(cfg), constants.ServiceReportRunner+"-events", log); err != nil {
 		log.Warn("nats unavailable — report.completed announcements disabled", "error", err)
 	} else {
-		bus.EnsureStream(context.Background(), events.StreamName, []string{events.StreamSubjects})
+		bus.EnsureStreamWithRetry(context.Background(), events.StreamName, []string{events.StreamSubjects})
 		executor.Events = events.NewPublisher(bus, log)
 		lc.OnShutdown("report-events", func(_ context.Context) error { return bus.Close() })
 	}
