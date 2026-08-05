@@ -62,9 +62,9 @@ serving: Serving · sync RTB {
   style.fill: "#eef2ff"
 
   ssp: SSP :8084          { style.fill: "#34d399"; d: placements · floors · bid-req gen }
-  exchange: Exchange :8081 { style.fill: "#818cf8"; d: first-price auction · deal priority · 3-DSP fan-out }
+  exchange: Exchange :8081 { style.fill: "#818cf8"; d: first-price auction · deal priority · 4-DSP fan-out }
   dsp: DSP internal :8082  { style.fill: "#22d3ee"; d: bid · targeting · pacing · shading }
-  dspc: DSP competitors ×2 { style.fill: "#fb923c"; d: :8089 / :8090 (noise + no-bid) }
+  dspc: DSP competitors ×3 { style.fill: "#fb923c"; d: :8089 slowpoke · :8090 deadbeat · :8098 healthy (SmartRouter scenarios) }
   adserver: Ad Server :8085 { style.fill: "#a78bfa"; d: creative resolve · macros · pixel URLs }
   pubad: Publisher Ad Server :8088 { style.fill: "#a78bfa"; d: serves markup to the page }
   tracker: Tracker :8083   { style.fill: "#fbbf24"; d: imp · click · conv · view }

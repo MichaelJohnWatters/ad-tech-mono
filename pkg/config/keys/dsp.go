@@ -35,6 +35,7 @@ var DSP = struct {
 	WarmAdvertiserBalancesPollInterval config.DurationKey
 	BalanceGateEnabled                 config.BoolKey
 	BidCacheRefreshInterval            config.DurationKey
+	ResponseDelay                      config.DurationKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL      config.StringKey
@@ -65,6 +66,7 @@ var DSP = struct {
 	WarmAdvertiserBalancesPollInterval: dspSet.Duration("cache.warm.advertiser_balances.poll_interval", "30s", config.TierLive, "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", config.Since("v1.2")),
 	BalanceGateEnabled:                 dspSet.Bool("dsp.balance_gate_enabled", "true", config.TierLive, "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", config.Since("v1.2")),
 	BidCacheRefreshInterval:            dspSet.Duration("dsp.bid_cache_refresh_interval", "1s", config.TierLive, "How often the background refresher bulk-MGETs the budget spend counters and balance draw-down mirrors into process memory. The bid loop reads ONLY these in-process copies (never Redis), so this bounds cross-pod staleness of budget pacing and the prepay gate.", config.Since("v1.11")),
+	ResponseDelay:                      dspSet.Duration("dsp.response_delay", "0s", config.TierLive, "Artificial delay (jittered ±25%) added before handling every bid request — makes this pod a deliberately SLOW market participant. Powers the slowpoke scenario DSP (competitor1): set near/above exchange.bid_timeout so its timeout rate crosses the SmartRouter skip threshold every run; zero it live to watch the router rehabilitate the DSP via the ε-probe + recency window. 0 (default) disables.", config.Since("v1.20")),
 	URL:                                config.RawString("dsp.url", routes.DefaultDSPURL),
 	Port:                               config.RawString("dsp.port", routes.PortDSP),
 	GRPCPort:                           config.RawString("dsp.grpc_port", routes.PortDSPGRPC),

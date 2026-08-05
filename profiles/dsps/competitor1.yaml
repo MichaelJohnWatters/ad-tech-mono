@@ -1,6 +1,10 @@
-# Competitor 1 - Large agency DSP (Omnicom-style).
-# Big brands, aggressive mobile bidding, high budgets.
-# Bids are randomised ±30% with 20% random no-bid rate.
+# Competitor 1 - SmartRouter scenario: SLOWPOKE.
+# Bids normally WHEN it answers, but the helm env DSP_RESPONSE_DELAY (500ms,
+# jittered ±25% in cmd/dsp) straddles exchange.bid_timeout — most calls time
+# out, so its timeout rate crosses routing_max_timeout_rate (50%) and the
+# router skips it after warm-up (ε-probe trickle continues). Zero the live
+# dsp.response_delay key on its pod to watch the EWMA rehabilitate it in
+# minutes. Catalog: large agency book, aggressive mobile bidding.
 name: competitor1
 competitor: true
 noise_pct: 30       # ±30% random bid noise

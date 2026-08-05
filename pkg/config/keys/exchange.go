@@ -31,6 +31,7 @@ var Exchange = struct {
 	RoutingNeverSkip       config.StringKey
 	RoutingLatencySoft     config.DurationKey
 	RoutingLatencyHard     config.DurationKey
+	RoutingRecencyWindow   config.IntKey
 	ReportingURL           config.StringKey
 	WarmDealsPollInterval  config.DurationKey
 	AdsTxtEnforcement      config.StringKey
@@ -68,6 +69,7 @@ var Exchange = struct {
 	RoutingNeverSkip:       exchangeSet.String("exchange.routing_never_skip", "", config.TierLive, "Comma-separated DSP endpoints the skip rules must NEVER exclude. Paste entries as they appear in exchange.dsp_endpoints — a ;notify= suffix is stripped for matching, so the full entry and the bare bid endpoint both work. Use for demand holding PG/PMP deals: deals are evaluated from returned bids, so routing out the deal-holder silently starves a contractual guarantee regardless of its open-market bid rate.", config.Since("v1.19")),
 	RoutingLatencySoft:     exchangeSet.Duration("exchange.routing_latency_soft", "50ms", config.TierLive, "Ranking (not skipping): a DSP whose average response latency exceeds this gets its expected-value score multiplied by 0.8, so a fast bidder outranks a slow one of equal value.", config.Since("v1.19")),
 	RoutingLatencyHard:     exchangeSet.Duration("exchange.routing_latency_hard", "80ms", config.TierLive, "Ranking (not skipping): above this average latency the score multiplier drops to 0.5. Pair with exchange.bid_timeout — a DSP near the timeout is barely worth calling even when it bids well.", config.Since("v1.19")),
+	RoutingRecencyWindow:   exchangeSet.Int("exchange.routing_recency_window", "200", config.TierLive, "Rolling-stat horizon in calls per (channel, DSP): bid/timeout rates and latency are EWMAs with this effective window, so a DSP is judged on its recent self, not its lifetime record — a skipped DSP that recovers rehabilitates after ~window probed calls instead of never (cumulative averages made the ε-probe's second chance hollow after a long bad history). Below the window the stats are exact cumulative means, so warm-up behaviour is unchanged.", config.Since("v1.20")),
 	ReportingURL:           exchangeSet.String("exchange.reporting_url", "http://localhost:8086", config.TierStatic, "Base URL of the reporting service, used only for the routing warm-start aggregate fetch on boot (exchange.routing_warmstart).", config.Since("v1.4")),
 	WarmDealsPollInterval:  exchangeSet.Duration("cache.warm.deals.poll_interval", "30s", config.TierStatic, "How often the in-memory deal cache refreshes from Postgres. Affects how quickly newly activated PG/PMP deals start preempting open-market bids.", config.Since("v1.1")),
 	AdsTxtEnforcement:      exchangeSet.String("exchange.adstxt_enforcement", "off", config.TierLive, "ads.txt seller-authorisation enforcement before fan-out: 'off' (no check), 'warn' (log unauthorised publishers but allow), or 'strict' (no-bid requests from publishers whose ads.txt doesn't list us). Off by default; needs adstxt_seller_domain/id set and the ads_txt_cache populated (cmd/adstxt) to be meaningful.", config.Since("v1.3")),

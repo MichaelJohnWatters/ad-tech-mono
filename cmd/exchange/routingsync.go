@@ -143,10 +143,18 @@ func (rs *routingSync) reseedLoop() {
 			continue
 		}
 		time.Sleep(interval)
-		url := base + "/debug/routing/stats?since_hours=6"
-		if at := rs.resetAt.Load(); at > 0 {
-			url = fmt.Sprintf("%s/debug/routing/stats?since_ms=%d", base, at)
+		// Rolling 10-minute window, not lifetime: the reseed OVERWRITES the
+		// router's stats, so a long-horizon aggregate silently undoes the
+		// recency-window semantics (exchange.routing_recency_window) every
+		// cycle — a DSP whose behaviour changed mid-run stayed judged on its
+		// cumulative record (caught 2026-08-05: the deadbeat scenario DSP's
+		// live no-bid flip took hours to matter instead of ~a window). After
+		// a reset broadcast the window additionally starts at the reset.
+		since := time.Now().Add(-10 * time.Minute).UnixMilli()
+		if at := rs.resetAt.Load(); at > since {
+			since = at
 		}
+		url := fmt.Sprintf("%s/debug/routing/stats?since_ms=%d", base, since)
 		seed, ok := fetchRoutingStats(url, rs.log, "routing reseed")
 		if !ok {
 			continue
