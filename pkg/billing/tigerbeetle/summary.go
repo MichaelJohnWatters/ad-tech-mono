@@ -109,13 +109,20 @@ func (l *Ledger) recordStats(entries []billing.LedgerEntry) {
 	for _, e := range entries {
 		transfers = append(transfers, statTransfers(e)...)
 	}
-	for start := 0; start < len(transfers); start += maxTransfersPerRequest {
-		end := min(start+maxTransfersPerRequest, len(transfers))
+	for start := 0; start < len(transfers); {
+		end := min(start+l.perReqCap(), len(transfers))
 		if err := l.createTransfers(transfers[start:end]); err != nil {
+			// Oversized for the server (e.g. --development wire limit):
+			// learn the cap and retry the SAME window at the new size.
+			if isBatchSizeExceeded(err) {
+				l.shrinkPerReqCap(end - start)
+				continue
+			}
 			l.log.Error("tigerbeetle summary stats write failed (money unaffected)",
 				"entries", len(entries), "error", err)
 			return
 		}
+		start = end
 	}
 }
 
