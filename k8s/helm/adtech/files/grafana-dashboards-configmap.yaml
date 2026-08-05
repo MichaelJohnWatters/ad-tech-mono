@@ -542,6 +542,39 @@ data:
         },
         {
           "type": "row",
+          "title": "Per-pod — spot the sick replica",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 }
+        },
+        {
+          "id": 27,
+          "title": "Auction RPS by exchange pod",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 56 },
+          "description": "Same data as Auction RPS, split per pod. Healthy = three near-identical lines (round-robin). One line sagging = that pod is slow/unready; one at zero = it's out of rotation.",
+          "targets": [
+            {
+              "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",exported_service=\"exchange\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[$__rate_interval])) by (pod)",
+              "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 28,
+          "title": "Auction latency p95 by exchange pod",
+          "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 56 },
+          "description": "Per-pod auction p95. The aggregate panel hides a single degraded replica (2 fast pods + 1 slow one averages 'fine'); this one names it.",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate({__name__=~\"adtech_http_request_duration_seconds_bucket|adtech_grpc_request_duration_seconds_bucket\",exported_service=\"exchange\",handler=~\"/v1/openrtb/auction|/adtech.internalrpc.InternalAuctionService/RunAuction\"}[$__rate_interval])) by (pod, le))",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "type": "row",
           "title": "Phase profiling — where the milliseconds go",
           "collapsed": false,
           "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }

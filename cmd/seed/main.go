@@ -159,6 +159,12 @@ func main() {
 		log.Error("seed advertiser balances failed", "error", err)
 		os.Exit(1)
 	}
+	// Overspend canary: tiny-balance advertiser so every load run exercises
+	// the balance gate + the overspend watchdog has real events to measure.
+	if err := in.SeedOverspendCanary(ctx); err != nil {
+		log.Error("seed overspend canary failed", "error", err)
+		os.Exit(1)
+	}
 	// Per-advertiser conversion signing keys (G7) so the stack runs the
 	// prod-shaped strict per-advertiser conversion posture: each advertiser's
 	// S2S conversions validate only against its own key. Deterministic dev value
