@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
@@ -106,4 +108,175 @@ func (f *FreqCap) Record(ctx context.Context, userID, campaignID string, limit i
 			f.log.Warn("freqcap record expire failed", "key", key, "error", err)
 		}
 	}
+}
+
+// ── Combined user+household ops: ONE Redis round trip via Lua ─────────────
+//
+// The serve handler runs the cap for BOTH scopes on every request; as four
+// serial ops (2× INCR + 2× EXPIRE) that was the whole render leg's cost
+// under load (adserver freqcap phase p95 80ms vs 1-2ms for everything else,
+// 2026-08-05). Each script preserves the serial path's exact semantics —
+// notably check-and-record only touches the household counter when the user
+// scope ALLOWED (the pre-existing asymmetry). When the backend can't script
+// (in-memory fallback era, tests, Redis blip) every method degrades to the
+// original per-scope calls.
+
+// checkScript: INCR user (PEXPIRE on first); if over limit stop (household
+// untouched). Else INCR household when present. Returns {userCount, hhCount};
+// hhCount -1 = not evaluated (blocked at user or no household key).
+const checkScript = `
+local limit = tonumber(ARGV[1])
+local win = tonumber(ARGV[2])
+local c1 = redis.call('INCR', KEYS[1])
+if c1 == 1 then redis.call('PEXPIRE', KEYS[1], win) end
+if c1 > limit or #KEYS < 2 then return {c1, -1} end
+local c2 = redis.call('INCR', KEYS[2])
+if c2 == 1 then redis.call('PEXPIRE', KEYS[2], win) end
+return {c1, c2}`
+
+// peekScript: read every counter without touching it.
+const peekScript = `
+local out = {}
+for i, k in ipairs(KEYS) do out[i] = tonumber(redis.call('GET', k) or '0') end
+return out`
+
+// recordScript: INCR every counter (PEXPIRE on first) — stitch-time counting.
+const recordScript = `
+local win = tonumber(ARGV[1])
+for i, k in ipairs(KEYS) do
+  local c = redis.call('INCR', k)
+  if c == 1 then redis.call('PEXPIRE', k, win) end
+end
+return 1`
+
+// capKeys returns the 1-2 keys for the scopes present (user first).
+func capKeys(userID, householdID, campaignID string) []string {
+	keys := make([]string, 0, 2)
+	if userID != "" {
+		keys = append(keys, freqCapKey(userID, campaignID))
+	}
+	if householdID != "" {
+		keys = append(keys, freqCapKey(householdID, campaignID))
+	}
+	return keys
+}
+
+// evalInts runs a script and coerces the []any reply to int64s.
+func (f *FreqCap) evalInts(ctx context.Context, script string, keys []string, args ...any) ([]int64, error) {
+	sc, ok := f.l2.(cache.Scripter)
+	if !ok {
+		return nil, errNoScripting
+	}
+	raw, err := sc.Eval(ctx, script, keys, args...)
+	if err != nil {
+		return nil, err
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("freqcap script: unexpected reply %T", raw)
+	}
+	out := make([]int64, len(items))
+	for i, it := range items {
+		n, ok := it.(int64)
+		if !ok {
+			return nil, fmt.Errorf("freqcap script: unexpected element %T", it)
+		}
+		out[i] = n
+	}
+	return out, nil
+}
+
+var errNoScripting = errors.New("freqcap: backend does not support scripting")
+
+// DecideAndRecord is the display path for both scopes in one round trip:
+// check-and-increment user, then household only if the user allowed.
+// blockedScope is "" (allowed), "user", or "household".
+func (f *FreqCap) DecideAndRecord(ctx context.Context, userID, householdID, campaignID string, limit int, window time.Duration) (bool, string) {
+	if limit <= 0 || (userID == "" && householdID == "") {
+		return true, ""
+	}
+	// The script's user/household asymmetry needs a real user key; a
+	// household-only request degrades to the single-scope serial call.
+	if userID != "" {
+		keys := capKeys(userID, householdID, campaignID)
+		counts, err := f.evalInts(ctx, checkScript, keys, limit, window.Milliseconds())
+		if err == nil {
+			if counts[0] > int64(limit) {
+				return false, "user"
+			}
+			if len(keys) > 1 && counts[1] > int64(limit) {
+				return false, "household"
+			}
+			return true, ""
+		}
+		if err != errNoScripting {
+			f.log.Warn("freqcap combined check failed; using serial path", "error", err)
+		}
+	}
+	// Serial fallback — byte-for-byte the pre-Lua behaviour.
+	if !f.AllowAndRecord(ctx, userID, campaignID, limit, window) {
+		return false, "user"
+	}
+	if householdID != "" && !f.AllowAndRecord(ctx, householdID, campaignID, limit, window) {
+		return false, "household"
+	}
+	return true, ""
+}
+
+// PeekBoth is the video/audio decision path: would the NEXT impression be
+// allowed for both scopes, without incrementing either.
+func (f *FreqCap) PeekBoth(ctx context.Context, userID, householdID, campaignID string, limit int) (bool, string) {
+	if limit <= 0 || (userID == "" && householdID == "") {
+		return true, ""
+	}
+	keys := capKeys(userID, householdID, campaignID)
+	counts, err := f.evalInts(ctx, peekScript, keys)
+	if err == nil {
+		scopes := capScopes(userID, householdID)
+		for i, c := range counts {
+			if c >= int64(limit) {
+				return false, scopes[i]
+			}
+		}
+		return true, ""
+	}
+	if err != errNoScripting {
+		f.log.Warn("freqcap combined peek failed; using serial path", "error", err)
+	}
+	if userID != "" && !f.Allow(ctx, userID, campaignID, limit) {
+		return false, "user"
+	}
+	if householdID != "" && !f.Allow(ctx, householdID, campaignID, limit) {
+		return false, "household"
+	}
+	return true, ""
+}
+
+// RecordBoth counts a confirmed impression against both scopes (stitch time).
+func (f *FreqCap) RecordBoth(ctx context.Context, userID, householdID, campaignID string, limit int, window time.Duration) {
+	if limit <= 0 || (userID == "" && householdID == "") {
+		return
+	}
+	keys := capKeys(userID, householdID, campaignID)
+	if sc, ok := f.l2.(cache.Scripter); ok {
+		if _, err := sc.Eval(ctx, recordScript, keys, window.Milliseconds()); err == nil {
+			return
+		} else {
+			f.log.Warn("freqcap combined record failed; using serial path", "error", err)
+		}
+	}
+	f.Record(ctx, userID, campaignID, limit, window)
+	f.Record(ctx, householdID, campaignID, limit, window)
+}
+
+// capScopes mirrors capKeys' ordering for blocked-scope attribution.
+func capScopes(userID, householdID string) []string {
+	scopes := make([]string, 0, 2)
+	if userID != "" {
+		scopes = append(scopes, "user")
+	}
+	if householdID != "" {
+		scopes = append(scopes, "household")
+	}
+	return scopes
 }

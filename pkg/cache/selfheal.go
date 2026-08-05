@@ -11,6 +11,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -128,6 +129,16 @@ func (s *SelfHealingL2) ReplaceSet(ctx context.Context, key string, members []st
 // (falling back to serial Gets while on the in-memory stand-in).
 func (s *SelfHealingL2) MGet(ctx context.Context, keys ...string) ([]*string, error) {
 	return MGet(ctx, s.get(), keys)
+}
+
+// Eval forwards the Scripter capability when the current backend has it;
+// errUnsupported otherwise (the in-memory fallback era) — callers use their
+// plain multi-op path on error.
+func (s *SelfHealingL2) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	if sc, ok := s.get().(Scripter); ok {
+		return sc.Eval(ctx, script, keys, args...)
+	}
+	return nil, errors.New("cache: backend does not support scripting")
 }
 
 func (s *SelfHealingL2) Ping(ctx context.Context) error {

@@ -399,31 +399,24 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		// / cold conditioning-miss / manifest re-request never burns a slot);
 		// "record" = increment when the ad is actually stitched. Display (empty
 		// mode) stays check-and-record: it renders here, so serve ≈ impression.
+		// Both scopes (user + household) resolve in ONE Redis round trip via
+		// the FreqCap combined methods (Lua; serial fallback when the backend
+		// can't script) — as four serial ops this was nearly the whole render
+		// leg (freqcap phase p95 80ms, 2026-08-05).
 		switch req.CapMode {
 		case models.CapModeRecord:
 			// The ad was stitched → count exactly this impression, no decision.
-			freqCap.Record(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
-			if req.HouseholdID != "" {
-				freqCap.Record(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
-			}
+			freqCap.RecordBoth(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 			obsAdServePhase("freqcap", phaseMark)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		allow := freqCap.AllowAndRecord
+		var allowed bool
+		var blockedScope string
 		if req.CapMode == models.CapModePeek {
-			allow = func(ctx context.Context, u, c string, lim int, _ time.Duration) bool {
-				return freqCap.Allow(ctx, u, c, lim)
-			}
-		}
-		blockedScope := ""
-		allowed := allow(ctx, req.UserID, req.CampaignID, capLimit, capWindow)
-		if !allowed {
-			blockedScope = "user"
-		} else if req.HouseholdID != "" {
-			if allowed = allow(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow); !allowed {
-				blockedScope = "household"
-			}
+			allowed, blockedScope = freqCap.PeekBoth(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit)
+		} else {
+			allowed, blockedScope = freqCap.DecideAndRecord(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 		}
 		phaseMark = obsAdServePhase("freqcap", phaseMark)
 		if !allowed {

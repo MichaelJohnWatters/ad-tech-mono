@@ -107,3 +107,38 @@ func TestFreqCap_HouseholdSharedAcrossUsers(t *testing.T) {
 type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+// Combined-path semantics (serial fallback on MemoryL2): the household
+// counter must NOT be touched when the user scope blocks — the same
+// asymmetry the pre-Lua serial path had, preserved by checkScript.
+func TestFreqCapDecideAndRecordAsymmetry(t *testing.T) {
+	l2 := cache.NewMemoryL2()
+	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+
+	// Cap 1: first serve allowed, second blocked at user.
+	if ok, scope := fc.DecideAndRecord(context.Background(), "u1", "hh1", "c1", 1, time.Minute); !ok || scope != "" {
+		t.Fatalf("first serve: ok=%v scope=%q, want allowed", ok, scope)
+	}
+	if ok, scope := fc.DecideAndRecord(context.Background(), "u1", "hh1", "c1", 1, time.Minute); ok || scope != "user" {
+		t.Fatalf("second serve: ok=%v scope=%q, want blocked at user", ok, scope)
+	}
+	// Household counter saw only the ONE allowed serve — a fresh user in the
+	// same household still gets an impression under a household cap of 2.
+	if v, _, _ := l2.Get(context.Background(), freqCapKey("hh1", "c1")); v != "1" {
+		t.Fatalf("household counter = %q, want 1 (not incremented on user-blocked serve)", v)
+	}
+
+	// PeekBoth never increments.
+	if ok, _ := fc.PeekBoth(context.Background(), "u2", "hh2", "c1", 1); !ok {
+		t.Fatal("peek on fresh counters must allow")
+	}
+	if v, present, _ := l2.Get(context.Background(), freqCapKey("u2", "c1")); present {
+		t.Fatalf("peek incremented the counter: %q", v)
+	}
+
+	// RecordBoth counts both scopes.
+	fc.RecordBoth(context.Background(), "u3", "hh3", "c1", 5, time.Minute)
+	if v, _, _ := l2.Get(context.Background(), freqCapKey("hh3", "c1")); v != "1" {
+		t.Fatalf("household record = %q, want 1", v)
+	}
+}
