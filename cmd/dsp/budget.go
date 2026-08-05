@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
@@ -35,11 +36,31 @@ type BudgetTracker struct {
 	ttlFn func() time.Duration
 	nowFn func() time.Time
 	log   *slog.Logger
+
+	// spendCache is a ~1s in-process read cache over the Redis counter. The
+	// bid handler calls Spend for EVERY eligible campaign on EVERY bid — with
+	// a big-world catalog (73 campaigns) that was ~70 sequential Redis round
+	// trips per display bid, ~500ms under load, and the exchange's bid
+	// deadline fired (2026-08-05: display bid rate 16% vs video 97%, blank
+	// no_bid_reason = DeadlineExceeded). 1s of staleness is safe here: this
+	// counter is a deliberately conservative overspend guard that the billing
+	// snapshot reconciles anyway; local Record/Reconcile invalidate their
+	// entry so this pod's own writes are visible immediately.
+	mu         sync.Mutex
+	spendCache map[string]spendEntry // key = day-stamped budgetKey
 }
+
+type spendEntry struct {
+	micros int64
+	at     time.Time
+}
+
+// spendCacheTTL bounds cross-pod staleness of the in-process spend read.
+const spendCacheTTL = 1 * time.Second
 
 // NewBudgetTracker wires the tracker to an L2 cache (Redis in prod, in-memory in tests).
 func NewBudgetTracker(l2 cache.L2Cache, ttlFn func() time.Duration, log *slog.Logger) *BudgetTracker {
-	return &BudgetTracker{l2: l2, ttlFn: ttlFn, nowFn: time.Now, log: log}
+	return &BudgetTracker{l2: l2, ttlFn: ttlFn, nowFn: time.Now, log: log, spendCache: make(map[string]spendEntry)}
 }
 
 // dateFmt is the UTC day stamp shared with pkg/billing's accumulator (dayKey).
@@ -61,16 +82,41 @@ func (b *BudgetTracker) Spend(campaignID string) float64 {
 // 5,000µ) is exact. Used by the /debug/budget endpoint (and tests) that observe
 // the counter the pacing gate and reconcile write.
 func (b *BudgetTracker) SpendMicros(campaignID string) int64 {
-	v, ok, err := b.l2.Get(context.Background(), budgetKey(b.today(), campaignID))
+	key := budgetKey(b.today(), campaignID)
+	now := b.nowFn()
+	b.mu.Lock()
+	e, cached := b.spendCache[key]
+	b.mu.Unlock()
+	if cached && now.Sub(e.at) < spendCacheTTL {
+		return e.micros
+	}
+	v, ok, err := b.l2.Get(context.Background(), key)
 	if err != nil {
 		b.log.Warn("budget read failed", "campaign", campaignID, "error", err)
+		if cached {
+			return e.micros // stale beats zero on a Redis blip
+		}
 		return 0
 	}
-	if !ok {
-		return 0
+	var micros int64
+	if ok {
+		micros, _ = strconv.ParseInt(v, 10, 64)
 	}
-	micros, _ := strconv.ParseInt(v, 10, 64)
+	// Cache the miss too (0): unknown campaigns would otherwise re-hit Redis
+	// on every bid.
+	b.mu.Lock()
+	b.spendCache[key] = spendEntry{micros: micros, at: now}
+	b.mu.Unlock()
 	return micros
+}
+
+// invalidateSpend drops the in-process cache entry so the next read refetches —
+// called after this pod's own writes (Record / Reconcile) to keep the local
+// overspend guard responsive despite the read cache.
+func (b *BudgetTracker) invalidateSpend(key string) {
+	b.mu.Lock()
+	delete(b.spendCache, key)
+	b.mu.Unlock()
 }
 
 // Record adds amount (in major units) to today's spend for a campaign.
@@ -92,6 +138,7 @@ func (b *BudgetTracker) Record(campaignID string, amount float64) {
 	if _, err := b.l2.IncrBy(ctx, key, micros); err != nil {
 		b.log.Warn("budget incr failed", "campaign", campaignID, "error", err)
 	}
+	b.invalidateSpend(key)
 }
 
 // Reconcile overwrites a campaign's spend counter to an authoritative value in
@@ -115,7 +162,9 @@ func (b *BudgetTracker) Reconcile(day, campaignID string, micros int64) {
 	if day == "" {
 		day = b.today()
 	}
-	if err := b.l2.Set(context.Background(), budgetKey(day, campaignID), strconv.FormatInt(micros, 10), b.ttlFn()); err != nil {
+	key := budgetKey(day, campaignID)
+	if err := b.l2.Set(context.Background(), key, strconv.FormatInt(micros, 10), b.ttlFn()); err != nil {
 		b.log.Warn("budget reconcile failed", "campaign", campaignID, "error", err)
 	}
+	b.invalidateSpend(key)
 }

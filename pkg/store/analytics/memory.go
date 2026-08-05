@@ -44,6 +44,7 @@ type MemoryStore struct {
 type FreqCapBlock struct {
 	TraceID     string
 	UserID      string
+	HouseholdID string // hh:-prefixed household proxy; often the ONLY id on CTV blocks
 	CampaignID  string
 	PlacementID string
 	PublisherID string

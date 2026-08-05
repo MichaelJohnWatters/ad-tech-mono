@@ -798,7 +798,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		consent := privacy.Evaluate(sig)
 		if !consent.Bid {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBRReason: "privacy"})
 			reqLog.Info("no bid", "reason", "privacy", "privacy_reason", consent.Reason)
 			return
 		}
@@ -953,12 +953,20 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
+		// declines tallies WHY each candidate campaign dropped out, so the
+		// eventual no-bid can carry a machine-groupable reason (NBRReason →
+		// exchange → dsp_calls.no_bid_reason in ClickHouse). Post-run fill
+		// analysis then attributes no-bids to pacing vs budget vs targeting
+		// with one GROUP BY instead of log archaeology.
+		declines := make(map[string]int, 8)
 		for i := range all {
 			c := &all[i]
 			if c.Status != constants.StatusLive {
+				declines["not_live"]++
 				continue
 			}
 			if blockedAdv[strings.ToLower(c.CreativeDomain)] {
+				declines["badv_blocked"]++
 				continue // advertiser already in the pod (OpenRTB badv)
 			}
 
@@ -969,6 +977,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			// them up again.
 			match := selectCreativeForRequest(c, reqFormat, reqW, reqH, reqMinDur, reqMaxDur)
 			if match == nil {
+				declines["no_creative_match"]++
 				reqLog.Debug("no matching creative",
 					"campaign", c.ID,
 					"want_format", reqFormat,
@@ -990,6 +999,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 			result := targeting.Evaluate(tRules, tReq)
 			if !result.Matched {
+				declines["targeting_mismatch"]++
 				reqLog.Debug("campaign excluded by targeting", "campaign", c.ID, "dimension", result.FailedDimension)
 				continue
 			}
@@ -1007,6 +1017,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			// stronger signal than throttling and deserves its own log +
 			// event.
 			if currentSpend >= c.DailyBudget {
+				declines["budget_depleted"]++
 				reqLog.Debug("campaign daily budget exhausted", "campaign", c.ID)
 				// Publish BudgetDepletedEvent once per (campaign, pod
 				// lifetime) so reporting + dashboards / alerts have a
@@ -1036,6 +1047,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			// gate's re-arm-when-funds-return posture.
 			depletedAlreadyPublished.Delete(c.ID)
 			if !pacer.ShouldBid(currentSpend) {
+				declines["paced"]++
 				reqLog.Debug("campaign throttled by pacing", "campaign", c.ID, "spend", currentSpend)
 				continue
 			}
@@ -1044,6 +1056,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			// gate isn't wired (no DB) — same posture as opt-outs.
 			if balanceGate != nil {
 				if ok, remaining := balanceGate.HasFunds(c.AccountID); !ok {
+					declines["balance_depleted"]++
 					reqLog.Info("no bid", "reason", "balance_depleted", "campaign", c.ID, "account", c.AccountID)
 					if pub != nil {
 						if _, already := balanceDepletedPublished.LoadOrStore(c.AccountID, struct{}{}); !already {
@@ -1085,6 +1098,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			if isCompetitor {
 				noBidRate := noBidRateFn()
 				if rand.Float64() < noBidRate {
+					declines["competitor_random"]++
 					reqLog.Debug("competitor random no-bid", "campaign", c.ID)
 					continue
 				}
@@ -1096,6 +1110,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 
 			if adjustedBid < floor {
+				declines["below_floor"]++
 				reqLog.Debug("bid below floor", "campaign", c.ID, "bid", adjustedBid, "floor", floor)
 				continue
 			}
@@ -1181,9 +1196,17 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		}
 
 		if bestBid == nil {
+			// One token, the reason that eliminated the MOST candidates —
+			// keeps dsp_calls.no_bid_reason GROUP BY-able. "no_campaigns"
+			// = the DSP had nothing loaded at all (a wiring problem, not a
+			// marketplace outcome), distinct from every-candidate-declined.
+			reason := dominantDecline(declines)
+			if len(all) == 0 {
+				reason = "no_campaigns"
+			}
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
-			reqLog.Info("no bid", "reason", "no eligible campaigns", "candidates", len(all))
+			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBRReason: reason})
+			reqLog.Info("no bid", "reason", reason, "candidates", len(all), "declines", declines)
 			return
 		}
 
@@ -1207,6 +1230,20 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			"size", fmt.Sprintf("%dx%d", reqW, reqH),
 		)
 	}
+}
+
+// dominantDecline returns the decline reason that eliminated the most
+// candidate campaigns (ties broken alphabetically for determinism). Empty map
+// → "no_eligible_campaigns" (shouldn't happen when candidates existed, but a
+// stable token beats an empty column).
+func dominantDecline(declines map[string]int) string {
+	best, bestN := "no_eligible_campaigns", 0
+	for r, n := range declines {
+		if n > bestN || (n == bestN && bestN > 0 && r < best) {
+			best, bestN = r, n
+		}
+	}
+	return best
 }
 
 // selectCreativeForRequest picks a creative variant that matches the
