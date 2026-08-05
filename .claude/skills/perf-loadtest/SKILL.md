@@ -99,6 +99,16 @@ mutex}, disarm with ?block=0&mutex=0.
   GROUP BY household_id`.
 - Chaos variant: `make test-e2e-chaos` (incl. NATS-outage spool losslessness).
 
+## Market composition (since caeba06)
+
+The competitor fleet is a SmartRouter scenario bench: competitor1 =
+slowpoke (500ms delay → timeout-skipped minute 1), competitor2 = deadbeat
+(97% no-bid → bid-rate-skipped), competitor3 = the real competitive market
+maker (:8098). Expect dsp_calls to show comp1/comp2 at the ~1% ε-probe
+trickle after warm-up — that's the router working, not a broken DSP.
+Fanout p95 baselines predating this reflect a market where slow legs were
+always waited on.
+
 ## Iron rule (thrice-proven)
 
 **Nothing in the per-campaign bid loop may do per-call network I/O.** Budget
