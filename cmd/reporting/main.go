@@ -232,6 +232,12 @@ func main() {
 	}
 
 	metrics := middleware.NewMetrics(constants.ServiceReporting)
+	// Overspend watchdog: negative advertiser balances = the DSP balance
+	// gate admitted more spend than funding. Expected 0 — this is the
+	// continuous empirical check on the gate's staleness budget. Small
+	// bounded overspend is the DESIGN (prepay dips slightly negative, gate
+	// closes, next topup recovers the debt); this gauge keeps it visible.
+	startOverspendGauge(context.Background(), cfg.Get(keys.Database.URL.Key(), ""), metrics.Registry(), log)
 
 	mux := http.NewServeMux()
 	// On-demand profiler (internal mux only; zero cost until a profile is
