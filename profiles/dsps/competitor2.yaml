@@ -9,7 +9,9 @@
 name: competitor2
 competitor: true
 noise_pct: 40
-no_bid_rate: 0.97  # deadbeat: bid rate ~3% < routing_min_bid_rate → skipped
+no_bid_rate: 0.99  # deadbeat: measured bid rate must sit CLEARLY below
+                   # routing_min_bid_rate (5%) — at 0.97 it measured 6.2%
+                   # (eligibility mix) and legitimately stayed in the fan-out
 
 campaigns:
   - id: c2-001
