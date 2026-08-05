@@ -234,6 +234,10 @@ func main() {
 	metrics := middleware.NewMetrics(constants.ServiceReporting)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 	// First-class rollup trigger (the batch-conductor chain step drives
 	// this) — registered unconditionally, unlike the /debug alias below.
 	mux.HandleFunc(routes.ReportingRollupRun, rollupRunHandler(rollupEngine, log))

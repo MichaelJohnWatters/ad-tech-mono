@@ -229,6 +229,10 @@ func main() {
 	routerSync := startRoutingSync(cfg, router, connectInvalidateBus(cfg, log), log)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
@@ -422,6 +426,16 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			}
 		}
 
+		// Phase clock: obsPhase records the time since the previous boundary
+		// under the named phase and restarts the clock. Early returns simply
+		// record fewer phases — the histogram is per-phase, not per-request,
+		// so partial coverage is fine.
+		phaseStart := time.Now()
+		obsPhase := func(name string) {
+			am.phaseDuration.WithLabelValues(name).Observe(time.Since(phaseStart).Seconds())
+			phaseStart = time.Now()
+		}
+
 		// Read the live channel knob once per request so UI edits to
 		// exchange.channel apply on the next auction without a restart.
 		channel := channelFn()
@@ -483,6 +497,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// verify it authentically came from this exchange. No-op when signing
 		// is unconfigured.
 		signReq(&bidReq)
+		obsPhase("gates")
 
 		// Application-level span — the HTTP middleware already opened a
 		// server span around the request, but we want the auction phases
@@ -507,6 +522,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			selectedEndpoints = dspEndpoints
 		}
 
+		obsPhase("routing")
 		reqLog.Info("auction started", "channel", routingChannel, "num_dsps_total", len(dspEndpoints), "num_dsps_called", len(selectedEndpoints))
 
 		// Fan out to DSPs in parallel. The fan-out context carries the
@@ -538,6 +554,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID), am)
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
+		obsPhase("fanout")
 
 		if len(bids) == 0 {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
@@ -694,6 +711,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				multiWinners = result.Winners
 			}
 		}
+		obsPhase("dealeval")
 
 		// Seat = the winning advertiser's UUID (sb.Seat from DSP). Falls back
 		// to the DSP node id when seat wasn't set. Without this, the SSP/test
@@ -788,6 +806,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
+		obsPhase("finalize")
 
 		reqLog.Info("auction complete",
 			"result", "winner",

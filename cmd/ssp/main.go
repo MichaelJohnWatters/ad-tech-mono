@@ -48,6 +48,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	"github.com/prometheus/client_golang/prometheus"
 	_ "github.com/lib/pq"
 )
 
@@ -117,8 +118,18 @@ func main() {
 	hlth.AddReadinessCheck("secrets-cache", func(_ context.Context) error { return secretsCache.Ready() })
 
 	metrics := middleware.NewMetrics(constants.ServiceSSP)
+	sspServePhases = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "adtech", Name: "ssp_serve_phase_duration_seconds",
+		Help:    "Per-phase serve latency: pre_auction|auction|render.",
+		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+	}, []string{"phase"})
+	metrics.Registry().MustRegister(sspServePhases)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
@@ -374,6 +385,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
 func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
+	serveStart := time.Now()
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
 	device := r.URL.Query().Get("device")
@@ -702,6 +714,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			devHeaders = map[string]string{"X-Dev-Slow-DSPs": v}
 		}
 	}
+	phaseMark := obsServePhase("pre_auction", serveStart)
 	var respBody []byte
 	if grpcx.IsURL(exchangeURL) {
 		// Internal fast path: the exchange is ours, so this edge rides the
@@ -737,6 +750,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		respBody, _ = io.ReadAll(resp.Body)
 	}
 
+	obsServePhase("auction", phaseMark)
 	var bidResp openrtb.BidResponse
 	json.Unmarshal(respBody, &bidResp)
 
@@ -866,6 +880,20 @@ func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.Placemen
 // downstreamEventPressure is the exchange's last-reported event-spool fill
 // (0–100), updated on every auction response. Read by shedOnEventPressure.
 var downstreamEventPressure atomic.Int64
+
+// sspServePhases is the serve-path phase histogram (pre_auction|auction|
+// render). pre_auction = placement/segment/household work before the exchange
+// call; auction = the exchange round-trip; render = adserve + response build.
+// Set in main once the metrics registry exists; nil-checked for tests.
+var sspServePhases *prometheus.HistogramVec
+
+// obsServePhase records t→now under phase and returns a fresh mark.
+func obsServePhase(phase string, t time.Time) time.Time {
+	if sspServePhases != nil {
+		sspServePhases.WithLabelValues(phase).Observe(time.Since(t).Seconds())
+	}
+	return time.Now()
+}
 
 // shedOnEventPressure is the FRONT-DOOR throttle for event-layer stress: when
 // the exchange's event spool fills (NATS down/stalled), a growing fraction of
@@ -1014,6 +1042,8 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 		if !ok {
 			return
 		}
+		renderMark := time.Now()
+		defer func() { obsServePhase("render", renderMark) }()
 		ctx := logger.WithTraceID(r.Context(), ac.TraceID)
 		reqLog := logger.WithContext(log, ctx)
 

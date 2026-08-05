@@ -185,6 +185,10 @@ func main() {
 	dedup := NewDedup(l2, dedupTTL.Value, dedupEnabled.Value, log)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
