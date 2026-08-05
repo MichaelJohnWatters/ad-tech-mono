@@ -149,6 +149,10 @@ func main() {
 	metrics := middleware.NewMetrics(constants.ServiceGateway)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 
 	// Health (no auth)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())

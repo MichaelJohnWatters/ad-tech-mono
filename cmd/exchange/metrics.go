@@ -38,6 +38,15 @@ type auctionMetrics struct {
 	// Floors-below counter — how often a bid arrived but dropped because
 	// it was below the placement floor. Useful for tuning floor prices.
 	bidsBelowFloorTotal *prometheus.CounterVec
+
+	// Per-phase auction latency: gates (decode + adstxt/schain/sign) →
+	// routing (DSP selection) → fanout (bid collection; the wall-clock
+	// dominant phase) → dealeval (deal matching + winner determination) →
+	// finalize (win records, response build + encode). Mirrors the Jaeger
+	// span boundaries so the dashboard breakdown and traces agree. This is
+	// what turns "auction p95 is 900ms" into "fanout is 460 of it" without
+	// opening a single trace.
+	phaseDuration *prometheus.HistogramVec
 }
 
 func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
@@ -62,12 +71,18 @@ func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
 			Name:      "bids_below_floor_total",
 			Help:      "Bids dropped pre-auction because their price was below the placement floor.",
 		}, []string{"placement_id"}),
+		phaseDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "adtech",
+			Name:      "auction_phase_duration_seconds",
+			Help:      "Per-phase auction latency: gates|routing|fanout|dealeval|finalize. Stack the p95s to see where auction time goes.",
+			Buckets:   []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+		}, []string{"phase"}),
 		auctionsWonTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "adtech",
 			Name:      "auctions_won_total",
 			Help:      "Auctions won per DSP endpoint. Paired with bids_received_total to chart bid/win/loss by DSP.",
 		}, []string{"dsp_endpoint"}),
 	}
-	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal)
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration)
 	return m
 }

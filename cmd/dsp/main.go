@@ -47,7 +47,22 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/targeting"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+
+// dspBidPhases is the bid-handler phase histogram (parse|audience|
+// campaign_loop|encode). Set in main once the metrics registry exists;
+// nil-checked so handler unit tests need no registry.
+var dspBidPhases *prometheus.HistogramVec
+
+// obsBidPhase records t→now under phase and returns a fresh mark.
+func obsBidPhase(phase string, t time.Time) time.Time {
+	if dspBidPhases != nil {
+		dspBidPhases.WithLabelValues(phase).Observe(time.Since(t).Seconds())
+	}
+	return time.Now()
+}
 
 func main() {
 	clk := clock.Real{}
@@ -228,8 +243,23 @@ func main() {
 	})
 
 	metrics := middleware.NewMetrics(constants.ServiceDSP)
+	// Bid-handler phase histogram — the DSP legs are where most auction
+	// milliseconds live (183-249ms avg at 110rps), and the campaign_loop
+	// phase is the one that scales with catalog size (the O(campaigns)
+	// budget-read bug hid exactly there). Package-level var: the bid handler
+	// is a closure whose signature we don't want to grow.
+	dspBidPhases = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "adtech", Name: "bid_phase_duration_seconds",
+		Help:    "Per-phase DSP bid latency: parse|audience|campaign_loop|encode.",
+		Buckets: []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5},
+	}, []string{"phase"})
+	metrics.Registry().MustRegister(dspBidPhases)
 
 	mux := http.NewServeMux()
+	// On-demand profiler (internal mux only; zero cost until a profile is
+	// pulled). Block/mutex profiling stays off until armed — see
+	// middleware.SetProfileRates.
+	middleware.AttachPprof(mux)
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
@@ -742,6 +772,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			return
 		}
 
+		handlerStart := time.Now()
 		var bidReq openrtb.BidRequest
 		if err := json.NewDecoder(r.Body).Decode(&bidReq); err != nil {
 			http.Error(w, "invalid bid request", http.StatusBadRequest)
@@ -796,6 +827,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			sig.TCFConsent = bidReq.User.Ext.Consent
 		}
 		consent := privacy.Evaluate(sig)
+		phaseMark := obsBidPhase("parse", handlerStart)
 		if !consent.Bid {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBRReason: "privacy"})
@@ -891,6 +923,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			}
 		}
 
+		phaseMark = obsBidPhase("audience", phaseMark)
 		floor := 0.0
 		var reqW, reqH, reqMinDur, reqMaxDur int
 		reqFormat := "display"
@@ -1195,6 +1228,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			return
 		}
 
+		phaseMark = obsBidPhase("campaign_loop", phaseMark)
 		if bestBid == nil {
 			// One token, the reason that eliminated the MOST candidates —
 			// keeps dsp_calls.no_bid_reason GROUP BY-able. "no_campaigns"
@@ -1221,6 +1255,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
+		obsBidPhase("encode", phaseMark)
 
 		reqLog.Info("bid submitted",
 			"campaign", bestCampaign.ID,

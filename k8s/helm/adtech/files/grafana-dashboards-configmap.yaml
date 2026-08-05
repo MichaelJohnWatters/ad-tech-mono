@@ -542,13 +542,61 @@ data:
         },
         {
           "type": "row",
+          "title": "Phase profiling — where the milliseconds go",
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }
+        },
+        {
+          "id": 24,
+          "title": "Exchange auction phases (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 58 },
+          "description": "Per-phase auction latency p95: gates (decode+adstxt/schain/sign), routing (DSP selection), fanout (bid collection — usually dominant), dealeval (deal match + winner), finalize (records + response encode). Mirrors the Jaeger span boundaries. A latency spike now names its phase.",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(adtech_auction_phase_duration_seconds_bucket[$__rate_interval])) by (phase, le))",
+              "legendFormat": "{{phase}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 25,
+          "title": "DSP bid phases (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 58 },
+          "description": "Per-phase bid-handler latency p95: parse (decode+privacy), audience (private/household segment lookups), campaign_loop (eligibility over the whole catalog — the phase that scales with campaign count; the O(campaigns) budget-read bug lived here), encode. All 3 local DSP deployments run this binary; external DSPs are outside-in only (dsp_calls).",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(adtech_bid_phase_duration_seconds_bucket[$__rate_interval])) by (phase, le))",
+              "legendFormat": "{{phase}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 26,
+          "title": "SSP serve phases (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 58 },
+          "description": "Per-phase serve latency p95: pre_auction (placement/segment/household work), auction (exchange round-trip), render (adserve + response build).",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(adtech_ssp_serve_phase_duration_seconds_bucket[$__rate_interval])) by (phase, le))",
+              "legendFormat": "{{phase}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "type": "row",
           "title": "Service Detail",
           "collapsed": false,
           "gridPos": {
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 58
+            "y": 66
           }
         },
         {
