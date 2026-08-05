@@ -35,6 +35,25 @@ func (in *inserter) SeedAdvertiserBalances(ctx context.Context, amount float64) 
 
 	granted := 0
 	for _, accountID := range ids {
+		// The overspend canary gets its own deliberately-tiny grant
+		// (SeedOverspendCanary) — the uniform demo grant would defeat it.
+		if accountID == DeriveID("account", canaryAccountKey) {
+			continue
+		}
+		if err := in.grantBalance(ctx, accountID, amount, "seed-initial-grant"); err != nil {
+			return err
+		}
+		granted++
+	}
+	_ = granted
+	return nil
+}
+
+// grantBalance is one ledger-honest operator grant: topup row (idempotent on
+// key), double-entry ledger pair, advertiser_balances upsert. Extracted so
+// the canary's tiny grant uses the identical money path as the demo grants.
+func (in *inserter) grantBalance(ctx context.Context, accountID string, amount float64, idemKey string) error {
+	{
 		tx, err := in.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -46,12 +65,12 @@ func (in *inserter) SeedAdvertiserBalances(ctx context.Context, amount float64) 
 		var topupID string
 		err = tx.QueryRowContext(ctx,
 			`INSERT INTO topups (account_id, amount, currency, status, payment_method, idempotency_key)
-			 VALUES ($1::uuid, $2, 'USD', 'succeeded', 'seed', 'seed-initial-grant')
+			 VALUES ($1::uuid, $2, 'USD', 'succeeded', 'seed', $3)
 			 ON CONFLICT (account_id, idempotency_key) DO NOTHING RETURNING id::text`,
-			accountID, amount).Scan(&topupID)
+			accountID, amount, idemKey).Scan(&topupID)
 		if err != nil { // sql.ErrNoRows = already granted (re-seed)
 			tx.Rollback()
-			continue
+			return nil
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO ledger_entries (account_code, entry_type, amount, currency, reference_type, reference_id)
@@ -73,8 +92,6 @@ func (in *inserter) SeedAdvertiserBalances(ctx context.Context, amount float64) 
 		if err := tx.Commit(); err != nil {
 			return err
 		}
-		granted++
 	}
-	in.log.Info("seeded advertiser prepay balances", "accounts", len(ids), "granted_now", granted, "amount", amount)
 	return nil
 }
