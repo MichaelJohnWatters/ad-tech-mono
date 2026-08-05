@@ -98,6 +98,19 @@ func MGet(ctx context.Context, l2 L2Cache, keys []string) ([]*string, error) {
 	return out, nil
 }
 
+// Scripter is an optional L2 capability (like BulkGetter): server-side Lua
+// evaluation, for hot paths that would otherwise pay several serial round
+// trips for one logical decision (e.g. the adserver's user+household
+// frequency-cap check — 2× INCR + 2× EXPIRE collapsed to one call). Callers
+// must fall back to the plain multi-op path on assertion failure OR error,
+// which also covers the SelfHealingL2 in-memory era.
+type Scripter interface {
+	// Eval runs a Lua script with keys+args and returns Redis's reply
+	// (typically int64 or []any). Implementations should cache by script
+	// hash (EVALSHA) so the body isn't resent per call.
+	Eval(ctx context.Context, script string, keys []string, args ...any) (any, error)
+}
+
 // MemoryL2 is an in-memory L2Cache for testing (no Redis needed). It stands in
 // for Redis, which is concurrency-safe, so it guards its maps with a mutex —
 // callers (e.g. the DSP's async cache-populate goroutines) use it concurrently.

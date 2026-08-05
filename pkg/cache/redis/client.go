@@ -7,6 +7,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,6 +16,18 @@ import (
 // Client is a Redis-backed L2Cache.
 type Client struct {
 	rdb *redis.Client
+	// scripts caches redis.Script objects by body so Eval runs EVALSHA
+	// after the first call instead of resending the script text.
+	scripts sync.Map // script body -> *redis.Script
+}
+
+// Eval implements cache.Scripter with EVALSHA caching.
+func (c *Client) Eval(ctx context.Context, script string, keys []string, args ...any) (any, error) {
+	v, ok := c.scripts.Load(script)
+	if !ok {
+		v, _ = c.scripts.LoadOrStore(script, redis.NewScript(script))
+	}
+	return v.(*redis.Script).Run(ctx, c.rdb, keys, args...).Result()
 }
 
 // Config holds connection settings.
