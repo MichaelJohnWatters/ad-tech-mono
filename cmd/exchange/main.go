@@ -140,6 +140,21 @@ func main() {
 	// from the same /metrics endpoint as the generic HTTP metrics.
 	auctionM := newAuctionMetrics(metrics.Registry())
 
+	// Event spool: a failed NATS publish (deadline/stall/restart) is absorbed
+	// to disk and replayed on reconnect instead of silently dropped — the
+	// 2026-08-05 VM seizure cost 146k events (auction wins + completes) to
+	// exactly that. Pressure feeds X-Event-Pressure on auction responses so
+	// the SSP's front-door throttle can shed before the spool caps out.
+	if pub != nil {
+		if sp, err := events.NewSpool(events.SpoolDirFromEnv(), events.DefaultSpoolCap, metrics.Registry()); err != nil {
+			log.Error("event spool init failed — publishes remain at-most-once", "error", err)
+		} else {
+			stopSpool := pub.EnableSpool(context.Background(), sp)
+			lc.OnShutdown("event-spool", func(context.Context) error { stopSpool(); return nil })
+			log.Info("event spool armed", "dir", events.SpoolDirFromEnv())
+		}
+	}
+
 	// Warm cache of active deals.
 	dealCache := startDealCache(cfg, clk, log)
 	if dealCache != nil {
@@ -398,6 +413,14 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// Event-layer backpressure signal: the SSP's front-door throttle sheds
+		// incoming serve requests as this rises (each serve spawns ~5 events),
+		// letting a stressed spool drain instead of growing to its cap.
+		if pub != nil {
+			if pr := pub.Pressure(); pr > 0 {
+				w.Header().Set("X-Event-Pressure", strconv.Itoa(pr))
+			}
+		}
 
 		// Read the live channel knob once per request so UI edits to
 		// exchange.channel apply on the next auction without a restart.
@@ -518,7 +541,11 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 
 		if len(bids) == 0 {
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
+			noBidResp := openrtb.BidResponse{ID: bidReq.ID, NoBid: true}
+			if pub != nil {
+				noBidResp.EventPressure = pub.Pressure()
+			}
+			json.NewEncoder(w).Encode(noBidResp)
 			reqLog.Info("auction complete", "result", "no_bids", "duration_ms", clk.Since(start).Milliseconds())
 			am.auctionsTotal.WithLabelValues("no_bids", channel).Inc()
 			// Record the no-bid auction too, so the auctions table reflects
@@ -756,6 +783,9 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			resp.SeatBid = seatBids
 		}
 
+		if pub != nil {
+			resp.EventPressure = pub.Pressure()
+		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 

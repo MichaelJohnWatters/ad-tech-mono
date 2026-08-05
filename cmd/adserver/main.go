@@ -131,6 +131,15 @@ func main() {
 	go warmStartBandit(cfg, bandit, log)
 
 	metrics := middleware.NewMetrics(constants.ServiceAdServer)
+	// Event spool: freq_cap_blocked now feeds post-run cap attribution
+	// (household skew analysis), so losing it under a NATS stall degrades
+	// real analysis, not just vanity dashboards. Cheap insurance.
+	if sp, err := events.NewSpool(events.SpoolDirFromEnv(), events.DefaultSpoolCap, metrics.Registry()); err != nil {
+		log.Error("event spool init failed — publishes remain at-most-once", "error", err)
+	} else {
+		stopSpool := adserverPub.EnableSpool(context.Background(), sp)
+		lc.OnShutdown("event-spool", func(context.Context) error { stopSpool(); return nil })
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())

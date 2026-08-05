@@ -331,6 +331,14 @@ services:
         value: "nats://nats:4222"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
+      - name: EVENT_SPOOL_DIR
+        value: "/var/spool/adtech-events"
+    volumes:
+      - name: event-spool
+        emptyDir: { sizeLimit: 512Mi }
+    volumeMounts:
+      - name: event-spool
+        mountPath: /var/spool/adtech-events
     resources:
       requests: { cpu: 400m, memory: 96Mi }
       limits: { cpu: 3000m, memory: 512Mi }
@@ -373,6 +381,14 @@ services:
         value: "http://minio:9000"
       - name: S3_BUCKET
         value: "adtech-creatives"
+      - name: EVENT_SPOOL_DIR
+        value: "/var/spool/adtech-events"
+    volumes:
+      - name: event-spool
+        emptyDir: { sizeLimit: 512Mi }
+    volumeMounts:
+      - name: event-spool
+        mountPath: /var/spool/adtech-events
     resources:
       requests: { cpu: 250m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }
@@ -451,6 +467,14 @@ services:
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
+      - name: EVENT_SPOOL_DIR
+        value: "/var/spool/adtech-events"
+    volumes:
+      - name: event-spool
+        emptyDir: { sizeLimit: 512Mi }
+    volumeMounts:
+      - name: event-spool
+        mountPath: /var/spool/adtech-events
     resources:
       requests: { cpu: 150m, memory: 64Mi }
       limits: { cpu: 2000m, memory: 512Mi }

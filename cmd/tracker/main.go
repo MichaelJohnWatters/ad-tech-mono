@@ -108,6 +108,13 @@ func main() {
 		reportingURL: reportingURL,
 		log:          log,
 	}
+	// Event spool (money-critical tier): by the time a pixel fires, the ad
+	// ALREADY displayed — refusing/failing the request cannot prevent the
+	// event, only lose it. So the tracker never sheds; failed publishes go to
+	// disk and replay on reconnect (dedup ids make replays billing-safe).
+	// Spool metrics registered later once the metrics registry exists would
+	// race the first request — so the tracker registers them on the default
+	// path below with the shared registry.
 	fraudChecker := fraud.NewRealTimeChecker(fraud.DefaultConfig())
 	// DB-driven IP/UA blocklists, refreshed into the checker on a poll +
 	// NATS invalidate. Nil when no database.url — hardcoded patterns remain.
@@ -161,6 +168,15 @@ func main() {
 		return ks
 	}
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
+	if bus != nil {
+		if sp, err := events.NewSpool(events.SpoolDirFromEnv(), events.DefaultSpoolCap, metrics.Registry()); err != nil {
+			log.Error("event spool init failed — publishes remain at-most-once", "error", err)
+		} else {
+			stopSpool := publisher.typed.EnableSpool(context.Background(), sp)
+			lc.OnShutdown("event-spool", func(context.Context) error { stopSpool(); return nil })
+			log.Info("event spool armed", "dir", events.SpoolDirFromEnv())
+		}
+	}
 
 	l2 := connectRedis(cfg, log)
 	dedup := NewDedup(l2, dedupTTL.Value, dedupEnabled.Value, log)
@@ -827,13 +843,16 @@ func (p *eventPublisher) publish(ctx context.Context, subject, msgID string, pay
 	if p.bus == nil {
 		return false
 	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Warn("marshal failed", "subject", subject, "error", err)
-		return false
-	}
-	if err := events.PublishDedup(ctx, p.bus, subject, msgID, data); err != nil {
-		log.Warn("nats publish failed, falling back to HTTP", "subject", subject, "error", err)
+	// Route through the SPOOL-ARMED typed publisher, never raw PublishDedup:
+	// a failed publish is absorbed to disk and replayed with the SAME msgID
+	// (dedup-safe). The old raw path surfaced the error and the HTTP fallback
+	// below re-delivered the event out-of-band — when the "failed" publish
+	// had actually reached the stream (ambiguous ack, standard during a NATS
+	// bounce), that DOUBLE-DELIVERED: ~1k duplicate impressions per chaos
+	// run, invisible to NATS-side dedup because HTTP bypasses it. The
+	// fallback now exists only for bus==nil (no NATS configured at boot).
+	if err := p.typed.PublishJSONID(ctx, subject, msgID, payload); err != nil {
+		log.Warn("publish failed and spool unavailable", "subject", subject, "error", err)
 		return false
 	}
 	return true
