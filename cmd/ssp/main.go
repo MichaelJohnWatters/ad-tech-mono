@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -354,11 +355,12 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
 	pwd := keys.Redis.Password.Get(cfg)
 	db := keys.Redis.DB.Get(cfg)
+	pool := keys.Redis.PoolSize.Get(cfg)
 	// Self-healing: a failed boot dial no longer latches MemoryL2 forever —
 	// the wrapper serves fail-open from memory and swaps to Redis when the
 	// background retry lands (pkg/cache/selfheal.go).
 	return cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
-		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db, PoolSize: pool})
 	}, 10*time.Second, addr, log)
 }
 
@@ -613,28 +615,47 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		// anonymous included, so an unbounded query here would be a hot-path
 		// latency risk).
 		if audienceStore != nil && (lookupKey != "" || householdID != "") {
+			// The two lookups are independent reads, so they run CONCURRENTLY
+			// under the shared 25ms budget (serialized they were worst-case
+			// 2×25ms — and before the Redis client honoured ctx deadlines on
+			// the wire, this block was most of pre_auction's 237ms p95).
+			// Sub-phase histogram pins that decomposition on the dashboard.
+			segStart := time.Now()
 			segCtx, cancelSeg := context.WithTimeout(ctx, 25*time.Millisecond)
+			var userSegs, hhSegs []string
+			var wg sync.WaitGroup
 			if lookupKey != "" {
-				looked, err := audienceStore.SegmentsForUser(segCtx, lookupKey)
-				if err != nil {
-					reqLog.Warn("segment lookup failed (degrading to none)", "user_key", lookupKey, "error", err)
-				} else {
-					segs = looked
-				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					looked, err := audienceStore.SegmentsForUser(segCtx, lookupKey)
+					if err != nil {
+						reqLog.Warn("segment lookup failed (degrading to none)", "user_key", lookupKey, "error", err)
+					} else {
+						userSegs = looked
+					}
+				}()
 			}
 			// Public household segments: same lookup, keyed by the household
 			// id (audience members carry the hh: prefix). Private household
 			// segments are the DSP's own lookup — mirrors the user
 			// public/private split.
 			if householdID != "" {
-				looked, err := audienceStore.SegmentsForUser(segCtx, householdID)
-				if err != nil {
-					reqLog.Warn("household segment lookup failed (degrading to none)", "household", householdID, "error", err)
-				} else {
-					segs = append(segs, looked...)
-				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					looked, err := audienceStore.SegmentsForUser(segCtx, householdID)
+					if err != nil {
+						reqLog.Warn("household segment lookup failed (degrading to none)", "household", householdID, "error", err)
+					} else {
+						hhSegs = looked
+					}
+				}()
 			}
+			wg.Wait()
 			cancelSeg()
+			segs = append(userSegs, hhSegs...)
+			obsServePhase("pre_auction_segments", segStart)
 		}
 		// Explicit ?segments= (comma-separated) lets a publisher/test pass the
 		// user's public audience segments directly; unioned with any looked up.

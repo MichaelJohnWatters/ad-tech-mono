@@ -124,6 +124,12 @@ func (s *SelfHealingL2) ReplaceSet(ctx context.Context, key string, members []st
 	return s.get().ReplaceSet(ctx, key, members, ttl)
 }
 
+// MGet forwards the BulkGetter capability to whichever backend is current
+// (falling back to serial Gets while on the in-memory stand-in).
+func (s *SelfHealingL2) MGet(ctx context.Context, keys ...string) ([]*string, error) {
+	return MGet(ctx, s.get(), keys)
+}
+
 func (s *SelfHealingL2) Ping(ctx context.Context) error {
 	return s.get().Ping(ctx)
 }

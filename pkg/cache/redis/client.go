@@ -22,6 +22,9 @@ type Config struct {
 	Addr     string
 	Password string
 	DB       int
+	// PoolSize caps this pod's concurrent Redis connections (redis.pool_size
+	// config key). 0 keeps the go-redis default (10).
+	PoolSize int
 }
 
 // New creates a Client and verifies the connection with PING.
@@ -30,6 +33,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Addr:     cfg.Addr,
 		Password: cfg.Password,
 		DB:       cfg.DB,
+		PoolSize: cfg.PoolSize,
+		// Make a caller's ctx deadline bind on the wire. Without this,
+		// go-redis only consults ctx BETWEEN operations — the socket deadline
+		// is the static ReadTimeout (default 3s), so a hot-path call under a
+		// 25ms ctx budget could still stall for the full server-side latency
+		// (2026-08-05: DSP/SSP segment lookups hit 214ms under load with the
+		// 25ms cap provably not binding — this was the leak).
+		ContextTimeoutEnabled: true,
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return nil, err
@@ -46,6 +57,27 @@ func (c *Client) Get(ctx context.Context, key string) (string, bool, error) {
 		return "", false, err
 	}
 	return v, true, nil
+}
+
+// MGet bulk-reads keys in one round trip (cache.BulkGetter). A nil entry
+// means the key does not exist. Used by background cache refreshers so the
+// per-key read cost is one RTT total, not one RTT each.
+func (c *Client) MGet(ctx context.Context, keys ...string) ([]*string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	vals, err := c.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*string, len(keys))
+	for i, v := range vals {
+		if s, ok := v.(string); ok {
+			s := s
+			out[i] = &s
+		}
+	}
+	return out, nil
 }
 
 func (c *Client) Set(ctx context.Context, key, value string, ttl time.Duration) error {

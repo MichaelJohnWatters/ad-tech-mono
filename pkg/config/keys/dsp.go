@@ -34,6 +34,7 @@ var DSP = struct {
 	IdentityMinConfidence              config.FloatKey
 	WarmAdvertiserBalancesPollInterval config.DurationKey
 	BalanceGateEnabled                 config.BoolKey
+	BidCacheRefreshInterval            config.DurationKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL      config.StringKey
@@ -63,6 +64,7 @@ var DSP = struct {
 	IdentityMinConfidence:              dspSet.Float("dsp.identity_min_confidence", "0", config.TierStatic, "Minimum edge confidence the DSP will traverse when resolving identity (0 = all edges). Raise (e.g. 0.8) to exclude low-confidence probabilistic links and only expand across deterministic ones.", config.Since("v1.4")),
 	WarmAdvertiserBalancesPollInterval: dspSet.Duration("cache.warm.advertiser_balances.poll_interval", "30s", config.TierLive, "DSP balance warm-cache refresh. NATS invalidates (topup/drawdown) make this the fallback bound on balance staleness.", config.Since("v1.2")),
 	BalanceGateEnabled:                 dspSet.Bool("dsp.balance_gate_enabled", "true", config.TierLive, "Gate bidding on the advertiser prepay balance (no funds -> no bid). Rollout escape hatch; disabling reverts to daily-budget-only enforcement.", config.Since("v1.2")),
+	BidCacheRefreshInterval:            dspSet.Duration("dsp.bid_cache_refresh_interval", "1s", config.TierLive, "How often the background refresher bulk-MGETs the budget spend counters and balance draw-down mirrors into process memory. The bid loop reads ONLY these in-process copies (never Redis), so this bounds cross-pod staleness of budget pacing and the prepay gate.", config.Since("v1.11")),
 	URL:                                config.RawString("dsp.url", routes.DefaultDSPURL),
 	Port:                               config.RawString("dsp.port", routes.PortDSP),
 	GRPCPort:                           config.RawString("dsp.grpc_port", routes.PortDSPGRPC),
