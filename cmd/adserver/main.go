@@ -36,6 +36,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// adserverServePhases decomposes the serve handler (nil-safe for tests, like
+// the SSP's sspServePhases). obsAdServePhase records elapsed-since-mark and
+// returns a fresh mark for the next phase.
+var adserverServePhases *prometheus.HistogramVec
+
+func obsAdServePhase(phase string, t time.Time) time.Time {
+	now := time.Now()
+	if adserverServePhases != nil {
+		adserverServePhases.WithLabelValues(phase).Observe(now.Sub(t).Seconds())
+	}
+	return now
+}
+
 // freqcapBlockedTotal counts serves blocked by the frequency cap, by scope
 // (user|household). Set in main once the metrics registry exists; nil-checked
 // at the increment so unit tests that build handlers directly don't need it.
@@ -145,6 +158,12 @@ func main() {
 		Help: "Serves blocked by the frequency cap, by scope (user|household). Subtract from the handler's total 429s to isolate rate-limiter 429s.",
 	}, []string{"scope"})
 	metrics.Registry().MustRegister(freqcapBlockedTotal)
+	adserverServePhases = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "adtech", Subsystem: "adserver", Name: "serve_phase_duration_seconds",
+		Help:    "Per-phase serve latency: freqcap|creative|assemble. Decomposes the SSP's render leg (its biggest owned phase) the same way the SSP/DSP/exchange phase histograms do.",
+		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+	}, []string{"phase"})
+	metrics.Registry().MustRegister(adserverServePhases)
 	// Event spool: freq_cap_blocked now feeds post-run cap attribution
 	// (household skew analysis), so losing it under a NATS stall degrades
 	// real analysis, not just vanity dashboards. Cheap insurance.
@@ -357,6 +376,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 
 		ctx := logger.WithTraceID(r.Context(), req.TraceID)
 		reqLog := logger.WithContext(log, ctx)
+		phaseMark := time.Now()
 
 		// Resolve the cap: the campaign's advertiser-configured limit/window
 		// when present in the warm cache, else the platform-default knobs.
@@ -386,6 +406,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			if req.HouseholdID != "" {
 				freqCap.Record(ctx, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 			}
+			obsAdServePhase("freqcap", phaseMark)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -404,6 +425,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				blockedScope = "household"
 			}
 		}
+		phaseMark = obsAdServePhase("freqcap", phaseMark)
 		if !allowed {
 			// Prometheus counter so the dashboard can tell freq-cap 429s
 			// apart from rate-limiter 429s (both land as status=429 in the
@@ -467,6 +489,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				HTML: defaultCreativeHTML,
 			}
 		}
+		phaseMark = obsAdServePhase("creative", phaseMark)
 
 		macroCtx := adserving.MacroContext{
 			AuctionID:    req.TraceID,
@@ -516,6 +539,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
+		obsAdServePhase("assemble", phaseMark)
 
 		reqLog.Info("ad served",
 			"creative", req.CreativeID,

@@ -1043,6 +1043,15 @@ observability:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "200m", memory: "256Mi" }
 
+  # VM-level pressure metrics (CPU modes / MemAvailable / disk+net) — the
+  # "is it code or is it the VM" half of the Stack-pressure dashboard row.
+  nodeExporter:
+    enabled: true
+    image: prom/node-exporter:v1.8.2@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706
+    resources:
+      requests: { cpu: "25m", memory: "32Mi" }
+      limits: { cpu: "100m", memory: "128Mi" }
+
   jaeger:
     enabled: true
     image: jaegertracing/all-in-one:1.58@sha256:f015fb34e6742bb46b87c42cf83abfacfdd5dc39864a859a4ba942eb21c4b29c
