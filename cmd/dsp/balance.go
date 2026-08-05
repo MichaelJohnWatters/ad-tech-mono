@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
@@ -47,26 +48,34 @@ type BalanceGate struct {
 	mu        sync.RWMutex
 	baselines map[string]balanceBaseline
 
-	// deltaCache is a ~1s in-process read cache over the Redis draw-down
-	// counter. HasFunds runs PER ELIGIBLE CAMPAIGN PER BID inside the
-	// campaign loop — with a 66-campaign catalog that was up to ~66
-	// sequential Redis GETs per display bid, the same O(campaigns) pattern
-	// as the 2026-08-05 BudgetTracker bug. Phase profiling caught it:
-	// campaign_loop p95 500ms with the DSP only 11% CPU-busy (all Redis
-	// wait). 1s staleness is safe — the gate's whole design is
-	// snapshot+delta with fail-open tolerance bounded by the 30s poll;
-	// RecordWin invalidates so this pod's own wins gate immediately.
+	// deltaCache is the in-process copy of each account's Redis draw-down
+	// beyond the snapshot baseline. HasFunds runs PER ELIGIBLE CAMPAIGN PER
+	// BID inside the campaign loop — with a 66-campaign catalog that was up
+	// to ~66 sequential Redis GETs per display bid, the same O(campaigns)
+	// pattern as the 2026-08-05 BudgetTracker bug (campaign_loop p95 500ms,
+	// DSP 11% CPU-busy = all Redis wait). The first fix was a 1s TTL cache;
+	// the unlucky expiry bid still paid the serial GETs. Now the bid path
+	// NEVER touches Redis: RefreshDeltas (background bulk MGET) keeps this
+	// warm and RecordWin writes its own INCRBY result back. Staleness is
+	// bounded by the refresher interval (~1s) — well inside the gate's
+	// snapshot+delta fail-open tolerance (30s poll).
 	deltaMu    sync.Mutex
 	deltaCache map[string]balanceDelta
+
+	// baselineGen guards delta writes against a concurrent rebase: a delta
+	// computed against the OLD counterAt baselines must never land after
+	// rebase swapped in new ones (that double-counts wins billing has since
+	// settled — the TestBalanceGate_RebaseDoesNotDoubleCount trap). Writers
+	// capture the generation with the baselines and drop their write if it
+	// moved. rebase bumps it BEFORE clearing deltaCache so a stale write
+	// either lands pre-clear (wiped) or fails the gen check.
+	baselineGen atomic.Int64
 }
 
 type balanceDelta struct {
 	delta int64
 	at    time.Time
 }
-
-// balanceDeltaTTL bounds cross-pod staleness of the cached draw-down read.
-const balanceDeltaTTL = time.Second
 
 type balanceBaseline struct {
 	balanceMicros int64
@@ -112,10 +121,13 @@ func (g *BalanceGate) rebase(ctx context.Context, rows []postgres.AdvertiserBala
 	g.mu.Lock()
 	g.baselines = next
 	g.mu.Unlock()
-	// Cached deltas were computed against the OLD counterAt baselines —
-	// serving them against the new ones double-counts wins that billing has
-	// since settled into the snapshot (caught by
-	// TestBalanceGate_RebaseDoesNotDoubleCount).
+	// Bump the generation FIRST (see baselineGen), then clear: cached deltas
+	// were computed against the OLD counterAt baselines — serving them
+	// against the new ones double-counts wins that billing has since settled
+	// into the snapshot (caught by TestBalanceGate_RebaseDoesNotDoubleCount).
+	// An empty delta (0) is momentarily exact here: counterAt was read at
+	// snapshot time, so the refresher's next tick only adds post-snapshot wins.
+	g.baselineGen.Add(1)
 	g.deltaMu.Lock()
 	g.deltaCache = map[string]balanceDelta{}
 	g.deltaMu.Unlock()
@@ -136,7 +148,7 @@ func (g *BalanceGate) HasFunds(accountID string) (bool, float64) {
 		return false, 0
 	}
 
-	delta := g.drawDownDelta(accountID, base.counterAt)
+	delta := g.drawDownDelta(accountID)
 
 	// Invoiced accounts bid on credit: creditLimitMicros extends the headroom.
 	// Prepay rows have creditLimitMicros == 0, so this is the old prepay gate
@@ -145,43 +157,79 @@ func (g *BalanceGate) HasFunds(accountID string) (bool, float64) {
 	return remainingMicros > 0, float64(remainingMicros) / microsPerUSD
 }
 
-// drawDownDelta returns the account's Redis draw-down beyond the snapshot
-// baseline, served from the ~1s in-process cache (see deltaCache) with a
-// Redis refresh on expiry. Redis errors fall open on the snapshot alone —
-// unchanged posture, just centralized.
-func (g *BalanceGate) drawDownDelta(accountID string, counterAt int64) int64 {
-	now := time.Now()
+// drawDownDelta returns the account's cached draw-down beyond the snapshot
+// baseline — in-process copy ONLY, never Redis (the bid-loop rule). A miss
+// (fresh boot, just-rebased, Redis blip) gates on the snapshot alone: the
+// documented fail-open posture, bounded by the refresher interval.
+func (g *BalanceGate) drawDownDelta(accountID string) int64 {
 	g.deltaMu.Lock()
 	e, hit := g.deltaCache[accountID]
 	g.deltaMu.Unlock()
-	if hit && now.Sub(e.at) < balanceDeltaTTL {
+	if hit {
 		return e.delta
 	}
-	var delta int64
-	if v, ok, err := g.l2.Get(context.Background(), balanceKey(accountID)); err != nil {
-		g.log.Warn("balance mirror read failed; gating on snapshot only", "account", accountID, "error", err)
-		if hit {
-			return e.delta // stale beats zero on a Redis blip
-		}
-	} else if ok {
-		counter, _ := strconv.ParseInt(v, 10, 64)
-		if counter > counterAt {
-			delta = counter - counterAt
-		}
-	}
-	g.deltaMu.Lock()
-	g.deltaCache[accountID] = balanceDelta{delta: delta, at: now}
-	g.deltaMu.Unlock()
-	return delta
+	return 0
 }
 
-// invalidateDelta drops the cached draw-down so the next read refetches —
-// called after this pod's own RecordWin, keeping the local gate responsive
-// despite the read cache.
-func (g *BalanceGate) invalidateDelta(accountID string) {
+// setDelta writes a delta computed under generation gen, dropping it if a
+// rebase moved the baselines in the meantime (see baselineGen).
+func (g *BalanceGate) setDelta(accountID string, delta int64, gen int64) {
 	g.deltaMu.Lock()
-	delete(g.deltaCache, accountID)
+	if g.baselineGen.Load() == gen {
+		g.deltaCache[accountID] = balanceDelta{delta: delta, at: time.Now()}
+	}
 	g.deltaMu.Unlock()
+}
+
+// RefreshDeltas is the background bulk refresher's entry point: one MGET over
+// every live account's mirror counter, deltas recomputed against the current
+// baselines and written wholesale. On error the existing entries are left
+// untouched (stale beats zero on a Redis blip).
+func (g *BalanceGate) RefreshDeltas(ctx context.Context, accountIDs []string) {
+	if len(accountIDs) == 0 {
+		return
+	}
+	gen := g.baselineGen.Load()
+	g.mu.RLock()
+	counterAts := make(map[string]int64, len(accountIDs))
+	for _, id := range accountIDs {
+		if b, ok := g.baselines[id]; ok {
+			counterAts[id] = b.counterAt
+		}
+	}
+	g.mu.RUnlock()
+
+	keys := make([]string, len(accountIDs))
+	for i, id := range accountIDs {
+		keys[i] = balanceKey(id)
+	}
+	vals, err := cache.MGet(ctx, g.l2, keys)
+	if err != nil {
+		g.log.Warn("balance mirror bulk refresh failed; gating on last-good deltas", "accounts", len(accountIDs), "error", err)
+		return
+	}
+
+	g.deltaMu.Lock()
+	defer g.deltaMu.Unlock()
+	if g.baselineGen.Load() != gen {
+		return // rebase raced this refresh; next tick recomputes against the new baselines
+	}
+	now := time.Now()
+	for i, id := range accountIDs {
+		ca, known := counterAts[id]
+		if !known {
+			delete(g.deltaCache, id) // no baseline row → HasFunds fails closed anyway
+			continue
+		}
+		var delta int64
+		if vals[i] != nil {
+			counter, _ := strconv.ParseInt(*vals[i], 10, 64)
+			if counter > ca {
+				delta = counter - ca
+			}
+		}
+		g.deltaCache[id] = balanceDelta{delta: delta, at: now}
+	}
 }
 
 // RecordWin mirrors a won auction's clearing price into the Redis counter so
@@ -198,10 +246,26 @@ func (g *BalanceGate) RecordWin(accountID string, amount float64) {
 			return
 		}
 	}
-	if _, err := g.l2.IncrBy(ctx, key, int64(math.Round(amount*microsPerUSD))); err != nil {
+	// INCRBY returns the post-increment counter — recompute this account's
+	// delta from it directly so the pod's own win gates immediately without
+	// a Redis read (the bid path never refetches anymore).
+	gen := g.baselineGen.Load()
+	counter, err := g.l2.IncrBy(ctx, key, int64(math.Round(amount*microsPerUSD)))
+	if err != nil {
 		g.log.Warn("balance mirror incr failed", "account", accountID, "error", err)
+		return
 	}
-	g.invalidateDelta(accountID)
+	g.mu.RLock()
+	base, known := g.baselines[accountID]
+	g.mu.RUnlock()
+	if !known {
+		return // no baseline row → fail-closed regardless of the counter
+	}
+	var delta int64
+	if counter > base.counterAt {
+		delta = counter - base.counterAt
+	}
+	g.setDelta(accountID, delta, gen)
 }
 
 // startBalanceGate wires the warm cache + gate. With database.url unset both

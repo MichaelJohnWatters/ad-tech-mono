@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -94,6 +95,66 @@ func TestBudgetTracker_UTCDayIsolation(t *testing.T) {
 	b.nowFn = func() time.Time { return day1.Add(24 * time.Hour) }
 	if got := b.Spend("camp-1"); got != 0 {
 		t.Fatalf("day2 spend = %f, want 0 (rolled at UTC midnight)", got)
+	}
+}
+
+// countingL2 counts read ops so tests can pin the bid-path rule: nothing in
+// the per-campaign loop may do per-call network I/O.
+type countingL2 struct {
+	cache.L2Cache
+	gets int
+}
+
+func (c *countingL2) Get(ctx context.Context, key string) (string, bool, error) {
+	c.gets++
+	return c.L2Cache.Get(ctx, key)
+}
+
+// The bid path (Spend) must NEVER touch Redis — reads come from the in-process
+// copy kept warm by RefreshSpend (background) and this pod's own writes.
+func TestBudgetTracker_SpendNeverTouchesRedis(t *testing.T) {
+	l2 := &countingL2{L2Cache: cache.NewMemoryL2()}
+	b := NewBudgetTracker(l2, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+
+	b.Record("camp-1", 2.50)
+	l2.gets = 0
+	for i := 0; i < 100; i++ {
+		if got := b.Spend("camp-1"); got != 2.50 {
+			t.Fatalf("Spend = %f, want 2.50", got)
+		}
+		b.Spend("camp-never-refreshed") // unknown key must also stay off Redis
+	}
+	if l2.gets != 0 {
+		t.Fatalf("bid-path Spend did %d Redis GETs, want 0", l2.gets)
+	}
+}
+
+// RefreshSpend (the background bulk refresher) makes counters written by OTHER
+// pods visible, and prunes keys that left the refresh set (day rollover /
+// deleted campaigns).
+func TestBudgetTracker_RefreshSpendBulk(t *testing.T) {
+	l2 := cache.NewMemoryL2()
+	b := NewBudgetTracker(l2, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+
+	// A sibling pod recorded spend straight into Redis.
+	other := NewBudgetTracker(l2, func() time.Duration { return time.Hour }, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	other.Record("camp-1", 3.00)
+
+	if got := b.Spend("camp-1"); got != 0 {
+		t.Fatalf("pre-refresh Spend = %f, want 0 (not yet visible)", got)
+	}
+	b.RefreshSpend(context.Background(), []string{"camp-1", "camp-2"})
+	if got := b.Spend("camp-1"); got != 3.00 {
+		t.Fatalf("post-refresh Spend = %f, want 3.00", got)
+	}
+	if got := b.Spend("camp-2"); got != 0 {
+		t.Fatalf("absent counter Spend = %f, want 0", got)
+	}
+
+	// camp-1 leaves the catalog → its entry is pruned, reads go back to 0.
+	b.RefreshSpend(context.Background(), []string{"camp-2"})
+	if got := b.Spend("camp-1"); got != 0 {
+		t.Fatalf("pruned Spend = %f, want 0", got)
 	}
 }
 

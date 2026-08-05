@@ -225,6 +225,12 @@ func main() {
 		lc.OnShutdown("balance-cache", func(_ context.Context) error { balanceCache.Stop(); return nil })
 	}
 
+	// Background bulk refresher for the two in-process copies the campaign
+	// loop reads per candidate (budget spend + balance draw-down). The bid
+	// path itself never touches Redis — see refresh.go.
+	startBidCacheRefresher(campaignCache, budget, balanceGate,
+		func() time.Duration { return keys.DSP.BidCacheRefreshInterval.Get(cfg) }, log)
+
 	// Readiness checks: only report ready when the L2 connection responds
 	// and the campaign cache has completed at least one successful load.
 	// Tilt and K8s use this to decide when to route traffic / show green.
@@ -752,11 +758,12 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
 	pwd := keys.Redis.Password.Get(cfg)
 	db := keys.Redis.DB.Get(cfg)
+	pool := keys.Redis.PoolSize.Get(cfg)
 	// Self-healing: a failed boot dial no longer latches MemoryL2 forever —
 	// the wrapper serves fail-open from memory and swaps to Redis when the
 	// background retry lands (pkg/cache/selfheal.go).
 	return cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
-		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db})
+		return cacheredis.New(ctx, cacheredis.Config{Addr: addr, Password: pwd, DB: db, PoolSize: pool})
 	}, 10*time.Second, addr, log)
 }
 
@@ -895,31 +902,42 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// (5xx + no-bid). With our own 25ms cap, slow lookups degrade
 		// gracefully: bid proceeds without private segments instead of
 		// failing entirely.
-		if consent.Personalise && audienceStore != nil && userKey != "" {
-			lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
-			// Expands userKey via the identity graph when resolution is enabled,
-			// so segments on a linked id (UID2/device/cross-publisher) also match.
-			private := dspPrivateSegments(lookupCtx, audienceStore, identityResolver, userKey, identityMaxLinked, log)
-			cancel()
-			if len(private) > 0 {
-				tReq.Segments = append(tReq.Segments, private...)
-			}
-		}
-
-		// Household segments (CTV): the SSP carries a household id as an EID
-		// (salted IP hash — the household proxy). Household-scoped audience
-		// segments are ordinary audience_segment_members rows keyed by the
-		// hh: id, so this is the same lookup as user segments, just under the
-		// household key. Consent-gated identically — no consent, no household
-		// personalisation. Same 25ms degrade-gracefully budget as above.
+		// The user and household lookups are independent Redis reads, so they
+		// share ONE 25ms budget and run CONCURRENTLY — serialized they were
+		// worst-case 50ms of wall clock for no reason (and before the Redis
+		// client honoured ctx deadlines on the wire, far more under load).
 		if consent.Personalise && audienceStore != nil {
-			if hhID := openrtb.HouseholdFrom(bidReq.User); hhID != "" {
+			hhID := openrtb.HouseholdFrom(bidReq.User)
+			if userKey != "" || hhID != "" {
 				lookupCtx, cancel := context.WithTimeout(r.Context(), 25*time.Millisecond)
-				hhSegs := dspPrivateSegments(lookupCtx, audienceStore, nil, hhID, 0, log)
-				cancel()
-				if len(hhSegs) > 0 {
-					tReq.Segments = append(tReq.Segments, hhSegs...)
+				var private, hhSegs []string
+				var wg sync.WaitGroup
+				if userKey != "" {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						// Expands userKey via the identity graph when resolution is
+						// enabled, so segments on a linked id (UID2/device/
+						// cross-publisher) also match.
+						private = dspPrivateSegments(lookupCtx, audienceStore, identityResolver, userKey, identityMaxLinked, log)
+					}()
 				}
+				// Household segments (CTV): the SSP carries a household id as an
+				// EID (salted IP hash — the household proxy). Household-scoped
+				// audience segments are ordinary audience_segment_members rows
+				// keyed by the hh: id — the same lookup, just under the household
+				// key. Consent-gated identically.
+				if hhID != "" {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						hhSegs = dspPrivateSegments(lookupCtx, audienceStore, nil, hhID, 0, log)
+					}()
+				}
+				wg.Wait()
+				cancel()
+				tReq.Segments = append(tReq.Segments, private...)
+				tReq.Segments = append(tReq.Segments, hhSegs...)
 			}
 		}
 

@@ -68,6 +68,36 @@ type L2Cache interface {
 	Close() error
 }
 
+// BulkGetter is an optional L2 capability (like SCard/SIsMember on the Redis
+// client): one-round-trip bulk reads for background cache refreshers. Not on
+// L2Cache itself so existing fakes/wrappers keep compiling; use the MGet
+// helper below, which degrades to serial Gets.
+type BulkGetter interface {
+	// MGet returns one entry per key, nil where the key does not exist.
+	MGet(ctx context.Context, keys ...string) ([]*string, error)
+}
+
+// MGet bulk-reads keys via the backend's MGET when it supports BulkGetter,
+// else falls back to serial Gets (correct, just N round trips — acceptable
+// off the hot path, which is the only place this helper belongs).
+func MGet(ctx context.Context, l2 L2Cache, keys []string) ([]*string, error) {
+	if bg, ok := l2.(BulkGetter); ok {
+		return bg.MGet(ctx, keys...)
+	}
+	out := make([]*string, len(keys))
+	for i, k := range keys {
+		v, ok, err := l2.Get(ctx, k)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			v := v
+			out[i] = &v
+		}
+	}
+	return out, nil
+}
+
 // MemoryL2 is an in-memory L2Cache for testing (no Redis needed). It stands in
 // for Redis, which is concurrency-safe, so it guards its maps with a mutex —
 // callers (e.g. the DSP's async cache-populate goroutines) use it concurrently.

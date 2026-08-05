@@ -160,6 +160,44 @@ func TestBalanceGate_RedisErrorFailsOpenOnSnapshot(t *testing.T) {
 	}
 }
 
+// The bid path (HasFunds) must NEVER touch Redis — deltas come from the
+// in-process copy kept warm by RefreshDeltas and this pod's own RecordWin.
+func TestBalanceGate_HasFundsNeverTouchesRedis(t *testing.T) {
+	l2 := &countingL2{L2Cache: cache.NewMemoryL2()}
+	g := NewBalanceGate(l2, nil, quietBalanceLog())
+	g.rebase(context.Background(), rows("acct-a", 10.00))
+	g.RecordWin("acct-a", 1.00)
+	l2.gets = 0
+	for i := 0; i < 100; i++ {
+		if ok, rem := g.HasFunds("acct-a"); !ok || rem != 9.00 {
+			t.Fatalf("HasFunds = %v %v, want true 9.00", ok, rem)
+		}
+		g.HasFunds("acct-unknown") // fail-closed path must also stay off Redis
+	}
+	if l2.gets != 0 {
+		t.Fatalf("bid-path HasFunds did %d Redis GETs, want 0", l2.gets)
+	}
+}
+
+// RefreshDeltas (the background bulk refresher) makes wins mirrored by OTHER
+// pods gate on this one.
+func TestBalanceGate_RefreshDeltasCrossPod(t *testing.T) {
+	l2 := cache.NewMemoryL2()
+	g := NewBalanceGate(l2, nil, quietBalanceLog())
+	other := NewBalanceGate(l2, nil, quietBalanceLog())
+	g.rebase(context.Background(), rows("acct-a", 10.00))
+	other.rebase(context.Background(), rows("acct-a", 10.00))
+
+	other.RecordWin("acct-a", 4.00)
+	if _, rem := g.HasFunds("acct-a"); rem != 10.00 {
+		t.Fatalf("pre-refresh rem = %v, want 10.00 (sibling win not yet visible)", rem)
+	}
+	g.RefreshDeltas(context.Background(), []string{"acct-a"})
+	if ok, rem := g.HasFunds("acct-a"); !ok || rem != 6.00 {
+		t.Fatalf("post-refresh: ok=%v rem=%v, want true 6.00", ok, rem)
+	}
+}
+
 func TestBalanceGate_DisabledConfigBypasses(t *testing.T) {
 	g := NewBalanceGate(cache.NewMemoryL2(), func() bool { return false }, quietBalanceLog())
 	// No rebase at all — with the gate disabled everything passes.
