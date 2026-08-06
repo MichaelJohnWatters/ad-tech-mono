@@ -710,6 +710,62 @@ data:
           "fieldConfig": { "defaults": { "unit": "bytes" } }
         },
         {
+          "id": 34,
+          "title": "Cluster CPU %",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 6, "x": 0, "y": 83 },
+          "description": "Node non-idle CPU as a percentage of all vCPUs (node-exporter). ~90%+ at 110rps means every latency panel above is measuring queueing, not code; 150+rps historically pins this near 100% with ~23% of it irq/softirq (virtio-net ceiling).",
+          "targets": [
+            {
+              "expr": "100 * sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval])) / count(node_cpu_seconds_total{mode=\"idle\"})",
+              "legendFormat": "cluster CPU %"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } }
+        },
+        {
+          "id": 35,
+          "title": "Cluster memory %",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 6, "x": 6, "y": 83 },
+          "description": "Used = 1 − MemAvailable/MemTotal. The kernel starts evicting executable pages (the 2026-08 thrash) when this pushes past ~87% on the 12GiB VM — cross-check the MemAvailable line on the panel above.",
+          "targets": [
+            {
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+              "legendFormat": "cluster mem %"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } }
+        },
+        {
+          "id": 36,
+          "title": "Per-pod CPU (% of cluster)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 83 },
+          "description": "Each Go pod's CPU as % of all vCPUs (own process collector — NO cadvisor in this stack, so infra pods (clickhouse/postgres/redis/TB/nats) are invisible here; the gap between this stack's total and Cluster CPU % IS the infra+system share, historically ~40% under load.",
+          "targets": [
+            {
+              "expr": "100 * sum by (pod) (rate(adtech_process_cpu_seconds_total[$__rate_interval])) / scalar(count(node_cpu_seconds_total{mode=\"idle\"}))",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "custom": { "stacking": { "mode": "normal" } } } }
+        },
+        {
+          "id": 37,
+          "title": "Per-pod memory (% of cluster)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 83 },
+          "description": "Each Go pod's RSS as % of node MemTotal (process collector; infra pods invisible — see the CPU panel note). A pod trending up here across runs is a leak candidate: cross-check go_memstats on its Service Detail row.",
+          "targets": [
+            {
+              "expr": "100 * sum by (pod) (adtech_process_resident_memory_bytes) / scalar(node_memory_MemTotal_bytes)",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent", "custom": { "stacking": { "mode": "normal" } } } }
+        },
+        {
           "type": "row",
           "title": "Service Detail",
           "collapsed": false,
