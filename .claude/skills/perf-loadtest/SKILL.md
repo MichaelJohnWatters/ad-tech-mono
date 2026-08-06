@@ -105,15 +105,17 @@ mutex}, disarm with ?block=0&mutex=0.
   GROUP BY household_id`.
 - Chaos variant: `make test-e2e-chaos` (incl. NATS-outage spool losslessness).
 
-## Market composition (since caeba06)
+## Market composition (5 scenario DSPs)
 
 The competitor fleet is a SmartRouter scenario bench: competitor1 =
-slowpoke (500ms delay → timeout-skipped minute 1), competitor2 = deadbeat
-(97% no-bid → bid-rate-skipped), competitor3 = the real competitive market
-maker (:8098). Expect dsp_calls to show comp1/comp2 at the ~1% ε-probe
-trickle after warm-up — that's the router working, not a broken DSP.
-Fanout p95 baselines predating this reflect a market where slow legs were
-always waited on.
+slowpoke (500ms delay → timeout-skipped after warm-up), competitor2 =
+deadbeat (99% no-bid → bid-rate-skipped), competitor3 = healthy market
+maker (:8098), competitor4 = COINFLIP (:8100, bids ~50% — mediocre but must
+NEVER be skipped; if it is, a skip-rule regression shipped). Expect
+dsp_calls to show comp1/comp2 at the ~1% ε-probe trickle and comp3/comp4 at
+full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (0821d1c,
+10cpu/20GiB VM — auction p95 58.8ms, fill ~92-94%); perfbench regresses
+against it automatically.
 
 ## Iron rule (thrice-proven)
 
