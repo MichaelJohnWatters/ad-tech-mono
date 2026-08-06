@@ -6,11 +6,11 @@ import (
 
 // ScoreResult is a detailed fraud assessment.
 type ScoreResult struct {
-	TraceID    string
-	Score      float64 // 0.0 (clean) to 1.0 (fraudulent)
-	Category   string  // givt, sivt, clean
-	Signals    map[string]float64
-	Timestamp  time.Time
+	TraceID   string
+	Score     float64 // 0.0 (clean) to 1.0 (fraudulent)
+	Category  string  // givt, sivt, clean
+	Signals   map[string]float64
+	Timestamp time.Time
 }
 
 // Scorer combines multiple fraud signals into a single score.
@@ -20,13 +20,13 @@ type Scorer struct {
 
 // SignalWeights defines how much each signal contributes to the score.
 type SignalWeights struct {
-	BotUA          float64 `yaml:"bot_ua"`
-	IPBlocklist    float64 `yaml:"ip_blocklist"`
-	DataCenterIP   float64 `yaml:"data_center_ip"`
-	RateLimited    float64 `yaml:"rate_limited"`
-	NoReferer      float64 `yaml:"no_referer"`
-	EmptyUA        float64 `yaml:"empty_ua"`
-	GeoMismatch    float64 `yaml:"geo_mismatch"`
+	BotUA            float64 `yaml:"bot_ua"`
+	IPBlocklist      float64 `yaml:"ip_blocklist"`
+	DataCenterIP     float64 `yaml:"data_center_ip"`
+	RateLimited      float64 `yaml:"rate_limited"`
+	NoReferer        float64 `yaml:"no_referer"`
+	EmptyUA          float64 `yaml:"empty_ua"`
+	GeoMismatch      float64 `yaml:"geo_mismatch"`
 	SuspiciousTiming float64 `yaml:"suspicious_timing"`
 }
 

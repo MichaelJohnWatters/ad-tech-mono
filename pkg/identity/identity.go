@@ -35,7 +35,7 @@ const (
 	// attribution resolves across.
 	SourceAdvertiserUserID = "advertiser_user_id"
 	SourceDeviceID         = "device_id"
-	SourceProbabilistic   = "probabilistic" // IP + UA heuristic
+	SourceProbabilistic    = "probabilistic" // IP + UA heuristic
 	// SourceHousehold is the platform household id (CTV): a salted IP hash
 	// derived at the SSP (see HouseholdID). Edges user↔household cluster the
 	// devices/viewers sharing a home.

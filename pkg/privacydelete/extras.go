@@ -9,7 +9,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
-
 // SignalsStore is the analytics seam for purging the ClickHouse profile-store
 // tables (behaviour_signals + profile_signals) and re-deriving the affected
 // Parquet export partitions. Implemented by pkg/store/analytics.ClickHouse.

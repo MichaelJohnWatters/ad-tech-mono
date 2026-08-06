@@ -601,12 +601,12 @@ const (
 // ============================================================
 
 const (
-	ReportingQuery  = "/v1/reporting/query"
+	ReportingQuery = "/v1/reporting/query"
 	// ReportingChannels is the platform-wide per-channel activity breakdown
 	// (impressions + cost grouped by channel, last 7 days). Unscoped (no account
 	// filter) — the gateway staff-gates it before proxying.
 	ReportingChannels = "/v1/reporting/channels"
-	ReportingEvents = "/v1/reporting/events"
+	ReportingEvents   = "/v1/reporting/events"
 	// ReportingRollupRun triggers a synchronous rollup for
 	// ?level=minute|hourly|daily|monthly (&lookback=N completed windows,
 	// default 1). First-class internal route — the batch-conductor's chain
@@ -620,8 +620,8 @@ const (
 	// ReportingAttribution returns a conversion's multi-touch chain with
 	// per-touchpoint credit apportioned under a requested model.
 	ReportingAttribution = "/v1/reporting/attribution"
-	BillingSummary             = "/v1/billing/summary"
-	BillingLedger              = "/v1/billing/ledger"
+	BillingSummary       = "/v1/billing/summary"
+	BillingLedger        = "/v1/billing/ledger"
 )
 
 // ============================================================
@@ -790,15 +790,15 @@ const (
 	PortDSPGRPC      = "8182"
 	PortAdServerGRPC = "8185"
 
-	PortClickHouseHTTP    = "8123"
-	PortClickHouseNative  = "9010"
-	PortGrafana           = "3000"
-	PortPrometheus        = "9090"
-	PortJaeger            = "16686"
-	PortNATSClient        = "4222"
-	PortNATSMonitor       = "8222"
-	PortPostgres          = "5432"
-	PortRedis             = "6379"
-	PortMinioAPI          = "9000"
-	PortMinioUI           = "9001"
+	PortClickHouseHTTP   = "8123"
+	PortClickHouseNative = "9010"
+	PortGrafana          = "3000"
+	PortPrometheus       = "9090"
+	PortJaeger           = "16686"
+	PortNATSClient       = "4222"
+	PortNATSMonitor      = "8222"
+	PortPostgres         = "5432"
+	PortRedis            = "6379"
+	PortMinioAPI         = "9000"
+	PortMinioUI          = "9001"
 )

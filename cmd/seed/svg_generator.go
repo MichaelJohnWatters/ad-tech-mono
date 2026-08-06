@@ -21,16 +21,16 @@ import (
 )
 
 type svgTheme struct {
-	Slug      string
-	BG1, BG2  string // gradient stops
-	FG        string
-	Accent    string
-	Glyph     string // emoji-ish character drawn as large text
-	Brand     string
-	Tagline   string
-	CTA       string
-	CTAFG     string
-	CTABG     string
+	Slug     string
+	BG1, BG2 string // gradient stops
+	FG       string
+	Accent   string
+	Glyph    string // emoji-ish character drawn as large text
+	Brand    string
+	Tagline  string
+	CTA      string
+	CTAFG    string
+	CTABG    string
 }
 
 var svgThemes = []svgTheme{
@@ -275,11 +275,11 @@ func generateBlockSVG(t svgTheme, w, h int) []byte {
 // inserter picks the right entry based on each creative's declared
 // width × height in the YAML.
 var standardSizes = []struct{ W, H int }{
-	{300, 250}, // MPU
-	{728, 90},  // Leaderboard
-	{300, 600}, // Half-page
-	{320, 50},  // Mobile banner
-	{160, 600}, // Wide skyscraper
+	{300, 250},  // MPU
+	{728, 90},   // Leaderboard
+	{300, 600},  // Half-page
+	{320, 50},   // Mobile banner
+	{160, 600},  // Wide skyscraper
 	{970, 250},  // Billboard
 	{336, 280},  // Large rectangle
 	{1200, 627}, // Native main image (1.91:1)

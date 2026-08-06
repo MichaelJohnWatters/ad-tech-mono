@@ -1,10 +1,10 @@
 //go:build e2e
 
 // Creative serving — verifies the ad server's resolver pathways:
-//   1. html_content column → returned directly (small banners)
-//   2. asset_url → fetched from Minio (large assets)  — skipped, needs upload step
-//   3. unknown creative id → default fallback HTML
-//   4. review_status filter → only approved creatives are servable
+//  1. html_content column → returned directly (small banners)
+//  2. asset_url → fetched from Minio (large assets)  — skipped, needs upload step
+//  3. unknown creative id → default fallback HTML
+//  4. review_status filter → only approved creatives are servable
 package e2e
 
 import (

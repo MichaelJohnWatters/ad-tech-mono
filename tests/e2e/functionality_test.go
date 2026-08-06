@@ -28,15 +28,15 @@ func TestEndToEnd(t *testing.T) {
 	// failed subtest still leaves valid handles for downstream steps to
 	// either reference or skip via t.Skip / cascade.
 	var (
-		admin       harness.Account
-		pubAccount  harness.Account
-		advAccount  harness.Account
-		publisher   harness.Publisher
-		placement   harness.Placement
+		admin          harness.Account
+		pubAccount     harness.Account
+		advAccount     harness.Account
+		publisher      harness.Publisher
+		placement      harness.Placement
 		insertionOrder harness.InsertionOrder
-		campaign    harness.Campaign
-		auctionRes  harness.AuctionResult
-		winner      harness.BidResponseWinner
+		campaign       harness.Campaign
+		auctionRes     harness.AuctionResult
+		winner         harness.BidResponseWinner
 	)
 
 	t.Run("01_admin_signup", func(t *testing.T) {
@@ -71,8 +71,8 @@ func TestEndToEnd(t *testing.T) {
 		insertionOrder = h.CreateInsertionOrder(t, advAccount, "e2e-io-acme-q1", 5000)
 		campaign = h.CreateCampaign(t, advAccount, insertionOrder,
 			"e2e-li-acme-uk-mobile",
-			3.50,  // base bid
-			500,   // daily budget
+			3.50, // base bid
+			500,  // daily budget
 			"e2e-cr-acme-mpu",
 			"acme.test",
 			harness.Targeting{Geos: []string{"GBR"}, Devices: []string{"mobile"}},

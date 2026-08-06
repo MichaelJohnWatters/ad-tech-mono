@@ -25,9 +25,9 @@ import (
 // runtime source of truth is now Postgres, with Minio providing the body when
 // the creative is too big for the html_content column.
 type CreativeResolver struct {
-	meta    *warm.Cache[models.Creative]
-	objects objects.Store
-	bucket  string
+	meta      *warm.Cache[models.Creative]
+	objects   objects.Store
+	bucket    string
 	bodyTTLFn func() time.Duration
 	clk       clock.Clock
 	log       *slog.Logger

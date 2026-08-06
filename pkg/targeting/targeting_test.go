@@ -242,8 +242,8 @@ func TestApplyModifiers_AudienceSegment(t *testing.T) {
 func TestApplyModifiers_TimeOfDay(t *testing.T) {
 	mods := targeting.Modifiers{
 		TimeOfDay: []targeting.TimeModifier{
-			{StartHour: 9, EndHour: 17, Modifier: 10},   // business hours +10%
-			{StartHour: 0, EndHour: 6, Modifier: -30},    // night -30%
+			{StartHour: 9, EndHour: 17, Modifier: 10}, // business hours +10%
+			{StartHour: 0, EndHour: 6, Modifier: -30}, // night -30%
 		},
 	}
 

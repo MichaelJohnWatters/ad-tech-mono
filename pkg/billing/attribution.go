@@ -8,8 +8,8 @@ import (
 // AttributionWindow defines how far back to look for impressions
 // when attributing a conversion.
 type AttributionWindow struct {
-	ClickThrough  time.Duration // conversion within N after click (default 30 days)
-	ViewThrough   time.Duration // conversion within N after impression (default 7 days)
+	ClickThrough time.Duration // conversion within N after click (default 30 days)
+	ViewThrough  time.Duration // conversion within N after impression (default 7 days)
 }
 
 // DefaultAttributionWindow returns industry standard windows.
@@ -35,7 +35,7 @@ type TouchPoint struct {
 type Attribution struct {
 	ConversionTraceID string
 	TouchPoint        TouchPoint
-	Type              string  // "click_through" or "view_through"
+	Type              string // "click_through" or "view_through"
 	TimeDelta         time.Duration
 	Revenue           float64
 }

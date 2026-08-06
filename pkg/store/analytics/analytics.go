@@ -285,23 +285,23 @@ const (
 
 // ImpressionEvent records a served impression.
 type ImpressionEvent struct {
-	SchemaVersion    int       `json:"schema_version"`
-	TraceID          string    `json:"trace_id"`
-	InsertionOrderID string    `json:"insertion_order_id,omitempty"`
-	CampaignID       string    `json:"campaign_id"`
-	CreativeID       string    `json:"creative_id"`
-	PlacementID      string    `json:"placement_id"`
-	PublisherID      string    `json:"publisher_id"`
-	AccountID        string    `json:"account_id"`
-	Geo              string    `json:"geo,omitempty"`
-	Device           string    `json:"device,omitempty"`
-	Channel          string    `json:"channel,omitempty"`
-	Format           string    `json:"format,omitempty"`
-	ClearingPrice    float64   `json:"clearing_price"`
-	ClearingCurrency string    `json:"clearing_currency"`
-	ClearingPriceUSD float64   `json:"clearing_price_usd"`
-	BidModel         string    `json:"bid_model,omitempty"`
-	DealID           string    `json:"deal_id,omitempty"`
+	SchemaVersion    int     `json:"schema_version"`
+	TraceID          string  `json:"trace_id"`
+	InsertionOrderID string  `json:"insertion_order_id,omitempty"`
+	CampaignID       string  `json:"campaign_id"`
+	CreativeID       string  `json:"creative_id"`
+	PlacementID      string  `json:"placement_id"`
+	PublisherID      string  `json:"publisher_id"`
+	AccountID        string  `json:"account_id"`
+	Geo              string  `json:"geo,omitempty"`
+	Device           string  `json:"device,omitempty"`
+	Channel          string  `json:"channel,omitempty"`
+	Format           string  `json:"format,omitempty"`
+	ClearingPrice    float64 `json:"clearing_price"`
+	ClearingCurrency string  `json:"clearing_currency"`
+	ClearingPriceUSD float64 `json:"clearing_price_usd"`
+	BidModel         string  `json:"bid_model,omitempty"`
+	DealID           string  `json:"deal_id,omitempty"`
 	// ImpressionQty is how many audience impressions this single served event
 	// represents. 1 for a 1:1 format (display/video/etc — one render = one
 	// impression). For DIGITAL OUT-OF-HOME it's the venue's estimated audience per
@@ -339,13 +339,13 @@ type ClickEvent struct {
 // (and AreaPx when the client passes it) so the analytics row stores the
 // authoritative verdict, not the client's claim.
 type ViewEvent struct {
-	SchemaVersion  int    `json:"schema_version"`
-	TraceID        string `json:"trace_id"`
-	CampaignID     string `json:"campaign_id"`
-	CreativeID     string `json:"creative_id,omitempty"`
-	PlacementID    string `json:"placement_id"`
-	PublisherID    string `json:"publisher_id"`
-	AccountID      string `json:"account_id"`
+	SchemaVersion int    `json:"schema_version"`
+	TraceID       string `json:"trace_id"`
+	CampaignID    string `json:"campaign_id"`
+	CreativeID    string `json:"creative_id,omitempty"`
+	PlacementID   string `json:"placement_id"`
+	PublisherID   string `json:"publisher_id"`
+	AccountID     string `json:"account_id"`
 	// Channel is "display" (or empty) or "video" — the IAB viewability dwell
 	// differs (1s vs 2s), and it lets reporting split display vs video
 	// viewability instead of conflating them.
@@ -380,16 +380,16 @@ func IsIABViewable(durationMs int64, percentVisible int, areaPx int64, channel s
 
 // ConversionEvent records a conversion (purchase, signup, etc.).
 type ConversionEvent struct {
-	SchemaVersion  int       `json:"schema_version"`
-	TraceID        string    `json:"trace_id"`
-	CampaignID     string    `json:"campaign_id"`
-	CreativeID     string    `json:"creative_id"`
-	PlacementID    string    `json:"placement_id"`
-	AccountID      string    `json:"account_id"`
-	ConversionType string    `json:"conversion_type"`
-	Revenue        float64   `json:"revenue,omitempty"`
-	Currency       string    `json:"currency,omitempty"`
-	RevenueUSD     float64   `json:"revenue_usd,omitempty"`
+	SchemaVersion  int     `json:"schema_version"`
+	TraceID        string  `json:"trace_id"`
+	CampaignID     string  `json:"campaign_id"`
+	CreativeID     string  `json:"creative_id"`
+	PlacementID    string  `json:"placement_id"`
+	AccountID      string  `json:"account_id"`
+	ConversionType string  `json:"conversion_type"`
+	Revenue        float64 `json:"revenue,omitempty"`
+	Currency       string  `json:"currency,omitempty"`
+	RevenueUSD     float64 `json:"revenue_usd,omitempty"`
 	// AttributedTraceID is the trace of the ad exposure (impression/click) this
 	// conversion is credited to — the join that closes the attribution loop.
 	// For deterministic click-through it is the earning click's trace, captured
@@ -633,17 +633,17 @@ type ProfileSignalRow struct {
 	IngestTraceID string    `json:"ingest_trace_id,omitempty"` // "ing_<32hex>" batch lineage → audience_ingest_jobs.id
 	AccountID     string    `json:"account_id"`
 	Provider      string    `json:"provider,omitempty"`
-	ProviderID  string    `json:"provider_id,omitempty"` // data_providers.id (ADR 0009)
-	DataParty   string    `json:"data_party,omitempty"`  // first | second | third (ADR 0009)
-	Source      string    `json:"source"`
-	Access      string    `json:"access"`
-	SegmentID   string    `json:"segment_id"`
-	SegmentName string    `json:"segment_name"`
-	Visibility  string    `json:"visibility"`
-	Consent     bool      `json:"consent"`
-	IDType      string    `json:"id_type"`
-	IDValue     string    `json:"id_value"`
-	ObservedAt  time.Time `json:"observed_at"`
+	ProviderID    string    `json:"provider_id,omitempty"` // data_providers.id (ADR 0009)
+	DataParty     string    `json:"data_party,omitempty"`  // first | second | third (ADR 0009)
+	Source        string    `json:"source"`
+	Access        string    `json:"access"`
+	SegmentID     string    `json:"segment_id"`
+	SegmentName   string    `json:"segment_name"`
+	Visibility    string    `json:"visibility"`
+	Consent       bool      `json:"consent"`
+	IDType        string    `json:"id_type"`
+	IDValue       string    `json:"id_value"`
+	ObservedAt    time.Time `json:"observed_at"`
 }
 
 // QueryParams defines a query against the analytics store.

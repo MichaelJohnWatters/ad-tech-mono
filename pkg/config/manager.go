@@ -766,14 +766,14 @@ func (m *Manager) HTTPHandler() http.HandlerFunc {
 // the Source column in the config manager UI so operators stop having to
 // read code to answer "why is this value X right now?".
 type ResolvedConfig struct {
-	Key       string `json:"key"`
-	Tier      string `json:"tier"`     // live / static / secret (from schema)
-	Value     string `json:"value"`    // effective resolved value
-	Source    string `json:"source"`   // postgres-pod / postgres-global / env / default / unknown
-	PodID     string `json:"pod_id"`   // populated when Source = postgres-pod
-	EnvKey    string `json:"env_key"`  // env var name checked (always reported)
-	Default   string `json:"default"`  // schema default, for comparison
-	Redacted  bool   `json:"redacted"` // true for secret tier (value masked)
+	Key      string `json:"key"`
+	Tier     string `json:"tier"`     // live / static / secret (from schema)
+	Value    string `json:"value"`    // effective resolved value
+	Source   string `json:"source"`   // postgres-pod / postgres-global / env / default / unknown
+	PodID    string `json:"pod_id"`   // populated when Source = postgres-pod
+	EnvKey   string `json:"env_key"`  // env var name checked (always reported)
+	Default  string `json:"default"`  // schema default, for comparison
+	Redacted bool   `json:"redacted"` // true for secret tier (value masked)
 }
 
 // resolveSource computes the provenance for a key + pod. The order

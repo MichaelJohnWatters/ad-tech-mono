@@ -32,7 +32,7 @@ func (s *PostgresSource) FetchAll(ctx context.Context) (map[string]string, error
 }
 
 // FetchAllForPod returns the rows visible to a single pod: its own pod_id
-// rows + legacy global rows (pod_id = ''). When the same key has both,
+// rows + legacy global rows (pod_id = ”). When the same key has both,
 // pod-specific wins. The manager polls this so each pod's in-memory map
 // only contains values that apply to *it*.
 func (s *PostgresSource) FetchAllForPod(ctx context.Context, podID string) (map[string]string, error) {
@@ -124,7 +124,7 @@ func (s *PostgresSource) UpdateForPod(ctx context.Context, podID, key, value, ac
 }
 
 // UpdateWithAction is the legacy signature kept for compatibility with the
-// UI's bulk endpoints. Writes to the global scope (pod_id = '').
+// UI's bulk endpoints. Writes to the global scope (pod_id = ”).
 func (s *PostgresSource) UpdateWithAction(ctx context.Context, key, value, action string) error {
 	return s.UpdateForPod(ctx, "", key, value, action)
 }

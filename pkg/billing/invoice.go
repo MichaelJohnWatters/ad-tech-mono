@@ -7,18 +7,18 @@ import (
 
 // Invoice is an advertiser's bill for a period.
 type Invoice struct {
-	ID             string
-	AdvertiserID   string
-	PeriodStart    time.Time
-	PeriodEnd      time.Time
-	Currency       string
-	LineItems      []InvoiceLineItem
-	Subtotal       float64
-	Adjustments    float64 // credits, refunds
-	Total          float64
-	Status         string // draft, issued, paid, overdue
-	IssuedAt       time.Time
-	DueDate        time.Time
+	ID           string
+	AdvertiserID string
+	PeriodStart  time.Time
+	PeriodEnd    time.Time
+	Currency     string
+	LineItems    []InvoiceLineItem
+	Subtotal     float64
+	Adjustments  float64 // credits, refunds
+	Total        float64
+	Status       string // draft, issued, paid, overdue
+	IssuedAt     time.Time
+	DueDate      time.Time
 }
 
 // InvoiceLineItem is a single line on an invoice.
@@ -49,12 +49,12 @@ type Payout struct {
 
 // PayoutLineItem is a single line on a payout.
 type PayoutLineItem struct {
-	PlacementID  string
-	Impressions  int64
-	Revenue      float64
-	FeePercent   float64
-	DealType     string
-	Subsidy      float64
+	PlacementID string
+	Impressions int64
+	Revenue     float64
+	FeePercent  float64
+	DealType    string
+	Subsidy     float64
 }
 
 // InvoiceGenerator creates invoices and payouts from ledger data.

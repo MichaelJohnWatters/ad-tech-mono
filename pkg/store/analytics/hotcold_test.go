@@ -1,8 +1,8 @@
 package analytics
 
 import (
-	"fmt"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )

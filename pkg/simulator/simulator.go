@@ -42,26 +42,26 @@ func DefaultConfig() Config {
 
 // Request defines a single simulated ad request.
 type Request struct {
-	Geo       string
-	Device    string // mobile, desktop, tablet
-	Domain    string
-	BidFloor  float64
-	Width     int
-	Height    int
-	UserID    string
+	Geo      string
+	Device   string // mobile, desktop, tablet
+	Domain   string
+	BidFloor float64
+	Width    int
+	Height   int
+	UserID   string
 }
 
 // Result holds the outcome of a simulated request.
 type Result struct {
-	TraceID      string
-	HasWinner    bool
-	WinnerDSP    string
-	WinPrice     float64
-	CampaignID   string
-	CreativeID   string
-	AuctionMs    int64
-	PixelFired   bool
-	Error        string
+	TraceID    string
+	HasWinner  bool
+	WinnerDSP  string
+	WinPrice   float64
+	CampaignID string
+	CreativeID string
+	AuctionMs  int64
+	PixelFired bool
+	Error      string
 }
 
 // ProfileResult holds aggregate results from a simulation profile run.

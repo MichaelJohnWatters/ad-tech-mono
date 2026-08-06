@@ -36,13 +36,13 @@ type AuctionParams struct {
 	Categories string // retail: the shopper's browsed IAB categories (?cat=) → Site.Cat
 	Surfaces   int    // in-game intrinsic: number of scene surfaces (?surfaces=) → imp.ext.surfaces
 	Geo        string // ISO country (Device.geo.country)
-	Device    string // device type keyword
-	UserID    string // User.id (drives segment lookup)
-	UID2      string // Unified ID 2.0 token → User.eids (cookieless identity)
-	OS        string // Device.os — for OS targeting
-	IP        string // client IP (?ip=) — drives the SSP's household derivation
-	Keywords  string // Site.keywords (comma-separated) — for keyword targeting
-	Segments  string // User.ext.segments (comma-separated) — for segment targeting
+	Device     string // device type keyword
+	UserID     string // User.id (drives segment lookup)
+	UID2       string // Unified ID 2.0 token → User.eids (cookieless identity)
+	OS         string // Device.os — for OS targeting
+	IP         string // client IP (?ip=) — drives the SSP's household derivation
+	Keywords   string // Site.keywords (comma-separated) — for keyword targeting
+	Segments   string // User.ext.segments (comma-separated) — for segment targeting
 	// Privacy signals the SSP stamps into Regs / User.ext.consent. Let privacy
 	// tests exercise the consent path end-to-end (SSP → exchange → DSP).
 	GDPR      string // "1" sets Regs.ext.gdpr

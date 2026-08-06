@@ -3,9 +3,9 @@
 // Analytics-gap closure tests. Each one proves that an event that used
 // to vanish into a log line now reaches reporting:
 //
-//   Gap 1 — BudgetDepletedEvent (DSP → reporting)
-//   Gap 4 — Video + Audio engagement (tracker → reporting)
-//   Gap 5 — ServeNoFillEvent (publisher-adserver → reporting)
+//	Gap 1 — BudgetDepletedEvent (DSP → reporting)
+//	Gap 4 — Video + Audio engagement (tracker → reporting)
+//	Gap 5 — ServeNoFillEvent (publisher-adserver → reporting)
 //
 // All three follow the same shape: trigger the producing path, poll the
 // reporting analytics store for the record, assert count >= 1.

@@ -22,19 +22,19 @@ type Rules struct {
 
 // TargetingSet holds targeting values per dimension.
 type TargetingSet struct {
-	Geo            []string          // country/region codes
-	Device         []string          // mobile, desktop, tablet, ctv
-	OS             []string          // iOS, Android, Windows
-	Segments       []string          // audience segment IDs
-	Domains        []string          // publisher domains
-	AppBundles     []string          // app bundle IDs
-	Categories     []string          // IAB content categories
-	PlacementIDs   []string          // specific placement IDs
-	Languages      []string          // language codes
-	InventoryType  []string          // site, app
-	Keywords       []string          // page keywords
-	Channels       []string          // display, video, audio, native, dooh, retail, ingame — empty = all channels
-	Custom         map[string]string // custom key-value pairs
+	Geo           []string          // country/region codes
+	Device        []string          // mobile, desktop, tablet, ctv
+	OS            []string          // iOS, Android, Windows
+	Segments      []string          // audience segment IDs
+	Domains       []string          // publisher domains
+	AppBundles    []string          // app bundle IDs
+	Categories    []string          // IAB content categories
+	PlacementIDs  []string          // specific placement IDs
+	Languages     []string          // language codes
+	InventoryType []string          // site, app
+	Keywords      []string          // page keywords
+	Channels      []string          // display, video, audio, native, dooh, retail, ingame — empty = all channels
+	Custom        map[string]string // custom key-value pairs
 }
 
 // Request represents the targeting-relevant signals from a bid request.
@@ -55,9 +55,9 @@ type Request struct {
 
 // Result of a targeting evaluation.
 type Result struct {
-	Matched        bool
+	Matched         bool
 	FailedDimension string // which dimension caused the failure (if not matched)
-	FailedReason   string // "no_inclusion_match" or "excluded"
+	FailedReason    string // "no_inclusion_match" or "excluded"
 }
 
 // Evaluate checks if a request matches the targeting rules.

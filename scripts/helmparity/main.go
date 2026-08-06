@@ -130,11 +130,11 @@ func dig(v any, path ...string) any {
 // noiseLabels / noiseAnnotations are toolchain-managed metadata, cosmetic by
 // definition — stripped from BOTH sides before comparing.
 var noiseLabels = map[string]bool{
-	"helm.sh/chart":                  true,
-	"app.kubernetes.io/managed-by":   true,
-	"app.kubernetes.io/instance":     true,
-	"app.kubernetes.io/version":      true,
-	"helm.toolkit.fluxcd.io/name":    true,
+	"helm.sh/chart":                    true,
+	"app.kubernetes.io/managed-by":     true,
+	"app.kubernetes.io/instance":       true,
+	"app.kubernetes.io/version":        true,
+	"helm.toolkit.fluxcd.io/name":      true,
 	"helm.toolkit.fluxcd.io/namespace": true,
 }
 

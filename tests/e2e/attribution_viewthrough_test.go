@@ -22,8 +22,8 @@ func TestAttributionViewThrough(t *testing.T) {
 	h.SetCampaignBidStrategy(t, w.Campaign, "cpa")
 	h.RefreshAllCaches(t)
 
-	const pubUser = "vt-pubuser-1"  // publisher-side id on the impression
-	const advUID = "vt-advuid-1"    // advertiser-side visitor id on the conversion
+	const pubUser = "vt-pubuser-1" // publisher-side id on the impression
+	const advUID = "vt-advuid-1"   // advertiser-side visitor id on the conversion
 	// The bridge: the identity graph links the two id spaces (as a shared hashed
 	// email would). Without this edge the conversion can't reach the exposure.
 	h.AddIdentityEdge(t, advUID, pubUser, "crm_match")

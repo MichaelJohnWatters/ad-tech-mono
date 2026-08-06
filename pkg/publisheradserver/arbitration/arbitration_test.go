@@ -27,12 +27,12 @@ func TestDecide(t *testing.T) {
 	req := Request{PublisherID: "pub-1", PlacementID: "pl-1", Now: now}
 
 	cases := []struct {
-		name        string
-		items       []publisheradserver.PublisherLineItem
-		pacing      PacingDecider
-		wantType    DecisionType
-		wantLineID  string
-		wantReason  string
+		name       string
+		items      []publisheradserver.PublisherLineItem
+		pacing     PacingDecider
+		wantType   DecisionType
+		wantLineID string
+		wantReason string
 	}{
 		{
 			name:       "no line items → programmatic",
@@ -42,8 +42,8 @@ func TestDecide(t *testing.T) {
 			wantReason: "no-direct-line-items",
 		},
 		{
-			name:       "sponsorship wins over everything",
-			items:      []publisheradserver.PublisherLineItem{
+			name: "sponsorship wins over everything",
+			items: []publisheradserver.PublisherLineItem{
 				active("li-house", "pub-1", publisheradserver.TierHouse),
 				active("li-guar", "pub-1", publisheradserver.TierGuaranteed),
 				active("li-spon", "pub-1", publisheradserver.TierSponsorship),
@@ -54,8 +54,8 @@ func TestDecide(t *testing.T) {
 			wantReason: "sponsorship-wins",
 		},
 		{
-			name:       "guaranteed behind pace wins over house",
-			items:      []publisheradserver.PublisherLineItem{
+			name: "guaranteed behind pace wins over house",
+			items: []publisheradserver.PublisherLineItem{
 				active("li-house", "pub-1", publisheradserver.TierHouse),
 				active("li-guar", "pub-1", publisheradserver.TierGuaranteed),
 			},
@@ -65,8 +65,8 @@ func TestDecide(t *testing.T) {
 			wantReason: "guaranteed-behind-pace",
 		},
 		{
-			name:       "guaranteed on-pace defers to programmatic",
-			items:      []publisheradserver.PublisherLineItem{
+			name: "guaranteed on-pace defers to programmatic",
+			items: []publisheradserver.PublisherLineItem{
 				active("li-guar", "pub-1", publisheradserver.TierGuaranteed),
 			},
 			pacing:     stubPacing{behind: false},

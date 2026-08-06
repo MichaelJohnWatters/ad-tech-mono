@@ -238,10 +238,10 @@ func (s *lazyCommittedSpendStore) Load(ctx context.Context, day string) (map[str
 // pod, it logs an ERROR every tick so the misconfiguration is impossible to
 // miss. Best-effort: no Redis → guard disabled (logged once).
 type publisherGuard struct {
-	rdb   *cacheredis.Client
-	podID string
-	ttl   time.Duration
-	log   *slog.Logger
+	rdb     *cacheredis.Client
+	podID   string
+	ttl     time.Duration
+	log     *slog.Logger
 	leading bool // last-known election state, for edge-transition logs
 }
 

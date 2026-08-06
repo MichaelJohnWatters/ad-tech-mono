@@ -166,7 +166,7 @@ func StandardChain(d Deps) []Step {
 					DB: d.DB, Lake: d.Lake, Bus: d.Bus, Log: d.Log,
 					Behaviour:     d.Behaviour,
 					MinConfidence: d.MinConfidence, MaxClusterSize: d.MaxClusterSize,
-					RunID:         RunIDFromContext(ctx),
+					RunID: RunIDFromContext(ctx),
 				})
 				if err != nil {
 					return "", err

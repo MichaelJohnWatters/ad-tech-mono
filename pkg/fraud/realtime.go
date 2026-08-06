@@ -24,10 +24,10 @@ import (
 
 // CheckResult is the output of a real-time fraud check.
 type CheckResult struct {
-	Blocked    bool
-	Score      float64 // 0.0 (clean) to 1.0 (fraudulent)
-	Reasons    []string
-	CheckTime  time.Duration
+	Blocked   bool
+	Score     float64 // 0.0 (clean) to 1.0 (fraudulent)
+	Reasons   []string
+	CheckTime time.Duration
 }
 
 // Request contains the signals for fraud evaluation.
@@ -82,7 +82,7 @@ type RealTimeChecker struct {
 }
 
 type rateEntry struct {
-	count    int
+	count       int
 	windowStart time.Time
 }
 

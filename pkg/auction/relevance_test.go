@@ -13,8 +13,8 @@ import (
 func TestRelevanceWeighted_RelevanceBeatsHigherBid(t *testing.T) {
 	engine := auction.NewEngine(clock.Real{})
 	bids := []auction.Bid{
-		{DSPID: "d1", CampaignID: "shoes", Price: 2.00, Category: "IAB18-5"},   // relevant, cheap → 1.0×2 = 2.0
-		{DSPID: "d2", CampaignID: "loans", Price: 5.00, Category: "IAB13"},     // irrelevant, pricey → 0.1×5 = 0.5
+		{DSPID: "d1", CampaignID: "shoes", Price: 2.00, Category: "IAB18-5"}, // relevant, cheap → 1.0×2 = 2.0
+		{DSPID: "d2", CampaignID: "loans", Price: 5.00, Category: "IAB13"},   // irrelevant, pricey → 0.1×5 = 0.5
 	}
 	res, err := engine.RunAuction(context.Background(), bids, auction.AuctionRequest{
 		Channel:          "retail",

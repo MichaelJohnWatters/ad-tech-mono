@@ -37,7 +37,7 @@ func (e ValidationError) Error() string {
 
 // Result holds the output of a pipeline run.
 type Result struct {
-	Valid       []Record
+	Valid      []Record
 	Quarantine []QuarantineRecord
 	Stats      Stats
 }

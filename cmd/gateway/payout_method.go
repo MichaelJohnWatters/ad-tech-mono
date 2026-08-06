@@ -185,7 +185,7 @@ func payoutMethodHandler(store payoutMethodStore, log *slog.Logger) http.Handler
 				ResourceID:   claims.AccountID,
 				Changes: map[string]any{
 					"method_type": m.MethodType, "display_name": m.DisplayName,
-					"masked_tail": maskTail(m.MethodType, m.Last4),
+					"masked_tail":          maskTail(m.MethodType, m.Last4),
 					"minimum_payout_cents": m.MinimumPayoutCents, "currency": m.Currency,
 				},
 			})

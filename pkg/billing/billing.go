@@ -36,12 +36,12 @@ const (
 
 // SpendEvent is an incoming event that triggers billing.
 type SpendEvent struct {
-	TraceID       string
-	CampaignID    string
-	CreativeID    string
-	PlacementID   string
-	PublisherID   string
-	AdvertiserID  string
+	TraceID      string
+	CampaignID   string
+	CreativeID   string
+	PlacementID  string
+	PublisherID  string
+	AdvertiserID string
 	// ClearingPrice is the realized per-impression cost in Currency (dollars),
 	// NOT the auction CPM. Callers convert the CPM (bid.price = cost per 1000
 	// impressions) to per-impression cost before ingestion — see

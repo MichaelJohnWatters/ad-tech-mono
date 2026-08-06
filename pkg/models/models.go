@@ -75,9 +75,9 @@ type Campaign struct {
 	// product_category) — the retail relevance signal, distinct from the content-
 	// targeting Include.Categories. Empty → the DSP falls back to Include.Categories.
 	ProductCategory string
-	BidModel       string // cpm, cpc, cpa, vcpm, cpcv
-	PacingMode     string // even, asap, front_loaded
-	Status         string // live, paused, ended, ...
+	BidModel        string // cpm, cpc, cpa, vcpm, cpcv
+	PacingMode      string // even, asap, front_loaded
+	Status          string // live, paused, ended, ...
 	// Timezone is the IANA name (line_items.timezone) used to evaluate
 	// time-of-day bid modifiers. Empty → UTC.
 	Timezone string

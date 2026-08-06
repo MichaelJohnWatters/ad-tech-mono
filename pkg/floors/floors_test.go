@@ -11,11 +11,11 @@ func TestEffective(t *testing.T) {
 		"geo":    map[string]any{"USA": 2.5, "GBR": 1.8},
 	}
 	cases := []struct {
-		name           string
-		base           float64
-		device, geo    string
-		config         map[string]any
-		want           float64
+		name        string
+		base        float64
+		device, geo string
+		config      map[string]any
+		want        float64
 	}{
 		{"nil config = base", 1.0, "mobile", "USA", nil, 1.0},
 		{"no match = base", 1.0, "ctv", "FRA", cfg, 1.0},
@@ -53,11 +53,11 @@ func TestEffectiveDayparts(t *testing.T) {
 	sat := func(h int) time.Time { return time.Date(2026, 7, 4, h, 30, 0, 0, time.UTC) }
 
 	cases := []struct {
-		name        string
-		base        float64
-		device      string
-		at          time.Time
-		want        float64
+		name   string
+		base   float64
+		device string
+		at     time.Time
+		want   float64
 	}{
 		{"weekday inside window", 1.0, "ctv", thu(10), 3.0},
 		{"weekday before window", 1.0, "ctv", thu(8), 1.0},
@@ -88,7 +88,7 @@ func TestEffectiveDaypartTimezone(t *testing.T) {
 			map[string]any{"start_hour": 9.0, "end_hour": 17.0, "floor": 2.5},
 		},
 	}
-	inNY := time.Date(2026, 7, 2, 15, 0, 0, 0, time.UTC) // 11:00 NY → inside
+	inNY := time.Date(2026, 7, 2, 15, 0, 0, 0, time.UTC)  // 11:00 NY → inside
 	outNY := time.Date(2026, 7, 2, 23, 0, 0, 0, time.UTC) // 19:00 NY → outside
 	if got := Effective(1.0, cfg, "ctv", "", inNY); got != 2.5 {
 		t.Errorf("inside NY window = %v, want 2.5", got)

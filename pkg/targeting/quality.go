@@ -3,13 +3,13 @@ package targeting
 // QualityScore rates how valuable a placement is for bid decisions.
 // Higher score = higher quality inventory = bid more aggressively.
 type QualityScore struct {
-	PlacementID    string
-	Overall        float64 // 0-100
-	Viewability    float64 // 0-100 (% of impressions that were viewable)
-	CTR            float64 // 0-100 (click-through rate percentile)
-	FraudRate      float64 // 0-100 (100 = no fraud)
-	BrandSafety    float64 // 0-100
-	AdDensity      float64 // 0-100 (100 = low density = good)
+	PlacementID string
+	Overall     float64 // 0-100
+	Viewability float64 // 0-100 (% of impressions that were viewable)
+	CTR         float64 // 0-100 (click-through rate percentile)
+	FraudRate   float64 // 0-100 (100 = no fraud)
+	BrandSafety float64 // 0-100
+	AdDensity   float64 // 0-100 (100 = low density = good)
 }
 
 // ComputeQualityScore calculates an overall quality score from individual metrics.

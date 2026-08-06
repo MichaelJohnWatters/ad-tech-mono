@@ -29,9 +29,9 @@ func TestAttributionIdentityBridgeFromPixel(t *testing.T) {
 
 	// Unique per run so persisted edges don't collide across runs.
 	suffix := fmt.Sprint(time.Now().UnixNano())
-	advUID := "br-adv-" + suffix        // advertiser first-party visitor id
-	he := "br-he-" + suffix             // shared hashed email (the bridge key)
-	pubUser := "br-pub-" + suffix       // publisher-side user id
+	advUID := "br-adv-" + suffix  // advertiser first-party visitor id
+	he := "br-he-" + suffix       // shared hashed email (the bridge key)
+	pubUser := "br-pub-" + suffix // publisher-side user id
 
 	// Publisher half of the bridge: the SSP observed this hashed email alongside
 	// the publisher user when serving (seeded here). The ADVERTISER half is NOT

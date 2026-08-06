@@ -113,7 +113,7 @@ func TestIdentityPublisher(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
 		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "", "") // one id, no fp
-		time.Sleep(50 * time.Millisecond)                                   // grace for the async goroutine to (not) publish
+		time.Sleep(50 * time.Millisecond)                                    // grace for the async goroutine to (not) publish
 		if n := len(bus.published(events.SubjectIdentityObserved)); n != 0 {
 			t.Errorf("published %d, want 0", n)
 		}

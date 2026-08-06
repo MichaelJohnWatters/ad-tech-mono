@@ -47,4 +47,3 @@ func TestAuctionWinLandsInAnalytics(t *testing.T) {
 		t.Errorf("auction win count for trace %q = %d, want exactly 1", res.TraceID, c)
 	}
 }
-

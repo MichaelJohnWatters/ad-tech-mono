@@ -150,11 +150,11 @@ type AdsTxtResult struct {
 
 // SellerEntry represents a single seller in sellers.json.
 type SellerEntry struct {
-	SellerID   string `json:"seller_id"`
-	Name       string `json:"name"`
-	Domain     string `json:"domain"`
-	SellerType string `json:"seller_type"` // PUBLISHER, INTERMEDIARY, BOTH
-	IsPassthrough int `json:"is_passthrough"` // 0 or 1
+	SellerID      string `json:"seller_id"`
+	Name          string `json:"name"`
+	Domain        string `json:"domain"`
+	SellerType    string `json:"seller_type"`    // PUBLISHER, INTERMEDIARY, BOTH
+	IsPassthrough int    `json:"is_passthrough"` // 0 or 1
 }
 
 // SellersJSON represents the platform's sellers.json file.

@@ -43,7 +43,7 @@ type Segment struct {
 	Name        string
 	Type        SegmentType
 	Description string
-	Size        int64 // estimated user count
+	Size        int64  // estimated user count
 	Status      string // active, archived
 	Shared      bool   // visible to other accounts for targeting
 	Suppression bool   // use as exclusion list

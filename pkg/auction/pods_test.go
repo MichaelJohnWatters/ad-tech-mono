@@ -129,10 +129,10 @@ func TestPod_Variable_UniqueAdvertiser(t *testing.T) {
 // best 30s wins slot 2; a 60s bid finds no slot and falls out.
 func TestPod_Fixed_SlotMatching(t *testing.T) {
 	bids := []auction.Bid{
-		bid("d", "c-15-a", "cr1", 4.0, 15, "adv-a", ""), // best 15s CPM/sec
-		bid("d", "c-15-b", "cr2", 3.0, 15, "adv-b", ""), // backup 15s
+		bid("d", "c-15-a", "cr1", 4.0, 15, "adv-a", ""),  // best 15s CPM/sec
+		bid("d", "c-15-b", "cr2", 3.0, 15, "adv-b", ""),  // backup 15s
 		bid("d", "c-30-a", "cr3", 12.0, 30, "adv-c", ""), // best 30s
-		bid("d", "c-60", "cr4", 30.0, 60, "adv-d", ""),  // no matching slot
+		bid("d", "c-60", "cr4", 30.0, 60, "adv-d", ""),   // no matching slot
 	}
 	req := podReq(&auction.PodRequest{RqdDurs: []int{15, 30}})
 	r, err := (&auction.PodStrategy{}).Select(context.Background(), bids, req)

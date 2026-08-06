@@ -13,11 +13,11 @@ type DSPRow struct {
 	ID          string
 	Name        string
 	DisplayName string
-	ProfileType string  // 'internal' | 'competitor' | 'external'
+	ProfileType string // 'internal' | 'competitor' | 'external'
 	NoisePct    int
 	NoBidRate   float64
-	Endpoint    string  // empty for in-cluster pods
-	Status      string  // 'active' | 'paused' | 'terminated'
+	Endpoint    string // empty for in-cluster pods
+	Status      string // 'active' | 'paused' | 'terminated'
 }
 
 // IsCompetitor is derived, not stored. A DSP "behaves like a competitor"

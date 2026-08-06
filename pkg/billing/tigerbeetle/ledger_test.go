@@ -23,11 +23,11 @@ type fakeClient struct {
 	createTransfersCalls int
 	createAccountsErr    error
 	createTransfersErr   error
-	transferResults   map[int]tbtypes.CreateTransferResult
-	accountResults    map[int]tbtypes.CreateAccountResult
-	lookupAccount     map[tbtypes.Uint128]tbtypes.Account
-	queryByCode       map[uint16][]tbtypes.Transfer
-	closed            bool
+	transferResults      map[int]tbtypes.CreateTransferResult
+	accountResults       map[int]tbtypes.CreateAccountResult
+	lookupAccount        map[tbtypes.Uint128]tbtypes.Account
+	queryByCode          map[uint16][]tbtypes.Transfer
+	closed               bool
 
 	// health-test hooks
 	lookupAccountsErr   error
@@ -151,8 +151,8 @@ func (f *fakeClient) QueryTransfers(filter tbtypes.QueryFilter) ([]tbtypes.Trans
 	return out, nil
 }
 
-func (f *fakeClient) Nop() error  { return nil }
-func (f *fakeClient) Close()       { f.closed = true }
+func (f *fakeClient) Nop() error { return nil }
+func (f *fakeClient) Close()     { f.closed = true }
 
 // silentLogger returns a logger that discards output, keeping test
 // stderr clean of expected error paths.

@@ -502,7 +502,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			Geo:          req.Geo,
 			Device:       req.Device,
 			UserID:       req.BehaviourUserID, // consent-gated upstream (empty = no personalisation consent)
-			Household:    req.HouseholdID,    // baked onto the beacon only alongside a consented uid (setGeoDevice)
+			Household:    req.HouseholdID,     // baked onto the beacon only alongside a consented uid (setGeoDevice)
 			TrackerURL:   trackerURL,
 			LandingURL:   creative.LandingURL,
 			URLTTL:       urlTTLFn(),

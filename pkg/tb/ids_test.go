@@ -64,11 +64,11 @@ func TestReservationIDDeterministic(t *testing.T) {
 func TestTransferIDFamiliesDistinct(t *testing.T) {
 	trace := "trace-abc"
 	ids := map[string]any{
-		"reservation":   ReservationID(trace),
-		"settlement":    SettlementID(trace),
-		"margin":        MarginTransferID(trace),
-		"spend":         SpendTransferID(trace),
-		"spend_margin":  SpendMarginTransferID(trace),
+		"reservation":  ReservationID(trace),
+		"settlement":   SettlementID(trace),
+		"margin":       MarginTransferID(trace),
+		"spend":        SpendTransferID(trace),
+		"spend_margin": SpendMarginTransferID(trace),
 	}
 	seen := make(map[any]string, len(ids))
 	for kind, id := range ids {

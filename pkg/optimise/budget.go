@@ -18,15 +18,15 @@ type LineItemPerformance struct {
 
 // BudgetReallocation is a suggested shift of budget between line items.
 type BudgetReallocation struct {
-	IOId         string
+	IOId          string
 	Reallocations []Reallocation
-	Reason       string
+	Reason        string
 }
 
 // Reallocation is a budget change for a single line item.
 type Reallocation struct {
-	LineItemID     string
-	CurrentBudget  float64
+	LineItemID      string
+	CurrentBudget   float64
 	SuggestedBudget float64
 	ChangePct       float64 // +20 = increase 20%, -30 = decrease 30%
 	Reason          string
@@ -34,16 +34,16 @@ type Reallocation struct {
 
 // ReallocationConfig controls the auto-optimiser.
 type ReallocationConfig struct {
-	MaxChangePct    float64 // max budget change per cycle (default 20%)
-	MinImpressions  int64   // min impressions before considering reallocation
-	PerformanceMetric string // "ctr", "cpa", "roas"
+	MaxChangePct      float64 // max budget change per cycle (default 20%)
+	MinImpressions    int64   // min impressions before considering reallocation
+	PerformanceMetric string  // "ctr", "cpa", "roas"
 }
 
 // DefaultReallocationConfig returns sensible defaults.
 func DefaultReallocationConfig() ReallocationConfig {
 	return ReallocationConfig{
-		MaxChangePct:   20,
-		MinImpressions: 100,
+		MaxChangePct:      20,
+		MinImpressions:    100,
 		PerformanceMetric: "ctr",
 	}
 }
