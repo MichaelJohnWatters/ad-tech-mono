@@ -202,6 +202,27 @@ func (r *SmartRouter) RecordCall(channel, dspID string, bidReceived bool, bidPri
 	s.AvgLatency += time.Duration(alpha * float64(latency-s.AvgLatency))
 }
 
+// RecordFanoutDeadline records a synthetic timeout for a leg still in flight
+// when the whole fan-out deadline fired — UNLESS the (channel, DSP) is still
+// inside its MinCalls warm-up, in which case nothing is recorded and false is
+// returned (callers also skip the telemetry event). Cold-start grace: at load
+// a DSP's first 20 calls land within ~a second, and first-dial/cold-pool
+// stalls routinely blow the deadline — recording those condemned HEALTHY
+// DSPs on their opening window and the reseed kept them condemned
+// (2026-08-06: two fresh-boot runs went 0-fill exactly this way).
+func (r *SmartRouter) RecordFanoutDeadline(channel, dspID string, latency time.Duration) bool {
+	minCalls := r.currentKnobs().MinCalls
+	r.mu.RLock()
+	s, ok := r.stats[channelDSPKey{channel: channel, dspID: dspID}]
+	warm := ok && s.TotalCalls >= minCalls
+	r.mu.RUnlock()
+	if !warm {
+		return false
+	}
+	r.RecordCall(channel, dspID, false, 0, latency, true)
+	return true
+}
+
 // RecordWin records a DSP winning an auction on the given channel.
 func (r *SmartRouter) RecordWin(channel, dspID string) {
 	r.mu.Lock()

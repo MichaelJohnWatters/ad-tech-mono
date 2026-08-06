@@ -1436,7 +1436,13 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				if reported[ep] {
 					continue
 				}
-				router.RecordCall(channel, ep, false, 0, elapsed, true)
+				// Cold-start grace lives in RecordFanoutDeadline: a leg
+				// inside its MinCalls warm-up records nothing (locally OR as
+				// telemetry — the CH rows feed the reseed, so an emitted
+				// event would re-poison what the grace just protected).
+				if !router.RecordFanoutDeadline(channel, ep, elapsed) {
+					continue
+				}
 				if am != nil {
 					am.bidsReceivedTotal.WithLabelValues(ep, "timeout").Inc()
 				}
