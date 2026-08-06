@@ -21,18 +21,18 @@ type Recommendation struct {
 
 // CampaignMetrics holds the data used to generate recommendations.
 type CampaignMetrics struct {
-	CampaignID   string
-	Impressions  int64
-	Clicks       int64
-	Conversions  int64
-	Spend        float64
-	Budget       float64
+	CampaignID    string
+	Impressions   int64
+	Clicks        int64
+	Conversions   int64
+	Spend         float64
+	Budget        float64
 	DaysRemaining int
-	WinRate      float64
-	AvgCPM       float64
-	CTR          float64
-	ConvRate     float64
-	PacingRatio  float64 // actual/expected spend
+	WinRate       float64
+	AvgCPM        float64
+	CTR           float64
+	ConvRate      float64
+	PacingRatio   float64 // actual/expected spend
 }
 
 // GenerateRecommendations analyses campaign metrics and produces actionable suggestions.

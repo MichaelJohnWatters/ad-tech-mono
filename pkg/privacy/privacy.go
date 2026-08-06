@@ -28,21 +28,21 @@ import (
 type OptOutLevel int
 
 const (
-	LevelNone             OptOutLevel = 0
+	LevelNone              OptOutLevel = 0
 	LevelNoPersonalisation OptOutLevel = 1
-	LevelNoTracking       OptOutLevel = 2
-	LevelFullDeletion     OptOutLevel = 3
+	LevelNoTracking        OptOutLevel = 2
+	LevelFullDeletion      OptOutLevel = 3
 )
 
 // Purpose represents a data processing purpose for consent checking.
 type Purpose string
 
 const (
-	PurposeTargeting   Purpose = "targeting"
+	PurposeTargeting    Purpose = "targeting"
 	PurposeFrequencyCap Purpose = "frequency_cap"
-	PurposeMeasurement Purpose = "measurement"
-	PurposeRetargeting Purpose = "retargeting"
-	PurposeCrossDevice Purpose = "cross_device"
+	PurposeMeasurement  Purpose = "measurement"
+	PurposeRetargeting  Purpose = "retargeting"
+	PurposeCrossDevice  Purpose = "cross_device"
 )
 
 // ConsentStatus represents a user's consent state.
@@ -60,17 +60,17 @@ type OptOutRecord struct {
 	Level      OptOutLevel
 	Source     string
 	Timestamp  time.Time
-	VerifiedAt *time.Time // for Level 3 deletion
+	VerifiedAt *time.Time      // for Level 3 deletion
 	Systems    map[string]bool // which systems have been purged
 }
 
 // DeletionResult tracks the outcome of a deletion request.
 type DeletionResult struct {
-	UserID         string
-	Level          OptOutLevel
-	SystemsPurged  []string
+	UserID          string
+	Level           OptOutLevel
+	SystemsPurged   []string
 	SegmentsRemoved int
-	Timestamp      time.Time
+	Timestamp       time.Time
 }
 
 // Manager handles privacy operations.
@@ -251,7 +251,7 @@ func (m *Manager) Stats() PrivacyStats {
 // VerificationResult is the outcome of verifying a deletion.
 type VerificationResult struct {
 	UserID           string
-	Status           string   // verified, incomplete, not_found
+	Status           string // verified, incomplete, not_found
 	CompletedSystems []string
 	FailedSystems    []string
 }

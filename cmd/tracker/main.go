@@ -315,10 +315,10 @@ func main() {
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
 			Channel:          channelOrDefault(q.Get("ch")),
-			ClearingPrice:    impCost,                    // per-impression (CPM/1000)
+			ClearingPrice:    impCost, // per-impression (CPM/1000)
 			ClearingCurrency: q.Get("cur"),
-			ClearingPriceUSD: impCost * float64(qty),     // full play cost — billing books this
-			ImpressionQty:    qty,                         // audience impressions this play delivered
+			ClearingPriceUSD: impCost * float64(qty), // full play cost — billing books this
+			ImpressionQty:    qty,                    // audience impressions this play delivered
 			BidModel:         bidModel,
 			DealID:           q.Get("deal"),
 			SchemaVersion:    1,
@@ -836,14 +836,14 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 		// The household (salted-IP hash) the serve resolved, when the beacon
 		// carries it. Lets view-through fall back to a household match when the
 		// exact user id doesn't line up (cross-device / CTV).
-		HouseholdID:   q.Get("hh"),
-		PlacementID:   q.Get("pid"),
-		PublisherID:   q.Get("pubid"),
-		CampaignID:    q.Get("cid"),
-		CreativeID:    q.Get("crid"),
-		Channel:       channelOrDefault(q.Get("ch")),
-		Geo:           q.Get("geo"),
-		Device:        q.Get("dev"),
+		HouseholdID: q.Get("hh"),
+		PlacementID: q.Get("pid"),
+		PublisherID: q.Get("pubid"),
+		CampaignID:  q.Get("cid"),
+		CreativeID:  q.Get("crid"),
+		Channel:     channelOrDefault(q.Get("ch")),
+		Geo:         q.Get("geo"),
+		Device:      q.Get("dev"),
 		// The advertiser account the row is scoped to. site_visit (retargeting
 		// pixel) carries it as `aid`; impression/click/view beacons carry it as
 		// `advid`. Stamping it on the ad-exposure kinds too is what lets

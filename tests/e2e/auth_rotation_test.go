@@ -3,10 +3,10 @@
 // Phase 7: rotation workflow tests. These exercise the multi-step
 // operator flow that the secrets UI will eventually drive:
 //
-//   1. Operator mints a replacement key (insert as active or rotating).
-//   2. Both old and new keys validate during a grace window.
-//   3. Operator demotes the old key to "rotating", then "revoked".
-//   4. After revoke, only the new key works.
+//  1. Operator mints a replacement key (insert as active or rotating).
+//  2. Both old and new keys validate during a grace window.
+//  3. Operator demotes the old key to "rotating", then "revoked".
+//  4. After revoke, only the new key works.
 //
 // They also cover the natural-expiry branch (expires_at < now) that
 // can fire independent of an operator-driven status change — useful

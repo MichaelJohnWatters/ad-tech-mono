@@ -84,15 +84,15 @@ type IngestResult struct {
 // Job is one audience-ingestion unit: the staged file, the segment spec, its
 // lifecycle state, and (once done) the terminal result counts.
 type Job struct {
-	ID          string      `json:"id"`
-	AccountID   string      `json:"account_id"`
-	Source      string      `json:"source"`
-	Provider    string      `json:"provider,omitempty"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	Source    string `json:"source"`
+	Provider  string `json:"provider,omitempty"`
 	// ProviderID references the data_providers row this ingest is attributed to
 	// (ADR 0009); empty = no provider (plain upload). Nullable FK column.
-	ProviderID  string      `json:"provider_id,omitempty"`
-	FileBucket  string      `json:"file_bucket"`
-	FileKey     string      `json:"file_key"`
+	ProviderID string `json:"provider_id,omitempty"`
+	FileBucket string `json:"file_bucket"`
+	FileKey    string `json:"file_key"`
 	// TraceID is the uploader's REAL request trace (32-hex OTel), snapshotted
 	// at enqueue so an upload that runs ASYNC (large file / future run_at)
 	// keeps the same request lineage an inline run gets from its HTTP context.

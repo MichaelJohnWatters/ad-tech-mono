@@ -47,12 +47,12 @@ func staffChannelsHandler(reportingURL string, log *slog.Logger) http.HandlerFun
 // staffRetargetingRow is one advertiser's retargeting audience as the staff
 // oversight console renders it (platform-wide).
 type staffRetargetingRow struct {
-	Advertiser  string    `json:"advertiser"`
-	Segment     string    `json:"segment"`
-	Tag         string    `json:"tag"`
-	WindowDays  int       `json:"window_days"`
-	Members     int       `json:"members"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Advertiser string    `json:"advertiser"`
+	Segment    string    `json:"segment"`
+	Tag        string    `json:"tag"`
+	WindowDays int       `json:"window_days"`
+	Members    int       `json:"members"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // staffRetargetingHandler serves GET /v1/api/staff/retargeting — every

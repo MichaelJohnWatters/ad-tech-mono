@@ -39,9 +39,9 @@ import (
 //
 // Tests use it as a drop-in replacement:
 //
-//   ts := harness.HostReachableServer(handler)
-//   defer ts.Close()
-//   ssp.SetConfigForPod(t, "exchange.dsp_endpoints", ts.URL)
+//	ts := harness.HostReachableServer(handler)
+//	defer ts.Close()
+//	ssp.SetConfigForPod(t, "exchange.dsp_endpoints", ts.URL)
 func HostReachableServer(handler http.Handler) *httptest.Server {
 	hostIP := os.Getenv("ADTECH_HOST_IP")
 	if hostIP == "" {

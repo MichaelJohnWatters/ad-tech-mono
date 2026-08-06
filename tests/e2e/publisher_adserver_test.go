@@ -8,10 +8,10 @@
 // integration (warm cache loading from Postgres, NATS invalidate, SSP
 // fall-through, ad server creative resolution):
 //
-//   1. Sponsorship wins over a guaranteed-behind-pace and a house line item.
-//   2. No direct line items → SSP/exchange/DSP path runs (source=programmatic).
-//   3. Paused direct line item is skipped → falls through to programmatic.
-//   4. House line item fills when programmatic returns no-bid (geo mismatch).
+//  1. Sponsorship wins over a guaranteed-behind-pace and a house line item.
+//  2. No direct line items → SSP/exchange/DSP path runs (source=programmatic).
+//  3. Paused direct line item is skipped → falls through to programmatic.
+//  4. House line item fills when programmatic returns no-bid (geo mismatch).
 //
 // All four share BuildBasicWorld (which creates one publisher + one
 // placement + one live programmatic campaign) and layer the direct-sold

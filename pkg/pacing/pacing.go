@@ -30,10 +30,10 @@ const (
 
 // Config holds pacing configuration for a line item.
 type Config struct {
-	Mode           Mode
-	DailyBudget    float64
-	DayStartUTC    time.Time // midnight UTC (or timezone-adjusted)
-	Timezone       string    // for timezone-aware day boundaries
+	Mode        Mode
+	DailyBudget float64
+	DayStartUTC time.Time // midnight UTC (or timezone-adjusted)
+	Timezone    string    // for timezone-aware day boundaries
 }
 
 // Pacer controls bid/no-bid decisions based on spend pacing.

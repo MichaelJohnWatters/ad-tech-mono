@@ -49,8 +49,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
-	"github.com/prometheus/client_golang/prometheus"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {

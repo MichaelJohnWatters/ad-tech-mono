@@ -31,9 +31,9 @@ func TestManager_OnChange(t *testing.T) {
 	// OnChange callbacks fire in goroutines (Manager.applyChanges); guard
 	// the captured state with a Mutex so -race stays clean.
 	var (
-		mu                sync.Mutex
-		changed           bool
-		gotOld, gotNew    string
+		mu             sync.Mutex
+		changed        bool
+		gotOld, gotNew string
 	)
 	mgr.OnChange("test.key", func(_, old, new_ string) {
 		mu.Lock()

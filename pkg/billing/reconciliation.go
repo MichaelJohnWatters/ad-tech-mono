@@ -10,13 +10,13 @@ import (
 
 // ReconciliationResult holds the outcome of a daily reconciliation check.
 type ReconciliationResult struct {
-	Date               string
-	CampaignID         string
-	ExchangePublished  int64 // count from exchange logs
-	ReportingConsumed  int64 // count from analytics store
-	BillingRecorded    int64 // count from ledger
-	Matched            bool
-	MissingTraceIDs    []string
+	Date              string
+	CampaignID        string
+	ExchangePublished int64 // count from exchange logs
+	ReportingConsumed int64 // count from analytics store
+	BillingRecorded   int64 // count from ledger
+	Matched           bool
+	MissingTraceIDs   []string
 }
 
 // Reconciler verifies that billing and reporting counts match.

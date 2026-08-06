@@ -60,8 +60,8 @@ type Bid struct {
 	// auction math — carried through so the winner's response can expose it.
 	SettlementSeat string
 	AdomainHost    string // first entry of OpenRTB BidObj.ADomain — preserved here so the exchange can carry the
-	                   // advertiser landing domain into the winner response without re-querying the DSP
-	Category     string // IAB category for competitive separation
+	// advertiser landing domain into the winner response without re-querying the DSP
+	Category string // IAB category for competitive separation
 	// Relevance is an optional 0..1 quality/relevance score for retail media
 	// (sponsored-product ranking). When >0 the RelevanceWeighted strategy ranks
 	// by Relevance×Price using this value directly; when 0 it derives relevance
@@ -77,9 +77,9 @@ type AuctionRequest struct {
 	RequestID     string
 	PlacementID   string
 	PublisherID   string
-	PageRequestID string  // groups slots on same page (competitive separation)
-	Channel       string  // display, video, audio, dooh, retail, ingame
-	Format        string  // banner, native, video, audio
+	PageRequestID string // groups slots on same page (competitive separation)
+	Channel       string // display, video, audio, dooh, retail, ingame
+	Format        string // banner, native, video, audio
 	FloorPrice    float64
 	FloorCurrency string
 	PriceMode     string // first_price, second_price
@@ -118,14 +118,14 @@ type AuctionRequest struct {
 //     matches. Real-world example: SSAI pods on CTV where the SSAI
 //     server has pre-allocated stitched slots of specific durations.
 type PodRequest struct {
-	PodID         string  // pod identifier (shared across all slots in the pod)
-	MaxDuration   int     // seconds; total pod duration cap (variable-duration pods)
-	RqdDurs       []int   // seconds per slot (fixed-slot pods); zero entries match any duration
-	MaxAds        int     // 0 = no limit; otherwise refuse to fill more than N slots
-	MinCPMPerSec  float64 // per-second floor across the pod
-	NoSameAdvertiserAdjacent bool // when true, two adjacent slots cannot share AdvertiserID (industry default for instream pods)
-	UniqueAdvertiser         bool // when true, advertiser can appear at most once anywhere in the pod
-	UniqueCategory           bool // when true, IAB category can appear at most once anywhere in the pod
+	PodID                    string  // pod identifier (shared across all slots in the pod)
+	MaxDuration              int     // seconds; total pod duration cap (variable-duration pods)
+	RqdDurs                  []int   // seconds per slot (fixed-slot pods); zero entries match any duration
+	MaxAds                   int     // 0 = no limit; otherwise refuse to fill more than N slots
+	MinCPMPerSec             float64 // per-second floor across the pod
+	NoSameAdvertiserAdjacent bool    // when true, two adjacent slots cannot share AdvertiserID (industry default for instream pods)
+	UniqueAdvertiser         bool    // when true, advertiser can appear at most once anywhere in the pod
+	UniqueCategory           bool    // when true, IAB category can appear at most once anywhere in the pod
 }
 
 // Result contains the auction outcome.

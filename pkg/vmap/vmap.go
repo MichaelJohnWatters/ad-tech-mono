@@ -46,10 +46,10 @@ type VMAP struct {
 // VMAP allows multiple formats: "start", "end", "HH:MM:SS[.mmm]" for
 // absolute offsets, or "N%" for relative offsets.
 type AdBreak struct {
-	BreakType   string          `xml:"breakType,attr"`              // linear, nonlinear, display (linear is the common case)
-	TimeOffset  string          `xml:"timeOffset,attr"`             // start | end | HH:MM:SS | N%
-	BreakID     string          `xml:"breakId,attr,omitempty"`      // opaque publisher-side identifier
-	RepeatAfter string          `xml:"repeatAfter,attr,omitempty"`  // HH:MM:SS — auto-repeat the break at this cadence
+	BreakType   string          `xml:"breakType,attr"`             // linear, nonlinear, display (linear is the common case)
+	TimeOffset  string          `xml:"timeOffset,attr"`            // start | end | HH:MM:SS | N%
+	BreakID     string          `xml:"breakId,attr,omitempty"`     // opaque publisher-side identifier
+	RepeatAfter string          `xml:"repeatAfter,attr,omitempty"` // HH:MM:SS — auto-repeat the break at this cadence
 	AdSource    *AdSource       `xml:"vmap:AdSource,omitempty"`
 	Tracking    *TrackingEvents `xml:"vmap:TrackingEvents,omitempty"`
 	Extensions  *Extensions     `xml:"vmap:Extensions,omitempty"`
@@ -59,12 +59,12 @@ type AdBreak struct {
 // one of VASTAdData / AdTagURI / CustomAdData should be populated;
 // players that find multiple use VASTAdData first.
 type AdSource struct {
-	ID                string       `xml:"id,attr,omitempty"`
-	AllowMultipleAds  bool         `xml:"allowMultipleAds,attr"`         // true = pods allowed in this break
-	FollowRedirects   bool         `xml:"followRedirects,attr"`          // controls Wrapper chasing
-	VASTAdData        *VASTAdData  `xml:"vmap:VASTAdData,omitempty"`     // inline VAST document
-	AdTagURI          *AdTagURI    `xml:"vmap:AdTagURI,omitempty"`       // URL to fetch VAST from
-	CustomAdData      *CustomData  `xml:"vmap:CustomAdData,omitempty"`   // non-VAST source (rare)
+	ID               string      `xml:"id,attr,omitempty"`
+	AllowMultipleAds bool        `xml:"allowMultipleAds,attr"`       // true = pods allowed in this break
+	FollowRedirects  bool        `xml:"followRedirects,attr"`        // controls Wrapper chasing
+	VASTAdData       *VASTAdData `xml:"vmap:VASTAdData,omitempty"`   // inline VAST document
+	AdTagURI         *AdTagURI   `xml:"vmap:AdTagURI,omitempty"`     // URL to fetch VAST from
+	CustomAdData     *CustomData `xml:"vmap:CustomAdData,omitempty"` // non-VAST source (rare)
 }
 
 // VASTAdData wraps an inline VAST document so it can be embedded in the

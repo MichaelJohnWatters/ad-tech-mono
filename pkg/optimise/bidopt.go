@@ -19,21 +19,21 @@ import (
 
 // BidAdjustment is a recommended change to a campaign's bid on a placement.
 type BidAdjustment struct {
-	CampaignID  string
-	PlacementID string
-	CurrentBid  float64
+	CampaignID   string
+	PlacementID  string
+	CurrentBid   float64
 	SuggestedBid float64
-	Reason      string
-	Confidence  float64 // 0-1
+	Reason       string
+	Confidence   float64 // 0-1
 }
 
 // PlacementScore rates a placement's value for a campaign.
 type PlacementScore struct {
-	PlacementID   string
-	Score         float64 // 0-100
-	WinRate       float64
-	AvgClearing   float64
-	Impressions   int
+	PlacementID    string
+	Score          float64 // 0-100
+	WinRate        float64
+	AvgClearing    float64
+	Impressions    int
 	Recommendation string
 }
 
@@ -125,7 +125,7 @@ func ScorePlacements(tracker *bidshading.Tracker) []PlacementScore {
 		}
 
 		// Score based on win rate and clearing efficiency
-		winRateScore := stats.WinRate * 40       // 0-40 points
+		winRateScore := stats.WinRate * 40 // 0-40 points
 		efficiencyScore := 0.0
 		if stats.AvgClearing > 0 {
 			// Lower clearing = more efficient (inversely proportional)

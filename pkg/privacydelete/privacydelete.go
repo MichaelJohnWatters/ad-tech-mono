@@ -21,11 +21,11 @@ import (
 // pipeline (the lake's single writer); freq_cap_blocks is the ClickHouse
 // analytics table keyed by user_id.
 const (
-	SystemIdentityGraph        = "identity_graph"
-	SystemSegmentMembers       = "audience_segment_members"
-	SystemFreqCapBlocks        = "freq_cap_blocks"
-	SystemCHBehaviourSignals   = "clickhouse:behaviour_signals"
-	SystemCHProfileSignals     = "clickhouse:profile_signals"
+	SystemIdentityGraph      = "identity_graph"
+	SystemSegmentMembers     = "audience_segment_members"
+	SystemFreqCapBlocks      = "freq_cap_blocks"
+	SystemCHBehaviourSignals = "clickhouse:behaviour_signals"
+	SystemCHProfileSignals   = "clickhouse:profile_signals"
 )
 
 // Purge is the per-user outcome: how many rows were removed from each system.

@@ -9,13 +9,13 @@ package targeting
 
 // Modifiers holds bid adjustments per dimension.
 type Modifiers struct {
-	Device      map[string]float64 // "mobile": 20 (means +20%)
-	GeoCountry  map[string]float64
-	GeoRegion   map[string]float64
-	TimeOfDay   []TimeModifier
-	DayOfWeek   map[string]float64
-	Audience    map[string]float64
-	Inventory   map[string]float64 // "app": 10
+	Device     map[string]float64 // "mobile": 20 (means +20%)
+	GeoCountry map[string]float64
+	GeoRegion  map[string]float64
+	TimeOfDay  []TimeModifier
+	DayOfWeek  map[string]float64
+	Audience   map[string]float64
+	Inventory  map[string]float64 // "app": 10
 	// Bounds (safety rails)
 	MaxPositive float64 // max single modifier (default 200%)
 	MaxNegative float64 // max single negative modifier (default -80%)
@@ -31,13 +31,13 @@ type TimeModifier struct {
 
 // ModifierContext holds the signals used to look up modifiers.
 type ModifierContext struct {
-	Device      string
-	GeoCountry  string
-	GeoRegion   string
-	HourOfDay   int
-	DayOfWeek   string // mon, tue, wed, etc.
-	Segments    []string
-	Inventory   string // site, app
+	Device     string
+	GeoCountry string
+	GeoRegion  string
+	HourOfDay  int
+	DayOfWeek  string // mon, tue, wed, etc.
+	Segments   []string
+	Inventory  string // site, app
 }
 
 // ApplyModifiers calculates the modified bid price.

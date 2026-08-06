@@ -431,7 +431,7 @@ func (f *fakeBalanceSink) DebitBatch(_ context.Context, debits []BatchDebit) ([]
 func TestProcessBatch_EqualsSumOfProcessEvent(t *testing.T) {
 	events := []SpendEvent{
 		{TraceID: "t1", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv1", ClearingPrice: 3.00, Currency: "USD", BidModel: BidCPM, EventType: "impression"},
-		{TraceID: "t2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv2", ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression"},  // reserve, no debit
+		{TraceID: "t2", CampaignID: "c1", PublisherID: "pub1", AdvertiserID: "adv2", ClearingPrice: 1.50, Currency: "USD", BidModel: BidCPC, EventType: "impression"}, // reserve, no debit
 		{TraceID: "t3", CampaignID: "c2", PublisherID: "pub2", AdvertiserID: "adv1", ClearingPrice: 5.00, Currency: "USD", BidModel: BidCPM, EventType: "impression"},
 		{TraceID: "t4", CampaignID: "c2", PublisherID: "pub2", AdvertiserID: "adv3", ClearingPrice: 2.00, Currency: "USD", BidModel: BidVCPM, EventType: "impression"}, // reserve
 	}

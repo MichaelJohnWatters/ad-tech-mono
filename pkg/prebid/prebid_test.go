@@ -14,10 +14,10 @@ func silentLog() *slog.Logger {
 
 func TestResolveFloor(t *testing.T) {
 	cases := []struct {
-		name      string
-		inbound   float64
-		ourMin    float64
-		want      float64
+		name    string
+		inbound float64
+		ourMin  float64
+		want    float64
 	}{
 		{"inbound higher wins", 5.00, 1.00, 5.00},
 		{"our min higher wins", 0.50, 1.00, 1.00},

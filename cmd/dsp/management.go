@@ -308,14 +308,14 @@ type createCampaignRequest struct {
 	// display. A display campaign gets an auto-generated placeholder banner; a
 	// non-display campaign starts with no creative — attach one via PATCH
 	// `creatives` (only approved, format-matching creatives serve).
-	Format        string   `json:"format,omitempty"`
+	Format string `json:"format,omitempty"`
 	// ProductCategory is the advertised product's own IAB category (retail
 	// relevance signal), distinct from include_categories (content targeting).
 	ProductCategory string   `json:"product_category,omitempty"`
 	IncludeGeo      []string `json:"include_geo,omitempty"`
-	ExcludeGeo    []string `json:"exclude_geo,omitempty"`
-	IncludeDevice []string `json:"include_device,omitempty"`
-	ExcludeDevice []string `json:"exclude_device,omitempty"`
+	ExcludeGeo      []string `json:"exclude_geo,omitempty"`
+	IncludeDevice   []string `json:"include_device,omitempty"`
+	ExcludeDevice   []string `json:"exclude_device,omitempty"`
 	// Domain / category targeting — the DSP targeting engine evaluates these
 	// against the bid request. Empty list = no constraint on that dimension.
 	IncludeDomains    []string `json:"include_domains,omitempty"`

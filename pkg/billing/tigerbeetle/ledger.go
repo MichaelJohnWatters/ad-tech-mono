@@ -6,25 +6,25 @@
 // Transfer model (see PLAN.md → "Active Build: TigerBeetle-backed Ledger"
 // → settle decision):
 //
-//   EntrySpend (CPM)       — 2 linked transfers:
-//                              adv→publisher (revenue, code=spend)
-//                              adv→house     (margin,  code=margin)
+//	EntrySpend (CPM)       — 2 linked transfers:
+//	                           adv→publisher (revenue, code=spend)
+//	                           adv→house     (margin,  code=margin)
 //
-//   EntryReservation       — 1 pending transfer:
-//                              adv→escrow    (full,    code=reservation,
-//                              timeout=24h,  user_data_128=trace,
-//                              user_data_32=bid_model)
+//	EntryReservation       — 1 pending transfer:
+//	                           adv→escrow    (full,    code=reservation,
+//	                           timeout=24h,  user_data_128=trace,
+//	                           user_data_32=bid_model)
 //
-//   EntrySettlement        — 3 linked transfers:
-//                              post-pending of the reservation (code=settlement)
-//                              escrow→publisher (revenue, code=settlement)
-//                              escrow→house     (margin,  code=margin)
-//                            Escrow nets to zero; advertiser, publisher,
-//                            and house balances reflect the true split.
+//	EntrySettlement        — 3 linked transfers:
+//	                           post-pending of the reservation (code=settlement)
+//	                           escrow→publisher (revenue, code=settlement)
+//	                           escrow→house     (margin,  code=margin)
+//	                         Escrow nets to zero; advertiser, publisher,
+//	                         and house balances reflect the true split.
 //
-//   EntryRelease           — 1 void-pending transfer
-//                              (or no-op if TB has already auto-voided
-//                              via the reservation timeout).
+//	EntryRelease           — 1 void-pending transfer
+//	                           (or no-op if TB has already auto-voided
+//	                           via the reservation timeout).
 //
 // EntryAdjustment / EntryRefund are not yet implemented — they get
 // rejected with ErrUnsupportedEntryType so callers can't silently miss
@@ -615,4 +615,3 @@ func parsePublisherAccount(s string) (tbtypes.Uint128, error) {
 	}
 	return tb.AccountIDFromUUID(id)
 }
-

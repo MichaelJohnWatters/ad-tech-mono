@@ -123,4 +123,3 @@ FROM batch_runs WHERE run_id = $1::uuid ORDER BY seq`, res.RunID)
 		t.Errorf("skipped steps = %d, want %d (everything after checkpoint)", skipped, len(want)-1)
 	}
 }
-

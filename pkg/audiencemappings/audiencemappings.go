@@ -37,9 +37,9 @@ var ErrNotFound = errors.New("mapping not found")
 
 // Mapping is one saved connector: a tenant's named source→canonical column map.
 type Mapping struct {
-	ID        string            `json:"id"`
-	AccountID string            `json:"account_id"`
-	Name      string            `json:"name"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	Name      string `json:"name"`
 	// Mappings is their lowercased source column → canonical field (a value in
 	// ConsumedFields). At least one value must be id_value.
 	Mappings  map[string]string `json:"mappings"`

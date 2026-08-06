@@ -31,14 +31,14 @@ type lokiSink struct {
 	stop      chan struct{}
 	doneFlush chan struct{}
 
-	mu        sync.Mutex
-	lastWarn  time.Time
-	httpC     *http.Client
+	mu       sync.Mutex
+	lastWarn time.Time
+	httpC    *http.Client
 }
 
 const (
-	lokiQueueSize     = 4096                  // dropped if full; tune for log volume
-	lokiBatchSize     = 100                   // lines per push
+	lokiQueueSize     = 4096 // dropped if full; tune for log volume
+	lokiBatchSize     = 100  // lines per push
 	lokiFlushInterval = 500 * time.Millisecond
 	lokiPushPath      = "/loki/api/v1/push"
 	lokiWarnThrottle  = 30 * time.Second

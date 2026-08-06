@@ -21,9 +21,9 @@ func TestAttributionHouseholdFallback(t *testing.T) {
 	h.RefreshAllCaches(t)
 
 	suffix := fmt.Sprint(time.Now().UnixNano())
-	advUID := "g6-adv-" + suffix       // advertiser visitor id on the conversion
-	household := "hh:g6-" + suffix      // the shared household
-	deviceUser := "g6-dev-" + suffix    // the device id on the impression (NOT resolvable from advUID)
+	advUID := "g6-adv-" + suffix     // advertiser visitor id on the conversion
+	household := "hh:g6-" + suffix   // the shared household
+	deviceUser := "g6-dev-" + suffix // the device id on the impression (NOT resolvable from advUID)
 
 	// The identity graph links the advertiser visitor to the HOUSEHOLD, not to the
 	// device id on the impression — so only a household match can bridge them.

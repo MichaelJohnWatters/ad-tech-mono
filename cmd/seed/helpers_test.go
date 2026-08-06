@@ -6,11 +6,11 @@ import (
 
 func TestBrandSlugFromDomain(t *testing.T) {
 	cases := map[string]string{
-		"":                 "default",
-		"acme-shoes.com":   "acme-shoes",
-		"globex-tech.com":  "globex-tech",
-		"LuxAuto.com":      "luxauto",
-		"single":           "single", // no dot — treated as slug as-is
+		"":                "default",
+		"acme-shoes.com":  "acme-shoes",
+		"globex-tech.com": "globex-tech",
+		"LuxAuto.com":     "luxauto",
+		"single":          "single", // no dot — treated as slug as-is
 	}
 	for in, want := range cases {
 		if got := brandSlugFromDomain(in); got != want {
@@ -101,7 +101,7 @@ func TestMaterialiseCreatives_NewShape(t *testing.T) {
 			{ID: "cr-shoes-001", Width: 300, Height: 250},
 			{ID: "cr-shoes-001-leader", Width: 728, Height: 90},
 			{Width: 320, Height: 50}, // ID omitted → auto-named
-			{ID: "with-bad-dims"},   // Width/Height = 0 → default to 300x250
+			{ID: "with-bad-dims"},    // Width/Height = 0 → default to 300x250
 		},
 	}
 	out := materialiseCreatives(c)

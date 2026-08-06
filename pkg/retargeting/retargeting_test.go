@@ -98,9 +98,9 @@ func TestOnSiteVisit_RuleWindowSetsTTL(t *testing.T) {
 func TestOnSiteVisit_SkipsTagMismatchAndHighMinCount(t *testing.T) {
 	src := &fakeSource{segs: map[string][]Segment{
 		"adv": {
-			{ID: "seg-tag", Rule: []byte(`{"event":"site_visit","tag":"electronics","min_count":1}`)},   // tag mismatch
-			{ID: "seg-freq", Rule: []byte(`{"event":"site_visit","min_count":3}`)},                       // needs history → batch only
-			{ID: "seg-other", Rule: []byte(`{"event":"impression","min_count":1}`)},                      // not a visit rule
+			{ID: "seg-tag", Rule: []byte(`{"event":"site_visit","tag":"electronics","min_count":1}`)}, // tag mismatch
+			{ID: "seg-freq", Rule: []byte(`{"event":"site_visit","min_count":3}`)},                    // needs history → batch only
+			{ID: "seg-other", Rule: []byte(`{"event":"impression","min_count":1}`)},                   // not a visit rule
 		},
 	}}
 	enr := &fakeEnroller{}
@@ -171,8 +171,13 @@ type zeroAddEnroller struct{ invalidated int }
 func (z *zeroAddEnroller) AddMembers(_ context.Context, _, _ string, _ []string, _ time.Duration, _, _ string) (int, error) {
 	return 0, nil
 }
-func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _, _ string) (int, error) { return 0, nil }
-func (z *zeroAddEnroller) InvalidateAudience(_ context.Context, _ string) error        { z.invalidated++; return nil }
+func (z *zeroAddEnroller) RemoveMember(_ context.Context, _, _, _, _ string) (int, error) {
+	return 0, nil
+}
+func (z *zeroAddEnroller) InvalidateAudience(_ context.Context, _ string) error {
+	z.invalidated++
+	return nil
+}
 
 func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 	src := &fakeSource{segs: map[string][]Segment{

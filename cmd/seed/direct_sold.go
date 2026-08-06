@@ -14,7 +14,7 @@ import (
 
 // DirectSoldProfile is the YAML structure for profiles/direct-sold/*.yaml.
 type DirectSoldProfile struct {
-	Name      string             `yaml:"name"`
+	Name      string               `yaml:"name"`
 	LineItems []DirectSoldLineYAML `yaml:"line_items"`
 }
 

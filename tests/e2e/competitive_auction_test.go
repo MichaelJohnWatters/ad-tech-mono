@@ -9,35 +9,41 @@
 // FULL SCOPE (6 phases, 19 tests). Each row = one test in this file.
 //
 // PHASE 1 — core auction proof
-//   A1  HigherBaseBidWinsWithinDSP                       within-DSP selection
-//   B1  CrossDSPHighestBidWins                           exchange-side selection
-//   C1  FloorCutsLowBidsHighestAboveFloorWins            floor enforcement
-//   B2  OneDSPNoBidsOthersWin                            partial fan-out
+//
+//	A1  HigherBaseBidWinsWithinDSP                       within-DSP selection
+//	B1  CrossDSPHighestBidWins                           exchange-side selection
+//	C1  FloorCutsLowBidsHighestAboveFloorWins            floor enforcement
+//	B2  OneDSPNoBidsOthersWin                            partial fan-out
 //
 // PHASE 2 — robustness
-//   B4  SlowDSPCutOffByBidTimeout                        timeout protection
-//   B6  ErrorFromOneDSPDoesNotKillAuction                error tolerance
-//   A3  BudgetExhaustedCampaignExcludedSiblingBids       per-campaign budget
-//   A4  PausedCampaignExcludedSiblingBids                status filter
-//   D1  PGDealPreemptsHigherOpenBid                      deal preempt
+//
+//	B4  SlowDSPCutOffByBidTimeout                        timeout protection
+//	B6  ErrorFromOneDSPDoesNotKillAuction                error tolerance
+//	A3  BudgetExhaustedCampaignExcludedSiblingBids       per-campaign budget
+//	A4  PausedCampaignExcludedSiblingBids                status filter
+//	D1  PGDealPreemptsHigherOpenBid                      deal preempt
 //
 // PHASE 3 — fan-out hygiene
-//   B5  AllDSPsTimeoutReturnsNoBid                       no partial deadlock
-//   B7  SmartRouterPreFiltersAlwaysNoBidDSP              router learning
-//   E1  LosersReceiveLossNotifications                   notification fan-out
+//
+//	B5  AllDSPsTimeoutReturnsNoBid                       no partial deadlock
+//	B7  SmartRouterPreFiltersAlwaysNoBidDSP              router learning
+//	E1  LosersReceiveLossNotifications                   notification fan-out
 //
 // PHASE 4 — publisher-adserver vs programmatic
-//   F1  SponsorshipPreemptsHigherProgrammaticBid         tier ordering
-//   F4  OutOfFlightDirectSkippedProgrammaticWins         flight window
-//   F5  DirectLineItemPlacementAllowlistRespected        placement match
+//
+//	F1  SponsorshipPreemptsHigherProgrammaticBid         tier ordering
+//	F4  OutOfFlightDirectSkippedProgrammaticWins         flight window
+//	F5  DirectLineItemPlacementAllowlistRespected        placement match
 //
 // PHASE 5 — deals competitive
-//   D2  PreferredDealRaisesFloorOpenBidStillWins         non-preempt deal
-//   D3  PMPAllowlistedAtDealPriceVsNonListedOpen         PMP eligibility
+//
+//	D2  PreferredDealRaisesFloorOpenBidStillWins         non-preempt deal
+//	D3  PMPAllowlistedAtDealPriceVsNonListedOpen         PMP eligibility
 //
 // PHASE 6 — Prebid competitive
-//   G1  PrebidMultiImpRequestPerImpAuction               multi-imp handling
-//   G2  PrebidInboundVsInternalDSPsHighestWins           Prebid + fan-out
+//
+//	G1  PrebidMultiImpRequestPerImpAuction               multi-imp handling
+//	G2  PrebidInboundVsInternalDSPsHighestWins           Prebid + fan-out
 package e2e
 
 import (

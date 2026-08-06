@@ -23,22 +23,22 @@ type DSPProfile struct {
 
 // CampaignConfig is a campaign definition in YAML with targeting.
 type CampaignConfig struct {
-	ID             string          `yaml:"id"`
-	AccountID      string          `yaml:"account_id"`
-	AdvertiserID   string          `yaml:"advertiser_id"`
-	IOId           string          `yaml:"io_id"`
-	Name           string          `yaml:"name"`
-	CreativeID     string          `yaml:"creative_id"`
-	CreativeDomain string          `yaml:"creative_domain"`
-	BaseBid        float64         `yaml:"base_bid"`
-	Currency       string          `yaml:"currency"`
-	DailyBudget    float64         `yaml:"daily_budget"`
-	TotalBudget    float64         `yaml:"total_budget"`
-	BidModel       string          `yaml:"bid_model"`
-	PacingMode     string          `yaml:"pacing_mode"`
-	Status         string          `yaml:"status"`
-	Targeting      *TargetingYAML  `yaml:"targeting,omitempty"`
-	Modifiers      *ModifiersYAML  `yaml:"modifiers,omitempty"`
+	ID             string         `yaml:"id"`
+	AccountID      string         `yaml:"account_id"`
+	AdvertiserID   string         `yaml:"advertiser_id"`
+	IOId           string         `yaml:"io_id"`
+	Name           string         `yaml:"name"`
+	CreativeID     string         `yaml:"creative_id"`
+	CreativeDomain string         `yaml:"creative_domain"`
+	BaseBid        float64        `yaml:"base_bid"`
+	Currency       string         `yaml:"currency"`
+	DailyBudget    float64        `yaml:"daily_budget"`
+	TotalBudget    float64        `yaml:"total_budget"`
+	BidModel       string         `yaml:"bid_model"`
+	PacingMode     string         `yaml:"pacing_mode"`
+	Status         string         `yaml:"status"`
+	Targeting      *TargetingYAML `yaml:"targeting,omitempty"`
+	Modifiers      *ModifiersYAML `yaml:"modifiers,omitempty"`
 }
 
 type TargetingYAML struct {
@@ -47,11 +47,11 @@ type TargetingYAML struct {
 }
 
 type TargetingSetYAML struct {
-	Geo       []string `yaml:"geo,omitempty"`
-	Device    []string `yaml:"device,omitempty"`
-	OS        []string `yaml:"os,omitempty"`
-	Segments  []string `yaml:"segments,omitempty"`
-	Domains   []string `yaml:"domains,omitempty"`
+	Geo        []string `yaml:"geo,omitempty"`
+	Device     []string `yaml:"device,omitempty"`
+	OS         []string `yaml:"os,omitempty"`
+	Segments   []string `yaml:"segments,omitempty"`
+	Domains    []string `yaml:"domains,omitempty"`
 	Categories []string `yaml:"categories,omitempty"`
 }
 

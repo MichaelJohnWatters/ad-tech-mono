@@ -64,8 +64,8 @@ func BuildBasicWorld(t *testing.T, h *Harness, suffix string) World {
 	w.IO = h.CreateInsertionOrder(t, w.AdvAcc, "e2e-io-"+suffix, 5000)
 	w.Campaign = h.CreateCampaign(t, w.AdvAcc, w.IO,
 		"e2e-li-"+suffix,
-		3.50,  // base bid
-		500,   // daily budget
+		3.50, // base bid
+		500,  // daily budget
 		"e2e-cr-"+suffix,
 		"adv-"+suffix+".test",
 		Targeting{Geos: []string{"GBR"}, Devices: []string{"mobile"}},

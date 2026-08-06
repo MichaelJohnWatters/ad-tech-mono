@@ -78,10 +78,10 @@ type InLine struct {
 	Impressions []Impression `xml:"Impression"`
 	// Errors are VAST <Error> URIs the player pings on a playback failure (with
 	// the [ERRORCODE] macro). Placed after Impression per the VAST XSD.
-	Errors      []Error `xml:"Error,omitempty"`
-	Description string  `xml:"Description,omitempty"`
-	Advertiser  string       `xml:"Advertiser,omitempty"`
-	Pricing     *Pricing     `xml:"Pricing,omitempty"`
+	Errors      []Error  `xml:"Error,omitempty"`
+	Description string   `xml:"Description,omitempty"`
+	Advertiser  string   `xml:"Advertiser,omitempty"`
+	Pricing     *Pricing `xml:"Pricing,omitempty"`
 	// AdVerifications carries Open Measurement (OMID) verification resources.
 	// VAST 4.1+ places it as a top-level InLine child (before Creatives per the
 	// XSD); omitted when empty for backward compatibility.
