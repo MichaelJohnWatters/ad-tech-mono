@@ -180,3 +180,38 @@ func TestSmartRouterRecencyWindowRehabilitates(t *testing.T) {
 		t.Fatal("fast-again DSP must rehabilitate within ~recency-window calls")
 	}
 }
+
+// Cold-start grace: a fan-out-deadline breach during a DSP's MinCalls
+// warm-up must record NOTHING — at load the first 20 calls land within a
+// second, and first-dial stalls condemned healthy DSPs on their opening
+// window (2026-08-06 fresh-boot 0-fill).
+func TestSmartRouterFanoutDeadlineColdStartGrace(t *testing.T) {
+	r := NewSmartRouter()
+	all := []string{"dsp-a", "dsp-b"}
+
+	// Cold: 5 calls (< MinCalls 20) then deadline breaches — not recorded.
+	for i := 0; i < 5; i++ {
+		r.RecordCall("display", "dsp-a", true, 4.0, 600*time.Millisecond, false)
+	}
+	for i := 0; i < 50; i++ {
+		if r.RecordFanoutDeadline("display", "dsp-a", 500*time.Millisecond) {
+			t.Fatal("cold DSP breach must not be recorded (grace)")
+		}
+	}
+	if !contains(r.SelectDSPs("display", all), "dsp-a") {
+		t.Fatal("cold DSP must stay included")
+	}
+
+	// Warm: past MinCalls, breaches record and can skip.
+	for i := 0; i < 20; i++ {
+		r.RecordCall("display", "dsp-b", true, 4.0, 20*time.Millisecond, false)
+	}
+	for i := 0; i < 40; i++ {
+		if !r.RecordFanoutDeadline("display", "dsp-b", 500*time.Millisecond) {
+			t.Fatal("warm DSP breach must record")
+		}
+	}
+	if contains(r.SelectDSPs("display", all), "dsp-b") {
+		t.Fatal("warm DSP with chronic deadline breaches must be skipped")
+	}
+}
