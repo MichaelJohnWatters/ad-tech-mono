@@ -29,3 +29,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-06 19:42 | 29c4653 | 149.6 | 30m | 92 | GREEN | 0 | 58.98 | 667.05 | 58.21 | 700.08 | 132.79 | 1.38 | 49.64 | 76.28 | -0.3175 | 93.01 | 6.76 | new-VM load curve (10cpu/20GiB, 5-DSP market) |
 | 2026-08-06 20:17 | 31dc6cd | 188.5 | 30m | 94.8 | RED | 0 | 267.42 | 920.01 | 169.98 | 970.8 | 336.63 | 2.15 | 152.52 | 216.6 | -25.5775 | 91.92 | 6.46 | new-VM load curve (10cpu/20GiB, 5-DSP market) |
 | 2026-08-06 21:15 | c0d588b | 149.4 | 10m | 91.8 | GREEN | 0 | 155.96 | 495.02 | 99.28 | 703.6 | 242.73 | 2.09 | 89.63 | 195.22 | -2.3275 | 93.6 | 7.91 | post nats-cpu-bump (500m req / 2-core limit) |
+| 2026-08-06 22:43 | d772bda+dirty | 107.7 | 30m | 91.8 | GREEN | 12 | 35.38 | 245.2 | 55.86 | 351.78 | 133.03 | 1.11 | 46.7 | 80.93 | -0.0475 | 88.09 | 7.59 | pre-floor-trim reference (promtail freshly bounced) |
