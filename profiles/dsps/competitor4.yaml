@@ -1,0 +1,121 @@
+# Competitor 4 - SmartRouter scenario: COINFLIP (mid-tier).
+# Fast, bids ~half the time (50% random no-bid) — sits well ABOVE the
+# routing_min_bid_rate skip line (5%) and must therefore ALWAYS stay in the
+# fan-out: this DSP guards the skip threshold's upper boundary (the deadbeat
+# guards it from below) and adds realistic mid-market demand. If the router
+# ever skips this one, a skip-rule regression just shipped.
+# Catalog: competitor1's agency book (distinct -x4 accounts).
+name: competitor4
+competitor: true
+noise_pct: 25
+no_bid_rate: 0.5   # coinflip: ~50% bid rate — mediocre, but NEVER skippable
+
+campaigns:
+  - id: c4-001
+    account_id: agency-omnicom-x4
+    advertiser_id: adv-megastore-x4
+    io_id: c4-io-001
+    name: "MegaStore Summer Blowout"
+    creative_domain: megastore.com
+    base_bid: 4.50
+    currency: USD
+    daily_budget: 5000
+    total_budget: 100000
+    bid_model: cpm
+    pacing_mode: asap
+    status: live
+    targeting:
+      include:
+        geo: [GBR, USA, DEU, FRA]
+    modifiers:
+      device:
+        mobile: 30
+      geo_country:
+        USA: 25
+        GBR: 15
+    # Big retail brand — full sizes including billboard.
+    creatives:
+      - { id: c4-cr-001, width: 300, height: 250 }
+      - { id: c4-cr-001-leader, width: 728, height: 90 }
+      - { id: c4-cr-001-billboard, width: 970, height: 250 }
+      - { id: c4-cr-001-mobile, width: 320, height: 50 }
+      - { id: c4-cr-001-halfpage, width: 300, height: 600 }
+      - id: c4-cr-001-native
+        format: native
+        native:
+          title: "MegaStore Summer Blowout — up to 60% off"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          sponsored: "MegaStore"
+          body: "Summer deals across every department. Free shipping over $25."
+          cta: "Shop the sale"
+
+  - id: c4-002
+    account_id: agency-omnicom-x4
+    advertiser_id: adv-luxauto-x4
+    io_id: c4-io-002
+    name: "LuxAuto - Premium"
+    creative_domain: luxauto.com
+    base_bid: 5.20
+    currency: USD
+    daily_budget: 2000
+    total_budget: 50000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        geo: [GBR, USA]
+    modifiers:
+      device:
+        desktop: 15
+    # Luxury auto — premium desktop placements (billboard, leaderboard,
+    # half-page, sky); skips mobile banner intentionally. Two video
+    # variants for instream pre-roll auctions: 15s standard slot + 30s
+    # premium pod slot.
+    creatives:
+      - { id: c4-cr-002, width: 300, height: 250 }
+      - { id: c4-cr-002-leader, width: 728, height: 90 }
+      - { id: c4-cr-002-billboard, width: 970, height: 250 }
+      - { id: c4-cr-002-halfpage, width: 300, height: 600 }
+      - { id: c4-cr-002-sky, width: 160, height: 600 }
+      # Media served from our own object store (Minio) via the gateway
+      # /v1/creatives/media/* proxy — seeded once by cmd/seed/media.go,
+      # so there is no live third-party dependency per request.
+      - { id: c4-cr-002-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/bbb-360-2mb.mp4" }
+      - { id: c4-cr-002-video-30s, format: video, width: 640, height: 360, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/bbb-360-5mb.mp4" }
+
+  - id: c4-003
+    account_id: agency-omnicom-x4
+    advertiser_id: adv-fastfood-x4
+    io_id: c4-io-003
+    name: "QuickBite App Install"
+    creative_domain: quickbite.app
+    base_bid: 2.80
+    currency: USD
+    daily_budget: 3000
+    total_budget: 60000
+    bid_model: cpm
+    pacing_mode: front_loaded
+    status: live
+    targeting:
+      include:
+        device: [mobile, tablet]
+    modifiers:
+      geo_country:
+        USA: 40
+        GBR: 20
+    # App install — mobile display + a mobile-video pre-roll + an audio spot
+    # (app-install advertisers lean heavily on video/audio for installs).
+    creatives:
+      - { id: c4-cr-003, width: 300, height: 250 }
+      - { id: c4-cr-003-mobile, width: 320, height: 50 }
+      - { id: c4-cr-003-halfpage, width: 300, height: 600 }
+      - { id: c4-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/bbb-360-2mb.mp4" }
+      - { id: c4-cr-003-audio-30s, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/audio-2.mp3" }

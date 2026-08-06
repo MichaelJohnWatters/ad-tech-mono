@@ -86,6 +86,7 @@ localExpose:
     dsp-competitor1: { ports: [{ name: http, port: 8089 }] }
     dsp-competitor2: { ports: [{ name: http, port: 8090 }] }
     dsp-competitor3: { ports: [{ name: http, port: 8098 }] }
+    dsp-competitor4: { ports: [{ name: http, port: 8100 }] }
     webhooks: { ports: [{ name: http, port: 8091 }] }
     identity-consumer: { ports: [{ name: http, port: 8092 }] }
     ssai: { ports: [{ name: http, port: 8093 }] }
@@ -291,6 +292,48 @@ services:
     ingress:
       subdomains: [dsp-comp3]
 
+  # COINFLIP scenario (see profiles/dsps/competitor4.yaml): fast, bids ~50%
+  # — mediocre but far above the skip line; must ALWAYS stay in the fan-out.
+  dsp-competitor4:
+    image: adtech-dsp
+    containerName: dsp
+    ports: [{ name: http, port: 8100 }]
+    env:
+      - name: POD_NAME
+        value: "dsp-competitor4-0"
+      - name: DSP_PROFILE
+        value: "competitor4"
+      - name: DSP_PORT
+        value: "8100"
+      - name: DSP_ADCERT_KEY_URL
+        value: "http://exchange:8081/v1/adcert/key"
+      - name: DSP_ADCERT_ENFORCEMENT
+        value: "strict"
+      - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      - name: NATS_URL
+        value: "nats://nats:4222"
+      - name: REDIS_URL
+        value: "redis:6379"
+      - name: OTEL_ENDPOINT
+        value: "jaeger:4318"
+    resources:
+      # Full fan-out rate lands on this single replica (like competitor3).
+      requests: { cpu: 250m, memory: 96Mi }
+      limits: { cpu: 2000m, memory: 512Mi }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8100 }
+      initialDelaySeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 5
+    readinessProbe:
+      httpGet: { path: /readyz, port: 8100 }
+      periodSeconds: 2
+      timeoutSeconds: 3
+      failureThreshold: 5
+    ingress:
+      subdomains: [dsp-comp4]
+
   ssp:
     image: adtech-ssp
     replicas: 3
@@ -360,7 +403,7 @@ services:
       # nurl/lurl stay HTTP by design) — required whenever the bid edge
       # is grpc://, or notices are undeliverable and budget caps break.
       - name: EXCHANGE_DSP_ENDPOINTS
-        value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090,http://dsp-competitor3:8098"
+        value: "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090,http://dsp-competitor3:8098,http://dsp-competitor4:8100"
       - name: EXCHANGE_ADSERVER_URL
         value: "http://adserver:8085"
       # Routing warm-start + cross-replica reseed source. Without this the
