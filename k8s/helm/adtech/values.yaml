@@ -1002,7 +1002,7 @@ infra:
     storage: 5Gi
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
-      limits: { cpu: "500m", memory: "1Gi" }
+      limits: { cpu: "500m", memory: "2Gi"  # JetStream restore after a heavy bench day peaked >1Gi (2026-08-06 OOM crash-loop: 1.09M-msg stream restore re-OOMed 17x) }
 
   redis:
     image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
