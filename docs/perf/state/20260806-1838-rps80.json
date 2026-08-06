@@ -1,0 +1,1782 @@
+{
+ "run": {
+  "stamp": "20260806-1838",
+  "rps": 80,
+  "sha": "6e2addb",
+  "date": "2026-08-06 18:38"
+ },
+ "pods": [
+  {
+   "pod": "adserver-65fbbfb895-5vgfq",
+   "image_id": "docker-pullable://adtech-adserver@sha256:bf3bdcbea332baf59f571c8a3ab503d1d42a293cc45f9e67405b2a7c36e1ee93",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "adserver-65fbbfb895-bhhsv",
+   "image_id": "docker-pullable://adtech-adserver@sha256:bf3bdcbea332baf59f571c8a3ab503d1d42a293cc45f9e67405b2a7c36e1ee93",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "adserver-65fbbfb895-ftslz",
+   "image_id": "docker-pullable://adtech-adserver@sha256:bf3bdcbea332baf59f571c8a3ab503d1d42a293cc45f9e67405b2a7c36e1ee93",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "audience-rt-8d4fcdc8f-grh7f",
+   "image_id": "docker-pullable://adtech-audience-rt@sha256:53043e76e955afb370e6dbef8fbd8c5cfbadfbd7a96e44a0f27fe10159b27874",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "audience-rt-8d4fcdc8f-gs58b",
+   "image_id": "docker-pullable://adtech-audience-rt@sha256:53043e76e955afb370e6dbef8fbd8c5cfbadfbd7a96e44a0f27fe10159b27874",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "batch-conductor-29767210-qjtvc",
+   "image_id": "docker-pullable://adtech-batch-conductor@sha256:4a4b6764feef314149c8255425f9e7f3db60e5303783f3296e54d97aeda504e7",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "batch-conductor-29767270-zmpfg",
+   "image_id": "docker-pullable://adtech-batch-conductor@sha256:4a4b6764feef314149c8255425f9e7f3db60e5303783f3296e54d97aeda504e7",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "clickhouse-0",
+   "image_id": "docker-pullable://clickhouse/clickhouse-server@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "dsp-competitor1-7cf8b7cb8-bmqnn",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "dsp-competitor2-59b744f754-v7d5l",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "dsp-competitor3-57c58d8485-xwbnd",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "dsp-competitor4-7676c98bfd-p624f",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "dsp-internal-f9645c549-c6qnn",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "dsp-internal-f9645c549-h7rvg",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "dsp-internal-f9645c549-n7wms",
+   "image_id": "docker-pullable://adtech-dsp@sha256:aae92554a102819a2d262e05d7da62d7a8ac567909b22e6d84aa71ad08d0bddd",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "exchange-7b47dcc866-8nb5w",
+   "image_id": "docker-pullable://adtech-exchange@sha256:6dc34c358a39d3359130d9a5a9db6baec84ceddfd522dbb6f34d3c7a126bbd80",
+   "restarts": "0",
+   "cpu_req": "400m"
+  },
+  {
+   "pod": "exchange-7b47dcc866-l68fz",
+   "image_id": "docker-pullable://adtech-exchange@sha256:6dc34c358a39d3359130d9a5a9db6baec84ceddfd522dbb6f34d3c7a126bbd80",
+   "restarts": "0",
+   "cpu_req": "400m"
+  },
+  {
+   "pod": "exchange-7b47dcc866-xpv6h",
+   "image_id": "docker-pullable://adtech-exchange@sha256:6dc34c358a39d3359130d9a5a9db6baec84ceddfd522dbb6f34d3c7a126bbd80",
+   "restarts": "0",
+   "cpu_req": "400m"
+  },
+  {
+   "pod": "gateway-6bcd595b6-99j7b",
+   "image_id": "docker-pullable://adtech-gateway@sha256:e32ff83ea5322a364eeba12d584cfacc5c9e4ca0ce17384a9578ad21f1ba2a7d",
+   "restarts": "1",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "gateway-6bcd595b6-pdk4p",
+   "image_id": "docker-pullable://adtech-gateway@sha256:e32ff83ea5322a364eeba12d584cfacc5c9e4ca0ce17384a9578ad21f1ba2a7d",
+   "restarts": "1",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "gateway-6bcd595b6-ppb68",
+   "image_id": "docker-pullable://adtech-gateway@sha256:e32ff83ea5322a364eeba12d584cfacc5c9e4ca0ce17384a9578ad21f1ba2a7d",
+   "restarts": "1",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "grafana-678f9f7646-rbdwn",
+   "image_id": "docker-pullable://grafana/grafana@sha256:62d2b9d20a19714ebfe48d1bb405086081bc602aa053e28cf6d73c7537640dfb",
+   "restarts": "0",
+   "cpu_req": "25m"
+  },
+  {
+   "pod": "identity-consumer-578d6b9db7-sw2jk",
+   "image_id": "docker-pullable://adtech-identity-consumer@sha256:b650bd36c72c856b400ded369353b3eea06cb5e125fc58a99d71b63729438f5b",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "identity-consumer-578d6b9db7-vm9kt",
+   "image_id": "docker-pullable://adtech-identity-consumer@sha256:b650bd36c72c856b400ded369353b3eea06cb5e125fc58a99d71b63729438f5b",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "identity-consumer-578d6b9db7-wf4jv",
+   "image_id": "docker-pullable://adtech-identity-consumer@sha256:b650bd36c72c856b400ded369353b3eea06cb5e125fc58a99d71b63729438f5b",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "jaeger-7cfc749fbd-rzqb2",
+   "image_id": "docker-pullable://jaegertracing/all-in-one@sha256:f015fb34e6742bb46b87c42cf83abfacfdd5dc39864a859a4ba942eb21c4b29c",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "loki-658f5b64ff-88hjs",
+   "image_id": "docker-pullable://grafana/loki@sha256:d947e68a84d9e44915dfa08c3bec27e2124efd5ba6c83443eb53578101ec69e3",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "mailpit-7f9b7cc8db-7pjth",
+   "image_id": "docker-pullable://axllent/mailpit@sha256:7eef0f38dbc85e4e264f2edf5d70fbb694826791e05cb2cae4fc9e3282f968f5",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "minio-597497b9f7-jp82p",
+   "image_id": "docker-pullable://minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "nats-0",
+   "image_id": "docker-pullable://natsio/prometheus-nats-exporter@sha256:1f6787754b8b083f271adea4bb699b9c9e21279c89d903f1710f7647c604f145",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "node-exporter-l45v9",
+   "image_id": "docker-pullable://prom/node-exporter@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706",
+   "restarts": "0",
+   "cpu_req": "25m"
+  },
+  {
+   "pod": "notifications-84f47544f6-44k6k",
+   "image_id": "docker-pullable://adtech-notifications@sha256:e7f3edfa43c8331a55bd598fc5aee15b016417e1a942684113ca096f28943b4f",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "pipeline-768f5b97c6-7rvf9",
+   "image_id": "docker-pullable://adtech-pipeline@sha256:9a589bab0506c418c7ebf0071c8272384d4cae098facd6df5a8f5d2a6cd9fb8e",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "postgres-0",
+   "image_id": "docker-pullable://postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+   "restarts": "0",
+   "cpu_req": "300m"
+  },
+  {
+   "pod": "prometheus-6c964c4476-2xqz2",
+   "image_id": "docker-pullable://prom/prometheus@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "promtail-z9trp",
+   "image_id": "docker-pullable://grafana/promtail@sha256:b3db8e7b1cba0e8c45ce2ae72ebddfd88ebdcae86383f1680edf0074e9010ff6",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "publisher-adserver-cfff79d67-5vl7s",
+   "image_id": "docker-pullable://adtech-publisher-adserver@sha256:2dec9ab07a13a5d85b40aaa8ecaaf957eadb768f3bbd7934c82d84ffb11eb068",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "publisher-adserver-cfff79d67-7rr4w",
+   "image_id": "docker-pullable://adtech-publisher-adserver@sha256:2dec9ab07a13a5d85b40aaa8ecaaf957eadb768f3bbd7934c82d84ffb11eb068",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "publisher-adserver-cfff79d67-b5lqr",
+   "image_id": "docker-pullable://adtech-publisher-adserver@sha256:2dec9ab07a13a5d85b40aaa8ecaaf957eadb768f3bbd7934c82d84ffb11eb068",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "redis-6875b7844c-29tt7",
+   "image_id": "docker-pullable://redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "registry-mirror-6c574ddf8d-6x2d4",
+   "image_id": "docker-pullable://registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "report-runner-5dc4f75ddb-2vl5v",
+   "image_id": "docker-pullable://adtech-report-runner@sha256:5c2b75487e2ba67b2a57b340ffb777a785b26a7ffc80413dbce065b23830cdf6",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "report-runner-5dc4f75ddb-crwvz",
+   "image_id": "docker-pullable://adtech-report-runner@sha256:5c2b75487e2ba67b2a57b340ffb777a785b26a7ffc80413dbce065b23830cdf6",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "report-runner-5dc4f75ddb-qnz6w",
+   "image_id": "docker-pullable://adtech-report-runner@sha256:5c2b75487e2ba67b2a57b340ffb777a785b26a7ffc80413dbce065b23830cdf6",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "reporting-589fc497c4-q867v",
+   "image_id": "docker-pullable://adtech-reporting@sha256:b3246e0fd3c736da469cc6ab854831856500089538e3e0dc35042156cc71a061",
+   "restarts": "2",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "reporting-589fc497c4-qjc6x",
+   "image_id": "docker-pullable://adtech-reporting@sha256:b3246e0fd3c736da469cc6ab854831856500089538e3e0dc35042156cc71a061",
+   "restarts": "3",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "reporting-589fc497c4-zclch",
+   "image_id": "docker-pullable://adtech-reporting@sha256:b3246e0fd3c736da469cc6ab854831856500089538e3e0dc35042156cc71a061",
+   "restarts": "2",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "ssai-749cf668b6-4dwjv",
+   "image_id": "docker-pullable://adtech-ssai@sha256:6e17d0154cd615b9da368061d7ead0e801a13a6f8b514cb6f49fb3449bfb5684",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "ssai-749cf668b6-bp5n5",
+   "image_id": "docker-pullable://adtech-ssai@sha256:6e17d0154cd615b9da368061d7ead0e801a13a6f8b514cb6f49fb3449bfb5684",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "ssai-749cf668b6-wpdkk",
+   "image_id": "docker-pullable://adtech-ssai@sha256:6e17d0154cd615b9da368061d7ead0e801a13a6f8b514cb6f49fb3449bfb5684",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "ssp-b48b64cf8-wlzm9",
+   "image_id": "docker-pullable://adtech-ssp@sha256:095664a09debf5e7b0b6c851b63a62b922bed508bda8f20c6e710802c374bd2a",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "ssp-b48b64cf8-xkggm",
+   "image_id": "docker-pullable://adtech-ssp@sha256:095664a09debf5e7b0b6c851b63a62b922bed508bda8f20c6e710802c374bd2a",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "ssp-b48b64cf8-z965j",
+   "image_id": "docker-pullable://adtech-ssp@sha256:095664a09debf5e7b0b6c851b63a62b922bed508bda8f20c6e710802c374bd2a",
+   "restarts": "0",
+   "cpu_req": "250m"
+  },
+  {
+   "pod": "tigerbeetle-0",
+   "image_id": "docker-pullable://ghcr.io/tigerbeetle/tigerbeetle@sha256:aac07eea19a720580a54cbfaba4bf5f90b7c53bfc0805996860bf0c6c26b6ce7",
+   "restarts": "0",
+   "cpu_req": "100m"
+  },
+  {
+   "pod": "tracker-6f56984cd5-9rdfs",
+   "image_id": "docker-pullable://adtech-tracker@sha256:62db0eeb82a90793d0cd502bf829711ef963bbe5320e6cb8ed002d3f6f0c2b85",
+   "restarts": "0",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "tracker-6f56984cd5-pjhbk",
+   "image_id": "docker-pullable://adtech-tracker@sha256:62db0eeb82a90793d0cd502bf829711ef963bbe5320e6cb8ed002d3f6f0c2b85",
+   "restarts": "0",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "tracker-6f56984cd5-sctvh",
+   "image_id": "docker-pullable://adtech-tracker@sha256:62db0eeb82a90793d0cd502bf829711ef963bbe5320e6cb8ed002d3f6f0c2b85",
+   "restarts": "0",
+   "cpu_req": "150m"
+  },
+  {
+   "pod": "transcoder-75fcd6b7c4-gmsd5",
+   "image_id": "docker-pullable://adtech-transcoder@sha256:9a81097f8dc4a2e2e540a01c8fa0f2da8323a9544a66383537363672516d8c65",
+   "restarts": "0",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "webhooks-85b78fbbfd-2dnpn",
+   "image_id": "docker-pullable://adtech-webhooks@sha256:ab8a667ca014b6d81ac9e25a5ed5bb81d017d174bdadfcb55846835cf4bc02df",
+   "restarts": "1",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "webhooks-85b78fbbfd-jg6kr",
+   "image_id": "docker-pullable://adtech-webhooks@sha256:ab8a667ca014b6d81ac9e25a5ed5bb81d017d174bdadfcb55846835cf4bc02df",
+   "restarts": "1",
+   "cpu_req": "50m"
+  },
+  {
+   "pod": "webhooks-85b78fbbfd-tx5f5",
+   "image_id": "docker-pullable://adtech-webhooks@sha256:ab8a667ca014b6d81ac9e25a5ed5bb81d017d174bdadfcb55846835cf4bc02df",
+   "restarts": "1",
+   "cpu_req": "50m"
+  }
+ ],
+ "live_config": [
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.bandit_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.default_creative_ttl",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.freq_cap_per_user_per_campaign",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.freq_cap_window",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.ratelimit_allowlist",
+   "value": "\"127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.ratelimit_burst",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.ratelimit_rps",
+   "value": "\"100\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.ratelimit_trusted_proxy_hops",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "adserver.url_ttl",
+   "value": "\"1h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "cache.warm.freq_caps.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "adserver-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "audience-rt-8d4fcdc8f-grh7f",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "audience-rt-8d4fcdc8f-grh7f",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "audience-rt-8d4fcdc8f-gs58b",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "audience-rt-8d4fcdc8f-gs58b",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "cache.warm.advertiser_balances.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.adcert_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.adcert_max_age",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.balance_gate_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.bid_cache_refresh_interval",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.budget_reset_interval",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.daily_budget_default",
+   "value": "\"1000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.identity_resolution_enabled",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.max_bid_modifier",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.no_bid_rate",
+   "value": "\"0.2\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.noise_pct",
+   "value": "\"30\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.response_delay",
+   "value": "\"500ms\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor1-0",
+   "key": "dsp.spend_reconcile_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "cache.warm.advertiser_balances.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.adcert_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.adcert_max_age",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.balance_gate_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.bid_cache_refresh_interval",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.budget_reset_interval",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.daily_budget_default",
+   "value": "\"1000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.identity_resolution_enabled",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.max_bid_modifier",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.no_bid_rate",
+   "value": "\"0.99\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.noise_pct",
+   "value": "\"40\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.response_delay",
+   "value": "\"0s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor2-0",
+   "key": "dsp.spend_reconcile_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "cache.warm.advertiser_balances.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.adcert_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.adcert_max_age",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.balance_gate_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.bid_cache_refresh_interval",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.budget_reset_interval",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.daily_budget_default",
+   "value": "\"1000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.identity_resolution_enabled",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.max_bid_modifier",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.no_bid_rate",
+   "value": "\"0.08\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.noise_pct",
+   "value": "\"20\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.response_delay",
+   "value": "\"0s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor3-0",
+   "key": "dsp.spend_reconcile_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "cache.warm.advertiser_balances.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.adcert_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.adcert_max_age",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.balance_gate_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.bid_cache_refresh_interval",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.budget_reset_interval",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.daily_budget_default",
+   "value": "\"1000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.identity_resolution_enabled",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.max_bid_modifier",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.no_bid_rate",
+   "value": "\"0.5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.noise_pct",
+   "value": "\"25\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.response_delay",
+   "value": "\"0s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-competitor4-0",
+   "key": "dsp.spend_reconcile_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "cache.warm.advertiser_balances.poll_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.adcert_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.adcert_max_age",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.balance_gate_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.bid_cache_refresh_interval",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.budget_reset_interval",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.daily_budget_default",
+   "value": "\"1000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.identity_resolution_enabled",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.max_bid_modifier",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.no_bid_rate",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.noise_pct",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.response_delay",
+   "value": "\"0s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "dsp-internal-0",
+   "key": "dsp.spend_reconcile_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.adstxt_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.adstxt_seller_domain",
+   "value": "\"adtech.local\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.adstxt_seller_id",
+   "value": "\"adtech-exchange\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.bid_timeout",
+   "value": "\"500ms\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.channel",
+   "value": "\"all\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.dsp_call_sample_ratio",
+   "value": "\"1.0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.dsp_endpoints",
+   "value": "\"grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090,http://dsp-competitor3:8098,http://dsp-competitor4:8100\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.emit_dsp_call_events",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.retail_min_relevance",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_explore_pct",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_latency_hard",
+   "value": "\"80ms\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_latency_soft",
+   "value": "\"50ms\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_max_timeout_rate",
+   "value": "\"0.5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_min_bid_rate",
+   "value": "\"0.05\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_min_calls",
+   "value": "\"20\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_never_skip",
+   "value": "\"\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_recency_window",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.routing_reseed_interval",
+   "value": "\"5s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.schain_append_node",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.schain_enforcement",
+   "value": "\"strict\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "exchange.win_loss_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "prebid.enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "exchange-0",
+   "key": "prebid.min_bid_floor",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ingest_inline_max_rows",
+   "value": "\"50000\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ingest_max_upload_bytes",
+   "value": "\"104857600\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ratelimit_allowlist",
+   "value": "\"127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ratelimit_burst",
+   "value": "\"40\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ratelimit_rps",
+   "value": "\"20\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "gateway-0",
+   "key": "gateway.ratelimit_trusted_proxy_hops",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "identity-consumer-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "identity-consumer-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "notifications-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "notifications-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "audience.changelog_lag_warn",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "audience.changelog_poll_interval",
+   "value": "\"3s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "audience.changelog_reconcile_interval",
+   "value": "\"5m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "pipeline.ingest_max_reject_pct",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "pipeline-0",
+   "key": "pipeline.onboarding_retention",
+   "value": "\"720h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "publisher_adserver.omid_vendor",
+   "value": "\"ad-tech-mono-omid\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "publisher_adserver.omid_verification_url",
+   "value": "\"\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "publisher_adserver.prebid_servers",
+   "value": "\"\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "publisher_adserver.prebid_timeout",
+   "value": "\"500ms\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "publisher-adserver-0",
+   "key": "publisher_adserver.stub_on_nobid",
+   "value": "\"false\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "report_runner.poll_interval",
+   "value": "\"5s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "report_runner.query_timeout",
+   "value": "\"10m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "report_runner.retention",
+   "value": "\"720h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "report_runner.schedule_interval",
+   "value": "\"60s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "report-runner-0",
+   "key": "report_runner.sweep_interval",
+   "value": "\"1h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.click_through_window_hours",
+   "value": "\"720\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.max_resolved_ids",
+   "value": "\"50\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.min_identity_confidence",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.min_viewability_seconds",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.model",
+   "value": "\"last_touch\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.require_viewability",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "attribution.view_through_window_hours",
+   "value": "\"168\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "billing.balance_invalidate_min_interval",
+   "value": "\"5s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.billing_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.data_fee_margin_pct",
+   "value": "\"30\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.pacing_hold_ttl",
+   "value": "\"15m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.pacing_reconcile_interval",
+   "value": "\"60s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.query_timeout",
+   "value": "\"2m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.rollup_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.spend_snapshot_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-q867v",
+   "key": "reporting.spend_snapshot_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.click_through_window_hours",
+   "value": "\"720\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.max_resolved_ids",
+   "value": "\"50\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.min_identity_confidence",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.min_viewability_seconds",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.model",
+   "value": "\"last_touch\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.require_viewability",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "attribution.view_through_window_hours",
+   "value": "\"168\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "billing.balance_invalidate_min_interval",
+   "value": "\"5s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.billing_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.data_fee_margin_pct",
+   "value": "\"30\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.pacing_hold_ttl",
+   "value": "\"15m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.pacing_reconcile_interval",
+   "value": "\"60s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.query_timeout",
+   "value": "\"2m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.rollup_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.spend_snapshot_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-qjc6x",
+   "key": "reporting.spend_snapshot_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.click_through_window_hours",
+   "value": "\"720\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.max_resolved_ids",
+   "value": "\"50\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.min_identity_confidence",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.min_viewability_seconds",
+   "value": "\"1\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.model",
+   "value": "\"last_touch\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.require_viewability",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "attribution.view_through_window_hours",
+   "value": "\"168\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "billing.balance_invalidate_min_interval",
+   "value": "\"5s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.billing_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.data_fee_margin_pct",
+   "value": "\"30\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.pacing_hold_ttl",
+   "value": "\"15m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.pacing_reconcile_interval",
+   "value": "\"60s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.query_timeout",
+   "value": "\"2m\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.rollup_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.spend_snapshot_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "reporting-589fc497c4-zclch",
+   "key": "reporting.spend_snapshot_interval",
+   "value": "\"30s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.behaviour_observe_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.household_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.ratelimit_allowlist",
+   "value": "\"127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.ratelimit_burst",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.ratelimit_rps",
+   "value": "\"100\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "ssp-0",
+   "key": "ssp.ratelimit_trusted_proxy_hops",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.conversion_strict_advertiser_key",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.dedup_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.dedup_ttl",
+   "value": "\"24h\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.exp_validation",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.fraud_enabled",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.ratelimit_allowlist",
+   "value": "\"127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.ratelimit_burst",
+   "value": "\"400\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.ratelimit_rps",
+   "value": "\"200\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.ratelimit_trusted_proxy_hops",
+   "value": "\"0\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "tracker-0",
+   "key": "tracker.signature_validation",
+   "value": "\"true\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "webhooks-0",
+   "key": "database.max_idle_conns",
+   "value": "\"5\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "webhooks-0",
+   "key": "database.max_open_conns",
+   "value": "\"10\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "webhooks-0",
+   "key": "webhooks.backoff_base",
+   "value": "\"1s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "webhooks-0",
+   "key": "webhooks.http_timeout",
+   "value": "\"10s\""
+  },
+  {
+   "service": "platform",
+   "pod_id": "webhooks-0",
+   "key": "webhooks.max_attempts",
+   "value": "\"3\""
+  }
+ ],
+ "dsps": [
+  "competitor1 noise=30 no_bid=0.2",
+  "competitor2 noise=40 no_bid=0.99",
+  "competitor3 noise=20 no_bid=0.08",
+  "competitor4 noise=25 no_bid=0.5",
+  "internal noise=0 no_bid=0"
+ ],
+ "node": "{\"cpu\":\"10\",\"ephemeral-storage\":\"102625208Ki\",\"hugepages-2Mi\":\"0\",\"memory\":\"20488752Ki\",\"pods\":\"110\"}",
+ "git_dirty_files": [
+  "M docs/perf/RESULTS.md",
+  " M docs/perf/runs.jsonl"
+ ]
+}

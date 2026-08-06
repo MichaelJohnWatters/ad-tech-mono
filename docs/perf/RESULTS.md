@@ -24,3 +24,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-06 15:24 | 9f4b751 | 108.3 | 30m | 0 | RED | 2027 | 2.29 | 32.51 | 3.8 | 60.61 | 7.77 | 0.48 | 2.19 | 2.39 | 5 | 67.46 | 0.85 | golden-base candidate v2 (post NATS 2Gi fix) |
 | 2026-08-06 17:23 | 0821d1c | 109.9 | 30m | 91.8 | GREEN | 0 | 8.63 | 44.53 | 19.79 | 58.77 | 26.13 | 1.02 | 11.19 | 17.58 | -0.0475 | 90.44 | 9.08 | golden-base v3 (10cpu/20GiB, cold-start grace) |
 | 2026-08-06 18:07 | 23133d0 | 50 | 30m | 92.1 | GREEN | 0 | 4.36 | 18.36 | 3.93 | 23.62 | 8.81 | 0.5 | 2.48 | 3.18 | -0.01 | 80.8 | 8.82 | new-VM load curve (10cpu/20GiB, 5-DSP market) |
+| 2026-08-06 18:38 | 6e2addb | 80 | 30m | 92.1 | GREEN | 0 | 7.03 | 24.71 | 8.72 | 39.52 | 19.49 | 0.71 | 5.47 | 8.24 | -0.0475 | 87.76 | 8.72 | new-VM load curve (10cpu/20GiB, 5-DSP market) |
