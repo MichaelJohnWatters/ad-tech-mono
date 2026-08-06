@@ -99,32 +99,76 @@ entry = {
     "sched_p99_ms": query(f'1000 * histogram_quantile(0.99, sum by (le) (rate(go_sched_latencies_seconds_total_bucket{{service=~"exchange|dsp-internal|ssp|adserver"}}[{W}])))'),
 }
 
-# ---- regression check: compare phases vs the PREVIOUS run at this RPS ----
-# The point of the ledger: a big slowdown shows up here BY PHASE NAME, tied
-# to the commit range between the two runs' shas — "what changed and where".
+# ---- regression check: compare phases vs a BASELINE of all previous runs
+# at this RPS (not just the last one — five consecutive +15%s never trip a
+# prev-only threshold; a history baseline catches the creep). A named-phase
+# flag + the baseline runs' sha range = "what changed and where".
+#
+# Settable via env (e.g. REGRESSION_PCT=20 make perfbench):
+#   REGRESSION_BASELINE  median | best | prev | <sha>  (default: the pin
+#                        file docs/perf/BASELINE if present, else median).
+#                        A sha compares against the runs recorded at that
+#                        commit — PIN the golden base once you've decided
+#                        which one it is:  echo 246a23d > docs/perf/BASELINE
+#                        (committed, so the whole team regresses against it)
+#   REGRESSION_PCT       % slower than baseline that flags (default 30)
+#   REGRESSION_MS        AND at least this many ms slower   (default 10)
+#   REGRESSION_LOOKBACK  compare vs last N same-RPS runs; 0 = all (default 0)
 PHASE_COLS = [
     "fanout_p50_ms", "fanout_p95_ms", "ssp_pre_auction_p95_ms",
     "ssp_auction_p95_ms", "ssp_render_p95_ms", "dsp_campaign_loop_p95_ms",
     "dsp_audience_p95_ms", "adserver_freqcap_p95_ms",
 ]
+BASELINE_MODE = os.environ.get("REGRESSION_BASELINE", "")
+if not BASELINE_MODE and os.path.exists("docs/perf/BASELINE"):
+    BASELINE_MODE = open("docs/perf/BASELINE").read().strip()
+BASELINE_MODE = BASELINE_MODE or "median"
+REG_PCT = float(os.environ.get("REGRESSION_PCT", "30"))
+REG_MS = float(os.environ.get("REGRESSION_MS", "10"))
+LOOKBACK = int(os.environ.get("REGRESSION_LOOKBACK", "0"))
+
 regressions = []
+history = []
 if os.path.exists(LEDGER):
-    prev = None
     for l in open(LEDGER):
-        if not l.strip():
-            continue
-        r = json.loads(l)
-        if r.get("rps_target") == RPS:
-            prev = r
-    if prev:
-        for c in PHASE_COLS:
-            a, b = prev.get(c), entry.get(c)
-            if a and b and b > a * 1.3 and b - a > 10:
-                regressions.append(f"{c}: {a:g} -> {b:g}ms (+{100*(b-a)/a:.0f}%, since {prev.get('sha','?')})")
-        for c in ("fill_pct",):
-            a, b = prev.get(c), entry.get(c)
-            if a and b and b < a - 3:
-                regressions.append(f"{c}: {a:g} -> {b:g} (since {prev.get('sha','?')})")
+        if l.strip():
+            r = json.loads(l)
+            if r.get("rps_target") == RPS:
+                history.append(r)
+if LOOKBACK > 0:
+    history = history[-LOOKBACK:]
+if BASELINE_MODE == "prev":
+    history = history[-1:]
+elif BASELINE_MODE not in ("median", "best"):
+    # sha pin: compare against the run(s) recorded at that commit
+    pinned = [h for h in history if h.get("sha", "").startswith(BASELINE_MODE)]
+    if pinned:
+        history = pinned
+    else:
+        print(f"note: no {RPS}rps runs at pinned baseline '{BASELINE_MODE}'; falling back to median of history")
+        BASELINE_MODE = "median"
+
+if history:
+    shas = [h.get("sha", "?") for h in history]
+    span = shas[0] if len(set(shas)) == 1 else f"{shas[0]}..{shas[-1]}"
+
+    def baseline(col):
+        vals = sorted(v for h in history if (v := h.get(col)) is not None)
+        if not vals:
+            return None
+        if BASELINE_MODE == "best":
+            return vals[0]
+        return vals[len(vals) // 2]  # median (also covers mode=prev: 1 value)
+
+    for c in PHASE_COLS:
+        a, b = baseline(c), entry.get(c)
+        if a and b and b > a * (1 + REG_PCT / 100) and b - a > REG_MS:
+            regressions.append(
+                f"{c}: {BASELINE_MODE}({len(history)} runs) {a:g} -> {b:g}ms "
+                f"(+{100*(b-a)/a:.0f}%, baseline {span})")
+    a, b = baseline("fill_pct"), entry.get("fill_pct")
+    if a and b and b < a - 3:
+        regressions.append(f"fill_pct: {BASELINE_MODE}({len(history)} runs) {a:g} -> {b:g} (baseline {span})")
 entry["regressions"] = regressions
 
 os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
