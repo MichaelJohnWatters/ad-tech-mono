@@ -1150,7 +1150,10 @@ observability:
 
   promtail:
     enabled: true
-    image: grafana/promtail:3.1.0@sha256:b3db8e7b1cba0e8c45ce2ae72ebddfd88ebdcae86383f1680edf0074e9010ff6
+    # 3.1.0's tailer accumulated a busy-spin after load-run log rotations —
+    # pinned at its 200m limit at IDLE (198m vs 11m freshly restarted,
+    # 2026-08-06); 3.5.x carries the file-tailer fixes from the 3.2-3.5 line.
+    image: grafana/promtail:3.5.3@sha256:698c3357886c886bb9a862da36062e130c20bf359d956148e67ee36141ef6f17
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "200m", memory: "256Mi" }
