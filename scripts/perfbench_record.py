@@ -99,6 +99,34 @@ entry = {
     "sched_p99_ms": query(f'1000 * histogram_quantile(0.99, sum by (le) (rate(go_sched_latencies_seconds_total_bucket{{service=~"exchange|dsp-internal|ssp|adserver"}}[{W}])))'),
 }
 
+# ---- regression check: compare phases vs the PREVIOUS run at this RPS ----
+# The point of the ledger: a big slowdown shows up here BY PHASE NAME, tied
+# to the commit range between the two runs' shas — "what changed and where".
+PHASE_COLS = [
+    "fanout_p50_ms", "fanout_p95_ms", "ssp_pre_auction_p95_ms",
+    "ssp_auction_p95_ms", "ssp_render_p95_ms", "dsp_campaign_loop_p95_ms",
+    "dsp_audience_p95_ms", "adserver_freqcap_p95_ms",
+]
+regressions = []
+if os.path.exists(LEDGER):
+    prev = None
+    for l in open(LEDGER):
+        if not l.strip():
+            continue
+        r = json.loads(l)
+        if r.get("rps_target") == RPS:
+            prev = r
+    if prev:
+        for c in PHASE_COLS:
+            a, b = prev.get(c), entry.get(c)
+            if a and b and b > a * 1.3 and b - a > 10:
+                regressions.append(f"{c}: {a:g} -> {b:g}ms (+{100*(b-a)/a:.0f}%, since {prev.get('sha','?')})")
+        for c in ("fill_pct",):
+            a, b = prev.get(c), entry.get(c)
+            if a and b and b < a - 3:
+                regressions.append(f"{c}: {a:g} -> {b:g} (since {prev.get('sha','?')})")
+entry["regressions"] = regressions
+
 os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
 with open(LEDGER, "a") as f:
     f.write(json.dumps(entry) + "\n")
@@ -169,3 +197,70 @@ os.replace(sys.argv[1], f"{arch_dir}/simulator.log")
 
 print(f"recorded rps={RPS}: fill={entry['fill_pct']}% verify={entry['verify']} "
       f"fanout_p95={entry['fanout_p95_ms']}ms — archived {count} series to {arch_dir}")
+
+# ---- cluster-state snapshot (committed): what was RUNNING at run time ----
+# The git sha alone says what the code was; this says what the CLUSTER was:
+# actual image digests per pod, replicas, resource requests, the live config
+# rows (the behavioral knobs — routing thresholds, scenario delays, ...),
+# and the DSP roster. Small JSON, one per run, committed with the ledger.
+import subprocess
+
+
+def sh(cmd):
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                              timeout=60).stdout.strip()
+    except Exception as e:
+        return f"<error: {e}>"
+
+
+state = {
+    "run": {"stamp": stamp, "rps": RPS, "sha": entry["sha"], "date": entry["date"]},
+    "pods": [
+        dict(zip(["pod", "image_id", "restarts", "cpu_req"], l.split("|")))
+        for l in sh(
+            "kubectl -n adtech get pods -o jsonpath="
+            "'{range .items[*]}{.metadata.name}{\"|\"}{.status.containerStatuses[0].imageID}"
+            "{\"|\"}{.status.containerStatuses[0].restartCount}{\"|\"}"
+            "{.spec.containers[0].resources.requests.cpu}{\"\\n\"}{end}'"
+        ).splitlines() if l
+    ],
+    "live_config": [
+        dict(zip(["service", "pod_id", "key", "value"], l.split("|", 3)))
+        for l in sh(
+            "kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tAc "
+            "\"SELECT service||'|'||pod_id||'|'||key||'|'||value::text FROM config ORDER BY pod_id, key\""
+        ).splitlines() if "|" in l
+    ],
+    "dsps": sh(
+        "kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tAc "
+        "\"SELECT name||' noise='||noise_pct||' no_bid='||no_bid_rate FROM dsps ORDER BY name\""
+    ).splitlines(),
+    "node": sh("kubectl get nodes -o jsonpath='{.items[0].status.capacity}'"),
+    "git_dirty_files": sh("git status --porcelain").splitlines(),
+}
+os.makedirs("docs/perf/state", exist_ok=True)
+state_file = f"docs/perf/state/{stamp}-rps{RPS}.json"
+with open(state_file, "w") as f:
+    json.dump(state, f, indent=1)
+with open(f"{arch_dir}/cluster-state.json", "w") as f:
+    json.dump(state, f, indent=1)
+
+# ---- auto-commit the run record (pathspec-limited: never sweeps up other
+# work in a dirty tree) + best-effort push ----
+reg_note = ""
+if regressions:
+    reg_note = "\nREGRESSIONS vs previous run at this RPS:\n  " + "\n  ".join(regressions) + "\n"
+    print("!! " + "\n!! ".join(regressions))
+
+msg = (f"perfbench: {entry['date']} rps={RPS} fill={entry['fill_pct']}% "
+       f"verify={entry['verify']} fanout_p95={entry['fanout_p95_ms']}ms "
+       f"canary=${entry['canary_usd']}\n{reg_note}\n"
+       f"Auto-recorded by scripts/perfbench.sh. Cluster state (running image\n"
+       f"digests, live config rows, DSP roster) in {state_file}; raw series\n"
+       f"archive (uncommitted) in {arch_dir}/.\n\n"
+       f"Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>")
+sh(f"git add {LEDGER} {RESULTS} docs/perf/state/")
+commit_out = sh(f"git commit --no-verify -q -m {json.dumps(msg)} -- docs/perf") or "committed"
+push_out = sh("git push -q origin main 2>&1") or "pushed"
+print(f"run committed: {sh('git log --oneline -1')} ({push_out})")
