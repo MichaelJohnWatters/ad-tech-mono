@@ -156,6 +156,13 @@ func TestManager_PollRemovalRevertsToDefault(t *testing.T) {
 	if got := cfg.Get("removaltest.knob", "x"); got != "200ms" {
 		t.Fatalf("after first poll = %q, want 200ms", got)
 	}
+	// Callbacks fire on their own goroutines with no ordering guarantee —
+	// let the first poll's callback land before triggering the removal one,
+	// or a late "200ms" delivery can overwrite the "500ms" we assert on.
+	waitFor(t, "initial callback fired", func() bool {
+		v, ok := lastNew.Load().(string)
+		return ok && v == "200ms"
+	})
 
 	// Row deleted at the source — next poll must clear the live layer.
 	if err := source.Delete(context.Background(), "removaltest.knob"); err != nil {
