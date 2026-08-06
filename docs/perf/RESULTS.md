@@ -32,3 +32,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-06 22:43 | d772bda+dirty | 107.7 | 30m | 91.8 | GREEN | 12 | 35.38 | 245.2 | 55.86 | 351.78 | 133.03 | 1.11 | 46.7 | 80.93 | -0.0475 | 88.09 | 7.59 | pre-floor-trim reference (promtail freshly bounced) |
 | 2026-08-07 00:05 | fe8c3d5+dirty | 110 | 30m | 91.9 | GREEN | 0 | 20.15 | 140.13 | 41.03 | 193.33 | 62.41 | 0.96 | 34.6 | 37.7 | -0.0775 | 92.95 | 7.2 | A/B run 1: CH syslog-trim + promtail 3.5.3 + cadvisor 60s (vs 22:43 pre-ref) |
 | 2026-08-07 00:20 | a01b8e6+dirty | 110 | 10m | 91.9 | GREEN | 0 | 17.96 | 86.49 | 27.24 | 99.2 | 44.83 | 0.93 | 22.84 | 24.19 | -0.07 | 93.2 | 8.47 | A/B run 2: OTEL_SAMPLE_RATIO 0.1 on serving fleet+reporting (vs 00:05 run 1) |
+| 2026-08-07 00:32 | c16e032+dirty | 110 | 10m | 91.9 | GREEN | 0 | 13.62 | 48.62 | 20.48 | 73.44 | 32.21 | 0.9 | 14.42 | 19.69 | -0.025 | 92.15 | 8.57 | A/B run 3: nats request 500m->250m (weight rebalance; vs 00:20 run 2) |
