@@ -12,4 +12,5 @@ COPY --from=builder /app /app
 COPY web/templates /web/templates
 COPY web/static /web/static
 WORKDIR /
+USER 1000:1000
 ENTRYPOINT ["/app"]
