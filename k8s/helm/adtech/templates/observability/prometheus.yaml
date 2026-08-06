@@ -113,6 +113,11 @@ data:
       # above only cover our Go services). Whitelist-filtered: cadvisor is
       # high-cardinality, we keep only the two series the dashboards read.
       - job_name: 'kubernetes-cadvisor'
+        # 60s (vs the global 15s): every scrape makes the kubelet walk+render
+        # ALL cgroup stats (the relabel drop below happens Prometheus-side,
+        # AFTER that work). Per-pod CPU/mem panels read fine at 60s; the k3s
+        # process pays 4x less for them.
+        scrape_interval: 60s
         scheme: https
         tls_config:
           ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt

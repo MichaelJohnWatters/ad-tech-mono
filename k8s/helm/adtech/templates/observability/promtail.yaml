@@ -10,6 +10,9 @@ data:
   promtail.yaml: |
     server:
       http_listen_port: 9080
+      # warn: at INFO promtail logs every rotation watch event, making it
+      # its own top log producer at idle (5.7 of 8.3 lines/s, 2026-08-06).
+      log_level: warn
     positions:
       # hostPath (volume below): survives container restarts, so a bounced
       # promtail RESUMES tailing instead of re-shipping every file.
