@@ -31,13 +31,15 @@ the baselines — worse than no run.
 
        make loadtest RPS=110 DURATION=10m VERIFY=1
 
-   Stay at **≤110 rps for latency work** — 150 saturates the 8-vCPU VM
-   (97% CPU, 23% irq: phases ~2x from queueing, you're measuring the VM).
-   **150 is fine for fill/money runs** (2026-08-06: 149.8rps, 0 errors,
-   lossless, 91.9% fill — was 52% pre-push). 200+ needs an `rdctl`
-   cpu/memory bump (known VZ-restart wedge risk). Watch the Stack Pressure
-   dashboard: MemAvailable floor ~1.3GiB at 110-150rps is already near the
-   1.5GiB thrash zone (loki ~560MiB = first trim candidate).
+   Stay at **≤110 rps for latency work** (10cpu/20GiB VM: knee at 110-150;
+   50rps = the 23ms intrinsic floor, 80 = 40ms, 110 = 75ms, 150 = 700ms
+   saturated). **150-200 are fine for fill/money runs** (200 offered → 188.5
+   held, 94.8% fill, money lossless after spool drain — but VERIFY samples
+   mid-drain and reads RED at 150+: re-check CH counts + spool drained==
+   spooled a few minutes post-run before calling loss). THE FLOOR EATS
+   CORES: infra burns ~8.1 of 10 cores before meaningful traffic — more
+   vCPUs barely move the knee; trim loki/promtail/prometheus/jaeger for
+   real headroom. Memory is solved (floors 6.5-8.8GiB).
 
 4. **Read the results:**
    - Grafana **"Phase profiling"** row (exchange gates/routing/fanout/dealeval/
