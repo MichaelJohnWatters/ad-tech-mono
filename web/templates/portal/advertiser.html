@@ -276,7 +276,7 @@
       {{ template "card-start" (dict "title" "Conversion signing key" "subtitle" "Sign server-to-server conversion postbacks with your own HMAC key so no other advertiser can forge a conversion billed to you") }}
       <div id="convKeyBody" class="text-sm text-gray-400">loading…</div>
       <div class="flex justify-end mt-3">
-        {{ template "button" (dict "label" "Generate / rotate key" "variant" "secondary" "size" "sm" "onclick" "rotateConversionKey()") }}
+        {{ template "button" (dict "label" "Generate / rotate key" "variant" "secondary" "size" "sm" "onclick" "openRotateKey()") }}
       </div>
       <p class="mt-3 text-xs text-gray-400">Use this key to <strong>HMAC-sign</strong> your <code>/v1/t/conv</code> postbacks (fired server-to-server, never from the browser). The full value is shown <strong>once</strong> — store it securely. Rotating keeps the previous key valid during a short grace window so in-flight postbacks don't break.</p>
       {{ template "card-end" . }}
@@ -751,6 +751,28 @@
       {{ template "button" (dict "label" "Create" "type" "submit") }}
     </div>
   </form>
+{{ template "modal-end" . }}
+
+<!-- Conversion signing key rotation: confirm, then one-time key reveal. -->
+{{ template "modal-start" (dict "id" "rotateKeyModal" "title" "Rotate conversion signing key") }}
+  <div id="rotateKeyConfirm">
+    <p class="text-sm mb-4">Generate a new conversion signing key? Your current key stays valid during a short grace window, then should be retired.</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closeRotateKey()") }}
+      {{ template "button" (dict "label" "Generate new key" "onclick" "doRotateKey()") }}
+    </div>
+  </div>
+  <!-- Shown once after a successful rotation: the full key value. -->
+  <div id="rotateKeyResult" class="hidden mt-1">
+    <p class="text-sm mb-2">Your new conversion signing key — shown once, store it now:</p>
+    <div class="flex items-center gap-2 mb-4">
+      <code id="rk_value" class="flex-1 px-2 py-1.5 rounded bg-surface-3 font-mono text-sm select-all break-all"></code>
+      {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyConvKey()") }}
+    </div>
+    <div class="flex justify-end">
+      {{ template "button" (dict "label" "Done" "onclick" "closeRotateKey()") }}
+    </div>
+  </div>
 {{ template "modal-end" . }}
 
 <!-- Edit campaign drawer -->
@@ -1994,12 +2016,23 @@ async function loadConversionKey() {
     body.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
   }
 }
-async function rotateConversionKey() {
-  if (!confirm('Generate a new conversion signing key? Your current key stays valid during a short grace window, then should be retired.')) return;
+function openRotateKey() {
+  $('rotateKeyConfirm').classList.remove('hidden');
+  $('rotateKeyResult').classList.add('hidden');
+  $('rotateKeyModal').classList.remove('hidden');
+}
+function closeRotateKey() { $('rotateKeyModal').classList.add('hidden'); }
+function copyConvKey() {
+  navigator.clipboard?.writeText($('rk_value').textContent).then(() => toast('Key copied', 'info'));
+}
+async function doRotateKey() {
   try {
     const res = await fetchJSON('/v1/api/conversion-key', {method: 'POST', body: '{}'});
-    // Full value is returned exactly once — surface it prominently for copy.
-    prompt('Your conversion signing key (shown once — store it now):', res.value);
+    // Full value is returned exactly once — reveal it in place (toasts
+    // fade; this must persist until the user dismisses it).
+    $('rk_value').textContent = res.value;
+    $('rotateKeyConfirm').classList.add('hidden');
+    $('rotateKeyResult').classList.remove('hidden');
     toast('New signing key issued', 'success');
     loadConversionKey();
   } catch (err) {
