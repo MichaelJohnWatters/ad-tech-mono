@@ -131,11 +131,14 @@ data:
           - source_labels: [__name__]
             regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes'
             action: keep
-          # Drop the pod-sandbox / cgroup-aggregate rows (empty container or
-          # POD pause container) so per-pod sums don't double count.
-          - source_labels: [container]
-            regex: '|POD'
-            action: drop
+          # This kubelet's cadvisor exposes POD-level cgroup rows (labels:
+          # namespace+pod) plus hierarchy aggregates that carry only an `id`
+          # (/, /kubepods, ...) — and NO `container` label at all (a drop
+          # rule on `container` therefore drops EVERYTHING; learned live
+          # 2026-08-06). Keep exactly the pod-attributed rows.
+          - source_labels: [pod]
+            regex: '.+'
+            action: keep
 
   # Trust-the-graphs rules: a zero on a dashboard is ambiguous (real zero /
   # missing data / broken query). These alerts distinguish the cases so a dead
