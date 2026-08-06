@@ -1,5 +1,7 @@
 # Ad Tech Mono
 
+[![ci](https://github.com/MichaelJohnWatters/ad-tech-mono/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MichaelJohnWatters/ad-tech-mono/actions/workflows/ci.yml)
+
 A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking to analytics - runs locally on K8s (Colima + k3s). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
 
 ## Architecture
