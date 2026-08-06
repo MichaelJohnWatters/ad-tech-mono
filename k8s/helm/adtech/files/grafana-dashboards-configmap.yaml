@@ -7,7 +7,8 @@ data:
   adtech-overview.json: |
     {
       "uid": "adtech-overview",
-      "title": "Ad Tech Overview",
+      "title": "Ad Tech — 1. Overview (is the pipeline healthy?)",
+      "description": "START HERE. Traffic + health at a glance: auction/impression/click RPS, auction latency, real errors (adserver freq-cap 429s split out into their own panel — they are the product working), per-pod auction rate/latency so a single sick replica cannot hide in an average, NATS/event-bus flow, audience cache writer. If something looks slow, go to \"2. Latency & Phases\"; if latency is bad everywhere at once, go to \"3. Stack Pressure\" first.",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": {
@@ -795,7 +796,8 @@ data:
   adtech-latency.json: |
     {
       "uid": "adtech-latency",
-      "title": "Ad Tech — Latency & Phases",
+      "title": "Ad Tech — 2. Latency & Phases (where do the milliseconds go?)",
+      "description": "Per-phase latency histograms for every hot-path service: exchange (gates/routing/fanout/dealeval/finalize — fanout IS the auction), DSP (parse/audience/campaign_loop/encode), SSP (pre_auction/segments/auction/render), adserver (freqcap/creative/assemble). A latency regression names its phase here. Plus per-handler request rate/latency drill-down. Cross-check \"3. Stack Pressure\" before blaming code: if scheduler latency and cluster CPU% are climbing too, the fix is cores/replicas, not the phase that moved.",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": {
@@ -1051,7 +1053,8 @@ data:
   adtech-pressure.json: |
     {
       "uid": "adtech-pressure",
-      "title": "Ad Tech — Stack Pressure",
+      "title": "Ad Tech — 3. Stack Pressure (is it code or is it the VM?)",
+      "description": "The is-it-code-or-is-it-the-VM discriminator. Cluster CPU% and memory% (node-exporter; mem past ~87% on the 12GiB VM = page-cache-thrash danger zone), per-pod CPU/memory %-of-cluster (cadvisor — every container incl. clickhouse/postgres/redis/TigerBeetle), node CPU by mode (iowait = disk/page-cache thrash, irq+softirq ~23% = the virtio-net ceiling at 150+rps), Go scheduler latency p99 per service (goroutines waiting for a core), fleet RSS + MemAvailable. When these climb together with phase p95s, add cores or shed replicas — the code is fine.",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": {
@@ -1297,8 +1300,9 @@ data:
 
   all-logs.json: |
     {
-      "title": "Ad Tech All Logs",
       "uid": "adtech-logs",
+      "title": "Ad Tech — Logs (all services, Loki)",
+      "description": "Every service's structured JSON logs via Loki, filterable by service/pod/level. trace_id in any log line is clickable → opens the trace in Jaeger (derivedFields). The reverse pivot exists too: every Jaeger span has \"View logs\".",
       "tags": [
         "adtech",
         "logs"
@@ -1319,7 +1323,7 @@ data:
             "x": 0,
             "y": 0
           },
-          "description": "All service logs in one stream. Filter via the template vars at the top. Service+level are multi-select (default = all). trace_id + search are textboxes (default empty = no filter). Examples: trace_id=ea14... + search empty \u2192 all log lines for that trace across services. service=dsp + level=WARN + search=\"audience\" \u2192 DSP warnings about the audience store. To extend in-panel without editing this dashboard: click the panel title \u2192 Edit, then append more LogQL clauses (e.g. | campaign=\"abc-123\").",
+          "description": "All service logs in one stream. Filter via the template vars at the top. Service+level are multi-select (default = all). trace_id + search are textboxes (default empty = no filter). Examples: trace_id=ea14... + search empty → all log lines for that trace across services. service=dsp + level=WARN + search=\"audience\" → DSP warnings about the audience store. To extend in-panel without editing this dashboard: click the panel title → Edit, then append more LogQL clauses (e.g. | campaign=\"abc-123\").",
           "options": {
             "showTime": true,
             "showLabels": false,
@@ -1348,7 +1352,7 @@ data:
           },
           "options": {
             "mode": "markdown",
-            "content": "**Common LogQL shortcuts** \u2014 append these clauses to the panel query (Panel \u2192 Edit) when the top-bar filters aren't enough:\n\n- All **ERRORs** across services: set level=ERROR in the dropdown above.\n- **One trace end-to-end**: paste the trace_id into the textbox; the query auto-wraps with `trace_id=~\".*<id>.*\"`.\n- **Exchange auctions only**: set service=exchange, then search `auction complete` or `no_bids`.\n- **DSP bid submissions** with campaign + price: `service=dsp, search=\"bid submitted\"`.\n- **Slow paths**: in the panel query add `| duration_ms > 100` (works if the service slog'd a duration_ms field on that line).\n- **Audience preload heartbeats**: `service=~\".+\", search=\"audience preload\"` \u2014 confirms warm cache is pumping every 30s.\n- **Win/loss notify trace**: `service=dsp, search=\"win notification\"|\"loss notification\"`.\n\n**Why some fields show 'no extracted labels'**: a log line without a JSON field for that key (e.g. an INFO without a trace_id) won't match `| trace_id=~\".+\"`. With the default `.*` we use here, empty / missing fields still pass through."
+            "content": "**Common LogQL shortcuts** — append these clauses to the panel query (Panel → Edit) when the top-bar filters aren't enough:\n\n- All **ERRORs** across services: set level=ERROR in the dropdown above.\n- **One trace end-to-end**: paste the trace_id into the textbox; the query auto-wraps with `trace_id=~\".*<id>.*\"`.\n- **Exchange auctions only**: set service=exchange, then search `auction complete` or `no_bids`.\n- **DSP bid submissions** with campaign + price: `service=dsp, search=\"bid submitted\"`.\n- **Slow paths**: in the panel query add `| duration_ms > 100` (works if the service slog'd a duration_ms field on that line).\n- **Audience preload heartbeats**: `service=~\".+\", search=\"audience preload\"` — confirms warm cache is pumping every 30s.\n- **Win/loss notify trace**: `service=dsp, search=\"win notification\"|\"loss notification\"`.\n\n**Why some fields show 'no extracted labels'**: a log line without a JSON field for that key (e.g. an INFO without a trace_id) won't match `| trace_id=~\".+\"`. With the default `.*` we use here, empty / missing fields still pass through."
           }
         }
       ],
@@ -1407,8 +1411,9 @@ data:
 
   trace-explorer.json: |
     {
-      "title": "Ad Tech Trace Explorer",
       "uid": "adtech-trace",
+      "title": "Ad Tech — Trace Explorer (follow one request)",
+      "description": "Jump-off point for following a single request end-to-end: search Jaeger traces by service/operation, then pivot to the exact logs for that trace. The SSP stamps X-Trace-Id on responses, so any curl/e2e failure can be looked up here directly.",
       "tags": [
         "adtech",
         "trace"
@@ -1456,7 +1461,7 @@ data:
             "x": 0,
             "y": 20
           },
-          "description": "Exchange auction-complete log lines for this trace \u2014 winner_dsp, clearing_price, num_bids.",
+          "description": "Exchange auction-complete log lines for this trace — winner_dsp, clearing_price, num_bids.",
           "targets": [
             {
               "datasource": "Loki",
@@ -1482,8 +1487,9 @@ data:
 
   adtech-lag.json: |
     {
-      "title": "Ad Tech \u2014 Freshness & Lag",
       "uid": "adtech-lag",
+      "title": "Ad Tech — Event Bus Lag (are events keeping up?)",
+      "description": "JetStream consumer backlog (num_pending) per consumer — the events building up between publish and processing. Sustained growth = reporting/billing falling behind the stream (graphs elsewhere will LOOK wrong before data is actually lost); it must drain to ~0 after every load run. Spool counters (publish-failure protection) live on the Overview NATS row: spooled must equal drained, dropped must stay 0.",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": {
@@ -1504,7 +1510,7 @@ data:
         },
         {
           "id": 1,
-          "title": "Consumer lag \u2014 pending messages by consumer",
+          "title": "Consumer lag — pending messages by consumer",
           "type": "timeseries",
           "gridPos": {
             "h": 9,
@@ -1549,7 +1555,7 @@ data:
             "x": 0,
             "y": 11
           },
-          "description": "Age of the oldest pending membership change \u2014 the audience-cache staleness ceiling. Red past 30s; the writer WARNs and it's the signal to shard the writer.",
+          "description": "Age of the oldest pending membership change — the audience-cache staleness ceiling. Red past 30s; the writer WARNs and it's the signal to shard the writer.",
           "fieldConfig": {
             "defaults": {
               "unit": "s",
