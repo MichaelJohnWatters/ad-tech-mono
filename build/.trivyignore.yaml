@@ -1,0 +1,8 @@
+misconfigurations:
+  # Reporting deliberately runs as root: its tigerbeetle-go CGO client
+  # SIGSEGVs under the hardened securityContext (see the note in
+  # Dockerfile.reporting and hardenedExempt in the Helm values). Every
+  # other Dockerfile still gets the non-root USER check.
+  - id: AVD-DS-0002
+    paths:
+      - "Dockerfile.reporting"
