@@ -6,8 +6,8 @@ metadata:
 data:
   adtech-overview.json: |
     {
-      "title": "Ad Tech Overview",
       "uid": "adtech-overview",
+      "title": "Ad Tech Overview",
       "schemaVersion": 39,
       "refresh": "10s",
       "time": {
@@ -162,7 +162,7 @@ data:
             "x": 0,
             "y": 17
           },
-          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" \u2014 there's no separate errors counter. Adserver 429s are EXCLUDED here: they're almost always frequency caps working as designed and at load they drown every real error \u2014 they live in the dedicated '429 breakdown' panel to the right (which also splits caps from rate-limiter throttling).",
+          "description": "HTTP errors per second by service+status. Built from adtech_http_requests_total with status=~\"[45]..\" — there's no separate errors counter. Adserver 429s are EXCLUDED here: they're almost always frequency caps working as designed and at load they drown every real error — they live in the dedicated '429 breakdown' panel to the right (which also splits caps from rate-limiter throttling).",
           "targets": [
             {
               "expr": "sum(rate({__name__=~\"adtech_http_requests_total|adtech_grpc_requests_total\",status=~\"[45]..\",status!=\"429\"}[5m])) by (service, status)",
@@ -176,7 +176,7 @@ data:
         },
         {
           "id": 23,
-          "title": "Adserver 429 breakdown \u2014 freq caps vs rate limiter",
+          "title": "Adserver 429 breakdown — freq caps vs rate limiter",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
@@ -184,11 +184,11 @@ data:
             "x": 12,
             "y": 17
           },
-          "description": "The adserver has TWO 429 sources with opposite meanings: frequency caps (product working \u2014 a household/user hit its impression limit) and the per-IP rate limiter (traffic being throttled). The generic error-rate panel can't tell them apart. freq-cap series come from the dedicated counter; 'rate limiter / other' is total 429s minus freq-cap blocks.",
+          "description": "The adserver has TWO 429 sources with opposite meanings: frequency caps (product working — a household/user hit its impression limit) and the per-IP rate limiter (traffic being throttled). The generic error-rate panel can't tell them apart. freq-cap series come from the dedicated counter; 'rate limiter / other' is total 429s minus freq-cap blocks.",
           "targets": [
             {
               "expr": "sum(rate(adtech_adserver_freqcap_blocked_total[$__rate_interval])) by (scope)",
-              "legendFormat": "freq cap \u2014 {{scope}}"
+              "legendFormat": "freq cap — {{scope}}"
             },
             {
               "expr": "clamp_min(sum(rate(adtech_http_requests_total{exported_service=\"adserver\",status=\"429\"}[$__rate_interval])) - sum(rate(adtech_adserver_freqcap_blocked_total[$__rate_interval])), 0)",
@@ -276,7 +276,7 @@ data:
             "x": 16,
             "y": 25
           },
-          "description": "Go runtime total memory classes (heap + stacks + metadata + \u2026). On macOS the Linux process_resident_memory_bytes isn't emitted, so this is the closest proxy.",
+          "description": "Go runtime total memory classes (heap + stacks + metadata + …). On macOS the Linux process_resident_memory_bytes isn't emitted, so this is the closest proxy.",
           "targets": [
             {
               "expr": "go_memory_classes_total_bytes / 1024 / 1024",
@@ -428,15 +428,15 @@ data:
           "targets": [
             {
               "expr": "sum(rate(adtech_bids_received_total{decision=\"bid\"}[$__rate_interval])) by (dsp_endpoint)",
-              "legendFormat": "bids \u2014 {{dsp_endpoint}}"
+              "legendFormat": "bids — {{dsp_endpoint}}"
             },
             {
               "expr": "sum(rate(adtech_bids_received_total{decision=\"no_bid\"}[$__rate_interval])) by (dsp_endpoint)",
-              "legendFormat": "no-bids \u2014 {{dsp_endpoint}}"
+              "legendFormat": "no-bids — {{dsp_endpoint}}"
             },
             {
               "expr": "sum(rate(adtech_auctions_won_total[$__rate_interval])) by (dsp_endpoint)",
-              "legendFormat": "wins \u2014 {{dsp_endpoint}}"
+              "legendFormat": "wins — {{dsp_endpoint}}"
             }
           ]
         },
@@ -461,8 +461,14 @@ data:
             "defaults": {
               "thresholds": {
                 "steps": [
-                  { "color": "green", "value": null },
-                  { "color": "red", "value": 1 }
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
                 ]
               }
             }
@@ -548,13 +554,23 @@ data:
           "type": "row",
           "title": "Per-pod — spot the sick replica",
           "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 }
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 55
+          }
         },
         {
           "id": 27,
           "title": "Auction RPS by exchange pod",
           "type": "timeseries",
-          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 56 },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 56
+          },
           "description": "Same data as Auction RPS, split per pod. Healthy = three near-identical lines (round-robin). One line sagging = that pod is slow/unready; one at zero = it's out of rotation.",
           "targets": [
             {
@@ -567,7 +583,12 @@ data:
           "id": 28,
           "title": "Auction latency p95 by exchange pod",
           "type": "timeseries",
-          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 56 },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 56
+          },
           "description": "Per-pod auction p95. The aggregate panel hides a single degraded replica (2 fast pods + 1 slow one averages 'fine'); this one names it.",
           "targets": [
             {
@@ -575,19 +596,234 @@ data:
               "legendFormat": "{{pod}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
         },
+        {
+          "type": "row",
+          "title": "NATS / Event Bus",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 73
+          }
+        },
+        {
+          "title": "Consumer lag (num_pending) — events building up",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 74
+          },
+          "targets": [
+            {
+              "expr": "jetstream_consumer_num_pending > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10
+              }
+            }
+          }
+        },
+        {
+          "title": "Ack pending (delivered, unacked)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 83
+          },
+          "targets": [
+            {
+              "expr": "jetstream_consumer_num_ack_pending > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Redeliveries/s (at-least-once retries firing)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 83
+          },
+          "targets": [
+            {
+              "expr": "rate(jetstream_consumer_num_redelivered[5m]) > 0",
+              "legendFormat": "{{consumer_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Stream messages held",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 91
+          },
+          "targets": [
+            {
+              "expr": "jetstream_stream_total_messages",
+              "legendFormat": "{{stream_name}}"
+            }
+          ]
+        },
+        {
+          "title": "Stream bytes held",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 91
+          },
+          "targets": [
+            {
+              "expr": "jetstream_stream_total_bytes",
+              "legendFormat": "{{stream_name}}"
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Audience Cache Writer",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 92
+          }
+        },
+        {
+          "id": 19,
+          "title": "Change-log backlog (un-drained rows)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 93
+          },
+          "description": "Rows in audience_membership_changelog not yet applied by the single writer. Steady ~0 is healthy; a sustained climb means the writer can't keep up — shard it.",
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_changelog_backlog{service=\"pipeline\"}",
+              "legendFormat": "backlog rows"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "title": "Change-log lag (oldest un-drained row, s)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 93
+          },
+          "description": "Age of the oldest pending change. This is the audience-cache staleness ceiling; the writer WARNs past audience.changelog_lag_warn (30s). Sustained high lag = time to shard the writer.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 30
+                  }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_changelog_lag_seconds{service=\"pipeline\"}",
+              "legendFormat": "oldest lag (s)"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "title": "Writer drain age (liveness, s)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 93
+          },
+          "description": "Seconds since the writer last drained. Should stay near the poll interval (3s). A rising value means the single writer is stalled/dead.",
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          },
+          "targets": [
+            {
+              "expr": "adtech_audience_cache_drain_age_seconds{service=\"pipeline\"}",
+              "legendFormat": "drain age (s)"
+            }
+          ]
+        }
+      ]
+    }
+
+  adtech-latency.json: |
+    {
+      "uid": "adtech-latency",
+      "title": "Ad Tech — Latency & Phases",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
+      "panels": [
         {
           "type": "row",
           "title": "Phase profiling — where the milliseconds go",
           "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 }
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 57
+          }
         },
         {
           "id": 24,
           "title": "Exchange auction phases (p95)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 58 },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 58
+          },
           "description": "Per-phase auction latency p95: gates (decode+adstxt/schain/sign), routing (DSP selection), fanout (bid collection — usually dominant), dealeval (deal match + winner), finalize (records + response encode). Mirrors the Jaeger span boundaries. A latency spike now names its phase.",
           "targets": [
             {
@@ -595,13 +831,22 @@ data:
               "legendFormat": "{{phase}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
         },
         {
           "id": 25,
           "title": "DSP bid phases (p95)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 58 },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 58
+          },
           "description": "Per-phase bid-handler latency p95: parse (decode+privacy), audience (private/household segment lookups), campaign_loop (eligibility over the whole catalog — the phase that scales with campaign count; the O(campaigns) budget-read bug lived here), encode. All 3 local DSP deployments run this binary; external DSPs are outside-in only (dsp_calls).",
           "targets": [
             {
@@ -609,13 +854,22 @@ data:
               "legendFormat": "{{phase}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
         },
         {
           "id": 26,
           "title": "SSP serve phases (p95)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 58 },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 58
+          },
           "description": "Per-phase serve latency p95: pre_auction (placement/segment/household work), auction (exchange round-trip), render (adserve + response build).",
           "targets": [
             {
@@ -623,13 +877,22 @@ data:
               "legendFormat": "{{phase}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
         },
         {
           "id": 29,
           "title": "Adserver serve phases (p95)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 66 },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 66
+          },
           "description": "Per-phase adserver serve latency p95: freqcap (Redis cap check, user+household), creative (resolver: L1/L2/object store), assemble (macro substitution + signed tracking URLs + response encode). Decomposes the SSP render leg — the biggest owned phase left after the 2026-08-05 auction-speed push.",
           "targets": [
             {
@@ -637,133 +900,11 @@ data:
               "legendFormat": "{{phase}}"
             }
           ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
-        },
-        {
-          "id": 30,
-          "title": "Go scheduler latency p99 by service",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 66 },
-          "description": "Time goroutines sit RUNNABLE waiting for a core (go_sched_latencies). This is the 'is it code or is it the VM' discriminator: when phase p95s inflate while this climbs, the fix is cores/replicas, not code. Idle stacks read microseconds; the 8-vCPU VM under 110rps load reads ~10ms p99.",
-          "targets": [
-            {
-              "expr": "histogram_quantile(0.99, sum by (le, service) (rate(go_sched_latencies_seconds_total_bucket{service=~\"exchange|dsp-internal|ssp|adserver|tracker\"}[$__rate_interval])))",
-              "legendFormat": "{{service}}"
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
             }
-          ],
-          "fieldConfig": { "defaults": { "unit": "s" } }
-        },
-        {
-          "id": 31,
-          "title": "Fleet CPU (cores) by service + node non-idle",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 66 },
-          "description": "Per-service CPU from each Go process's own counter (adtech_process_cpu_seconds_total — no cadvisor in this stack) plus the node's total non-idle line from node-exporter. When the node line saturates (~8 cores), every latency graph above it is suspect.",
-          "targets": [
-            {
-              "expr": "sum by (service) (rate(adtech_process_cpu_seconds_total[$__rate_interval]))",
-              "legendFormat": "{{service}}"
-            },
-            {
-              "expr": "sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval]))",
-              "legendFormat": "node non-idle (total)"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "none" } }
-        },
-        {
-          "type": "row",
-          "title": "Stack pressure — node CPU / memory (correlate with everything above)",
-          "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 74 }
-        },
-        {
-          "id": 32,
-          "title": "Node CPU by mode",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 75 },
-          "description": "node-exporter CPU seconds by mode. The 2026-08-04 thrash diagnosis signals, now on a graph instead of /proc spelunking: iowait spikes = page-cache thrash / disk stalls; irq+softirq ~23% at 150rps = the virtio-net ceiling; idle ~0 = saturation (phase p95s above are then queueing, not code).",
-          "targets": [
-            {
-              "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval]))",
-              "legendFormat": "{{mode}}"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "none", "custom": { "stacking": { "mode": "normal" } } } }
-        },
-        {
-          "id": 33,
-          "title": "Memory: service RSS (stacked) + node MemAvailable",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 75 },
-          "description": "Per-service resident memory (process collector) stacked, with the node's MemAvailable overlaid. MemAvailable approaching ~1.5GiB is the page-cache-thrash danger zone (2026-08-04: kernel evicted executable pages → random 10-250ms stalls fleet-wide; fixed by TB --development + trimming, but the fleet keeps growing).",
-          "targets": [
-            {
-              "expr": "sum by (service) (adtech_process_resident_memory_bytes)",
-              "legendFormat": "{{service}}"
-            },
-            {
-              "expr": "node_memory_MemAvailable_bytes",
-              "legendFormat": "node MemAvailable"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "bytes" } }
-        },
-        {
-          "id": 34,
-          "title": "Cluster CPU %",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 6, "x": 0, "y": 83 },
-          "description": "Node non-idle CPU as a percentage of all vCPUs (node-exporter). ~90%+ at 110rps means every latency panel above is measuring queueing, not code; 150+rps historically pins this near 100% with ~23% of it irq/softirq (virtio-net ceiling).",
-          "targets": [
-            {
-              "expr": "100 * sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval])) / count(node_cpu_seconds_total{mode=\"idle\"})",
-              "legendFormat": "cluster CPU %"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } }
-        },
-        {
-          "id": 35,
-          "title": "Cluster memory %",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 6, "x": 6, "y": 83 },
-          "description": "Used = 1 − MemAvailable/MemTotal. The kernel starts evicting executable pages (the 2026-08 thrash) when this pushes past ~87% on the 12GiB VM — cross-check the MemAvailable line on the panel above.",
-          "targets": [
-            {
-              "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
-              "legendFormat": "cluster mem %"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } }
-        },
-        {
-          "id": 36,
-          "title": "Per-pod CPU (% of cluster)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 83 },
-          "description": "Each Go pod's CPU as % of all vCPUs (own process collector — NO cadvisor in this stack, so infra pods (clickhouse/postgres/redis/TB/nats) are invisible here; the gap between this stack's total and Cluster CPU % IS the infra+system share, historically ~40% under load.",
-          "targets": [
-            {
-              "expr": "100 * sum by (pod) (rate(adtech_process_cpu_seconds_total[$__rate_interval])) / scalar(count(node_cpu_seconds_total{mode=\"idle\"}))",
-              "legendFormat": "{{pod}}"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "percent", "custom": { "stacking": { "mode": "normal" } } } }
-        },
-        {
-          "id": 37,
-          "title": "Per-pod memory (% of cluster)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 83 },
-          "description": "Each Go pod's RSS as % of node MemTotal (process collector; infra pods invisible — see the CPU panel note). A pod trending up here across runs is a leak candidate: cross-check go_memstats on its Service Detail row.",
-          "targets": [
-            {
-              "expr": "100 * sum by (pod) (adtech_process_resident_memory_bytes) / scalar(node_memory_MemTotal_bytes)",
-              "legendFormat": "{{pod}}"
-            }
-          ],
-          "fieldConfig": { "defaults": { "unit": "percent", "custom": { "stacking": { "mode": "normal" } } } }
+          }
         },
         {
           "type": "row",
@@ -903,146 +1044,257 @@ data:
               "legendFormat": "memory (MiB)"
             }
           ]
-        },
+        }
+      ]
+    }
+
+  adtech-pressure.json: |
+    {
+      "uid": "adtech-pressure",
+      "title": "Ad Tech — Stack Pressure",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
+      "panels": [
         {
           "type": "row",
-          "title": "NATS / Event Bus",
+          "title": "Scheduler & fleet CPU",
           "collapsed": false,
           "gridPos": {
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 73
+            "y": 0
           }
         },
         {
-          "title": "Consumer lag (num_pending) \u2014 events building up",
+          "id": 30,
+          "title": "Go scheduler latency p99 by service",
           "type": "timeseries",
           "gridPos": {
-            "h": 9,
-            "w": 24,
-            "x": 0,
-            "y": 74
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 66
           },
+          "description": "Time goroutines sit RUNNABLE waiting for a core (go_sched_latencies). This is the 'is it code or is it the VM' discriminator: when phase p95s inflate while this climbs, the fix is cores/replicas, not code. Idle stacks read microseconds; the 8-vCPU VM under 110rps load reads ~10ms p99.",
           "targets": [
             {
-              "expr": "jetstream_consumer_num_pending > 0",
-              "legendFormat": "{{consumer_name}}"
+              "expr": "histogram_quantile(0.99, sum by (le, service) (rate(go_sched_latencies_seconds_total_bucket{service=~\"exchange|dsp-internal|ssp|adserver|tracker\"}[$__rate_interval])))",
+              "legendFormat": "{{service}}"
             }
           ],
           "fieldConfig": {
             "defaults": {
+              "unit": "s"
+            }
+          }
+        },
+        {
+          "id": 31,
+          "title": "Fleet CPU (cores) by service + node non-idle",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 66
+          },
+          "description": "Per-service CPU from each Go process's own counter (adtech_process_cpu_seconds_total — no cadvisor in this stack) plus the node's total non-idle line from node-exporter. When the node line saturates (~8 cores), every latency graph above it is suspect.",
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(adtech_process_cpu_seconds_total[$__rate_interval]))",
+              "legendFormat": "{{service}}"
+            },
+            {
+              "expr": "sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval]))",
+              "legendFormat": "node non-idle (total)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Stack pressure — node CPU / memory (correlate with everything above)",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 74
+          }
+        },
+        {
+          "id": 32,
+          "title": "Node CPU by mode",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 75
+          },
+          "description": "node-exporter CPU seconds by mode. The 2026-08-04 thrash diagnosis signals, now on a graph instead of /proc spelunking: iowait spikes = page-cache thrash / disk stalls; irq+softirq ~23% at 150rps = the virtio-net ceiling; idle ~0 = saturation (phase p95s above are then queueing, not code).",
+          "targets": [
+            {
+              "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval]))",
+              "legendFormat": "{{mode}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
               "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10
+                "stacking": {
+                  "mode": "normal"
+                }
               }
             }
           }
         },
         {
-          "title": "Ack pending (delivered, unacked)",
-          "type": "timeseries",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 83
-          },
-          "targets": [
-            {
-              "expr": "jetstream_consumer_num_ack_pending > 0",
-              "legendFormat": "{{consumer_name}}"
-            }
-          ]
-        },
-        {
-          "title": "Redeliveries/s (at-least-once retries firing)",
+          "id": 33,
+          "title": "Memory: service RSS (stacked) + node MemAvailable",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
             "w": 12,
             "x": 12,
+            "y": 75
+          },
+          "description": "Per-service resident memory (process collector) stacked, with the node's MemAvailable overlaid. MemAvailable approaching ~1.5GiB is the page-cache-thrash danger zone (2026-08-04: kernel evicted executable pages → random 10-250ms stalls fleet-wide; fixed by TB --development + trimming, but the fleet keeps growing).",
+          "targets": [
+            {
+              "expr": "sum by (service) (adtech_process_resident_memory_bytes)",
+              "legendFormat": "{{service}}"
+            },
+            {
+              "expr": "node_memory_MemAvailable_bytes",
+              "legendFormat": "node MemAvailable"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            }
+          }
+        },
+        {
+          "id": 34,
+          "title": "Cluster CPU %",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 0,
             "y": 83
           },
+          "description": "Node non-idle CPU as a percentage of all vCPUs (node-exporter). ~90%+ at 110rps means every latency panel above is measuring queueing, not code; 150+rps historically pins this near 100% with ~23% of it irq/softirq (virtio-net ceiling).",
           "targets": [
             {
-              "expr": "rate(jetstream_consumer_num_redelivered[5m]) > 0",
-              "legendFormat": "{{consumer_name}}"
+              "expr": "100 * sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval])) / count(node_cpu_seconds_total{mode=\"idle\"})",
+              "legendFormat": "cluster CPU %"
             }
-          ]
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "max": 100,
+              "min": 0
+            }
+          }
         },
         {
-          "title": "Stream messages held",
+          "id": 35,
+          "title": "Cluster memory %",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 91
+            "w": 6,
+            "x": 6,
+            "y": 83
           },
+          "description": "Used = 1 − MemAvailable/MemTotal. The kernel starts evicting executable pages (the 2026-08 thrash) when this pushes past ~87% on the 12GiB VM — cross-check the MemAvailable line on the panel above.",
           "targets": [
             {
-              "expr": "jetstream_stream_total_messages",
-              "legendFormat": "{{stream_name}}"
+              "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+              "legendFormat": "cluster mem %"
             }
-          ]
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "max": 100,
+              "min": 0
+            }
+          }
         },
         {
-          "title": "Stream bytes held",
+          "id": 36,
+          "title": "Per-pod CPU (% of cluster, cadvisor)",
           "type": "timeseries",
           "gridPos": {
             "h": 8,
-            "w": 12,
+            "w": 6,
             "x": 12,
-            "y": 91
+            "y": 83
           },
+          "description": "Every container's CPU (kubelet cadvisor via the API-server proxy) as % of all vCPUs — infra included (clickhouse/postgres/redis/TB/nats), unlike the Go-process collectors. Pause containers and cgroup aggregates are dropped at scrape.",
           "targets": [
             {
-              "expr": "jetstream_stream_total_bytes",
-              "legendFormat": "{{stream_name}}"
+              "expr": "100 * sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"adtech\"}[$__rate_interval])) / scalar(count(node_cpu_seconds_total{mode=\"idle\"}))",
+              "legendFormat": "{{pod}}"
             }
-          ]
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            }
+          }
         },
         {
-          "type": "row",
-          "title": "Audience Cache Writer",
-          "collapsed": false,
-          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 92 }
-        },
-        {
-          "id": 19,
-          "title": "Change-log backlog (un-drained rows)",
+          "id": 37,
+          "title": "Per-pod memory (% of cluster, cadvisor)",
           "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 93 },
-          "description": "Rows in audience_membership_changelog not yet applied by the single writer. Steady ~0 is healthy; a sustained climb means the writer can't keep up — shard it.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 83
+          },
+          "description": "Every container's working-set memory as % of node MemTotal (cadvisor — infra included). A pod trending up across runs is a leak candidate.",
           "targets": [
-            { "expr": "adtech_audience_cache_changelog_backlog{service=\"pipeline\"}", "legendFormat": "backlog rows" }
-          ]
-        },
-        {
-          "id": 20,
-          "title": "Change-log lag (oldest un-drained row, s)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 93 },
-          "description": "Age of the oldest pending change. This is the audience-cache staleness ceiling; the writer WARNs past audience.changelog_lag_warn (30s). Sustained high lag = time to shard the writer.",
-          "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 30 } ] } } },
-          "targets": [
-            { "expr": "adtech_audience_cache_changelog_lag_seconds{service=\"pipeline\"}", "legendFormat": "oldest lag (s)" }
-          ]
-        },
-        {
-          "id": 21,
-          "title": "Writer drain age (liveness, s)",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 93 },
-          "description": "Seconds since the writer last drained. Should stay near the poll interval (3s). A rising value means the single writer is stalled/dead.",
-          "fieldConfig": { "defaults": { "unit": "s" } },
-          "targets": [
-            { "expr": "adtech_audience_cache_drain_age_seconds{service=\"pipeline\"}", "legendFormat": "drain age (s)" }
-          ]
+            {
+              "expr": "100 * sum by (pod) (container_memory_working_set_bytes{namespace=\"adtech\"}) / scalar(node_memory_MemTotal_bytes)",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            }
+          }
         }
       ]
     }
+
   all-logs.json: |
     {
       "title": "Ad Tech All Logs",
@@ -1152,6 +1404,7 @@ data:
         ]
       }
     }
+
   trace-explorer.json: |
     {
       "title": "Ad Tech Trace Explorer",
