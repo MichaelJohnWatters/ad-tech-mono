@@ -31,9 +31,13 @@ the baselines — worse than no run.
 
        make loadtest RPS=110 DURATION=10m VERIFY=1
 
-   Stay at **≤110 rps for latency work** — 150+ saturates the 8-vCPU VM (23%
-   irq) and you're measuring the VM, not the code. 200+ needs an
-   `rdctl` cpu/memory bump (known VZ-restart wedge risk).
+   Stay at **≤110 rps for latency work** — 150 saturates the 8-vCPU VM
+   (97% CPU, 23% irq: phases ~2x from queueing, you're measuring the VM).
+   **150 is fine for fill/money runs** (2026-08-06: 149.8rps, 0 errors,
+   lossless, 91.9% fill — was 52% pre-push). 200+ needs an `rdctl`
+   cpu/memory bump (known VZ-restart wedge risk). Watch the Stack Pressure
+   dashboard: MemAvailable floor ~1.3GiB at 110-150rps is already near the
+   1.5GiB thrash zone (loki ~560MiB = first trim candidate).
 
 4. **Read the results:**
    - Grafana **"Phase profiling"** row (exchange gates/routing/fanout/dealeval/
