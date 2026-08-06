@@ -27,11 +27,15 @@ cd "$ROOT"
 # Update when you change the actual code; the script complains if the
 # count drifts. If you legitimately need more, raise the budget; if
 # you cleaned some up, lower it.
-BUDGET_INLINE_STYLE=290   # web/templates/**/*.html inline style="..."
-                          # Raised from 275 to 290 (2026-07-02): drift
-                          # accumulated in the simulator while nothing ran
-                          # this script — it's wired into CI now (see
-                          # .github/workflows/ci.yml) so the ratchet holds.
+BUDGET_INLINE_STYLE=343   # web/templates/**/*.html inline style="..."
+                          # Raised 290 -> 343 (2026-08-06): drift again, and
+                          # again all in simulator/minimal.html (328 of the
+                          # 343 — its CSS-var theming isn't migrated to
+                          # Tailwind yet, so new simulator UI ships inline
+                          # styles by design). Commits go straight to main
+                          # here, so red CI doesn't block; portal/component
+                          # counts are flat. Previously raised 275 -> 290
+                          # (2026-07-02) for the same simulator drift.
                           # The component partials' 7 CSS-var inline styles
                           # are intentional (they must render on both
                           # Tailwind and theme.css pages).
