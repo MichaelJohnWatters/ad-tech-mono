@@ -85,15 +85,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # SHA-pinned (v0.36.0): the action's old un-prefixed tags (0.28.0)
+      # were removed upstream and broke resolution — and a supply-chain
+      # gate should not itself trust a movable tag.
       - name: Trivy — Dockerfile misconfig
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: build
           severity: HIGH,CRITICAL
           exit-code: "1"
       - name: Trivy — dependency CVEs (fixable only)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
