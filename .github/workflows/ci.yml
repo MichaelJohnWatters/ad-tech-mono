@@ -1,8 +1,13 @@
-# CI — unit tests + UI design-system guardrails.
+# CI — build/vet/test + chart validation + UI design-system guardrails.
 #
 # Deliberately minimal: no services, no docker. Integration tests
-# (testcontainers, -tags=integration), DuckDB (CGO), and e2e (full Tilt
+# (testcontainers, -tags=integration), DuckDB (CGO), and e2e (full
 # stack) stay local/manual — see the Makefile test-* targets.
+#
+# Born of two same-day incidents (2026-08-06): a chart committed without
+# helm lint broke the next `helm upgrade` with the stack already down, and
+# `go test | tail` in &&-chains masked failing tests into deploys three
+# times. Everything here runs unpiped so exit codes actually gate.
 name: ci
 
 on:
@@ -27,8 +32,34 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
       - run: go build ./...
+      - run: go vet ./...
       - run: go test ./...
+
+  # Chart sanity: helm lint catches template/YAML breakage (e.g. a comment
+  # inside a {} flow mapping) BEFORE it lands on main and bricks the next
+  # `helm upgrade`; kubeconform then schema-validates the rendered manifests
+  # against upstream k8s schemas — no cluster needed (kubectl's client-side
+  # dry-run still wants an API server for schema validation). The chart
+  # renders only core kinds, so default schemas cover everything.
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+      - run: helm lint k8s/helm/adtech
+      - run: helm template adtech k8s/helm/adtech | kubeconform -strict -summary
 
   # The duckdb-tagged reporting build is invisible to `go build ./...`
   # (build-tag-gated, CGO) — it once broke silently and every reporting
