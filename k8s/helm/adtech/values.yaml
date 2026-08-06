@@ -1044,7 +1044,7 @@ infra:
       maxFile: 4GB
     storage: 5Gi
     resources:
-      requests: { cpu: "100m", memory: "256Mi" }
+      requests: { cpu: "500m", memory: "256Mi" }
       # 2Gi memory: the JetStream boot restore after a heavy bench day peaked
       # >1Gi (2026-08-06: 1.09M-msg stream restore re-OOMed 17x in a crash-loop).
       # CPU 2000m (was 500m): at 200rps the platform publishes ~2.5k durable
