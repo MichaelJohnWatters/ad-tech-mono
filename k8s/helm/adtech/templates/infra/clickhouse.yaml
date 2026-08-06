@@ -4,6 +4,39 @@
        at a managed/replicated CH via its addr env. Analytics is partially
        rebuildable from the S3 Parquet lake + NATS. Default true. */}}
 {{- if ne (toString $ch.enabled) "false" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  namespace: {{ $ns }}
+data:
+  # Background-cost trim (2026-08-06 infra-floor session): a stock 24.8
+  # server burns ~0.5-0.8 cores on self-instrumentation — metric_log
+  # collects every 1s, trace/thread/part/processor logs row per query/part,
+  # and the file logger writes TRACE for every statement. On a 10-vCPU dev
+  # VM that is auction headroom, and none of it is read: dashboards use
+  # Prometheus/cadvisor, forensics use query_log (KEPT) + our own tables.
+  zz-perf-trim.xml: |
+    <clickhouse>
+      <logger>
+        <level>warning</level>
+      </logger>
+      <metric_log remove="1"/>
+      <asynchronous_metric_log remove="1"/>
+      <trace_log remove="1"/>
+      <query_thread_log remove="1"/>
+      <part_log remove="1"/>
+      <processors_profile_log remove="1"/>
+      <text_log remove="1"/>
+      <session_log remove="1"/>
+      <error_log remove="1"/>
+      <opentelemetry_span_log remove="1"/>
+      <asynchronous_insert_log remove="1"/>
+      <backup_log remove="1"/>
+      <blob_storage_log remove="1"/>
+      <asynchronous_metrics_update_period_s>30</asynchronous_metrics_update_period_s>
+    </clickhouse>
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -45,6 +78,9 @@ spec:
           volumeMounts:
             - name: clickhouse-data
               mountPath: /var/lib/clickhouse
+            - name: clickhouse-config
+              mountPath: /etc/clickhouse-server/config.d/zz-perf-trim.xml
+              subPath: zz-perf-trim.xml
           resources:
             {{- toYaml $ch.resources | nindent 12 }}
           readinessProbe:
@@ -61,6 +97,10 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
             failureThreshold: 5
+      volumes:
+        - name: clickhouse-config
+          configMap:
+            name: clickhouse-config
   volumeClaimTemplates:
     - metadata:
         name: clickhouse-data
