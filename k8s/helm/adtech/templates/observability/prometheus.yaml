@@ -32,6 +32,31 @@ subjects:
     name: prometheus
     namespace: {{ $ns }}
 ---
+# Cluster-scoped: node discovery + the kubelet cadvisor proxy, so per-pod
+# CPU/memory covers EVERY container (clickhouse/postgres/redis/TB/nats...),
+# not just our Go processes' own collectors. Read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-nodes
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: {{ $ns }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -82,6 +107,35 @@ data:
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
+
+      # Kubelet cadvisor via the API-server proxy: true per-container
+      # CPU/memory for EVERY pod (infra included — the process collectors
+      # above only cover our Go services). Whitelist-filtered: cadvisor is
+      # high-cardinality, we keep only the two series the dashboards read.
+      - job_name: 'kubernetes-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'container_cpu_usage_seconds_total|container_memory_working_set_bytes'
+            action: keep
+          # Drop the pod-sandbox / cgroup-aggregate rows (empty container or
+          # POD pause container) so per-pod sums don't double count.
+          - source_labels: [container]
+            regex: '|POD'
+            action: drop
 
   # Trust-the-graphs rules: a zero on a dashboard is ambiguous (real zero /
   # missing data / broken query). These alerts distinguish the cases so a dead
