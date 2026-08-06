@@ -1110,7 +1110,13 @@ infra:
       maxFile: 4GB
     storage: 5Gi
     resources:
-      requests: { cpu: "500m", memory: "256Mi" }
+      # 250m request (was 500m): the 2000m LIMIT below is what fixed the
+      # throttled ack path; the request only sets cpu.weight. At 500m the
+      # weight dilution starved tracker/gateway under saturation (their Go
+      # sched p99 jumped 10ms -> 117ms bucket at 110rps, 2026-08-06) and
+      # every post-bump run regressed 2-5x on tail latencies. 250m keeps
+      # 2.5x the pre-bump weight for the ack path.
+      requests: { cpu: "250m", memory: "256Mi" }
       # 2Gi memory: the JetStream boot restore after a heavy bench day peaked
       # >1Gi (2026-08-06: 1.09M-msg stream restore re-OOMed 17x in a crash-loop).
       # CPU 2000m (was 500m): at 200rps the platform publishes ~2.5k durable
