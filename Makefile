@@ -259,3 +259,6 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help
+
+perfbench: ## Dated benchmark run(s): clean world per stage, ledger + raw Prometheus archive. RPS=110 DURATION=30m, or RPS_STAGES="20 50 80" for a sweep; PURGE=1 wipes PVCs first
+	scripts/perfbench.sh
