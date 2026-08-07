@@ -627,6 +627,11 @@ services:
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
+      # Explicit here (tracker already defaults 0.1 in code) so the request-
+      # LOG sampler (pkg/logger, follows OTEL_SAMPLE_RATIO) covers the beacon
+      # firehose too — highest log volume in the fleet.
+      - name: OTEL_SAMPLE_RATIO
+        value: "0.1"
       - name: EVENT_SPOOL_DIR
         value: "/var/spool/adtech-events"
     volumes:
