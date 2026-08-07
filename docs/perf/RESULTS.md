@@ -40,3 +40,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-07 11:31 | 389dcca | 109.3 | 10m | 92.1 | GREEN | 0 | 50.37 | 428.31 | 77.56 | 482.74 | 204.39 | 1.4 | 61.41 | 122.09 | -15.5575 | 90.82 | 7.78 | confirm revert of GOMAXPROCS pinning (expect ~48ms fanout p95, baseline 5c00c38) |
 | 2026-08-07 11:46 | 20a9432 | 109.5 | 10m | 92 | GREEN | 0 | 50.97 | 294.66 | 63.26 | 411.07 | 150.28 | 1.76 | 49.14 | 82.24 | -3.0025 | 91.13 | 7.74 | clean confirm post-revert, backlog drained (expect ~48ms fanout p95) |
 | 2026-08-07 12:00 | a6f5f86 | 109.5 | 10m | 91.8 | GREEN | 0 | 61.25 | 343.05 | 68.79 | 430.16 | 170.84 | 1.83 | 50.71 | 89.6 | -0.2275 | 91.52 | 7.66 | hands-off-host confirm (theory: 11:14-11:46 degradation = ambient host use) |
+| 2026-08-07 12:17 | 0e451a2 | 110 | 10m | 59.6 | GREEN | 0 | 8.12 | 815.02 | 12.91 | 811.85 | 22.65 | 1.48 | 8.65 | 14.81 | -0.025 | 88.61 | 10.43 | post rdctl-restart confirm (degraded-VZ theory) |
