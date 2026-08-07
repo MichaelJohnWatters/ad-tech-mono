@@ -175,11 +175,19 @@ type CacheInvalidateEvent struct {
 // VideoEvent is published by the tracker on /v1/t/video pixel hits.
 // EventType is the VAST event name (start, firstQuartile, midpoint,
 // thirdQuartile, complete, skip, mute, unmute, …). PositionMs carries
-// the playback offset if the player sent one.
+// the playback offset if the player sent one. Campaign/creative/
+// placement/publisher/account attribution mirrors the impression pixel
+// (verified beacon params cid/crid/pid/pubid/advid — additive, so old
+// beacons decode with empty attribution).
 type VideoEvent struct {
 	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`
 	EventType     string    `json:"event_type"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	CreativeID    string    `json:"creative_id,omitempty"`
+	PlacementID   string    `json:"placement_id,omitempty"`
+	PublisherID   string    `json:"publisher_id,omitempty"`
+	AccountID     string    `json:"account_id,omitempty"` // advertiser account (advid) — tenant scope
 	PositionMs    int64     `json:"position_ms,omitempty"`
 	Duration      int       `json:"duration_seconds,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
@@ -191,6 +199,11 @@ type AudioEvent struct {
 	SchemaVersion int       `json:"schema_version"`
 	TraceID       string    `json:"trace_id"`
 	EventType     string    `json:"event_type"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	CreativeID    string    `json:"creative_id,omitempty"`
+	PlacementID   string    `json:"placement_id,omitempty"`
+	PublisherID   string    `json:"publisher_id,omitempty"`
+	AccountID     string    `json:"account_id,omitempty"` // advertiser account (advid) — tenant scope
 	PositionMs    int64     `json:"position_ms,omitempty"`
 	Duration      int       `json:"duration_seconds,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`

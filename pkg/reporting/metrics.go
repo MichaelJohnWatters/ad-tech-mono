@@ -105,6 +105,22 @@ var derivedMetrics = map[string]derivedMetric{
 			return viewable / imp * 100, true
 		},
 	},
+	// Completion rate = completed video/audio plays / started plays (percent).
+	// Both sources are filtered counts on media_events (countIf in ClickHouse),
+	// so a channel/campaign/etc. filter scopes numerator and denominator alike.
+	// Null when nothing started (no plays ≠ 0% completion).
+	"completion_rate": {
+		name:    "completion_rate",
+		sources: []metricSource{{"media_events", "media_completes"}, {"media_events", "media_starts"}},
+		compute: func(c computeCtx) (float64, bool) {
+			done, _ := c.get("media_events", "media_completes") // absent for a key → 0
+			starts, ok := c.get("media_events", "media_starts")
+			if !ok || starts == 0 {
+				return 0, false
+			}
+			return done / starts * 100, true
+		},
+	},
 	// Net revenue = gross × (1 − platform fee), computed via the publisher's
 	// contract. Requires publisher scope (see engine).
 	"net_revenue": {

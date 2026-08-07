@@ -96,13 +96,21 @@ type CampaignStateChange struct {
 // MediaEvent records a video or audio engagement ping (VAST/DAAST event).
 // One bucket for both formats with `Channel` distinguishing them — the
 // shape is identical and analytics queries are typically grouped by
-// (channel, event_type).
+// (channel, event_type). Attribution mirrors the impression row
+// (campaign/creative/placement/publisher + AccountID = the advertiser)
+// so quartile reports slice and tenant-scope exactly like impressions;
+// rows from pre-attribution beacons carry empty strings.
 type MediaEvent struct {
-	TraceID    string
-	Channel    string // "video" or "audio"
-	EventType  string
-	PositionMs int64
-	Timestamp  time.Time
+	TraceID     string
+	Channel     string // "video" or "audio"
+	EventType   string
+	PositionMs  int64
+	CampaignID  string
+	CreativeID  string
+	PlacementID string
+	PublisherID string
+	AccountID   string // advertiser account — tenant scope, same as impressions
+	Timestamp   time.Time
 }
 
 // BudgetDepletion records the moment a DSP detected a campaign had
@@ -822,6 +830,8 @@ func (s *MemoryStore) Query(_ context.Context, params QueryParams) (*QueryResult
 		return s.queryViews(params)
 	case "auctions":
 		return s.queryAuctions(params)
+	case "media_events":
+		return s.queryMediaEvents(params)
 	default:
 		return nil, fmt.Errorf("unknown table: %s", params.Table)
 	}
@@ -874,6 +884,7 @@ func (s *MemoryStore) queryImpressions(params QueryParams) (*QueryResult, error)
 			"geo":          imp.Geo,
 			"device":       imp.Device,
 			"channel":      imp.Channel,
+			"deal_id":      imp.DealID,
 		}) {
 			continue
 		}
@@ -898,6 +909,7 @@ func (s *MemoryStore) queryImpressions(params QueryParams) (*QueryResult, error)
 			"geo":          imp.Geo,
 			"device":       imp.Device,
 			"channel":      imp.Channel,
+			"deal_id":      imp.DealID,
 			"day":          imp.Timestamp.Format("2006-01-02"),
 			"hour":         imp.Timestamp.Format("2006-01-02T15"),
 		})
@@ -1096,6 +1108,99 @@ func (s *MemoryStore) queryAuctions(params QueryParams) (*QueryResult, error) {
 		Columns: []string{"count", "avg_duration_ms"},
 		Rows:    [][]interface{}{{count, avgDuration}},
 	}, nil
+}
+
+// mediaEventDims mirrors the ClickHouse media_events columns available as
+// filters/dimensions (plus day/hour time dims), so tenant filters
+// (account_id / publisher_id) behave identically on both backends.
+func mediaEventDims(e MediaEvent) map[string]string {
+	return map[string]string{
+		"trace_id":     e.TraceID,
+		"channel":      e.Channel,
+		"event_type":   e.EventType,
+		"campaign_id":  e.CampaignID,
+		"creative_id":  e.CreativeID,
+		"placement_id": e.PlacementID,
+		"publisher_id": e.PublisherID,
+		"account_id":   e.AccountID,
+		"day":          e.Timestamp.Format("2006-01-02"),
+		"hour":         e.Timestamp.Format("2006-01-02T15"),
+	}
+}
+
+// queryMediaEvents serves the media_events table: metrics count plus the
+// filtered counts media_starts / media_completes (mirroring the ClickHouse
+// countIf base metrics the completion_rate derived metric consumes), grouped
+// by any media_events dimension.
+func (s *MemoryStore) queryMediaEvents(params QueryParams) (*QueryResult, error) {
+	type agg struct{ count, starts, completes int64 }
+	groups := map[string]*agg{}
+	var order []string
+	for _, e := range s.mediaEvents {
+		if !params.TimeFrom.IsZero() && e.Timestamp.Before(params.TimeFrom) {
+			continue
+		}
+		if !params.TimeTo.IsZero() && e.Timestamp.After(params.TimeTo) {
+			continue
+		}
+		fields := mediaEventDims(e)
+		if !matchFilters(params.Filters, fields) {
+			continue
+		}
+		key := dimensionKey(params.Dimensions, fields)
+		a, ok := groups[key]
+		if !ok {
+			a = &agg{}
+			groups[key] = a
+			order = append(order, key)
+		}
+		a.count++
+		switch e.EventType {
+		case "start":
+			a.starts++
+		case "complete":
+			a.completes++
+		}
+	}
+	if len(params.Dimensions) == 0 && len(groups) == 0 {
+		groups[""] = &agg{} // aggregate query over no rows still returns one row
+		order = append(order, "")
+	}
+
+	metrics := params.Metrics
+	if len(metrics) == 0 {
+		metrics = []string{"count"}
+	}
+	columns := append([]string{}, params.Dimensions...)
+	columns = append(columns, metrics...)
+	sort.Strings(order)
+	var rows [][]interface{}
+	for _, key := range order {
+		a := groups[key]
+		var row []interface{}
+		if len(params.Dimensions) > 0 {
+			for _, v := range strings.Split(key, "|") {
+				row = append(row, v)
+			}
+		}
+		for _, m := range metrics {
+			switch m {
+			case "count":
+				row = append(row, a.count)
+			case "media_starts":
+				row = append(row, a.starts)
+			case "media_completes":
+				row = append(row, a.completes)
+			default:
+				return nil, fmt.Errorf("unknown metric: %s", m)
+			}
+		}
+		rows = append(rows, row)
+	}
+	if params.Limit > 0 && len(rows) > params.Limit {
+		rows = rows[:params.Limit]
+	}
+	return &QueryResult{Columns: columns, Rows: rows}, nil
 }
 
 func matchFilters(filters map[string]string, fields map[string]string) bool {

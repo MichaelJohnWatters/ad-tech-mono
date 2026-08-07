@@ -191,7 +191,13 @@ func (c *ClickHouse) InsertMediaEvents(ctx context.Context, es []*MediaEvent) er
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO media_events")
+	// Explicit column list (dsp_calls precedent): the attribution columns land
+	// mid-table on fresh CREATEs but their physical position on ALTER-upgraded
+	// tables is whatever the chained AFTERs produced — naming the columns makes
+	// the insert order-independent either way.
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO media_events
+		(trace_id, channel, event_type, position_ms, campaign_id, creative_id,
+		 placement_id, publisher_id, account_id, schema_version, timestamp)`)
 	if err != nil {
 		return fmt.Errorf("prepare media_events batch: %w", err)
 	}
@@ -200,7 +206,9 @@ func (c *ClickHouse) InsertMediaEvents(ctx context.Context, es []*MediaEvent) er
 			continue
 		}
 		if err := b.Append(
-			e.TraceID, e.Channel, e.EventType, e.PositionMs, int32(1), bts(e.Timestamp),
+			e.TraceID, e.Channel, e.EventType, e.PositionMs,
+			e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID, e.AccountID,
+			int32(1), bts(e.Timestamp),
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append media_event: %w", err)
