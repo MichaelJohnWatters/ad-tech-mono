@@ -43,3 +43,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-07 12:17 | 0e451a2 | 110 | 10m | 59.6 | GREEN | 0 | 8.12 | 815.02 | 12.91 | 811.85 | 22.65 | 1.48 | 8.65 | 14.81 | -0.025 | 88.61 | 10.43 | post rdctl-restart confirm (degraded-VZ theory) |
 | 2026-08-07 12:28 | c2b8a27 | 110 | 10m | 91.9 | GREEN | 0 | 10.58 | 45.81 | 18.22 | 60.5 | 25.22 | 0.84 | 10.7 | 17.77 | -0.07 | 91.79 | 10.06 | final confirm: post VM-restart + router warm (expect ~48ms baseline) |
 | 2026-08-07 14:30 | 6271980+dirty | 110 | 10m | 92 | GREEN | 0 | 21.17 | 98.04 | 37.76 | 164.41 | 49.96 | 0.94 | 30.49 | 33.08 | -0.0775 | 91.68 | 9.79 | GOMAXPROCS clean re-test on healthy VM (vs 12:28 unpinned 45.81ms) |
+| 2026-08-07 15:23 | 6a46e39+dirty | 110 | 10m | 92.1 | GREEN | 0 | 10.78 | 52.81 | 21.68 | 79.11 | 33.05 | 0.8 | 15.87 | 19.75 | -0.0625 | 91.29 | 9.58 | A/B: trace-consistent request-log sampling 10% (vs 12:28 unpinned 45.81ms) |
