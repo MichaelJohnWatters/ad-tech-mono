@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 )
 
 // FreqCap is the Redis-backed per-user-per-campaign impression counter.
@@ -267,6 +268,63 @@ func (f *FreqCap) RecordBoth(ctx context.Context, userID, householdID, campaignI
 	}
 	f.Record(ctx, userID, campaignID, limit, window)
 	f.Record(ctx, householdID, campaignID, limit, window)
+}
+
+// ── Campaign cap scope (per-campaign frequency_cap.scope knob) ────────────
+//
+// A campaign whose cap scope is "household" enforces its limit against the
+// HOUSEHOLD counter (hh:… id + campaign key — the same key the default path's
+// household leg already uses) INSTEAD of the per-user counter, so co-viewing
+// devices share one allowance. This is a pure key swap in front of the
+// existing combined FreqCap calls — the household id rides in the primary
+// (user) slot and the secondary slot is dropped, so the Redis round-trip
+// count is unchanged (hot-path iron rule). When no household id resolves the
+// cap falls back to the per-user counter, mirroring how the platform
+// household leg silently vanishes on an absent hh: id. Any other scope
+// (empty/"user") keeps the pre-knob behaviour byte-for-byte: user counter
+// primary, household counter co-enforced.
+
+// capScopeIDs picks the counter ids for a campaign cap scope. hhPrimary
+// reports that the household id took the primary slot (for blocked-scope
+// attribution: the primitive reports the primary slot as "user").
+func capScopeIDs(scope, userID, householdID string) (uid, hhid string, hhPrimary bool) {
+	if scope == models.FreqCapScopeHousehold && householdID != "" {
+		return householdID, "", true
+	}
+	return userID, householdID, false
+}
+
+// remapBlockedScope corrects the primitive's primary-slot attribution when the
+// household id rode in the user slot.
+func remapBlockedScope(blocked string, hhPrimary bool) string {
+	if hhPrimary && blocked == "user" {
+		return "household"
+	}
+	return blocked
+}
+
+// ScopedDecideAndRecord is DecideAndRecord with the campaign's cap scope
+// applied (display path).
+func (f *FreqCap) ScopedDecideAndRecord(ctx context.Context, scope, userID, householdID, campaignID string, limit int, window time.Duration) (bool, string) {
+	uid, hhid, hhPrimary := capScopeIDs(scope, userID, householdID)
+	ok, blocked := f.DecideAndRecord(ctx, uid, hhid, campaignID, limit, window)
+	return ok, remapBlockedScope(blocked, hhPrimary)
+}
+
+// ScopedPeek is PeekBoth with the campaign's cap scope applied (video/audio
+// serve decision — never increments).
+func (f *FreqCap) ScopedPeek(ctx context.Context, scope, userID, householdID, campaignID string, limit int) (bool, string) {
+	uid, hhid, hhPrimary := capScopeIDs(scope, userID, householdID)
+	ok, blocked := f.PeekBoth(ctx, uid, hhid, campaignID, limit)
+	return ok, remapBlockedScope(blocked, hhPrimary)
+}
+
+// ScopedRecord is RecordBoth with the campaign's cap scope applied (stitch-time
+// counting — increments the same swapped key ScopedPeek decided on, keeping
+// the PEEK/RECORD split consistent per scope).
+func (f *FreqCap) ScopedRecord(ctx context.Context, scope, userID, householdID, campaignID string, limit int, window time.Duration) {
+	uid, hhid, _ := capScopeIDs(scope, userID, householdID)
+	f.RecordBoth(ctx, uid, hhid, campaignID, limit, window)
 }
 
 // capScopes mirrors capKeys' ordering for blocked-scope attribution.

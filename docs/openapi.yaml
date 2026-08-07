@@ -79,6 +79,18 @@ tags:
     description: "[Public] Server-side ad insertion (HLS/DASH stitching)"
   - name: Ops
     description: "[Staff] Stack ops console — pod matrix, restarts, cron triggers, log tails (ops:read / ops:deploy)"
+  - name: Config
+    description: "[Operator] Live config management + service registry (config:read / config:update)"
+  - name: Conversions
+    description: "[Customer] Advertiser conversion-event setup + S2S postback signing keys"
+  - name: Notifications
+    description: "[Customer] In-app notification feed (portal bell)"
+  - name: Privacy
+    description: "[Operator] User opt-out intake (levels 1-3)"
+  - name: House Ads
+    description: "[Staff] Platform fallback creatives served on a no-bid (support:read / support:update)"
+  - name: Demos
+    description: "[Staff] Guided end-to-end demos over isolated synthetic data (support:read / support:update)"
 
 paths:
   # ============================================================
@@ -321,6 +333,34 @@ paths:
       responses:
         "200":
           description: Available report templates
+    post:
+      tags: [Reports]
+      summary: Run an analytics query (tenant-enforced proxy)
+      description: >-
+        Requires reports:read. Proxies the query body to the reporting
+        service's /v1/reporting/query. The gateway REWRITES the filters for
+        customer sessions (advertiser → account_id, publisher → validated
+        publisher_id) before forwarding — the browser's filters are
+        convenience, this rewrite is the tenant guarantee. Staff sessions
+        pass through unscoped. Supports every table/metric/dimension of
+        /v1/reporting/query, including media_events with media_starts /
+        media_completes / completion_rate and the deal_id impressions
+        dimension.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryParams"
+      responses:
+        "200":
+          description: Query results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResult"
 
   /v1/api/trace:
     get:
@@ -416,6 +456,25 @@ paths:
       description: |
         Execute an analytics query. Supports aggregation by dimensions,
         time range filtering, and multiple metrics.
+
+        Tables: `impressions`, `auctions`, `clicks`, `conversions`, `views`,
+        and `media_events` (video/audio playback lifecycle: start, quartiles,
+        complete — rows carry campaign/creative/placement/publisher/account
+        attribution, so the quartile funnel is queryable per campaign and
+        tenant-scoped like every other table).
+
+        Derived metrics (`ecpm`, `ctr`, `fill_rate`, `viewability_rate`,
+        `completion_rate`, `net_revenue`) are computed server-side by the
+        metrics engine from their source tables; `completion_rate` =
+        media_completes / media_starts (percent, null when nothing started).
+        `media_starts` / `media_completes` are filtered counts on
+        media_events (event_type = start / complete).
+
+        `deal_id` is a valid impressions dimension for per-deal breakdowns;
+        it is deliberately absent from the rollup configs, so queries grouped
+        by deal_id always scan raw impressions instead of the rollup fast
+        path. media_events is hot-store only (ClickHouse), not exported to
+        the cold lake.
       requestBody:
         required: true
         content:
@@ -447,6 +506,18 @@ paths:
                 value:
                   table: auctions
                   metrics: [count, avg_duration_ms]
+              media_funnel:
+                summary: Video/audio completion funnel per campaign
+                value:
+                  table: media_events
+                  metrics: [media_starts, media_completes, completion_rate]
+                  dimensions: [campaign_id, channel]
+              by_deal:
+                summary: Impressions and spend per deal (raw scan, no rollup)
+                value:
+                  table: impressions
+                  metrics: [count, sum_cost]
+                  dimensions: [deal_id]
       responses:
         "200":
           description: Query results
@@ -921,11 +992,17 @@ paths:
   /v1/api/agency-accounts:
     get:
       tags: [Agency]
-      summary: List managed advertiser accounts
-      description: An agency session sees its own managed accounts; staff see all (filter with ?agency_id).
+      summary: List managed advertiser accounts (or the agency roster)
+      description: >-
+        An agency session sees its own managed accounts; staff see all (filter
+        with ?agency_id). With ?list=agencies (staff only) it instead returns
+        the agency roster [{ id, name }] — the source for the staff assignment
+        picker.
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: agency_id, in: query, schema: { type: string, format: uuid } }]
-      responses: { "200": { description: "List of managed-account rows (agency_id, agency_name, managed_account_id, managed_account_name)" } }
+      parameters:
+        - { name: agency_id, in: query, schema: { type: string, format: uuid } }
+        - { name: list, in: query, schema: { type: string, enum: [agencies] }, description: "list=agencies returns all agency accounts [{ id, name }] (staff only)" }
+      responses: { "200": { description: "List of managed-account rows (agency_id, agency_name, managed_account_id, managed_account_name); with ?list=agencies, [{ id, name }]" } }
     post:
       tags: [Agency]
       summary: Assign a managed account to an agency (staff)
@@ -1692,7 +1769,7 @@ paths:
       tags: [Reports]
       summary: List saved / scheduled reports
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: List } }
+      responses: { "200": { description: "[{ id, name, query_config, schedule, delivery }] — schedule empty for manual reports; delivery one of email/webhook/none" } }
     post:
       tags: [Reports]
       summary: Save a report (optionally scheduled)
@@ -1939,6 +2016,656 @@ paths:
         "403": { description: Invalid signature }
         "410": { description: Expired }
 
+  # ============================================================
+  # Public API - Auth (session login / signup / bootstrap)
+  # ============================================================
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Browser login (form POST → session cookie)
+      description: >-
+        Validates email + password against team_members and sets a signed JWT
+        in an httpOnly `session` cookie (SameSite=Lax, 12h expiry), then 303
+        redirects to the caller's portal (advertiser / publisher / staff by
+        account type). Unknown email and wrong password return the same 401
+        message (no user enumeration). Agencies get their managed-account list
+        embedded in the session claims (drives act-as).
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "303": { description: Logged in — redirect to the portal, session cookie set }
+        "400": { description: email and password required }
+        "401": { description: Invalid email or password }
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out (clears the session cookie)
+      responses:
+        "303": { description: Session cookie cleared — redirect to /login }
+  /v1/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Self-serve account signup (advertiser or publisher)
+      description: >-
+        Creates an account + owner team member and auto-logs in (session
+        cookie + 303 redirect to the portal). Password minimum 8 characters.
+        Staff/agency accounts are provisioned internally, not via signup.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [name, email, password, account_type]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                password: { type: string, minLength: 8 }
+                account_type: { type: string, enum: [advertiser, publisher] }
+      responses:
+        "303": { description: Account created — logged in, redirect to the portal }
+        "400": { description: Missing fields, short password, or invalid account_type }
+        "409": { description: An account with that email already exists }
+  /v1/auth/bootstrap:
+    post:
+      tags: [Auth]
+      summary: One-shot operator API key mint (fresh deploy)
+      description: >-
+        Gated by the PLATFORM_ROOT_PASSWORD env var (constant-time compare).
+        On success mints the `bootstrap-admin-key` secrets row and returns the
+        key value ONCE. Self-disables — once the row exists every subsequent
+        call returns 410 regardless of password. Rotate/revoke via the
+        secrets UI thereafter.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, description: must equal PLATFORM_ROOT_PASSWORD }
+      responses:
+        "200": { description: "{ name, value, note } — value shown ONCE" }
+        "401": { description: Incorrect password }
+        "410": { description: Bootstrap already used — rotate via the secrets UI }
+        "503": { description: Bootstrap not configured (no PLATFORM_ROOT_PASSWORD) or secrets store unavailable }
+
+  # ============================================================
+  # Operator API - Live config + service registry
+  # ============================================================
+  /v1/config:
+    get:
+      tags: [Config]
+      summary: Read live config (config:read)
+      description: >-
+        One endpoint, mode-switched by query param. Plain GET lists every live
+        key→value; ?key= returns one. ?schema=true returns the registered
+        schema (key, type, default, description, service, tier, deprecated)
+        merged with current values + source provenance (?service= filters,
+        ?pod= resolves per-pod). ?resolved=true&key=&pod= returns the full
+        resolution record { key, tier, value, source
+        (postgres-pod|postgres-global|env|default), pod_id, env_key, default,
+        redacted }. ?history=true returns the change audit trail (per-key with
+        ?key=, else the platform-wide tail). Per-pod rows SHADOW the global
+        row for the same key.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: key, in: query, schema: { type: string } }
+        - { name: schema, in: query, schema: { type: string, enum: ["true"] } }
+        - { name: resolved, in: query, schema: { type: string, enum: ["true"] } }
+        - { name: history, in: query, schema: { type: string, enum: ["true"] } }
+        - { name: service, in: query, schema: { type: string }, description: "with ?schema=true — filter to one service" }
+        - { name: pod, in: query, schema: { type: string }, description: pod id to resolve source/value for }
+      responses:
+        "200": { description: "Key→value map, single { key, value }, schema array, resolved record, or history array per the mode params" }
+    put:
+      tags: [Config]
+      summary: Set a live config key (config:update)
+      description: >-
+        Writes the value (schema-validated) and fans the change out via NATS
+        so every pod's poller picks it up sub-second. Empty pod_id writes the
+        GLOBAL row; a non-empty pod_id writes a per-pod override, which
+        shadows the global value on that pod.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: { type: string }
+                value: { type: string }
+                pod_id: { type: string, description: "empty = global; else per-pod override" }
+      responses:
+        "200": { description: "{ key, value, status: updated }" }
+        "201": { description: "{ key, value, status: updated } — the row did not exist before" }
+        "400": { description: Schema validation failed }
+    delete:
+      tags: [Config]
+      summary: Delete a live config row (config:update)
+      description: Deleting a row reverts the key to env-var/default resolution on the next poll; the DELETE is broadcast so pods revert immediately.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string } }
+        - { name: pod, in: query, schema: { type: string } }
+      responses:
+        "200": { description: "{ key, status: deleted }" }
+        "400": { description: key required }
+  /v1/services:
+    get:
+      tags: [Config]
+      summary: Service registry — every running pod + its config schema (config:read)
+      description: >-
+        Flat pod list by default — [{ pod_id, service, version, host, port,
+        schema_entries, status, started_at, last_ping_at }]. ?grouped=true
+        groups by service with the per-service schema union (what the config
+        manager UI reads).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: grouped, in: query, schema: { type: string, enum: ["true"] } }
+      responses:
+        "200": { description: Pod list, or service groups with schema unions }
+
+  # ============================================================
+  # Public API - Conversion setup (advertiser)
+  # ============================================================
+  /v1/api/conversions:
+    get:
+      tags: [Conversions]
+      summary: List conversion-event configs (campaigns:read)
+      description: Tenant-scoped. Each config includes the ready-to-embed tracker pixel `<img>` and JS snippet pointing at /v1/t/conv.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, name, event_type, default_value, currency, status, created_at, pixel, snippet }]" }
+    post:
+      tags: [Conversions]
+      summary: Create a conversion-event config (campaigns:create)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                event_type: { type: string, enum: [purchase, signup, lead, custom], default: custom }
+                default_value: { type: number, minimum: 0 }
+                currency: { type: string, default: USD }
+      responses:
+        "201": { description: "The created config incl. pixel + snippet" }
+        "400": { description: Missing name or invalid event_type }
+    delete:
+      tags: [Conversions]
+      summary: Delete a conversion-event config (campaigns:delete)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: "{ id, status: deleted }" }
+        "404": { description: Not found (or not the caller's) }
+  /v1/api/conversion-key:
+    get:
+      tags: [Conversions]
+      summary: List the account's S2S conversion signing keys (campaigns:read)
+      description: >-
+        The per-advertiser HMAC keys that sign server-to-server /v1/t/conv
+        postbacks (G7 — the tracker validates by advid so no other advertiser
+        can forge a conversion billed to this account). Values are MASKED on
+        GET (value_preview only).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, name, status (active|rotating), value_preview, created_at, rotated_at? }]" }
+        "503": { description: Secrets store unavailable }
+    post:
+      tags: [Conversions]
+      summary: Generate / rotate the conversion signing key (campaigns:create)
+      description: >-
+        Atomic rotation — the current active key (if any) demotes to
+        `rotating` and keeps validating during the grace window; the new key
+        becomes active. The full value is returned ONCE and never again.
+        Publishes the tracker cache invalidate so validation picks up the new
+        key immediately.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: "{ id, value (shown once), note }" }
+        "503": { description: Secrets store unavailable }
+
+  # ============================================================
+  # Public API - Invoices (advertiser, read-only)
+  # ============================================================
+  /v1/api/invoices:
+    get:
+      tags: [Billing]
+      summary: Invoice history (billing:view)
+      description: Tenant-scoped, read-only — invoices are written by the monthly invoice-runner from billed committed spend. Totals are dollars (converted from micros at generation). Max 500, newest period first.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ invoices: [{ id, period_start, period_end, total, currency, status, due_date }] }" }
+  /v1/api/invoices/{id}:
+    get:
+      tags: [Billing]
+      summary: Invoice detail + per-campaign line items (billing:view)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: "Invoice header + lines: [{ campaign_id, campaign_name, impressions, clicks, conversions, spend, bid_model }] ordered by spend desc" }
+        "404": { description: Not found — a cross-tenant id is indistinguishable from missing }
+
+  # ============================================================
+  # Staff API - Billing terms (prepay/invoiced posture)
+  # ============================================================
+  /v1/api/billing/terms:
+    get:
+      tags: [Billing]
+      summary: Read an advertiser's billing terms (staff, support:read)
+      description: "Defaults to { payment_terms: prepay, credit_limit: 0 } for accounts that never topped up."
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: account_id, in: query, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: "{ account_id, payment_terms (prepay|invoiced), credit_limit }" }
+    put:
+      tags: [Billing]
+      summary: Set an advertiser's billing terms (staff, support:update, audit-logged)
+      description: >-
+        Invoiced accounts may bid on credit up to credit_limit; prepay
+        normalises credit_limit to 0. Upserts the advertiser_balances row and
+        publishes the balance cache-invalidate so the DSP funding gate
+        re-reads the new terms within NATS RTT. Advertisers see their mode
+        read-only via /v1/api/billing/topup — only staff change it.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, payment_terms]
+              properties:
+                account_id: { type: string, format: uuid }
+                payment_terms: { type: string, enum: [prepay, invoiced] }
+                credit_limit: { type: number, minimum: 0 }
+      responses:
+        "200": { description: The stored terms (echoed) }
+        "400": { description: Invalid account_id / payment_terms / negative credit_limit }
+
+  # ============================================================
+  # Publisher API - Payout method + ads.txt integration
+  # ============================================================
+  /v1/api/payout-method:
+    get:
+      tags: [Payouts]
+      summary: Read the payout destination (earnings:view)
+      description: Tenant-scoped. Raw destination details are stored but NEVER returned — reads expose only a masked tail.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ configured, method_type?, display_name?, masked_tail?, minimum_payout_cents?, currency, status? } — { configured: false, currency } when unset" }
+    put:
+      tags: [Payouts]
+      summary: Upsert the payout destination (earnings:manage, audit-logged)
+      description: >-
+        One active method per account. Destination detail is required for the
+        method_type on first-time config (paypal_email for paypal,
+        account_number for bank_transfer, iban for payoneer/wire); a masked
+        round-trip that omits details keeps the stored value. The audit entry
+        records the masked tail, never the raw destination.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method_type]
+              properties:
+                method_type: { type: string, enum: [bank_transfer, paypal, payoneer, wire] }
+                display_name: { type: string }
+                details:
+                  type: object
+                  properties:
+                    paypal_email: { type: string }
+                    account_number: { type: string }
+                    iban: { type: string }
+                minimum_payout_cents: { type: integer, minimum: 0 }
+                currency: { type: string, default: USD }
+      responses:
+        "200": { description: The stored method, masked (same shape as GET) }
+        "400": { description: Invalid method_type or missing destination detail on first-time config }
+  /v1/api/integration/adstxt:
+    get:
+      tags: [Placements]
+      summary: The ads.txt line publishers should publish for this platform
+      description: >-
+        Read from the SAME live config the exchange enforces on
+        (exchange.adstxt_seller_domain/id/enforcement), so the surfaced line
+        always matches what strict mode checks. configured=false until the
+        seller domain/id are set.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ configured, seller_domain, seller_id, relationship: DIRECT, line, enforcement (off|warn|strict), sellers_json_url }" }
+
+  # ============================================================
+  # Public API - Notifications (portal bell)
+  # ============================================================
+  /v1/api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Recent in-app notifications + unread count
+      description: Tenant-scoped to the session account; rows are written by the notifications consumer from business events (budget/balance depleted, campaign state changes, report completed). Newest first, max 30.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ notifications: [{ id, account_id, kind, title, body?, ref_id?, read, created_at }], unread }" }
+        "503": { description: Notification store unavailable }
+  /v1/api/notifications/read:
+    post:
+      tags: [Notifications]
+      summary: Mark one notification (or all) read
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: exactly one of id / all
+              properties:
+                id: { type: string, format: uuid }
+                all: { type: boolean }
+      responses:
+        "200": { description: "{ status: ok, id? }" }
+        "400": { description: Neither id nor all supplied }
+        "404": { description: id not found for this account }
+
+  # ============================================================
+  # Operator API - Privacy opt-out intake (X-API-Key)
+  # ============================================================
+  /v1/api/privacy/optout:
+    post:
+      tags: [Privacy]
+      summary: Record a user opt-out (levels 1-3)
+      description: >-
+        Operator-API-key auth. Upserts the opt_out_registry row (level 1 = no
+        personalisation, 2 = no tracking, 3 = full deletion), publishes the
+        OptOutEvent, and fans out the opt-out cache invalidate so the DSP
+        stops bidding for the user within NATS RTT.
+      security: [{ apiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, level]
+              properties:
+                user_id: { type: string }
+                level: { type: integer, minimum: 1, maximum: 3 }
+                source: { type: string, default: api, description: "e.g. dsar_portal, gpc, support" }
+      responses:
+        "200": { description: "{ user_id, level, status: recorded }" }
+        "400": { description: Missing user_id or level outside 1-3 }
+
+  # ============================================================
+  # Public API - Retargeting audiences (advertiser)
+  # ============================================================
+  /v1/api/audiences/retargeting:
+    get:
+      tags: [Audiences]
+      summary: List real-time retargeting audiences (audiences:read)
+      description: Tenant-scoped. These segments are the targets of the /v1/t/rt pixel — enrollment happens within seconds via the audience-rt consumer. members is the live non-expired enrollment count.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, name, tag, window_days, members, updated_at }]" }
+    post:
+      tags: [Audiences]
+      summary: Create a retargeting audience (audiences:create)
+      description: "Creates the segment with rule { event: site_visit, tag, min_count: 1, window_days } for the caller's account (advertiser only; any account_id in the body is ignored)."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, tag]
+              properties:
+                name: { type: string }
+                tag: { type: string, description: the pixel's tag label }
+                window_days: { type: integer, default: 30 }
+      responses:
+        "201": { description: "{ id }" }
+        "400": { description: Missing name or tag }
+
+  # ============================================================
+  # Staff API - Cross-tenant oversight (retargeting + channels)
+  # ============================================================
+  /v1/api/staff/retargeting:
+    get:
+      tags: [Staff]
+      summary: Retargeting audiences across ALL advertisers (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ advertiser, segment, tag, window_days, members, updated_at }] — platform-wide" }
+  /v1/api/staff/channels:
+    get:
+      tags: [Staff]
+      summary: Platform-wide per-channel activity breakdown (support:read)
+      description: Proxied to reporting's /v1/reporting/channels with staff scope — impressions + cost grouped by channel over the last 7 days.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "QueryResult { columns: [channel, count, sum_cost], rows }" }
+        "502": { description: Reporting unreachable }
+
+  # ============================================================
+  # Staff API - House ads (no-bid fallback creatives)
+  # ============================================================
+  /v1/api/house-ads:
+    get:
+      tags: [House Ads]
+      summary: List house ads (support:read)
+      description: Platform-global (no tenant scope) — the platform's own fallback creatives served on a no-bid when the fill switch is on.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, format, name, markup, landing_url, enabled, weight, created_at, updated_at }]" }
+    post:
+      tags: [House Ads]
+      summary: Create a house ad (support:update, audit-logged)
+      description: Markup is HTML for display/native, inline VAST XML for video/audio. Mutations publish the house-ads cache invalidate so the publisher ad server reloads sub-second.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format, name, markup]
+              properties:
+                format: { type: string, enum: [display, video, native, audio] }
+                name: { type: string }
+                markup: { type: string }
+                landing_url: { type: string }
+                enabled: { type: boolean }
+                weight: { type: integer, minimum: 0 }
+      responses:
+        "201": { description: "{ id, status: created }" }
+        "400": { description: Invalid format/name/markup/weight }
+  /v1/api/house-ads/{id}:
+    put:
+      tags: [House Ads]
+      summary: Update a house ad (support:update, audit-logged)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format, name, markup]
+              properties:
+                format: { type: string, enum: [display, video, native, audio] }
+                name: { type: string }
+                markup: { type: string }
+                landing_url: { type: string }
+                enabled: { type: boolean }
+                weight: { type: integer, minimum: 0 }
+      responses:
+        "200": { description: "{ id, status: updated }" }
+        "404": { description: Not found }
+    delete:
+      tags: [House Ads]
+      summary: Delete a house ad (support:update, audit-logged)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: "{ id, status: deleted }" }
+        "404": { description: Not found }
+  /v1/api/house-ads/fill:
+    get:
+      tags: [House Ads]
+      summary: Read the house-ad fill master switch (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ enabled }" }
+    put:
+      tags: [House Ads]
+      summary: Toggle serving house ads on a no-bid (support:update, audit-logged)
+      description: Sets the GLOBAL publisher_adserver.stub_on_nobid config row AND clears any per-pod override rows for the key (per-pod rows would otherwise shadow the global value), so the switch takes effect platform-wide.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: "{ enabled }" }
+
+  # ============================================================
+  # Staff API - Guided demos (isolated synthetic data)
+  # ============================================================
+  # All five demos share one response shape:
+  #   { ran, account_id, steps: [{ n, title, narration, data }], summary, ran_at? }
+  # GET returns the last-run snapshot (support:read; ran=false if never run);
+  # POST .../run executes the demo against real platform machinery over an
+  # isolated synthetic account (support:update) and returns the fresh
+  # 5-step timeline. data is step-specific (documented per demo).
+  /v1/api/demo/onboarding:
+    get:
+      tags: [Demos]
+      summary: Onboarding & Expansion demo — last-run snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Demo snapshot — steps cover identity edges → CRM upload → profile before → cluster expansion → profile after" }
+  /v1/api/demo/onboarding/run:
+    post:
+      tags: [Demos]
+      summary: Run the Onboarding & Expansion demo (support:update)
+      description: Resets the isolated demo account, re-seeds synthetic identity edges + the empty demo segment, runs the REAL ingest path and profile-builder, and returns the 5-step upload→cluster→expand timeline.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Fresh demo timeline }
+        "503": { description: Demo backend unavailable (Postgres down at boot) }
+  /v1/api/demo/trace:
+    get:
+      tags: [Demos]
+      summary: Auction Trace demo — last-run snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Demo snapshot — persona → request (trace_id) → auction (winner, clearing price) → serve+track → data destinations" }
+  /v1/api/demo/trace/run:
+    post:
+      tags: [Demos]
+      summary: Run the Auction Trace demo (support:update)
+      description: Fires ONE fixed-persona request through the real SSP serve path, captures X-Trace-Id, polls the trace reader until the impression lands, and returns the 5-step timeline.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Fresh demo timeline }
+        "503": { description: Demo backend unavailable }
+  /v1/api/demo/billing:
+    get:
+      tags: [Demos]
+      summary: Billing / Money Flow demo — last-run snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Demo snapshot — winning impression → balance before → CPM/1000 math → ledger drawdown deltas → invoice tie-back" }
+  /v1/api/demo/billing/run:
+    post:
+      tags: [Demos]
+      summary: Run the Billing demo (support:update)
+      description: Fires one real request so a real advertiser wins, snapshots prepay balance + committed spend, fires the REAL impression beacon (the billable event), polls until the drawdown lands, and returns the before→after money timeline.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Fresh demo timeline }
+        "503": { description: Demo backend unavailable }
+  /v1/api/demo/rollups:
+    get:
+      tags: [Demos]
+      summary: Rollups demo — last-run snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Demo snapshot — N impressions fired → raw rows landed → GROUP BY collapse (identical totals) → coarser = fewer → the retention ladder" }
+  /v1/api/demo/rollups/run:
+    post:
+      tags: [Demos]
+      summary: Run the Rollups demo (support:update)
+      description: Fires N real impressions, waits for them to land, then queries raw count vs the same count grouped by the rollup dimensions to prove the collapse (fewer rows, identical totals).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Fresh demo timeline }
+        "503": { description: Demo backend unavailable }
+  /v1/api/demo/retargeting:
+    get:
+      tags: [Demos]
+      summary: Retargeting demo — last-run snapshot (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Demo snapshot — synthetic person + rule → real /v1/t/rt pixel + lake row → segment before → rule match + cluster expand → segment after" }
+  /v1/api/demo/retargeting/run:
+    post:
+      tags: [Demos]
+      summary: Run the Retargeting demo (support:update)
+      description: Resets the isolated demo account, seeds identity edges + a site_visit rule segment, fires the REAL retargeting pixel AND writes the behaviour row to the lake, runs the real profile-builder, and returns the visit→enrollment timeline.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Fresh demo timeline }
+        "503": { description: Demo backend unavailable (no lake/object store) }
+
+  # ============================================================
+  # Public API - Attribution (multi-touch)
+  # ============================================================
+  /v1/api/attribution:
+    get:
+      tags: [Reports]
+      summary: Multi-touch attribution chain for a conversion
+      description: >-
+        Requires reports:read. Proxied to reporting with the same
+        scope-injection as /v1/api/trace — staff unscoped, advertiser scoped
+        to its account (cross-tenant conversions 403), publisher sessions
+        denied. Returns the conversion's exposure chain with per-touchpoint
+        credit apportioned under the requested model.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: conversion_trace, in: query, required: true, schema: { type: string }, description: trace id of the conversion event }
+        - { name: model, in: query, schema: { type: string, default: linear }, description: attribution model }
+      responses:
+        "200": { description: "{ conversion_trace_id, model, revenue, touchpoints: [{ trace_id, type (impression|click), at, credit_fraction, credit_revenue }] } — empty touchpoints when no chain" }
+        "400": { description: conversion_trace required }
+        "403": { description: Cross-tenant conversion, or publisher session }
+
   /healthz:
     get:
       tags: [Dev Tools]
@@ -1961,6 +2688,11 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Operator API key from the secrets store (minted via /v1/auth/bootstrap, rotated via /v1/api/secrets). Used by the operator endpoints (secrets, identity-links, privacy opt-out).
 
   schemas:
     BidModifiers:
@@ -2112,17 +2844,27 @@ components:
       properties:
         table:
           type: string
-          enum: [impressions, clicks, conversions, auctions]
+          enum: [impressions, clicks, conversions, auctions, views, media_events]
         metrics:
           type: array
+          description: >-
+            Base metrics aggregate columns of the chosen table; media_starts /
+            media_completes are filtered counts on media_events. Derived
+            metrics (ecpm, ctr, fill_rate, viewability_rate, completion_rate,
+            net_revenue) are computed server-side by the metrics engine from
+            their source tables.
           items:
             type: string
-            enum: [count, sum_cost, avg_cost, sum_revenue, avg_duration_ms, sum_bids]
+            enum: [count, sum_cost, avg_cost, sum_revenue, avg_duration_ms, sum_bids, sum_viewable, media_starts, media_completes, ecpm, ctr, fill_rate, viewability_rate, completion_rate, net_revenue]
         dimensions:
           type: array
+          description: >-
+            deal_id (impressions) always scans raw rows — it is deliberately
+            not in the rollup configs. event_type (start/firstQuartile/
+            midpoint/thirdQuartile/complete/...) applies to media_events.
           items:
             type: string
-            enum: [campaign_id, creative_id, placement_id, publisher_id, account_id, geo, device, channel, day, hour]
+            enum: [campaign_id, creative_id, placement_id, publisher_id, account_id, geo, device, channel, day, hour, deal_id, event_type]
         filters:
           type: object
           additionalProperties:

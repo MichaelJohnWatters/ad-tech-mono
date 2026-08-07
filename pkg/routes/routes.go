@@ -55,6 +55,10 @@ const (
 	// APIStaffChannels is the staff platform-wide per-channel activity breakdown
 	// (proxies to reporting's ReportingChannels).
 	APIStaffChannels = apiPrefix + "/api/staff/channels"
+	// APIStaffShading is the staff read-only view of the DSP's per-placement
+	// bid-shading state (win/loss counts, win rate, avg clearing price).
+	// Proxies to the DSP's internal DSPShading endpoint; JWT support:read.
+	APIStaffShading = apiPrefix + "/api/staff/shading"
 	// APIAudienceRetargeting manages real-time retargeting audiences (the target
 	// of the /v1/t/rt pixel): GET lists them with live enrollment counts, POST
 	// creates one {name, tag, window_days}. Tenant-scoped.
@@ -126,6 +130,15 @@ const (
 	// APIPrivacyOptOut is the user opt-out intake (level 1/2/3). POST only.
 	// Records opt_out_registry + publishes OptOutEvent + cache-invalidate.
 	APIPrivacyOptOut = apiPrefix + "/api/privacy/optout"
+	// APIPrivacyStatus is the staff privacy console's per-identity lookup:
+	// GET ?id=<user/device/household id> returns that identity's opt-out
+	// level (0 = none) + source/when. JWT support:read; platform-wide read.
+	APIPrivacyStatus = apiPrefix + "/api/privacy/status"
+	// APIPrivacyOptOuts is the staff privacy console's registry surface: GET
+	// lists recent opt-outs (support:read); POST records one on behalf of a
+	// user — the support-workflow intake (support:update) — delegating to the
+	// same recorder as APIPrivacyOptOut without touching its operator-key path.
+	APIPrivacyOptOuts = apiPrefix + "/api/privacy/optouts"
 
 	// APITeam manages the caller's account team members (GET list, POST invite).
 	// JWT-gated; tenant-scoped to the caller's account.

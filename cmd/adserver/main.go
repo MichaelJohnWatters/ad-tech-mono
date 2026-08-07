@@ -379,15 +379,22 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		phaseMark := time.Now()
 
 		// Resolve the cap: the campaign's advertiser-configured limit/window
-		// when present in the warm cache, else the platform-default knobs.
+		// (and scope) when present in the warm cache, else the platform-default
+		// knobs. Scope "household" swaps the enforcement key to the household
+		// counter (see capScopeIDs in freqcap.go) — same Redis round trip,
+		// different key.
 		capLimit, capWindow := defaultLimitFn(), defaultWindowFn()
+		capScope := ""
 		if freqCapCache != nil {
 			if rule, ok := freqCapCache.ByID(req.CampaignID); ok && rule.Limit > 0 {
-				capLimit, capWindow = rule.Limit, rule.Window
+				capLimit, capWindow, capScope = rule.Limit, rule.Window, rule.Scope
 			}
 		}
-		// Per-user cap, then per-household when the SSP derived an hh: id —
-		// co-viewing devices (CTV + phones on one IP) share the household
+		// Default (scope "user"): per-user cap, then per-household when the
+		// SSP derived an hh: id. A campaign with cap scope "household"
+		// enforces its limit against the household counter INSTEAD (per-user
+		// fallback when no hh: id resolved) — see the Scoped* wrappers in
+		// freqcap.go. Co-viewing devices (CTV + phones on one IP) share the household
 		// counter, which is how CTV capping works when user ids differ or are
 		// absent. The hh: prefix keeps the two Redis keyspaces disjoint. A
 		// user-cap increment that the household cap then blocks leaves the
@@ -406,7 +413,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		switch req.CapMode {
 		case models.CapModeRecord:
 			// The ad was stitched → count exactly this impression, no decision.
-			freqCap.RecordBoth(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			freqCap.ScopedRecord(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 			obsAdServePhase("freqcap", phaseMark)
 			w.WriteHeader(http.StatusOK)
 			return
@@ -414,9 +421,9 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		var allowed bool
 		var blockedScope string
 		if req.CapMode == models.CapModePeek {
-			allowed, blockedScope = freqCap.PeekBoth(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit)
+			allowed, blockedScope = freqCap.ScopedPeek(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit)
 		} else {
-			allowed, blockedScope = freqCap.DecideAndRecord(ctx, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			allowed, blockedScope = freqCap.ScopedDecideAndRecord(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
 		}
 		phaseMark = obsAdServePhase("freqcap", phaseMark)
 		if !allowed {

@@ -100,6 +100,7 @@ type campaignWithSpend struct {
 	EndDate       string `json:"EndDate,omitempty"`   // YYYY-MM-DD
 	FreqCapLimit  int    `json:"FreqCapLimit,omitempty"`
 	FreqCapWindow string `json:"FreqCapWindow,omitempty"` // hour | day | week
+	FreqCapScope  string `json:"FreqCapScope,omitempty"`  // user | household
 }
 
 // campaignsCollectionHandler dispatches by method on /v1/dsp/campaigns:
@@ -161,6 +162,7 @@ func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, 
 						if m, ok := meta[out[i].ID]; ok {
 							out[i].StartDate, out[i].EndDate = m.startDate, m.endDate
 							out[i].FreqCapLimit, out[i].FreqCapWindow = m.capLimit, m.capWindow
+							out[i].FreqCapScope = m.capScope
 						}
 					}
 				} else {
@@ -285,15 +287,27 @@ func (b *bidModifiersInput) validateAndJSON() (string, error) {
 
 // freqCapInput is the advertiser-configured per-campaign frequency cap. It is
 // stored in targeting_rules.frequency_caps as the line_item-dimension entry and
-// enforced by the ad server (per-user impression counter). Limit <= 0 clears
-// the cap (falls back to the platform default).
+// enforced by the ad server. Limit <= 0 clears the cap (falls back to the
+// platform default). Scope selects the enforced counter: "user" (default —
+// per-user counter, household co-enforced when derivable) or "household" (the
+// whole household shares the allowance; per-user fallback when no household id
+// resolves at serve).
 type freqCapInput struct {
 	Limit  int    `json:"limit"`
 	Window string `json:"window,omitempty"` // hour | day | week; default day
+	Scope  string `json:"scope,omitempty"`  // user (default) | household
 }
 
 // validateAndJSON validates the cap and marshals it to the frequency_caps JSONB
 // array shape. A nil/zero cap yields "[]" (no per-campaign cap).
+//
+// Scope is stored as an extra "scope" field ON the line_item entry rather than
+// as a distinct dimension: both existing decoders (the ad server's
+// parseLineItemCap and lineItemCapFromJSON below) select the entry by
+// dimension == "line_item" and json.Unmarshal tolerates the extra field, so
+// old readers keep resolving the cap — a separate dimension would have made
+// them miss it entirely. "user"/empty is the default and is omitted, keeping
+// the stored shape byte-identical for every pre-scope campaign flow.
 func (f *freqCapInput) validateAndJSON() (string, error) {
 	if f == nil || f.Limit <= 0 {
 		return "[]", nil
@@ -310,9 +324,16 @@ func (f *freqCapInput) validateAndJSON() (string, error) {
 	default:
 		return "", fmt.Errorf("frequency cap window must be hour, day or week")
 	}
-	b, err := json.Marshal([]map[string]any{
-		{"dimension": "line_item", "window": win, "limit": f.Limit},
-	})
+	switch f.Scope {
+	case "", models.FreqCapScopeUser, models.FreqCapScopeHousehold:
+	default:
+		return "", fmt.Errorf("frequency cap scope must be user or household")
+	}
+	entry := map[string]any{"dimension": "line_item", "window": win, "limit": f.Limit}
+	if f.Scope == models.FreqCapScopeHousehold {
+		entry["scope"] = models.FreqCapScopeHousehold
+	}
+	b, err := json.Marshal([]map[string]any{entry})
 	if err != nil {
 		return "", err
 	}
@@ -1170,6 +1191,7 @@ type campaignEditMeta struct {
 	startDate, endDate string
 	capLimit           int
 	capWindow          string
+	capScope           string
 }
 
 // lookupCampaignEditMeta batch-loads flight dates and frequency caps for the
@@ -1202,7 +1224,7 @@ WHERE li.id = ANY($1::uuid[])`, pq.StringArray(ids))
 		if err := rows.Scan(&id, &m.startDate, &m.endDate, &capsJSON); err != nil {
 			return nil, err
 		}
-		m.capLimit, m.capWindow = lineItemCapFromJSON(capsJSON)
+		m.capLimit, m.capWindow, m.capScope = lineItemCapFromJSON(capsJSON)
 		out[id] = m
 	}
 	return out, rows.Err()
@@ -1210,25 +1232,31 @@ WHERE li.id = ANY($1::uuid[])`, pq.StringArray(ids))
 
 // lineItemCapFromJSON extracts the line_item-dimension cap from the
 // frequency_caps JSONB array — the same shape freqCapInput.validateAndJSON
-// writes. (0, "") when the campaign has no cap of its own.
-func lineItemCapFromJSON(raw string) (limit int, window string) {
+// writes. (0, "", "") when the campaign has no cap of its own. Scope
+// normalises to "user" for pre-scope entries (no "scope" field stored).
+func lineItemCapFromJSON(raw string) (limit int, window, scope string) {
 	if raw == "" || raw == "[]" {
-		return 0, ""
+		return 0, "", ""
 	}
 	var caps []struct {
 		Dimension string `json:"dimension"`
 		Window    string `json:"window"`
 		Limit     int    `json:"limit"`
+		Scope     string `json:"scope"`
 	}
 	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
-		return 0, ""
+		return 0, "", ""
 	}
 	for _, c := range caps {
 		if c.Dimension == "line_item" && c.Limit > 0 {
-			return c.Limit, c.Window
+			scope = models.FreqCapScopeUser
+			if c.Scope == models.FreqCapScopeHousehold {
+				scope = models.FreqCapScopeHousehold
+			}
+			return c.Limit, c.Window, scope
 		}
 	}
-	return 0, ""
+	return 0, "", ""
 }
 
 // lookupLineItemAccount finds which account owns this line item so we can
