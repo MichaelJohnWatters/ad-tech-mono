@@ -1,3 +1,10 @@
+> **DONE 2026-08-07** — commits 95bb42b (CH self-instrumentation off),
+> a01b8e6 (promtail 3.5.3 + cadvisor 60s), c16e032 (otel 0.1 sampling),
+> 80043b4 (nats request 250m). 110rps tails: fanout p95 245→46ms, auction
+> 352→60ms; 150rps knee: 667→346ms. Baseline re-pinned (15a86d6).
+> GOMAXPROCS pinning tested and PROVEN BAD (memory:
+> project_infra_floor_trim). Successor: 06-kernel-floor.md.
+
 # Session: trim the infra CPU floor (the last local perf lever)
 
 ## Context
