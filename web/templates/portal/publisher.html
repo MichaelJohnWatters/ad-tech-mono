@@ -57,6 +57,18 @@
         <span class="text-xs text-gray-400">loading…</span>
       </div>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Payout progress" "subtitle" "Pending balance vs your minimum-payout threshold") }}
+      <div id="payoutCallout" class="text-sm text-gray-400">loading…</div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Top placements — last 7 days" "subtitle" "By gross revenue — click a row to manage placements") }}
+      <div id="topPlWrap">
+      {{ template "table-start" (dict "headers" (slice "Placement" "Format" "Fill rate" "Impressions" "Gross revenue")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      </div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Placements ============ -->
@@ -82,8 +94,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New deal" "variant" "secondary" "size" "sm" "onclick" "openNewDeal()") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Price (CPM)" "Status" "")) }}
-        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Price (CPM)" "Guaranteed vol." "Status" "")) }}
+        <tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -192,16 +204,33 @@
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "Saved queries") }}
-      <form class="flex items-end gap-3 mb-4" onsubmit="saveQuery(event)">
+      <form class="flex flex-wrap items-end gap-3 mb-4" onsubmit="saveQuery(event)">
         <label class="block text-sm flex-1 max-w-xs">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Save the query above as</span>
           <input id="svName" placeholder="Weekly fill by placement" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" required>
         </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Schedule</span>
+          <select id="svSchedule" onchange="onSvScheduleChange()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">Manual</option><option value="@hourly">Hourly</option><option value="@daily">Daily</option>
+            <option value="@weekly">Weekly</option><option value="@monthly">Monthly</option><option value="custom">Custom cron…</option>
+          </select>
+        </label>
+        <label id="svCronWrap" class="block text-sm hidden">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Cron (5 fields)</span>
+          <input id="svCron" placeholder="30 6 * * 1" class="w-36 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Delivery</span>
+          <select id="svDelivery" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="none">None (in-app)</option><option value="email">Email</option><option value="webhook">Webhook</option>
+          </select>
+        </label>
         {{ template "button" (dict "label" "Save query" "variant" "secondary" "type" "submit") }}
       </form>
       <div id="savedWrap">
-      {{ template "table-start" (dict "headers" (slice "Name" "Query" "")) }}
-        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Query" "Schedule" "Delivery" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -282,6 +311,16 @@
         {{ template "stat" (dict "label" "Pending payout" "value" "—" "id" "kpiPending") }}
         {{ template "stat" (dict "label" "Paid out" "value" "—" "id" "kpiPaid") }}
       </div>
+      <!-- Read-only view of the caller's revshare contract (/v1/api/my-revshare)
+           — explains the gross→net split; editing is staff-only. -->
+      {{ template "card-start" (dict "title" "Your revenue share terms" "subtitle" "How gross earnings become the net amount we pay out") }}
+      <div id="revshareLoading" class="text-sm text-gray-400">loading…</div>
+      <div id="revshareOut" class="hidden space-y-3"></div>
+      <div id="revshareEmpty" class="hidden">
+        {{ template "empty-state" (dict "title" "No terms configured yet" "body" "No revenue-share contract is set for your sites — earnings are netted at the platform default until one is configured.") }}
+      </div>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Payout method" "subtitle" "Where your earnings go, and the minimum balance before we pay out") }}
       <form onsubmit="savePayoutMethod(event)" class="grid grid-cols-1 md:grid-cols-2 gap-x-4">
         <label class="block text-sm mb-4">
@@ -331,6 +370,18 @@
         {{ template "button" (dict "label" "+ Invite member" "variant" "secondary" "size" "sm" "onclick" "openInvite()") }}
       </div>
       {{ template "table-start" (dict "headers" (slice "Name" "Email" "Role" "Status")) }}
+        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Webhooks ============ -->
+    <section id="section-webhooks" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Webhooks" "subtitle" "HTTP callbacks for account events — every delivery is HMAC-signed with the subscription's secret") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New webhook" "variant" "secondary" "size" "sm" "onclick" "openNewWebhook()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "URL" "Events" "Status" "")) }}
         <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
@@ -391,6 +442,8 @@
       {{ template "form-field" (dict "label" "Height" "name" "np_height" "type" "number" "value" "90") }}
     </div>
     {{ template "form-field" (dict "label" "Surfaces / slots (in-game scene surfaces or retail sponsored slots — blank = 1)" "name" "np_surfaces" "type" "number" "placeholder" "e.g. 3 hoardings") }}
+    {{/* Set at create time only — the SSP placement PATCH doesn't accept it. */}}
+    {{ template "form-field" (dict "label" "Page URL pattern (path the tag serves on — blank = / whole site)" "name" "np_page" "placeholder" "/sports/") }}
     {{ template "form-field" (dict "label" "Floor price (USD CPM)" "name" "np_floor" "type" "number" "value" "0.50") }}
     <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
       <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Floor overrides (optional — raise the floor for specific device/geo)</summary>
@@ -486,6 +539,10 @@
     <div id="edName" class="mb-3 text-sm font-medium"></div>
     {{ template "form-field" (dict "label" "Name" "name" "ed_name") }}
     {{ template "form-field" (dict "label" "Price (USD CPM)" "name" "ed_price" "type" "number") }}
+    {{/* Guaranteed volume only applies to PG deals — toggled by openEditDeal. */}}
+    <div id="ed_pg_wrap" class="hidden">
+      {{ template "form-field" (dict "label" "Guaranteed volume (impressions — PG only)" "name" "ed_volume" "type" "number") }}
+    </div>
     <div class="grid grid-cols-2 gap-x-4">
       {{ template "form-field" (dict "label" "Flight start" "name" "ed_start" "type" "date") }}
       {{ template "form-field" (dict "label" "Flight end" "name" "ed_end" "type" "date") }}
@@ -630,6 +687,15 @@
       </label>
       {{ template "form-field" (dict "label" "CPM (USD)" "name" "edl_cpm" "type" "number") }}
     </div>
+    <div class="grid grid-cols-2 gap-x-4">
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
+        <select id="edl_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <option value="even">Even</option><option value="asap">ASAP</option>
+        </select>
+      </label>
+      {{ template "form-field" (dict "label" "Demand source (brand/advertiser)" "name" "edl_demand" "placeholder" "Nike") }}
+    </div>
     {{ template "form-field" (dict "label" "Impressions committed" "name" "edl_impr" "type" "number") }}
     <div class="grid grid-cols-2 gap-x-4">
       {{ template "form-field" (dict "label" "Delivery start" "name" "edl_start" "type" "date") }}
@@ -642,6 +708,32 @@
     </div>
   </form>
 {{ template "drawer-end" . }}
+
+<!-- New webhook modal — the signing secret is returned once on create and
+     shown here (same shown-once pattern as the invite modal). -->
+{{ template "modal-start" (dict "id" "newWebhook" "title" "New webhook") }}
+  <form id="webhookForm" onsubmit="createWebhook(event)">
+    {{ template "form-field" (dict "label" "Endpoint URL (http/https)" "name" "wh_url" "placeholder" "https://example.com/hooks/adtech" "required" true) }}
+    <div class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Events (pick at least one)</span>
+      <div id="wh_events" class="space-y-1 rounded-md border border-gray-200 dark:border-gray-700 p-2 text-sm"></div>
+    </div>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newWebhook').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Create webhook" "type" "submit") }}
+    </div>
+  </form>
+  <div id="webhookResult" class="hidden mt-1">
+    <p class="text-sm mb-2">Webhook created. This signing secret is shown once — store it now; every delivery is HMAC-signed with it:</p>
+    <div class="flex items-center gap-2 mb-4">
+      <code id="wh_secret" class="flex-1 px-2 py-1.5 rounded bg-surface-3 font-mono text-sm select-all break-all"></code>
+      {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyWebhookSecret()") }}
+    </div>
+    <div class="flex justify-end">
+      {{ template "button" (dict "label" "Done" "onclick" "closeNewWebhook()") }}
+    </div>
+  </div>
+{{ template "modal-end" . }}
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
@@ -695,7 +787,7 @@ function onPublisherChange() {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'audiences', 'reports', 'adtag', 'earnings', 'team'];
+const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'audiences', 'reports', 'adtag', 'earnings', 'team', 'webhooks'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -717,7 +809,8 @@ function showSection(name) {
     ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
       directsold: loadDirect, quality: loadQuality, audiences: loadAudiences,
       reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
-      adtag: loadTagPicker, earnings: loadEarnings, team: loadTeam}[name])?.();
+      adtag: loadTagPicker, earnings: loadEarnings, team: loadTeam,
+      webhooks: loadWebhooks}[name])?.();
   } else if (name === 'reports') {
     loadJobs(); // re-entering restarts the in-flight poll
   }
@@ -898,6 +991,82 @@ async function loadDashboard() {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('earnTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
+  // Depth cards refresh with the dashboard; each catches its own errors, so the
+  // await only preserves the no-overlap guarantee of refreshDashboard().
+  await Promise.all([loadTopPlacements(), loadPayoutCallout()]);
+}
+
+// ---- Top placements (7d, by gross revenue) ----
+// Same grouped engine call the placements fill table uses (fill_rate is
+// computed server-side); names/formats joined from /v1/api/placements.
+async function loadTopPlacements() {
+  const tbody = document.querySelector('#topPlWrap tbody');
+  if (!tbody) return;
+  try {
+    if (!placementsCache.length) placementsCache = await fetchJSON('/v1/api/placements') || [];
+    const res = await reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate'], dimensions: ['placement_id'], time_from: daysAgo(7)});
+    const info = Object.fromEntries(placementsCache.map(p => [p.ID, p]));
+    const col = (name) => res.columns.indexOf(name);
+    const pi = col('placement_id'), ci = col('count'), si = col('sum_cost'), fi = col('fill_rate');
+    const rows = (res.rows || [])
+      .map(r => ({id: r[pi], imp: +r[ci] || 0, gross: +r[si] || 0, fill: r[fi]}))
+      .sort((a, b) => b.gross - a.gross)
+      .slice(0, 10);
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No impressions in the last 7 days.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(x => {
+      const p = info[x.id];
+      const fill = x.fill == null ? null : +x.fill;
+      return `<tr onclick="location.hash='#placements'" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(p?.Name || x.id || '—')}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(p?.Format || '—')}</td>
+        <td class="px-3 py-2 font-mono ${fill != null && fill < 40 ? 'text-warn' : ''}">${fill == null ? '—' : fill.toFixed(1) + '%'}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(x.imp)}</td>
+        <td class="px-3 py-2 font-mono">${fmtUSD(x.gross)}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// ---- Payout callout (pending balance vs minimum-payout threshold) ----
+async function loadPayoutCallout() {
+  const el = $('payoutCallout');
+  if (!el) return;
+  try {
+    const [payouts, method] = await Promise.all([
+      fetchJSON('/v1/api/payouts'), fetchJSON('/v1/api/payout-method'),
+    ]);
+    const pending = (payouts?.pending_cents || 0) / 100;
+    const min = (method?.minimum_payout_cents || 0) / 100;
+    // No threshold set = any pending balance pays out on the next run.
+    const pct = min > 0 ? Math.min(100, Math.round(pending / min * 100)) : 100;
+    const note = min > 0
+      ? (pending >= min ? 'Threshold reached — pays out on the next settlement run.'
+                        : `${fmtUSD(min - pending)} to go until the ${fmtUSD(min)} minimum.`)
+      : 'No minimum set — the full balance pays out each settlement run.';
+    el.innerHTML = `
+      <div class="flex items-baseline justify-between mb-2">
+        <span><span class="text-xl font-semibold text-gray-900 dark:text-gray-100">${fmtUSD(pending)}</span>
+          <span class="text-xs text-gray-500 dark:text-gray-400 ml-1">pending payout</span></span>
+        {{/* location.hash, not an href — the nav-filter test asserts roles
+             without earnings:view render no "#earnings" link anywhere. */}}
+        <button type="button" onclick="location.hash='#earnings'" class="text-brand text-xs font-medium hover:underline">Manage payouts →</button>
+      </div>
+      <div class="h-2 rounded-full bg-gray-100 dark:bg-surface-3 overflow-hidden mb-1">
+        <div id="payoutBar" class="h-full rounded-full ${pct >= 100 ? 'bg-success' : 'bg-brand'}" data-w="${pct}"></div>
+      </div>
+      <p class="text-xs text-gray-500 dark:text-gray-400">${esc(note)}</p>`;
+    // Width is a computed value — set as a style property (the audit-ui lint
+    // bans inline style attributes in markup), same as the trend bars.
+    const bar = $('payoutBar');
+    if (bar) bar.style.width = bar.dataset.w + '%';
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
+  }
 }
 
 // ---- Live dashboard polling ----
@@ -1128,6 +1297,10 @@ async function createPlacement(ev) {
     surfaces: parseInt($('np_surfaces').value, 10) || 0,
     floor_price: parseFloat($('np_floor').value) || 0,
   };
+  // Create-time only: the SSP placement PATCH doesn't accept page_url_pattern,
+  // so it can't be edited later. Blank = the server's "/" whole-site default.
+  const page = $('np_page').value.trim();
+  if (page) body.page_url_pattern = page;
   const fc = floorConfigBody('np_floor_device', 'np_floor_geo', 'np_floor_dayparts', 'np_floor_tz');
   if (fc) body.floor_config = fc;
   if (body.format === 'video') body.video_config = videoConfigBody('np_vid');
@@ -1196,15 +1369,16 @@ async function loadDeals() {
         <td class="px-3 py-2 font-medium">${esc(d.name)}</td>
         <td class="px-3 py-2 font-mono text-xs uppercase">${esc(d.deal_type)}</td>
         <td class="px-3 py-2 font-mono">${fmtUSD(d.price)}</td>
+        <td class="px-3 py-2 font-mono">${d.deal_type === 'pg' ? fmtInt(d.guaranteed_volume) : '<span class="text-gray-400">—</span>'}</td>
         <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${d.status === 'active' ? 'bg-success/15 text-success' : d.status === 'paused' ? 'bg-warn/15 text-warn' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(d.status)}</span></td>
         <td class="px-3 py-2 text-right whitespace-nowrap">
           <button onclick="toggleDeal('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${d.status === 'paused' ? 'Resume' : 'Pause'}</button>
           <button onclick="openEditDeal('${esc(d.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
         </td>
       </tr>`).join('')
-      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No deals yet — cut your first with “+ New deal”.</td></tr>';
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No deals yet — cut your first with “+ New deal”.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -1226,6 +1400,9 @@ async function openEditDeal(id) {
   $('edName').textContent = d.name;
   $('ed_name').value = d.name;
   $('ed_price').value = d.price;
+  // Guaranteed volume only applies to PG deals — show + prefill for those.
+  $('ed_pg_wrap').classList.toggle('hidden', d.deal_type !== 'pg');
+  $('ed_volume').value = d.deal_type === 'pg' ? (d.guaranteed_volume || '') : '';
   $('ed_start').value = d.start_date || '';
   $('ed_end').value = d.end_date || '';
   $('ed_advertisers').value = (d.advertiser_ids || []).join(', ');
@@ -1244,6 +1421,11 @@ async function saveDeal(ev) {
   };
   if ($('ed_start').value) body.start_date = $('ed_start').value;
   if ($('ed_end').value) body.end_date = $('ed_end').value;
+  // Only PG deals carry a guaranteed volume (the field is shown for them).
+  if (!$('ed_pg_wrap').classList.contains('hidden')) {
+    const vol = parseInt($('ed_volume').value, 10);
+    if (!isNaN(vol) && vol >= 0) body.guaranteed_volume = vol;
+  }
   try {
     await fetchJSON('/v1/api/deals/' + encodeURIComponent($('edID').value), {method: 'PATCH', body: JSON.stringify(body)});
     $('editDeal').classList.add('hidden');
@@ -1259,7 +1441,7 @@ async function loadSaved() {
   try {
     savedCache = await fetchJSON('/v1/api/reports/saved') || [];
   } catch (err) {
-    savedTbody().innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    savedTbody().innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
     return;
   }
   savedTbody().innerHTML = savedCache.length ? savedCache.map(s => {
@@ -1268,6 +1450,8 @@ async function loadSaved() {
     return `<tr class="border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
       <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${s.schedule ? esc(s.schedule) : '<span class="text-gray-400">manual</span>'}</td>
+      <td class="px-3 py-2 font-mono text-xs">${s.delivery && s.delivery !== 'none' ? esc(s.delivery) : '<span class="text-gray-400">none</span>'}</td>
       <td class="px-3 py-2 text-right whitespace-nowrap">
         <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
         <button onclick="jobFromSaved('${esc(s.id)}')" title="Run async and download the result" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run as job</button>
@@ -1275,12 +1459,20 @@ async function loadSaved() {
       </td>
     </tr>`;
   }).join('')
-    : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+    : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+}
+
+// The free-text cron input only shows for "Custom cron…".
+function onSvScheduleChange() {
+  $('svCronWrap').classList.toggle('hidden', $('svSchedule').value !== 'custom');
 }
 
 async function saveQuery(ev) {
   ev.preventDefault();
   const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  // Schedule: interval keyword, a 5-field cron for "custom", or "" for manual —
+  // the API validates the expression (reportrunner.ValidSchedule) on save.
+  const schedule = $('svSchedule').value === 'custom' ? $('svCron').value.trim() : $('svSchedule').value;
   const body = {
     name: $('svName').value.trim(),
     query_config: {
@@ -1289,11 +1481,12 @@ async function saveQuery(ev) {
       dimensions: split($('repDims').value),
       range_days: parseInt($('repRange').value, 10),
     },
-    delivery: 'none',
+    schedule,
+    delivery: $('svDelivery').value,
   };
   try {
     await fetchJSON('/v1/api/reports/saved', {method: 'POST', body: JSON.stringify(body)});
-    toast('Query saved', 'success');
+    toast(schedule ? 'Query saved — runs ' + schedule : 'Query saved', 'success');
     $('svName').value = '';
     loadSaved();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
@@ -1526,6 +1719,8 @@ function openEditDirect(id) {
   $('edlName').textContent = d.name;
   $('edl_name').value = d.name;
   $('edl_tier').value = d.priority_tier;
+  $('edl_pacing').value = d.pacing_mode || 'even';
+  $('edl_demand').value = d.demand_source || '';
   $('edl_cpm').value = d.cpm != null ? d.cpm : '';
   $('edl_impr').value = d.impressions_committed;
   $('edl_start').value = d.delivery_start || '';
@@ -1539,6 +1734,9 @@ async function saveDirect(ev) {
   const body = {
     name: $('edl_name').value.trim(),
     priority_tier: $('edl_tier').value,
+    pacing_mode: $('edl_pacing').value,
+    // Always sent — clearing the input clears the stored label.
+    demand_source: $('edl_demand').value.trim(),
     impressions_committed: parseInt($('edl_impr').value, 10) || 0,
     placement_ids: csvIDs($('edl_placements').value),
   };
@@ -1745,8 +1943,48 @@ async function savePayoutMethod(ev) {
   }
 }
 
+// ---- Revenue share terms (read-only; staff own the editor) ----
+// /v1/api/my-revshare returns one row per publisher site: model, fee %,
+// guaranteed minimum and payment terms. Tier detail lives in the staff-side
+// contract — this view explains the split, it doesn't reproduce the schedule.
+const RS_MODEL_LABEL = {
+  fixed: 'Fixed fee', tiered: 'Tiered (fee steps down with volume)',
+  guaranteed_minimum: 'Guaranteed minimum', deal_type: 'Per deal type', hybrid: 'Hybrid',
+};
+const fmtTerms = (t) => esc((t || 'net_30').replace(/^net_/, 'Net '));
+async function loadMyRevshare() {
+  const out = $('revshareOut'), empty = $('revshareEmpty'), loading = $('revshareLoading');
+  try {
+    const terms = await fetchJSON('/v1/api/my-revshare') || [];
+    loading.classList.add('hidden');
+    if (!terms.length) { empty.classList.remove('hidden'); out.classList.add('hidden'); return; }
+    empty.classList.add('hidden');
+    out.classList.remove('hidden');
+    out.innerHTML = terms.map(t => {
+      const fee = +t.fee_pct || 0;
+      const keep = Math.max(0, 100 - fee);
+      return `<div class="rounded-md border border-gray-200 dark:border-gray-800 p-3">
+        <div class="flex items-center justify-between mb-1">
+          <span class="font-medium">${esc(t.name)}</span>
+          <span class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info">${esc(RS_MODEL_LABEL[t.revshare_model] || t.revshare_model)}</span>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          Platform fee <b class="text-gray-900 dark:text-gray-100">${fee.toFixed(1)}%</b> of gross —
+          you keep <b class="text-gray-900 dark:text-gray-100">${keep.toFixed(1)}%</b> as net earnings.
+          ${t.guaranteed_min_cpm ? `Guaranteed minimum <b class="text-gray-900 dark:text-gray-100">${fmtUSD(t.guaranteed_min_cpm)} CPM</b> — we top up if the split pays less. ` : ''}
+          Payment terms: <b class="text-gray-900 dark:text-gray-100">${fmtTerms(t.payment_terms)}</b>.
+        </p>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    loading.classList.remove('hidden');
+    loading.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+
 async function loadEarnings() {
   loadPayoutMethod();
+  loadMyRevshare();
   const tbody = tbodyOf('earnings');
   try {
     const res = await fetchJSON('/v1/api/payouts');
@@ -1814,6 +2052,74 @@ async function inviteMember(ev) {
     toast('Invite created', 'success');
     loadTeam();
   } catch (err) { toast('Invite failed: ' + err.message, 'error'); }
+}
+
+// ---- Webhooks ----
+// Customer-facing event names the dispatcher routes (cmd/webhooks eventRoutes)
+// — keep in sync when a new webhook event is added there.
+const WEBHOOK_EVENTS = [
+  ['budget.depleted', 'Campaign budget depleted'],
+  ['balance.depleted', 'Account balance depleted'],
+  ['campaign.state_changed', 'Campaign state changed'],
+  ['report.completed', 'Scheduled report completed'],
+  ['retargeting.enrolled', 'Retargeting enrollment'],
+];
+async function loadWebhooks() {
+  const tbody = tbodyOf('webhooks');
+  try {
+    const hooks = await fetchJSON('/v1/api/webhooks') || [];
+    tbody.innerHTML = hooks.length ? hooks.map(h => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs break-all">${esc(h.url)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc((h.events || []).join(', '))}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${h.status === 'active' ? 'bg-success/15 text-success' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(h.status)}</span></td>
+        <td class="px-3 py-2 text-right">
+          <button onclick="deleteWebhook('${esc(h.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No webhooks yet — add one to get event callbacks.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openNewWebhook() {
+  $('webhookForm').reset();
+  $('wh_events').innerHTML = WEBHOOK_EVENTS.map(([ev, label]) => `
+    <label class="flex items-center gap-2">
+      <input type="checkbox" class="wh_ev" value="${esc(ev)}">
+      <span class="flex-1">${esc(label)} <span class="text-xs text-gray-400 font-mono">${esc(ev)}</span></span>
+    </label>`).join('');
+  $('webhookForm').classList.remove('hidden');
+  $('webhookResult').classList.add('hidden');
+  $('newWebhook').classList.remove('hidden');
+}
+function closeNewWebhook() { $('newWebhook').classList.add('hidden'); }
+async function createWebhook(ev) {
+  ev.preventDefault();
+  const events = [...$('wh_events').querySelectorAll('.wh_ev:checked')].map(x => x.value);
+  if (!events.length) { toast('Pick at least one event', 'info'); return; }
+  try {
+    const res = await fetchJSON('/v1/api/webhooks', {method: 'POST', body: JSON.stringify({
+      url: $('wh_url').value.trim(), events,
+    })});
+    // The HMAC secret is returned once, here — swap the modal to the
+    // shown-once view (same pattern as the team-invite password).
+    $('wh_secret').textContent = res.secret;
+    $('webhookForm').classList.add('hidden');
+    $('webhookResult').classList.remove('hidden');
+    toast('Webhook created', 'success');
+    loadWebhooks();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+function copyWebhookSecret() {
+  navigator.clipboard?.writeText($('wh_secret').textContent).then(() => toast('Secret copied', 'info'));
+}
+async function deleteWebhook(id) {
+  try {
+    await fetchJSON('/v1/api/webhooks?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Webhook deleted — recreate it to undo (a new secret is issued)', 'success');
+    loadWebhooks();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // Load the site list + revshare terms before the first section renders, so the

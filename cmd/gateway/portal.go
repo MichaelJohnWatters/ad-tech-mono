@@ -64,6 +64,7 @@ var advertiserNav = []NavItem{
 	{Label: "Attribution", Href: "#attribution", Icon: "◔", Perm: "reports:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
+	{Label: "Webhooks", Href: "#webhooks", Icon: "⇄", Perm: "webhooks:read"},
 	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
 }
 
@@ -87,6 +88,7 @@ var publisherNav = []NavItem{
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Ad tag", Href: "#adtag", Icon: "⧉", Perm: "placements:read"},
 	{Label: "Earnings", Href: "#earnings", Icon: "▦", Perm: "earnings:view"},
+	{Label: "Webhooks", Href: "#webhooks", Icon: "⇄", Perm: "webhooks:read"},
 	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
 }
 
@@ -171,11 +173,13 @@ func publisherPortalHandler(templates *templateManager, signingKey string) http.
 // support-only role sees just what it can act on. The Tools section links
 // out to the existing operator surfaces (config manager, trace explorer).
 var staffNav = []NavItem{
+	{Label: "Overview", Href: "#overview", Icon: "▤", Perm: "support:read"},
 	{Label: "Impersonate", Href: "#impersonate", Icon: "👤", Perm: "support:read"},
 	{Label: "Moderation", Href: "#moderation", Icon: "⚑", Perm: "moderation:read"},
 	{Label: "Fraud rules", Href: "#fraud", Icon: "◍", Perm: "fraud:read"},
 	{Label: "Revshare", Href: "#revshare", Icon: "％", Perm: "support:read"},
 	{Label: "Billing terms", Href: "#billingterms", Icon: "＄", Perm: "support:read"},
+	{Label: "Agencies", Href: "#agencies", Icon: "◐", Perm: "support:read"},
 	{Label: "House ads", Href: "#houseads", Icon: "🏠", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Profiles", Href: "#profiles", Icon: "◔", Perm: "support:read"},

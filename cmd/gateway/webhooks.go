@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -17,10 +18,11 @@ import (
 // webhookView is one webhooks row as the account console sees it. The HMAC
 // secret is returned only once, on create — never listed.
 type webhookView struct {
-	ID     string   `json:"id"`
-	URL    string   `json:"url"`
-	Events []string `json:"events"`
-	Status string   `json:"status"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Events    []string  `json:"events"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type webhookInput struct {
@@ -159,7 +161,7 @@ func (s pgWebhookStore) ListWebhooks(ctx context.Context, accountID string) ([]w
 		return nil, sql.ErrConnDone
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id::text, url, events, status FROM webhooks WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
+		`SELECT id::text, url, events, status, created_at FROM webhooks WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +169,7 @@ func (s pgWebhookStore) ListWebhooks(ctx context.Context, accountID string) ([]w
 	out := []webhookView{}
 	for rows.Next() {
 		var v webhookView
-		if err := rows.Scan(&v.ID, &v.URL, pq.Array(&v.Events), &v.Status); err != nil {
+		if err := rows.Scan(&v.ID, &v.URL, pq.Array(&v.Events), &v.Status, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

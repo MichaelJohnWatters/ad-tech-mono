@@ -14,6 +14,76 @@
       <div class="text-sm text-gray-500 dark:text-gray-400">Staff · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Moderation</span></div>
     </div>
 
+    <!-- ============ Overview (landing) ============ -->
+    <!-- The default landing section: one KPI card per operational surface,
+         each linking into its full section. Cards are permission-gated the
+         same way the sidebar is — a card only renders when its target
+         section's nav item survived the permission filter — and cards whose
+         endpoint still 403s at runtime hide themselves, so partial-perm
+         staff always get a working landing page. -->
+    {{ $ovMod := false }}{{ $ovOnb := false }}{{ $ovBatch := false }}{{ $ovOps := false }}{{ $ovAudit := false }}
+    {{ range .Nav }}
+      {{ if eq .Href "#moderation" }}{{ $ovMod = true }}{{ end }}
+      {{ if eq .Href "#onboarding" }}{{ $ovOnb = true }}{{ end }}
+      {{ if eq .Href "#batchruns" }}{{ $ovBatch = true }}{{ end }}
+      {{ if eq .Href "#ops" }}{{ $ovOps = true }}{{ end }}
+      {{ if eq .Href "#audit" }}{{ $ovAudit = true }}{{ end }}
+    {{ end }}
+    <section id="section-overview" class="portal-section p-6 space-y-6">
+      <div class="flex items-center justify-between">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Platform at a glance — each card opens its full section.</p>
+        {{ template "button" (dict "label" "Refresh" "variant" "secondary" "size" "sm" "onclick" "loadOverview()") }}
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ if $ovMod }}
+        <a id="ovModCard" href="#moderation" class="block rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4 no-underline hover:border-brand/50">
+          <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Pending moderation</div>
+          <div id="ovModVal" class="mt-1 text-2xl font-semibold font-mono">—</div>
+          <div id="ovModHint" class="mt-1 text-xs text-gray-400">creatives awaiting review</div>
+        </a>
+        {{ end }}
+        {{ if $ovOnb }}
+        <a id="ovOnbCard" href="#onboarding" class="block rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4 no-underline hover:border-brand/50">
+          <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Ingest failures</div>
+          <div id="ovOnbVal" class="mt-1 text-2xl font-semibold font-mono">—</div>
+          <div id="ovOnbHint" class="mt-1 text-xs text-gray-400">recent drop-zone runs</div>
+        </a>
+        {{ end }}
+        {{ if $ovBatch }}
+        <a id="ovBatchCard" href="#batchruns" class="block rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4 no-underline hover:border-brand/50">
+          <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Last batch chain</div>
+          <div id="ovBatchVal" class="mt-1 text-2xl font-semibold font-mono">—</div>
+          <div id="ovBatchHint" class="mt-1 text-xs text-gray-400">checkpoint → rollups → privacy</div>
+        </a>
+        {{ end }}
+        {{ if $ovOps }}
+        <a id="ovOpsCard" href="#ops" class="block rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4 no-underline hover:border-brand/50">
+          <div class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Service health</div>
+          <div id="ovOpsVal" class="mt-1 text-2xl font-semibold font-mono">—</div>
+          <div id="ovOpsHint" class="mt-1 text-xs text-gray-400">live /readyz across the fleet</div>
+        </a>
+        {{ end }}
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {{ if $ovAudit }}
+        <div id="ovAuditCard">
+          {{ template "card-start" (dict "title" "Recent audit entries" "subtitle" "Last 10 platform-wide — full log under Audit log") }}
+          <div id="ovAuditBody"><p class="text-sm text-gray-400">loading…</p></div>
+          <a href="#audit" class="inline-block mt-3 text-xs text-brand hover:underline">Open audit log →</a>
+          {{ template "card-end" . }}
+        </div>
+        {{ end }}
+        {{ if $ovOps }}
+        <div id="ovNatsCard">
+          {{ template "card-start" (dict "title" "NATS lag" "subtitle" "JetStream consumers with unprocessed messages — detail under Ops") }}
+          <div id="ovNatsBody"><p class="text-sm text-gray-400">loading…</p></div>
+          <a href="#ops" class="inline-block mt-3 text-xs text-brand hover:underline">Open ops console →</a>
+          {{ template "card-end" . }}
+        </div>
+        {{ end }}
+      </div>
+    </section>
+
     <!-- ============ Impersonate ============ -->
     <section id="section-impersonate" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "View as account" "subtitle" "Open any advertiser or publisher portal as that account — scoped + audited") }}
@@ -24,7 +94,7 @@
     </section>
 
     <!-- ============ Moderation ============ -->
-    <section id="section-moderation" class="portal-section p-6 space-y-6">
+    <section id="section-moderation" class="portal-section p-6 space-y-6 hidden">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         {{ template "stat" (dict "label" "Pending review" "value" "—" "id" "kpiPending" "hint" "creatives, platform-wide") }}
       </div>
@@ -105,6 +175,32 @@
           <span class="ml-2 text-xs text-gray-400">The DSP picks the change up within a second.</span>
         </div>
       </form>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Agencies ============ -->
+    <section id="section-agencies" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Assign an advertiser to an agency" "subtitle" "The agency's users act as the managed advertiser via the act-as switcher — assignments load into the agency session at login.") }}
+      <form class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end" onsubmit="assignAgency(event)">
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Agency</span>
+          <select id="agAgency" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">Select an agency…</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Managed advertiser</span>
+          <select id="agAdvertiser" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">Select an advertiser…</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Assign" "type" "submit") }}
+      </form>
+      <p class="mt-2 text-xs text-gray-400">The agency picks the new account up at its next login.</p>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Agency assignments" "subtitle" "Grouped by agency — every advertiser each agency can act on") }}
+      <div id="agencyGroups"><p class="text-sm text-gray-400">loading…</p></div>
       {{ template "card-end" . }}
     </section>
 
@@ -452,6 +548,21 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- Creative preview modal. The creative body is UNTRUSTED advertiser content
+     — it renders ONLY inside a fully sandboxed iframe (sandbox="" = no
+     scripts, no same-origin, no navigation), never injected into the page
+     DOM. Inline html_content → srcdoc; asset creatives → the /v1/creatives/
+     object-store proxy. -->
+{{ template "modal-start" (dict "id" "previewModal" "title" "Creative preview") }}
+  <div id="pvMeta" class="mb-3 text-sm space-y-1"></div>
+  <div id="pvFrameWrap" class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white overflow-auto grid place-items-center p-2" style="min-height:200px"></div>
+  <div class="flex justify-end gap-2 mt-3">
+    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "closePreview()") }}
+    {{ template "button" (dict "label" "Approve" "onclick" "previewDecide('approve')") }}
+    {{ template "button" (dict "label" "Reject…" "variant" "danger" "onclick" "previewDecide('reject')") }}
+  </div>
+{{ template "modal-end" . }}
+
 <!-- Edit revenue terms modal (full config: model, fee, tiers, guaranteed, deal-type, payment terms) -->
 {{ template "modal-start" (dict "id" "revTermsModal" "title" "Edit revenue terms") }}
   <form onsubmit="saveRevTerms(event)">
@@ -556,12 +667,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'houseads', 'audit', 'profiles', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
-  if (!SECTIONS.includes(name)) name = 'moderation';
+  if (!SECTIONS.includes(name)) name = 'overview';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -572,7 +683,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, houseads: loadHouseAds, audit: loadAudit, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({overview: loadOverview, impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, agencies: loadAgencies, houseads: loadHouseAds, audit: loadAudit, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -607,6 +718,114 @@ async function loadImpersonate() {
 function viewAs(type, id) {
   document.cookie = 'act_as_account=' + type + ':' + id + '; path=/; max-age=43200; samesite=lax';
   location.href = type === 'publisher' ? '/portal/publisher' : '/portal/advertiser';
+}
+
+// ---- Overview (landing) ----
+// One fetch per card, all through Promise.allSettled — a single 403/timeout
+// never blanks the section. Cards are ALSO permission-gated server-side (a
+// card absent from the DOM skips its fetch entirely); a card that renders
+// but 403s at runtime hides itself, any other failure shows "unavailable"
+// in place. No polling — the Refresh button re-runs it.
+const is403 = (err) => /^403\b/.test((err && err.message) || '');
+// ovFetch skips the network entirely when the card was gated out server-side.
+const ovFetch = (cardId, url) => $(cardId) ? fetchJSON(url) : Promise.reject(new Error('403: card not rendered'));
+// ovCardFail: 403 → hide the card entirely; anything else → inline error.
+function ovCardFail(cardId, valId, hintId, err) {
+  if (is403(err)) { $(cardId)?.classList.add('hidden'); return; }
+  if (!$(valId)) return;
+  $(valId).textContent = '—';
+  $(hintId).textContent = 'unavailable — ' + ((err && err.message) || 'load failed');
+}
+async function loadOverview() {
+  // Un-hide runtime-hidden cards first so a manual Refresh re-probes.
+  ['ovModCard', 'ovOnbCard', 'ovBatchCard', 'ovOpsCard', 'ovAuditCard', 'ovNatsCard'].forEach(id => $(id)?.classList.remove('hidden'));
+  const [mod, onb, batch, ops, audit, nats] = await Promise.allSettled([
+    ovFetch('ovModCard', '/v1/api/moderation'),
+    ovFetch('ovOnbCard', '/v1/api/onboarding/runs'),
+    ovFetch('ovBatchCard', '/v1/api/batch/runs'),
+    ovFetch('ovOpsCard', '/v1/api/ops/readyz-grid'),
+    ovFetch('ovAuditCard', '/v1/api/audit?limit=10'),
+    ovFetch('ovNatsCard', '/v1/api/ops/nats'),
+  ]);
+
+  // Pending moderation — count of the queue.
+  if (mod.status === 'fulfilled' && $('ovModVal')) {
+    const n = (mod.value || []).length;
+    $('ovModVal').textContent = n;
+    $('ovModVal').classList.toggle('text-warning', n > 0);
+    $('ovModHint').textContent = n ? 'creatives awaiting review' : 'queue is clear';
+  } else if (mod.status === 'rejected') ovCardFail('ovModCard', 'ovModVal', 'ovModHint', mod.reason);
+
+  // Onboarding health — failed runs + rejected rows across the recent window.
+  if (onb.status === 'fulfilled' && $('ovOnbVal')) {
+    const runs = (onb.value && onb.value.runs) || [];
+    const failed = runs.filter(r => r.status === 'failed').length;
+    const rejected = runs.reduce((n, r) => n + (r.rejected_rows || 0), 0);
+    $('ovOnbVal').textContent = failed;
+    $('ovOnbVal').classList.toggle('text-error', failed > 0);
+    $('ovOnbHint').textContent = `failed of ${runs.length} recent runs · ${rejected.toLocaleString()} rejected rows`;
+  } else if (onb.status === 'rejected') ovCardFail('ovOnbCard', 'ovOnbVal', 'ovOnbHint', onb.reason);
+
+  // Batch conductor — the latest chain run's outcome (runs come newest-first).
+  if (batch.status === 'fulfilled' && $('ovBatchVal')) {
+    const r = ((batch.value && batch.value.runs) || [])[0];
+    if (!r) { $('ovBatchVal').textContent = '—'; $('ovBatchHint').textContent = 'no chain runs yet'; }
+    else {
+      const steps = r.steps || [];
+      const st = steps.some(s => s.status === 'failed') ? 'failed'
+        : steps.some(s => s.status === 'running') ? 'running' : 'done';
+      $('ovBatchVal').textContent = st;
+      $('ovBatchVal').classList.toggle('text-error', st === 'failed');
+      $('ovBatchVal').classList.toggle('text-success', st === 'done');
+      $('ovBatchHint').textContent = `${steps.filter(s => s.status === 'done').length}/${steps.length} steps · ${ago(r.started_at)}`;
+    }
+  } else if (batch.status === 'rejected') ovCardFail('ovBatchCard', 'ovBatchVal', 'ovBatchHint', batch.reason);
+
+  // Service health — pass/fail across the /readyz grid (ops:read).
+  if (ops.status === 'fulfilled' && $('ovOpsVal')) {
+    const svcs = (ops.value && ops.value.services) || [];
+    const ok = svcs.filter(s => s.ok).length;
+    $('ovOpsVal').textContent = `${ok}/${svcs.length}`;
+    $('ovOpsVal').classList.toggle('text-error', ok < svcs.length);
+    $('ovOpsVal').classList.toggle('text-success', svcs.length > 0 && ok === svcs.length);
+    $('ovOpsHint').textContent = ok < svcs.length
+      ? svcs.filter(s => !s.ok).map(s => s.service).join(', ') + ' not ready'
+      : 'all services ready';
+  } else if (ops.status === 'rejected') ovCardFail('ovOpsCard', 'ovOpsVal', 'ovOpsHint', ops.reason);
+
+  // Recent audit entries (audit:read).
+  if (audit.status === 'fulfilled' && $('ovAuditBody')) {
+    const entries = audit.value || [];
+    $('ovAuditBody').innerHTML = entries.length ? `<table class="w-full text-sm"><tbody>${entries.map(e => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-2 py-1.5 text-xs text-gray-500 whitespace-nowrap">${ago(e.timestamp)}</td>
+        <td class="px-2 py-1.5 text-xs">${esc(e.action)}</td>
+        <td class="px-2 py-1.5 font-mono text-xs text-gray-500">${esc(e.resource_type)}:${esc((e.resource_id || '').slice(0, 8))}</td>
+        <td class="px-2 py-1.5 font-mono text-xs text-gray-500">${esc((e.actor_id || '').slice(0, 12))}</td>
+      </tr>`).join('')}</tbody></table>`
+      : '<p class="text-sm text-gray-400">no audit entries yet</p>';
+  } else if (audit.status === 'rejected') {
+    if (is403(audit.reason)) $('ovAuditCard')?.classList.add('hidden');
+    else if ($('ovAuditBody')) $('ovAuditBody').innerHTML = `<p class="text-sm text-error">unavailable — ${esc((audit.reason && audit.reason.message) || '')}</p>`;
+  }
+
+  // NATS lag summary (ops:read).
+  if (nats.status === 'fulfilled' && $('ovNatsBody')) {
+    const streams = (nats.value && nats.value.streams) || [];
+    const lagging = (nats.value && nats.value.lagging) || [];
+    const pending = lagging.reduce((n, c) => n + (c.num_pending || 0), 0);
+    $('ovNatsBody').innerHTML = lagging.length ? `
+      <p class="text-sm mb-2"><span class="text-warning font-medium">${pending.toLocaleString()}</span> pending across ${lagging.length} consumer${lagging.length === 1 ? '' : 's'} (${streams.length} streams)</p>
+      <table class="w-full text-sm"><tbody>${lagging.slice(0, 5).map(c => `
+        <tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-2 py-1.5 font-mono text-xs">${esc(c.stream)}/${esc(c.name)}</td>
+          <td class="px-2 py-1.5 text-warning text-right">${(c.num_pending || 0).toLocaleString()}</td>
+        </tr>`).join('')}</tbody></table>`
+      : `<p class="text-sm text-success">all consumers caught up <span class="text-xs text-gray-400">(${streams.length} streams)</span></p>`;
+  } else if (nats.status === 'rejected') {
+    if (is403(nats.reason)) $('ovNatsCard')?.classList.add('hidden');
+    else if ($('ovNatsBody')) $('ovNatsBody').innerHTML = `<p class="text-sm text-error">unavailable — ${esc((nats.reason && nats.reason.message) || '')}</p>`;
+  }
 }
 
 // ---- Billing terms (staff: prepay vs invoiced + credit limit) ----
@@ -651,6 +870,83 @@ async function saveBillingTerms(ev) {
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 
+// ---- Agencies (agency → managed-advertiser assignments) ----
+// Staff view of who can act as whom. Advertiser picker rides the same
+// /v1/api/accounts list Impersonate uses; the agency picker needs its own
+// roster (accounts only lists advertiser+publisher) via ?list=agencies.
+let agencyAssignments = [];
+async function loadAgencies() {
+  const box = $('agencyGroups');
+  let accounts, agencies;
+  try {
+    [agencyAssignments, accounts, agencies] = await Promise.all([
+      fetchJSON('/v1/api/agency-accounts').then(r => r || []),
+      fetchJSON('/v1/api/accounts').then(r => r || []),
+      fetchJSON('/v1/api/agency-accounts?list=agencies').then(r => r || []),
+    ]);
+  } catch (err) {
+    box.innerHTML = `<p class="text-sm text-error">load failed — ${esc(err.message)}</p>`;
+    return;
+  }
+  $('agAgency').innerHTML = '<option value="">Select an agency…</option>' +
+    agencies.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+  $('agAdvertiser').innerHTML = '<option value="">Select an advertiser…</option>' +
+    accounts.filter(a => a.type === 'advertiser').map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('');
+  renderAgencyGroups();
+}
+function renderAgencyGroups() {
+  const box = $('agencyGroups');
+  if (!agencyAssignments.length) {
+    box.innerHTML = '<p class="text-sm text-gray-400">No assignments yet — link an agency to an advertiser above.</p>';
+    return;
+  }
+  // Group assignment rows by agency (the list arrives sorted by agency name).
+  const groups = {};
+  const order = [];
+  agencyAssignments.forEach(a => {
+    if (!groups[a.agency_id]) { groups[a.agency_id] = {name: a.agency_name, rows: []}; order.push(a.agency_id); }
+    groups[a.agency_id].rows.push(a);
+  });
+  box.innerHTML = order.map(id => {
+    const g = groups[id];
+    return `
+      <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-800">
+        <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+          <span class="font-medium">${esc(g.name)}</span>
+          <span class="text-xs text-gray-400">${g.rows.length} advertiser${g.rows.length === 1 ? '' : 's'}</span>
+        </div>
+        <table class="w-full text-sm"><tbody>${g.rows.map(a => `
+          <tr class="border-t border-gray-100 dark:border-gray-800 first:border-t-0">
+            <td class="px-4 py-2">${esc(a.managed_account_name)}</td>
+            <td class="px-4 py-2 font-mono text-xs text-gray-500">${esc(a.managed_account_id)}</td>
+            <td class="px-4 py-2 text-right">
+              <button onclick="unassignAgency('${esc(a.agency_id)}','${esc(a.managed_account_id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Unassign</button>
+            </td>
+          </tr>`).join('')}</tbody></table>
+      </div>`;
+  }).join('');
+}
+async function assignAgency(ev) {
+  ev.preventDefault();
+  const agencyID = $('agAgency').value, advID = $('agAdvertiser').value;
+  if (!agencyID || !advID) { toast('Pick both an agency and an advertiser', 'info'); return; }
+  try {
+    await fetchJSON('/v1/api/agency-accounts', {method: 'POST', body: JSON.stringify({
+      agency_account_id: agencyID, managed_account_id: advID,
+    })});
+    toast('Assigned — the agency can act as this advertiser from its next login', 'success');
+    loadAgencies();
+  } catch (err) { toast('Assign failed: ' + err.message, 'error'); }
+}
+async function unassignAgency(agencyID, managedID) {
+  try {
+    await fetchJSON('/v1/api/agency-accounts?agency_id=' + encodeURIComponent(agencyID) +
+      '&managed_account_id=' + encodeURIComponent(managedID), {method: 'DELETE'});
+    toast('Unassigned — re-assign above to undo', 'success');
+    loadAgencies();
+  } catch (err) { toast('Unassign failed: ' + err.message, 'error'); }
+}
+
 // ---- Moderation ----
 let queueCache = [];
 async function loadModeration() {
@@ -669,6 +965,7 @@ async function loadModeration() {
       <td class="px-3 py-2 font-mono text-xs">${esc(c.format)}</td>
       <td class="px-3 py-2 text-gray-500 text-xs">${ago(c.created_at)}</td>
       <td class="px-3 py-2 text-right whitespace-nowrap">
+        <button onclick="openPreview('${esc(c.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Preview</button>
         <button onclick="decide('${esc(c.id)}','approve')" class="text-xs px-2 py-1 rounded bg-success/15 text-success hover:bg-success/25">Approve</button>
         <button onclick="openReject('${esc(c.id)}')" class="text-xs px-2 py-1 rounded bg-error/15 text-error hover:bg-error/25">Reject</button>
       </td>
@@ -698,6 +995,54 @@ async function submitReject(ev) {
   if (!reason) { toast('A reason is required to reject', 'info'); return; }
   $('rejectModal').classList.add('hidden');
   await decide($('rejID').value, 'reject', reason);
+}
+
+// ---- Creative preview (moderation) ----
+// SECURITY: the creative body is untrusted advertiser content — it renders
+// ONLY inside a fully sandboxed iframe (sandbox="" = no scripts, no
+// same-origin, no navigation). Inline html_content goes in via srcdoc; asset
+// creatives load via the /v1/creatives/ object-store proxy. Never inject the
+// markup into the page DOM.
+let previewID = '';
+function openPreview(id) {
+  const c = queueCache.find(x => x.id === id);
+  if (!c) return;
+  previewID = id;
+  const w = c.width || 300, h = c.height || 250;
+  const landing = c.landing_url
+    ? `<a class="font-mono text-xs underline decoration-dotted hover:text-brand break-all" href="${esc(c.landing_url)}" target="_blank" rel="noopener noreferrer">${esc(c.landing_url)}</a>`
+    : '<span class="text-gray-400">none</span>';
+  $('pvMeta').innerHTML = `
+    <div class="font-medium">${esc(c.name)}</div>
+    <div class="text-xs text-gray-500">${esc(c.advertiser || '')} · <span class="font-mono">${esc(c.format)}</span> · ${w}×${h}</div>
+    <div class="text-xs"><span class="text-gray-500">Landing:</span> ${landing}</div>`;
+  const wrap = $('pvFrameWrap');
+  wrap.innerHTML = '';
+  if (c.html_content || c.asset_url) {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', ''); // deny-all: no scripts, no origin, no nav
+    frame.width = w; frame.height = h;
+    frame.className = 'bg-white border-0';
+    frame.title = 'creative preview';
+    if (c.html_content) frame.srcdoc = c.html_content;
+    else frame.src = '/v1/creatives/' + String(c.asset_url).replace(/^\/+/, '');
+    wrap.appendChild(frame);
+  } else {
+    wrap.innerHTML = '<p class="p-6 text-sm text-gray-400">Nothing to render — this creative has no html_content or asset_url.</p>';
+  }
+  $('previewModal').classList.remove('hidden');
+}
+function closePreview() {
+  $('previewModal').classList.add('hidden');
+  $('pvFrameWrap').innerHTML = ''; // drop the iframe — stop asset fetches
+}
+// Decide straight from the preview: approve immediately, or hand off to the
+// existing reject-with-reason modal.
+function previewDecide(action) {
+  const id = previewID;
+  closePreview();
+  if (action === 'approve') decide(id, 'approve');
+  else openReject(id);
 }
 
 // ---- Fraud blocklist ----
@@ -1187,7 +1532,7 @@ function loadControlCenter() {
   document.querySelectorAll('#section-tools iframe[data-src]').forEach(f => { f.src = f.dataset.src; });
 }
 
-showSection(location.hash.slice(1) || 'moderation');
+showSection(location.hash.slice(1) || 'overview');
 
 // ---- Profile lookup (profile store transparency) ----
 async function loadProfile(ev) {
@@ -1726,6 +2071,7 @@ const fmtPct = (r) => r == null ? '—' : `${(r * 100).toFixed(0)}%`;
 // folder view — the click-through for "show me the actual rejected file".
 const MINIO_CONSOLE = 'http://localhost:9001';
 const fmtInt = (n) => Number(n || 0).toLocaleString();
+const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch { return s; } };
 const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 function minioLink(bucket, key, label) {
   const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';

@@ -12,6 +12,7 @@ import (
 
 type fakeAgencyStore struct {
 	list          []agencyManagedView
+	agencies      []agencyOption
 	listForAgency string
 	assignAgency  string
 	assignManaged string
@@ -21,6 +22,9 @@ type fakeAgencyStore struct {
 func (f *fakeAgencyStore) ListManagedAccounts(_ context.Context, agencyID string) ([]agencyManagedView, error) {
 	f.listForAgency = agencyID
 	return f.list, nil
+}
+func (f *fakeAgencyStore) ListAgencies(context.Context) ([]agencyOption, error) {
+	return f.agencies, nil
 }
 func (f *fakeAgencyStore) AssignManagedAccount(_ context.Context, agencyID, managedID string) error {
 	f.assignAgency, f.assignManaged = agencyID, managedID
@@ -61,6 +65,21 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", adv))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("advertiser GET code=%d, want 403", rec.Code)
+	}
+
+	// Staff GET ?list=agencies → the agency roster for the assign picker.
+	store = &fakeAgencyStore{agencies: []agencyOption{{ID: agencyID, Name: "Bright Media"}}}
+	rec = httptest.NewRecorder()
+	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", staff))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Bright Media") {
+		t.Fatalf("staff roster GET code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Agency GET ?list=agencies → 403 (roster is staff-only).
+	rec = httptest.NewRecorder()
+	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", agency))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("agency roster GET code=%d, want 403", rec.Code)
 	}
 
 	// Staff POST assign → 201, store got the ids.

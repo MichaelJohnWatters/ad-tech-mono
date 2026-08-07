@@ -61,6 +61,21 @@
         <span class="text-xs text-gray-400">loading…</span>
       </div>
       {{ template "card-end" . }}
+
+      <!-- Needs attention: composed from loads the dashboard already makes
+           (campaigns, creatives, billing, notifications) — each item links to
+           the section that fixes it. Hidden entirely when all clear. -->
+      <div id="needsAttention" class="hidden">
+        {{ template "card-start" (dict "title" "Needs attention") }}
+        <div id="needsAttentionList" class="space-y-1 text-sm"></div>
+        {{ template "card-end" . }}
+      </div>
+
+      {{ template "card-start" (dict "title" "Top campaigns" "subtitle" "Top 5 by spend today; performance is last 7 days") }}
+      {{ template "table-start" (dict "headers" (slice "Name" "Status" "Spend / used" "Impr. 7d" "Clicks 7d" "CTR 7d")) }}
+        <tbody id="topCampaignsBody"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Portfolio (agency-only) ============ -->
@@ -313,7 +328,7 @@
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Query") }}
-      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end" onsubmit="runReport(event)">
+      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-7 gap-3 items-end" onsubmit="runReport(event)">
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
           <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
@@ -341,6 +356,12 @@
             <option value="csv">CSV</option><option value="json">JSON</option><option value="parquet">Parquet</option>
           </select>
         </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Job delivery</span>
+          <select id="repDelivery" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="How the finished job reaches you — email a download link, fire your report.completed webhook, or download here">
+            <option value="none">Download here</option><option value="email">Email link</option><option value="webhook">Webhook</option>
+          </select>
+        </label>
         <div class="flex gap-2">
           {{ template "button" (dict "label" "Run query" "type" "submit") }}
           {{ template "button" (dict "label" "Run as job" "variant" "secondary" "onclick" "runAsJob(event)" "title" "Run async and download the result — use for long ranges") }}
@@ -356,16 +377,39 @@
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "Saved queries") }}
-      <form class="flex items-end gap-3 mb-4" onsubmit="saveQuery(event)">
+      <form class="flex flex-wrap items-end gap-3 mb-4" onsubmit="saveQuery(event)">
         <label class="block text-sm flex-1 max-w-xs">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Save the query above as</span>
           <input id="svName" placeholder="Weekly spend by campaign" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" required>
         </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Schedule</span>
+          <select id="svSchedule" onchange="toggleCronInput()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">Manual</option>
+            <option value="@hourly">Hourly</option>
+            <option value="@daily">Daily</option>
+            <option value="@weekly">Weekly</option>
+            <option value="@monthly">Monthly</option>
+            <option value="cron">Custom cron…</option>
+          </select>
+        </label>
+        <label id="svCronWrap" class="hidden text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Cron (5-field)</span>
+          <input id="svCron" placeholder="30 6 * * 1" class="w-32 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Delivery</span>
+          <select id="svDelivery" title="Where scheduled runs go — email a download link, fire your report.completed webhook, or just keep them in Report jobs" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="none">None</option>
+            <option value="email">Email</option>
+            <option value="webhook">Webhook</option>
+          </select>
+        </label>
         {{ template "button" (dict "label" "Save query" "variant" "secondary" "type" "submit") }}
       </form>
       <div id="savedWrap">
-      {{ template "table-start" (dict "headers" (slice "Name" "Query" "")) }}
-        <tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Query" "Schedule" "Delivery" "")) }}
+        <tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -440,8 +484,53 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
+
+    <!-- ============ Webhooks ============ -->
+    <section id="section-webhooks" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Webhook subscriptions" "subtitle" "HMAC-signed HTTP POSTs to your endpoint when platform events fire") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New webhook" "variant" "secondary" "size" "sm" "onclick" "openNewWebhook()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "URL" "Events" "Status" "Created" "")) }}
+        <tbody id="webhookList"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      <p class="mt-3 text-xs text-gray-400">Deliveries are signed with the subscription's secret (<code>X-Adtech-Signature: sha256=…</code> over the raw body). Success = HTTP 2xx; failures retry with backoff. Dedup on <code>X-Adtech-Delivery</code>.</p>
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
+
+<!-- New webhook modal: create, then one-time secret reveal (same pattern as
+     the conversion-key rotation — the secret is never listed again). -->
+{{ template "modal-start" (dict "id" "newWebhook" "title" "New webhook") }}
+  <form id="webhookForm" onsubmit="createWebhook(event)">
+    {{ template "form-field" (dict "label" "Endpoint URL" "name" "wh_url" "type" "url" "placeholder" "https://example.com/hooks/adtech" "required" true) }}
+    <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Events</span>
+    {{/* Event names mirror the dispatcher's catalog (cmd/webhooks eventRoutes). */}}
+    <div class="mb-4 space-y-1 text-sm">
+      <label class="flex items-center gap-2"><input type="checkbox" class="wh_ev" value="budget.depleted" checked> <span>budget.depleted <span class="text-xs text-gray-400">— a campaign exhausts its budget</span></span></label>
+      <label class="flex items-center gap-2"><input type="checkbox" class="wh_ev" value="balance.depleted" checked> <span>balance.depleted <span class="text-xs text-gray-400">— your prepay balance hits zero</span></span></label>
+      <label class="flex items-center gap-2"><input type="checkbox" class="wh_ev" value="campaign.state_changed"> <span>campaign.state_changed <span class="text-xs text-gray-400">— a campaign is paused / resumed / archived</span></span></label>
+      <label class="flex items-center gap-2"><input type="checkbox" class="wh_ev" value="report.completed"> <span>report.completed <span class="text-xs text-gray-400">— a scheduled or async report finishes</span></span></label>
+      <label class="flex items-center gap-2"><input type="checkbox" class="wh_ev" value="retargeting.enrolled"> <span>retargeting.enrolled <span class="text-xs text-gray-400">— a shopper enrolls in a retargeting audience</span></span></label>
+    </div>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closeNewWebhook()") }}
+      {{ template "button" (dict "label" "Create webhook" "type" "submit") }}
+    </div>
+  </form>
+  <!-- Shown once after a successful create: the HMAC signing secret. -->
+  <div id="webhookResult" class="hidden mt-1">
+    <p class="text-sm mb-2">Webhook created. This signing secret is shown <strong>once</strong> — store it now:</p>
+    <div class="flex items-center gap-2 mb-4">
+      <code id="wh_secret" class="flex-1 px-2 py-1.5 rounded bg-surface-3 font-mono text-sm select-all break-all"></code>
+      {{ template "button" (dict "label" "Copy" "variant" "secondary" "size" "sm" "onclick" "copyWebhookSecret()") }}
+    </div>
+    <div class="flex justify-end">
+      {{ template "button" (dict "label" "Done" "onclick" "closeNewWebhook()") }}
+    </div>
+  </div>
+{{ template "modal-end" . }}
 
 <!-- Invite team member modal -->
 {{ template "modal-start" (dict "id" "inviteModal" "title" "Invite team member") }}
@@ -782,6 +871,11 @@
     <div id="ecName" class="mb-3 text-sm font-medium"></div>
     {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "ec_daily_budget" "type" "number") }}
     {{ template "form-field" (dict "label" "Base bid (USD)" "name" "ec_base_bid" "type" "number") }}
+    {{ template "form-field" (dict "label" "Total budget (USD)" "name" "ec_total_budget" "type" "number") }}
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Flight start" "name" "ec_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Flight end" "name" "ec_end" "type" "date") }}
+    </div>
     <label class="block text-sm">
       <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
       <select id="ec_bid_strategy" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
@@ -897,7 +991,7 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'attribution', 'reports', 'billing', 'team'];
+const SECTIONS = ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'attribution', 'reports', 'billing', 'team', 'webhooks'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'dashboard';
@@ -919,7 +1013,7 @@ function showSection(name) {
     ({dashboard: loadDashboard, portfolio: loadPortfolio, campaigns: loadCampaigns,
       creatives: loadCreatives, audiences: loadAudiences, conversions: loadConversions,
       reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
-      billing: loadBilling, team: loadTeam}[name])?.();
+      billing: loadBilling, team: loadTeam, webhooks: loadWebhooks}[name])?.();
   } else if (name === 'reports') {
     loadJobs(); // re-entering restarts the in-flight poll
   }
@@ -990,6 +1084,7 @@ const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return 
 const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [c, res.rows?.[0]?.[i]]));
 
 // ---- Dashboard ----
+let spendToday = 0; // account-level spend today (KPI query) — the low-balance rule reads it
 async function loadDashboard() {
   try {
     // One derived-metric call carries ctr (computed server-side); clicks.count
@@ -999,6 +1094,7 @@ async function loadDashboard() {
       reportQuery({table: 'clicks', metrics: ['count'], time_from: todayStart()}),
     ]);
     const i = firstRow(imps), c = firstRow(clicks);
+    spendToday = Number(i.sum_cost) || 0;
     $('kpiSpend').textContent = fmtUSD(i.sum_cost);
     $('kpiImps').textContent = fmtInt(i.count);
     $('kpiClicks').textContent = fmtInt(c.count);
@@ -1008,6 +1104,75 @@ async function loadDashboard() {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
+  await loadDashboardInsights();
+}
+
+// ---- Dashboard insights (needs-attention + top campaigns) ----
+// One batch: campaigns/creatives/billing are plain entity reads; the only
+// report queries are the shared 7d perf pair (fetchCampaignPerf7d), so the
+// dashboard stays at 2 extra report queries. Each leg is best-effort.
+async function loadDashboardInsights() {
+  const [campaigns, creatives, billing, perf] = await Promise.all([
+    fetchJSON('/v1/api/campaigns').catch(() => []),
+    fetchJSON('/v1/api/creatives').catch(() => []),
+    fetchJSON('/v1/api/billing/topup').catch(() => null),
+    fetchCampaignPerf7d().catch(() => ({})),
+  ]);
+  renderNeedsAttention(campaigns || [], creatives || [], billing);
+  renderTopCampaigns(campaigns || [], perf);
+}
+
+function renderNeedsAttention(campaigns, creatives, billing) {
+  const items = [];
+  const link = (href, label, detail) =>
+    `<a href="${href}" class="block px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-surface-3">
+      <span class="text-warn">⚠</span> ${label}${detail ? ` <span class="text-xs text-gray-400">${detail}</span>` : ''}
+    </a>`;
+  const paused = campaigns.filter(c => c.Status === 'paused').length;
+  if (paused) items.push(link('#campaigns', `${paused} paused campaign${paused === 1 ? '' : 's'}`, 'not spending — resume or archive'));
+  const rejected = creatives.filter(c => c.review_status === 'rejected').length;
+  if (rejected) items.push(link('#creatives', `${rejected} rejected creative${rejected === 1 ? '' : 's'}`, 'fix and re-upload'));
+  const pending = creatives.filter(c => c.review_status === 'pending_review').length;
+  if (pending) items.push(link('#creatives', `${pending} creative${pending === 1 ? '' : 's'} awaiting review`, 'cannot serve until approved'));
+  // Low prepay balance: under 2× today's spend or under $50. Invoiced
+  // accounts bid on credit, so the rule doesn't apply to them.
+  if (billing && billing.payment_terms !== 'invoiced') {
+    const bal = Number(billing.balance) || 0;
+    if (bal < 50 || bal < 2 * spendToday) {
+      items.push(link('#billing', `Low balance — ${fmtUSD(bal)}`, 'bidding stops at $0; add funds'));
+    }
+  }
+  if (notifUnread > 0) {
+    items.push(`<button type="button" onclick="toggleNotifs()" class="block w-full text-left px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-surface-3">
+      <span class="text-warn">⚠</span> ${notifUnread} unread notification${notifUnread === 1 ? '' : 's'}
+    </button>`);
+  }
+  $('needsAttention').classList.toggle('hidden', !items.length);
+  $('needsAttentionList').innerHTML = items.join('');
+}
+
+function renderTopCampaigns(campaigns, perf) {
+  const tbody = $('topCampaignsBody');
+  if (!campaigns.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No campaigns yet — create your first on the Campaigns screen.</td></tr>';
+    return;
+  }
+  const dash = '<span class="text-gray-300 dark:text-gray-600">—</span>';
+  const top = campaigns.slice().sort((a, b) =>
+    (Number(b.SpentToday) || 0) - (Number(a.SpentToday) || 0)
+    || (perf[b.ID]?.spend || 0) - (perf[a.ID]?.spend || 0)).slice(0, 5);
+  tbody.innerHTML = top.map(c => {
+    const p = perf[c.ID] || {};
+    return `
+    <tr onclick="location.hash='#campaigns'" class="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800" title="Open Campaigns">
+      <td class="px-3 py-2 font-medium">${esc(c.Name)}</td>
+      <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${BADGE[c.Status] || BADGE.ended}">${esc(c.Status)}</span></td>
+      <td class="px-3 py-2 font-mono">${spendUsed(c)}</td>
+      <td class="px-3 py-2 font-mono">${p.imps ? fmtInt(p.imps) : dash}</td>
+      <td class="px-3 py-2 font-mono">${p.clicks ? fmtInt(p.clicks) : dash}</td>
+      <td class="px-3 py-2 font-mono">${p.ctr != null ? p.ctr.toFixed(2) + '%' : dash}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ---- Live dashboard polling ----
@@ -1094,6 +1259,25 @@ function servingWarning(c) {
   return '';
 }
 
+// fetchCampaignPerf7d runs the per-campaign perf pair (last 7 days) shared by
+// the campaigns table and the dashboard's top-campaigns snapshot. Returns
+// campaign_id → {imps, clicks, spend, ctr}.
+async function fetchCampaignPerf7d() {
+  const [imps, clks] = await Promise.all([
+    reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'ctr'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
+    reportQuery({table: 'clicks', metrics: ['count'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
+  ]);
+  const im = rowsByKey(imps, 'campaign_id'), cm = rowsByKey(clks, 'campaign_id');
+  const perf = {};
+  new Set([...Object.keys(im), ...Object.keys(cm)]).forEach(id => {
+    const i = Number(im[id]?.count || 0), c = Number(cm[id]?.count || 0);
+    // ctr is computed server-side by the metrics engine (null when no imps).
+    const ctr = im[id]?.ctr;
+    perf[id] = {imps: i, clicks: c, spend: Number(im[id]?.sum_cost || 0), ctr: ctr == null ? null : +ctr};
+  });
+  return perf;
+}
+
 async function loadCampaigns() {
   const tbody = tbodyOf('campaigns');
   let perf = {};
@@ -1101,19 +1285,8 @@ async function loadCampaigns() {
     campaignsCache = await fetchJSON('/v1/api/campaigns') || [];
     // Per-campaign performance (last 7 days), merged into the rows. Best-effort:
     // a reporting hiccup shows the campaigns without perf rather than failing the list.
-    try {
-      const [imps, clks] = await Promise.all([
-        reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'ctr'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
-        reportQuery({table: 'clicks', metrics: ['count'], dimensions: ['campaign_id'], time_from: daysAgo(7)}),
-      ]);
-      const im = rowsByKey(imps, 'campaign_id'), cm = rowsByKey(clks, 'campaign_id');
-      new Set([...Object.keys(im), ...Object.keys(cm)]).forEach(id => {
-        const i = Number(im[id]?.count || 0), c = Number(cm[id]?.count || 0);
-        // ctr is computed server-side by the metrics engine (null when no imps).
-        const ctr = im[id]?.ctr;
-        perf[id] = {imps: i, clicks: c, spend: Number(im[id]?.sum_cost || 0), ctr: ctr == null ? null : +ctr};
-      });
-    } catch (_) { /* perf is optional decoration */ }
+    try { perf = await fetchCampaignPerf7d(); }
+    catch (_) { /* perf is optional decoration */ }
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
     return;
@@ -1256,6 +1429,9 @@ function openEdit(id) {
   $('ecName').textContent = c.Name;
   $('ec_daily_budget').value = c.DailyBudget;
   $('ec_base_bid').value = c.BaseBid;
+  $('ec_total_budget').value = c.TotalBudget || '';
+  $('ec_start').value = c.StartDate || '';
+  $('ec_end').value = c.EndDate || '';
   $('ec_bid_strategy').value = c.BidModel || 'cpm';
   $('ec_pacing').value = c.PacingMode || 'even';
   // Prefill targeting from the campaign's current rules (Include/Exclude sets).
@@ -1275,6 +1451,8 @@ function openEdit(id) {
   $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
   $('ec_mod_tod').value = timeModsToStr(mods.TimeOfDay);
   $('ec_timezone').value = c.Timezone || '';
+  $('ec_fc_limit').value = c.FreqCapLimit || '';
+  $('ec_fc_window').value = c.FreqCapWindow || 'day';
   $('ec_rotation').value = c.CreativeRotation || 'bandit';
   renderCreativePicker(c);
   $('editCampaign').classList.remove('hidden');
@@ -1336,13 +1514,21 @@ async function saveCampaign(ev) {
   };
   const ecTz = $('ec_timezone').value.trim();
   if (ecTz) body.timezone = ecTz;
-  // Frequency cap: blank leaves it unchanged; a number sets it; 0 clears it.
-  // (Not prefilled — the DSP read model doesn't carry the cap; enter a value
-  // only to change it.)
+  // IO fields — only send when set (total budget must be positive; the
+  // flight inputs are prefilled, so blank means "leave as is").
+  const ecTotal = parseFloat($('ec_total_budget').value);
+  if (ecTotal > 0) body.total_budget = ecTotal;
+  if ($('ec_start').value) body.start_date = $('ec_start').value;
+  if ($('ec_end').value) body.end_date = $('ec_end').value;
+  // Frequency cap (prefilled): a number sets it; blanking a previously-set
+  // cap clears it (falls back to the platform default).
+  const ecPrev = campaignsCache.find(x => x.ID === $('ecID').value);
   const ecFcRaw = $('ec_fc_limit').value.trim();
   if (ecFcRaw !== '') {
     const n = parseInt(ecFcRaw, 10);
     body.frequency_cap = {limit: n > 0 ? n : 0, window: $('ec_fc_window').value};
+  } else if (ecPrev && ecPrev.FreqCapLimit) {
+    body.frequency_cap = {limit: 0};
   }
   body.creative_rotation = $('ec_rotation').value;
   // Only replace attachments when at least one creative is checked.
@@ -2102,7 +2288,7 @@ async function loadSaved() {
   try {
     savedCache = await fetchJSON('/v1/api/reports/saved') || [];
   } catch (err) {
-    savedTbody().innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    savedTbody().innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
     return;
   }
   savedTbody().innerHTML = savedCache.length ? savedCache.map(s => {
@@ -2111,6 +2297,8 @@ async function loadSaved() {
     return `<tr class="border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
       <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
+      <td class="px-3 py-2 font-mono text-xs">${s.schedule ? esc(s.schedule) : '<span class="text-gray-400">manual</span>'}</td>
+      <td class="px-3 py-2 text-xs">${s.delivery && s.delivery !== 'none' ? esc(s.delivery) : '<span class="text-gray-400">—</span>'}</td>
       <td class="px-3 py-2 text-right whitespace-nowrap">
         <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
         <button onclick="jobFromSaved('${esc(s.id)}')" title="Run async and download the result" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run as job</button>
@@ -2118,7 +2306,12 @@ async function loadSaved() {
       </td>
     </tr>`;
   }).join('')
-    : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+    : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
+}
+
+// The custom-cron input only appears when "Custom cron…" is picked.
+function toggleCronInput() {
+  $('svCronWrap').classList.toggle('hidden', $('svSchedule').value !== 'cron');
 }
 
 function currentQueryConfig() {
@@ -2133,7 +2326,19 @@ function currentQueryConfig() {
 
 async function saveQuery(ev) {
   ev.preventDefault();
-  const body = {name: $('svName').value.trim(), query_config: currentQueryConfig(), delivery: 'none'};
+  // Schedule: interval keyword, or the free-text cron when "custom" is picked.
+  // The gateway validates (reportrunner.ValidSchedule) so junk gets a clear 400.
+  let schedule = $('svSchedule').value;
+  if (schedule === 'cron') {
+    schedule = $('svCron').value.trim();
+    if (!schedule) { toast('Enter a 5-field cron expression', 'error'); return; }
+  }
+  const body = {
+    name: $('svName').value.trim(),
+    query_config: currentQueryConfig(),
+    schedule,
+    delivery: $('svDelivery').value,
+  };
   try {
     await fetchJSON('/v1/api/reports/saved', {method: 'POST', body: JSON.stringify(body)});
     toast('Query saved', 'success');
@@ -2226,12 +2431,13 @@ function runAsJob(ev) {
       time_from: daysAgo(days),
     },
     format: $('repFormat').value,
+    delivery: $('repDelivery').value,
   }, 'watch the Report jobs table below');
 }
 
 function jobFromSaved(id) {
   const s = savedCache.find(x => x.id === id);
-  submitReportJob({saved_report_id: id, format: $('repFormat').value},
+  submitReportJob({saved_report_id: id, format: $('repFormat').value, delivery: $('repDelivery').value},
     s ? esc(s.name) : 'from saved query');
 }
 
@@ -2432,6 +2638,60 @@ async function openInvoice(id) {
   }
 }
 
+// ---- Webhooks ----
+// Subscription CRUD (GET/POST/DELETE /v1/api/webhooks). The HMAC secret is
+// returned once on create — revealed in the modal, never listed again — so
+// delete is plain toast (no undo could restore the secret).
+async function loadWebhooks() {
+  const tbody = $('webhookList');
+  try {
+    const hooks = await fetchJSON('/v1/api/webhooks') || [];
+    tbody.innerHTML = hooks.length ? hooks.map(h => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs max-w-[20rem] truncate" title="${esc(h.url)}">${esc(h.url)}</td>
+        <td class="px-3 py-2">${(h.events || []).map(e => `<span class="inline-block mr-1 mb-0.5 text-xs px-1.5 py-0.5 rounded bg-surface-3 text-gray-500 font-mono">${esc(e)}</span>`).join('')}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${h.status === 'active' ? 'bg-success/15 text-success' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(h.status)}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(h.created_at)}</td>
+        <td class="px-3 py-2 text-right"><button onclick="deleteWebhook('${esc(h.id)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Delete</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No webhooks yet — add an endpoint to receive platform events.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openNewWebhook() {
+  $('webhookForm').reset();
+  $('webhookForm').classList.remove('hidden');
+  $('webhookResult').classList.add('hidden');
+  $('newWebhook').classList.remove('hidden');
+}
+function closeNewWebhook() { $('newWebhook').classList.add('hidden'); }
+function copyWebhookSecret() {
+  navigator.clipboard?.writeText($('wh_secret').textContent).then(() => toast('Secret copied', 'info'));
+}
+async function createWebhook(ev) {
+  ev.preventDefault();
+  const events = [...document.querySelectorAll('#webhookForm .wh_ev:checked')].map(b => b.value);
+  if (!events.length) { toast('Pick at least one event', 'error'); return; }
+  try {
+    const res = await fetchJSON('/v1/api/webhooks', {method: 'POST',
+      body: JSON.stringify({url: $('wh_url').value.trim(), events})});
+    // Reveal the one-time secret in place (toasts fade; this must persist).
+    $('wh_secret').textContent = res.secret;
+    $('webhookForm').classList.add('hidden');
+    $('webhookResult').classList.remove('hidden');
+    toast('Webhook created', 'success');
+    loadWebhooks();
+  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
+}
+async function deleteWebhook(id) {
+  try {
+    await fetchJSON('/v1/api/webhooks?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Webhook deleted', 'success');
+    loadWebhooks();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
+
 // ---- Agency act-as switcher ----
 // Agencies reuse this portal; the switcher picks which managed advertiser
 // account to operate as. Selection is an act_as_account cookie the gateway
@@ -2481,7 +2741,9 @@ function renderNotifs(list) {
     </div>`;
   }).join('');
 }
+let notifUnread = 0; // last polled unread count — the needs-attention card reads it
 function setNotifBadge(n) {
+  notifUnread = n;
   const b = $('notifBadge');
   if (!b) return;
   if (n > 0) { b.textContent = n > 99 ? '99+' : n; b.classList.remove('hidden'); }
