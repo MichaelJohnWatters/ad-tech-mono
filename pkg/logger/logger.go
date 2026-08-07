@@ -66,11 +66,15 @@ func writerForService(service string) io.Writer {
 
 // NewWithWriter creates a logger that writes to the given writer.
 // Useful for testing (write to a buffer instead of stdout).
+//
+// Request-scoped INFO/DEBUG lines are sampled by trace ID when
+// LOG_SAMPLE_RATIO (or OTEL_SAMPLE_RATIO) < 1 — see sampling.go. With the
+// env unset every line passes, exactly as before.
 func NewWithWriter(service string, w io.Writer) *slog.Logger {
 	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level: logLevel(),
 	})
-	return slog.New(handler).With("service", service)
+	return slog.New(newSamplingHandler(handler, requestLogSampleRatio())).With("service", service)
 }
 
 // WithTraceID adds a trace_id to the context for propagation.
