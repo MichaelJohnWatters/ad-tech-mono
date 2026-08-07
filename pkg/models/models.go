@@ -118,7 +118,21 @@ type FreqCapRule struct {
 	CampaignID string
 	Limit      int           // max impressions per user per window (0 = no cap)
 	Window     time.Duration // rolling window for the counter TTL
+	// Scope selects which counter the limit is enforced against: empty or
+	// FreqCapScopeUser = the per-user counter (with the household counter
+	// co-enforced when an hh: id is derivable — the platform default);
+	// FreqCapScopeHousehold = the household counter ONLY (co-viewing devices
+	// share the allowance; falls back to the per-user counter when no
+	// household id resolves).
+	Scope string
 }
+
+// Frequency-cap scopes for FreqCapRule.Scope (the advertiser-facing
+// frequency_cap.scope input). Empty means FreqCapScopeUser.
+const (
+	FreqCapScopeUser      = "user"      // default: limit per user (household co-enforced)
+	FreqCapScopeHousehold = "household" // limit shared by the whole household
+)
 
 // Account represents an advertiser, publisher, agency, staff, or admin account.
 type Account struct {

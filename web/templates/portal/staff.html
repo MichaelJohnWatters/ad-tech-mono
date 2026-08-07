@@ -302,6 +302,58 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Privacy console (opt-out registry) ============ -->
+    <section id="section-privacy" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Opt-out lookup" "subtitle" "Check an identity against the opt-out registry — level, source, and when it was requested") }}
+      <form class="flex gap-3 items-end mb-4" onsubmit="lookupPrivacy(event)">
+        <label class="block text-sm grow">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">User / device / household id</span>
+          <input id="privLookupId" placeholder="user-123 · hh:… · uid2 token" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+        </label>
+        {{ template "button" (dict "label" "Look up" "type" "submit") }}
+      </form>
+      <div id="privacyResult" class="text-sm"><p class="text-gray-400">Enter an identifier above.</p></div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Record an opt-out (support intake)" "subtitle" "On behalf of a user who contacted support — recorded with source \"support\", enforced platform-wide within a second (DSP no-bid + segment strip, tracker pixel reject). Level 3 is irreversible.") }}
+      <form class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end" onsubmit="submitPrivacyOptOut(event)">
+        <label class="block text-sm md:col-span-2">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">User id</span>
+          <input id="privIntakeId" placeholder="user-123" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" required>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Level</span>
+          <select id="privIntakeLevel" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="1">1 — no personalisation</option>
+            <option value="2">2 — no tracking</option>
+            <option value="3">3 — full deletion</option>
+          </select>
+        </label>
+        {{ template "button" (dict "label" "Record opt-out" "type" "submit") }}
+      </form>
+      <p class="mt-2 text-xs text-gray-400">Level 1: contextual ads only, no behavioural targeting. Level 2: cookie deleted, no frequency caps / identity graph / user-level events. Level 3: GDPR/CCPA erasure — everything purged, history anonymised.</p>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Recent opt-outs" "subtitle" "Latest registry entries, platform-wide — newest first") }}
+      {{ template "table-start" (dict "headers" (slice "User" "Level" "Source" "Requested" "Completed")) }}
+        <tbody id="privacyRecent"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Shading insights (DSP bid shading) ============ -->
+    <section id="section-shading" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Bid shading — per-placement win/loss" "subtitle" "Live from the DSP's in-memory tracker (pkg/bidshading) — read-only; shading is model-driven, there are no knobs") }}
+      <div class="flex items-center justify-between mb-3 gap-4">
+        <p class="text-xs text-gray-400">First-price auctions overpay when you bid your full value. The DSP records every win (did we overpay?) and loss (what price cleared?) per placement, builds a win-rate curve from them, and shades bids toward the lowest price that still wins the target share of auctions.</p>
+        {{ template "button" (dict "label" "Refresh" "variant" "secondary" "size" "sm" "onclick" "loadShading()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Placement" "Bids" "Wins" "Losses" "Win rate" "Avg clearing" "Below floor" "Outbid")) }}
+        <tbody id="shadingTable"><tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Retargeting oversight ============ -->
     <section id="section-retargeting" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Retargeting audiences" "subtitle" "Real-time retargeting pools across ALL advertisers — tag, window, and live enrollment (cmd/audience-rt enrolls on site_visit, suppresses on purchase)") }}
@@ -667,12 +719,12 @@ async function fetchJSON(url, opts = {}) {
 }
 
 // ---- Section switching ----
-const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
 const loaded = {};
 function showSection(name) {
   if (!SECTIONS.includes(name)) name = 'overview';
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
+  $('crumbSection').textContent = {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
     const active = a.getAttribute('href') === '#' + name;
     a.classList.toggle('bg-brand/10', active);
@@ -683,7 +735,7 @@ function showSection(name) {
   });
   if (!loaded[name]) {
     loaded[name] = true;
-    ({overview: loadOverview, impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, agencies: loadAgencies, houseads: loadHouseAds, audit: loadAudit, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
+    ({overview: loadOverview, impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, agencies: loadAgencies, houseads: loadHouseAds, audit: loadAudit, privacy: loadPrivacy, shading: loadShading, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
   }
 }
 window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
@@ -2078,6 +2130,100 @@ function minioLink(bucket, key, label) {
   const href = `${MINIO_CONSOLE}/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(prefix)}`;
   return `<a class="underline decoration-dotted hover:text-brand" href="${href}" target="_blank" title="open in Minio console">${esc(label)}</a>`;
 }
+// ---- Privacy console (opt-out registry) ----
+// Level semantics mirror docs/PLAN.md → "User Opt-Out and Data Deletion
+// System"; the API returns the raw registry row, the scope text is rendered
+// here so support staff see what the level actually does.
+const PRIVACY_LEVELS = {
+  0: {name: 'No opt-out on file', cls: 'text-success', scope: 'Full personalisation and tracking apply — nothing recorded for this identity.'},
+  1: {name: 'Level 1 — no personalisation', cls: 'text-warning', scope: 'No behavioural/audience targeting; contextual ads only. Anonymous event data kept, history not deleted.'},
+  2: {name: 'Level 2 — no tracking', cls: 'text-warning', scope: 'Platform cookie deleted. No frequency caps, identity graph, or user-level events — ads served fully anonymous.'},
+  3: {name: 'Level 3 — full deletion', cls: 'text-error', scope: 'GDPR/CCPA erasure: everything purged, historical data anonymised. Irreversible — as if the user never existed.'},
+};
+
+async function loadPrivacy() {
+  const tbody = $('privacyRecent');
+  if (!tbody) return;
+  try {
+    const list = await fetchJSON('/v1/api/privacy/optouts') || [];
+    tbody.innerHTML = list.length ? list.map(o => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(o.user_id)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${o.level === 3 ? 'bg-error/15 text-error' : 'bg-warning/15 text-warning'}">Level ${o.level}</span></td>
+        <td class="px-3 py-2 text-xs">${esc(o.source)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500" title="${esc(o.requested_at)}">${ago(o.requested_at)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${o.completed_at ? ago(o.completed_at) : 'pending'}</td>
+      </tr>`).join('')
+      : `<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No opt-outs recorded.</td></tr>`;
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function lookupPrivacy(e) {
+  e.preventDefault();
+  const id = $('privLookupId').value.trim();
+  const out = $('privacyResult');
+  if (!id) { out.innerHTML = '<p class="text-gray-400">Enter an identifier above.</p>'; return; }
+  out.innerHTML = '<p class="text-gray-400">Looking up…</p>';
+  try {
+    const s = await fetchJSON('/v1/api/privacy/status?id=' + encodeURIComponent(id));
+    const lvl = PRIVACY_LEVELS[s.level] || PRIVACY_LEVELS[0];
+    out.innerHTML = `
+      <div class="rounded-lg border border-gray-200 dark:border-gray-800 p-4 space-y-1">
+        <div class="font-mono text-xs text-gray-500">${esc(s.user_id)}</div>
+        <div class="font-semibold ${lvl.cls}">${lvl.name}</div>
+        <p class="text-xs text-gray-500 dark:text-gray-400">${lvl.scope}</p>
+        ${s.opted_out ? `<p class="text-xs text-gray-400">Requested ${ago(s.requested_at)} via <span class="font-mono">${esc(s.source)}</span>${s.completed_at ? ' · completed ' + ago(s.completed_at) : ' · propagation pending'}${s.verified_at ? ' · verified ' + ago(s.verified_at) : ''}</p>` : ''}
+      </div>`;
+  } catch (err) {
+    out.innerHTML = `<p class="text-error">Lookup failed — ${esc(err.message)}</p>`;
+  }
+}
+
+async function submitPrivacyOptOut(e) {
+  e.preventDefault();
+  const userId = $('privIntakeId').value.trim();
+  const level = parseInt($('privIntakeLevel').value, 10);
+  if (!userId) { toast('Enter a user id', 'info'); return; }
+  try {
+    await fetchJSON('/v1/api/privacy/optouts', {
+      method: 'POST',
+      body: JSON.stringify({user_id: userId, level, source: 'support'}),
+    });
+    toast(`Opt-out recorded — level ${level}. Enforcers pick it up within a second.`, 'success');
+    $('privIntakeId').value = '';
+    loadPrivacy();
+  } catch (err) { toast('Record failed: ' + err.message, 'error'); }
+}
+
+// ---- Shading insights (DSP bid shading, read-only) ----
+// The DSP returns map[placement_id]PlacementStats with Go field names
+// (TotalBids/Wins/Losses/WinRate/AvgClearing/BelowFloor/Outbid).
+async function loadShading() {
+  const tbody = $('shadingTable');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>';
+  try {
+    const data = await fetchJSON('/v1/api/staff/shading') || {};
+    const rows = Object.entries(data).sort((a, b) => (b[1].TotalBids || 0) - (a[1].TotalBids || 0));
+    tbody.innerHTML = rows.length ? rows.map(([pid, s]) => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(pid)}</td>
+        <td class="px-3 py-2 font-mono">${(s.TotalBids || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono text-success">${(s.Wins || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono">${(s.Losses || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono">${((s.WinRate || 0) * 100).toFixed(1)}%</td>
+        <td class="px-3 py-2 font-mono">$${(s.AvgClearing || 0).toFixed(2)}</td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${(s.BelowFloor || 0).toLocaleString()}</td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${(s.Outbid || 0).toLocaleString()}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">No win/loss data yet — the tracker fills as auctions run (it resets on a DSP restart).</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
 async function loadStaffRetargeting() {
   loadStaffChannels();
   const tbody = document.getElementById('staffRetargetList');

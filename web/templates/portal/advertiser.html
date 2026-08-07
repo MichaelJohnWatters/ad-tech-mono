@@ -666,12 +666,18 @@
       </label>
       {{ template "form-field" (dict "label" "Campaign timezone (IANA — for time-of-day modifiers)" "name" "nc_timezone" "placeholder" "UTC") }}
       <p class="text-xs text-gray-400 mb-2">Modifiers adjust the bid up/down by percent and stack; applied before the floor check. Hours 24h, end exclusive; end ≤ start wraps midnight.</p>
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Frequency cap (impressions/user)" "name" "nc_fc_limit" "type" "number" "placeholder" "blank = platform default") }}
+      <div class="grid grid-cols-3 gap-x-4">
+        {{ template "form-field" (dict "label" "Frequency cap (impressions)" "name" "nc_fc_limit" "type" "number" "placeholder" "blank = platform default") }}
         <label class="block text-sm">
           <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap window</span>
           <select id="nc_fc_window" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="day">Day</option><option value="hour">Hour</option><option value="week">Week</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap scope</span>
+          <select id="nc_fc_scope" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="user">Per user</option><option value="household">Per household</option>
           </select>
         </label>
       </div>
@@ -926,12 +932,18 @@
         <textarea id="ec_mod_tod" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="9-18 20"></textarea>
       </label>
       {{ template "form-field" (dict "label" "Campaign timezone (IANA)" "name" "ec_timezone") }}
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Frequency cap (impressions/user)" "name" "ec_fc_limit" "type" "number") }}
+      <div class="grid grid-cols-3 gap-x-4">
+        {{ template "form-field" (dict "label" "Frequency cap (impressions)" "name" "ec_fc_limit" "type" "number") }}
         <label class="block text-sm">
           <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap window</span>
           <select id="ec_fc_window" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="day">Day</option><option value="hour">Hour</option><option value="week">Week</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap scope</span>
+          <select id="ec_fc_scope" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="user">Per user</option><option value="household">Per household</option>
           </select>
         </label>
       </div>
@@ -1384,7 +1396,7 @@ async function createCampaign(ev) {
   const tz = $('nc_timezone').value.trim();
   if (tz) body.timezone = tz;
   const fcLimit = parseInt($('nc_fc_limit').value, 10);
-  if (fcLimit > 0) body.frequency_cap = {limit: fcLimit, window: $('nc_fc_window').value};
+  if (fcLimit > 0) body.frequency_cap = {limit: fcLimit, window: $('nc_fc_window').value, scope: $('nc_fc_scope').value};
   const total = parseFloat($('nc_total_budget').value);
   if (total > 0) body.total_budget = total;
   if ($('nc_start').value) body.start_date = $('nc_start').value;
@@ -1454,6 +1466,7 @@ function openEdit(id) {
   $('ec_timezone').value = c.Timezone || '';
   $('ec_fc_limit').value = c.FreqCapLimit || '';
   $('ec_fc_window').value = c.FreqCapWindow || 'day';
+  $('ec_fc_scope').value = c.FreqCapScope || 'user';
   $('ec_rotation').value = c.CreativeRotation || 'bandit';
   renderCreativePicker(c);
   $('editCampaign').classList.remove('hidden');
@@ -1527,7 +1540,7 @@ async function saveCampaign(ev) {
   const ecFcRaw = $('ec_fc_limit').value.trim();
   if (ecFcRaw !== '') {
     const n = parseInt(ecFcRaw, 10);
-    body.frequency_cap = {limit: n > 0 ? n : 0, window: $('ec_fc_window').value};
+    body.frequency_cap = {limit: n > 0 ? n : 0, window: $('ec_fc_window').value, scope: $('ec_fc_scope').value};
   } else if (ecPrev && ecPrev.FreqCapLimit) {
     body.frequency_cap = {limit: 0};
   }

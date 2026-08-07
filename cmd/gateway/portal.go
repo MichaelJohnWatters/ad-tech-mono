@@ -183,6 +183,8 @@ var staffNav = []NavItem{
 	{Label: "House ads", Href: "#houseads", Icon: "🏠", Perm: "support:read"},
 	{Label: "Audit log", Href: "#audit", Icon: "▤", Perm: "audit:read"},
 	{Label: "Profiles", Href: "#profiles", Icon: "◔", Perm: "support:read"},
+	{Label: "Privacy", Href: "#privacy", Icon: "🛡", Perm: "support:read"},
+	{Label: "Shading", Href: "#shading", Icon: "◑", Perm: "support:read"},
 	{Label: "Retargeting", Href: "#retargeting", Icon: "🎯", Perm: "support:read"},
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
 	{Label: "Demos", Href: "#demos", Icon: "🎓", Perm: "support:read"},

@@ -496,6 +496,9 @@ func main() {
 	mux.Handle(routes.APIOnboardingRuns, authMiddleware(http.HandlerFunc(onboardingMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIStaffRetargeting, authMiddleware(http.HandlerFunc(staffRetargetingHandler(gwDB, log))))
 	mux.Handle(routes.APIStaffChannels, authMiddleware(http.HandlerFunc(staffChannelsHandler(reportingURL, log))))
+	// Shading insights — staff read-only view of the DSP's per-placement
+	// win/loss shading state, proxied server-side (support:read).
+	mux.Handle(routes.APIStaffShading, authMiddleware(http.HandlerFunc(staffShadingHandler(dspURL, log))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic
 	// account). GET support:read (state), POST /run support:update (reset+run).
@@ -602,6 +605,13 @@ func main() {
 	// Privacy opt-out intake — operator-API-key auth like the others. Records
 	// the opt-out + fans out so the DSP stops bidding for the user.
 	mux.Handle(routes.APIPrivacyOptOut, secretsAuth(http.HandlerFunc(privacyOptOutHandler(gwDB, secretsBus, log))))
+	// Staff privacy console — JWT-gated read surface over the same registry
+	// (GET status?id= lookup / GET optouts recent list, both support:read) plus
+	// the staff intake POST on behalf of a user (support:update), which
+	// delegates to the SAME recorder the operator-key path uses so the two
+	// intakes can't drift.
+	mux.Handle(routes.APIPrivacyStatus, authMiddleware(http.HandlerFunc(privacyStatusHandler(pgPrivacyConsoleStore{db: gwDB}, log))))
+	mux.Handle(routes.APIPrivacyOptOuts, authMiddleware(http.HandlerFunc(privacyOptOutsHandler(pgPrivacyConsoleStore{db: gwDB}, privacyOptOutHandler(gwDB, secretsBus, log), log))))
 
 	// Team management — JWT-gated, tenant-scoped to the caller's account.
 	mux.Handle(routes.APITeam, authMiddleware(http.HandlerFunc(teamHandler(pgTeamStore{db: gwDB}, log))))
