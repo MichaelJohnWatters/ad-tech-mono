@@ -13,6 +13,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // webhookView is one webhooks row as the account console sees it. The HMAC
@@ -160,12 +161,14 @@ func (s pgWebhookStore) ListWebhooks(ctx context.Context, accountID string) ([]w
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77) — same pattern as deals/quality.
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, url, events, status, created_at FROM webhooks WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []webhookView{}
 	for rows.Next() {
 		var v webhookView
@@ -203,7 +206,17 @@ func (s pgWebhookStore) DeleteWebhook(ctx context.Context, accountID, id string)
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	res, err := s.db.ExecContext(ctx,
+	// Same RLS requirement as the list: without the tenant GUC the DELETE
+	// matches zero rows and every delete reports not-found.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM webhooks WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	if err != nil {
 		return err
@@ -211,5 +224,5 @@ func (s pgWebhookStore) DeleteWebhook(ctx context.Context, accountID, id string)
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }

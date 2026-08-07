@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // myRevshareView is a publisher's OWN revenue-share terms — the tenant-scoped
@@ -65,14 +66,16 @@ func (s pgMyRevshareStore) RevshareForAccount(ctx context.Context, accountID str
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77) — same pattern as deals/quality.
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, name, revshare_model,
 		        COALESCE(revshare_config::text, '{}'), COALESCE(payment_terms, 'net_30')
 		 FROM publishers WHERE account_id = $1::uuid AND status != 'archived' ORDER BY name`, accountID)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	for rows.Next() {
 		var v myRevshareView
 		var cfgJSON string

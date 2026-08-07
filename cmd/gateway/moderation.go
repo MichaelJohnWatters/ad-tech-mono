@@ -139,7 +139,11 @@ func (s pgModerationStore) ListPending(ctx context.Context) ([]moderationItem, e
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Staff cross-tenant read → platform hatch, or RLS silently blanks the
+	// queue under the NOBYPASSRLS app role (security #77; the handler already
+	// gates on moderation:read). Decide below has done this since the flip —
+	// only the list read was missed.
+	rows, closeFn, err := postgres.NewFromDB(s.db).QueryPlatform(ctx,
 		`SELECT c.id::text, c.account_id::text, a.name, c.name, c.format,
 		        COALESCE(c.width, 0), COALESCE(c.height, 0),
 		        COALESCE(c.asset_url, ''), COALESCE(c.html_content, ''),
@@ -149,7 +153,7 @@ func (s pgModerationStore) ListPending(ctx context.Context) ([]moderationItem, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []moderationItem{}
 	for rows.Next() {
 		var m moderationItem
