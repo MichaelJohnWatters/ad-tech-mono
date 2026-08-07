@@ -1,3 +1,12 @@
+> **PROGRESS 2026-08-07 (session 2):** the runtime churn is ROOT-CAUSED and
+> the big lever SHIPPED — dockerd+containerd's ~40k ctx-switches/s each was
+> the per-log-line cost of the json-file pipeline; trace-consistent request-
+> log sampling (pkg/logger, LOG_SAMPLE_RATIO) cut it 85% and moved the
+> 150rps knee 346→207ms fanout p95 (ladder: 667→346→207). Remaining levers
+> below: CAL/LOC attribution (still ~16k/s each at idle), probe/scrape
+> connection churn, vCPU-count A/B. GOMAXPROCS pinning: PROVEN BAD, listed
+> in dead-ends.
+
 # Session: the kernel-side CPU floor (~4.5 cores at 110rps)
 
 ## Context
