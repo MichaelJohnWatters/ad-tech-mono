@@ -48,6 +48,22 @@ sound; is anything needlessly complex or duplicated; where are the silent
 failure modes; is observability adequate (can the operator SEE backlog,
 drain lag, membership counts per segment today?).
 
+## Design decision (operator, 2026-08-07): a THEMED, two-tier world
+Local segments/personas/campaigns get memorable, human-checkable themes:
+a readable core of ~6-10 segments (dog-lovers, cat-lovers, coffee-snobs,
+...), simulator personas whose BEHAVIOUR coherently earns membership (a
+"dog person" browses dog content → behaviour signals → the hourly rule
+enrolls them — Phase 1's walkthrough watches a dog-lover get CREATED),
+and campaigns that target them ("Premium Dog Food Co" → dog-lovers). DSPs
+may take themed skins ("Barkstream DSP") but the four competitor
+PERSONALITIES (slowpoke/deadbeat/healthy/coinflip) are load-bearing for
+the SmartRouter bench + perf baselines and MUST keep their latency/
+bid-rate semantics. Verification then reads like English: the dog-food ad
+wins on the dog-blog page for dog personas and never shows to pure cat
+people. Density testing (Phase 3) bulk-adds SYNTHETIC dummy segments/
+memberships via a seed flag AROUND the readable core — perf numbers
+without sacrificing comprehension.
+
 ## Phase 3 — density + cadence (from the perf sessions' thread)
 - Seed a segment-dense world: O(100) segments, O(100k-1M) memberships,
   a slice of big-world campaigns with audience predicates + bid modifiers
