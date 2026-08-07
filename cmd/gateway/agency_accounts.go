@@ -37,9 +37,19 @@ type agencyAssignInput struct {
 	ManagedAccountID string `json:"managed_account_id"`
 }
 
+// agencyOption is one agency account for the staff assign picker. The
+// /v1/api/accounts list only carries advertiser + publisher types, so the
+// staff console's agency dropdown loads from GET ?list=agencies here instead.
+type agencyOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type agencyAccountStore interface {
 	// ListManagedAccounts returns assignments; agencyID="" returns all (staff).
 	ListManagedAccounts(ctx context.Context, agencyID string) ([]agencyManagedView, error)
+	// ListAgencies returns every agency-type account (staff assign picker).
+	ListAgencies(ctx context.Context) ([]agencyOption, error)
 	AssignManagedAccount(ctx context.Context, agencyID, managedID string) error
 	UnassignManagedAccount(ctx context.Context, agencyID, managedID string) error
 }
@@ -60,6 +70,22 @@ func agencyAccountsHandler(store agencyAccountStore, log *slog.Logger) http.Hand
 
 		switch r.Method {
 		case http.MethodGet:
+			// ?list=agencies → the agency-account roster for the staff assign
+			// picker (includes agencies with zero assignments). Staff only.
+			if r.URL.Query().Get("list") == "agencies" {
+				if !isStaff {
+					http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+					return
+				}
+				agencies, err := store.ListAgencies(r.Context())
+				if err != nil {
+					log.Error("agency roster list failed", "error", err)
+					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(agencies)
+				return
+			}
 			// An agency sees its own; staff see all (or a specific ?agency_id).
 			var forAgency string
 			switch {
@@ -161,6 +187,29 @@ func (s pgAgencyAccountStore) ListManagedAccounts(ctx context.Context, agencyID 
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s pgAgencyAccountStore) ListAgencies(ctx context.Context) ([]agencyOption, error) {
+	if s.db == nil {
+		return nil, sql.ErrConnDone
+	}
+	// Cross-tenant read of the accounts roster (staff-only caller) → platform
+	// hatch so RLS admits it under the NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.NewFromDB(s.db).QueryPlatform(ctx,
+		`SELECT id::text, name FROM accounts WHERE type = 'agency' AND status != 'archived' ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn()
+	out := []agencyOption{}
+	for rows.Next() {
+		var a agencyOption
+		if err := rows.Scan(&a.ID, &a.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

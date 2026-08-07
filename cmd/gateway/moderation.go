@@ -15,12 +15,20 @@ import (
 )
 
 // moderationItem is a creative awaiting review, as the staff queue sees it.
+// Width/Height/AssetURL/HTMLContent/LandingURL feed the staff preview modal —
+// the queue renders the actual creative (sandboxed) so staff don't approve
+// blind. asset_url is the object key the /v1/creatives/ proxy serves.
 type moderationItem struct {
 	ID           string    `json:"id"`
 	AccountID    string    `json:"account_id"`
 	Advertiser   string    `json:"advertiser"`
 	Name         string    `json:"name"`
 	Format       string    `json:"format"`
+	Width        int       `json:"width"`
+	Height       int       `json:"height"`
+	AssetURL     string    `json:"asset_url"`
+	HTMLContent  string    `json:"html_content"`
+	LandingURL   string    `json:"landing_url"`
 	ReviewStatus string    `json:"review_status"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -132,7 +140,10 @@ func (s pgModerationStore) ListPending(ctx context.Context) ([]moderationItem, e
 		return nil, sql.ErrConnDone
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT c.id::text, c.account_id::text, a.name, c.name, c.format, c.review_status, c.created_at
+		`SELECT c.id::text, c.account_id::text, a.name, c.name, c.format,
+		        COALESCE(c.width, 0), COALESCE(c.height, 0),
+		        COALESCE(c.asset_url, ''), COALESCE(c.html_content, ''),
+		        c.landing_url, c.review_status, c.created_at
 		 FROM creatives c JOIN accounts a ON a.id = c.account_id
 		 WHERE c.review_status = 'pending_review' ORDER BY c.created_at LIMIT 200`)
 	if err != nil {
@@ -142,7 +153,9 @@ func (s pgModerationStore) ListPending(ctx context.Context) ([]moderationItem, e
 	out := []moderationItem{}
 	for rows.Next() {
 		var m moderationItem
-		if err := rows.Scan(&m.ID, &m.AccountID, &m.Advertiser, &m.Name, &m.Format, &m.ReviewStatus, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.AccountID, &m.Advertiser, &m.Name, &m.Format,
+			&m.Width, &m.Height, &m.AssetURL, &m.HTMLContent,
+			&m.LandingURL, &m.ReviewStatus, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

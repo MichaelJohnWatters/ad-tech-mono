@@ -93,6 +93,13 @@ type campaignWithSpend struct {
 	models.Campaign
 	SpentToday     float64 `json:"SpentToday"`
 	AdvertiserName string  `json:"AdvertiserName,omitempty"`
+	// Edit-form prefill fields the bid-path Campaign model doesn't carry:
+	// the IO flight window and the advertiser's own frequency cap (the
+	// line_item-dimension entry of targeting_rules.frequency_caps).
+	StartDate     string `json:"StartDate,omitempty"` // YYYY-MM-DD
+	EndDate       string `json:"EndDate,omitempty"`   // YYYY-MM-DD
+	FreqCapLimit  int    `json:"FreqCapLimit,omitempty"`
+	FreqCapWindow string `json:"FreqCapWindow,omitempty"` // hour | day | week
 }
 
 // campaignsCollectionHandler dispatches by method on /v1/dsp/campaigns:
@@ -146,6 +153,18 @@ func campaignsCollectionHandler(cache *warm.Cache[models.Campaign], db *sql.DB, 
 					}
 				} else {
 					log.Warn("advertiser name lookup failed", "error", err)
+				}
+				// Flight window + frequency cap for the portal's edit prefill.
+				// Skipped on error — the edit form still works, just unprefilled.
+				if meta, err := lookupCampaignEditMeta(r.Context(), db, all); err == nil {
+					for i := range out {
+						if m, ok := meta[out[i].ID]; ok {
+							out[i].StartDate, out[i].EndDate = m.startDate, m.endDate
+							out[i].FreqCapLimit, out[i].FreqCapWindow = m.capLimit, m.capWindow
+						}
+					}
+				} else {
+					log.Warn("campaign edit-meta lookup failed", "error", err)
 				}
 			}
 			json.NewEncoder(w).Encode(out)
@@ -640,6 +659,11 @@ INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1, 
 type patchCampaignRequest struct {
 	BaseBid     *float64 `json:"base_bid,omitempty"`
 	DailyBudget *float64 `json:"daily_budget,omitempty"`
+	// IO-level fields (insertion_orders): total budget cap + flight window.
+	// Same validation as create; land on the campaign's parent IO row.
+	TotalBudget *float64 `json:"total_budget,omitempty"`
+	StartDate   *string  `json:"start_date,omitempty"` // YYYY-MM-DD
+	EndDate     *string  `json:"end_date,omitempty"`   // YYYY-MM-DD
 	Status      *string  `json:"status,omitempty"`
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
@@ -673,6 +697,20 @@ type patchCampaignRequest struct {
 	FreqCap *freqCapInput `json:"frequency_cap,omitempty"`
 }
 
+// hasIOFields reports whether the patch touches the parent insertion_orders
+// row (total budget / flight window).
+func (p patchCampaignRequest) hasIOFields() bool {
+	return p.TotalBudget != nil || p.StartDate != nil || p.EndDate != nil
+}
+
+// strFrom dereferences an optional string ("" for nil).
+func strFrom(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // hasTargeting reports whether the patch touches any targeting column.
 func (p patchCampaignRequest) hasTargeting() bool {
 	return p.IncludeGeo != nil || p.ExcludeGeo != nil ||
@@ -703,9 +741,26 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
 		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil &&
-		req.CreativeRotation == nil && req.Creatives == nil && req.ProductCategory == nil && !req.hasTargeting() {
+		req.CreativeRotation == nil && req.Creatives == nil && req.ProductCategory == nil &&
+		!req.hasIOFields() && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
 		return
+	}
+	if req.TotalBudget != nil && *req.TotalBudget <= 0 {
+		http.Error(w, "total_budget must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.StartDate != nil || req.EndDate != nil {
+		start, end := strFrom(req.StartDate), strFrom(req.EndDate)
+		if start == "" && req.StartDate != nil || end == "" && req.EndDate != nil ||
+			!validDate(start) || !validDate(end) {
+			http.Error(w, "start_date and end_date must be YYYY-MM-DD when set", http.StatusBadRequest)
+			return
+		}
+		if start != "" && end != "" && end < start {
+			http.Error(w, "end_date must be on or after start_date", http.StatusBadRequest)
+			return
+		}
 	}
 	if req.CreativeRotation != nil && !validCreativeRotations[*req.CreativeRotation] {
 		http.Error(w, "creative_rotation must be even, weighted, bandit or sequential", http.StatusBadRequest)
@@ -854,6 +909,30 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return errors.New("campaign not found or RLS blocked update")
+	}
+	// IO-level fields (total budget / flight window) land on the parent
+	// insertion_orders row in the same tx.
+	if req.hasIOFields() {
+		ioSets := []string{"updated_at = now()"}
+		ioArgs := []any{}
+		if req.TotalBudget != nil {
+			ioArgs = append(ioArgs, *req.TotalBudget)
+			ioSets = append(ioSets, fmt.Sprintf("budget = $%d", len(ioArgs)))
+		}
+		if req.StartDate != nil {
+			ioArgs = append(ioArgs, *req.StartDate)
+			ioSets = append(ioSets, fmt.Sprintf("start_date = $%d::date", len(ioArgs)))
+		}
+		if req.EndDate != nil {
+			ioArgs = append(ioArgs, *req.EndDate)
+			ioSets = append(ioSets, fmt.Sprintf("end_date = $%d::date", len(ioArgs)))
+		}
+		ioArgs = append(ioArgs, lineItemID)
+		ioQ := fmt.Sprintf("UPDATE insertion_orders SET %s WHERE id = (SELECT insertion_order_id FROM line_items WHERE id = $%d)",
+			strings.Join(ioSets, ", "), len(ioArgs))
+		if _, err := tx.ExecContext(ctx, ioQ, ioArgs...); err != nil {
+			return fmt.Errorf("io update: %w", err)
+		}
 	}
 	// Targeting edits land in the same tx on targeting_rules (keyed by
 	// line_item_id) so a campaign + targeting patch is atomic.
@@ -1083,6 +1162,73 @@ func lookupAccountNames(ctx context.Context, db *sql.DB, ids []string) (map[stri
 		out[id] = name
 	}
 	return out, rows.Err()
+}
+
+// campaignEditMeta is the per-campaign prefill data joined into the GET
+// response: IO flight window + the line_item-dimension frequency cap.
+type campaignEditMeta struct {
+	startDate, endDate string
+	capLimit           int
+	capWindow          string
+}
+
+// lookupCampaignEditMeta batch-loads flight dates and frequency caps for the
+// listed campaigns (one query, keyed by line-item id). Platform-read hatch,
+// same as the campaign loader that produced the list — the rows are already
+// scope-filtered.
+func lookupCampaignEditMeta(ctx context.Context, db *sql.DB, campaigns []models.Campaign) (map[string]campaignEditMeta, error) {
+	out := map[string]campaignEditMeta{}
+	if len(campaigns) == 0 {
+		return out, nil
+	}
+	ids := make([]string, len(campaigns))
+	for i, c := range campaigns {
+		ids[i] = c.ID
+	}
+	rows, closeRows, err := postgres.NewFromDB(db).QueryPlatform(ctx, `
+SELECT li.id::text, COALESCE(io.start_date::text, ''), COALESCE(io.end_date::text, ''),
+       COALESCE(tr.frequency_caps::text, '[]')
+FROM line_items li
+JOIN insertion_orders io ON io.id = li.insertion_order_id
+LEFT JOIN targeting_rules tr ON tr.line_item_id = li.id
+WHERE li.id = ANY($1::uuid[])`, pq.StringArray(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows()
+	for rows.Next() {
+		var id, capsJSON string
+		var m campaignEditMeta
+		if err := rows.Scan(&id, &m.startDate, &m.endDate, &capsJSON); err != nil {
+			return nil, err
+		}
+		m.capLimit, m.capWindow = lineItemCapFromJSON(capsJSON)
+		out[id] = m
+	}
+	return out, rows.Err()
+}
+
+// lineItemCapFromJSON extracts the line_item-dimension cap from the
+// frequency_caps JSONB array — the same shape freqCapInput.validateAndJSON
+// writes. (0, "") when the campaign has no cap of its own.
+func lineItemCapFromJSON(raw string) (limit int, window string) {
+	if raw == "" || raw == "[]" {
+		return 0, ""
+	}
+	var caps []struct {
+		Dimension string `json:"dimension"`
+		Window    string `json:"window"`
+		Limit     int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
+		return 0, ""
+	}
+	for _, c := range caps {
+		if c.Dimension == "line_item" && c.Limit > 0 {
+			return c.Limit, c.Window
+		}
+	}
+	return 0, ""
 }
 
 // lookupLineItemAccount finds which account owns this line item so we can
