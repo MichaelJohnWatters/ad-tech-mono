@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -244,5 +245,113 @@ func TestEngine_ViewabilityRate_VideoChannel(t *testing.T) {
 	}
 	if got := col(t, res2, "viewability_rate"); !approx(got, 70.0) {
 		t.Errorf("overall viewability_rate = %v, want 70.0", got)
+	}
+}
+
+// seedMedia builds a memory store with quartile pings for two advertiser
+// tenants: acctA (10 starts, 6 completes across two campaigns) and acctB
+// (5 starts, 5 completes) — the second tenant catches scope leaks, exactly
+// like seed() does with pubB.
+func seedMedia(t *testing.T) *analytics.MemoryStore {
+	t.Helper()
+	s := analytics.NewMemory()
+	ctx := context.Background()
+	ts := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	add := func(n int, acct, campaign, event string) {
+		for i := 0; i < n; i++ {
+			_ = s.InsertMediaEvent(ctx, &analytics.MediaEvent{
+				TraceID: "tr", Channel: "video", EventType: event,
+				CampaignID: campaign, PublisherID: "pubA", AccountID: acct, Timestamp: ts,
+			})
+		}
+	}
+	add(6, "acctA", "c1", "start")
+	add(4, "acctA", "c1", "complete")
+	add(4, "acctA", "c2", "start")
+	add(2, "acctA", "c2", "complete")
+	add(10, "acctA", "c1", "midpoint") // never counted as start/complete
+	add(5, "acctB", "c9", "start")
+	add(5, "acctB", "c9", "complete")
+	return s
+}
+
+// TestEngine_CompletionRate: completes/starts as a percent, computed from the
+// media_events filtered counts, with the tenant filter (the one the gateway's
+// enforceReportTenant forces) riding through both sources.
+func TestEngine_CompletionRate(t *testing.T) {
+	eng := NewQueryEngine(seedMedia(t), nil)
+	res, err := eng.Query(context.Background(), analytics.QueryParams{
+		Table:   "media_events",
+		Metrics: []string{"media_starts", "media_completes", "completion_rate"},
+		Filters: map[string]string{"account_id": "acctA"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// acctA only: 10 starts, 6 completes → 60% (acctB's 100% must not blend in).
+	if got := col(t, res, "media_starts"); !approx(got, 10) {
+		t.Errorf("media_starts = %v, want 10 (acctB leaked?)", got)
+	}
+	if got := col(t, res, "media_completes"); !approx(got, 6) {
+		t.Errorf("media_completes = %v, want 6", got)
+	}
+	if got := col(t, res, "completion_rate"); !approx(got, 60.0) {
+		t.Errorf("completion_rate = %v, want 60.0", got)
+	}
+}
+
+// TestEngine_CompletionRate_GroupedByCampaign: per-campaign quartile rollup —
+// the dimension set every advertiser report uses.
+func TestEngine_CompletionRate_GroupedByCampaign(t *testing.T) {
+	eng := NewQueryEngine(seedMedia(t), nil)
+	res, err := eng.Query(context.Background(), analytics.QueryParams{
+		Table:      "media_events",
+		Metrics:    []string{"media_starts", "completion_rate"},
+		Dimensions: []string{"campaign_id"},
+		Filters:    map[string]string{"account_id": "acctA"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"c1": 4.0 / 6.0 * 100, "c2": 50.0}
+	if len(res.Rows) != 2 {
+		t.Fatalf("rows = %d (%+v), want 2 (c1, c2)", len(res.Rows), res.Rows)
+	}
+	for _, row := range res.Rows {
+		c := fmt.Sprint(row[0])
+		got, ok := toFloat(row[2])
+		if !ok {
+			t.Fatalf("completion_rate for %s not numeric: %v", c, row[2])
+		}
+		if !approx(got, want[c]) {
+			t.Errorf("completion_rate[%s] = %v, want %v", c, got, want[c])
+		}
+	}
+}
+
+// TestEngine_CompletionRate_NullWhenNoStarts: zero starts → null (client
+// renders "—"), never a fake 0% — mirrors the other ratio metrics' contract.
+func TestEngine_CompletionRate_NullWhenNoStarts(t *testing.T) {
+	s := analytics.NewMemory()
+	ctx := context.Background()
+	// Completes with NO recorded start (lost start beacon): denominator 0.
+	_ = s.InsertMediaEvent(ctx, &analytics.MediaEvent{
+		TraceID: "tr", Channel: "video", EventType: "complete",
+		AccountID: "acctZ", Timestamp: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+	})
+	eng := NewQueryEngine(s, nil)
+	res, err := eng.Query(ctx, analytics.QueryParams{
+		Table:   "media_events",
+		Metrics: []string{"completion_rate"},
+		Filters: map[string]string{"account_id": "acctZ"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(res.Rows))
+	}
+	if res.Rows[0][0] != nil {
+		t.Errorf("completion_rate = %v, want nil (null) when starts=0", res.Rows[0][0])
 	}
 }

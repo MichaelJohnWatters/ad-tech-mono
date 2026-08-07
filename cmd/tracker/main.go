@@ -629,35 +629,31 @@ func main() {
 	// in dev-no-NATS mode, in which case the publish is a no-op and we still
 	// return 204 so the player keeps firing pings.
 	mux.HandleFunc(routes.TrackerVideo, func(w http.ResponseWriter, r *http.Request) {
-		traceID := r.URL.Query().Get("tid")
-		eventType := r.URL.Query().Get("event")
+		q := r.URL.Query()
+		traceID := q.Get("tid")
+		eventType := q.Get("event")
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("video_event", "event_type", eventType)
 		if !mediaGate.allow(w, r, "video", eventType, traceID, reqLog) {
 			return
 		}
-		go publisher.publishVideo(context.WithoutCancel(ctx), events.VideoEvent{
-			TraceID:   traceID,
-			EventType: eventType,
-			Timestamp: time.Now(),
-		}, reqLog)
+		go publisher.publishVideo(context.WithoutCancel(ctx),
+			videoEventFromQuery(q, traceID, eventType, time.Now()), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
-		traceID := r.URL.Query().Get("tid")
-		eventType := r.URL.Query().Get("event")
+		q := r.URL.Query()
+		traceID := q.Get("tid")
+		eventType := q.Get("event")
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("audio_event", "event_type", eventType)
 		if !mediaGate.allow(w, r, "audio", eventType, traceID, reqLog) {
 			return
 		}
-		go publisher.publishAudio(context.WithoutCancel(ctx), events.AudioEvent{
-			TraceID:   traceID,
-			EventType: eventType,
-			Timestamp: time.Now(),
-		}, reqLog)
+		go publisher.publishAudio(context.WithoutCancel(ctx),
+			audioEventFromQuery(q, traceID, eventType, time.Now()), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -740,6 +736,39 @@ func channelOrDefault(ch string) string {
 		return constants.ChannelDisplay
 	}
 	return ch
+}
+
+// videoEventFromQuery / audioEventFromQuery build the typed media events from
+// the ALREADY-PARSED (and HMAC-verified — the gate ran first) beacon params.
+// Attribution mirrors the impression pixel exactly: cid/crid/pid/pubid plus
+// advid → AccountID, so advertiser-tenant scoping on media_events works the
+// same way it does on impressions. Read-only over q — no lookups, no I/O
+// (hot-path iron rule). Legacy beacons signed before advid landed simply
+// yield empty attribution fields.
+func videoEventFromQuery(q url.Values, traceID, eventType string, now time.Time) events.VideoEvent {
+	return events.VideoEvent{
+		TraceID:     traceID,
+		EventType:   eventType,
+		CampaignID:  q.Get("cid"),
+		CreativeID:  q.Get("crid"),
+		PlacementID: q.Get("pid"),
+		PublisherID: q.Get("pubid"),
+		AccountID:   q.Get("advid"),
+		Timestamp:   now,
+	}
+}
+
+func audioEventFromQuery(q url.Values, traceID, eventType string, now time.Time) events.AudioEvent {
+	return events.AudioEvent{
+		TraceID:     traceID,
+		EventType:   eventType,
+		CampaignID:  q.Get("cid"),
+		CreativeID:  q.Get("crid"),
+		PlacementID: q.Get("pid"),
+		PublisherID: q.Get("pubid"),
+		AccountID:   q.Get("advid"),
+		Timestamp:   now,
+	}
 }
 
 func (p *eventPublisher) publishImpression(ctx context.Context, e analytics.ImpressionEvent, log *slog.Logger) {

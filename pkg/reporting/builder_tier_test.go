@@ -145,3 +145,70 @@ func toF(v interface{}) float64 {
 		return -1
 	}
 }
+
+// A deal_id group-by can't be served from rollups (the events rollup doesn't
+// carry the dimension), so even with matching rollup rows present AND AutoTier
+// on, the builder must fall through to the raw table — where deal_id lives on
+// every impression row. Guards the "don't add deal_id to rollup configs"
+// decision: if someone ever adds it to rollupDimensions without adding it to
+// the actual rollup engine, this test's raw-vs-rollup counts diverge.
+func TestBuilder_DealIDDimensionBypassesRollups(t *testing.T) {
+	store := analytics.NewMemory()
+	ctx := context.Background()
+	to := time.Now().UTC().Truncate(time.Hour)
+	from := to.Add(-3 * time.Hour)
+
+	// A rollup row that WOULD serve an account-scoped count query (count=999,
+	// deliberately wrong) — if the deal_id group-by reads rollups, we see 999.
+	if err := store.InsertRollups(ctx, []analytics.RollupRow{
+		rr("events", "hourly", to.Add(-time.Hour), to,
+			map[string]string{"account_id": "acct1", "campaign_id": "c1"},
+			map[string]float64{"count": 999}),
+	}); err != nil {
+		t.Fatalf("seed rollups: %v", err)
+	}
+	ts := to.Add(-30 * time.Minute)
+	for i := 0; i < 3; i++ {
+		_ = store.InsertImpression(ctx, &analytics.ImpressionEvent{
+			AccountID: "acct1", CampaignID: "c1", DealID: "deal-pmp-1", Timestamp: ts})
+	}
+	for i := 0; i < 2; i++ {
+		_ = store.InsertImpression(ctx, &analytics.ImpressionEvent{
+			AccountID: "acct1", CampaignID: "c1", DealID: "deal-pg-2", Timestamp: ts})
+	}
+
+	res, err := NewBuilder(store).
+		Table("impressions").Metrics("count").GroupBy("deal_id").
+		ForAccount("acct1").TimeRange(from, to).AutoTier().Build(ctx)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got := map[string]float64{}
+	for _, row := range res.Rows {
+		got[row[0].(string)] = toF(row[1])
+	}
+	if len(got) != 2 || got["deal-pmp-1"] != 3 || got["deal-pg-2"] != 2 {
+		t.Fatalf("got %+v, want raw per-deal counts {deal-pmp-1:3 deal-pg-2:2} (999 would mean the rollup fast path served a deal_id group-by)", got)
+	}
+}
+
+// deal_id as a FILTER must also bypass rollups and scope raw rows.
+func TestBuilder_DealIDFilterReadsRaw(t *testing.T) {
+	store := analytics.NewMemory()
+	ctx := context.Background()
+	to := time.Now().UTC().Truncate(time.Hour)
+	ts := to.Add(-30 * time.Minute)
+	_ = store.InsertImpression(ctx, &analytics.ImpressionEvent{AccountID: "acct1", DealID: "deal-a", Timestamp: ts})
+	_ = store.InsertImpression(ctx, &analytics.ImpressionEvent{AccountID: "acct1", DealID: "deal-b", Timestamp: ts})
+
+	res, err := NewBuilder(store).
+		Table("impressions").Metrics("count").
+		Filter("deal_id", "deal-a").
+		ForAccount("acct1").TimeRange(to.Add(-3*time.Hour), to).AutoTier().Build(ctx)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(res.Rows) != 1 || toF(res.Rows[0][0]) != 1 {
+		t.Fatalf("got %+v, want count=1 (deal-a only)", res.Rows)
+	}
+}

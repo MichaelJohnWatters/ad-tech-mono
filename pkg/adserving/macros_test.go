@@ -176,12 +176,13 @@ func TestBuildClickURL(t *testing.T) {
 // rewritten event invalidates the signature.
 func TestBuildVideoEventURL(t *testing.T) {
 	ctx := MacroContext{
-		AuctionID:   "trace-abc",
-		CampaignID:  "li-1",
-		CreativeID:  "cr-1",
-		PlacementID: "pl-1",
-		PublisherID: "pub-1",
-		TrackerURL:  "http://tracker:8083",
+		AuctionID:    "trace-abc",
+		CampaignID:   "li-1",
+		CreativeID:   "cr-1",
+		PlacementID:  "pl-1",
+		PublisherID:  "pub-1",
+		AdvertiserID: "acct-1",
+		TrackerURL:   "http://tracker:8083",
 	}
 	signed := BuildVideoEventURL(ctx, "firstQuartile")
 	if !strings.Contains(signed, "/v1/t/video?") {
@@ -189,6 +190,11 @@ func TestBuildVideoEventURL(t *testing.T) {
 	}
 	if !strings.Contains(signed, "event=firstQuartile") {
 		t.Errorf("URL must carry event=firstQuartile, got %s", signed)
+	}
+	// advid rides signed so the tracker can stamp account_id (tenant scope)
+	// onto the media event, mirroring the impression pixel.
+	if !strings.Contains(signed, "advid=acct-1") {
+		t.Errorf("URL must carry advid=acct-1, got %s", signed)
 	}
 	u, _ := url.Parse(signed)
 	if !ValidateSignature(u.Path, u.Query(), DefaultSigningKey) {
@@ -204,12 +210,13 @@ func TestBuildVideoEventURL(t *testing.T) {
 
 func TestBuildAudioEventURL(t *testing.T) {
 	ctx := MacroContext{
-		AuctionID:   "trace-abc",
-		CampaignID:  "li-1",
-		CreativeID:  "cr-1",
-		PlacementID: "pl-1",
-		PublisherID: "pub-1",
-		TrackerURL:  "http://tracker:8083",
+		AuctionID:    "trace-abc",
+		CampaignID:   "li-1",
+		CreativeID:   "cr-1",
+		PlacementID:  "pl-1",
+		PublisherID:  "pub-1",
+		AdvertiserID: "acct-1",
+		TrackerURL:   "http://tracker:8083",
 	}
 	signed := BuildAudioEventURL(ctx, "complete")
 	if !strings.Contains(signed, "/v1/t/audio?") {
@@ -217,6 +224,9 @@ func TestBuildAudioEventURL(t *testing.T) {
 	}
 	if !strings.Contains(signed, "event=complete") {
 		t.Errorf("audio URL must carry event=complete, got %s", signed)
+	}
+	if !strings.Contains(signed, "advid=acct-1") {
+		t.Errorf("audio URL must carry advid=acct-1, got %s", signed)
 	}
 }
 

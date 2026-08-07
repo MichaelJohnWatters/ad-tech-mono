@@ -152,6 +152,8 @@ func (c *ClickHouse) createTables() error {
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS media_events (
 			trace_id String, channel String, event_type String, position_ms Int64,
+			campaign_id String, creative_id String, placement_id String,
+			publisher_id String, account_id String,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS serve_no_fills (
@@ -296,6 +298,17 @@ func (c *ClickHouse) createTables() error {
 		// CREATE-d table — the batch insert appends by column order, so a mismatch
 		// (ALTER defaults to appending at the end) would corrupt every batched row.
 		`ALTER TABLE impressions ADD COLUMN IF NOT EXISTS impression_qty Int32 DEFAULT 1 AFTER deal_id`,
+		// Media-event attribution (quartile reporting): campaign/creative/
+		// placement/publisher/account, mirroring the impression row so quartile
+		// reports slice and tenant-scope the same way. AFTER position_ms (chained)
+		// so ALTER-upgraded tables match a fresh CREATE column-for-column; both
+		// insert paths name their columns anyway, so order is belt-and-braces.
+		// Old rows read as empty = pre-attribution beacons.
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS campaign_id String AFTER position_ms`,
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS creative_id String AFTER campaign_id`,
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS placement_id String AFTER creative_id`,
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS publisher_id String AFTER placement_id`,
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS account_id String AFTER publisher_id`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
 			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
@@ -408,9 +421,13 @@ func (c *ClickHouse) InsertMediaEvent(ctx context.Context, e *MediaEvent) error 
 		tsv = time.Now()
 	}
 	return c.exec(ctx, "media_event",
-		`INSERT INTO media_events (trace_id, channel, event_type, position_ms, schema_version, timestamp)
-		VALUES (?,?,?,?,?,?)`,
-		e.TraceID, e.Channel, e.EventType, e.PositionMs, int32(1), tsv)
+		`INSERT INTO media_events (trace_id, channel, event_type, position_ms,
+			campaign_id, creative_id, placement_id, publisher_id, account_id,
+			schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		e.TraceID, e.Channel, e.EventType, e.PositionMs,
+		e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID, e.AccountID,
+		int32(1), tsv)
 }
 
 func (c *ClickHouse) InsertBatch(ctx context.Context, events []Event) error {

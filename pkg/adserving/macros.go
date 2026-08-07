@@ -178,6 +178,10 @@ func BuildVideoEventURL(ctx MacroContext, event string) string {
 	params.Set("crid", ctx.CreativeID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	// advid rides signed (same as the impression pixel) so the tracker can
+	// stamp account_id onto the media event — advertiser-tenant scoping for
+	// quartile reporting works exactly like impressions.
+	params.Set("advid", ctx.AdvertiserID)
 	if event != "" {
 		params.Set("event", event)
 	}
@@ -196,6 +200,7 @@ func BuildAudioEventURL(ctx MacroContext, event string) string {
 	params.Set("crid", ctx.CreativeID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	params.Set("advid", ctx.AdvertiserID) // signed, same rationale as video
 	if event != "" {
 		params.Set("event", event)
 	}

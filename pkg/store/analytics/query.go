@@ -62,6 +62,14 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 			// views.iab_viewable is 0/1, so SUM == the count of IAB-viewable
 			// views — the numerator for viewability_rate.
 			selectParts = append(selectParts, "SUM(iab_viewable) AS sum_viewable")
+		case "media_starts":
+			// media_events quartile counts: countIf is ClickHouse-native, which
+			// is fine — media_events is hot-only (not in exportTables, so the
+			// cold s3() path never sees these metrics). Denominator for
+			// completion_rate.
+			selectParts = append(selectParts, "countIf(event_type = 'start') AS media_starts")
+		case "media_completes":
+			selectParts = append(selectParts, "countIf(event_type = 'complete') AS media_completes")
 		default:
 			selectParts = append(selectParts, metric)
 		}

@@ -989,7 +989,9 @@ func (c *EventConsumer) handleVideo(ctx context.Context, msg *events.Message) er
 	if err := c.store.InsertMediaEvent(ctx, &analytics.MediaEvent{
 		TraceID: src.TraceID, Channel: "video",
 		EventType: src.EventType, PositionMs: src.PositionMs,
-		Timestamp: src.Timestamp,
+		CampaignID: src.CampaignID, CreativeID: src.CreativeID,
+		PlacementID: src.PlacementID, PublisherID: src.PublisherID,
+		AccountID: src.AccountID, Timestamp: src.Timestamp,
 	}); err != nil {
 		c.log.Error("insert video media event", "error", err, "trace_id", src.TraceID)
 	}
@@ -1007,7 +1009,9 @@ func (c *EventConsumer) handleAudio(ctx context.Context, msg *events.Message) er
 	if err := c.store.InsertMediaEvent(ctx, &analytics.MediaEvent{
 		TraceID: src.TraceID, Channel: "audio",
 		EventType: src.EventType, PositionMs: src.PositionMs,
-		Timestamp: src.Timestamp,
+		CampaignID: src.CampaignID, CreativeID: src.CreativeID,
+		PlacementID: src.PlacementID, PublisherID: src.PublisherID,
+		AccountID: src.AccountID, Timestamp: src.Timestamp,
 	}); err != nil {
 		c.log.Error("insert audio media event", "error", err, "trace_id", src.TraceID)
 	}

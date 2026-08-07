@@ -334,15 +334,16 @@
           <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option>impressions</option><option>clicks</option><option>conversions</option>
             <option>views</option><option>auctions</option><option>auction_wins</option>
+            <option>media_events</option>
           </select>
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics</span>
-          <input id="repMetrics" value="count,sum_cost" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <input id="repMetrics" value="count,sum_cost" title="count, sum_cost, ctr, ecpm — on media_events (video/audio quartiles): media_starts, media_completes, completion_rate" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by</span>
-          <input id="repDims" placeholder="campaign_id,day" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <input id="repDims" placeholder="campaign_id,day" title="campaign_id, creative_id, placement_id, deal_id, day, hour — media_events also groups by channel and event_type" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
