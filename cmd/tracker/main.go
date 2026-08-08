@@ -119,6 +119,9 @@ func main() {
 	// race the first request — so the tracker registers them on the default
 	// path below with the shared registry.
 	fraudChecker := fraud.NewRealTimeChecker(fraud.DefaultConfig())
+	// Fraud-check client-IP resolver (shared trusted-proxy parser; hops read
+	// live from tracker.trusted_proxy_hops). See clientip.go.
+	clientIP := newClientIPFn(cfg)
 	// DB-driven IP/UA blocklists, refreshed into the checker on a poll +
 	// NATS invalidate. Nil when no database.url — hardcoded patterns remain.
 	blocklistCache := startFraudBlocklistCache(cfg, log, bus, fraudChecker)
@@ -627,6 +630,7 @@ func main() {
 		sigValidation: func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
 		expValidation: func() bool { return keys.Tracker.ExpValidation.Get(cfg) },
 		fraud:         fraudChecker,
+		clientIP:      clientIP,
 		dedup:         dedup,
 		publisher:     publisher,
 	}

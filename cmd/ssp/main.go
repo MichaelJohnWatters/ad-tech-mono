@@ -236,9 +236,12 @@ func main() {
 		}
 		return identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), ip)
 	}
-	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn))
+	// End-user IP resolution (household + identity fingerprint): shared
+	// trusted-proxy parse, allowlist-gated ?ip= override. See clientip.go.
+	endUserIPFn := newEndUserIPFn(cfg)
+	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, shedOnEventPressure(log, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)))
+	mux.HandleFunc(routes.SSPServe, shedOnEventPressure(log, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn)))
 
 	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
 	sspRL := middleware.NewLiveRateLimiter(func() middleware.RateLimitConfig {
@@ -386,7 +389,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // requestAdHandler (X-ray) and serveAdHandler (visitor). Returns the bid
 // response plus the placement row so the caller can decide how much detail
 // to expose to its caller.
-func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) (auctionContext, bool) {
+func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string, endUserIPFn func(*http.Request) string) (auctionContext, bool) {
 	serveStart := time.Now()
 	placementExt := r.URL.Query().Get("placement_id")
 	geo := r.URL.Query().Get("geo")
@@ -579,18 +582,19 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// token when there's no first-party user_id.
 	uid2 := r.URL.Query().Get("uid2")
 	// Household (CTV): derive the platform household id from the end user's
-	// IP and carry it as an EID. Same IP precedence as the identity
-	// fingerprint: explicit ?ip= first (the ad tag forwards the device IP —
-	// the SSP otherwise sees the publisher server or LB address), then the
-	// connection-derived client IP. Stamped like segments — the DSP enforces
-	// the consent gate before USING it. A fully anonymous viewer still has a
-	// household, so this creates the User object even without user_id/uid2.
+	// IP and carry it as an EID. The IP is resolved ONCE here — shared
+	// trusted-proxy parse plus the allowlist-gated ?ip= override (see
+	// clientip.go) — and reused for the identity fingerprint below, so the
+	// household and the fingerprint can never disagree for one viewer.
+	// Stamped like segments — the DSP enforces the consent gate before USING
+	// it. A fully anonymous viewer still has a household, so this creates the
+	// User object even without user_id/uid2.
+	endUserIP := ""
+	if endUserIPFn != nil {
+		endUserIP = endUserIPFn(r)
+	}
 	householdID := ""
 	if householdFn != nil {
-		endUserIP := r.URL.Query().Get("ip")
-		if endUserIP == "" {
-			endUserIP = clientIP(r)
-		}
 		householdID = householdFn(endUserIP)
 	}
 	// feeSegs is the data-monetization attribution captured when (and only
@@ -706,7 +710,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 
 	// Auto-build the identity graph: link any identifiers that co-occurred on
 	// this request. No-op when observation is disabled (nil observer).
-	idPublisher.Observe(r, userID, uid2, householdID)
+	idPublisher.Observe(r, userID, uid2, householdID, endUserIP)
 
 	// Behavioural signal: one consent-gated request row (self-contained —
 	// content categories stamped now from the placement warm cache). The
@@ -878,9 +882,9 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 // price, deal_id). A real publisher page should NOT call this — auction
 // internals must not leak to the browser. The /v1/ssp/serve endpoint is
 // the realistic visitor-facing path.
-func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func requestAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string, endUserIPFn func(*http.Request) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn)
 		if !ok {
 			return
 		}
@@ -1057,9 +1061,9 @@ func doAdServe(ctx context.Context, adServerURL string, body []byte) (int, []byt
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string, endUserIPFn func(*http.Request) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn)
+		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn)
 		if !ok {
 			return
 		}

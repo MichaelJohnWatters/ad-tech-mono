@@ -8,6 +8,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clientip"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/fraud"
 )
@@ -24,6 +25,7 @@ func newTestGate(sigValidation bool) mediaEventGate {
 		sigValidation: func() bool { return sigValidation },
 		expValidation: func() bool { return true },
 		fraud:         fraud.NewRealTimeChecker(fraud.DefaultConfig()),
+		clientIP:      func(r *http.Request) string { return clientip.Resolve(r, 0) },
 		dedup:         NewDedup(cache.NewMemoryL2(), dedupTTL, dedupOn, log),
 		publisher:     pub,
 	}
