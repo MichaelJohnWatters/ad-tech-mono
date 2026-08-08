@@ -208,15 +208,7 @@ func (s pgWebhookStore) DeleteWebhook(ctx context.Context, accountID, id string)
 	}
 	// Same RLS requirement as the list: without the tenant GUC the DELETE
 	// matches zero rows and every delete reports not-found.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
-		return err
-	}
-	res, err := tx.ExecContext(ctx,
+	res, err := postgres.ExecTenantDB(ctx, s.db, accountID,
 		`DELETE FROM webhooks WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	if err != nil {
 		return err
@@ -224,5 +216,5 @@ func (s pgWebhookStore) DeleteWebhook(ctx context.Context, accountID, id string)
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	return tx.Commit()
+	return nil
 }

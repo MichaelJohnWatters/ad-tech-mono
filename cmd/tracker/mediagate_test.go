@@ -58,7 +58,7 @@ func TestMediaGate_UnsignedRejectedInStrictMode(t *testing.T) {
 	g := newTestGate(true)
 	rec := httptest.NewRecorder()
 	r := playerRequest("http://tracker/v1/t/video?tid=trace-spoof&event=complete")
-	if g.allow(rec, r, "video", "complete", "trace-spoof", nopLog()) {
+	if ok, _ := g.allow(rec, r, "video", "complete", "trace-spoof", nopLog()); ok {
 		t.Fatal("unsigned beacon allowed in strict mode")
 	}
 	if rec.Code != http.StatusForbidden {
@@ -74,12 +74,12 @@ func TestMediaGate_SignedAllowedThenDeduped(t *testing.T) {
 	url := signedVideoBeacon("trace-a", "start")
 
 	rec1 := httptest.NewRecorder()
-	if !g.allow(rec1, playerRequest(url), "video", "start", "trace-a", nopLog()) {
+	if ok, _ := g.allow(rec1, playerRequest(url), "video", "start", "trace-a", nopLog()); !ok {
 		t.Fatalf("signed beacon rejected: status=%d", rec1.Code)
 	}
 
 	rec2 := httptest.NewRecorder()
-	if g.allow(rec2, playerRequest(url), "video", "start", "trace-a", nopLog()) {
+	if ok, _ := g.allow(rec2, playerRequest(url), "video", "start", "trace-a", nopLog()); ok {
 		t.Fatal("re-fired quartile not deduped (over-count)")
 	}
 	if rec2.Code != http.StatusNoContent {
@@ -94,13 +94,13 @@ func TestMediaGate_DistinctQuartilesEachRecordOnce(t *testing.T) {
 	g := newTestGate(true)
 	for _, ev := range []string{"start", "firstQuartile", "midpoint", "thirdQuartile", "complete"} {
 		rec := httptest.NewRecorder()
-		if !g.allow(rec, playerRequest(signedVideoBeacon("trace-b", ev)), "video", ev, "trace-b", nopLog()) {
+		if ok, _ := g.allow(rec, playerRequest(signedVideoBeacon("trace-b", ev)), "video", ev, "trace-b", nopLog()); !ok {
 			t.Errorf("quartile %q rejected on first fire: status=%d", ev, rec.Code)
 		}
 	}
 	// A re-fire of any one quartile is still dropped.
 	rec := httptest.NewRecorder()
-	if g.allow(rec, playerRequest(signedVideoBeacon("trace-b", "midpoint")), "video", "midpoint", "trace-b", nopLog()) {
+	if ok, _ := g.allow(rec, playerRequest(signedVideoBeacon("trace-b", "midpoint")), "video", "midpoint", "trace-b", nopLog()); ok {
 		t.Error("re-fired midpoint not deduped")
 	}
 }
@@ -112,7 +112,7 @@ func TestMediaGate_FraudBlockedSilent204(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", signedVideoBeacon("trace-bot", "start"), nil)
 	r.Header.Set("User-Agent", "Googlebot/2.1 (+http://www.google.com/bot.html)")
-	if g.allow(rec, r, "video", "start", "trace-bot", nopLog()) {
+	if ok, _ := g.allow(rec, r, "video", "start", "trace-bot", nopLog()); ok {
 		t.Fatal("bot beacon allowed")
 	}
 	if rec.Code != http.StatusNoContent {
@@ -127,7 +127,7 @@ func TestMediaGate_UnsignedAllowedInDevMode(t *testing.T) {
 	g := newTestGate(false)
 	rec := httptest.NewRecorder()
 	r := playerRequest("http://tracker/v1/t/audio?tid=trace-dev&event=start")
-	if !g.allow(rec, r, "audio", "start", "trace-dev", nopLog()) {
+	if ok, _ := g.allow(rec, r, "audio", "start", "trace-dev", nopLog()); !ok {
 		t.Fatalf("unsigned beacon rejected in dev mode: status=%d", rec.Code)
 	}
 }

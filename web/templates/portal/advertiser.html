@@ -391,7 +391,7 @@
             <option value="@daily">Daily</option>
             <option value="@weekly">Weekly</option>
             <option value="@monthly">Monthly</option>
-            <option value="cron">Custom cron…</option>
+            <option value="custom">Custom cron…</option>
           </select>
         </label>
         <label id="svCronWrap" class="hidden text-sm">
@@ -1098,7 +1098,7 @@ const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [
 
 // ---- Dashboard ----
 let spendToday = 0; // account-level spend today (KPI query) — the low-balance rule reads it
-async function loadDashboard() {
+async function loadDashboard(withInsights = true) {
   try {
     // One derived-metric call carries ctr (computed server-side); clicks.count
     // still comes back on its own for the Clicks card.
@@ -1117,13 +1117,14 @@ async function loadDashboard() {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
-  await loadDashboardInsights();
+  if (withInsights) await loadDashboardInsights();
 }
 
 // ---- Dashboard insights (needs-attention + top campaigns) ----
-// One batch: campaigns/creatives/billing are plain entity reads; the only
-// report queries are the shared 7d perf pair (fetchCampaignPerf7d), so the
-// dashboard stays at 2 extra report queries. Each leg is best-effort.
+// One batch of 4 extra HTTP calls (campaigns + creatives + billing entity reads
+// plus the shared 7d perf pair in fetchCampaignPerf7d) — not free, so the poll
+// only re-runs it every 4th tick (~60s); KPIs/trend stay on the 15s cadence.
+// Each leg is best-effort.
 async function loadDashboardInsights() {
   const [campaigns, creatives, billing, perf] = await Promise.all([
     fetchJSON('/v1/api/campaigns').catch(() => []),
@@ -1191,13 +1192,16 @@ function renderTopCampaigns(campaigns, perf) {
 // ---- Live dashboard polling ----
 // Refresh KPIs every 15s while the dashboard is on screen and the tab is
 // visible; skip if a refresh is still in flight (no overlap, no work hidden).
+// Insights are heavier (4 extra HTTP calls) so they only ride every 4th tick.
 let dashInFlight = false;
+let dashTick = 0;
 async function refreshDashboard() {
   if (dashInFlight) return;
   if (document.visibilityState !== 'visible') return;
   if ($('section-dashboard')?.classList.contains('hidden')) return;
   dashInFlight = true;
-  try { await loadDashboard(); } finally { dashInFlight = false; }
+  dashTick++;
+  try { await loadDashboard(dashTick % 4 === 0); } finally { dashInFlight = false; }
 }
 setInterval(refreshDashboard, 15000);
 
@@ -2325,7 +2329,7 @@ async function loadSaved() {
 
 // The custom-cron input only appears when "Custom cron…" is picked.
 function toggleCronInput() {
-  $('svCronWrap').classList.toggle('hidden', $('svSchedule').value !== 'cron');
+  $('svCronWrap').classList.toggle('hidden', $('svSchedule').value !== 'custom');
 }
 
 function currentQueryConfig() {
@@ -2343,7 +2347,7 @@ async function saveQuery(ev) {
   // Schedule: interval keyword, or the free-text cron when "custom" is picked.
   // The gateway validates (reportrunner.ValidSchedule) so junk gets a clear 400.
   let schedule = $('svSchedule').value;
-  if (schedule === 'cron') {
+  if (schedule === 'custom') {
     schedule = $('svCron').value.trim();
     if (!schedule) { toast('Enter a 5-field cron expression', 'error'); return; }
   }

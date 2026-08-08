@@ -1151,7 +1151,7 @@ const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [
 // server-side and always runs under the caller's validated publisher_id scope.
 
 // ---- Dashboard ----
-async function loadDashboard() {
+async function loadDashboard(withDepth = true) {
   try {
     // One derived-metric call carries fill_rate/ecpm/net_revenue (all computed
     // server-side); a tiny auctions.count call feeds the "Ad requests" card.
@@ -1174,9 +1174,10 @@ async function loadDashboard() {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('earnTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
-  // Depth cards refresh with the dashboard; each catches its own errors, so the
+  // Depth cards are heavier (placements join + payouts pair) so the poll only
+  // re-runs them every 4th tick (~60s); each catches its own errors, so the
   // await only preserves the no-overlap guarantee of refreshDashboard().
-  await Promise.all([loadTopPlacements(), loadPayoutCallout()]);
+  if (withDepth) await Promise.all([loadTopPlacements(), loadPayoutCallout()]);
 }
 
 // ---- Top placements (7d, by gross revenue) ----
@@ -1255,13 +1256,16 @@ async function loadPayoutCallout() {
 // ---- Live dashboard polling ----
 // Refresh KPIs every 15s, but only while the dashboard is on screen and the tab
 // is visible; skip if a refresh is still in flight (no overlap, no work hidden).
+// The depth cards (top placements + payout callout) only ride every 4th tick.
 let dashInFlight = false;
+let dashTick = 0;
 async function refreshDashboard() {
   if (dashInFlight) return;
   if (document.visibilityState !== 'visible') return;
   if ($('section-dashboard')?.classList.contains('hidden')) return;
   dashInFlight = true;
-  try { await loadDashboard(); } finally { dashInFlight = false; }
+  dashTick++;
+  try { await loadDashboard(dashTick % 4 === 0); } finally { dashInFlight = false; }
 }
 setInterval(refreshDashboard, 15000);
 
@@ -1654,8 +1658,13 @@ async function saveQuery(ev) {
   ev.preventDefault();
   const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
   // Schedule: interval keyword, a 5-field cron for "custom", or "" for manual —
-  // the API validates the expression (reportrunner.ValidSchedule) on save.
-  const schedule = $('svSchedule').value === 'custom' ? $('svCron').value.trim() : $('svSchedule').value;
+  // the API validates the expression (reportrunner.ValidSchedule) on save. An
+  // empty cron under "custom" would silently save as manual, so guard it here.
+  let schedule = $('svSchedule').value;
+  if (schedule === 'custom') {
+    schedule = $('svCron').value.trim();
+    if (!schedule) { toast('Enter a 5-field cron expression', 'error'); return; }
+  }
   const body = {
     name: $('svName').value.trim(),
     query_config: {

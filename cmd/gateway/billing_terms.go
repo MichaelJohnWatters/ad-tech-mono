@@ -11,6 +11,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // billingTermsView is one advertiser account's billing posture as the staff
@@ -129,10 +130,14 @@ func (s pgBillingTermsStore) TermsFor(ctx context.Context, accountID string) (bi
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(payment_terms, 'prepay'), COALESCE(credit_limit, 0)::float8
+	// Staff read of ANOTHER tenant's row: the target-account GUC must be set
+	// or RLS silently blanks it under the NOBYPASSRLS app role (security #77)
+	// — and because no-row defaults to prepay/0, the blank was invisible.
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&out.PaymentTerms, &out.CreditLimit)
+	}, `SELECT COALESCE(payment_terms, 'prepay'), COALESCE(credit_limit, 0)::float8
 		 FROM advertiser_balances WHERE account_id = $1::uuid`,
-		accountID).Scan(&out.PaymentTerms, &out.CreditLimit)
+		accountID)
 	if err == sql.ErrNoRows {
 		// Never topped up → default prepay, no credit. Not an error.
 		return out, nil
@@ -149,7 +154,9 @@ func (s pgBillingTermsStore) SetTerms(ctx context.Context, accountID, actor stri
 	}
 	// UPSERT: create the balance row at balance 0 if the account never topped
 	// up, else set just the terms + credit_limit (balance/currency untouched).
-	if _, err := s.db.ExecContext(ctx,
+	// Scoped to the TARGET tenant's GUC — without it the RLS with-check
+	// rejects the write outright (500) under the NOBYPASSRLS app role.
+	if _, err := postgres.ExecTenantDB(ctx, s.db, accountID,
 		`INSERT INTO advertiser_balances (account_id, balance, currency, credit_limit, payment_terms, updated_at)
 		 VALUES ($1::uuid, 0, 'USD', $2, $3, now())
 		 ON CONFLICT (account_id) DO UPDATE

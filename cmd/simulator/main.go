@@ -462,14 +462,14 @@ func runOne(client *http.Client, eps endpoints, exchangeURL, trackerURL string, 
 		}
 	}
 	bidReq := request.Build(request.Input{TraceID: traceID, Channel: ch, Persona: persona, Placement: placement, Rand: rng})
-	winner, err := sendAuction(client, exchangeURL, bidReq, traceparent)
+	winner, seat, err := sendAuction(client, exchangeURL, bidReq, traceparent)
 	if err != nil {
 		return false, err
 	}
 	if winner == nil {
 		return false, nil
 	}
-	if !fireEvents(client, trackerURL, traceID, traceparent, ch, winner, placement, p, rng) {
+	if !fireEvents(client, trackerURL, traceID, traceparent, ch, winner, seat, placement, p, rng) {
 		atomic.AddInt64(&beaconLost64, 1)
 	}
 	return true, nil
@@ -581,28 +581,30 @@ func checkServices() {
 }
 
 // sendAuction POSTs the bid request to the exchange and returns the winning bid
-// (nil on no-bid) so the caller can fire correctly-attributed, signed beacons
-// using the real winner's campaign/creative/price — not placeholder values.
-func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (*openrtb.BidObj, error) {
+// (nil on no-bid) plus the winning SEAT — the advertiser account id the DSP
+// declared, the same value the production serve chain signs into beacons as
+// advid — so the caller can fire correctly-attributed, signed beacons using
+// the real winner's campaign/creative/price, not placeholder values.
+func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequest, traceparent string) (*openrtb.BidObj, string, error) {
 	body, _ := json.Marshal(bidReq)
 	req, err := http.NewRequest("POST", exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Content-Type", constants.ContentTypeJSON)
 	req.Header.Set("traceparent", traceparent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
 	var bidResp openrtb.BidResponse
 	json.NewDecoder(resp.Body).Decode(&bidResp)
 	if bidResp.NoBid || len(bidResp.SeatBid) == 0 || len(bidResp.SeatBid[0].Bid) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
-	return &bidResp.SeatBid[0].Bid[0], nil
+	return &bidResp.SeatBid[0].Bid[0], bidResp.SeatBid[0].Seat, nil
 }
 
 // fireEvents fires the post-win beacon sequence appropriate to the channel:
@@ -618,11 +620,12 @@ func sendAuction(client *http.Client, exchangeURL string, bidReq openrtb.BidRequ
 // fireEvents fires the win's tracker beacons; returns whether the IMPRESSION
 // beacon was delivered (the money event — everything else is best-effort,
 // mirroring real browser beacon semantics).
-func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, winner *openrtb.BidObj, pl request.Placement, p profile, rng *rand.Rand) bool {
+func fireEvents(client *http.Client, trackerURL, traceID, traceparent string, ch request.Channel, winner *openrtb.BidObj, seat string, pl request.Placement, p profile, rng *rand.Rand) bool {
 	mc := adserving.MacroContext{
 		AuctionID:    traceID, // the auction trace — ties beacons to the auction
 		AuctionPrice: winner.Price,
 		Currency:     "USD",
+		AdvertiserID: seat, // winning seat = advertiser account (advid in signed beacons)
 		CampaignID:   winner.CID,
 		CreativeID:   winner.CrID,
 		PlacementID:  pl.TagID,

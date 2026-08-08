@@ -721,8 +721,18 @@ async function fetchJSON(url, opts = {}) {
 // ---- Section switching ----
 const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
 const loaded = {};
+// Landing fallback: the first section in the RENDERED (permission-filtered)
+// sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
+// lands on a section it can actually see. Derived from the DOM at runtime —
+// never hardcode section hrefs here (the templates_test nav-filter test asserts
+// forbidden hrefs appear nowhere in the page). Empty nav → 'overview'.
+function defaultSection() {
+  const first = document.querySelector('aside nav a')?.getAttribute('href') || '';
+  const name = first.startsWith('#') ? first.slice(1) : '';
+  return SECTIONS.includes(name) ? name : 'overview';
+}
 function showSection(name) {
-  if (!SECTIONS.includes(name)) name = 'overview';
+  if (!SECTIONS.includes(name)) name = defaultSection();
   SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
   $('crumbSection').textContent = {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
   document.querySelectorAll('aside nav a').forEach(a => {
@@ -792,7 +802,7 @@ async function loadOverview() {
   // Un-hide runtime-hidden cards first so a manual Refresh re-probes.
   ['ovModCard', 'ovOnbCard', 'ovBatchCard', 'ovOpsCard', 'ovAuditCard', 'ovNatsCard'].forEach(id => $(id)?.classList.remove('hidden'));
   const [mod, onb, batch, ops, audit, nats] = await Promise.allSettled([
-    ovFetch('ovModCard', '/v1/api/moderation'),
+    ovFetch('ovModCard', '/v1/api/moderation?summary=1'),
     ovFetch('ovOnbCard', '/v1/api/onboarding/runs'),
     ovFetch('ovBatchCard', '/v1/api/batch/runs'),
     ovFetch('ovOpsCard', '/v1/api/ops/readyz-grid'),
@@ -800,9 +810,10 @@ async function loadOverview() {
     ovFetch('ovNatsCard', '/v1/api/ops/nats'),
   ]);
 
-  // Pending moderation — count of the queue.
+  // Pending moderation — the summary endpoint returns just {"pending": N}; the
+  // full list (html_content per creative) stays on the moderation section only.
   if (mod.status === 'fulfilled' && $('ovModVal')) {
-    const n = (mod.value || []).length;
+    const n = (mod.value && mod.value.pending) || 0;
     $('ovModVal').textContent = n;
     $('ovModVal').classList.toggle('text-warning', n > 0);
     $('ovModHint').textContent = n ? 'creatives awaiting review' : 'queue is clear';
@@ -1061,9 +1072,15 @@ function openPreview(id) {
   if (!c) return;
   previewID = id;
   const w = c.width || 300, h = c.height || 250;
-  const landing = c.landing_url
-    ? `<a class="font-mono text-xs underline decoration-dotted hover:text-brand break-all" href="${esc(c.landing_url)}" target="_blank" rel="noopener noreferrer">${esc(c.landing_url)}</a>`
-    : '<span class="text-gray-400">none</span>';
+  // landing_url is untrusted advertiser input: esc() stops markup injection
+  // but not a javascript:/data: SCHEME riding an href — only http(s) gets a
+  // clickable link, anything else renders as inert text for the reviewer.
+  const landingSafe = /^https?:\/\//i.test(c.landing_url || '');
+  const landing = !c.landing_url
+    ? '<span class="text-gray-400">none</span>'
+    : landingSafe
+      ? `<a class="font-mono text-xs underline decoration-dotted hover:text-brand break-all" href="${esc(c.landing_url)}" target="_blank" rel="noopener noreferrer">${esc(c.landing_url)}</a>`
+      : `<span class="font-mono text-xs break-all" title="non-http(s) landing URL — not linkified">${esc(c.landing_url)}</span>`;
   $('pvMeta').innerHTML = `
     <div class="font-medium">${esc(c.name)}</div>
     <div class="text-xs text-gray-500">${esc(c.advertiser || '')} · <span class="font-mono">${esc(c.format)}</span> · ${w}×${h}</div>
@@ -1584,7 +1601,9 @@ function loadControlCenter() {
   document.querySelectorAll('#section-tools iframe[data-src]').forEach(f => { f.src = f.dataset.src; });
 }
 
-showSection(location.hash.slice(1) || 'overview');
+// Empty hash falls through showSection's defaultSection() fallback (first
+// rendered nav entry), same as an unknown hash.
+showSection(location.hash.slice(1));
 
 // ---- Profile lookup (profile store transparency) ----
 async function loadProfile(ev) {

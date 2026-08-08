@@ -67,6 +67,14 @@ func moderationHandler(store moderationStore, bus events.EventBus, log *slog.Log
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
+			// ?summary=1 → just the pending count. The full list carries every
+			// creative's html_content (preview modal) — a multi-hundred-KB
+			// payload the staff Overview card would otherwise fetch to render
+			// one number.
+			if r.URL.Query().Get("summary") == "1" {
+				_ = json.NewEncoder(w).Encode(map[string]int{"pending": len(items)})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(items)
 
 		case http.MethodPost:

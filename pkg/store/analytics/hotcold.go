@@ -50,6 +50,14 @@ func (t *HotColdStore) Query(ctx context.Context, params QueryParams) (*QueryRes
 	if t.cold == nil {
 		return t.hot.Query(ctx, params)
 	}
+	// Hot-only tables never reach the cold lake (see exportTables) — routing
+	// their queries by time would serve a silent EMPTY answer for any range the
+	// router deems cold, even though the rows exist in hot ClickHouse right up
+	// to its TTL. Serve them entirely hot, original params, no Approximate
+	// stamp: hot holds everything that survives for these tables.
+	if hotOnlyTables[params.Table] {
+		return t.hot.Query(ctx, params)
+	}
 	boundary := t.now().Add(-t.hotWindow)
 	to := params.TimeTo
 	if to.IsZero() {
@@ -401,9 +409,31 @@ func (t *HotColdStore) Close() error {
 
 // additiveMetrics are the base metrics that sum across stores/rollups. avg_* are
 // deliberately absent — a mean can't be re-derived by adding two means.
+// sum_viewable and the media countIfs are plain sums/counts and merge fine.
 var additiveMetrics = map[string]bool{
 	"count": true, "sum_cost": true, "sum_revenue": true, "sum_bids": true,
+	"sum_viewable": true, "media_starts": true, "media_completes": true,
 }
+
+// hotOnlyTables are the tables absent from exportTables — observability spines
+// that live only in hot ClickHouse (bounded by its TTL) and have no parquet
+// cold path. Derived from the export list at init so the two can't drift.
+var hotOnlyTables = func() map[string]bool {
+	exported := map[string]bool{}
+	for _, t := range exportTables {
+		exported[t.name] = true
+	}
+	out := map[string]bool{}
+	for _, name := range []string{
+		"media_events", "serve_no_fills", "freq_cap_blocks", "render_failures",
+		"campaign_state_changes", "budget_depletions", "tracker_rejections",
+	} {
+		if !exported[name] {
+			out[name] = true
+		}
+	}
+	return out
+}()
 
 func hasNonAdditive(metrics []string) bool {
 	for _, m := range metrics {

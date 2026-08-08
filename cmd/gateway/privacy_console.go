@@ -12,15 +12,18 @@ package main
 // (see moderation.go ListPending).
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
@@ -126,12 +129,46 @@ func privacyOptOutsHandler(store privacyConsoleStore, intake http.HandlerFunc, l
 				http.Error(w, `{"error":"opt-out intake unavailable"}`, http.StatusServiceUnavailable)
 				return
 			}
+			// A staff-recorded opt-out is a GDPR-relevant action (level 3 is
+			// irreversible erasure) — it must NOT land indistinguishable from an
+			// operator-API intake. Force source to the acting staff identity
+			// (whatever the form sent) and leave an audit trail before
+			// delegating to the shared recorder.
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+				return
+			}
+			body["source"] = "staff:" + claims.UserID
+			raw, err := json.Marshal(body)
+			if err != nil {
+				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			r.ContentLength = int64(len(raw))
+			userID, _ := body["user_id"].(string)
+			_ = audit.Log(r.Context(), privacyAuditDB(store), audit.Entry{
+				ActorID: claims.UserID, Action: "privacy:optout_recorded",
+				ResourceType: "opt_out", ResourceID: userID,
+				Changes: map[string]any{"level": body["level"], "source": body["source"]},
+			})
 			intake(w, r)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}
 	}
+}
+
+// privacyAuditDB pulls the *sql.DB from the pg store so the staff intake can
+// write the audit row (same pattern as auditDBFrom in payout_method.go); nil
+// for the test fake, which audit.Log tolerates.
+func privacyAuditDB(store privacyConsoleStore) *sql.DB {
+	if pg, ok := store.(pgPrivacyConsoleStore); ok {
+		return pg.db
+	}
+	return nil
 }
 
 type pgPrivacyConsoleStore struct{ db *sql.DB }

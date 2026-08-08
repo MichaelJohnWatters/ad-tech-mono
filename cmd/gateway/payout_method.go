@@ -10,6 +10,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // validPayoutMethodTypes are the destination kinds a publisher can configure.
@@ -251,10 +252,13 @@ func (s pgPayoutMethodStore) Get(ctx context.Context, accountID string) (payoutM
 		return m, false, sql.ErrConnDone
 	}
 	var last4, display sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT method_type, COALESCE(display_name,''), last4, minimum_payout_cents, currency, status
+	// Tenant GUC must be set or RLS silently blanks the row under the
+	// NOBYPASSRLS app role (security #77).
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&m.MethodType, &display, &last4, &m.MinimumPayoutCents, &m.Currency, &m.Status)
+	}, `SELECT method_type, COALESCE(display_name,''), last4, minimum_payout_cents, currency, status
 		 FROM payout_methods WHERE account_id = $1::uuid AND status = 'active'`,
-		accountID).Scan(&m.MethodType, &display, &last4, &m.MinimumPayoutCents, &m.Currency, &m.Status)
+		accountID)
 	if err == sql.ErrNoRows {
 		return m, false, nil
 	}

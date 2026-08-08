@@ -13,6 +13,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // conversionConfig is an advertiser-defined conversion event. It's the setup
@@ -218,11 +219,13 @@ SELECT id::text, name, event_type, default_value, currency, status, created_at
 FROM conversion_configs
 WHERE account_id = $1::uuid
 ORDER BY created_at DESC`
-	rows, err := s.db.QueryContext(ctx, q, accountID)
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID, q, accountID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	for rows.Next() {
 		var c conversionConfig
 		var created sql.NullTime

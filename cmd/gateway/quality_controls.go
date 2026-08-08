@@ -215,7 +215,7 @@ func (s pgQualityControlStore) DeleteQualityControl(ctx context.Context, account
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	res, err := s.db.ExecContext(ctx,
+	res, err := postgres.ExecTenantDB(ctx, s.db, accountID,
 		`DELETE FROM quality_controls WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	if err != nil {
 		return err
