@@ -3,36 +3,28 @@ package main
 import (
 	"net/http"
 	"testing"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 )
 
-func TestClientIP(t *testing.T) {
-	cases := []struct {
-		name       string
-		remoteAddr string
-		xff        string
-		xRealIP    string
-		want       string
-	}{
-		{"xff single", "10.0.0.1:5000", "203.0.113.7", "", "203.0.113.7"},
-		{"xff chain uses first (client)", "10.0.0.1:5000", "203.0.113.7, 70.41.3.18, 10.0.0.1", "", "203.0.113.7"},
-		{"xff trims whitespace", "10.0.0.1:5000", "  203.0.113.9 ,10.0.0.1", "", "203.0.113.9"},
-		{"x-real-ip fallback", "10.0.0.1:5000", "", "198.51.100.5", "198.51.100.5"},
-		{"remoteaddr strips port", "192.0.2.44:54321", "", "", "192.0.2.44"},
-		{"xff wins over x-real-ip", "10.0.0.1:5000", "203.0.113.7", "198.51.100.5", "203.0.113.7"},
-		{"remoteaddr without port passes through", "192.0.2.44", "", "", "192.0.2.44"},
+// The parsing tiers (XFF → X-Real-IP → RemoteAddr) are covered in
+// pkg/clientip. This pins the tracker wiring: right-anchored XFF (a bot
+// prepending forged entries can't dodge the blocklist) with the hop count
+// read live from tracker.trusted_proxy_hops.
+func TestClientIPFnHonoursTrustedProxyHops(t *testing.T) {
+	cfg := config.Load()
+	clientIP := newClientIPFn(cfg)
+
+	r := &http.Request{RemoteAddr: "10.0.0.1:5000", Header: http.Header{}}
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.7, 70.41.3.18")
+
+	// Default hops=0: rightmost entry — the client our ingress saw.
+	if got := clientIP(r); got != "70.41.3.18" {
+		t.Errorf("hops=0: clientIP() = %q, want %q", got, "70.41.3.18")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &http.Request{RemoteAddr: tc.remoteAddr, Header: http.Header{}}
-			if tc.xff != "" {
-				r.Header.Set("X-Forwarded-For", tc.xff)
-			}
-			if tc.xRealIP != "" {
-				r.Header.Set("X-Real-IP", tc.xRealIP)
-			}
-			if got := clientIP(r); got != tc.want {
-				t.Errorf("clientIP() = %q, want %q", got, tc.want)
-			}
-		})
+	// Live-tuned hops=1 (CDN in front of the ingress) shifts one entry left.
+	cfg.SetLive("tracker.trusted_proxy_hops", "1")
+	if got := clientIP(r); got != "203.0.113.7" {
+		t.Errorf("hops=1: clientIP() = %q, want %q", got, "203.0.113.7")
 	}
 }

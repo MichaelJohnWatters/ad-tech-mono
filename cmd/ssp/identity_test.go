@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identityobserve"
 )
@@ -57,21 +58,49 @@ func TestGatherSignals(t *testing.T) {
 }
 
 func TestRequestFingerprint(t *testing.T) {
-	// explicit ?ip & ?ua
-	if fp := requestFingerprint(httptest.NewRequest("GET", "/s?ip=1.2.3.4&ua=Moz", nil)); fp != "1.2.3.4|Moz" {
+	// resolved IP + explicit ?ua
+	if fp := requestFingerprint(httptest.NewRequest("GET", "/s?ua=Moz", nil), "1.2.3.4"); fp != "1.2.3.4|Moz" {
 		t.Errorf("got %q, want 1.2.3.4|Moz", fp)
 	}
-	// header fallback
+	// UA header fallback
 	r := httptest.NewRequest("GET", "/s", nil)
-	r.Header.Set("X-Forwarded-For", "9.9.9.9, 1.1.1.1")
 	r.Header.Set("User-Agent", "UA")
-	if fp := requestFingerprint(r); fp != "9.9.9.9|UA" {
-		t.Errorf("got %q, want 9.9.9.9|UA (first XFF hop)", fp)
+	if fp := requestFingerprint(r, "9.9.9.9"); fp != "9.9.9.9|UA" {
+		t.Errorf("got %q, want 9.9.9.9|UA", fp)
 	}
-	// missing half → empty
-	if fp := requestFingerprint(httptest.NewRequest("GET", "/s?ip=1.2.3.4", nil)); fp != "" {
+	// missing half → empty (never fingerprint on IP alone, or UA alone)
+	if fp := requestFingerprint(httptest.NewRequest("GET", "/s", nil), "1.2.3.4"); fp != "" {
 		// no UA header on httptest requests → empty
 		t.Errorf("got %q, want empty when UA missing", fp)
+	}
+	if fp := requestFingerprint(httptest.NewRequest("GET", "/s?ua=Moz", nil), ""); fp != "" {
+		t.Errorf("got %q, want empty when IP missing", fp)
+	}
+}
+
+// TestEndUserIPFn pins the override gate: ?ip= is honoured only for
+// allowlisted (private-range, by default) callers; a public caller gets the
+// trusted-proxy resolved address no matter what ?ip= claims.
+func TestEndUserIPFn(t *testing.T) {
+	fn := newEndUserIPFn(config.Load())
+
+	// Private caller (the simulator/harness/SSAI shape) → ?ip= honoured.
+	r := httptest.NewRequest("GET", "/s?ip=203.0.113.50", nil)
+	r.RemoteAddr = "10.42.0.7:41000"
+	if got := fn(r); got != "203.0.113.50" {
+		t.Errorf("private caller: got %q, want the ?ip= override", got)
+	}
+	// Public caller → override IGNORED (a browser must not rotate households).
+	r = httptest.NewRequest("GET", "/s?ip=203.0.113.50", nil)
+	r.RemoteAddr = "198.51.100.9:41000"
+	if got := fn(r); got != "198.51.100.9" {
+		t.Errorf("public caller: got %q, want the connection IP", got)
+	}
+	// Public caller, forged XFF prepend → rightmost (trusted) entry wins.
+	r = httptest.NewRequest("GET", "/s", nil)
+	r.Header.Set("X-Forwarded-For", "6.6.6.6, 198.51.100.9")
+	if got := fn(r); got != "198.51.100.9" {
+		t.Errorf("forged XFF: got %q, want the rightmost entry", got)
 	}
 }
 
@@ -98,7 +127,7 @@ func TestIdentityPublisher(t *testing.T) {
 
 	t.Run("publishes an event with ids + fingerprint", func(t *testing.T) {
 		r := httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1.2.3.4&ua=Moz", nil)
-		p.Observe(r, "USER", "U", "")
+		p.Observe(r, "USER", "U", "", "1.2.3.4")
 		msgs := waitPublished(t, bus, events.SubjectIdentityObserved, 1)
 		ev, err := identityobserve.Unmarshal(msgs[0])
 		if err != nil {
@@ -112,8 +141,8 @@ func TestIdentityPublisher(t *testing.T) {
 	t.Run("nothing to link → no publish", func(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
-		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "", "") // one id, no fp
-		time.Sleep(50 * time.Millisecond)                                    // grace for the async goroutine to (not) publish
+		p.Observe(httptest.NewRequest("GET", "/serve", nil), "solo", "", "", "") // one id, no fp
+		time.Sleep(50 * time.Millisecond)                                        // grace for the async goroutine to (not) publish
 		if n := len(bus.published(events.SubjectIdentityObserved)); n != 0 {
 			t.Errorf("published %d, want 0", n)
 		}
@@ -122,12 +151,12 @@ func TestIdentityPublisher(t *testing.T) {
 	t.Run("single id + fingerprint still publishes (for probabilistic)", func(t *testing.T) {
 		bus := newCapBus()
 		p := newIdentityPublisher(bus, quietLog())
-		p.Observe(httptest.NewRequest("GET", "/serve?ip=1.2.3.4&ua=Moz", nil), "solo", "", "")
+		p.Observe(httptest.NewRequest("GET", "/serve?ua=Moz", nil), "solo", "", "", "1.2.3.4")
 		waitPublished(t, bus, events.SubjectIdentityObserved, 1)
 	})
 
 	t.Run("nil publisher is a no-op", func(t *testing.T) {
 		var np *identityPublisher
-		np.Observe(httptest.NewRequest("GET", "/serve?hashed_email=E&ip=1&ua=x", nil), "USER", "U", "")
+		np.Observe(httptest.NewRequest("GET", "/serve?hashed_email=E&ua=x", nil), "USER", "U", "", "1")
 	})
 }

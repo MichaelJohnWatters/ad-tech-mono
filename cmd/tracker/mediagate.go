@@ -24,6 +24,7 @@ type mediaEventGate struct {
 	sigValidation func() bool     // tracker.signature_validation (default false)
 	expValidation func() bool     // tracker.exp_validation (default true)
 	fraud         *fraud.RealTimeChecker
+	clientIP      func(*http.Request) string // trusted-proxy fraud IP resolver (clientip.go)
 	dedup         *Dedup
 	publisher     *eventPublisher
 }
@@ -66,7 +67,7 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 	}
 
 	fraudResult := g.fraud.Check(fraud.Request{
-		IP: clientIP(r), UserAgent: r.UserAgent(),
+		IP: g.clientIP(r), UserAgent: r.UserAgent(),
 		TraceID: traceID, Referer: r.Referer(),
 	})
 	if fraudResult.Blocked {

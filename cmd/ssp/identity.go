@@ -2,9 +2,7 @@ package main
 
 import (
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/identity"
@@ -32,8 +30,10 @@ func newIdentityPublisher(bus events.EventBus, log *slog.Logger) *identityPublis
 // request. Fire-and-forget; safe on a nil receiver. householdID (may be "")
 // is the platform household id derived by the caller — including it links
 // user_id/uid2/device ↔ household in the identity graph, which is what
-// makes cross-device household resolution possible.
-func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID string) {
+// makes cross-device household resolution possible. endUserIP is the caller-
+// resolved end-user IP (newEndUserIPFn) — the SAME address household
+// derivation used, so the fingerprint and the household can never disagree.
+func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID, endUserIP string) {
 	if p == nil {
 		return
 	}
@@ -55,7 +55,7 @@ func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID s
 	// the auction must not wait on them. Mirrors behaviourPublisher.Observe.
 	traceID := tracing.TraceIDFromContext(r.Context())
 	ids := gatherSignals(r, userID, uid2, householdID)
-	fp := requestFingerprint(r)
+	fp := requestFingerprint(r, endUserIP)
 	go p.pub.Publish(traceID, ids, fp)
 }
 
@@ -87,34 +87,17 @@ func gatherSignals(r *http.Request, userID, uid2, householdID string) []identity
 }
 
 // requestFingerprint is the end user's IP + user-agent for probabilistic
-// matching. Prefers explicit ?ip / ?ua (forwarded by the ad tag), then falls
-// back to X-Forwarded-For / User-Agent. Empty when either half is missing (we
-// never fingerprint on IP alone).
-func requestFingerprint(r *http.Request) string {
-	q := r.URL.Query()
-	ip := q.Get("ip")
-	if ip == "" {
-		ip = clientIP(r)
-	}
-	ua := q.Get("ua")
+// matching. The IP is the caller-resolved end-user IP (trusted-proxy parse +
+// allowlist-gated ?ip= override — newEndUserIPFn); the UA prefers explicit
+// ?ua (forwarded by the ad tag), then the User-Agent header. Empty when
+// either half is missing (we never fingerprint on IP alone).
+func requestFingerprint(r *http.Request, endUserIP string) string {
+	ua := r.URL.Query().Get("ua")
 	if ua == "" {
 		ua = r.Header.Get("User-Agent")
 	}
-	if ip == "" || ua == "" {
+	if endUserIP == "" || ua == "" {
 		return ""
 	}
-	return ip + "|" + ua
-}
-
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return endUserIP + "|" + ua
 }
