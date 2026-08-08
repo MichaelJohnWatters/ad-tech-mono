@@ -64,9 +64,10 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 			selectParts = append(selectParts, "SUM(iab_viewable) AS sum_viewable")
 		case "media_starts":
 			// media_events quartile counts: countIf is ClickHouse-native, which
-			// is fine — media_events is hot-only (not in exportTables, so the
-			// cold s3() path never sees these metrics). Denominator for
-			// completion_rate.
+			// is fine on BOTH sides of the hot/cold boundary — the cold reader
+			// (CHParquetColdReader) is the same ClickHouse engine running this
+			// query over s3() Parquet, so media_events can route hot+cold like
+			// the other exported tables. Denominator for completion_rate.
 			selectParts = append(selectParts, "countIf(event_type = 'start') AS media_starts")
 		case "media_completes":
 			selectParts = append(selectParts, "countIf(event_type = 'complete') AS media_completes")

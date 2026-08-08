@@ -415,9 +415,12 @@ var additiveMetrics = map[string]bool{
 	"sum_viewable": true, "media_starts": true, "media_completes": true,
 }
 
-// hotOnlyTables are the tables absent from exportTables — observability spines
-// that live only in hot ClickHouse (bounded by its TTL) and have no parquet
-// cold path. Derived from the export list at init so the two can't drift.
+// hotOnlyTables are the tables absent from exportTables — the operational
+// debug spines (no-fills, cap blocks, render failures, rejections, state
+// changes, depletions) that live only in hot ClickHouse (bounded by its TTL,
+// 30d by design) and have no parquet cold path. Derived from the export list
+// at init so the two can't drift: adding a table to exportTables (as
+// media_events was) automatically flips its reads to hot+cold routing.
 var hotOnlyTables = func() map[string]bool {
 	exported := map[string]bool{}
 	for _, t := range exportTables {
@@ -425,7 +428,7 @@ var hotOnlyTables = func() map[string]bool {
 	}
 	out := map[string]bool{}
 	for _, name := range []string{
-		"media_events", "serve_no_fills", "freq_cap_blocks", "render_failures",
+		"serve_no_fills", "freq_cap_blocks", "render_failures",
 		"campaign_state_changes", "budget_depletions", "tracker_rejections",
 	} {
 		if !exported[name] {
