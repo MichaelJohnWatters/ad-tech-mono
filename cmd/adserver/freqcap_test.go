@@ -108,35 +108,123 @@ type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 
-// capScopeIDs is the whole campaign-scope knob: it must pick the household
-// counter as the (single) enforcement key for household-scoped campaigns, and
-// fall back to the untouched default pair otherwise.
-func TestCapScopeIDs(t *testing.T) {
+// resolveCapScope is the whole campaign-scope knob: it must resolve the
+// household counter as the (single) enforcement leg for household-scoped
+// campaigns, and fall back to the untouched default (user, household) pair
+// otherwise. The leg carries its own scope label, so blocked-scope
+// attribution is fixed at resolution time.
+func TestResolveCapScope(t *testing.T) {
 	cases := []struct {
 		name, scope, user, hh string
-		wantUID, wantHH       string
-		wantHHPrimary         bool
+		wantLegs              []capLeg
 	}{
-		{"default scope keeps both", "", "u1", "hh:1", "u1", "hh:1", false},
-		{"explicit user scope keeps both", "user", "u1", "hh:1", "u1", "hh:1", false},
-		{"household scope swaps to hh key only", "household", "u1", "hh:1", "hh:1", "", true},
-		{"household scope no hh id falls back to user", "household", "u1", "", "u1", "", false},
-		{"unknown scope behaves as default", "banana", "u1", "hh:1", "u1", "hh:1", false},
-		{"household scope, hh only (no user id)", "household", "", "hh:1", "hh:1", "", true},
+		{"default scope keeps both", "", "u1", "hh:1", []capLeg{{"user", "u1"}, {"household", "hh:1"}}},
+		{"explicit user scope keeps both", "user", "u1", "hh:1", []capLeg{{"user", "u1"}, {"household", "hh:1"}}},
+		{"household scope swaps to hh leg only", "household", "u1", "hh:1", []capLeg{{"household", "hh:1"}}},
+		{"household scope no hh id falls back to user", "household", "u1", "", []capLeg{{"user", "u1"}}},
+		{"unknown scope behaves as default", "banana", "u1", "hh:1", []capLeg{{"user", "u1"}, {"household", "hh:1"}}},
+		{"household scope, hh only (no user id)", "household", "", "hh:1", []capLeg{{"household", "hh:1"}}},
+		{"default scope, hh only (no user id)", "", "", "hh:1", []capLeg{{"household", "hh:1"}}},
+		{"default scope, user only", "", "u1", "", []capLeg{{"user", "u1"}}},
+		{"no ids resolves to nothing (cap bypass)", "", "", "", nil},
+		{"household scope, no ids resolves to nothing", "household", "", "", nil},
 	}
 	for _, tc := range cases {
-		uid, hhid, hhPrimary := capScopeIDs(tc.scope, tc.user, tc.hh)
-		if uid != tc.wantUID || hhid != tc.wantHH || hhPrimary != tc.wantHHPrimary {
-			t.Errorf("%s: capScopeIDs(%q,%q,%q) = (%q,%q,%v), want (%q,%q,%v)",
-				tc.name, tc.scope, tc.user, tc.hh, uid, hhid, hhPrimary, tc.wantUID, tc.wantHH, tc.wantHHPrimary)
+		res := resolveCapScope(tc.scope, tc.user, tc.hh)
+		got := res.legs[:res.n]
+		if len(got) != len(tc.wantLegs) {
+			t.Errorf("%s: resolveCapScope(%q,%q,%q) = %v, want %v", tc.name, tc.scope, tc.user, tc.hh, got, tc.wantLegs)
+			continue
 		}
+		for i := range got {
+			if got[i] != tc.wantLegs[i] {
+				t.Errorf("%s: leg %d = %+v, want %+v", tc.name, i, got[i], tc.wantLegs[i])
+			}
+		}
+	}
+}
+
+// The resolve-once contract, end-to-end against the backing store for every
+// (user, household, scope-mode) combo: Peek, RecordAll, and DecideAndRecord
+// all consume ONE resolution, so RecordAll creates exactly the resolved
+// keys, Peek reads those same keys (blocking once they reach the limit),
+// and nothing else in the keyspace is touched. This is the property the old
+// Scoped* wrappers could only approximate by re-deriving ids per call.
+func TestFreqCap_PeekRecordSameKeysAllCombos(t *testing.T) {
+	cases := []struct {
+		name, scope, user, hh string
+		wantKeys              []string // counter OWNER ids, in leg order
+		wantBlocked           string   // scope attributed once every leg is at the limit
+	}{
+		{"default both ids", "", "u1", "hh:1", []string{"u1", "hh:1"}, "user"},
+		{"user scope both ids", "user", "u1", "hh:1", []string{"u1", "hh:1"}, "user"},
+		{"household scope both ids", "household", "u1", "hh:1", []string{"hh:1"}, "household"},
+		{"household scope no hh id", "household", "u1", "", []string{"u1"}, "user"},
+		{"default user only", "", "u1", "", []string{"u1"}, "user"},
+		{"default hh only", "", "", "hh:1", []string{"hh:1"}, "household"},
+	}
+	ctx := context.Background()
+	for _, tc := range cases {
+		l2 := cache.NewMemoryL2()
+		fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+		res := resolveCapScope(tc.scope, tc.user, tc.hh)
+
+		// Resolution is deterministic: the record request of a PEEK/RECORD
+		// split (a separate HTTP call re-resolving the same inputs) lands on
+		// identical keys.
+		again := resolveCapScope(tc.scope, tc.user, tc.hh)
+		if res != again {
+			t.Errorf("%s: re-resolution differs: %+v vs %+v", tc.name, res, again)
+		}
+
+		if ok, _ := fc.Peek(ctx, res, "c1", 1); !ok {
+			t.Errorf("%s: fresh peek must allow", tc.name)
+		}
+		fc.RecordAll(ctx, res, "c1", 1, time.Hour)
+
+		// Exactly the resolved counters exist — no more, no fewer.
+		for _, owner := range tc.wantKeys {
+			if v, _, _ := l2.Get(ctx, freqCapKey(owner, "c1")); v != "1" {
+				t.Errorf("%s: counter for %s = %q, want 1", tc.name, owner, v)
+			}
+		}
+		for _, owner := range []string{"u1", "hh:1"} {
+			expected := false
+			for _, w := range tc.wantKeys {
+				if w == owner {
+					expected = true
+				}
+			}
+			if _, present, _ := l2.Get(ctx, freqCapKey(owner, "c1")); present != expected {
+				t.Errorf("%s: counter %s present=%v, want %v", tc.name, owner, present, expected)
+			}
+		}
+
+		// Peek reads the keys RecordAll wrote: at the limit it blocks, and
+		// the attribution is the blocking leg's own label.
+		if ok, scope := fc.Peek(ctx, res, "c1", 1); ok || scope != tc.wantBlocked {
+			t.Errorf("%s: peek at limit: ok=%v scope=%q, want blocked at %q", tc.name, ok, scope, tc.wantBlocked)
+		}
+	}
+
+	// Empty resolution (no consented ids): everything bypasses, nothing is
+	// written, nothing blocks.
+	l2 := cache.NewMemoryL2()
+	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	res := resolveCapScope("household", "", "")
+	fc.RecordAll(ctx, res, "c1", 1, time.Hour)
+	if ok, scope := fc.Peek(ctx, res, "c1", 1); !ok || scope != "" {
+		t.Fatalf("empty resolution: ok=%v scope=%q, want bypass", ok, scope)
+	}
+	if ok, scope := fc.DecideAndRecord(ctx, res, "c1", 1, time.Hour); !ok || scope != "" {
+		t.Fatalf("empty resolution decide: ok=%v scope=%q, want bypass", ok, scope)
 	}
 }
 
 // Household-scoped enforcement: the campaign limit binds on the HOUSEHOLD
 // counter (co-viewers share it), the per-user counter is never touched, and
-// the blocked scope is attributed to "household" even though the hh id rode
-// in the primary slot.
+// the blocked scope is attributed to "household" because the household leg
+// carries its own label through the resolution.
 func TestFreqCap_ScopedHousehold(t *testing.T) {
 	l2 := cache.NewMemoryL2()
 	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
@@ -144,13 +232,13 @@ func TestFreqCap_ScopedHousehold(t *testing.T) {
 	const hh = "hh:feedbeef"
 
 	// Two different users in one household share the allowance of 2.
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "household", "u1", hh, "c1", 2, time.Hour); !ok || scope != "" {
+	if ok, scope := fc.DecideAndRecord(ctx, resolveCapScope("household", "u1", hh), "c1", 2, time.Hour); !ok || scope != "" {
 		t.Fatalf("serve 1: ok=%v scope=%q, want allowed", ok, scope)
 	}
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "household", "u2", hh, "c1", 2, time.Hour); !ok || scope != "" {
+	if ok, scope := fc.DecideAndRecord(ctx, resolveCapScope("household", "u2", hh), "c1", 2, time.Hour); !ok || scope != "" {
 		t.Fatalf("serve 2: ok=%v scope=%q, want allowed", ok, scope)
 	}
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "household", "u3", hh, "c1", 2, time.Hour); ok || scope != "household" {
+	if ok, scope := fc.DecideAndRecord(ctx, resolveCapScope("household", "u3", hh), "c1", 2, time.Hour); ok || scope != "household" {
 		t.Fatalf("serve 3: ok=%v scope=%q, want blocked at household", ok, scope)
 	}
 	// The household counter carries the count; no per-user counter was touched.
@@ -172,10 +260,11 @@ func TestFreqCap_ScopedHouseholdFallbackToUser(t *testing.T) {
 	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 
-	if ok, _ := fc.ScopedDecideAndRecord(ctx, "household", "u1", "", "c1", 1, time.Hour); !ok {
+	legs := resolveCapScope("household", "u1", "")
+	if ok, _ := fc.DecideAndRecord(ctx, legs, "c1", 1, time.Hour); !ok {
 		t.Fatal("fallback serve 1 should be allowed")
 	}
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "household", "u1", "", "c1", 1, time.Hour); ok || scope != "user" {
+	if ok, scope := fc.DecideAndRecord(ctx, legs, "c1", 1, time.Hour); ok || scope != "user" {
 		t.Fatalf("fallback serve 2: ok=%v scope=%q, want blocked at user", ok, scope)
 	}
 	if v, _, _ := l2.Get(ctx, freqCapKey("u1", "c1")); v != "2" {
@@ -183,17 +272,18 @@ func TestFreqCap_ScopedHouseholdFallbackToUser(t *testing.T) {
 	}
 }
 
-// Default (user) scope through the Scoped wrappers is byte-for-byte the
+// Default (user) scope through the resolution is byte-for-byte the
 // pre-knob behaviour: user primary, household co-enforced.
 func TestFreqCap_ScopedDefaultUnchanged(t *testing.T) {
 	l2 := cache.NewMemoryL2()
 	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 	ctx := context.Background()
 
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "", "u1", "hh:1", "c1", 1, time.Hour); !ok || scope != "" {
+	legs := resolveCapScope("", "u1", "hh:1")
+	if ok, scope := fc.DecideAndRecord(ctx, legs, "c1", 1, time.Hour); !ok || scope != "" {
 		t.Fatalf("serve 1: ok=%v scope=%q, want allowed", ok, scope)
 	}
-	if ok, scope := fc.ScopedDecideAndRecord(ctx, "", "u1", "hh:1", "c1", 1, time.Hour); ok || scope != "user" {
+	if ok, scope := fc.DecideAndRecord(ctx, legs, "c1", 1, time.Hour); ok || scope != "user" {
 		t.Fatalf("serve 2: ok=%v scope=%q, want blocked at user", ok, scope)
 	}
 	// Both counters exist: user carries both attempts, household only the
@@ -216,16 +306,16 @@ func TestFreqCap_ScopedPeekRecordHousehold(t *testing.T) {
 	const hh = "hh:ctvhouse"
 
 	for i := 0; i < 10; i++ {
-		if ok, _ := fc.ScopedPeek(ctx, "household", "u1", hh, "c1", 2); !ok {
+		if ok, _ := fc.Peek(ctx, resolveCapScope("household", "u1", hh), "c1", 2); !ok {
 			t.Fatalf("peek %d should be allowed (nothing recorded)", i)
 		}
 	}
 	if _, present, _ := l2.Get(ctx, freqCapKey(hh, "c1")); present {
 		t.Fatal("peek must not increment the household counter")
 	}
-	fc.ScopedRecord(ctx, "household", "u1", hh, "c1", 2, time.Hour)
-	fc.ScopedRecord(ctx, "household", "u2", hh, "c1", 2, time.Hour)
-	if ok, scope := fc.ScopedPeek(ctx, "household", "u3", hh, "c1", 2); ok || scope != "household" {
+	fc.RecordAll(ctx, resolveCapScope("household", "u1", hh), "c1", 2, time.Hour)
+	fc.RecordAll(ctx, resolveCapScope("household", "u2", hh), "c1", 2, time.Hour)
+	if ok, scope := fc.Peek(ctx, resolveCapScope("household", "u3", hh), "c1", 2); ok || scope != "household" {
 		t.Fatalf("peek after 2 records: ok=%v scope=%q, want blocked at household", ok, scope)
 	}
 	if _, present, _ := l2.Get(ctx, freqCapKey("u1", "c1")); present {
@@ -241,10 +331,11 @@ func TestFreqCapDecideAndRecordAsymmetry(t *testing.T) {
 	fc := NewFreqCap(l2, slog.New(slog.NewTextHandler(nopWriter{}, nil)))
 
 	// Cap 1: first serve allowed, second blocked at user.
-	if ok, scope := fc.DecideAndRecord(context.Background(), "u1", "hh1", "c1", 1, time.Minute); !ok || scope != "" {
+	legs := resolveCapScope("", "u1", "hh1")
+	if ok, scope := fc.DecideAndRecord(context.Background(), legs, "c1", 1, time.Minute); !ok || scope != "" {
 		t.Fatalf("first serve: ok=%v scope=%q, want allowed", ok, scope)
 	}
-	if ok, scope := fc.DecideAndRecord(context.Background(), "u1", "hh1", "c1", 1, time.Minute); ok || scope != "user" {
+	if ok, scope := fc.DecideAndRecord(context.Background(), legs, "c1", 1, time.Minute); ok || scope != "user" {
 		t.Fatalf("second serve: ok=%v scope=%q, want blocked at user", ok, scope)
 	}
 	// Household counter saw only the ONE allowed serve — a fresh user in the
@@ -253,17 +344,43 @@ func TestFreqCapDecideAndRecordAsymmetry(t *testing.T) {
 		t.Fatalf("household counter = %q, want 1 (not incremented on user-blocked serve)", v)
 	}
 
-	// PeekBoth never increments.
-	if ok, _ := fc.PeekBoth(context.Background(), "u2", "hh2", "c1", 1); !ok {
+	// Peek never increments.
+	if ok, _ := fc.Peek(context.Background(), resolveCapScope("", "u2", "hh2"), "c1", 1); !ok {
 		t.Fatal("peek on fresh counters must allow")
 	}
 	if v, present, _ := l2.Get(context.Background(), freqCapKey("u2", "c1")); present {
 		t.Fatalf("peek incremented the counter: %q", v)
 	}
 
-	// RecordBoth counts both scopes.
-	fc.RecordBoth(context.Background(), "u3", "hh3", "c1", 5, time.Minute)
+	// RecordAll counts both legs.
+	fc.RecordAll(context.Background(), resolveCapScope("", "u3", "hh3"), "c1", 5, time.Minute)
 	if v, _, _ := l2.Get(context.Background(), freqCapKey("hh3", "c1")); v != "1" {
 		t.Fatalf("household record = %q, want 1", v)
+	}
+}
+
+// Default-scope block on the HOUSEHOLD leg: a fresh user in a saturated
+// household is allowed at user but blocked at household, and the attribution
+// names the household leg (the resolution carries the label; nothing remaps
+// it after the fact).
+func TestFreqCap_DefaultScopeHouseholdBlockAttribution(t *testing.T) {
+	fc := NewFreqCap(cache.NewMemoryL2(), slog.New(slog.NewTextHandler(nopWriter{}, nil)))
+	ctx := context.Background()
+	const hh = "hh:full"
+
+	// Two users exhaust the shared household allowance of 2.
+	if ok, _ := fc.DecideAndRecord(ctx, resolveCapScope("", "u1", hh), "c1", 2, time.Hour); !ok {
+		t.Fatal("serve 1 should be allowed")
+	}
+	if ok, _ := fc.DecideAndRecord(ctx, resolveCapScope("", "u2", hh), "c1", 2, time.Hour); !ok {
+		t.Fatal("serve 2 should be allowed")
+	}
+	// u3 is fresh (user count 0) but the household is full.
+	if ok, scope := fc.DecideAndRecord(ctx, resolveCapScope("", "u3", hh), "c1", 2, time.Hour); ok || scope != "household" {
+		t.Fatalf("serve 3: ok=%v scope=%q, want blocked at household", ok, scope)
+	}
+	// Same shape through Peek (video/audio path).
+	if ok, scope := fc.Peek(ctx, resolveCapScope("", "u4", hh), "c1", 2); ok || scope != "household" {
+		t.Fatalf("peek: ok=%v scope=%q, want blocked at household", ok, scope)
 	}
 }

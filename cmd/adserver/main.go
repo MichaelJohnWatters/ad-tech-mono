@@ -381,7 +381,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		// Resolve the cap: the campaign's advertiser-configured limit/window
 		// (and scope) when present in the warm cache, else the platform-default
 		// knobs. Scope "household" swaps the enforcement key to the household
-		// counter (see capScopeIDs in freqcap.go) — same Redis round trip,
+		// counter (see resolveCapScope in freqcap.go) — same Redis round trip,
 		// different key.
 		capLimit, capWindow := defaultLimitFn(), defaultWindowFn()
 		capScope := ""
@@ -390,16 +390,21 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 				capLimit, capWindow, capScope = rule.Limit, rule.Window, rule.Scope
 			}
 		}
-		// Default (scope "user"): per-user cap, then per-household when the
-		// SSP derived an hh: id. A campaign with cap scope "household"
-		// enforces its limit against the household counter INSTEAD (per-user
-		// fallback when no hh: id resolved) — see the Scoped* wrappers in
-		// freqcap.go. Co-viewing devices (CTV + phones on one IP) share the household
-		// counter, which is how CTV capping works when user ids differ or are
-		// absent. The hh: prefix keeps the two Redis keyspaces disjoint. A
-		// user-cap increment that the household cap then blocks leaves the
-		// user counter one high for the window — same increment-then-no-render
-		// drift the cap already has on creative-resolve failure; accepted.
+		// Resolve the enforcement legs ONCE — the (scope label, counter id)
+		// pairs below drive peek, record, and check-and-record alike, so a
+		// peek and its later record can never disagree on keys, and a block
+		// is attributed to the leg that blocked. Default (scope "user"):
+		// per-user cap, then per-household when the SSP derived an hh: id. A
+		// campaign with cap scope "household" enforces its limit against the
+		// household counter INSTEAD (per-user fallback when no hh: id
+		// resolved). Co-viewing devices (CTV + phones on one IP) share the
+		// household counter, which is how CTV capping works when user ids
+		// differ or are absent. The hh: prefix keeps the two Redis keyspaces
+		// disjoint. A user-cap increment that the household cap then blocks
+		// leaves the user counter one high for the window — same
+		// increment-then-no-render drift the cap already has on
+		// creative-resolve failure; accepted.
+		capLegs := resolveCapScope(capScope, req.UserID, req.HouseholdID)
 		// CapMode splits check from record for formats whose impression is
 		// confirmed after this call (video/audio/native — SSAI stitches + fires the
 		// impression server-side). "peek" = decide without incrementing (so a nobid
@@ -413,7 +418,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		switch req.CapMode {
 		case models.CapModeRecord:
 			// The ad was stitched → count exactly this impression, no decision.
-			freqCap.ScopedRecord(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			freqCap.RecordAll(ctx, capLegs, req.CampaignID, capLimit, capWindow)
 			obsAdServePhase("freqcap", phaseMark)
 			w.WriteHeader(http.StatusOK)
 			return
@@ -421,9 +426,9 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 		var allowed bool
 		var blockedScope string
 		if req.CapMode == models.CapModePeek {
-			allowed, blockedScope = freqCap.ScopedPeek(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit)
+			allowed, blockedScope = freqCap.Peek(ctx, capLegs, req.CampaignID, capLimit)
 		} else {
-			allowed, blockedScope = freqCap.ScopedDecideAndRecord(ctx, capScope, req.UserID, req.HouseholdID, req.CampaignID, capLimit, capWindow)
+			allowed, blockedScope = freqCap.DecideAndRecord(ctx, capLegs, req.CampaignID, capLimit, capWindow)
 		}
 		phaseMark = obsAdServePhase("freqcap", phaseMark)
 		if !allowed {
