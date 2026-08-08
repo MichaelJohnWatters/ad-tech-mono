@@ -223,7 +223,7 @@
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Schedule</span>
-          <select id="svSchedule" onchange="onSvScheduleChange()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+          <select id="svSchedule" onchange="toggleCronInput()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="">Manual</option><option value="@hourly">Hourly</option><option value="@daily">Daily</option>
             <option value="@weekly">Weekly</option><option value="@monthly">Monthly</option><option value="custom">Custom cron…</option>
           </select>
@@ -393,8 +393,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New webhook" "variant" "secondary" "size" "sm" "onclick" "openNewWebhook()") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "URL" "Events" "Status" "")) }}
-        <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "URL" "Events" "Status" "Created" "")) }}
+        <tbody id="webhookList"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -783,6 +783,10 @@
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
 <script src="/static/trace-render.js"></script>
+<script src="/static/portal-core.js"></script>
+<script src="/static/portal-reports.js"></script>
+<script src="/static/portal-webhooks.js"></script>
+<script src="/static/portal-monetization.js"></script>
 <script>
 // Tenant scope: publisher sessions see their slice (and the gateway enforces
 // it server-side); staff/admin and the dev bypass see platform-wide.
@@ -791,23 +795,13 @@ const PORTAL = {
   scoped: {{ if .IsCustomer }}true{{ else }}false{{ end }},
 };
 
-const $ = (id) => document.getElementById(id);
+// $ / esc / fetchJSON / fmtUSD / fmtDate / date helpers / section router /
+// notifications live in portal-core.js; the reports, webhooks and
+// segment-monetization consoles in portal-reports.js / portal-webhooks.js /
+// portal-monetization.js (shared with the advertiser portal).
 // The table partial owns its <tbody>; grab it by section.
 const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
-const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const fmtInt = (n) => Number(n || 0).toLocaleString();
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-async function fetchJSON(url, opts = {}) {
-  const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});
-  const text = await resp.text();
-  if (!resp.ok) {
-    let msg = text;
-    try { msg = JSON.parse(text).error || text; } catch {}
-    throw new Error(`${resp.status}: ${msg}`);
-  }
-  return text ? JSON.parse(text) : null;
-}
 
 // ---- Publisher context (top-bar selector when the account has several) ----
 let publishers = [];
@@ -827,43 +821,25 @@ async function loadPublishers() {
 
 function onPublisherChange() {
   // Re-pull whatever is on screen for the newly selected site.
-  Object.keys(loaded).forEach(k => delete loaded[k]);
+  showSection.resetLoaded();
   showSection(location.hash.slice(1) || 'dashboard');
 }
 
-// ---- Section switching (hash-driven; sidebar links are #anchors) ----
-const SECTIONS = ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'audiences', 'reports', 'adtag', 'earnings', 'team', 'webhooks'];
-const loaded = {};
-function showSection(name) {
-  if (!SECTIONS.includes(name)) name = 'dashboard';
-  SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
+// ---- Section switching (portal-core initSectionRouter) ----
+const showSection = initSectionRouter({
+  sections: ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'audiences', 'reports', 'adtag', 'earnings', 'team', 'webhooks'],
+  loaders: {dashboard: () => loadDashboard(), placements: () => loadPlacements(), deals: () => loadDeals(),
+    directsold: () => loadDirect(), quality: () => loadQuality(), audiences: () => loadAudiences(),
+    reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
+    adtag: () => loadTagPicker(), earnings: () => loadEarnings(), team: () => loadTeam(),
+    webhooks: () => loadWebhooks()},
+  reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
+  crumbs: {adtag: 'Ad tag', directsold: 'Direct sold'},
   // '+ New placement' was in the global header (showed on every tab); scope
   // it to the Placements section like every other section-local action.
-  $('newPlacementBtn')?.classList.toggle('hidden', name !== 'placements');
-  $('crumbSection').textContent = name === 'adtag' ? 'Ad tag' : name === 'directsold' ? 'Direct sold' : name[0].toUpperCase() + name.slice(1);
-  document.querySelectorAll('aside nav a').forEach(a => {
-    const active = a.getAttribute('href') === '#' + name;
-    a.classList.toggle('bg-brand/10', active);
-    a.classList.toggle('text-brand', active);
-    a.classList.toggle('font-medium', active);
-    a.classList.toggle('text-gray-600', !active);
-    a.classList.toggle('dark:text-gray-300', !active);
-  });
-  if (!loaded[name]) {
-    loaded[name] = true;
-    ({dashboard: loadDashboard, placements: loadPlacements, deals: loadDeals,
-      directsold: loadDirect, quality: loadQuality, audiences: loadAudiences,
-      reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
-      adtag: loadTagPicker, earnings: loadEarnings, team: loadTeam,
-      webhooks: loadWebhooks}[name])?.();
-  } else if (name === 'reports') {
-    loadJobs(); // re-entering restarts the in-flight poll
-  }
-}
-window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
+  onShow: (name) => $('newPlacementBtn')?.classList.toggle('hidden', name !== 'placements'),
+});
 
-// ---- Audiences (first-party onboarding — mirrors the advertiser portal) ----
-const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch { return s; } };
 const fmtMatchRate = (r) => r == null ? '<span class="text-gray-400">—</span>' : `${(r * 100).toFixed(0)}%`;
 async function loadAudiences() {
   const tbody = tbodyOf('audiences');
@@ -962,133 +938,8 @@ async function exportSegment(id, name) {
 }
 
 // ---- Data earnings (ADR 0009) ----
-const fmtMicros = (m) => '$' + (m / 1e6).toFixed(4);
-async function loadDataEarnings() {
-  const tbody = document.getElementById('dataEarnings');
-  if (!tbody) return;
-  try {
-    const rows = await fetchJSON('/v1/api/audiences/earnings') || [];
-    tbody.innerHTML = rows.length ? rows.map(r => `
-      <tr class="border-t border-gray-100 dark:border-gray-800">
-        <td class="px-3 py-2 font-medium">${esc(r.segment_name)}</td>
-        <td class="px-3 py-2 font-mono">${fmtInt(r.impressions)}</td>
-        <td class="px-3 py-2 font-mono text-xs">${fmtMicros(r.fee_micros)}</td>
-        <td class="px-3 py-2 font-mono text-xs text-gray-500">${fmtMicros(r.margin_micros)}</td>
-        <td class="px-3 py-2 font-mono text-xs text-success">${fmtMicros(r.owner_net_micros)}</td>
-        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(r.last_earned_at)}</td>
-      </tr>`).join('')
-      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">Nothing earned yet — set a fee on a public, IAB-labelled segment and earnings accrue when external buyers win on it.</td></tr>';
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
-  }
-}
-
-// ---- Data-fee editor ----
-let feeTarget = null; // { segmentId, prevMicros } — prevMicros powers toast-undo
-function openFeeEditor(segmentId, currentMicros) {
-  feeTarget = { segmentId, prevMicros: currentMicros ?? null };
-  $('fee_input').value = currentMicros != null ? (currentMicros / 1e6).toFixed(2) : '';
-  $('feeEditor').classList.remove('hidden');
-  $('fee_input').focus();
-}
-async function saveFee(clear) {
-  const t = feeTarget;
-  if (!t) return;
-  let micros = null;
-  if (!clear) {
-    const dollars = parseFloat($('fee_input').value);
-    if (isNaN(dollars) || dollars < 0) { toast('Enter a fee of $0.00 or more', 'error'); return; }
-    micros = Math.round(dollars * 1e6);
-  }
-  $('feeEditor').classList.add('hidden');
-  try {
-    await putFee(t.segmentId, micros);
-    loadAudiences();
-    toastUndo(clear ? 'Data fee cleared' : 'Data fee updated', async () => {
-      try { await putFee(t.segmentId, t.prevMicros); loadAudiences(); }
-      catch (err) { toast('Undo failed: ' + err.message, 'error'); }
-    });
-  } catch (err) { toast('Fee update failed: ' + err.message, 'error'); }
-}
-async function putFee(segmentId, micros) {
-  const resp = await fetch('/v1/api/audiences/fee', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segment_id: segmentId, data_fee_micros: micros }),
-  });
-  if (!resp.ok) {
-    // Surface the server's reason (e.g. the 422 "must be public and
-    // taxonomy-labelled" precondition) instead of a bare status code.
-    let msg = 'HTTP ' + resp.status;
-    try { const body = await resp.json(); if (body && body.error) msg = body.error; } catch {}
-    throw new Error(msg);
-  }
-}
-
-// ---- IAB Audience Taxonomy picker ----
-// Labelling a segment with a standard taxonomy node is what makes it
-// expressible OUTSIDE the platform: public labelled segments ride bid
-// requests to external buyers as OpenRTB user.data (ext.segtax=4). The
-// reference list is global and small, so it loads once and filters
-// client-side — fuzzy by default, "quoted" for strict substring.
-let taxNodes = null;   // global reference list, fetched once per page life
-let taxTarget = null;  // { segmentId, prevId } — prevId powers toast-undo
-async function openTaxonomyPicker(segmentId, currentId) {
-  taxTarget = { segmentId, prevId: currentId ?? null };
-  if (!taxNodes) {
-    try { taxNodes = await fetchJSON('/v1/api/taxonomy') || []; }
-    catch (err) { toast('Taxonomy load failed: ' + err.message, 'error'); return; }
-  }
-  $('tax_search').value = '';
-  renderTaxonomyList();
-  $('taxonomyPicker').classList.remove('hidden');
-  $('tax_search').focus();
-}
-function taxFuzzyScore(q, s) {
-  if (!q) return 0;
-  s = s.toLowerCase();
-  if (q.startsWith('"')) return s.includes(q.replaceAll('"', '')) ? 0 : -1; // strict mode
-  let qi = 0, score = 0, streak = 0;
-  for (let i = 0; i < s.length && qi < q.length; i++) {
-    if (s[i] === q[qi]) { qi++; streak++; score += streak; }
-    else streak = 0;
-  }
-  return qi === q.length ? score : -1;
-}
-function renderTaxonomyList() {
-  const q = $('tax_search').value.trim().toLowerCase();
-  const rows = taxNodes
-    .map(n => ({ n, score: taxFuzzyScore(q, n.path) }))
-    .filter(r => r.score >= 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 60);
-  $('tax_list').innerHTML = rows.length ? rows.map(r => `
-    <button type="button" onclick="setTaxonomy(${r.n.id})" class="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-surface-3 ${taxTarget && taxTarget.prevId === r.n.id ? 'bg-info/10' : ''}">
-      ${esc(r.n.path)} <span class="text-[10px] text-gray-400 font-mono">#${r.n.id}</span>
-    </button>`).join('')
-    : '<div class="px-3 py-6 text-center text-sm text-gray-400">no matches</div>';
-}
-async function setTaxonomy(taxonomyId) { // null clears the label
-  const t = taxTarget;
-  if (!t) return;
-  $('taxonomyPicker').classList.add('hidden');
-  try {
-    await putTaxonomy(t.segmentId, taxonomyId);
-    loadAudiences();
-    toastUndo(taxonomyId == null ? 'Taxonomy label cleared' : 'Taxonomy label updated', async () => {
-      try { await putTaxonomy(t.segmentId, t.prevId); loadAudiences(); }
-      catch (err) { toast('Undo failed: ' + err.message, 'error'); }
-    });
-  } catch (err) { toast('Label update failed: ' + err.message, 'error'); }
-}
-async function putTaxonomy(segmentId, taxonomyId) {
-  const resp = await fetch('/v1/api/audiences/taxonomy', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segment_id: segmentId, taxonomy_id: taxonomyId }),
-  });
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
-}
+// Data earnings + fee editor + IAB taxonomy picker live in
+// portal-monetization.js (shared with the other customer portal).
 
 // ---- Reporting queries ----
 // Always sends the selected publisher_id; for publisher sessions the gateway
@@ -1139,8 +990,6 @@ async function pubViewTrace(traceId) {
       steps: [{ time: '', service: 'reporting', cls: 'warn', msg: 'Unavailable', detail: '' }] });
   }
 }
-const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
-const todayStart = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
 // Result rows come back positionally; map columns -> value for row 0.
 const firstRow = (res) => Object.fromEntries((res.columns || []).map((c, i) => [c, res.rows?.[0]?.[i]]));
 
@@ -1622,139 +1471,9 @@ async function saveDeal(ev) {
 }
 
 // ---- Saved queries ----
-const savedTbody = () => document.querySelector('#savedWrap tbody');
-let savedCache = [];
-async function loadSaved() {
-  try {
-    savedCache = await fetchJSON('/v1/api/reports/saved') || [];
-  } catch (err) {
-    savedTbody().innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
-    return;
-  }
-  savedTbody().innerHTML = savedCache.length ? savedCache.map(s => {
-    const q = s.query_config || {};
-    const desc = `${q.table || '?'} · ${(q.metrics || []).join(',')}${q.dimensions?.length ? ' by ' + q.dimensions.join(',') : ''}`;
-    return `<tr class="border-t border-gray-100 dark:border-gray-800">
-      <td class="px-3 py-2 font-medium">${esc(s.name)}</td>
-      <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(desc)}</td>
-      <td class="px-3 py-2 font-mono text-xs">${s.schedule ? esc(s.schedule) : '<span class="text-gray-400">manual</span>'}</td>
-      <td class="px-3 py-2 font-mono text-xs">${s.delivery && s.delivery !== 'none' ? esc(s.delivery) : '<span class="text-gray-400">none</span>'}</td>
-      <td class="px-3 py-2 text-right whitespace-nowrap">
-        <button onclick="runSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run</button>
-        <button onclick="jobFromSaved('${esc(s.id)}')" title="Run async and download the result" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Run as job</button>
-        <button onclick="deleteSaved('${esc(s.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
-      </td>
-    </tr>`;
-  }).join('')
-    : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">Nothing saved yet — run a query and save it.</td></tr>';
-}
-
-// The free-text cron input only shows for "Custom cron…".
-function onSvScheduleChange() {
-  $('svCronWrap').classList.toggle('hidden', $('svSchedule').value !== 'custom');
-}
-
-async function saveQuery(ev) {
-  ev.preventDefault();
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
-  // Schedule: interval keyword, a 5-field cron for "custom", or "" for manual —
-  // the API validates the expression (reportrunner.ValidSchedule) on save. An
-  // empty cron under "custom" would silently save as manual, so guard it here.
-  let schedule = $('svSchedule').value;
-  if (schedule === 'custom') {
-    schedule = $('svCron').value.trim();
-    if (!schedule) { toast('Enter a 5-field cron expression', 'error'); return; }
-  }
-  const body = {
-    name: $('svName').value.trim(),
-    query_config: {
-      table: $('repTable').value,
-      metrics: split($('repMetrics').value),
-      dimensions: split($('repDims').value),
-      range_days: parseInt($('repRange').value, 10),
-    },
-    schedule,
-    delivery: $('svDelivery').value,
-  };
-  try {
-    await fetchJSON('/v1/api/reports/saved', {method: 'POST', body: JSON.stringify(body)});
-    toast(schedule ? 'Query saved — runs ' + schedule : 'Query saved', 'success');
-    $('svName').value = '';
-    loadSaved();
-  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
-}
-
-function runSaved(id) {
-  const s = savedCache.find(x => x.id === id);
-  if (!s) return;
-  const q = s.query_config || {};
-  $('repTable').value = q.table || 'impressions';
-  $('repMetrics').value = (q.metrics || []).join(',');
-  $('repDims').value = (q.dimensions || []).join(',');
-  if (q.range_days) $('repRange').value = String(q.range_days);
-  runReport(new Event('submit'));
-}
-
-async function deleteSaved(id) {
-  try {
-    await fetchJSON('/v1/api/reports/saved?id=' + encodeURIComponent(id), {method: 'DELETE'});
-    toast('Saved query deleted — save it again to undo', 'success');
-    loadSaved();
-  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
-}
-
+// Saved-query + report-jobs console lives in portal-reports.js; only the
+// portal-specific job builders stay below.
 // ---- Report jobs (async) ----
-const jobsTbody = () => document.querySelector('#jobsWrap tbody');
-let jobsTimer = null;
-
-function toggleColdHint() {
-  $('coldHint')?.classList.toggle('hidden', parseInt($('repRange').value, 10) <= 7);
-}
-
-function jobStatusBadge(j) {
-  const cls = {queued: 'bg-gray-200/60 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
-               running: 'bg-brand/15 text-brand', done: 'bg-success/15 text-success',
-               failed: 'bg-error/15 text-error'}[j.status] || 'bg-gray-100 text-gray-500';
-  const title = j.status === 'failed' ? ` title="${esc(j.error || '')}"` : '';
-  return `<span${title} class="text-xs px-1.5 py-0.5 rounded ${cls}">${esc(j.status)}</span>`;
-}
-
-async function loadJobs() {
-  clearTimeout(jobsTimer);
-  let jobs = [];
-  try {
-    jobs = await fetchJSON('/v1/api/reports/jobs') || [];
-  } catch (err) {
-    jobsTbody().innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
-    return;
-  }
-  jobsTbody().innerHTML = jobs.length ? jobs.map(j => `
-    <tr class="border-t border-gray-100 dark:border-gray-800">
-      <td class="px-3 py-2 font-medium">${esc(j.name)}</td>
-      <td class="px-3 py-2">${jobStatusBadge(j)}</td>
-      <td class="px-3 py-2 font-mono text-xs">${esc(j.format)}</td>
-      <td class="px-3 py-2 font-mono text-xs">${esc((j.created_at || '').slice(0, 19))}</td>
-      <td class="px-3 py-2 font-mono text-xs text-right">${j.status === 'done' ? (j.row_count ?? 0) : '—'}</td>
-      <td class="px-3 py-2 text-right whitespace-nowrap">${j.status === 'done'
-        ? `<a href="/v1/api/reports/jobs/${esc(j.id)}/download" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Download</a>`
-        : ''}</td>
-    </tr>`).join('')
-    : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No jobs yet — use “Run as job” above.</td></tr>';
-  // Poll while anything is in flight and the section is visible.
-  if (jobs.some(j => j.status === 'queued' || j.status === 'running')
-      && !$('section-reports').classList.contains('hidden')) {
-    jobsTimer = setTimeout(loadJobs, 3000);
-  }
-}
-
-async function submitReportJob(body, label) {
-  try {
-    await fetchJSON('/v1/api/reports/jobs', {method: 'POST', body: JSON.stringify(body)});
-    toast(`Job queued — ${label}`, 'success');
-    loadJobs();
-  } catch (err) { toast('Job failed: ' + err.message, 'error'); }
-}
-
 function runAsJob(ev) {
   ev.preventDefault();
   const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
@@ -1991,31 +1710,6 @@ async function deleteQuality(id) {
   } catch (err) { toast('Remove failed: ' + err.message, 'error'); }
 }
 
-// ---- Reports console ----
-async function runReport(ev) {
-  ev.preventDefault();
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
-  const body = {
-    table: $('repTable').value,
-    metrics: split($('repMetrics').value),
-    dimensions: split($('repDims').value),
-    time_from: daysAgo(parseInt($('repRange').value, 10)),
-  };
-  const out = $('reportOut');
-  try {
-    const res = await reportQuery(body);
-    if (!res.rows?.length) {
-      out.innerHTML = '<div class="py-6 text-center text-sm text-gray-400">Query ran — zero rows in range.</div>';
-      return;
-    }
-    out.innerHTML = `<table class="w-full text-sm">
-      <thead><tr>${res.columns.map(c => `<th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">${esc(c)}</th>`).join('')}</tr></thead>
-      <tbody>${res.rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">${
-        r.map(v => `<td class="px-3 py-2 font-mono text-xs">${typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : esc(v)}</td>`).join('')
-      }</tr>`).join('')}</tbody></table>`;
-  } catch (err) { toast('Query failed: ' + err.message, 'error'); }
-}
-
 // ---- Ad tag ----
 async function loadTagPicker() {
   if (!placementsCache.length) {
@@ -2249,143 +1943,13 @@ async function inviteMember(ev) {
 // ---- Webhooks ----
 // Customer-facing event names the dispatcher routes (cmd/webhooks eventRoutes)
 // — keep in sync when a new webhook event is added there.
-const WEBHOOK_EVENTS = [
-  ['budget.depleted', 'Campaign budget depleted'],
-  ['balance.depleted', 'Account balance depleted'],
-  ['campaign.state_changed', 'Campaign state changed'],
-  ['report.completed', 'Scheduled report completed'],
-  ['retargeting.enrolled', 'Retargeting enrollment'],
-];
-async function loadWebhooks() {
-  const tbody = tbodyOf('webhooks');
-  try {
-    const hooks = await fetchJSON('/v1/api/webhooks') || [];
-    tbody.innerHTML = hooks.length ? hooks.map(h => `
-      <tr class="border-t border-gray-100 dark:border-gray-800">
-        <td class="px-3 py-2 font-mono text-xs break-all">${esc(h.url)}</td>
-        <td class="px-3 py-2 font-mono text-xs">${esc((h.events || []).join(', '))}</td>
-        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${h.status === 'active' ? 'bg-success/15 text-success' : 'bg-gray-200 dark:bg-gray-800 text-gray-500'}">${esc(h.status)}</span></td>
-        <td class="px-3 py-2 text-right">
-          <button onclick="deleteWebhook('${esc(h.id)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Delete</button>
-        </td>
-      </tr>`).join('')
-      : '<tr><td colspan="4" class="px-3 py-8 text-center text-sm text-gray-400">No webhooks yet — add one to get event callbacks.</td></tr>';
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
-  }
-}
-function openNewWebhook() {
-  $('webhookForm').reset();
-  $('wh_events').innerHTML = WEBHOOK_EVENTS.map(([ev, label]) => `
-    <label class="flex items-center gap-2">
-      <input type="checkbox" class="wh_ev" value="${esc(ev)}">
-      <span class="flex-1">${esc(label)} <span class="text-xs text-gray-400 font-mono">${esc(ev)}</span></span>
-    </label>`).join('');
-  $('webhookForm').classList.remove('hidden');
-  $('webhookResult').classList.add('hidden');
-  $('newWebhook').classList.remove('hidden');
-}
-function closeNewWebhook() { $('newWebhook').classList.add('hidden'); }
-async function createWebhook(ev) {
-  ev.preventDefault();
-  const events = [...$('wh_events').querySelectorAll('.wh_ev:checked')].map(x => x.value);
-  if (!events.length) { toast('Pick at least one event', 'info'); return; }
-  try {
-    const res = await fetchJSON('/v1/api/webhooks', {method: 'POST', body: JSON.stringify({
-      url: $('wh_url').value.trim(), events,
-    })});
-    // The HMAC secret is returned once, here — swap the modal to the
-    // shown-once view (same pattern as the team-invite password).
-    $('wh_secret').textContent = res.secret;
-    $('webhookForm').classList.add('hidden');
-    $('webhookResult').classList.remove('hidden');
-    toast('Webhook created', 'success');
-    loadWebhooks();
-  } catch (err) { toast('Create failed: ' + err.message, 'error'); }
-}
-function copyWebhookSecret() {
-  navigator.clipboard?.writeText($('wh_secret').textContent).then(() => toast('Secret copied', 'info'));
-}
-async function deleteWebhook(id) {
-  try {
-    await fetchJSON('/v1/api/webhooks?id=' + encodeURIComponent(id), {method: 'DELETE'});
-    toast('Webhook deleted — recreate it to undo (a new secret is issued)', 'success');
-    loadWebhooks();
-  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
-}
+// Webhooks console (list/create/delete + event catalog) lives in
+// portal-webhooks.js (shared with the advertiser portal).
 
-// Load the site list + revshare terms before the first section renders, so the
+// Load the site list + revshare terms// Load the site list + revshare terms before the first section renders, so the
 // dashboard nets out earnings on its first paint.
-// ---- Notifications (bell + dropdown) ----
-// Poll the unread count every 30s for the badge; the full list loads when the
-// panel opens. Clicking a notification marks it read; "Mark all read" clears the
-// badge. All reads/mutations are tenant-scoped server-side.
-function renderNotifs(list) {
-  const el = $('notifList');
-  if (!el) return;
-  if (!list.length) {
-    el.innerHTML = '<div class="px-4 py-6 text-center text-sm text-gray-400">No notifications</div>';
-    return;
-  }
-  el.innerHTML = list.map(n => {
-    const when = new Date(n.created_at).toLocaleString();
-    const dot = n.read ? '' : '<span class="inline-block w-2 h-2 rounded-full bg-brand shrink-0 mt-1.5"></span>';
-    const wt = n.read ? 'font-normal' : 'font-medium';
-    return `<div class="flex gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-surface-3" onclick="markNotifRead('${esc(n.id)}')">
-      ${dot || '<span class="w-2 shrink-0"></span>'}
-      <div class="min-w-0">
-        <div class="text-sm text-gray-900 dark:text-gray-100 ${wt}">${esc(n.title)}</div>
-        ${n.body ? `<div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">${esc(n.body)}</div>` : ''}
-        <div class="text-[11px] text-gray-400 mt-1">${esc(when)}</div>
-      </div>
-    </div>`;
-  }).join('');
-}
-function setNotifBadge(n) {
-  const b = $('notifBadge');
-  if (!b) return;
-  if (n > 0) { b.textContent = n > 99 ? '99+' : n; b.classList.remove('hidden'); }
-  else b.classList.add('hidden');
-}
-async function loadNotifs() {
-  try {
-    const res = await fetchJSON('/v1/api/notifications');
-    renderNotifs(res?.notifications || []);
-    setNotifBadge(res?.unread || 0);
-  } catch { /* transient — the 30s poll retries */ }
-}
-async function refreshNotifBadge() {
-  try {
-    const res = await fetchJSON('/v1/api/notifications');
-    setNotifBadge(res?.unread || 0);
-  } catch { /* transient */ }
-}
-function toggleNotifs() {
-  const p = $('notifPanel');
-  if (!p) return;
-  const open = !p.classList.contains('hidden');
-  p.classList.toggle('hidden', open);
-  if (!open) loadNotifs();
-}
-async function markNotifRead(id) {
-  try {
-    await fetchJSON('/v1/api/notifications/read', {method: 'POST', body: JSON.stringify({id})});
-    await loadNotifs();
-  } catch (err) { toast('Could not mark read: ' + err.message, 'error'); }
-}
-async function markAllNotifsRead() {
-  try {
-    await fetchJSON('/v1/api/notifications/read', {method: 'POST', body: JSON.stringify({all: true})});
-    await loadNotifs();
-  } catch (err) { toast('Could not mark all read: ' + err.message, 'error'); }
-}
-// Close the panel when clicking outside it.
-document.addEventListener('click', (e) => {
-  const wrap = $('notifBell')?.parentElement;
-  if (wrap && !wrap.contains(e.target)) $('notifPanel')?.classList.add('hidden');
-});
-refreshNotifBadge();
-setInterval(refreshNotifBadge, 30000);
+// Notifications bell lives in portal-core.js.
+initNotifBell();
 
 loadPublishers().then(() => showSection(location.hash.slice(1) || 'dashboard'));
 </script>
