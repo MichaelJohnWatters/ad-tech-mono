@@ -143,3 +143,23 @@ recording why that is **not** the next step:
 
 Verdict: keep replication in the back pocket as the **HA** move; it is not a scaling step
 for this workload and is explicitly out of scope now.
+
+### Addendum (2026-08-08): which event tables are exported vs hot-only
+
+The export list (`exportTables` in `pkg/store/analytics/export.go`) is the
+single source of truth; hot/cold read routing is derived from it at init
+(`hotOnlyTables` in `hotcold.go`), so the two cannot drift.
+
+- **Exported (business event spines, keep-forever in the lake):** impressions,
+  clicks, conversions, auctions, auction_wins, views, dsp_calls,
+  behaviour_signals, profile_signals, and — added 2026-08-08 — **media_events**
+  (video/audio quartile beacons; they feed media_starts / media_completes /
+  completion_rate, which are tenant-facing metrics, not debug aids). Their
+  reads route hot+cold; the cold reader is ClickHouse over `s3()` Parquet, so
+  ClickHouse-native expressions like `countIf` work on both sides.
+- **Hot-only BY DESIGN (operational debug spines, bounded by the 30d hot
+  TTL):** serve_no_fills, freq_cap_blocks, render_failures,
+  campaign_state_changes, budget_depletions, tracker_rejections. These explain
+  *why* something happened recently; 30 days is the retention limit and that is
+  a deliberate decision, not a gap. Promoting one later = add it to
+  `exportTables` (routing follows automatically).

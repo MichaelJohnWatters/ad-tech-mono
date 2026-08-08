@@ -32,6 +32,12 @@ var exportTables = []struct {
 	{"dsp_calls", "timestamp"},
 	{"behaviour_signals", "observed_at"},
 	{"profile_signals", "observed_at"},
+	// media_events (video/audio quartile beacons) feed media_starts /
+	// media_completes / completion_rate — business metrics, not debug aids, so
+	// quartile history must outlive the 30d hot TTL like every other event
+	// spine. Exporting also flips its reads to hot+cold routing (hotOnlyTables
+	// is derived from this list).
+	{"media_events", "timestamp"},
 }
 
 // ExportPrefixDefault is the object-key prefix under the lake bucket that the

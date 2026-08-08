@@ -190,6 +190,121 @@ func TestHotCold_NilCold_PassesThrough(t *testing.T) {
 	}
 }
 
+// recordingHot wraps a Store and records the params of the last Query — lets
+// us assert a hot-only table's query reaches hot with the ORIGINAL params
+// (no boundary clamp, no split).
+type recordingHot struct {
+	Store
+	lastParams QueryParams
+	result     *QueryResult
+}
+
+func (r *recordingHot) Query(_ context.Context, p QueryParams) (*QueryResult, error) {
+	r.lastParams = p
+	return r.result, nil
+}
+
+// TestHotCold_MediaEvents_SpanningMergesQuartiles: media_events is exported to
+// the cold lake, so its reads route hot+cold like impressions. A spanning query
+// must merge the countIf quartile metrics additively and carry the tenant
+// filter to cold (the cold s3() reader is ClickHouse too, so countIf is native
+// on both sides).
+func TestHotCold_MediaEvents_SpanningMergesQuartiles(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	cold := &fakeCold{result: &QueryResult{
+		Columns: []string{"media_starts", "media_completes"},
+		Rows:    [][]interface{}{{int64(10), int64(5)}},
+	}}
+	ts, hot := newHotCold(cold, 7*24*time.Hour, now)
+	ctx := context.Background()
+	// Hot half: 2 starts + 1 complete inside the hot window.
+	for _, et := range []string{"start", "complete", "start"} {
+		_ = hot.InsertMediaEvent(ctx, &MediaEvent{
+			Channel: "video", EventType: et, AccountID: "acctA", Timestamp: now.Add(-time.Hour),
+		})
+	}
+	res, err := ts.Query(ctx, QueryParams{
+		Table: "media_events", Metrics: []string{"media_starts", "media_completes"},
+		Filters:  map[string]string{"account_id": "acctA"},
+		TimeFrom: now.Add(-30 * 24 * time.Hour), TimeTo: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := floatCol(t, res, "", "media_starts"); got != 12 {
+		t.Errorf("media_starts = %v, want 12 (10 cold + 2 hot)", got)
+	}
+	if got := floatCol(t, res, "", "media_completes"); got != 6 {
+		t.Errorf("media_completes = %v, want 6 (5 cold + 1 hot)", got)
+	}
+	if cold.lastParams.Table != "media_events" {
+		t.Errorf("cold not queried for media_events: %+v", cold.lastParams)
+	}
+	if cold.lastParams.Filters["account_id"] != "acctA" {
+		t.Errorf("tenant filter dropped on cold: %+v", cold.lastParams.Filters)
+	}
+	if res.Approximate != "" {
+		t.Errorf("additive quartile merge wrongly stamped approximate: %q", res.Approximate)
+	}
+}
+
+// TestHotCold_HotOnlyTables_ServedEntirelyHot: the observability spines are
+// hot-only BY DESIGN (never exported) — a cold-range query must go to hot with
+// the caller's original params, never touch cold, and never carry a degraded/
+// approximate stamp.
+func TestHotCold_HotOnlyTables_ServedEntirelyHot(t *testing.T) {
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	from := now.Add(-60 * 24 * time.Hour) // entirely before the boundary
+	for name := range hotOnlyTables {
+		cold := &fakeCold{result: &QueryResult{Columns: []string{"count"}, Rows: [][]interface{}{{999.0}}}}
+		hot := &recordingHot{Store: NewMemory(), result: &QueryResult{Columns: []string{"count"}, Rows: [][]interface{}{{3.0}}}}
+		ts := NewHotColdStore(hot, cold, 7*24*time.Hour, nil)
+		ts.now = func() time.Time { return now }
+		res, err := ts.Query(context.Background(), QueryParams{
+			Table: name, Metrics: []string{"count"}, TimeFrom: from, TimeTo: now,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if cold.lastParams.Table != "" {
+			t.Errorf("%s: cold was queried for a hot-only table", name)
+		}
+		if !hot.lastParams.TimeFrom.Equal(from) {
+			t.Errorf("%s: hot TimeFrom = %v, want original %v (no boundary clamp)", name, hot.lastParams.TimeFrom, from)
+		}
+		if res.Approximate != "" {
+			t.Errorf("%s: hot-only answer wrongly stamped approximate: %q", name, res.Approximate)
+		}
+	}
+}
+
+// TestExportRoutingConsistency pins the export↔routing contract: media_events
+// is exported (quartile history outlives the hot TTL) and therefore NOT
+// hot-only, while the six observability spines stay hot-only by design.
+func TestExportRoutingConsistency(t *testing.T) {
+	exported := map[string]bool{}
+	for _, et := range exportTables {
+		exported[et.name] = true
+	}
+	if !exported["media_events"] {
+		t.Error("media_events missing from exportTables — quartile history would vanish at the hot TTL")
+	}
+	if hotOnlyTables["media_events"] {
+		t.Error("media_events is exported but still routed hot-only")
+	}
+	for _, name := range []string{
+		"serve_no_fills", "freq_cap_blocks", "render_failures",
+		"campaign_state_changes", "budget_depletions", "tracker_rejections",
+	} {
+		if exported[name] {
+			t.Errorf("%s: observability table unexpectedly exported (hot-only by design)", name)
+		}
+		if !hotOnlyTables[name] {
+			t.Errorf("%s: observability table not routed hot-only", name)
+		}
+	}
+}
+
 // A failing cold store must not fail the query — but the degradation must
 // ride the RESPONSE (Approximate), not just a server log: a missing lake
 // once turned deep-history queries into confidently wrong numbers.
