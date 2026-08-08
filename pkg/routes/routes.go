@@ -15,6 +15,13 @@ const apiPrefix = "/" + APIVersion
 const (
 	// Auth
 	AuthToken = "/v1/auth/token"
+	// AuthLogin/Logout/Signup are the portal credential endpoints (form login
+	// → session cookie, logout, self-serve signup). Constants (rather than the
+	// raw literals cmd/gateway used to register) so the OpenAPI drift test
+	// covers them.
+	AuthLogin  = "/v1/auth/login"
+	AuthLogout = "/v1/auth/logout"
+	AuthSignup = "/v1/auth/signup"
 	// AuthBootstrap is the one-shot endpoint for minting the first operator
 	// API key after a fresh deploy. Gated by PLATFORM_ROOT_PASSWORD env var
 	// (must match exactly); on success creates a row in the secrets table
@@ -23,9 +30,16 @@ const (
 	// rotate this initial key via the secrets UI thereafter.
 	AuthBootstrap = "/v1/auth/bootstrap"
 
-	// Config management
-	Config        = "/v1/config"
-	ConfigHistory = "/v1/config/history"
+	// Config management. The change audit trail is a mode of the same
+	// endpoint (GET /v1/config?history=true), not a sub-path — a separate
+	// ConfigHistory constant existed here for years but was never registered.
+	Config = "/v1/config"
+	// ServicesRegistry lists every running service + its config snapshot
+	// (config:read; topology recon if open).
+	ServicesRegistry = "/v1/services"
+	// MediaProxy fronts the sim's sample MP4s (same-origin for the IMA SDK) —
+	// a dev asset proxy, not a documented API surface.
+	MediaProxy = "/v1/media/"
 
 	// API proxy routes (gateway -> internal services)
 	APICampaigns  = apiPrefix + "/api/campaigns/"
@@ -179,6 +193,9 @@ const (
 	// /v1/api/notifications/read {id} | {"all":true} marks read. JWT-gated;
 	// tenant-scoped — every read/mutation is bound to the session account.
 	APINotifications = apiPrefix + "/api/notifications"
+	// APINotificationsRead is the mark-read mutation sub-path (spelled out
+	// rather than composed so the OpenAPI drift extractor sees it).
+	APINotificationsRead = apiPrefix + "/api/notifications/read"
 
 	// APISavedReports is saved/scheduled report management (GET list, POST
 	// create, DELETE remove). JWT-gated on reports:read/reports:save;

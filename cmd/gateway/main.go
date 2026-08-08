@@ -229,12 +229,12 @@ func main() {
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "login.html", nil)
 	})
-	mux.HandleFunc("/v1/auth/login", loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
-	mux.HandleFunc("/v1/auth/logout", logoutHandler)
+	mux.HandleFunc(routes.AuthLogin, loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
+	mux.HandleFunc(routes.AuthLogout, logoutHandler)
 	mux.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "signup.html", nil)
 	})
-	mux.HandleFunc("/v1/auth/signup", signupHandler(pgSignupStore{db: gwDB}, signingKey, log))
+	mux.HandleFunc(routes.AuthSignup, signupHandler(pgSignupStore{db: gwDB}, signingKey, log))
 	// /dev/landing/{brand} is the demo destination the tracker redirects
 	// to after a click. Brand slug (luxauto, megastore, cryptoex, …) is
 	// the last path segment; theme is picked from a small table so the
@@ -325,7 +325,7 @@ func main() {
 	// Service registry - shows all running services and their config (topology
 	// recon if open) — require an authenticated caller with config:read.
 	if sc.Registry != nil {
-		mux.Handle("/v1/services", authMiddleware(middleware.RequirePermission("config:read")(sc.Registry.HTTPHandler())))
+		mux.Handle(routes.ServicesRegistry, authMiddleware(middleware.RequirePermission("config:read")(sc.Registry.HTTPHandler())))
 	}
 
 	// Dev-only token minter: /v1/auth/token issues a signed JWT for an arbitrary
@@ -656,7 +656,7 @@ func main() {
 		notifStore = notifications.NewPostgresStore(gwDB)
 	}
 	mux.Handle(routes.APINotifications, authMiddleware(http.HandlerFunc(notificationsHandler(notifStore, log))))
-	mux.Handle(routes.APINotifications+"/read", authMiddleware(http.HandlerFunc(notificationsHandler(notifStore, log))))
+	mux.Handle(routes.APINotificationsRead, authMiddleware(http.HandlerFunc(notificationsHandler(notifStore, log))))
 
 	// Saved reports — account saved/scheduled reports (tenant-scoped,
 	// reports:read/reports:save gated).
@@ -896,8 +896,8 @@ func main() {
 	// same-origin as the sim page, eliminating CORS as a variable
 	// when IMA SDK fetches the MP4. Range requests + content-type
 	// pass through unchanged.
-	mux.Handle("/v1/media/",
-		middleware.CORS(middleware.StripPrefix("/v1/media/",
+	mux.Handle(routes.MediaProxy,
+		middleware.CORS(middleware.StripPrefix(routes.MediaProxy,
 			middleware.ReverseProxy("https://test-videos.co.uk/vids/", log))))
 	mux.Handle(routes.ProxyAdServer, middleware.CORS(middleware.ReverseProxy(adserverURL, log)))
 	mux.Handle(routes.ProxySSP, middleware.CORS(middleware.ReverseProxy(sspURL, log)))
