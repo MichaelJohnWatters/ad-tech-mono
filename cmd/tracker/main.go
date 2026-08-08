@@ -209,9 +209,13 @@ func main() {
 		// Validate HMAC signature. When tracker.signature_validation is
 		// true (prod-shape) we 403 the request; otherwise we warn and let
 		// the event through so dev pipelines that don't yet sign keep
-		// flowing. The config knob is live-tunable so ops can ratchet
-		// strictness without a redeploy.
-		if !adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys()) {
+		// flowing — but an unverified beacon never gets to assert WHO it
+		// belongs to (attribution params are blanked below), or anyone
+		// could forge impressions into a victim tenant's reports/billing.
+		// The config knob is live-tunable so ops can ratchet strictness
+		// without a redeploy.
+		sigOK := adserving.ValidateSignatureAny(r.URL.Path, q, sigKeys())
+		if !sigOK {
 			reqLog.Warn("invalid signature", "path", r.URL.Path)
 			if keys.Tracker.SignatureValidation.Get(cfg) {
 				go publisher.publishRejected(context.WithoutCancel(ctx),
@@ -305,13 +309,16 @@ func main() {
 				qty = m
 			}
 		}
+		// Attribution (who gets billed/credited) only from signature-verified
+		// URLs — same rule as the media beacons (see attribGate).
+		attrib := attribGate(q, sigOK)
 		go publisher.publishImpression(context.WithoutCancel(ctx), analytics.ImpressionEvent{
 			TraceID:          traceID,
-			CampaignID:       q.Get("cid"),
-			CreativeID:       q.Get("crid"),
-			PlacementID:      q.Get("pid"),
-			PublisherID:      q.Get("pubid"),
-			AccountID:        q.Get("advid"),
+			CampaignID:       attrib("cid"),
+			CreativeID:       attrib("crid"),
+			PlacementID:      attrib("pid"),
+			PublisherID:      attrib("pubid"),
+			AccountID:        attrib("advid"),
 			Geo:              q.Get("geo"),
 			Device:           q.Get("dev"),
 			Channel:          channelOrDefault(q.Get("ch")),
@@ -320,7 +327,7 @@ func main() {
 			ClearingPriceUSD: impCost * float64(qty), // full play cost — billing books this
 			ImpressionQty:    qty,                    // audience impressions this play delivered
 			BidModel:         bidModel,
-			DealID:           q.Get("deal"),
+			DealID:           attrib("deal"),
 			SchemaVersion:    1,
 			Timestamp:        time.Now().UTC(),
 		}, reqLog)
@@ -635,11 +642,12 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("video_event", "event_type", eventType)
-		if !mediaGate.allow(w, r, "video", eventType, traceID, reqLog) {
+		record, sigOK := mediaGate.allow(w, r, "video", eventType, traceID, reqLog)
+		if !record {
 			return
 		}
 		go publisher.publishVideo(context.WithoutCancel(ctx),
-			videoEventFromQuery(q, traceID, eventType, time.Now()), reqLog)
+			videoEventFromQuery(q, traceID, eventType, sigOK, time.Now()), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
@@ -649,11 +657,12 @@ func main() {
 		ctx := logger.WithTraceID(r.Context(), traceID)
 		reqLog := logger.WithContext(log, ctx)
 		reqLog.Info("audio_event", "event_type", eventType)
-		if !mediaGate.allow(w, r, "audio", eventType, traceID, reqLog) {
+		record, sigOK := mediaGate.allow(w, r, "audio", eventType, traceID, reqLog)
+		if !record {
 			return
 		}
 		go publisher.publishAudio(context.WithoutCancel(ctx),
-			audioEventFromQuery(q, traceID, eventType, time.Now()), reqLog)
+			audioEventFromQuery(q, traceID, eventType, sigOK, time.Now()), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -739,36 +748,51 @@ func channelOrDefault(ch string) string {
 }
 
 // videoEventFromQuery / audioEventFromQuery build the typed media events from
-// the ALREADY-PARSED (and HMAC-verified — the gate ran first) beacon params.
-// Attribution mirrors the impression pixel exactly: cid/crid/pid/pubid plus
-// advid → AccountID, so advertiser-tenant scoping on media_events works the
-// same way it does on impressions. Read-only over q — no lookups, no I/O
-// (hot-path iron rule). Legacy beacons signed before advid landed simply
-// yield empty attribution fields.
-func videoEventFromQuery(q url.Values, traceID, eventType string, now time.Time) events.VideoEvent {
+// the ALREADY-PARSED beacon params. Attribution mirrors the impression pixel:
+// cid/crid/pid/pubid plus advid → AccountID, so advertiser-tenant scoping on
+// media_events works the same way it does on impressions — but ONLY when the
+// URL signature verified (sigOK). With validation off the gate warn-and-allows
+// unsigned beacons; recording them is fine, but trusting their attribution
+// would let anyone forge quartiles into a victim tenant's completion metrics.
+// Real traffic is always signed, so it keeps full attribution. Read-only over
+// q — no lookups, no I/O (hot-path iron rule). Legacy beacons signed before
+// advid landed simply yield empty attribution fields.
+func videoEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time) events.VideoEvent {
+	attrib := attribGate(q, sigOK)
 	return events.VideoEvent{
 		TraceID:     traceID,
 		EventType:   eventType,
-		CampaignID:  q.Get("cid"),
-		CreativeID:  q.Get("crid"),
-		PlacementID: q.Get("pid"),
-		PublisherID: q.Get("pubid"),
-		AccountID:   q.Get("advid"),
+		CampaignID:  attrib("cid"),
+		CreativeID:  attrib("crid"),
+		PlacementID: attrib("pid"),
+		PublisherID: attrib("pubid"),
+		AccountID:   attrib("advid"),
 		Timestamp:   now,
 	}
 }
 
-func audioEventFromQuery(q url.Values, traceID, eventType string, now time.Time) events.AudioEvent {
+func audioEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time) events.AudioEvent {
+	attrib := attribGate(q, sigOK)
 	return events.AudioEvent{
 		TraceID:     traceID,
 		EventType:   eventType,
-		CampaignID:  q.Get("cid"),
-		CreativeID:  q.Get("crid"),
-		PlacementID: q.Get("pid"),
-		PublisherID: q.Get("pubid"),
-		AccountID:   q.Get("advid"),
+		CampaignID:  attrib("cid"),
+		CreativeID:  attrib("crid"),
+		PlacementID: attrib("pid"),
+		PublisherID: attrib("pubid"),
+		AccountID:   attrib("advid"),
 		Timestamp:   now,
 	}
+}
+
+// attribGate returns a q.Get that yields "" for every key when the beacon's
+// signature did not verify — unverified callers may be recorded (dev
+// tolerance) but never get to assert who the event belongs to.
+func attribGate(q url.Values, sigOK bool) func(string) string {
+	if sigOK {
+		return q.Get
+	}
+	return func(string) string { return "" }
 }
 
 func (p *eventPublisher) publishImpression(ctx context.Context, e analytics.ImpressionEvent, log *slog.Logger) {

@@ -149,8 +149,11 @@ func main() {
 			params := rep.QueryConfig
 			params.Filters = filters
 			delivery := rep.Delivery
-			if delivery != reportjobs.DeliveryEmail {
-				delivery = reportjobs.DeliveryNone // webhook delivery not built yet
+			// email + webhook both pass through: the executor emails directly and
+			// announces report.completed for the webhook dispatcher. Anything else
+			// (legacy/blank) normalises to none.
+			if delivery != reportjobs.DeliveryEmail && delivery != reportjobs.DeliveryWebhook {
+				delivery = reportjobs.DeliveryNone
 			}
 			format := rep.Format
 			if !reportjobs.ValidFormat(format) {

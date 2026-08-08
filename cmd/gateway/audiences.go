@@ -30,6 +30,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
@@ -751,8 +752,13 @@ func (deps audienceDeps) resolveUploaderEmail(ctx context.Context, userID string
 		return nil
 	}
 	var e string
-	if err := deps.db.QueryRowContext(ctx,
-		`SELECT email FROM team_members WHERE id = $1::uuid`, userID).Scan(&e); err != nil {
+	// team_members is RLS-policied and this helper has no account context —
+	// the id comes from a VERIFIED JWT, so the platform hatch is the correct
+	// self-resolution posture (security #77; a raw read was silently blanked
+	// and the uploader never notified).
+	if err := postgres.NewFromDB(deps.db).QueryRowPlatform(ctx, func(row *sql.Row) error {
+		return row.Scan(&e)
+	}, `SELECT email FROM team_members WHERE id = $1::uuid`, userID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			deps.log.Warn("audience upload: uploader email lookup failed", "user", userID, "error", err)
 		}

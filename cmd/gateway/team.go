@@ -12,6 +12,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -125,12 +126,14 @@ func (s pgTeamStore) ListTeam(ctx context.Context, accountID string) ([]teamMemb
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, email, name, role, status FROM team_members WHERE account_id = $1::uuid ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []teamMemberView{}
 	for rows.Next() {
 		var m teamMemberView

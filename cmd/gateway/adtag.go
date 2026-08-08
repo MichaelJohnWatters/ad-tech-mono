@@ -12,6 +12,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // placementTag is the metadata the tag generator needs about a placement.
@@ -148,11 +149,18 @@ func (s pgAdTagStore) GetPlacementForTag(ctx context.Context, accountID, placeme
 		return p, sql.ErrConnDone
 	}
 	var width, height sql.NullInt64
-	// Empty accountID = platform caller — no tenant filter.
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id::text, name, format, width, height FROM placements
-		 WHERE id = $1::uuid AND ($2 = '' OR account_id = $2::uuid)`, placementID, accountID).
-		Scan(&p.ID, &p.Name, &p.Format, &width, &height)
+	scan := func(row *sql.Row) error { return row.Scan(&p.ID, &p.Name, &p.Format, &width, &height) }
+	const q = `SELECT id::text, name, format, width, height FROM placements
+		 WHERE id = $1::uuid AND ($2 = '' OR account_id = $2::uuid)`
+	// Tenant GUC (or the platform hatch for empty-accountID staff callers) must
+	// be set or RLS silently blanks the row under the NOBYPASSRLS app role
+	// (security #77).
+	var err error
+	if accountID == "" {
+		err = postgres.NewFromDB(s.db).QueryRowPlatform(ctx, scan, q, placementID, accountID)
+	} else {
+		err = postgres.QueryRowTenantDB(ctx, s.db, accountID, scan, q, placementID, accountID)
+	}
 	if err != nil {
 		return p, err
 	}

@@ -2465,6 +2465,51 @@ paths:
       responses:
         "200": { description: "QueryResult { columns: [channel, count, sum_cost], rows }" }
         "502": { description: Reporting unreachable }
+  /v1/api/staff/shading:
+    get:
+      tags: [Staff]
+      summary: Per-placement bid-shading state, read-only (support:read)
+      description: Proxied server-side to the DSP's internal /v1/dsp/shading. Body is the DSP's map keyed by placement_id; values use Go field names (no json tags) — TotalBids, Wins, Losses, WinRate, AvgClearing, BelowFloor, Outbid. Shading is model-driven; there are no knobs.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ <placement_id>: { TotalBids, Wins, Losses, WinRate, AvgClearing, BelowFloor, Outbid } }" }
+        "502": { description: DSP unreachable }
+  /v1/api/privacy/status:
+    get:
+      tags: [Privacy]
+      summary: Staff opt-out lookup for one identity (support:read)
+      description: Never-opted-out is a valid answer (opted_out false, level 0), not a 404. Levels — 1 no personalisation, 2 no tracking, 3 full GDPR/CCPA deletion.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string }, description: user / device / household id }
+      responses:
+        "200": { description: "{ user_id, opted_out, level, source?, requested_at?, completed_at?, verified_at? }" }
+        "400": { description: id missing }
+  /v1/api/privacy/optouts:
+    get:
+      tags: [Privacy]
+      summary: Recent opt-outs, newest first, limit 100 (support:read)
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ user_id, level, source, requested_at, completed_at?, verified_at? }]" }
+    post:
+      tags: [Privacy]
+      summary: Staff opt-out intake on behalf of a user (support:update)
+      description: Delegates to the same recorder as the operator-key /v1/api/privacy/optout (write + OptOutEvent + cache invalidate) so the two intakes can't drift. source is FORCED to staff:<actor user id> and the action is audit-logged — a staff-recorded opt-out (level 3 is irreversible erasure) is always attributable.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, level]
+              properties:
+                user_id: { type: string }
+                level: { type: integer, enum: [1, 2, 3] }
+      responses:
+        "200": { description: "{ user_id, level, status: recorded }" }
+        "503": { description: Opt-out intake unavailable }
 
   # ============================================================
   # Staff API - House ads (no-bid fallback creatives)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // payoutView is one payouts row as the publisher earnings console sees it.
@@ -76,14 +77,16 @@ func (s pgPayoutStore) ListPayouts(ctx context.Context, accountID string) (payou
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, publisher_id::text, amount, currency, platform_fee, status,
 		        period_start::text, period_end::text
 		 FROM payouts WHERE account_id = $1::uuid ORDER BY period_end DESC LIMIT 500`, accountID)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	for rows.Next() {
 		var p payoutView
 		if err := rows.Scan(&p.ID, &p.PublisherID, &p.Amount, &p.Currency, &p.PlatformFee, &p.Status, &p.PeriodStart, &p.PeriodEnd); err != nil {

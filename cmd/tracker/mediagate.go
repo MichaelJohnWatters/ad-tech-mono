@@ -28,26 +28,32 @@ type mediaEventGate struct {
 	publisher     *eventPublisher
 }
 
-// allow runs the gate and returns true when the event should be recorded. On
-// rejection it writes the response itself — 403 for a strict-mode bad signature,
-// 410 for an expired URL, and a silent 204 for fraud/dedup (so the player keeps
-// playing and detection isn't revealed) — and records a TrackerRejected event.
+// allow runs the gate and returns (record, sigOK). record is true when the
+// event should be recorded. sigOK is the best-effort signature result
+// REGARDLESS of the enforcement toggle: with validation off a bad/missing sig
+// still records (dev tolerance), but the caller must blank the beacon's
+// attribution params — otherwise anyone could forge cid/advid/pubid straight
+// into a victim tenant's media reports. On rejection allow writes the response
+// itself — 403 for a strict-mode bad signature, 410 for an expired URL, and a
+// silent 204 for fraud/dedup (so the player keeps playing and detection isn't
+// revealed) — and records a TrackerRejected event.
 //
 // dedup is namespaced per quartile per trace via eventType+":"+event (e.g.
 // "video:start"), so distinct quartiles on one trace each record once while a
 // re-fired quartile is dropped. Paired with the SSAI per-pod-ad trace that makes
 // the key effectively per-ad-per-quartile.
-func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType, event, traceID string, reqLog *slog.Logger) bool {
+func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType, event, traceID string, reqLog *slog.Logger) (bool, bool) {
 	q := r.URL.Query()
 	ctx := logger.WithTraceID(r.Context(), traceID)
 
-	if !adserving.ValidateSignatureAny(r.URL.Path, q, g.sigKeys()) {
+	sigOK := adserving.ValidateSignatureAny(r.URL.Path, q, g.sigKeys())
+	if !sigOK {
 		reqLog.Warn("invalid signature", "path", r.URL.Path)
 		if g.sigValidation() {
 			go g.publisher.publishRejected(context.WithoutCancel(ctx),
 				eventType, "invalid_signature", event, traceID, reqLog)
 			http.Error(w, "invalid signature", http.StatusForbidden)
-			return false
+			return false, false
 		}
 	}
 
@@ -56,7 +62,7 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 		go g.publisher.publishRejected(context.WithoutCancel(ctx),
 			eventType, "expired", q.Get("exp"), traceID, reqLog)
 		http.Error(w, "url expired", http.StatusGone)
-		return false
+		return false, sigOK
 	}
 
 	fraudResult := g.fraud.Check(fraud.Request{
@@ -69,7 +75,7 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 		go g.publisher.publishRejected(context.WithoutCancel(ctx),
 			eventType, "fraud", strings.Join(fraudResult.Reasons, ","), traceID, reqLog)
 		w.WriteHeader(http.StatusNoContent) // silent — don't reveal detection
-		return false
+		return false, sigOK
 	}
 
 	// Per-quartile-per-trace dedup: distinct quartiles on one trace each record
@@ -79,7 +85,7 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 		go g.publisher.publishRejected(context.WithoutCancel(ctx),
 			eventType, "dedup", event, traceID, reqLog)
 		w.WriteHeader(http.StatusNoContent)
-		return false
+		return false, sigOK
 	}
-	return true
+	return true, sigOK
 }

@@ -853,6 +853,14 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 	}
 
 	if err := updateLineItem(ctx, db, accountID, id, req); err != nil {
+		if errors.Is(err, errSharedInsertionOrder) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, errFlightWindowInverted) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, errCreativeNotAttachable) || errors.Is(err, errNoEligibleCreative) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -932,8 +940,39 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 		return errors.New("campaign not found or RLS blocked update")
 	}
 	// IO-level fields (total budget / flight window) land on the parent
-	// insertion_orders row in the same tx.
+	// insertion_orders row in the same tx. Guard query first: seeded/bigworld
+	// campaigns SHARE IOs (io-001 carries 4 line items), so a per-campaign
+	// patch on a shared IO would silently rewrite the siblings' budget/flight
+	// — and the day-boundary flight cron would then cascade-end every sibling.
+	// The same query fetches the stored dates so a single-sided date patch is
+	// merged and can't invert the window (the request-level check only fires
+	// when both dates are supplied).
 	if req.hasIOFields() {
+		var ioID string
+		var siblings int
+		var curStart, curEnd string
+		if err := tx.QueryRowContext(ctx, `
+SELECT io.id::text, (SELECT count(*) FROM line_items WHERE insertion_order_id = io.id),
+       io.start_date::text, io.end_date::text
+FROM insertion_orders io
+WHERE io.id = (SELECT insertion_order_id FROM line_items WHERE id = $1)
+FOR UPDATE`, lineItemID).Scan(&ioID, &siblings, &curStart, &curEnd); err != nil {
+			return fmt.Errorf("io lookup: %w", err)
+		}
+		if siblings > 1 {
+			return errSharedInsertionOrder
+		}
+		start, end := curStart, curEnd
+		if req.StartDate != nil {
+			start = *req.StartDate
+		}
+		if req.EndDate != nil {
+			end = *req.EndDate
+		}
+		// DATE::text is YYYY-MM-DD, so string compare is date compare.
+		if start != "" && end != "" && end < start {
+			return errFlightWindowInverted
+		}
 		ioSets := []string{"updated_at = now()"}
 		ioArgs := []any{}
 		if req.TotalBudget != nil {
@@ -948,8 +987,8 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 			ioArgs = append(ioArgs, *req.EndDate)
 			ioSets = append(ioSets, fmt.Sprintf("end_date = $%d::date", len(ioArgs)))
 		}
-		ioArgs = append(ioArgs, lineItemID)
-		ioQ := fmt.Sprintf("UPDATE insertion_orders SET %s WHERE id = (SELECT insertion_order_id FROM line_items WHERE id = $%d)",
+		ioArgs = append(ioArgs, ioID)
+		ioQ := fmt.Sprintf("UPDATE insertion_orders SET %s WHERE id = $%d::uuid",
 			strings.Join(ioSets, ", "), len(ioArgs))
 		if _, err := tx.ExecContext(ctx, ioQ, ioArgs...); err != nil {
 			return fmt.Errorf("io update: %w", err)
@@ -1019,6 +1058,13 @@ func countEligibleCreatives(ctx context.Context, tx *sql.Tx, accountID, lineItem
 // errCreativeNotAttachable → 400: an attached creative isn't owned by the
 // account or isn't approved.
 var errCreativeNotAttachable = errors.New("creative not owned by account or not approved")
+
+// errSharedInsertionOrder → 409: IO-level fields (total budget / flight
+// window) can't be edited through one campaign when several share the IO.
+var errSharedInsertionOrder = errors.New("insertion order is shared by multiple campaigns — its budget/flight can't be edited via a single campaign")
+
+// errFlightWindowInverted → 400: the merged (patch + stored) window inverts.
+var errFlightWindowInverted = errors.New("end_date must be on or after the flight's start_date")
 
 // replaceLineItemCreatives swaps the campaign's attached creatives for the
 // supplied set. Every creative must belong to accountID and be approved
@@ -1235,28 +1281,10 @@ WHERE li.id = ANY($1::uuid[])`, pq.StringArray(ids))
 // writes. (0, "", "") when the campaign has no cap of its own. Scope
 // normalises to "user" for pre-scope entries (no "scope" field stored).
 func lineItemCapFromJSON(raw string) (limit int, window, scope string) {
-	if raw == "" || raw == "[]" {
-		return 0, "", ""
-	}
-	var caps []struct {
-		Dimension string `json:"dimension"`
-		Window    string `json:"window"`
-		Limit     int    `json:"limit"`
-		Scope     string `json:"scope"`
-	}
-	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
-		return 0, "", ""
-	}
-	for _, c := range caps {
-		if c.Dimension == "line_item" && c.Limit > 0 {
-			scope = models.FreqCapScopeUser
-			if c.Scope == models.FreqCapScopeHousehold {
-				scope = models.FreqCapScopeHousehold
-			}
-			return c.Limit, c.Window, scope
-		}
-	}
-	return 0, "", ""
+	// One shared decoder with the enforcement loader (postgres.ParseLineItemCap)
+	// so prefill and enforcement can never disagree about the stored shape.
+	limit, window, scope, _ = postgres.ParseLineItemCap(raw)
+	return limit, window, scope
 }
 
 // lookupLineItemAccount finds which account owns this line item so we can

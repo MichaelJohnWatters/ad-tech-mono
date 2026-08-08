@@ -10,6 +10,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // invoiceView is one invoices row as the advertiser billing console lists it.
@@ -126,14 +127,16 @@ func (s pgInvoiceStore) ListInvoices(ctx context.Context, accountID string) (inv
 	if s.db == nil {
 		return out, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, period_start::text, period_end::text, total, currency, status, due_date::text
 		 FROM invoices WHERE account_id = $1::uuid ORDER BY period_end DESC, created_at DESC LIMIT 500`,
 		accountID)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	for rows.Next() {
 		var v invoiceView
 		if err := rows.Scan(&v.ID, &v.PeriodStart, &v.PeriodEnd, &v.Total, &v.Currency, &v.Status, &v.DueDate); err != nil {
@@ -153,17 +156,18 @@ func (s pgInvoiceStore) GetInvoice(ctx context.Context, accountID, invoiceID str
 	// Header, tenant-scoped. invoiceID is bound as a parameter cast to uuid; a
 	// malformed id makes the cast fail (returned as an error, mapped to 500 by
 	// the handler — the trailing-slash route only receives non-empty segments).
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id::text, period_start::text, period_end::text, total, currency, status, due_date::text
+	err := postgres.QueryRowTenantDB(ctx, s.db, accountID, func(row *sql.Row) error {
+		return row.Scan(&out.ID, &out.PeriodStart, &out.PeriodEnd, &out.Total, &out.Currency, &out.Status, &out.DueDate)
+	}, `SELECT id::text, period_start::text, period_end::text, total, currency, status, due_date::text
 		 FROM invoices WHERE id = $1::uuid AND account_id = $2::uuid`,
-		invoiceID, accountID).Scan(&out.ID, &out.PeriodStart, &out.PeriodEnd, &out.Total, &out.Currency, &out.Status, &out.DueDate)
+		invoiceID, accountID)
 	if err == sql.ErrNoRows {
 		return out, false, nil
 	}
 	if err != nil {
 		return out, false, err
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT campaign_id, COALESCE(campaign_name,''), impressions, clicks, conversions, spend, COALESCE(bid_model,'')
 		 FROM invoice_line_items WHERE invoice_id = $1::uuid AND account_id = $2::uuid
 		 ORDER BY spend DESC`,
@@ -171,7 +175,7 @@ func (s pgInvoiceStore) GetInvoice(ctx context.Context, accountID, invoiceID str
 	if err != nil {
 		return out, false, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	for rows.Next() {
 		var l invoiceLineView
 		if err := rows.Scan(&l.CampaignID, &l.CampaignName, &l.Impressions, &l.Clicks, &l.Conversions, &l.Spend, &l.BidModel); err != nil {

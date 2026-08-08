@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // creativeInput is an advertiser creative upload.
@@ -153,7 +154,9 @@ func (s pgCreativeStore) ListCreatives(ctx context.Context, accountID string) ([
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, name, format, COALESCE(width, 0), COALESCE(height, 0),
 		        COALESCE(landing_url, ''), review_status, COALESCE(rejection_reason, ''),
 		        created_at::text
@@ -162,7 +165,7 @@ func (s pgCreativeStore) ListCreatives(ctx context.Context, accountID string) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []creativeView{}
 	for rows.Next() {
 		var c creativeView

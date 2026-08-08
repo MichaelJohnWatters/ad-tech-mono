@@ -264,6 +264,26 @@ func QueryTenantDB(ctx context.Context, db *sql.DB, accountID, query string, arg
 	return rows, func() { rows.Close(); tx.Rollback() }, nil
 }
 
+// ExecTenantDB runs an account-scoped write on a raw *sql.DB with the tenant
+// GUC set — the write twin of QueryTenantDB. Without it every mutation on an
+// RLS-policied table needs a hand-rolled tx + set_config dance, and the sites
+// that skipped it matched zero rows silently under the NOBYPASSRLS app role.
+func ExecTenantDB(ctx context.Context, db *sql.DB, accountID, query string, args ...any) (sql.Result, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return res, tx.Commit()
+}
+
 // QueryRowTenantDB is the single-row form of QueryTenantDB: scan runs inside a
 // read-only tx with the caller's app.current_account_id set (security #77).
 // sql.ErrNoRows propagates out of scan as usual. No-op under the superuser.

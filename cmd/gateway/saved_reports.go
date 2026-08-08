@@ -10,6 +10,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportrunner"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
 
 // savedReportView is one saved_reports row as the reports console sees it.
@@ -145,13 +146,15 @@ func (s pgSavedReportStore) ListSavedReports(ctx context.Context, accountID stri
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	// Tenant GUC must be set or RLS silently blanks the rows under the
+	// NOBYPASSRLS app role (security #77).
+	rows, closeFn, err := postgres.QueryTenantDB(ctx, s.db, accountID,
 		`SELECT id::text, name, query_config, COALESCE(schedule,''), COALESCE(delivery,'none')
 		 FROM saved_reports WHERE account_id = $1::uuid ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeFn()
 	out := []savedReportView{}
 	for rows.Next() {
 		var v savedReportView
@@ -193,7 +196,7 @@ func (s pgSavedReportStore) DeleteSavedReport(ctx context.Context, accountID, id
 	if s.db == nil {
 		return sql.ErrConnDone
 	}
-	res, err := s.db.ExecContext(ctx,
+	res, err := postgres.ExecTenantDB(ctx, s.db, accountID,
 		`DELETE FROM saved_reports WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
 	if err != nil {
 		return err
