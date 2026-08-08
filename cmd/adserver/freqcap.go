@@ -111,20 +111,90 @@ func (f *FreqCap) Record(ctx context.Context, userID, campaignID string, limit i
 	}
 }
 
-// ── Combined user+household ops: ONE Redis round trip via Lua ─────────────
+// ── Cap scope resolution (per-campaign frequency_cap.scope knob) ──────────
 //
-// The serve handler runs the cap for BOTH scopes on every request; as four
-// serial ops (2× INCR + 2× EXPIRE) that was the whole render leg's cost
+// The serve handler resolves the campaign's cap scope ONCE per request into
+// an ordered list of enforcement legs — (scope label, counter id) pairs —
+// and the combined ops below all consume that same resolution. One
+// resolution driving peek, record, and check-and-record makes peek/record
+// key mismatches unrepresentable, and blocked-scope attribution is intrinsic
+// to the leg that blocked (no after-the-fact remapping).
+//
+// A campaign whose cap scope is "household" enforces its limit against the
+// HOUSEHOLD counter (hh:… id + campaign key — the same key the default
+// path's household leg already uses) INSTEAD of the per-user counter, so
+// co-viewing devices share one allowance. The resolution only picks keys —
+// the Redis round-trip count is unchanged (hot-path iron rule). When no
+// household id resolves the cap falls back to the per-user counter,
+// mirroring how the platform household leg silently vanishes on an absent
+// hh: id. Any other scope (empty/"user") keeps the pre-knob behaviour
+// byte-for-byte: user counter primary, household counter co-enforced.
+
+// capLeg is one resolved enforcement leg: the id that owns the counter and
+// the scope label a block on that counter is attributed to
+// (models.FreqCapScopeUser | models.FreqCapScopeHousehold).
+type capLeg struct {
+	scope string
+	id    string
+}
+
+// capResolution is the ordered (primary-first) set of enforcement legs for
+// one serve request. Value type, at most two legs — nothing on the serve
+// path allocates until a Redis script needs its key slice.
+type capResolution struct {
+	legs [2]capLeg
+	n    int
+}
+
+func (r *capResolution) add(scope, id string) {
+	r.legs[r.n] = capLeg{scope: scope, id: id}
+	r.n++
+}
+
+// keys returns the Redis keys for the resolved legs, in leg order.
+func (r capResolution) keys(campaignID string) []string {
+	keys := make([]string, r.n)
+	for i := 0; i < r.n; i++ {
+		keys[i] = freqCapKey(r.legs[i].id, campaignID)
+	}
+	return keys
+}
+
+// resolveCapScope maps (campaign cap scope, user id, household id) to the
+// enforcement legs. Deterministic, so the separate peek and record requests
+// of a video/audio PEEK/RECORD split resolve to identical keys. Absent ids
+// contribute no leg (an empty resolution bypasses the cap, matching the
+// primitives' empty-id bypass).
+func resolveCapScope(scope, userID, householdID string) capResolution {
+	var r capResolution
+	if scope == models.FreqCapScopeHousehold && householdID != "" {
+		r.add(models.FreqCapScopeHousehold, householdID)
+		return r
+	}
+	if userID != "" {
+		r.add(models.FreqCapScopeUser, userID)
+	}
+	if householdID != "" {
+		r.add(models.FreqCapScopeHousehold, householdID)
+	}
+	return r
+}
+
+// ── Combined multi-leg ops: ONE Redis round trip via Lua ──────────────────
+//
+// The serve handler runs the cap for up to two legs on every request; as
+// four serial ops (2× INCR + 2× EXPIRE) that was the whole render leg's cost
 // under load (adserver freqcap phase p95 80ms vs 1-2ms for everything else,
 // 2026-08-05). Each script preserves the serial path's exact semantics —
-// notably check-and-record only touches the household counter when the user
-// scope ALLOWED (the pre-existing asymmetry). When the backend can't script
-// (in-memory fallback era, tests, Redis blip) every method degrades to the
-// original per-scope calls.
+// notably check-and-record only touches the secondary (household) counter
+// when the primary leg ALLOWED (the pre-existing asymmetry). When the
+// backend can't script (in-memory fallback era, tests, Redis blip) every
+// method degrades to the original per-leg calls.
 
-// checkScript: INCR user (PEXPIRE on first); if over limit stop (household
-// untouched). Else INCR household when present. Returns {userCount, hhCount};
-// hhCount -1 = not evaluated (blocked at user or no household key).
+// checkScript: INCR the primary leg (PEXPIRE on first); if over limit stop
+// (secondary untouched). Else INCR the secondary when present. Returns
+// {primaryCount, secondaryCount}; secondaryCount -1 = not evaluated
+// (blocked at primary or no secondary key).
 const checkScript = `
 local limit = tonumber(ARGV[1])
 local win = tonumber(ARGV[2])
@@ -149,18 +219,6 @@ for i, k in ipairs(KEYS) do
   if c == 1 then redis.call('PEXPIRE', k, win) end
 end
 return 1`
-
-// capKeys returns the 1-2 keys for the scopes present (user first).
-func capKeys(userID, householdID, campaignID string) []string {
-	keys := make([]string, 0, 2)
-	if userID != "" {
-		keys = append(keys, freqCapKey(userID, campaignID))
-	}
-	if householdID != "" {
-		keys = append(keys, freqCapKey(householdID, campaignID))
-	}
-	return keys
-}
 
 // evalInts runs a script and coerces the []any reply to int64s.
 func (f *FreqCap) evalInts(ctx context.Context, script string, keys []string, args ...any) ([]int64, error) {
@@ -189,54 +247,49 @@ func (f *FreqCap) evalInts(ctx context.Context, script string, keys []string, ar
 
 var errNoScripting = errors.New("freqcap: backend does not support scripting")
 
-// DecideAndRecord is the display path for both scopes in one round trip:
-// check-and-increment user, then household only if the user allowed.
-// blockedScope is "" (allowed), "user", or "household".
-func (f *FreqCap) DecideAndRecord(ctx context.Context, userID, householdID, campaignID string, limit int, window time.Duration) (bool, string) {
-	if limit <= 0 || (userID == "" && householdID == "") {
+// DecideAndRecord is the display path for the resolved legs in one round
+// trip: check-and-increment the primary leg, then the secondary only if the
+// primary allowed. blockedScope is "" (allowed) or the blocking leg's scope
+// label ("user" / "household") — attribution comes straight from the
+// resolution, so it is correct in every scope mode by construction.
+func (f *FreqCap) DecideAndRecord(ctx context.Context, res capResolution, campaignID string, limit int, window time.Duration) (bool, string) {
+	if limit <= 0 || res.n == 0 {
 		return true, ""
 	}
-	// The script's user/household asymmetry needs a real user key; a
-	// household-only request degrades to the single-scope serial call.
-	if userID != "" {
-		keys := capKeys(userID, householdID, campaignID)
-		counts, err := f.evalInts(ctx, checkScript, keys, limit, window.Milliseconds())
-		if err == nil {
-			if counts[0] > int64(limit) {
-				return false, "user"
-			}
-			if len(keys) > 1 && counts[1] > int64(limit) {
-				return false, "household"
-			}
-			return true, ""
+	counts, err := f.evalInts(ctx, checkScript, res.keys(campaignID), limit, window.Milliseconds())
+	if err == nil {
+		if counts[0] > int64(limit) {
+			return false, res.legs[0].scope
 		}
-		if err != errNoScripting {
-			f.log.Warn("freqcap combined check failed; using serial path", "error", err)
+		if res.n > 1 && counts[1] > int64(limit) {
+			return false, res.legs[1].scope
 		}
+		return true, ""
 	}
-	// Serial fallback — byte-for-byte the pre-Lua behaviour.
-	if !f.AllowAndRecord(ctx, userID, campaignID, limit, window) {
-		return false, "user"
+	if err != errNoScripting {
+		f.log.Warn("freqcap combined check failed; using serial path", "error", err)
 	}
-	if householdID != "" && !f.AllowAndRecord(ctx, householdID, campaignID, limit, window) {
-		return false, "household"
+	// Serial fallback — byte-for-byte the pre-Lua behaviour: stop at the
+	// first blocking leg, later legs untouched.
+	for i := 0; i < res.n; i++ {
+		if !f.AllowAndRecord(ctx, res.legs[i].id, campaignID, limit, window) {
+			return false, res.legs[i].scope
+		}
 	}
 	return true, ""
 }
 
-// PeekBoth is the video/audio decision path: would the NEXT impression be
-// allowed for both scopes, without incrementing either.
-func (f *FreqCap) PeekBoth(ctx context.Context, userID, householdID, campaignID string, limit int) (bool, string) {
-	if limit <= 0 || (userID == "" && householdID == "") {
+// Peek is the video/audio decision path: would the NEXT impression be
+// allowed for every resolved leg, without incrementing any counter.
+func (f *FreqCap) Peek(ctx context.Context, res capResolution, campaignID string, limit int) (bool, string) {
+	if limit <= 0 || res.n == 0 {
 		return true, ""
 	}
-	keys := capKeys(userID, householdID, campaignID)
-	counts, err := f.evalInts(ctx, peekScript, keys)
+	counts, err := f.evalInts(ctx, peekScript, res.keys(campaignID))
 	if err == nil {
-		scopes := capScopes(userID, householdID)
 		for i, c := range counts {
 			if c >= int64(limit) {
-				return false, scopes[i]
+				return false, res.legs[i].scope
 			}
 		}
 		return true, ""
@@ -244,97 +297,30 @@ func (f *FreqCap) PeekBoth(ctx context.Context, userID, householdID, campaignID 
 	if err != errNoScripting {
 		f.log.Warn("freqcap combined peek failed; using serial path", "error", err)
 	}
-	if userID != "" && !f.Allow(ctx, userID, campaignID, limit) {
-		return false, "user"
-	}
-	if householdID != "" && !f.Allow(ctx, householdID, campaignID, limit) {
-		return false, "household"
+	for i := 0; i < res.n; i++ {
+		if !f.Allow(ctx, res.legs[i].id, campaignID, limit) {
+			return false, res.legs[i].scope
+		}
 	}
 	return true, ""
 }
 
-// RecordBoth counts a confirmed impression against both scopes (stitch time).
-func (f *FreqCap) RecordBoth(ctx context.Context, userID, householdID, campaignID string, limit int, window time.Duration) {
-	if limit <= 0 || (userID == "" && householdID == "") {
+// RecordAll counts a confirmed impression against every resolved leg
+// (stitch time). The record request re-resolves from the same (scope, user,
+// household) inputs the peek did, so it increments exactly the keys the
+// peek decided on — the PEEK/RECORD split stays consistent per scope mode.
+func (f *FreqCap) RecordAll(ctx context.Context, res capResolution, campaignID string, limit int, window time.Duration) {
+	if limit <= 0 || res.n == 0 {
 		return
 	}
-	keys := capKeys(userID, householdID, campaignID)
 	if sc, ok := f.l2.(cache.Scripter); ok {
-		if _, err := sc.Eval(ctx, recordScript, keys, window.Milliseconds()); err == nil {
+		if _, err := sc.Eval(ctx, recordScript, res.keys(campaignID), window.Milliseconds()); err == nil {
 			return
 		} else {
 			f.log.Warn("freqcap combined record failed; using serial path", "error", err)
 		}
 	}
-	f.Record(ctx, userID, campaignID, limit, window)
-	f.Record(ctx, householdID, campaignID, limit, window)
-}
-
-// ── Campaign cap scope (per-campaign frequency_cap.scope knob) ────────────
-//
-// A campaign whose cap scope is "household" enforces its limit against the
-// HOUSEHOLD counter (hh:… id + campaign key — the same key the default path's
-// household leg already uses) INSTEAD of the per-user counter, so co-viewing
-// devices share one allowance. This is a pure key swap in front of the
-// existing combined FreqCap calls — the household id rides in the primary
-// (user) slot and the secondary slot is dropped, so the Redis round-trip
-// count is unchanged (hot-path iron rule). When no household id resolves the
-// cap falls back to the per-user counter, mirroring how the platform
-// household leg silently vanishes on an absent hh: id. Any other scope
-// (empty/"user") keeps the pre-knob behaviour byte-for-byte: user counter
-// primary, household counter co-enforced.
-
-// capScopeIDs picks the counter ids for a campaign cap scope. hhPrimary
-// reports that the household id took the primary slot (for blocked-scope
-// attribution: the primitive reports the primary slot as "user").
-func capScopeIDs(scope, userID, householdID string) (uid, hhid string, hhPrimary bool) {
-	if scope == models.FreqCapScopeHousehold && householdID != "" {
-		return householdID, "", true
+	for i := 0; i < res.n; i++ {
+		f.Record(ctx, res.legs[i].id, campaignID, limit, window)
 	}
-	return userID, householdID, false
-}
-
-// remapBlockedScope corrects the primitive's primary-slot attribution when the
-// household id rode in the user slot.
-func remapBlockedScope(blocked string, hhPrimary bool) string {
-	if hhPrimary && blocked == "user" {
-		return "household"
-	}
-	return blocked
-}
-
-// ScopedDecideAndRecord is DecideAndRecord with the campaign's cap scope
-// applied (display path).
-func (f *FreqCap) ScopedDecideAndRecord(ctx context.Context, scope, userID, householdID, campaignID string, limit int, window time.Duration) (bool, string) {
-	uid, hhid, hhPrimary := capScopeIDs(scope, userID, householdID)
-	ok, blocked := f.DecideAndRecord(ctx, uid, hhid, campaignID, limit, window)
-	return ok, remapBlockedScope(blocked, hhPrimary)
-}
-
-// ScopedPeek is PeekBoth with the campaign's cap scope applied (video/audio
-// serve decision — never increments).
-func (f *FreqCap) ScopedPeek(ctx context.Context, scope, userID, householdID, campaignID string, limit int) (bool, string) {
-	uid, hhid, hhPrimary := capScopeIDs(scope, userID, householdID)
-	ok, blocked := f.PeekBoth(ctx, uid, hhid, campaignID, limit)
-	return ok, remapBlockedScope(blocked, hhPrimary)
-}
-
-// ScopedRecord is RecordBoth with the campaign's cap scope applied (stitch-time
-// counting — increments the same swapped key ScopedPeek decided on, keeping
-// the PEEK/RECORD split consistent per scope).
-func (f *FreqCap) ScopedRecord(ctx context.Context, scope, userID, householdID, campaignID string, limit int, window time.Duration) {
-	uid, hhid, _ := capScopeIDs(scope, userID, householdID)
-	f.RecordBoth(ctx, uid, hhid, campaignID, limit, window)
-}
-
-// capScopes mirrors capKeys' ordering for blocked-scope attribution.
-func capScopes(userID, householdID string) []string {
-	scopes := make([]string, 0, 2)
-	if userID != "" {
-		scopes = append(scopes, "user")
-	}
-	if householdID != "" {
-		scopes = append(scopes, "household")
-	}
-	return scopes
 }
