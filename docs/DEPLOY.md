@@ -188,6 +188,29 @@ no-bids real traffic*. Enable in order, watching logs at `warn` before `strict`:
 These are live-tier config: set once via the Config UI (Staff → Config) or the
 config API; on a fresh cluster you can also pre-seed them.
 
+**Client-IP topology (household ids, fraud checks, rate limits):**
+Every consumer of "who is this viewer" reads the shared trusted-proxy parser
+(`pkg/clientip`): the client IP is taken N entries from the RIGHT of
+X-Forwarded-For, where N = the number of trusted proxies in front of the app.
+Set all of these to match your real chain — **0** = ingress only (default),
+**1** = Cloudflare in front of the ingress:
+- `ssp.trusted_proxy_hops` (household-id derivation + identity fingerprint)
+- `tracker.trusted_proxy_hops` (fraud-check IP — blocklists, datacenter CIDRs)
+- `<svc>.ratelimit_trusted_proxy_hops` (per-IP rate limits)
+
+Wrong in either direction hurts: too low reads a proxy address (a whole site
+collapses into one "household" → fill craters on household-capped campaigns);
+too high trusts a client-forgeable XFF entry (bots dodge IP blocklists, one
+device mints fresh households at will).
+
+Also review `ssp.ip_override_allowlist`: the `?ip=` end-user-IP override (used
+by server-side callers that legitimately know the device IP — SSAI, server-side
+publisher tags) is honoured only from callers inside this CIDR list. The
+default is private ranges (right for in-cluster SSAI); add publisher server
+egress ranges that send server-to-server ad requests, and nothing else — a
+public browser's `?ip=` must stay ignored or household frequency caps stop
+being a real control.
+
 ## Go-live checklist
 
 - [ ] 🔵 Domain registered + DNS at the ingress LB (or Cloudflare)
@@ -197,4 +220,5 @@ config API; on a fresh cluster you can also pre-seed them.
 - [ ] 🔵 `jwt_signing` secret seeded (gateway won't boot without it)
 - [ ] 🟢 `helm upgrade --install … -f values-prod.yaml`
 - [ ] 🔵 Cloudflare in front (optional but recommended)
+- [ ] 🔵 `*.trusted_proxy_hops` set to the real proxy-chain depth (1 with Cloudflare) + `ssp.ip_override_allowlist` pruned to server-side caller ranges
 - [ ] Verify: `https://gateway.<domain>/healthz`, a test auction, tracked impression
