@@ -607,7 +607,7 @@
      object-store proxy. -->
 {{ template "modal-start" (dict "id" "previewModal" "title" "Creative preview") }}
   <div id="pvMeta" class="mb-3 text-sm space-y-1"></div>
-  <div id="pvFrameWrap" class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white overflow-auto grid place-items-center p-2" style="min-height:200px"></div>
+  <div id="pvFrameWrap" class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white overflow-auto grid place-items-center p-2 min-h-[200px]"></div>
   <div class="flex justify-end gap-2 mt-3">
     {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "closePreview()") }}
     {{ template "button" (dict "label" "Approve" "onclick" "previewDecide('approve')") }}
@@ -681,10 +681,11 @@
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
 <script src="/static/trace-render.js"></script>
+<script src="/static/portal-core.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
+// $ / esc / fetchJSON / section router live in portal-core.js (shared with
+// the customer portals; staff has no bell, so initNotifBell is not called).
 const tbodyOf = (section) => document.querySelector('#section-' + section + ' tbody');
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // staffLookupTrace — the in-portal trace inspector. The reporting endpoint
 // reconstructs the full per-service flow and returns the render-ready shape
@@ -707,48 +708,27 @@ async function staffLookupTrace(traceId) {
   }
 }
 
-async function fetchJSON(url, opts = {}) {
-  const resp = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...opts});
-  const text = await resp.text();
-  if (!resp.ok) {
-    let msg = text;
-    try { msg = JSON.parse(text).error || text; } catch {}
-    throw new Error(`${resp.status}: ${msg}`);
-  }
-  return text ? JSON.parse(text) : null;
-}
-
-// ---- Section switching ----
+// ---- Section switching (portal-core initSectionRouter) ----
 const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
-const loaded = {};
 // Landing fallback: the first section in the RENDERED (permission-filtered)
 // sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
 // lands on a section it can actually see. Derived from the DOM at runtime —
 // never hardcode section hrefs here (the templates_test nav-filter test asserts
-// forbidden hrefs appear nowhere in the page). Empty nav → 'overview'.
+// forbidden hrefs appear nowhere in the page). Empty nav → 'overview'. Note the
+// whole-fleet /readyz sweep (loadOverview → ops/readyz-grid) only fires when
+// Overview is actually the section being shown — a deep-link to another
+// section loads only that section.
 function defaultSection() {
   const first = document.querySelector('aside nav a')?.getAttribute('href') || '';
   const name = first.startsWith('#') ? first.slice(1) : '';
   return SECTIONS.includes(name) ? name : 'overview';
 }
-function showSection(name) {
-  if (!SECTIONS.includes(name)) name = defaultSection();
-  SECTIONS.forEach(s => $('section-' + s)?.classList.toggle('hidden', s !== name));
-  $('crumbSection').textContent = {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'}[name];
-  document.querySelectorAll('aside nav a').forEach(a => {
-    const active = a.getAttribute('href') === '#' + name;
-    a.classList.toggle('bg-brand/10', active);
-    a.classList.toggle('text-brand', active);
-    a.classList.toggle('font-medium', active);
-    a.classList.toggle('text-gray-600', !active);
-    a.classList.toggle('dark:text-gray-300', !active);
-  });
-  if (!loaded[name]) {
-    loaded[name] = true;
-    ({overview: loadOverview, impersonate: loadImpersonate, moderation: loadModeration, fraud: loadFraud, revshare: loadRevshare, billingterms: loadBillingTerms, agencies: loadAgencies, houseads: loadHouseAds, audit: loadAudit, privacy: loadPrivacy, shading: loadShading, retargeting: loadStaffRetargeting, onboarding: loadOnboarding, demos: loadDemos, batchruns: loadBatchRuns, ops: loadOps, config: loadConfig, architecture: loadArchitecture, tools: loadControlCenter}[name])?.();
-  }
-}
-window.addEventListener('hashchange', () => showSection(location.hash.slice(1)));
+const showSection = initSectionRouter({
+  sections: SECTIONS,
+  fallback: defaultSection,
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), ops: () => loadOps(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+});
 
 const ago = (iso) => {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -2142,8 +2122,7 @@ const fmtPct = (r) => r == null ? '—' : `${(r * 100).toFixed(0)}%`;
 // folder view — the click-through for "show me the actual rejected file".
 const MINIO_CONSOLE = 'http://localhost:9001';
 const fmtInt = (n) => Number(n || 0).toLocaleString();
-const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch { return s; } };
-const fmtUSD = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+// fmtDate / fmtUSD live in portal-core.js.
 function minioLink(bucket, key, label) {
   const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
   const href = `${MINIO_CONSOLE}/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(prefix)}`;

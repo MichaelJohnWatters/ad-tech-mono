@@ -49,9 +49,12 @@ async function login(page, { email, password }) {
 
 // waitForData polls until the page body shows a non-zero delivery number in
 // the KPI/stat areas — tolerant of exact layout, strict about "data visible".
+// A marker can appear in SEVERAL places (the dashboard's top-campaigns card
+// keeps a hidden copy after switching tabs), so pass "visible-only" matches —
+// .first() over all copies would latch onto a hidden one.
 async function expectVisibleData(page, mustContain) {
   for (const text of mustContain) {
-    await expect(page.getByText(text, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(text, { exact: false }).locator('visible=true').first()).toBeVisible({ timeout: 15_000 });
   }
 }
 
