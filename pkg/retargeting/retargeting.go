@@ -89,6 +89,15 @@ type IdentityExpander interface {
 	ExpandPerson(ctx context.Context, userID string) ([]string, error)
 }
 
+// ProductViewStore records the SKUs a shopper viewed/carted (Dynamic Product
+// Ads slice 2). Written on a site_visit that carries SKUs; read at render time
+// (slice 3) and for per-product suppression (slice 4). Optional — nil keeps
+// the pre-DPA behaviour (SKUs ignored).
+type ProductViewStore interface {
+	RecordProductViews(ctx context.Context, accountID, userID string, skus []string, at time.Time, ttl time.Duration, originTrace string) error
+	RemoveProductView(ctx context.Context, accountID, userID, sku string) error
+}
+
 // Service applies visit → enroll and conversion → suppress against a segment
 // source and enroller.
 type Service struct {
@@ -106,6 +115,10 @@ type Service struct {
 	sup            SuppressionStore
 	expand         IdentityExpander
 	suppressionTTL func() time.Duration
+	// products + productViewTTL wire SKU-aware retargeting memory (DPA slice 2).
+	// nil products = SKUs on a pixel are ignored (pre-DPA behaviour).
+	products       ProductViewStore
+	productViewTTL func() time.Duration
 }
 
 func New(src SegmentSource, enr Enroller, log *slog.Logger) *Service {
@@ -124,6 +137,13 @@ func (s *Service) SetSuppression(store SuppressionStore, expand IdentityExpander
 // without a restart.
 func (s *Service) SetHouseholdEnroll(fn func() bool) { s.householdEnroll = fn }
 
+// SetProductViews wires SKU-aware retargeting memory (DPA slice 2): the store
+// that records a shopper's viewed/carted SKUs and the TTL bounding their
+// lifetime (defaults to the retargeting window).
+func (s *Service) SetProductViews(store ProductViewStore, ttl func() time.Duration) {
+	s.products, s.productViewTTL = store, ttl
+}
+
 const kindSiteVisit = "site_visit"
 
 // OnSiteVisit enrolls the visitor into every retargeting segment of the
@@ -134,6 +154,10 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 	if ev.Kind != kindSiteVisit || ev.UserID == "" || ev.AccountID == "" {
 		return nil, nil
 	}
+	// DPA slice 2: remember the shopper's viewed/carted SKUs (independent of
+	// segment matching — a product-page pixel builds the memory a later
+	// checkout's dynamic creative renders from). Person+household, like enroll.
+	s.recordProductViews(ctx, ev)
 	segs, err := s.src.RetargetingSegments(ctx, ev.AccountID)
 	if err != nil {
 		return nil, err
@@ -182,6 +206,58 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 		s.log.Info("real-time retargeting enroll", "account", ev.AccountID, "user", ev.UserID, "segments", len(enrolled), "trace_id", ev.TraceID)
 	}
 	return enrolled, nil
+}
+
+// recordProductViews stores the SKUs an ev carried for the visitor (and the
+// household id when household enrollment is on), with the product-view TTL.
+// A no-op when no store is wired or the pixel carried no SKUs.
+func (s *Service) recordProductViews(ctx context.Context, ev events.BehaviourSignalEvent) {
+	if s.products == nil || ev.SKUs == "" {
+		return
+	}
+	skus := splitSKUs(ev.SKUs)
+	if len(skus) == 0 {
+		return
+	}
+	ttl := time.Duration(defaultWindowDays) * 24 * time.Hour
+	if s.productViewTTL != nil {
+		if v := s.productViewTTL(); v > 0 {
+			ttl = v
+		}
+	}
+	at := ev.ObservedAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	ids := []string{ev.UserID}
+	if s.householdEnroll != nil && s.householdEnroll() && ev.HouseholdID != "" && ev.HouseholdID != ev.UserID {
+		ids = append(ids, ev.HouseholdID)
+	}
+	for _, id := range ids {
+		if err := s.products.RecordProductViews(ctx, ev.AccountID, id, skus, at, ttl, ev.TraceID); err != nil {
+			s.log.Warn("record product views failed", "account", ev.AccountID, "user", id, "trace_id", ev.TraceID, "error", err)
+		}
+	}
+}
+
+// splitSKUs parses a comma-separated SKU list into trimmed, non-empty,
+// de-duplicated entries (order preserved), capped to bound a pathological pixel.
+func splitSKUs(csv string) []string {
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+		if len(out) >= 20 {
+			break
+		}
+	}
+	return out
 }
 
 // OnConversion suppresses a converter: it removes the user from the advertiser's

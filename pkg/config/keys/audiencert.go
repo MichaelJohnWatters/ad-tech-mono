@@ -18,10 +18,12 @@ var AudienceRT = struct {
 	PurgeInterval   config.DurationKey
 	HouseholdEnroll config.BoolKey
 	SuppressionDays config.IntKey
+	ProductViewDays config.IntKey
 }{
 	Port:            audienceRTSet.String("audience_rt.port", routes.PortAudienceRT, config.TierStatic, "HTTP port for /healthz, /readyz, /metrics.", config.Since("v1.5")),
 	NATSURL:         audienceRTSet.String("audience_rt.nats_url", routes.DefaultNATSURL, config.TierStatic, "NATS JetStream URL. Without it no behaviour/conversion events are consumed and readiness fails.", config.Since("v1.5")),
 	PurgeInterval:   audienceRTSet.Duration("audience_rt.purge_interval", "60s", config.TierStatic, "How often to physically delete expired retargeting members (audience_segment_members past their TTL). Read paths already exclude expired rows, so this is storage hygiene — a longer interval is fine.", config.Since("v1.5")),
 	SuppressionDays: audienceRTSet.Int("audience_rt.suppression_days", "30", config.TierLive, "How long a purchase burn-lists the buyer (retargeting_suppressions.expires_at = purchase + N days). Should cover the longest retargeting rule window an advertiser uses — past every window the buyer's pre-purchase signals can't qualify them anyway, so the row is inert. A NEW visit after the purchase clears the entry immediately regardless (a new abandoned cart legitimately restarts the chase).", config.Since("v2.2")),
 	HouseholdEnroll: audienceRTSet.Bool("audience_rt.household_enroll", "true", config.TierLive, "When true, a retargeting site_visit that carries a household id (hh: salted-IP hash, derived by the tracker's rt pixel) enrolls the HOUSEHOLD alongside the visitor id — so anonymous guest carts are chaseable on any device in the home (incl. CTV) without an email bridge. Coarser than person-level retargeting: the whole household sees the chase. Same TTL as the visitor enrollment; purchase suppression currently releases only the converting id (person/household-level suppression is a recorded open decision).", config.Since("v2.2")),
+	ProductViewDays: audienceRTSet.Int("audience_rt.product_view_days", "30", config.TierLive, "How long a SKU-aware retargeting pixel's remembered products live (retargeting_product_views.expires_at = view + N days, Dynamic Product Ads). A dynamic creative renders the user's SKUs viewed within this window; past it the memory ages out (read paths exclude expired rows, the purge sweep deletes them). Recorded person+household like the enrollment it rides alongside.", config.Since("v2.3")),
 }

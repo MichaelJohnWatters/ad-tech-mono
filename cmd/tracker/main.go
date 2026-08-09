@@ -925,8 +925,11 @@ func (p *eventPublisher) publishBehaviour(ctx context.Context, kind string, q ur
 		// `advid`. Stamping it on the ad-exposure kinds too is what lets
 		// view-through attribution scope a click-less conversion's lookback to
 		// the advertiser's own prior impressions.
-		AccountID:  firstNonEmpty(q.Get("aid"), q.Get("advid")),
-		Tag:        q.Get("tag"),
+		AccountID: firstNonEmpty(q.Get("aid"), q.Get("advid")),
+		Tag:       q.Get("tag"),
+		// DPA: the SKUs a shopper viewed/carted. Accept either a single sku= or
+		// a skus= CSV; normalise to CSV. audience-rt records them per-user.
+		SKUs:       firstNonEmpty(q.Get("skus"), q.Get("sku")),
 		ObservedAt: time.Now().UTC(),
 	}
 	if err := p.typed.PublishJSON(ctx, events.SubjectBehaviourObserved, ev); err != nil {

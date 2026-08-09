@@ -38,7 +38,11 @@ BARKBOX=$(kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -tA -c \
 DEMOADV_ACCOUNT_ID=$BARKBOX \
 DEMOADV_BRAND="Premium Dog Food Co" \
 DEMOADV_PRODUCT="12kg Grain-Free Bag" \
+DEMOADV_SKU="DOG-KIBBLE-12KG" \
 go run ./cmd/demoadv           # → http://localhost:9200
+# DEMOADV_SKU is the seeded catalog SKU the product/checkout pages report on
+# the retargeting pixel (Dynamic Product Ads) — the chase ad renders THIS
+# product. Default already DOG-KIBBLE-12KG (matches the seeded dog catalog).
 ```
 
 ## The script
