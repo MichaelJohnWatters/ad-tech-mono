@@ -1,5 +1,17 @@
 # Session: understand, judge, then stress the audience pipeline
 
+> **PROGRESS (2026-08-09)** — Phase 1 DONE (commits 6edab56 + 67a56f5):
+> themed two-tier world shipped + live-verified, `docs/AUDIENCE-PIPELINE.md`
+> explainer written, targeting-data-flow + cache-freshness diagrams
+> de-drifted, and a latent bug fixed — the in-cluster hourly profile-builder
+> had been a SILENT NO-OP (RLS-blanked reads under the app role) since the
+> DB-role flip. Phase 2 partially done: TTL-expiry (43s scrub via purge
+> trigger) + duplicate-ingest (idempotent, zero changelog churn) traced
+> live; audience-rt deaf-on-boot + FLUSHDB watermark semantics verified in
+> code; the DISRUPTIVE trio (pipeline down mid-drain, Redis FLUSHDB, NATS
+> outage) awaits the operator's go-ahead. Phase 3 not started. Evidence +
+> verdict options in memory topic project_audience_pipeline_walkthrough.
+
 ## Why
 The audience pipeline was built incrementally across many sessions and the
 operator doesn't currently hold a mental model of it. Before tuning
