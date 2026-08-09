@@ -71,17 +71,17 @@ go run ./cmd/demoadv           # → http://localhost:9200
    the DSP's in-memory graph snapshot, refreshed every 5 minutes — so the
    chase starts anywhere from instantly to ~5 min after the cart visit.
    Narrate the portal while you wait, or pre-warm by doing step 3 first.
-5. **Buy your freedom (mostly).** On the shop's checkout, complete the
-   order. The overlay logs the SIGNED server-to-server conversion;
-   audience-rt sees the purchase and removes the buying id from the cart
-   segments within seconds. Refresh the coffee blog — the chase is gone.
-   **Known product gap (found by the automated spec, 2026-08-09):**
-   suppression is ID-level while batch enrollment is PERSON-level — the
-   hourly profile-builder cluster-expands the cart rule to every linked id
-   and re-qualifies from the still-live site_visit signals, so the buyer's
-   OTHER devices/ids resume being chased after the next :10 run. Making
-   suppression person-level + durable (a suppression memory the builder
-   consults, i.e. "burn pixel" semantics) is an open operator decision.
+5. **Buy your freedom.** On the shop's checkout, complete the order. The
+   overlay logs the SIGNED server-to-server conversion; audience-rt sees
+   the purchase and suppresses the buyer within seconds. Refresh the coffee
+   blog — the chase is gone. **Suppression is person+household level and
+   DURABLE** (migration 082, the "burn list"): the purchase expands through
+   the buyer's identity cluster and household edges, removes every linked
+   id's membership, and writes suppression rows the hourly profile-builder
+   consults — a recompute cannot re-qualify the buyer from pre-purchase
+   signals (the gap the automated spec found on 2026-08-09, closed the same
+   day). A genuinely NEW visit after the purchase clears the entry and
+   legitimately restarts the chase. Knob: `audience_rt.suppression_days` (30).
 6. **Reset.** Click **New visitor** on both sites (fresh email + fresh
    first-party ids = a genuinely new person; your old enrollment ages out
    on its own via the 30-day TTL). Or demo the GDPR path instead and be
@@ -107,9 +107,9 @@ persona, so the SSP resolves the same household and the DSP's
 household-keyed segment lookup matches. The email never leaves the browser
 in this variant — its hash only seeds the deterministic demo IP client-side.
 This is household chasing: coarser (any device in the home sees it, CTV
-included), which is exactly the story to narrate. Note: a purchase releases
-only the buying id — the household row ages out on its TTL (the
-person/household-level suppression decision is still open).
+included), which is exactly the story to narrate. A purchase releases the
+household too — the rt pixel also publishes the guest↔household identity
+edge, so the burn list expands through it (proven by the household e2e).
 
 Both variants are automated: `tests/browser/chase-demo.spec.js` (2 tests);
 the platform-level proof is `tests/e2e/retargeting_household_test.go`

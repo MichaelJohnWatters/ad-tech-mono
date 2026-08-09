@@ -102,14 +102,14 @@ func TestEvaluateRule(t *testing.T) {
 	t.Run("min_count with category filter", func(t *testing.T) {
 		rule := Rule{Event: "request", Category: "sports", MinCount: 2, WindowDays: 30}
 		got := evaluateRule(rows, rule, now)
-		if len(got) != 1 || got[0] != "u1" {
+		if len(got) != 1 || got[0].Key != "u1" {
 			t.Errorf("got %v, want [u1] (u2 has 1 < 2, u3 outside window)", got)
 		}
 	})
 	t.Run("event kind filter", func(t *testing.T) {
 		rule := Rule{Event: "click", MinCount: 1, WindowDays: 30}
 		got := evaluateRule(rows, rule, now)
-		if len(got) != 1 || got[0] != "u4" {
+		if len(got) != 1 || got[0].Key != "u4" {
 			t.Errorf("got %v, want [u4]", got)
 		}
 	})
@@ -119,7 +119,7 @@ func TestEvaluateRule(t *testing.T) {
 			"categories": "", "observed_at": now,
 		}}
 		got := evaluateRule(hh, Rule{Event: "request", MinCount: 1, WindowDays: 30}, now)
-		if len(got) != 1 || got[0] != "hh:x" {
+		if len(got) != 1 || got[0].Key != "hh:x" {
 			t.Errorf("got %v, want [hh:x]", got)
 		}
 	})

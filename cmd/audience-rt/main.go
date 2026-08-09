@@ -81,6 +81,13 @@ func main() {
 		svc := retargeting.New(pgSource{store}, pgEnroller{store: store, bus: natsBus, log: log}, log)
 		// Household enrollment gate — live key, read per event.
 		svc.SetHouseholdEnroll(func() bool { return keys.AudienceRT.HouseholdEnroll.Get(cfg) })
+		// Durable purchase suppression (burn list, migration 082): the store
+		// doubles as the person+household expander (identity_clusters + hh
+		// edges). TTL live-keyed so an advertiser with longer rule windows
+		// can widen it without a restart.
+		svc.SetSuppression(store, store, func() time.Duration {
+			return time.Duration(keys.AudienceRT.SuppressionDays.Get(cfg)) * 24 * time.Hour
+		})
 
 		ctx := context.Background()
 		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
@@ -128,6 +135,11 @@ func main() {
 					log.Warn("expired-member purge failed", "error", err)
 				} else if n > 0 {
 					log.Info("purged expired retargeting members", "rows", n)
+				}
+				if n, err := store.PurgeExpiredSuppressions(purgeCtx); err != nil {
+					log.Warn("expired-suppression purge failed", "error", err)
+				} else if n > 0 {
+					log.Info("purged expired retargeting suppressions", "rows", n)
 				}
 			}
 		}

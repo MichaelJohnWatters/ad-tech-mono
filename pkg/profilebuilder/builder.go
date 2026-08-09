@@ -309,6 +309,58 @@ func expandKeys(c Clusters, keys []string) []string {
 	return out
 }
 
+// keyStrings projects qualified keys to their raw user keys.
+func keyStrings(keys []QualifiedKey) []string {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = k.Key
+	}
+	return out
+}
+
+// filterSuppressed drops qualifying keys whose burn-list entry is at/after
+// their newest matching signal: the purchase closed that cart, and only a
+// GENUINELY NEW visit (signal after the purchase) may re-enroll. sup nil /
+// key absent = untouched.
+func filterSuppressed(keys []QualifiedKey, sup map[string]time.Time) []QualifiedKey {
+	if len(sup) == 0 {
+		return keys
+	}
+	kept := keys[:0]
+	for _, k := range keys {
+		if at, ok := sup[k.Key]; ok && !k.Last.After(at) {
+			continue
+		}
+		kept = append(kept, k)
+	}
+	return kept
+}
+
+// dropSuppressedMembers filters the post-cluster-expansion member set against
+// the burn-list. Expansion can re-introduce the buyer's OTHER ids (the exact
+// person-level re-enroll gap this closes); an expanded id stays only if it
+// has no live suppression, or some qualifying key's newest signal postdates
+// its suppression (the person genuinely came back).
+func dropSuppressedMembers(members []string, keys []QualifiedKey, sup map[string]time.Time) []string {
+	if len(sup) == 0 {
+		return members
+	}
+	var newest time.Time
+	for _, k := range keys {
+		if k.Last.After(newest) {
+			newest = k.Last
+		}
+	}
+	kept := members[:0]
+	for _, m := range members {
+		if at, ok := sup[m]; ok && !newest.After(at) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
+}
+
 // platformReadTx runs fn inside a read-only transaction with the RLS
 // platform-read hatch set (app.platform_read='on'). The builder is the
 // platform's CROSS-TENANT expansion engine — it evaluates every account's
@@ -341,7 +393,39 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q B
 ) error {
 	type ruleSeg struct{ id, accountID, name, raw string }
 	var list []ruleSeg
+	// Purchase burn-list (migration 082): (account, user) → suppressed_at.
+	// Consulted for site_visit rules so an hourly recompute cannot re-qualify
+	// a buyer from PRE-purchase signals — the gap where suppression got
+	// silently undone at the next :10 run (found live 2026-08-09). Loaded
+	// once per run, cross-tenant, same hatch as the segment list.
+	suppressions := map[string]map[string]time.Time{}
 	err := platformReadTx(ctx, db, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT account_id::text, user_id, suppressed_at FROM retargeting_suppressions WHERE expires_at > now()`)
+		if err != nil {
+			return fmt.Errorf("list suppressions: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var acc, uid string
+			var at time.Time
+			if err := rows.Scan(&acc, &uid, &at); err != nil {
+				return fmt.Errorf("scan suppression: %w", err)
+			}
+			if suppressions[acc] == nil {
+				suppressions[acc] = map[string]time.Time{}
+			}
+			suppressions[acc][uid] = at
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		// Degrade loudly but keep building: a missing burn-list must not stop
+		// every audience recompute; it only weakens suppression durability.
+		log.Error("profile-builder: suppression load failed — site_visit rules run UNSUPPRESSED this pass", "error", err)
+		suppressions = map[string]map[string]time.Time{}
+	}
+	err = platformReadTx(ctx, db, func(tx *sql.Tx) error {
 		segs, err := tx.QueryContext(ctx,
 			`SELECT id::text, account_id::text, name, rule FROM audience_segments
 			  WHERE rule IS NOT NULL AND status = 'active'`)
@@ -399,7 +483,7 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q B
 				// so another tenant's identically-named tag can't enroll.
 				rule.accountID = s.accountID
 			}
-			var keys []string
+			var keys []QualifiedKey
 			if q != nil {
 				keys, err = q.QualifyingUsers(ctx, rule, now)
 				if err != nil {
@@ -409,7 +493,17 @@ func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q B
 			} else {
 				keys = evaluateRule(rows, rule, now)
 			}
-			apply(s, expandKeys(clusters, keys))
+			if rule.Event == "site_visit" {
+				keys = filterSuppressed(keys, suppressions[s.accountID])
+			}
+			members := expandKeys(clusters, keyStrings(keys))
+			if rule.Event == "site_visit" {
+				// Cluster expansion re-introduces the buyer's OTHER ids —
+				// filter the expanded set too (the burn-list covers the whole
+				// person: audience-rt expanded at purchase time).
+				members = dropSuppressedMembers(members, keys, suppressions[s.accountID])
+			}
+			apply(s, members)
 		case "composite", "lookalike":
 			derived = append(derived, s)
 		default:

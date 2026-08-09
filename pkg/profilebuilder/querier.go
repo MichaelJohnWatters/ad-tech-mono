@@ -22,6 +22,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
+// QualifiedKey is one rule-qualifying user: the key plus its NEWEST matching
+// signal time. The suppression filter compares Last against the purchase
+// burn-list: only a signal newer than the purchase may re-enroll the user.
+type QualifiedKey struct {
+	Key  string
+	Last time.Time
+}
+
 // KeyCategory is one (user key, category) pair — the per-person category
 // signal lookalike scoring consumes. The key mirrors the serve-path
 // precedence (user_id, else household_id); category is already lower-cased and
@@ -47,7 +55,7 @@ type BehaviourQuerier interface {
 	// behaviour_signals rows inside the rule window — the ClickHouse
 	// equivalent of evaluateRule (pre cluster-expansion). rule.accountID, when
 	// set (site_visit), scopes to the pixel owner's account.
-	QualifyingUsers(ctx context.Context, rule Rule, now time.Time) ([]string, error)
+	QualifyingUsers(ctx context.Context, rule Rule, now time.Time) ([]QualifiedKey, error)
 
 	// CategorySignals returns the distinct (user key, category) pairs across
 	// behaviour_signals in the last windowDays — the input evaluateLookalike
@@ -122,7 +130,10 @@ func qualifyingUsersSQL(rule Rule, now time.Time) (string, []any) {
 
 	// key = user_id else household_id, must be non-empty.
 	const keyExpr = "if(user_id != '', user_id, household_id)"
-	q := fmt.Sprintf(`SELECT %s AS key
+	// last = the key's newest qualifying signal. The suppression filter needs
+	// it: a purchase burn-lists a user AT a moment, and only signals NEWER
+	// than that moment may re-enroll them (a genuinely new abandoned cart).
+	q := fmt.Sprintf(`SELECT %s AS key, max(observed_at) AS last
 FROM behaviour_signals
 WHERE %s
 GROUP BY key
@@ -211,20 +222,20 @@ func (q *CHBehaviourQuerier) Close() error {
 	return q.db.Close()
 }
 
-func (q *CHBehaviourQuerier) QualifyingUsers(ctx context.Context, rule Rule, now time.Time) ([]string, error) {
+func (q *CHBehaviourQuerier) QualifyingUsers(ctx context.Context, rule Rule, now time.Time) ([]QualifiedKey, error) {
 	query, args := qualifyingUsersSQL(rule, now)
 	rows, err := q.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("qualifying users: %w", err)
 	}
 	defer rows.Close()
-	var out []string
+	var out []QualifiedKey
 	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
+		var k QualifiedKey
+		if err := rows.Scan(&k.Key, &k.Last); err != nil {
 			return nil, fmt.Errorf("scan qualifying user: %w", err)
 		}
-		out = append(out, key)
+		out = append(out, k)
 	}
 	return out, rows.Err()
 }

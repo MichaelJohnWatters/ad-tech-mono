@@ -439,9 +439,9 @@ func main() {
 				q.Set("hh", hh)
 			}
 			go publisher.publishBehaviour(context.WithoutCancel(ctx), "site_visit", q, reqLog)
-			// If the pixel also carries a hashed email, link it to the advertiser
-			// visitor id so view-through can later bridge to the publisher side.
-			publisher.publishAdvertiserIdentity(traceID, uid, q.Get("he"))
+			// Link the visitor id to its hashed email (view-through bridge) and
+			// household (purchase-suppression expansion for anonymous guests).
+			publisher.publishAdvertiserIdentity(traceID, uid, q.Get("he"), q.Get("hh"))
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
@@ -724,14 +724,22 @@ type eventPublisher struct {
 // view-through attribution crosses). Fire-and-forget; needs BOTH ids (the
 // identity-consumer only makes an edge from 2+ co-observed signals). Consent is
 // the caller's gate.
-func (p *eventPublisher) publishAdvertiserIdentity(traceID, advUID, hashedEmail string) {
-	if p.identityPub == nil || advUID == "" || hashedEmail == "" {
+func (p *eventPublisher) publishAdvertiserIdentity(traceID, advUID, hashedEmail, householdID string) {
+	if p.identityPub == nil || advUID == "" || (hashedEmail == "" && householdID == "") {
 		return
 	}
-	p.identityPub.Publish(traceID, []identityobserve.Signal{
-		{Value: advUID, Source: identity.SourceAdvertiserUserID},
-		{Value: hashedEmail, Source: identity.SourceHashedEmail},
-	}, "")
+	sigs := []identityobserve.Signal{{Value: advUID, Source: identity.SourceAdvertiserUserID}}
+	if hashedEmail != "" {
+		sigs = append(sigs, identityobserve.Signal{Value: hashedEmail, Source: identity.SourceHashedEmail})
+	}
+	// Household edge (uid ↔ hh:…), mirroring the SSP's serve-side identity
+	// publish: the graph is what lets a purchase suppression EXPAND to the
+	// buyer's household — for an anonymous guest the pixel is the only place
+	// this edge can come from.
+	if householdID != "" {
+		sigs = append(sigs, identityobserve.Signal{Value: householdID, Source: identity.SourceHousehold})
+	}
+	p.identityPub.Publish(traceID, sigs, "")
 }
 
 // channelOrDefault maps the beacon's ch= param to a channel, defaulting to
