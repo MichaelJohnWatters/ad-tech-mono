@@ -112,11 +112,22 @@ audiencert: audience-rt :8097 (pkg/retargeting) {
   what: |md
     site_visit -> enroll (first-visit only, +TTL)
     purchase   -> suppress
+    +DPA: skus= -> product_views; purchase -> per-product suppress + cross-sell
   |
 }
 nats -> audiencert: behaviour.observed (site_visit) + conversion {style.stroke-dash: 3}
 audiencert -> pg_members: enroll (TTL) / suppress / purge-expired
 audiencert -> nats: retargeting.enrolled (abandoned-cart push) {style.stroke-dash: 3}
+
+# Dynamic Product Ads: the SKU-aware pixel builds a per-user carted-products
+# memory the ad server assembles a dynamic creative from at render time; a
+# SKU purchase suppresses the bought product + cross-sells its complement.
+pg_pviews: retargeting_product_views (PG) - per-user carted SKUs (mig 084) {shape: cylinder}
+pg_catalog: products (PG) - advertiser catalog + complement_sku (mig 083/086) {shape: cylinder}
+audiencert -> pg_pviews: record SKUs (person+household) / remove bought / cross-sell complements
+audiencert -> pg_catalog: complement lookup on purchase {style.stroke-dash: 2}
+serve.adserver -> pg_pviews: render-time recent-SKU read (dynamic_product creative) {style.stroke-dash: 2}
+serve.adserver -> pg_catalog: render-time product lookup {style.stroke-dash: 2}
 
 # ============================================================
 # OUTPUT 1 - loaded back into live auctions (append-based change-log,
@@ -145,8 +156,9 @@ serve: Live auction path {
   exchange: Exchange fan-out
   dsp: DSP unions dsp_private + audience bid modifiers price bids
   eval: targeting.Evaluate - include / exclude / modifiers
+  adserver: "Ad server render - macros + (DPA) dynamic_product assembly from catalog x carted SKUs, static else-branch fallback"
 
-  stamp -> exchange -> dsp -> eval
+  stamp -> exchange -> dsp -> eval -> adserver
 }
 
 # OUTPUT 1b - standards-interoperable audience data for EXTERNAL buyers:

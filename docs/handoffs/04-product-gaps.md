@@ -1,5 +1,17 @@
 # Session: product gaps — Privacy Sandbox ARA + PLAN phases 10-12 + DPA
 
+> **DPA EPIC DONE (2026-08-09)** — all 4 slices shipped + live-verified +
+> e2e-green (commits c4b6cb3 PLAN reconcile · b2dac86 catalog · 5ee6d05 SKU
+> pixel · dc93438 dynamic creative · ba66d16 per-product suppression). The
+> chase ad now renders the shopper's ACTUAL carted product and rotates to a
+> cross-sell complement on purchase. See `docs/DYNAMIC-PRODUCT-ADS.md` for the
+> explainer; memory `project_dynamic_product_ads`.
+>
+> **Operator sign-off (this session):** scope was DPA slices 1→4 + the PLAN.md
+> ledger reconciliation (docs-only, done first). ARA and PLAN phases 10-12
+> remain the OTHER two candidate streams below — NOT started; pick them up in a
+> future session. 03-staging is still the roadmap-order next.
+
 ## Candidate epic (added 2026-08-09): Dynamic Product Ads (catalog creatives)
 Born from the retargeting chase demo (docs/demos/RETARGETING-CHASE-DEMO.md
 + memory: project_audience_pipeline_walkthrough). Today the WHO is precise
