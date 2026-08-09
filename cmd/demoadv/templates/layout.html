@@ -84,25 +84,50 @@
   }
   document.addEventListener('DOMContentLoaded', function () {
     var bar = document.createElement('div');
-    bar.style.cssText = 'position:fixed;bottom:8px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
+    bar.style.cssText = 'position:fixed;top:64px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
     bar.innerHTML = '👤 <b>' + personaEmail() + '</b>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaNew();return false">New visitor</a>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaChange();return false">Change</a>';
     document.body.appendChild(bar);
+    // Convenience: prefill the checkout's guest-email field with the persona
+    // email so the demo's "email moment" is one click (the human still has
+    // to click Save — that click IS the demo beat).
+    var ge = document.getElementById('guest-email');
+    if (ge) ge.value = personaEmail();
   });
   var DEMO_PERSONA_EMAIL = personaEmail();
 
-  // Consent → identify the visitor by the hashed persona email, THEN fire the
-  // retargeting pixel (which carries the hash so the advertiser↔publisher bridge
-  // edge is built).
+  // Consent → fire the retargeting pixel as a GUEST: real shops do not know
+  // a visitor's email on page one — they learn it when the visitor types it
+  // (checkout address step, newsletter, sign-in). So the initial pixel
+  // carries only the shop's first-party visitor id: the visit IS captured
+  // into the audience, but it is NOT bridgeable to other sites until an
+  // email capture moment upgrades it (captureGuestEmail below — wired to
+  // the checkout email field). If a previous capture already identified
+  // this visitor (stored hash), the pixel carries it as before.
   function applyConsent(personalized){
     localStorage.setItem('ford_consent', personalized ? 'yes' : 'no');
     var b=document.getElementById('consent'); if(b) b.style.display='none';
     if (!personalized) { log('✗ consent declined — no retargeting pixel (no audience)', 'no'); return; }
-    adtechadv.setEmail(DEMO_PERSONA_EMAIL).then(function(){
+    adtechadv.setConsent(true).then(function(uid){
+      var known = !!localStorage.getItem('adtechadv_he');
+      log('▶ retargeting pixel fired · tag="'+TAG+'" · visitor '+String(uid||'').slice(0,14)+'…'+
+          (known ? ' (+hashed email) → in the audience & BRIDGEABLE cross-site'
+                 : ' (GUEST — no email) → in the audience, NOT bridgeable cross-site yet'), 'ev');
+    });
+  }
+  // captureGuestEmail is THE email moment: the visitor typed an email (order
+  // updates / newsletter / sign-in), the tag hashes it in-browser and re-fires
+  // the pixel with the hash — from this instant the platform can bridge this
+  // shop visitor to the same person on publisher sites, and the cross-site
+  // chase becomes possible. This is how real retailers rescue "guest" carts.
+  function captureGuestEmail(email){
+    if (!email) return;
+    if (!adtechadv.hasConsent()) { log('✗ email not captured (no consent)', 'no'); return; }
+    adtechadv.setEmail(email.trim().toLowerCase()).then(function(){
       return adtechadv.setConsent(true);
-    }).then(function(uid){
-      log('▶ retargeting pixel fired (+hashed email) · tag="'+TAG+'" · visitor '+String(uid||'').slice(0,14)+'… → in the audience & bridgeable', 'ev');
+    }).then(function(){
+      log('▶ EMAIL CAPTURED at checkout · hashed in-browser · pixel re-fired (+hash) → identity now BRIDGEABLE — cross-site chase unlocked', 'ev');
     });
   }
   // Conversions are the platform's BILLING trigger, so they are NOT fired from

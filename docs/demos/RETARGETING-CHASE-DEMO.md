@@ -16,13 +16,11 @@ auction targeting, purchase suppression.
 make seed
 
 # 2. Turn on DSP identity resolution (off by default — it's the cross-site
-#    bridge) and RESTART dsp-internal: the key is TierLive but the resolver
-#    is constructed at BOOT (openIdentityResolver returns nil when disabled
-#    at startup), so a live flip alone does nothing — found the hard way
-#    wiring this demo.
+#    bridge). TierLive: the DSP's lazy resolver picks it up within ~15s, no
+#    restart. (It USED to be boot-latched — a cold-boot race constructed the
+#    resolver before the live config landed; fixed while wiring this demo.)
 kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
   "UPDATE config SET value='\"true\"'::jsonb WHERE key='dsp.identity_resolution_enabled' AND pod_id LIKE 'dsp-internal%'"
-kubectl -n adtech rollout restart deploy/dsp-internal
 ```
 
 ## Start the two demo sites (two terminals)
@@ -53,12 +51,19 @@ go run ./cmd/demoadv           # → http://localhost:9200
 2. **Baseline.** On the coffee blog, accept personalized ads. The slot
    shows whatever normally wins (a coffee ad if you browse a while, or a
    market campaign). Refresh a couple of times — no dog food anywhere.
-3. **Open the cart.** On the shop, accept the consent banner, browse to the
-   product, then **Checkout**. Watch the pixel overlay (bottom-right):
-   `retargeting pixel fired (+hashed email) · tag="checkout"`. At this
-   moment audience-rt enrolls your shop-visitor id into "Shop Checkout
-   Abandoners" (check the advertiser portal → Audiences to see yourself
-   counted), and the changelog drainer has it in Redis ~3s later.
+3. **Open the cart — as a GUEST.** On the shop, accept the consent banner,
+   browse to the product, then **Checkout**. The pixel overlay
+   (bottom-right) shows `retargeting pixel fired · (GUEST — no email) → in
+   the audience, NOT bridgeable cross-site yet`: real shops don't know your
+   email on page one, so you're captured into the cart audience under the
+   shop's own visitor id but unreachable anywhere else.
+3b. **The email moment.** In the checkout's "Email for order updates" field
+   (prefilled with your persona email), click **Save**. The overlay flips to
+   `EMAIL CAPTURED · hashed in-browser · identity now BRIDGEABLE — cross-site
+   chase unlocked`. This is the beat that explains modern ad identity: the
+   instant a "guest" types an email, deterministic retargeting wakes up.
+   audience-rt has already enrolled you (portal → Audiences shows the count);
+   the email capture is what lets the chase LEAVE the shop.
 4. **The chase.** Back on the coffee blog, refresh. The DSP resolves your
    publisher-side id → hashed email → shop-visitor id, finds the cart
    segment, and the "Cart Retargeting" campaign (deliberately the highest
@@ -66,10 +71,17 @@ go run ./cmd/demoadv           # → http://localhost:9200
    the DSP's in-memory graph snapshot, refreshed every 5 minutes — so the
    chase starts anywhere from instantly to ~5 min after the cart visit.
    Narrate the portal while you wait, or pre-warm by doing step 3 first.
-5. **Buy your freedom.** On the shop's checkout, complete the order. The
-   overlay logs the SIGNED server-to-server conversion; audience-rt sees
-   the purchase and removes you from the cart segments within seconds.
-   Refresh the coffee blog — the chase is gone.
+5. **Buy your freedom (mostly).** On the shop's checkout, complete the
+   order. The overlay logs the SIGNED server-to-server conversion;
+   audience-rt sees the purchase and removes the buying id from the cart
+   segments within seconds. Refresh the coffee blog — the chase is gone.
+   **Known product gap (found by the automated spec, 2026-08-09):**
+   suppression is ID-level while batch enrollment is PERSON-level — the
+   hourly profile-builder cluster-expands the cart rule to every linked id
+   and re-qualifies from the still-live site_visit signals, so the buyer's
+   OTHER devices/ids resume being chased after the next :10 run. Making
+   suppression person-level + durable (a suppression memory the builder
+   consults, i.e. "burn pixel" semantics) is an open operator decision.
 6. **Reset.** Click **New visitor** on both sites (fresh email + fresh
    first-party ids = a genuinely new person; your old enrollment ages out
    on its own via the 30-day TTL). Or demo the GDPR path instead and be
