@@ -255,14 +255,58 @@ One non-chaos finding from the same pass: single e2e test runs truncate the
 audience tables, wiping the themed world's earned memberships (segments
 restore with `make seed`; memberships need traffic + a builder run).
 
-## Cadence policy
+## Density results (Phase 3 A/B, 2026-08-09, /perf-loadtest protocol)
 
-Current: behaviour rules recompute **hourly** (conductor chain), changelog
-drain **3s**, reconcile **5m**, TTL purge **60s**. Phase 3 of handoff 07
-loads the pipeline at production density (synthetic tier + audience-predicate
-big-world campaigns) and will record deliberate choices here — including
-whether frequency rules deserve a 15m tier and whether 3s/5m survive
-O(100k-1M) memberships.
+Run A = control (87-campaign world, thin audiences). Run B = same +100
+synthetic segments / **500,015 memberships over a 100k-user universe** /
++20 audience-predicate campaigns (include_segments + audience bid
+modifiers) / load-run user ids drawn from the enrolled universe so lookups
+HIT. Both runs: 110rps × 10m, VERIFY green (lossless), canary in-bounds.
+
+| Metric | Run A (thin) | Run B (dense) |
+|---|---|---|
+| Fill / errors | 93.6% / 0 | 93.7% / 0 |
+| DSP audience p95 (p50) | 12.5ms | 13.8ms (1.5ms) |
+| DSP campaign_loop p95 | 0.8ms | 0.9ms (107 campaigns) |
+| Exchange fanout p95 | 45.1ms | 50.0ms |
+| SSP pre_auction / segments p95 | 18.3 / 15.1ms | 19.6 / 17.0ms |
+| Adserver freqcap p95 | 9.8ms | 10.5ms |
+
+Background-path measurements at 500k memberships:
+- **Changelog drain throughput ≈ 1.7-1.9k rows/s** — a 500k bulk ingest is
+  fully bid-eligible in ~5min; `AudienceChangelogLag` correctly reached
+  *pending* during it (a 1M ingest would fire it).
+- **Reconcile: 39s** steady-state (100k keys, diff-and-skip all unchanged)
+  vs <1s thin — ~13% of its 5m interval.
+- **Redis: ~38MB / ~0.4KB-per-user-key** at 100k users → ~380MB @1M users.
+- **profile-builder: 0.6s** at 75k behaviour signals / 8 rules / 500k
+  members — ClickHouse-side GROUP BY keeps the builder far from being the
+  bottleneck. Preloader RSS: n/a by design (read-only lookups, no
+  in-process copy).
+
+Verdict: **serving is insensitive to membership density** (the per-user
+inverted index working as designed); density cost concentrates in the
+reconcile, exactly as the scaling outlook predicted. Two at-scale defects
+found and fixed the same day: the reconcile ran under a hard 60s context —
+past ~1M memberships it would die mid-loop, and keys the loop never
+reaches lose their TTL refresh, so members would *silently vanish from
+serving* until a completed reconcile (budget now scales with the interval);
+the `/debug/audience/refresh` recovery lever had the same fixed cap and
+failed on exactly the dense worlds an operator needs it for. Caveat: the
+synthetic audience campaigns price in the standard 1.5-5.9 band to avoid
+distorting market composition, so they *evaluate* on every bid but rarely
+top the internal DSP's argmax — the latency numbers are real, the win path
+runs through the themed campaigns instead.
+
+## Cadence policy (chosen deliberately, 2026-08-09)
+
+| Knob | Decision | Rationale |
+|---|---|---|
+| `audience.changelog_poll_interval` **3s** | KEEP | Delta drain has ~1.9k rows/s headroom vs organic write rates; pixel→bid-eligible ≈4s end-to-end is the product value. |
+| `audience.changelog_reconcile_interval` **5m** | KEEP | 39s/5m = 13% duty at 500k. Revisit trigger: reconcile >~150s or memberships ≳2M → mitigation-ladder rung 2 (incremental/sharded reconcile). |
+| Behaviour-rule recompute **hourly** | KEEP; no 15m tier | Builder is 0.6s — a 15m tier costs nothing technically, so it's a *product* decision if ever wanted; the latency-sensitive case (retargeting) is already real-time via audience-rt. |
+| `audience_rt.purge_interval` **60s** | KEEP | Bounds the TTL-stale window (measured 43s). |
+| `audience.cache_ttl` **15m** | KEEP | Must stay ≥2× the reconcile interval (a key missed by one reconcile must survive to the next); if the reconcile interval is ever raised past ~7m, raise this with it. |
 
 ## Scaling outlook (operator discussion, 2026-08-09)
 

@@ -112,7 +112,10 @@ func startAudienceCacheWriter(cfg *config.Config, log *slog.Logger, lc *lifecycl
 // deterministic fresh cache without waiting for the poll tick. Same route the
 // DSP/SSP preloader used to expose; the harness now targets the single writer.
 func (w *audienceCacheWriter) DebugRefreshHandler(rw http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	// Budget scales with the density-dependent reconcile (measured 39s at
+	// 500k memberships — a fixed 60s cap made this endpoint fail on exactly
+	// the dense worlds where an operator reaches for it) plus drain headroom.
+	ctx, cancel := context.WithTimeout(r.Context(), w.reconcileBudget()+60*time.Second)
 	defer cancel()
 	w.drain(ctx)
 	w.reconcile(ctx)
@@ -268,13 +271,28 @@ func (w *audienceCacheWriter) drain(ctx context.Context) {
 	}
 }
 
+// reconcileBudget is the time box for one full reconcile: the configured
+// reconcile interval (floor 60s). A HARD 60s here was a scale cliff, found
+// in the 2026-08-09 density run: at 500k memberships the reconcile measured
+// 39s, so somewhere past ~1M the old budget would kill it MID-LOOP — and a
+// key the loop never reaches gets no TTL refresh, so after cache_ttl its
+// members silently vanish from serving and only a COMPLETED reconcile can
+// bring them back. The budget must scale with the work; interval-sized
+// keeps a permanently-overrunning reconcile from stacking behind the mutex.
+func (w *audienceCacheWriter) reconcileBudget() time.Duration {
+	if iv := w.reconcileEvery(); iv > 60*time.Second {
+		return iv
+	}
+	return 60 * time.Second
+}
+
 // reconcile rebuilds every user's Redis set from Postgres truth — the self-heal
 // for dropped appends / batch prunes / TTL expiry. Rewrites keys wholesale under
 // a fresh TTL; stale members are dropped because a full replace clears them.
 func (w *audienceCacheWriter) reconcile(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, w.reconcileBudget())
 	defer cancel()
 	rows, err := w.store.AllMemberships(rctx)
 	if err != nil {
