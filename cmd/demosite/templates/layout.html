@@ -67,17 +67,17 @@
   // one IP — so without this, "New visitor" would inherit the old persona's
   // household frequency caps. The demo IP rides the allowlist-gated ?ip=
   // override (private callers only — a public browser can't spoof it).
-  function personaIP() {
-    var ip = localStorage.getItem('demo_persona_ip');
-    if (!ip) {
-      ip = '203.0.113.' + (1 + Math.floor(Math.random() * 254));
-      localStorage.setItem('demo_persona_ip', ip);
-    }
-    return ip;
+  // Derived from the persona email's hash — NOT random — so the shop site
+  // (cmd/demoadv) computes the SAME address for the same persona and the two
+  // sites share one household. That household is how an anonymous guest cart
+  // (no email captured anywhere) still gets chased here: household id, not
+  // identity bridge.
+  function personaIPFromHash(he) {
+    var b0 = parseInt(he.slice(0, 2), 16);
+    return '203.0.113.' + (1 + (b0 % 254));
   }
   function personaReset(email) {
-    localStorage.setItem('demo_persona_email', email);
-    localStorage.removeItem('demo_persona_ip');            // new household too
+    localStorage.setItem('demo_persona_email', email);     // household derives from this
     document.cookie = 'adtech_uid=; Max-Age=0; path=/';   // drop the platform first-party id
     localStorage.removeItem('demotimes_consent');          // re-ask consent as the new person
     location.reload();
@@ -115,7 +115,7 @@
     if (personalized) {
       // Attach the hashed persona email BEFORE requesting ads, so the serve carries
       // it and the SSP links this publisher user to the shared identity.
-      sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he, demoIP: personaIP() }); proceed(); });
+      sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he, demoIP: personaIPFromHash(he) }); proceed(); });
     } else {
       proceed();
     }

@@ -171,3 +171,55 @@ test('cart open → chased on the coffee blog → purchase → released', async 
     )
     .toBe(0);
 });
+
+// The ANONYMOUS variant: no email is ever typed, no identity bridge exists —
+// the chase arrives via the HOUSEHOLD. The shop pixel carries the persona's
+// demo IP (derived from the persona email's hash CLIENT-SIDE — the email
+// itself never leaves the browser), the tracker enrolls the hh: household id
+// alongside the visitor id, and the coffee blog — which derives the SAME
+// demo IP for the same persona — gets the chase through the DSP's
+// household-keyed lookup. Fast: no identity-snapshot wait (≤~30s drain+serve).
+test('anonymous guest cart → household chase on the coffee blog (no email ever)', async ({ page }) => {
+  test.setTimeout(180_000);
+
+  const persona = `hh-spec-${Math.random().toString(16).slice(2, 8)}@example.com`;
+  await page.addInitScript((email) => localStorage.setItem('demo_persona_email', email), persona);
+
+  // Open the cart as a pure guest — consent yes, email NEVER saved.
+  await page.goto(SHOP + '/checkout');
+  await page.click('.consent button.accept');
+  await expect(page.locator('#adxlog')).toContainText('GUEST — no email', { timeout: 15_000 });
+
+  // Ground truth: the visit enrolled a HOUSEHOLD (hh:) member.
+  await expect
+    .poll(
+      () =>
+        Number(
+          psql(`SELECT count(*) FROM audience_segment_members m
+                JOIN audience_segments s ON s.id=m.segment_id
+                WHERE s.name='Shop Checkout Abandoners' AND m.user_id LIKE 'hh:%'
+                  AND m.added_at > now() - INTERVAL '90 seconds'`),
+        ),
+      { timeout: 30_000, message: 'guest cart visit never enrolled a household' },
+    )
+    .toBeGreaterThan(0);
+
+  // The coffee blog chases the HOUSEHOLD: same persona → same derived demo
+  // IP → same hh: id at the SSP → DSP household lookup matches.
+  let chased = false;
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await page.goto(COFFEE + '/');
+    // First visit on this origin shows the consent banner once.
+    const consent = page.locator('button.accept');
+    if (await consent.isVisible().catch(() => false)) await consent.click();
+    await page.locator('#ad-slot-mpu').waitFor();
+    await page.waitForTimeout(2_500);
+    if ((await page.locator('#ad-slot-mpu').innerHTML()).includes(chaseCampaignId)) {
+      chased = true;
+      break;
+    }
+    await page.waitForTimeout(5_000);
+  }
+  expect(chased, 'the household chase never reached the coffee blog (hh enrollment → Redis → DSP household lookup)').toBe(true);
+});

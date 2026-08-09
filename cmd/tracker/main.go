@@ -122,6 +122,7 @@ func main() {
 	// Fraud-check client-IP resolver (shared trusted-proxy parser; hops read
 	// live from tracker.trusted_proxy_hops). See clientip.go.
 	clientIP := newClientIPFn(cfg)
+	endUserIP := newEndUserIPFn(cfg)
 	// DB-driven IP/UA blocklists, refreshed into the checker on a poll +
 	// NATS invalidate. Nil when no database.url — hardcoded patterns remain.
 	blocklistCache := startFraudBlocklistCache(cfg, log, bus, fraudChecker)
@@ -427,6 +428,16 @@ func main() {
 		uid, aid := q.Get("uid"), q.Get("aid")
 		if uid != "" && aid != "" &&
 			privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC"))).Personalise {
+			// Derive the shopper's HOUSEHOLD id (salted-IP hash — same salt +
+			// derivation as the SSP so ids line up platform-wide) and stamp it
+			// on the site_visit. audience-rt can then enroll the household
+			// alongside the visitor id, which is what makes an ANONYMOUS guest
+			// cart chaseable on the home's other devices (CTV included) with
+			// no email bridge. End-user IP resolution mirrors the SSP:
+			// trusted-proxy parse + allowlist-gated ?ip= (see clientip.go).
+			if hh := identity.HouseholdID(keys.SSP.HouseholdSalt.Get(cfg), endUserIP(r)); hh != "" {
+				q.Set("hh", hh)
+			}
 			go publisher.publishBehaviour(context.WithoutCancel(ctx), "site_visit", q, reqLog)
 			// If the pixel also carries a hashed email, link it to the advertiser
 			// visitor id so view-through can later bridge to the publisher side.

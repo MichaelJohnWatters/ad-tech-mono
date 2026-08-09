@@ -79,6 +79,8 @@ func main() {
 	} else {
 		lc.OnShutdown("nats", func(_ context.Context) error { return natsBus.Close() })
 		svc := retargeting.New(pgSource{store}, pgEnroller{store: store, bus: natsBus, log: log}, log)
+		// Household enrollment gate — live key, read per event.
+		svc.SetHouseholdEnroll(func() bool { return keys.AudienceRT.HouseholdEnroll.Get(cfg) })
 
 		ctx := context.Background()
 		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})

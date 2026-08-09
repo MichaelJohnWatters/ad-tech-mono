@@ -105,11 +105,27 @@
   // email capture moment upgrades it (captureGuestEmail below — wired to
   // the checkout email field). If a previous capture already identified
   // this visitor (stored hash), the pixel carries it as before.
+  // The persona's HOUSEHOLD: derived from the persona email's hash (never
+  // sent anywhere — the hash only seeds a deterministic TEST-NET IP), so the
+  // publisher site derives the SAME demo IP for the same persona and the two
+  // sites share one household. This is what makes an ANONYMOUS guest cart
+  // (no email ever captured) chaseable on the "other device": household id,
+  // not identity. Rides the tracker's allowlist-gated ?ip= (inert in prod).
+  function personaDemoIP() {
+    return crypto.subtle.digest('SHA-256', new TextEncoder().encode(personaEmail()))
+      .then(function (buf) {
+        var b0 = new Uint8Array(buf)[0];
+        return '203.0.113.' + (1 + (b0 % 254));
+      });
+  }
   function applyConsent(personalized){
     localStorage.setItem('ford_consent', personalized ? 'yes' : 'no');
     var b=document.getElementById('consent'); if(b) b.style.display='none';
     if (!personalized) { log('✗ consent declined — no retargeting pixel (no audience)', 'no'); return; }
-    adtechadv.setConsent(true).then(function(uid){
+    personaDemoIP().then(function(ip){
+      adtechadv.setDemoIP(ip);
+      return adtechadv.setConsent(true);
+    }).then(function(uid){
       var known = !!localStorage.getItem('adtechadv_he');
       log('▶ retargeting pixel fired · tag="'+TAG+'" · visitor '+String(uid||'').slice(0,14)+'…'+
           (known ? ' (+hashed email) → in the audience & BRIDGEABLE cross-site'

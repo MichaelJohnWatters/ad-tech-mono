@@ -197,3 +197,50 @@ func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 		t.Errorf("removed=%v invalidated=%d, want 2 removes + 1 invalidate", enr.removed, enr.invalidated)
 	}
 }
+
+// Household enrollment (anonymous guest carts): with the gate ON and a
+// household id on the visit, BOTH the visitor id and the household enroll —
+// so the chase reaches the home's other devices with no email bridge. Gate
+// off (or nil, the default) keeps the original visitor-only behaviour, and a
+// household equal to the user id (household-keyed visitor) never doubles up.
+func TestOnSiteVisit_HouseholdEnrollGate(t *testing.T) {
+	seg := Segment{ID: "seg-cart", AccountID: "adv", Type: "retargeting", Rule: []byte(`{"event":"site_visit","tag":"cart","min_count":1}`)}
+	ev := visitEvent("adv", "guest-1", "cart")
+	ev.HouseholdID = "hh:abc123"
+
+	// Gate ON → visitor + household.
+	src := &fakeSource{segs: map[string][]Segment{"adv": {seg}}}
+	enr := &fakeEnroller{}
+	svc := New(src, enr, testLog())
+	svc.SetHouseholdEnroll(func() bool { return true })
+	if _, err := svc.OnSiteVisit(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	if len(enr.added) != 2 || enr.added[0].user != "guest-1" || enr.added[1].user != "hh:abc123" {
+		t.Fatalf("want visitor+household enrolled, got %+v", enr.added)
+	}
+
+	// Gate OFF → visitor only.
+	enr = &fakeEnroller{}
+	svc = New(src, enr, testLog())
+	svc.SetHouseholdEnroll(func() bool { return false })
+	if _, err := svc.OnSiteVisit(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	if len(enr.added) != 1 || enr.added[0].user != "guest-1" {
+		t.Fatalf("want visitor only, got %+v", enr.added)
+	}
+
+	// Household == user id (a household-keyed visitor) must not double-enroll.
+	ev2 := ev
+	ev2.UserID = "hh:abc123"
+	enr = &fakeEnroller{}
+	svc = New(src, enr, testLog())
+	svc.SetHouseholdEnroll(func() bool { return true })
+	if _, err := svc.OnSiteVisit(context.Background(), ev2); err != nil {
+		t.Fatal(err)
+	}
+	if len(enr.added) != 1 {
+		t.Fatalf("want single enrollment for hh-keyed visitor, got %+v", enr.added)
+	}
+}
