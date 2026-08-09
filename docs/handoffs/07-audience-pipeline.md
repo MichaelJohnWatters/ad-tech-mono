@@ -1,6 +1,7 @@
 # Session: understand, judge, then stress the audience pipeline
 
-> **PROGRESS (2026-08-09)** — Phases 1+2 DONE (6edab56, 67a56f5, 99c2358):
+> **DONE (2026-08-09)** — all three phases complete in one day.
+> Phases 1+2 (6edab56, 67a56f5, 99c2358):
 > themed two-tier world shipped + live-verified, `docs/AUDIENCE-PIPELINE.md`
 > explainer written, targeting-data-flow + cache-freshness diagrams
 > de-drifted, and a latent bug fixed — the in-cluster hourly profile-builder
@@ -12,7 +13,14 @@
 > flowing), NATS outage (no deaf-on-boot latch). Fixes shipped: zero-work
 > WARN in the builder + AudienceCacheWriterAbsent/AudienceChangelogLag
 > Prometheus alerts. Full fault table in docs/AUDIENCE-PIPELINE.md.
-> Phase 3 (density + cadence) not started — next session.
+> Phase 3 (density A/B + cadence decisions): 500k memberships / 100k-user
+> universe / 20 audience-predicate campaigns vs thin control — serving
+> insensitive (audience p95 12.5→13.8ms, fill identical, VERIFY green both
+> runs); drain ~1.9k rows/s, reconcile 39s@500k, builder 0.6s; found+fixed
+> the reconcile's hard 60s budget (silent membership loss past ~1M) and the
+> debug-refresh cap. Cadences kept ON PURPOSE (3s/5m/hourly/60s) with
+> recorded revisit triggers — see docs/AUDIENCE-PIPELINE.md "Density
+> results" + "Cadence policy".
 
 ## Why
 The audience pipeline was built incrementally across many sessions and the

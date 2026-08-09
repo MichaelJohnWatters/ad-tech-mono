@@ -51,7 +51,17 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// The synthetic density tier writes O(100k-1M) membership rows, each
+	// doubled by the changelog trigger — at ~5k rows/s that blows the
+	// default 60s budget well before it finishes. Scale the deadline with
+	// the requested volume instead of failing at segment ~60.
+	seedTimeout := 60 * time.Second
+	if *synthSegments > 0 {
+		if extra := time.Duration(*synthSegments**synthMembersPer/2000) * time.Second; extra > 0 {
+			seedTimeout += extra
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), seedTimeout)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
