@@ -47,25 +47,86 @@ func (f *fakeEnroller) InvalidateAudience(_ context.Context, _ string) error {
 	return nil
 }
 
-// fakeProductViews records the SKU writes/removes the service makes.
+// fakeProductViews records the SKU writes/removes the service makes and tracks
+// a per-user carted-SKU set so CountProductViews reflects record/remove.
 type fakeProductViews struct {
-	recorded map[string][]string // userID → skus
+	recorded map[string][]string // userID → skus recorded (append log)
+	views    map[string][]string // userID → current carted skus (for Count)
 	lastTTL  time.Duration
-	removed  []call // segment field reused as sku
+	removed  []call // {sku, user}
 }
 
 func (f *fakeProductViews) RecordProductViews(_ context.Context, _, userID string, skus []string, _ time.Time, ttl time.Duration, _ string) error {
 	if f.recorded == nil {
 		f.recorded = map[string][]string{}
+		f.views = map[string][]string{}
 	}
 	f.recorded[userID] = append(f.recorded[userID], skus...)
+	f.views[userID] = append(f.views[userID], skus...)
 	f.lastTTL = ttl
 	return nil
 }
 
-func (f *fakeProductViews) RemoveProductView(_ context.Context, _, userID, sku string) error {
-	f.removed = append(f.removed, call{sku, userID})
+func (f *fakeProductViews) RemoveProductViews(_ context.Context, _, userID string, skus []string) error {
+	drop := map[string]bool{}
+	for _, s := range skus {
+		drop[s] = true
+		f.removed = append(f.removed, call{s, userID})
+	}
+	if f.views != nil {
+		kept := f.views[userID][:0]
+		for _, s := range f.views[userID] {
+			if !drop[s] {
+				kept = append(kept, s)
+			}
+		}
+		f.views[userID] = kept
+	}
 	return nil
+}
+
+func (f *fakeProductViews) CountProductViews(_ context.Context, _, userID string) (int, error) {
+	if f.views == nil {
+		return 0, nil
+	}
+	return len(f.views[userID]), nil
+}
+
+// fakeSuppression records whole-person + per-SKU burns.
+type fakeSuppression struct {
+	personBurns []string        // user ids whole-person burned
+	skuBurns    map[string]bool // "user|sku"
+}
+
+func (f *fakeSuppression) Suppress(_ context.Context, _ string, userIDs []string, _ time.Time, _ time.Duration, _ string) error {
+	f.personBurns = append(f.personBurns, userIDs...)
+	return nil
+}
+func (f *fakeSuppression) SuppressedAt(_ context.Context, _, _ string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+func (f *fakeSuppression) ClearSuppression(_ context.Context, _, _ string) error { return nil }
+func (f *fakeSuppression) SuppressSKUs(_ context.Context, _ string, userIDs, skus []string, _ time.Time, _ time.Duration, _ string) error {
+	if f.skuBurns == nil {
+		f.skuBurns = map[string]bool{}
+	}
+	for _, u := range userIDs {
+		for _, s := range skus {
+			f.skuBurns[u+"|"+s] = true
+		}
+	}
+	return nil
+}
+
+// fakeComplements returns a fixed complement map.
+type fakeComplements struct{ m map[string][]string }
+
+func (f fakeComplements) ComplementSKUs(_ context.Context, _ string, skus []string) ([]string, error) {
+	var out []string
+	for _, s := range skus {
+		out = append(out, f.m[s]...)
+	}
+	return out, nil
 }
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -250,7 +311,8 @@ func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 	enr := &fakeEnroller{}
 	s := New(src, enr, testLog())
 
-	removed, err := s.OnConversion(context.Background(), "adv", "u1", "trace-xyz")
+	// Generic conversion (no bought SKUs) → whole-person suppression.
+	removed, err := s.OnConversion(context.Background(), "adv", "u1", "trace-xyz", nil)
 	if err != nil {
 		t.Fatalf("OnConversion: %v", err)
 	}
@@ -259,6 +321,83 @@ func TestOnConversion_SuppressesFromAllRetargetingSegments(t *testing.T) {
 	}
 	if len(enr.removed) != 2 || enr.invalidated != 1 {
 		t.Errorf("removed=%v invalidated=%d, want 2 removes + 1 invalidate", enr.removed, enr.invalidated)
+	}
+}
+
+// A SKU purchase with items still in the cart is PER-PRODUCT: burn + remove the
+// bought SKU, cross-sell its complement, and keep the buyer in the chase (no
+// whole-person segment removal).
+func TestOnConversion_PerProductKeepsChasingAndCrossSells(t *testing.T) {
+	src := &fakeSource{segs: map[string][]Segment{"adv": {{ID: "seg-a"}}}}
+	enr := &fakeEnroller{}
+	pv := &fakeProductViews{}
+	sup := &fakeSuppression{}
+	s := New(src, enr, testLog())
+	s.SetProductViews(pv, func() time.Duration { return 30 * 24 * time.Hour })
+	s.SetSuppression(sup, nil, func() time.Duration { return 30 * 24 * time.Hour })
+	s.SetComplements(fakeComplements{m: map[string][]string{"SKU-KIBBLE": {"SKU-TREATS"}}})
+
+	// The user still has another carted item (SKU-BOWL) beyond what they bought.
+	_ = pv.RecordProductViews(context.Background(), "adv", "u1", []string{"SKU-KIBBLE", "SKU-BOWL"}, time.Time{}, 0, "")
+
+	removed, err := s.OnConversion(context.Background(), "adv", "u1", "trace-1", []string{"SKU-KIBBLE"})
+	if err != nil {
+		t.Fatalf("OnConversion: %v", err)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("per-product purchase whole-person suppressed (removed=%v); should keep chasing", removed)
+	}
+	if len(enr.removed) != 0 {
+		t.Errorf("segment membership removed on a per-product purchase: %v", enr.removed)
+	}
+	if !sup.skuBurns["u1|SKU-KIBBLE"] {
+		t.Errorf("bought SKU-KIBBLE not per-product burned")
+	}
+	if len(sup.personBurns) != 0 {
+		t.Errorf("whole-person burn written on a keep-chasing purchase: %v", sup.personBurns)
+	}
+	// Bought SKU removed from views; complement recorded.
+	got := pv.recorded["u1"]
+	if len(got) < 3 || got[len(got)-1] != "SKU-TREATS" {
+		t.Errorf("cross-sell complement not recorded: %v", got)
+	}
+	foundRemove := false
+	for _, c := range pv.removed {
+		if c.segment == "SKU-KIBBLE" && c.user == "u1" {
+			foundRemove = true
+		}
+	}
+	if !foundRemove {
+		t.Errorf("bought SKU not removed from views: %v", pv.removed)
+	}
+	if enr.invalidated == 0 {
+		t.Errorf("audience not invalidated after per-product suppress (DSP won't refresh the creative)")
+	}
+}
+
+// A SKU purchase that empties the cart (no remaining items, no complement)
+// falls through to whole-person suppression.
+func TestOnConversion_PerProductClearedCartWholePersonSuppresses(t *testing.T) {
+	src := &fakeSource{segs: map[string][]Segment{"adv": {{ID: "seg-a"}}}}
+	enr := &fakeEnroller{}
+	pv := &fakeProductViews{}
+	sup := &fakeSuppression{}
+	s := New(src, enr, testLog())
+	s.SetProductViews(pv, func() time.Duration { return 30 * 24 * time.Hour })
+	s.SetSuppression(sup, nil, func() time.Duration { return 30 * 24 * time.Hour })
+	// No complements wired → nothing to rotate to.
+
+	_ = pv.RecordProductViews(context.Background(), "adv", "u1", []string{"SKU-ONLY"}, time.Time{}, 0, "")
+
+	removed, err := s.OnConversion(context.Background(), "adv", "u1", "trace-2", []string{"SKU-ONLY"})
+	if err != nil {
+		t.Fatalf("OnConversion: %v", err)
+	}
+	if len(removed) != 1 {
+		t.Fatalf("cleared cart should whole-person suppress (removed from segments), got %v", removed)
+	}
+	if len(sup.personBurns) == 0 {
+		t.Errorf("cleared cart should write a whole-person burn")
 	}
 }
 

@@ -163,6 +163,43 @@ WHERE account_id = $1::uuid AND sku = ANY($2::text[])`, accountID, pq.StringArra
 	return out, nil
 }
 
+// ComplementSKUs returns the cross-sell complements for the given SKUs — the
+// products.complement_sku of each, de-duplicated, excluding the bought SKUs
+// themselves and any empty complement. Used on purchase to rotate the dynamic
+// creative toward complementary items (DPA slice 4). Platform-hatch read (the
+// consumer service resolves the winning advertiser's catalog).
+func (s *Store) ComplementSKUs(ctx context.Context, accountID string, skus []string) ([]string, error) {
+	if len(skus) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin complement skus: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("complement skus platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT DISTINCT complement_sku FROM products
+WHERE account_id = $1::uuid AND sku = ANY($2::text[])
+  AND complement_sku <> '' AND NOT (complement_sku = ANY($2::text[]))`,
+		accountID, pq.StringArray(skus))
+	if err != nil {
+		return nil, fmt.Errorf("complement skus: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sku string
+		if err := rows.Scan(&sku); err != nil {
+			return nil, err
+		}
+		out = append(out, sku)
+	}
+	return out, rows.Err()
+}
+
 // CountByAccount returns how many products the account has.
 func (s *Store) CountByAccount(ctx context.Context, accountID string) (int, error) {
 	n := 0

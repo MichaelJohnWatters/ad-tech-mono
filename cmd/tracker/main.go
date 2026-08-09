@@ -516,7 +516,10 @@ func main() {
 			AttributedTraceID: attributedTrace,
 			AttributionType:   attrType,
 			UserID:            q.Get("uid"),
-			Timestamp:         time.Now().UTC(),
+			// DPA: purchased SKUs (sku= single or skus= CSV) drive per-product
+			// suppression + cross-sell in audience-rt.
+			SKUs:      firstNonEmpty(q.Get("skus"), q.Get("sku")),
+			Timestamp: time.Now().UTC(),
 		}, reqLog)
 		go publisher.publishBehaviour(context.WithoutCancel(ctx), "conversion", q, reqLog)
 

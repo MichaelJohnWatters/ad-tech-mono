@@ -227,13 +227,14 @@ func (in *inserter) seedProductCatalog(ctx context.Context) error {
 		imageURL := creativeAssetByTheme("barkbox-shop", 300, 250)
 		productURL := "http://localhost:9200/models/" + p.sku
 		if _, err := in.db.ExecContext(ctx, `
-INSERT INTO products (account_id, sku, title, description, image_url, price_micros, currency, availability, product_url, category, source, origin_trace, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'in_stock', $7, $8, 'seed', '', now(), now())
+INSERT INTO products (account_id, sku, title, description, image_url, price_micros, currency, availability, product_url, category, complement_sku, source, origin_trace, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'in_stock', $7, $8, $9, 'seed', '', now(), now())
 ON CONFLICT (account_id, sku) DO UPDATE SET
   title = EXCLUDED.title, image_url = EXCLUDED.image_url, price_micros = EXCLUDED.price_micros,
-  product_url = EXCLUDED.product_url, category = EXCLUDED.category, updated_at = now()`,
+  product_url = EXCLUDED.product_url, category = EXCLUDED.category,
+  complement_sku = EXCLUDED.complement_sku, updated_at = now()`,
 			account, p.sku, p.title, p.title+" — premium quality for your best friend.",
-			imageURL, p.priceMicros, productURL, p.category); err != nil {
+			imageURL, p.priceMicros, productURL, p.category, p.complementSKU); err != nil {
 			return fmt.Errorf("seed product %s: %w", p.sku, err)
 		}
 	}

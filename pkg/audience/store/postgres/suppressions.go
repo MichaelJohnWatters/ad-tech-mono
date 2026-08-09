@@ -15,18 +15,19 @@ import (
 	"github.com/lib/pq"
 )
 
-// Suppress upserts burn-list rows for every id a purchase expands to. Same
-// suppressed_at for the batch (one purchase = one moment); a repeat purchase
-// refreshes both timestamps.
+// Suppress upserts WHOLE-PERSON burn-list rows (sku=”) for every id a purchase
+// expands to. Same suppressed_at for the batch (one purchase = one moment); a
+// repeat purchase refreshes both timestamps. Per-product burns (a specific sku)
+// are written by SuppressSKUs (DPA slice 4).
 func (s *Store) Suppress(ctx context.Context, accountID string, userIDs []string, at time.Time, ttl time.Duration, originTrace string) error {
 	if len(userIDs) == 0 {
 		return nil
 	}
 	return s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-INSERT INTO retargeting_suppressions (account_id, user_id, suppressed_at, expires_at, source, origin_trace)
-SELECT $1::uuid, unnest($2::text[]), $3, $4, 'purchase', $5
-ON CONFLICT (account_id, user_id)
+INSERT INTO retargeting_suppressions (account_id, user_id, sku, suppressed_at, expires_at, source, origin_trace)
+SELECT $1::uuid, unnest($2::text[]), '', $3, $4, 'purchase', $5
+ON CONFLICT (account_id, user_id, sku)
 DO UPDATE SET suppressed_at = EXCLUDED.suppressed_at, expires_at = EXCLUDED.expires_at, origin_trace = EXCLUDED.origin_trace`,
 			accountID, pq.StringArray(userIDs), at, at.Add(ttl), originTrace)
 		if err != nil {
@@ -36,15 +37,39 @@ DO UPDATE SET suppressed_at = EXCLUDED.suppressed_at, expires_at = EXCLUDED.expi
 	})
 }
 
-// SuppressedAt returns when (account, user) was burn-listed, if the entry is
-// still live. Expired rows are invisible (read-side filter, same idiom as
-// member TTLs) even before the physical purge sweeps them.
+// SuppressSKUs writes PER-PRODUCT burn rows: one row per (id, sku) the purchase
+// bought, for every expanded id (person + household). These stop the dynamic
+// creative from re-featuring a bought SKU (RecordProductViews filters them) even
+// if a stale pixel re-fires — the durable half of per-product suppression (DPA
+// slice 4), mirroring the whole-person burn's durability lesson (migration 082).
+func (s *Store) SuppressSKUs(ctx context.Context, accountID string, userIDs, skus []string, at time.Time, ttl time.Duration, originTrace string) error {
+	if len(userIDs) == 0 || len(skus) == 0 {
+		return nil
+	}
+	return s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO retargeting_suppressions (account_id, user_id, sku, suppressed_at, expires_at, source, origin_trace)
+SELECT $1::uuid, u.id, k.sku, $4, $5, 'purchase', $6
+FROM unnest($2::text[]) AS u(id), unnest($3::text[]) AS k(sku)
+ON CONFLICT (account_id, user_id, sku)
+DO UPDATE SET suppressed_at = EXCLUDED.suppressed_at, expires_at = EXCLUDED.expires_at, origin_trace = EXCLUDED.origin_trace`,
+			accountID, pq.StringArray(userIDs), pq.StringArray(skus), at, at.Add(ttl), originTrace)
+		if err != nil {
+			return fmt.Errorf("suppress skus: %w", err)
+		}
+		return nil
+	})
+}
+
+// SuppressedAt returns when (account, user) was WHOLE-PERSON burn-listed (sku=”),
+// if the entry is still live. Expired rows are invisible (read-side filter, same
+// idiom as member TTLs) even before the physical purge sweeps them.
 func (s *Store) SuppressedAt(ctx context.Context, accountID, userID string) (time.Time, bool, error) {
 	var at time.Time
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `
 SELECT suppressed_at FROM retargeting_suppressions
-WHERE account_id = $1::uuid AND user_id = $2 AND expires_at > now()`,
+WHERE account_id = $1::uuid AND user_id = $2 AND sku = '' AND expires_at > now()`,
 			accountID, userID).Scan(&at)
 	})
 	if err == sql.ErrNoRows {
@@ -56,12 +81,14 @@ WHERE account_id = $1::uuid AND user_id = $2 AND expires_at > now()`,
 	return at, true, nil
 }
 
-// ClearSuppression removes the burn-list entry — a genuinely new visit after
-// the purchase reopens the chase.
+// ClearSuppression removes the WHOLE-PERSON burn-list entry (sku=”) — a
+// genuinely new visit after the purchase reopens the chase. Per-product burns
+// are left in place (a new visit to a DIFFERENT product shouldn't un-suppress a
+// bought one); they age out on their own TTL.
 func (s *Store) ClearSuppression(ctx context.Context, accountID, userID string) error {
 	return s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-DELETE FROM retargeting_suppressions WHERE account_id = $1::uuid AND user_id = $2`,
+DELETE FROM retargeting_suppressions WHERE account_id = $1::uuid AND user_id = $2 AND sku = ''`,
 			accountID, userID); err != nil {
 			return fmt.Errorf("clear suppression: %w", err)
 		}

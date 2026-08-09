@@ -401,7 +401,13 @@ type ConversionEvent struct {
 	AttributionType string `json:"attribution_type,omitempty"`
 	// UserID is the advertiser-side first-party visitor id carried on the
 	// conversion (used by later phases to resolve view-through/cross-device).
-	UserID    string    `json:"user_id,omitempty"`
+	UserID string `json:"user_id,omitempty"`
+	// SKUs are the purchased product SKUs (comma-separated, Dynamic Product
+	// Ads): a SKU-carrying purchase drives PER-PRODUCT suppression (stop
+	// featuring the bought SKU + cross-sell the complement, keep chasing the
+	// rest of the cart) rather than the whole-person suppression a generic
+	// conversion triggers. Empty for non-DPA conversions.
+	SKUs      string    `json:"skus,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }
 

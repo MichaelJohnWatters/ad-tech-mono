@@ -78,6 +78,9 @@ type SuppressionStore interface {
 	Suppress(ctx context.Context, accountID string, userIDs []string, at time.Time, ttl time.Duration, originTrace string) error
 	SuppressedAt(ctx context.Context, accountID, userID string) (time.Time, bool, error)
 	ClearSuppression(ctx context.Context, accountID, userID string) error
+	// SuppressSKUs writes per-product burn rows (DPA slice 4) so a bought SKU
+	// isn't re-featured by a stale pixel.
+	SuppressSKUs(ctx context.Context, accountID string, userIDs, skus []string, at time.Time, ttl time.Duration, originTrace string) error
 }
 
 // IdentityExpander returns the additional ids a converting user's purchase
@@ -95,7 +98,17 @@ type IdentityExpander interface {
 // the pre-DPA behaviour (SKUs ignored).
 type ProductViewStore interface {
 	RecordProductViews(ctx context.Context, accountID, userID string, skus []string, at time.Time, ttl time.Duration, originTrace string) error
-	RemoveProductView(ctx context.Context, accountID, userID, sku string) error
+	RemoveProductViews(ctx context.Context, accountID, userID string, skus []string) error
+	// CountProductViews reports how many carted SKUs the user still has — used
+	// to decide whether a SKU purchase cleared the cart (DPA slice 4).
+	CountProductViews(ctx context.Context, accountID, userID string) (int, error)
+}
+
+// ComplementSource returns the cross-sell complement SKUs for a set of bought
+// SKUs (DPA slice 4). Optional — nil means "no cross-sell" (a purchase just
+// suppresses the bought products).
+type ComplementSource interface {
+	ComplementSKUs(ctx context.Context, accountID string, skus []string) ([]string, error)
 }
 
 // Service applies visit → enroll and conversion → suppress against a segment
@@ -119,6 +132,8 @@ type Service struct {
 	// nil products = SKUs on a pixel are ignored (pre-DPA behaviour).
 	products       ProductViewStore
 	productViewTTL func() time.Duration
+	// complements wires cross-sell (DPA slice 4); nil = suppress-only on purchase.
+	complements ComplementSource
 }
 
 func New(src SegmentSource, enr Enroller, log *slog.Logger) *Service {
@@ -143,6 +158,10 @@ func (s *Service) SetHouseholdEnroll(fn func() bool) { s.householdEnroll = fn }
 func (s *Service) SetProductViews(store ProductViewStore, ttl func() time.Duration) {
 	s.products, s.productViewTTL = store, ttl
 }
+
+// SetComplements wires cross-sell (DPA slice 4): after a SKU purchase the chase
+// rotates toward these complementary catalog items. nil = suppress-only.
+func (s *Service) SetComplements(src ComplementSource) { s.complements = src }
 
 const kindSiteVisit = "site_visit"
 
@@ -323,10 +342,94 @@ func (s *Service) suppressionIDs(ctx context.Context, userID string) []string {
 	return ids
 }
 
-func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID string) ([]string, error) {
+// OnConversion handles a purchase. A GENERIC conversion (no bought SKUs) does
+// whole-person suppression as before: remove the buyer (+ cluster/household)
+// from every retargeting segment and burn-list them. A SKU-carrying purchase
+// (Dynamic Product Ads slice 4) is PER-PRODUCT: suppress the bought SKUs, rotate
+// the dynamic creative to their cross-sell complements, and keep chasing the
+// rest of the cart — only falling through to whole-person suppression when
+// nothing remains to show. Returns the segment ids removed (nil on the
+// keep-chasing per-product path).
+func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID string, boughtSKUs []string) ([]string, error) {
 	if accountID == "" || userID == "" {
 		return nil, nil
 	}
+	ids := s.suppressionIDs(ctx, userID)
+	if len(boughtSKUs) > 0 && s.products != nil {
+		return s.onProductConversion(ctx, accountID, userID, traceID, ids, boughtSKUs)
+	}
+	return s.onGenericConversion(ctx, accountID, userID, traceID, ids)
+}
+
+// onProductConversion is the per-product purchase path (DPA slice 4): burn +
+// remove the bought SKUs, cross-sell their complements, then keep chasing if
+// anything remains, else fall through to whole-person suppression.
+func (s *Service) onProductConversion(ctx context.Context, accountID, userID, traceID string, ids, boughtSKUs []string) ([]string, error) {
+	now := time.Now().UTC()
+	burnTTL := 30 * 24 * time.Hour
+	if s.suppressionTTL != nil {
+		if v := s.suppressionTTL(); v > 0 {
+			burnTTL = v
+		}
+	}
+	viewTTL := time.Duration(defaultWindowDays) * 24 * time.Hour
+	if s.productViewTTL != nil {
+		if v := s.productViewTTL(); v > 0 {
+			viewTTL = v
+		}
+	}
+	// Durable per-SKU burn for every id (stops a stale pixel re-adding a bought
+	// product), then remove the bought SKUs from the carted-products memory.
+	if s.sup != nil {
+		if err := s.sup.SuppressSKUs(ctx, accountID, ids, boughtSKUs, now, burnTTL, traceID); err != nil {
+			s.log.Warn("per-product burn write failed", "account", accountID, "trace_id", traceID, "error", err)
+		}
+	}
+	for _, id := range ids {
+		if err := s.products.RemoveProductViews(ctx, accountID, id, boughtSKUs); err != nil {
+			s.log.Warn("per-product view removal failed", "user", id, "account", accountID, "error", err)
+		}
+	}
+	// Cross-sell: rotate the chase toward the bought products' complements
+	// (RecordProductViews skips any that are themselves burn-listed).
+	var complements []string
+	if s.complements != nil {
+		if c, err := s.complements.ComplementSKUs(ctx, accountID, boughtSKUs); err != nil {
+			s.log.Warn("cross-sell complement lookup failed", "account", accountID, "error", err)
+		} else if len(c) > 0 {
+			complements = c
+			for _, id := range ids {
+				if err := s.products.RecordProductViews(ctx, accountID, id, complements, now, viewTTL, traceID); err != nil {
+					s.log.Warn("cross-sell record failed", "user", id, "account", accountID, "error", err)
+				}
+			}
+		}
+	}
+	// Cart-clear check on the converting id: nothing left to feature (bought
+	// everything, no complement) → whole-person suppress. Otherwise keep chasing
+	// the remaining cart + cross-sell.
+	remaining, err := s.products.CountProductViews(ctx, accountID, userID)
+	if err != nil {
+		s.log.Warn("product-view count failed — treating as cart-cleared", "user", userID, "account", accountID, "error", err)
+		remaining = 0
+	}
+	if remaining == 0 {
+		return s.onGenericConversion(ctx, accountID, userID, traceID, ids)
+	}
+	for _, id := range ids {
+		if err := s.enr.InvalidateAudience(ctx, id); err != nil {
+			s.log.Warn("audience invalidate after per-product suppress failed", "trace_id", traceID, "error", err)
+		}
+	}
+	s.log.Info("real-time per-product suppress", "account", accountID, "user", userID,
+		"bought", len(boughtSKUs), "complements", len(complements), "remaining", remaining, "trace_id", traceID)
+	return nil, nil
+}
+
+// onGenericConversion is the whole-person suppression path (a purchase with no
+// SKU context, or a SKU purchase that cleared the cart): remove the buyer from
+// every retargeting segment and burn-list the person + household.
+func (s *Service) onGenericConversion(ctx context.Context, accountID, userID, traceID string, ids []string) ([]string, error) {
 	segs, err := s.src.RetargetingSegments(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -335,7 +438,6 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID s
 	// (cluster siblings + household), not just the id on the conversion —
 	// otherwise the batch builder's person-level enrollment keeps the
 	// buyer's other devices in the chase.
-	ids := s.suppressionIDs(ctx, userID)
 	var removed []string
 	for _, seg := range segs {
 		got := 0

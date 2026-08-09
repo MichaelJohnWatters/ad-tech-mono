@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
@@ -38,6 +40,26 @@ import (
 // conversionPurchase is the conversion type that suppresses retargeting — a
 // completed buy. Other conversion types (signup, lead) don't stop the chase.
 const conversionPurchase = "purchase"
+
+// splitCSVSKUs parses a comma-separated SKU list (ConversionEvent.SKUs) into
+// trimmed, non-empty, de-duplicated entries (DPA slice 4).
+func splitCSVSKUs(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
 
 func main() {
 	log := logger.New(constants.ServiceAudienceRT)
@@ -94,6 +116,9 @@ func main() {
 		svc.SetProductViews(store, func() time.Duration {
 			return time.Duration(keys.AudienceRT.ProductViewDays.Get(cfg)) * 24 * time.Hour
 		})
+		// DPA slice 4: cross-sell — after a SKU purchase the chase rotates toward
+		// the bought products' catalog complements.
+		svc.SetComplements(catalogpg.New(db))
 
 		ctx := context.Background()
 		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
@@ -218,7 +243,10 @@ func conversionHandler(svc *retargeting.Service, log *slog.Logger) events.Handle
 		if ev.ConversionType != conversionPurchase {
 			return msg.Ack() // only a buy suppresses the chase
 		}
-		if _, err := svc.OnConversion(ctx, ev.AccountID, ev.UserID, ev.TraceID); err != nil {
+		// DPA slice 4: a SKU-carrying purchase drives per-product suppression +
+		// cross-sell; a generic one whole-person suppresses (unchanged).
+		boughtSKUs := splitCSVSKUs(ev.SKUs)
+		if _, err := svc.OnConversion(ctx, ev.AccountID, ev.UserID, ev.TraceID, boughtSKUs); err != nil {
 			log.Warn("real-time suppress failed, will redeliver", "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			return msg.Nak()
 		}
