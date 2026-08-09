@@ -1325,6 +1325,49 @@ paths:
         "200": { description: "Inline (small file): { segment_id, members_added, members_sent, matched, match_rate }" }
         "202": { description: "Queued (large file / held): { job_id, status, run_at? }. Poll GET /v1/api/audiences/ingest/{id}." }
         "422": { description: "File rejected (bad shape / undecodable / PGP-undecryptable / all-or-nothing threshold): { error } with the reason" }
+  /v1/api/products:
+    get:
+      tags: [Audiences]
+      summary: List the account's product catalog (Dynamic Product Ads)
+      description: >-
+        The advertiser's product catalog — the rows a dynamic creative assembles
+        at render time and the per-SKU purchase burn list keys on. Tenant-scoped.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ products: [{ sku, title, description?, image_url?, price_micros, currency, availability, product_url?, category? }], count } — price_micros is micro-dollars; availability ∈ {in_stock, out_of_stock, preorder, discontinued}" }
+    post:
+      tags: [Audiences]
+      summary: Upload a product feed (multipart CSV/TSV)
+      description: >-
+        A product feed is a second feed TYPE on the unified ingestion path (ADR
+        0007, kind=product): the same staging, audience_ingest_jobs queue,
+        inline-vs-202 threshold, and STRICT all-or-nothing validation as an
+        audience upload — but the rows upsert into the products table (keyed on
+        account + sku) instead of segment memberships. No PII hashing (a catalog
+        has none). Small feeds process inline (200 with products_written);
+        larger feeds return 202 with a job id — poll GET
+        /v1/api/audiences/ingest/{id}. Columns: sku (or id/item_id/offer_id),
+        title (or name/product_name), price ("38.99" or "38.99 EUR" or "$38.99"),
+        and optionally image_url (image_link/image), product_url (link/url),
+        availability, category (google_product_category), description, currency —
+        Google Merchant headers work as-is.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, file]
+              properties:
+                name: { type: string }
+                additional_emails: { type: string, description: "Comma/space-separated extra completion-email recipients" }
+                run_at: { type: string, description: "RFC3339 — hold the feed until this time (ingest timing)" }
+                file: { type: string, format: binary, description: "CSV/TSV product feed with sku+title+price columns" }
+      responses:
+        "200": { description: "Inline (small feed): { products_written, total_rows, valid_rows, rejected_rows }" }
+        "202": { description: "Queued (large feed / held): { job_id, status, run_at? }. Poll GET /v1/api/audiences/ingest/{id}." }
+        "422": { description: "Feed rejected (bad shape / all-or-nothing threshold): { error } naming the failing column" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

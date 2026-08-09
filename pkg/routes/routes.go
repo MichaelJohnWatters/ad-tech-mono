@@ -63,6 +63,10 @@ const (
 	// APIAudiences is the CRM/audience upload endpoint (create segment +
 	// bulk-add members). POST only.
 	APIAudiences = apiPrefix + "/api/audiences"
+	// APIProducts is the advertiser product catalog (Dynamic Product Ads):
+	// GET lists the account's products, POST uploads a feed CSV that rides
+	// the unified ingestion path (kind=product). Tenant-scoped.
+	APIProducts = apiPrefix + "/api/products"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

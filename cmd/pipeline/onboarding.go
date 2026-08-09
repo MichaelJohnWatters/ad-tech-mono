@@ -41,6 +41,7 @@ import (
 	"time"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
@@ -204,6 +205,7 @@ func initOnboarding(cfg *config.Config, log *slog.Logger, lc *lifecycle.Lifecycl
 		Pipeline:     pipeline.New(log),
 		Log:          log,
 		MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
+		Catalog:      catalogpg.New(db),
 	}
 	// ADR 0008: load the platform PGP private key so drop-zone files encrypted
 	// to the platform public key decrypt on ingest. A small direct DB read at
@@ -361,7 +363,11 @@ func (o *onboarder) enqueueFile(ctx context.Context, provider, key string) {
 // (ADR 0007). The ingest worker (ingest_worker.go) calls this per claimed job;
 // it exists so the worker keeps a stable method on the onboarder while the
 // actual logic lives in pkg/ingest, shared with the gateway inline path.
+// kind=product jobs (DPA) branch to the product-feed twin.
 func (o *onboarder) processStagedFile(ctx context.Context, job ingestjobs.Job) (ingestjobs.IngestResult, error) {
+	if job.Kind == ingestjobs.KindProduct {
+		return o.proc.ProcessProducts(ctx, job)
+	}
 	return o.proc.Process(ctx, job)
 }
 

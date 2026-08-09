@@ -26,6 +26,9 @@ func (in *inserter) SeedFeatureBaseline(ctx context.Context) error {
 	if err := in.seedThemedSegments(ctx); err != nil {
 		return err
 	}
+	if err := in.seedProductCatalog(ctx); err != nil {
+		return err
+	}
 	if err := in.seedAgency(ctx); err != nil {
 		return err
 	}
@@ -195,6 +198,46 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type,
 		}
 	}
 	in.log.Info("seeded themed segments", "count", len(segments))
+	return nil
+}
+
+// seedProductCatalog gives Premium Dog Food Co (adv-barkbox — the demoadv shop
+// advertiser) a product catalog so the Dynamic Product Ads path has something
+// to render (slice 3) and suppress by SKU (slice 4) out of the box. SKUs match
+// the demoadv shop grid; prices are micro-dollars (money convention). Idempotent
+// upsert by (account_id, sku), same as the ingest path writes.
+func (in *inserter) seedProductCatalog(ctx context.Context) error {
+	account := idgen.Derive("account", "adv-barkbox")
+	products := []struct {
+		sku, title, category string
+		priceMicros          int64
+		complementSKU        string
+	}{
+		{"DOG-KIBBLE-12KG", "Grain-Free Kibble 12kg", "dry-food", 38_990_000, "DOG-TREAT-BOX"},
+		{"DOG-KIBBLE-3KG", "Grain-Free Kibble 3kg", "dry-food", 12_990_000, "DOG-TREAT-BOX"},
+		{"DOG-WET-24PK", "Wet Food Variety 24-pack", "wet-food", 29_990_000, "DOG-BOWL-STEEL"},
+		{"DOG-TREAT-BOX", "Training Treats Box", "treats", 8_490_000, "DOG-KIBBLE-12KG"},
+		{"DOG-BOWL-STEEL", "Stainless Steel Bowl", "accessories", 15_000_000, "DOG-KIBBLE-3KG"},
+		{"DOG-BED-LARGE", "Orthopedic Dog Bed (L)", "accessories", 64_990_000, "DOG-BLANKET"},
+		{"DOG-BLANKET", "Fleece Dog Blanket", "accessories", 19_990_000, "DOG-BED-LARGE"},
+	}
+	for _, p := range products {
+		// "shop" → the retail theme SVG (no pet theme exists; retail is the
+		// closest catalog-shaped placeholder art).
+		imageURL := creativeAssetByTheme("barkbox-shop", 300, 250)
+		productURL := "http://localhost:9200/models/" + p.sku
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO products (account_id, sku, title, description, image_url, price_micros, currency, availability, product_url, category, source, origin_trace, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'in_stock', $7, $8, 'seed', '', now(), now())
+ON CONFLICT (account_id, sku) DO UPDATE SET
+  title = EXCLUDED.title, image_url = EXCLUDED.image_url, price_micros = EXCLUDED.price_micros,
+  product_url = EXCLUDED.product_url, category = EXCLUDED.category, updated_at = now()`,
+			account, p.sku, p.title, p.title+" — premium quality for your best friend.",
+			imageURL, p.priceMicros, productURL, p.category); err != nil {
+			return fmt.Errorf("seed product %s: %w", p.sku, err)
+		}
+	}
+	in.log.Info("seeded product catalog", "account", "adv-barkbox", "products", len(products))
 	return nil
 }
 

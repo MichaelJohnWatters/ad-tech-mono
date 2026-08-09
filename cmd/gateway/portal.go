@@ -60,6 +60,9 @@ var advertiserNav = []NavItem{
 	{Label: "Campaigns", Href: "#campaigns", Icon: "◎", Perm: "campaigns:read"},
 	{Label: "Creatives", Href: "#creatives", Icon: "▣", Perm: "creatives:read"},
 	{Label: "Audiences", Href: "#audiences", Icon: "◍", Perm: "audiences:read"},
+	// Products is the DPA catalog — ingested first-party data, so it rides the
+	// audience-data RBAC domain.
+	{Label: "Products", Href: "#products", Icon: "▢", Perm: "audiences:read"},
 	{Label: "Conversions", Href: "#conversions", Icon: "◈", Perm: "campaigns:read"},
 	{Label: "Attribution", Href: "#attribution", Icon: "◔", Perm: "reports:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
