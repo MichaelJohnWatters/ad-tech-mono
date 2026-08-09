@@ -15529,7 +15529,8 @@ Watch pods with `kubectl get pods -n adtech -w`; per-service redeploy is `make d
 > backlog; each phase carries a live status glyph; the **Build Status &
 > Outstanding Work** ledger at the end of this section is the one place that
 > tracks "plan vs reality" (it folds in the former `MOCK_AUDIT.md` and
-> `OUTSTANDING_WORK.md`, both deleted). Reconciled against disk 2026-07-01.
+> `OUTSTANDING_WORK.md`, both deleted). Reconciled against disk 2026-07-01;
+> re-reconciled 2026-08-09 (product-gaps session).
 >
 > **Status glyphs:** ✅ done · ⚠️ partial (library real but no runnable binary,
 > or serves but hardcoded) · ❌ empty shell / pure stub · ⬜ not started.
@@ -15578,7 +15579,7 @@ Watch pods with `kubectl get pods -n adtech -w`; per-service redeploy is `make d
 43. **Dev tools (Phase 4):** Trace Explorer - add budget impact panel ("was $100, cost $3, now $97")
 44. **Dev tools (Phase 4):** Publisher Simulator - billing debug in overlay (cost per impression, billing model)
 
-### ⚠️ Phase 5: Identity, Privacy, and Audience  — serving-path done; step 50 shipped 2026-07-05, step 45 outstanding (see ledger)
+### ✅ Phase 5: Identity, Privacy, and Audience  — step 50 shipped 2026-07-05; step 45 closed by the profile-store epic (identity graph + clusters wired into serving AND attribution — see ledger)
 45. `pkg/identity/` - platform ID, identity graph, cross-device linking
 46. Unified audience store (`pkg/audience/store/`) - Redis + Postgres, access-controlled
 47. Audience management - segments, lookalike audiences, composite segments, retargeting builders
@@ -15600,7 +15601,7 @@ Watch pods with `kubectl get pods -n adtech -w`; per-service redeploy is `make d
 61. Serve `sellers.json` from Gateway
 62. **Dev tools (Phase 6):** Publisher Simulator - fraud score in debug overlay per impression
 
-### ⚠️ Phase 7: Optimisation  — libs wired in-process; step 63 (cmd/optimise) outstanding (see ledger)
+### ✅ Phase 7: Optimisation  — libs wired in-process; step 63's one real gap (routing warm-start) shipped in cmd/exchange (warmstart.go boot seed + routingsync.go cross-replica reseed); a standalone cmd/optimise binary is not needed (see ledger)
 63. Bid optimisation pipeline (`cmd/optimise/`) - shading curve updates, placement scoring
 64. Creative performance - multi-arm bandit, DCO component-level optimisation
 65. Auto-optimisation - budget reallocation across line items within IO
@@ -15622,11 +15623,13 @@ Watch pods with `kubectl get pods -n adtech -w`; per-service redeploy is `make d
 79. Audit log dashboard
 80. Stress + burst simulation profiles
 
-### 🟨 Phase 9: Video, Audio, and Extended Channels (each with simulator template)  — core DONE via the simulator/SSAI epic (merged 06e5734); extended channels not started
-Status audited 2026-07-15 against main — the video/audio CORE (81–88) shipped
-with the production-like-simulator epic; the pub-sim has display/video/native/
-audio/ssai tabs. Remaining: channel-specific simulator templates, household
-targeting, and the three stubbed extended channels.
+### 🟨 Phase 9: Video, Audio, and Extended Channels (each with simulator template)  — core DONE via the simulator/SSAI epic (merged 06e5734); extended-channel MVPs SHIPPED 2026-08-02/03
+Status audited 2026-07-15, re-audited 2026-08-09 — the video/audio CORE (81–88)
+shipped with the production-like-simulator epic; household targeting + freq caps
+shipped 2026-07-15/16; DOOH / retail / in-game MVPs shipped 2026-08-02/03 (all 5
+auction strategies real, TestNoStubbedStrategiesRemain pins it; each channel's
+"Built (MVP)" block in its own section documents ship-vs-planned). Remaining:
+channel-specific simulator template polish, radio-vs-podcast, SSAI extras.
 81. ✅ OpenRTB `video` and `audio` objects in bid requests (pkg/openrtb; SSP builds, DSP evaluates, incl. pod fields)
 82. ✅ VAST 4.2 XML generation + DAAST for audio (pkg/vast; publisher-adserver vast.go/audio.go)
 83. ✅ VMAP with pre-roll/mid-roll/post-roll scheduling (pkg/vmap; /v1/pubad/video/vmap)
@@ -15640,19 +15643,19 @@ targeting, and the three stubbed extended channels.
 91. ⬜ **+ Publisher Simulator:** `ctv_player` template (full-screen, household signals)
 92. 🟨 Audio: podcast insertion ✅ (Feed=2, SSAI audio); streaming-radio distinction ⬜ (Feed=3 treated as podcast)
 93. ⬜ **+ Publisher Simulator:** `podcast` template (DAAST + waveform) + `radio_stream` template
-94. ⬜ DOOH: screen management, proof-of-play, time-slot auctions, audience estimation (TimeSlotStrategy is a stub)
-95. ⬜ **+ Publisher Simulator:** `billboard` template (rotation, weather, venue controls)
-96. ⬜ Retail media: product catalog sync, relevance-weighted auctions, keyword bidding (RelevanceWeightedStrategy is a stub)
-97. ⬜ **+ Publisher Simulator:** `retail_search` template (sponsored products, relevance scores)
-98. ⬜ In-game: rewarded ad verification, intrinsic billboard viewability, batch auctions (BatchStrategy is a stub)
-99. ⬜ **+ Publisher Simulator:** `game_scene` template (billboards + rewarded prompt)
+94. 🟨 DOOH **MVP SHIPPED 2026-08-02**: TimeSlot strategy real (single-winner screen play), proof-of-play beacon with audience multiplier (`ch=dooh&mult=N` → one impressions row, `impression_qty=N`, full play cost; reporting COUNT=SUM(impression_qty)); screen management / weather / venue controls open — see the DOOH "Built (MVP)" block
+95. 🟨 **+ Publisher Simulator:** DOOH tab shipped (e0dc800); `billboard` polish (rotation, weather, venue controls) open
+96. 🟨 Retail media **MVP SHIPPED 2026-08-03**: RelevanceWeightedStrategy real (relevance×bid slate, GSP pricing, MinRelevance floor, per-product category via line_items.product_category, multi-slot per-surface billing); catalog sync + keyword bidding open — see the retail "Built (MVP)" block
+97. 🟨 **+ Publisher Simulator:** retail tab shipped (e0dc800); `retail_search` polish (relevance-score display) open
+98. 🟨 In-game **MVP SHIPPED 2026-08-03**: BatchStrategy real (batch scene auction, competitive separation — one advertiser + one category per scene, per-surface sub-trace billing); rewarded verification + intrinsic viewability open — see the in-game "Built (MVP)" block
+99. 🟨 **+ Publisher Simulator:** in-game tab shipped (e0dc800); `game_scene` polish (rewarded prompt) open
 
-### ⬜ Phase 10: Clean Rooms and Data Marketplace  — not started
+### ⬜ Phase 10: Clean Rooms and Data Marketplace  — not started (but 104's payout spine partially exists)
 100. Clean room computation engine (`pkg/cleanroom/`)
 101. Clean room isolated job runner (`cmd/cleanroom/`)
 102. Data marketplace - listings, expansion estimates, purchase flow
 103. Data bartering - proposals, fairness scoring, mutual activation
-104. Marketplace billing - CPM surcharge tracking, data provider payouts
+104. 🟨 Marketplace billing - CPM surcharge tracking, data provider payouts — the payout SPINE shipped with segtax data monetization (data fees per delivered impression: `data_fee_pending` durable join → ledger + owner balance, trusted-seat billing); listings/purchase-flow billing itself not started
 
 ### ⬜ Phase 11: Business Operations  — not started
 105. Account closure and data export workflow
@@ -15664,18 +15667,18 @@ targeting, and the three stubbed extended channels.
 111. Data residency controls
 112. External partner onboarding portal (sandbox, test endpoint, certification)
 
-### ⬜ Phase 12: CI/CD and Production Readiness  — not started
-113. `ci.yml` - PR pipeline (lint, test, build, e2e, conditional A/B)
-114. `nightly.yml` - full nightly (build, test, perf, chaos, security, summary)
-115. `deploy-staging.yml` - auto-deploy on merge
-116. `deploy-prod.yml` - manual with approval gate
-117. `perf-test.yml` and `chaos-test.yml` - nightly regression
-118. SOPS for secret management
-119. HPA autoscaling per service
-120. Backup CronJobs (Postgres WAL, DuckDB, pre-migration)
-121. OpenAPI spec + Swagger UI
-122. D2 architecture diagram + Mermaid diagrams
-123. Final e2e testing with all simulation profiles + chaos scenarios
+### 🟨 Phase 12: CI/CD and Production Readiness  — partial (re-audited 2026-08-09); deploy pipelines (114–117) belong to the staging handoff (docs/handoffs/03-staging.md), not this phase's backlog
+113. ✅ `ci.yml` - PR pipeline SHIPPED 2026-08-06 (c69136d): gofmt/vet gates in the test job + helm-validate job (helm lint + template | kubeconform-strict); no conditional A/B (deliberate)
+114. ⬜ `nightly.yml` - full nightly (build, test, perf, chaos, security, summary) — → 03-staging
+115. ⬜ `deploy-staging.yml` - auto-deploy on merge — → 03-staging
+116. ⬜ `deploy-prod.yml` - manual with approval gate — → 03-staging
+117. ⬜ `perf-test.yml` and `chaos-test.yml` - nightly regression — → 03-staging (local protocol exists: /perf-loadtest skill + make test-e2e-chaos)
+118. ⬜ SOPS for secret management (referenced in values-staging.yaml; not wired)
+119. ⬜ HPA autoscaling per service
+120. 🟨 Backup CronJobs — Postgres backup CronJob shipped (helm `backup-postgres.yaml`); WAL archiving + pre-migration snapshot open (DuckDB backup obsolete — ClickHouse is the analytical store, ADR 0006)
+121. ✅ OpenAPI spec + Swagger UI (docs/openapi.yaml + gateway Swagger; reverse drift guard 2026-08-08)
+122. ✅ D2 architecture diagrams (docs/diagrams/ + make diagrams + per-diagram "Update when" index)
+123. ⬜ Final e2e testing with all simulation profiles + chaos scenarios
 
 ### Rule: every channel ships with its simulator template in the same PR.
 
@@ -15698,18 +15701,18 @@ declared done on the strength of the hot path. Rule of thumb when picking up:
 
 | Step | Item | State | Where / seam | Done when |
 |---|---|---|---|---|
-| 45 | Identity graph wired into serving | ⚠️ partial — edges + DSP resolve SHIPPED; profile store not built | Shipped: `identity_graph` PG writes via `cmd/identity-consumer` (observed signals over NATS) + gateway `/v1/api/identity-links`; DSP read-time BFS expansion behind `dsp.identity_resolution_enabled`. Remaining: batch clustering + person-level memberships + SSP expansion — see "Profile Store (Normalized Signals → Expansion → Memberships → Export)" | e2e asserts cross-device resolve affects targeting on BOTH sides (SSP stamp + DSP private) |
+| 45 | Identity graph wired into serving | ✅ SHIPPED (closed by the profile-store + attribution epics, re-reconciled 2026-08-09) | `identity_graph` PG writes via `cmd/identity-consumer`; DSP read-time expansion behind `dsp.identity_resolution_enabled` (lazy resolver, no boot latch); batch clustering + person-level memberships via `cmd/profile-builder` + `identity_clusters` (`audiencepg.ExpandPerson` — used by durable purchase suppression, migration 082); SSP stamps public segments + household EIDs; cross-device view-through attribution resolves through the graph (confidence-floored). e2e: profile-store suites, `attribution_identity_bridge_test.go`, household suites — all green | ✅ done |
 | 50 | `cmd/privacy-delete` + `cmd/privacy-verify` | ✅ SHIPPED (2026-07-05) | `pkg/privacydelete` (Deleter purges identity_graph + audience_segment_members for pending level-3 users, marks completed, announces `deletion_completed`; Verifier residual-checks + stamps verified_at) + both one-shot binaries + Tilt resources | ✅ `TestPrivacyDeletionPropagation` flipped |
 | 58 | `cmd/fraud` batch CronJob | ⚠️ lib real, no binary; **blocked on data** | `pkg/fraud/{realtime,scoring,adstxt}`; blocklists already DB-driven. **NOTE (2026-07-06):** a velocity/IP sweep can't be built yet — the analytics `impressions`/`clicks` tables have **no IP column** (only geo/device), so there's nothing to aggregate suspicious IPs from. First add IP capture to the event schema, THEN the batch job scores + writes `fraud_blocklists` (tracker warm cache already consumes them). Detection logic lives in `pkg/fraud` (was under active app-ads.txt work — coordinate). | F-series batch-sweep assertion |
 | 61 | `sellers.json` from DB | ✅ SHIPPED (2026-07-05) | `cmd/gateway/sellers.go` — `pgSellerStore` reads active `publishers` (seller_id = UUID); adding a publisher changes the output with no code change. DB-down → valid file with empty seller list, not stale hardcodes | ✅ done (handler unit tests: from-DB + empty-on-error) |
-| 63 | `cmd/optimise` pipeline CronJob | ⚠️ partly redundant; one clean seam | **NOTE (2026-07-06):** the **creative side is already live** — `cmd/adserver` `warmStartBandit` seeds the bandit from reporting's per-creative CTR on boot, so an offline creative-recompute job is redundant. The one real gap is **routing warm-start**: `optimise.SmartRouter.Seed([]DSPStats)` exists but `cmd/exchange/main.go` never calls it (line ~151 just `NewSmartRouter()`). Clean job = aggregate `dsp_calls` via `analytics.DSPCallAggregator` → persist per-(channel,DSP) stats → add a boot-seed call in `cmd/exchange` (that file was under active schain work — coordinate). | `routing_shading_test.go` offline-recompute assertion (none skipped today; the live-stats tests already pass) |
+| 63 | `cmd/optimise` pipeline CronJob | ✅ CLOSED (re-reconciled 2026-08-09) — no standalone binary needed | Creative side live since before (adserver `warmStartBandit` seeds the bandit from per-creative CTR on boot). The one real gap — routing warm-start — shipped with the SmartRouter split-brain fix: `cmd/exchange/warmstart.go` boot-seeds `router.Seed` from global `dsp_calls`, `routingsync.go` does the periodic cross-replica reseed + idempotent reset broadcast. `cmd/optimise/` stays an empty dir like `cmd/rollup` (engine lives in-process; a standalone binary may never be needed) | ✅ done (live-stats + routing-knobs e2e green) |
 | 76 | `cmd/webhooks` dispatcher | ✅ SHIPPED (2026-07-05) | `pkg/webhooks.Dispatcher` (store-backed, HMAC-signed envelope, retry+backoff, delivery log) + `cmd/webhooks` consuming `budget.depleted`/`balance.depleted`/`campaign.state_changed` from NATS → `webhooks`/`webhook_deliveries` tables; k8s pod + Tilt (port 8091). Remaining: more event types, delivery-log view API, DLQ on give-up | ✅ done (unit: httptest receiver verifies signed delivery + retry) |
 | 77 | `pkg/email` real SMTP + Mailpit | ✅ SHIPPED (2026-07-05) | `SMTPSender.Send` builds RFC 5322 MIME + `smtp.SendMail` (auth optional via `NewSMTPAuth`); Mailpit deployment (`k8s/base/mailpit`, SMTP 1025 / UI 8025) wired into kustomize + Tilt; report-runner delivers via `REPORT_RUNNER_SMTP_HOST=127.0.0.1:1025`. Remaining: e2e assertion reading a message out of Mailpit's API | ✅ done (unit: throwaway SMTP server captures DATA end-to-end) |
 | 72 | Chaos framework (`harness.ChaosKill*`) | ✅ SHIPPED (2026-07-05) | `tests/e2e/harness/chaos.go` — `WithChaos`/`ChaosKill{Redis,NATS,Postgres,Minio}`/`ChaosWaitReady` wrap `kubectl -n adtech delete pod` + recovery wait; the 4 `chaos_test.go` cases now assert graceful degradation (self-skip w/o kubectl) | ✅ 4 chaos e2e cases flipped |
-| 70–71 | `pkg/simulator` / `tests/k6` | ⚠️ 1 file each (thin) | flesh out the sim library + k6 scripts | perf e2e cases flip |
+| 70–71 | `pkg/simulator` / `tests/k6` | 🟨 sim substantial, k6 superseded locally (re-reconciled 2026-08-09) | `pkg/simulator` grew real with the production-like epic (persona builder, themed personas/user pools, `pages` = multi-slot demo pages, all formats incl. SSAI/CTV); `tests/k6` remains 2 scripts — the actual perf harness is `make loadtest` + the /perf-loadtest protocol (phase metrics, VERIFY money invariant, canary). k6 scripts only matter again for CI perf regression (→ 03-staging, step 117) | perf regression wired into nightly CI |
 | — | Event-spool residual: pod EVICTION loses undrained events | ⚠️ KNOWN LIMITATION (2026-08-05, deliberate deferral) | `pkg/events/spool.go` — the disk spool (shipped e9256bf, chaos-proven by `TestChaosNATSOutageSpoolLossless`) writes to an **emptyDir**, which survives container restarts (probe-kill storms — the observed failure mode) but NOT pod eviction/deletion/node loss. If a pod is evicted while holding undrained events (i.e. during a NATS outage), those events are gone. Window = (NATS down) ∩ (pod evicted) — both were true simultaneously exactly once (the 2026-08-05 VM seizure). Two real fixes, both with costs: (a) PVC-backed spool — per-pod RWO volumes complicate scheduling/rollouts for stateless services; (b) transactional outbox — bulletproof but puts a synchronous Postgres write on the auction/tracker hot path (~1-5ms + a new hard dependency). Revisit when: prod runs on preemptible/spot nodes, eviction becomes routine (HPA churn), or a money audit shows losses matching eviction events. Until then the exposure is monitored: `adtech_events_spool_bytes` > 0 during any eviction = at-risk events; `adtech_events_dropped_total` alerts on actual cap-drops. | either (a)/(b) shipped + chaos e2e extended to `kubectl drain`-style eviction with spool non-empty |
 | — | Ops console + `devops` role (in-cluster) and host dev console (Tilt-UI replacement) | ✅ SHIPPED (2026-07-19) — staff portal Ops section (pkg/kubeops hand-rolled k8s REST client, /v1/api/ops/* gated ops:read/ops:deploy, audited actions, gateway ServiceAccount RBAC, devops@adtech.local seed login, migration 046) + cmd/devconsole (`make devconsole`, localhost:8099) | Part 1: staff portal section gated by a new `devops` role — pod matrix / rollout-restart / log tail / manual CronJob triggers / NATS lag / PVC usage / readyz grid, via a namespace-scoped ServiceAccount from the gateway; same console serves as the prod monitoring+actions surface (Grafana/Jaeger remain for metrics/traces — this is for ACTING on the stack). House rules apply: toast+undo not confirm dialogs, per-pod granularity, audit every action. Part 2: `cmd/devconsole` host binary (`make devconsole`) for build/deploy-per-service buttons + build output stream — host-only because builds need the Go toolchain + docker socket; deliberately thin (a face on `make deploy SVC=x`), not a Tilt rebuild. | devops-role user can restart a pod + trigger the conductor from the portal (audited); local `make devconsole` builds+deploys a service from the browser |
-| — | Dev-orchestration migration: Tilt+OrbStack → Helm charts on Rancher Desktop (k3s) | 🚧 IN PROGRESS (activated 2026-07-17; runtime = Rancher Desktop, dev loop = make + helm upgrade — no watcher daemon) | Replace the Tiltfile's docker_build/k8s_resource graph with Helm charts (one umbrella chart, per-service subcharts, values per env — the kustomize overlays fold in); pick the local distro (k3s in a VM, minikube, or Rancher Desktop) to de-couple from OrbStack's VM lifecycle (its suspend/resume churn corrupts NATS PVCs — see E2E RUN GOTCHAS). Charts double as the staging/prod deploy artifact. | `helm install adtech` brings up the full local stack; e2e suite green on it; Tiltfile deleted or reduced to a thin `helm upgrade` watcher |
+| — | Dev-orchestration migration: Tilt+OrbStack → Helm charts on Rancher Desktop (k3s) | ✅ SHIPPED 2026-07-18 | Stack runs on Rancher Desktop k3s via `k8s/helm/adtech` (per-env values); dev loop = `make stack-up` / `make deploy SVC=x`; Tiltfile DELETED; e2e suite green on it. See k8s/CLAUDE.md | ✅ done |
 
 **Sub-items still open on things marked ✅** (not blockers): analytics `/debug`
 read-backs are memory-only; rollup query API doesn't read by tier;
@@ -15732,9 +15735,12 @@ re-runs now idempotent (replace-by-window on all three backends); tracker reads
   requirement so a cache-less pod drops out of rotation.
 - 🟡 **Intentional simulation:** competitor DSP `noise_pct` / `no_bid_rate`
   (`cmd/dsp/main.go`) is the demo market generator.
-- `cmd/rollup` is empty but the rollup engine runs inside `cmd/reporting` — a
-  standalone binary may never be needed. `cmd/{ssai,transcoder,cleanroom}` are
-  empty because they are Phase 9/10 (correctly not started).
+- `cmd/rollup` is empty but the rollup engine runs inside `cmd/reporting`, and
+  `cmd/optimise` is empty but both optimisation seams run in-process (bandit in
+  adserver, routing warm-start in exchange) — standalone binaries may never be
+  needed. `cmd/cleanroom` is empty because Phase 10 is correctly not started;
+  `cmd/fraud` is empty pending step 58 (blocked on IP capture in the event
+  schema). (`cmd/{ssai,transcoder}` HAVE since been built — Phase 9 core.)
 
 ### Test-harness debt (skips are missing helpers, not missing features)
 
