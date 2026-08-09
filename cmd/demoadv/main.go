@@ -172,6 +172,12 @@ func main() {
 		if ctid != "" {
 			params.Set("ctid", ctid)
 		}
+		// DPA: the purchased SKU (from the checkout page) drives per-product
+		// suppression + cross-sell — the chase stops showing the bought product
+		// and rotates to its complement.
+		if sku := env2(r.FormValue("sku"), cfg.SKU); sku != "" {
+			params.Set("skus", sku)
+		}
 		signed := adserving.SignURL(cfg.TrackerURL+"/v1/t/conv?"+params.Encode(), cfg.SigningKey)
 		status := 0
 		if resp, err := http.Get(signed); err == nil {

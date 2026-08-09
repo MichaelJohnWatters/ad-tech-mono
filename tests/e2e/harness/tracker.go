@@ -93,6 +93,15 @@ func (h *Harness) FireConversionForVisitor(t *testing.T, convTrace, accountID, u
 	h.fireAndConsume(t, url, "conversion")
 }
 
+// FireConversionForVisitorSKUs is FireConversionForVisitor carrying purchased
+// SKUs (skus= CSV) — drives DPA per-product suppression + cross-sell.
+func (h *Harness) FireConversionForVisitorSKUs(t *testing.T, convTrace, accountID, uid, convType, currency string, revenue float64, skus string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/conv?tid=%s&type=%s&rev=%.4f&cur=%s&advid=%s&uid=%s&skus=%s",
+		h.URLs.Tracker, convTrace, convType, revenue, currency, accountID, uid, skus)
+	h.fireAndConsume(t, url, "conversion")
+}
+
 // IssueConversionKey inserts a per-advertiser hmac_conversion signing key (G7)
 // straight into the secrets table and pokes the tracker's warm cache to reload.
 // The e2e stack runs the secrets cipher in passthrough mode (no
