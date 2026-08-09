@@ -50,10 +50,54 @@
   window.__ads = { onConsent: null };
   adtech.init({ publisherId: {{.Cfg.PublisherID}}, pubadUrl: {{.Cfg.PubadURL}}, debug: true });
 
-  // A shared demo persona: the SAME email the demo advertiser (cmd/demoadv) knows
+  // The demo persona: the SAME email the demo advertiser (cmd/demoadv) knows
   // this visitor by. Both sides hash it identically, so the platform can bridge
-  // this publisher-side visit to the advertiser-side conversion (view-through).
-  var DEMO_PERSONA_EMAIL = 'demo.shopper@example.com';
+  // this publisher-side visit to the advertiser-side pixels (retargeting +
+  // view-through). Was a baked-in constant — which silently re-linked every
+  // "fresh" incognito visitor to the same identity cluster. Now per-browser
+  // with a persona bar: "New visitor" = genuinely new person (new email +
+  // cleared first-party id); set the SAME email on both sites to be one person.
+  function personaEmail() {
+    var e = localStorage.getItem('demo_persona_email');
+    if (!e) { e = 'demo.shopper@example.com'; localStorage.setItem('demo_persona_email', e); }
+    return e;
+  }
+  // Each persona also gets its own HOUSEHOLD: the platform derives households
+  // from the client IP, and on a one-machine stack every browser visit shares
+  // one IP — so without this, "New visitor" would inherit the old persona's
+  // household frequency caps. The demo IP rides the allowlist-gated ?ip=
+  // override (private callers only — a public browser can't spoof it).
+  function personaIP() {
+    var ip = localStorage.getItem('demo_persona_ip');
+    if (!ip) {
+      ip = '203.0.113.' + (1 + Math.floor(Math.random() * 254));
+      localStorage.setItem('demo_persona_ip', ip);
+    }
+    return ip;
+  }
+  function personaReset(email) {
+    localStorage.setItem('demo_persona_email', email);
+    localStorage.removeItem('demo_persona_ip');            // new household too
+    document.cookie = 'adtech_uid=; Max-Age=0; path=/';   // drop the platform first-party id
+    localStorage.removeItem('demotimes_consent');          // re-ask consent as the new person
+    location.reload();
+  }
+  function personaNew() {
+    personaReset('shopper-' + Math.random().toString(16).slice(2, 6) + '@example.com');
+  }
+  function personaChange() {
+    var e = prompt('Persona email (use the SAME one on the shop site to be one person):', personaEmail());
+    if (e) personaReset(e.trim().toLowerCase());
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;bottom:8px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
+    bar.innerHTML = '👤 <b>' + personaEmail() + '</b>' +
+      ' <a href="#" style="color:#7dd3fc" onclick="personaNew();return false">New visitor</a>' +
+      ' <a href="#" style="color:#7dd3fc" onclick="personaChange();return false">Change</a>';
+    document.body.appendChild(bar);
+  });
+  var DEMO_PERSONA_EMAIL = personaEmail();
   function sha256Hex(v) {
     return crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(v).trim().toLowerCase()))
       .then(function (buf) {
@@ -71,7 +115,7 @@
     if (personalized) {
       // Attach the hashed persona email BEFORE requesting ads, so the serve carries
       // it and the SSP links this publisher user to the shared identity.
-      sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he }); proceed(); });
+      sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he, demoIP: personaIP() }); proceed(); });
     } else {
       proceed();
     }

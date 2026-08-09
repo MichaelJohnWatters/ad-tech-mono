@@ -134,7 +134,11 @@
                 hashedEmail: data.hashedEmail || null,
                 segments: data.segments || [],
                 age: data.age || null,
-                gender: data.gender || null
+                gender: data.gender || null,
+                // demoIP: local-demo household override (see the ?ip= note at
+                // the serve builders — server-side allowlist makes it inert
+                // from public browsers).
+                demoIP: data.demoIP || null
             };
         },
 
@@ -166,6 +170,14 @@
             // SSP can link this publisher user to the same person on other sites —
             // the publisher half of the cross-site identity bridge attribution uses.
             if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
+            // Demo/dev household override: the platform derives a HOUSEHOLD from
+            // the client IP, so on a single-machine stack every browser visitor
+            // shares one household (and its frequency caps). setUserData({demoIP})
+            // forwards an ?ip= override — the server honours it ONLY from
+            // trusted/private callers (ssp.ip_override_allowlist), so a public
+            // browser sending this is ignored; it exists for local demos where
+            // "New visitor" should mean a new household too.
+            if (state.userData && state.userData.demoIP) params.set('ip', state.userData.demoIP);
 
             var url = config.pubadUrl + '/v1/pubad/serve?' + params.toString();
 
@@ -214,6 +226,14 @@
             // SSP can link this publisher user to the same person on other sites —
             // the publisher half of the cross-site identity bridge attribution uses.
             if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
+            // Demo/dev household override: the platform derives a HOUSEHOLD from
+            // the client IP, so on a single-machine stack every browser visitor
+            // shares one household (and its frequency caps). setUserData({demoIP})
+            // forwards an ?ip= override — the server honours it ONLY from
+            // trusted/private callers (ssp.ip_override_allowlist), so a public
+            // browser sending this is ignored; it exists for local demos where
+            // "New visitor" should mean a new household too.
+            if (state.userData && state.userData.demoIP) params.set('ip', state.userData.demoIP);
 
             fetch(config.pubadUrl + '/v1/pubad/video/vast?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) {
@@ -249,6 +269,14 @@
             // SSP can link this publisher user to the same person on other sites —
             // the publisher half of the cross-site identity bridge attribution uses.
             if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
+            // Demo/dev household override: the platform derives a HOUSEHOLD from
+            // the client IP, so on a single-machine stack every browser visitor
+            // shares one household (and its frequency caps). setUserData({demoIP})
+            // forwards an ?ip= override — the server honours it ONLY from
+            // trusted/private callers (ssp.ip_override_allowlist), so a public
+            // browser sending this is ignored; it exists for local demos where
+            // "New visitor" should mean a new household too.
+            if (state.userData && state.userData.demoIP) params.set('ip', state.userData.demoIP);
 
             fetch(config.pubadUrl + '/v1/pubad/native?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) { return resp.status === 204 ? '' : resp.text(); })
@@ -282,6 +310,14 @@
             // SSP can link this publisher user to the same person on other sites —
             // the publisher half of the cross-site identity bridge attribution uses.
             if (state.userData && state.userData.hashedEmail) params.set('hashed_email', state.userData.hashedEmail);
+            // Demo/dev household override: the platform derives a HOUSEHOLD from
+            // the client IP, so on a single-machine stack every browser visitor
+            // shares one household (and its frequency caps). setUserData({demoIP})
+            // forwards an ?ip= override — the server honours it ONLY from
+            // trusted/private callers (ssp.ip_override_allowlist), so a public
+            // browser sending this is ignored; it exists for local demos where
+            // "New visitor" should mean a new household too.
+            if (state.userData && state.userData.demoIP) params.set('ip', state.userData.demoIP);
 
             fetch(config.pubadUrl + '/v1/pubad/audio?' + params.toString(), { credentials: 'omit' })
                 .then(function(resp) {

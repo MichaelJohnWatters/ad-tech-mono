@@ -15,12 +15,12 @@
        tracker (cross-origin). The visit is recorded against this advertiser account and — once a
        retargeting rule for the tag exists and the profile-builder runs — you become a member of the
        advertiser's audience, targetable in the next auction. Watch the panel, bottom-right.</p>
-    <p><a href="/models/f150"><button class="btn">Browse the F-150 →</button></a></p>
+    <p><a href="/models/f150"><button class="btn">Browse the {{.Cfg.Product}} →</button></a></p>
   </div>
   <div class="card">
     <h3>Popular models</h3>
     <p>F-150 · Mustang · Explorer · Bronco — each page view fires the pixel with its own tag,
-       so higher-intent pages (like the F-150) can drive higher-value retargeting segments.</p>
+       so higher-intent pages (like the {{.Cfg.Product}}) can drive higher-value retargeting segments.</p>
   </div>
 </main>
 {{template "consentBanner" .}}
