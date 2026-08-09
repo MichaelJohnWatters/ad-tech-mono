@@ -37,14 +37,14 @@ serving: Serving plane (hot path reads memory only) {
   redis: Redis {
     shape: cylinder
     style.fill: "#fecaca"
-    d: "audience:user:* memberships · dsp:budget:* pacing · balances · freq caps"
+    d: "audience:set:* membership SETs · dsp:budget:* pacing · balances · freq caps"
   }
   idsnap: DSP identity resolver (in-memory graph snapshot)
 }
 
 pg -> serving.warm: poll ~30s {style.stroke-dash: 2}
 nats -> serving.warm: "cache.invalidate.* (sub-second on writes)" {style.stroke-dash: 3}
-pg -> serving.redis: audience preloader 30s - bulk push + TOMBSTONE vanished members {style.stroke-dash: 2}
+pg -> serving.redis: "audience change-log drainer (cmd/pipeline, single writer) - 3s delta + 5m reconcile/tombstone" {style.stroke-dash: 2}
 pg -> serving.idsnap: interval preload (whole graph) {style.stroke-dash: 2}
 
 # ============================================================
@@ -80,7 +80,7 @@ analytics.lake -> readers: cold history (ClickHouse s3()) {style.stroke-dash: 2}
 loops: Feedback loops (the only analytics → serving paths) {
   style.fill: "#fffbeb"
 
-  l1: "1 · MEMBERSHIPS - profile-builder (hourly chain) recomputes segments over ClickHouse → PG → Redis ≤30s later. A behavioural rule reaches live auctions within one preload cycle."
+  l1: "1 · MEMBERSHIPS - profile-builder (hourly chain) recomputes segments over ClickHouse → PG; the trigger-fed change-log drainer applies them to Redis ≤3s later."
   l2: "2 · MONEY - billing engine computes committed spend from ingested events → NATS spend snapshot → DSP overwrites its Redis pacing counters to billed reality."
   l3: "3 · WARM-STARTS (boot) - adserver bandit seeds from historical CTR; exchange SmartRouter from dsp_calls. Then live signals take over."
   l4: "4 · IDENTITY - identity-consumer streams graph edges → PG → DSP in-memory snapshot; profile-builder pre-expands memberships across clusters so loop 1 covers every device of a person."

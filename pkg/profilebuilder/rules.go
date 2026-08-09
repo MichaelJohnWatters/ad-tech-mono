@@ -161,10 +161,12 @@ func (r Rule) matches(rec datalake.Record) bool {
 // late on the cutoff day lives in a partition that starts before it).
 func MaxRuleWindowDays(ctx context.Context, db *sql.DB) (int, error) {
 	var maxDays int
-	err := db.QueryRowContext(ctx, `
+	err := platformReadTx(ctx, db, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
 SELECT COALESCE(MAX(GREATEST(COALESCE((rule->>'window_days')::int, 30), 30)), 30)
 FROM audience_segments
 WHERE rule IS NOT NULL AND status = 'active'`).Scan(&maxDays)
+	})
 	if err != nil {
 		return 0, err
 	}

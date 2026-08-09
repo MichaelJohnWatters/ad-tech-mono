@@ -132,8 +132,38 @@ type Persona struct {
 	// single household absorbed ~8% of ALL traffic and its freq caps were
 	// permanently saturated (the 2026-08-05 "wall of adserver 429s").
 	HouseholdShared bool
+	// Interests are content-category slugs (matching placement categories,
+	// e.g. "dogs") the persona prefers to browse. The simulator's run loop
+	// biases placement selection toward matching inventory, so the persona's
+	// behaviour signals COHERENTLY earn audience-segment membership via the
+	// profile-builder's category rules — a dog person browses dog pages and
+	// becomes a dog-lover, rather than being declared one. Empty = no bias.
+	Interests []string
+	// UserPool > 0 gives the persona a population of STABLE user ids
+	// ("{name}-u{n}"): each request draws one from the pool, so the same
+	// synthetic users recur across requests and can accumulate the repeat
+	// behaviour signals that frequency rules (min_count > 1) require. The
+	// mirror path otherwise randomises user_id per request (a freq-cap
+	// starvation fix) — which makes earning membership impossible. Sized
+	// small enough that a short run revisits each user several times.
+	UserPool int
 	// Weight is the relative sampling frequency in a mix (higher = more common).
 	Weight int
+}
+
+// RequestUserID returns a stable pooled user id for ONE request, or "" when
+// the persona has no user pool (callers keep their existing id behaviour).
+func (p Persona) RequestUserID(rng *rand.Rand) string {
+	if p.UserPool <= 0 {
+		return ""
+	}
+	n := 0
+	if rng != nil {
+		n = rng.Intn(p.UserPool)
+	} else {
+		n = rand.Intn(p.UserPool)
+	}
+	return fmt.Sprintf("%s-u%03d", p.Name, n)
 }
 
 // RequestIP returns the client IP for ONE request: the persona's fixed
@@ -239,10 +269,74 @@ var Personas = []Persona{
 	},
 }
 
-// PersonaByName returns the registry persona with the given name and whether it
-// was found.
+// ThemedPersonas is the READABLE-WORLD registry (operator design decision,
+// 2026-08-07): personas whose browsing behaviour coherently EARNS themed
+// audience-segment membership. They are deliberately NOT in the default
+// Personas registry — the perf baselines and load profiles keep their exact
+// persona mix — and are reached via the "themed" profile (or --persona).
+//
+// Every themed persona has: Interests matching the themed publishers'
+// placement categories (profiles/publishers/themed.yaml), a small UserPool so
+// repeat visits accumulate per-user behaviour signals past the seeded rules'
+// min_count, and a consent regime that permits behaviour capture — except the
+// GPC persona, which browses cat pages forever without ever becoming a
+// cat-lover (the consent gate, verifiable in English).
+var ThemedPersonas = []Persona{
+	{
+		Name: "dog-lover-mobile", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "CO", City: "Denver", Device: "mobile", OS: "Android", Make: "Google", Model: "Pixel 8",
+		Interests: []string{"dogs"}, UserPool: 40, HouseholdPool: 4096, IP: "203.0.113.30", Weight: 10,
+	},
+	{
+		Name: "dog-lover-desktop", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "GBR", Region: "ENG", City: "Bristol", Device: "desktop", OS: "Windows",
+		Interests: []string{"dogs"}, UserPool: 30, HouseholdPool: 4096, IP: "203.0.113.31", Weight: 6,
+	},
+	{
+		Name: "cat-lover-mobile", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "OR", City: "Portland", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,3",
+		Interests: []string{"cats"}, UserPool: 40, HouseholdPool: 4096, IP: "203.0.113.32", Weight: 10,
+	},
+	{
+		Name: "cat-lover-desktop", Regime: RegimeGDPRConsented, Identity: IdentityPublisherID,
+		Geo: "DEU", Region: "BY", City: "Munich", Device: "desktop", OS: "macOS", Make: "Apple",
+		Interests: []string{"cats"}, UserPool: 30, HouseholdPool: 4096, IP: "203.0.113.33", Weight: 6,
+	},
+	{
+		Name: "coffee-snob-desktop", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "WA", City: "Seattle", Device: "desktop", OS: "macOS", Make: "Apple",
+		Interests: []string{"coffee"}, UserPool: 30, HouseholdPool: 4096, IP: "203.0.113.34", Weight: 8,
+	},
+	{
+		Name: "fitness-fan-mobile", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "CA", City: "San Diego", Device: "mobile", OS: "iOS", Make: "Apple", Model: "iPhone15,2",
+		Interests: []string{"fitness"}, UserPool: 30, HouseholdPool: 4096, IP: "203.0.113.35", Weight: 8,
+	},
+	{
+		// The crossover: a dog person who also browses coffee content —
+		// feeds the seeded COMPOSITE segment (dog-lovers AND coffee-browsers).
+		Name: "dog-cafe-regular", Regime: RegimeUSClear, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "CO", City: "Boulder", Device: "mobile", OS: "Android", Make: "Samsung", Model: "SM-S911B",
+		Interests: []string{"dogs", "coffee"}, UserPool: 20, HouseholdPool: 4096, IP: "203.0.113.36", Weight: 4,
+	},
+	{
+		// Browses cat pages under GPC: behaviour capture is consent-blocked,
+		// so these users must NEVER appear in cat-lovers — the negative case.
+		Name: "cat-lover-gpc", Regime: RegimeGPC, Identity: IdentityPublisherID,
+		Geo: "USA", Region: "MN", City: "Minneapolis", Device: "desktop", OS: "Windows",
+		Interests: []string{"cats"}, UserPool: 20, HouseholdPool: 4096, IP: "203.0.113.37", Weight: 3,
+	},
+}
+
+// PersonaByName returns the persona with the given name — searching the
+// default registry first, then the themed registry — and whether it was found.
 func PersonaByName(name string) (Persona, bool) {
 	for _, p := range Personas {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	for _, p := range ThemedPersonas {
 		if p.Name == name {
 			return p, true
 		}
@@ -250,11 +344,15 @@ func PersonaByName(name string) (Persona, bool) {
 	return Persona{}, false
 }
 
-// PersonaNames returns every registered persona name, for CLI listing/validation.
+// PersonaNames returns every registered persona name (default + themed), for
+// CLI listing/validation.
 func PersonaNames() []string {
-	names := make([]string, len(Personas))
-	for i, p := range Personas {
-		names[i] = p.Name
+	names := make([]string, 0, len(Personas)+len(ThemedPersonas))
+	for _, p := range Personas {
+		names = append(names, p.Name)
+	}
+	for _, p := range ThemedPersonas {
+		names = append(names, p.Name)
 	}
 	return names
 }

@@ -297,6 +297,29 @@ func expandKeys(c Clusters, keys []string) []string {
 	return out
 }
 
+// platformReadTx runs fn inside a read-only transaction with the RLS
+// platform-read hatch set (app.platform_read='on'). The builder is the
+// platform's CROSS-TENANT expansion engine — it evaluates every account's
+// segments in one run — but in-cluster it connects as the NOBYPASSRLS app
+// role, under which an unscoped read of an RLS table silently returns ZERO
+// rows. That exact failure shipped: after the 2026-08 DB-role flip the
+// hourly builder reported "done enrolled=0" for every run because its
+// segment list came back empty (found live 2026-08-09). Same pattern as
+// audiencepg.withPlatformRead; the hatch admits reads via the
+// tenant_isolation USING clause and must never wrap a write — the builder's
+// writes stay tenant-scoped through audiencepg.Store.
+func platformReadTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin platform read: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return fmt.Errorf("set platform read: %w", err)
+	}
+	return fn(tx)
+}
+
 // runRuleSegments evaluates behavioural rules then derived (composite +
 // lookalike) rules. When q != nil the behavioural + lookalike inputs come from
 // ClickHouse (server-side GROUP BY, ADR 0006 phase 2); when q == nil they come
@@ -304,23 +327,26 @@ func expandKeys(c Clusters, keys []string) []string {
 func runRuleSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store, q BehaviourQuerier, clusters Clusters,
 	rows []datalake.Record, now time.Time, originTrace string, log *slog.Logger, res *Result, changed map[string]string,
 ) error {
-	segs, err := db.QueryContext(ctx,
-		`SELECT id::text, account_id::text, name, rule FROM audience_segments
-		  WHERE rule IS NOT NULL AND status = 'active'`)
-	if err != nil {
-		return fmt.Errorf("list rule segments: %w", err)
-	}
-	defer segs.Close()
 	type ruleSeg struct{ id, accountID, name, raw string }
 	var list []ruleSeg
-	for segs.Next() {
-		var s ruleSeg
-		if err := segs.Scan(&s.id, &s.accountID, &s.name, &s.raw); err != nil {
-			return fmt.Errorf("scan rule segment: %w", err)
+	err := platformReadTx(ctx, db, func(tx *sql.Tx) error {
+		segs, err := tx.QueryContext(ctx,
+			`SELECT id::text, account_id::text, name, rule FROM audience_segments
+			  WHERE rule IS NOT NULL AND status = 'active'`)
+		if err != nil {
+			return fmt.Errorf("list rule segments: %w", err)
 		}
-		list = append(list, s)
-	}
-	if err := segs.Err(); err != nil {
+		defer segs.Close()
+		for segs.Next() {
+			var s ruleSeg
+			if err := segs.Scan(&s.id, &s.accountID, &s.name, &s.raw); err != nil {
+				return fmt.Errorf("scan rule segment: %w", err)
+			}
+			list = append(list, s)
+		}
+		return segs.Err()
+	})
+	if err != nil {
 		return err
 	}
 
@@ -444,26 +470,29 @@ func expandPlainSegments(ctx context.Context, db *sql.DB, aud *audiencepg.Store,
 	if len(clusters.PersonOf) == 0 {
 		return nil
 	}
-	rows, err := db.QueryContext(ctx, `
+	type segKey struct{ id, accountID string }
+	members := map[segKey][]string{}
+	err := platformReadTx(ctx, db, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
 SELECT s.id::text, s.account_id::text, m.user_id
 FROM audience_segments s
 JOIN audience_segment_members m ON m.segment_id = s.id
 WHERE s.rule IS NULL AND s.status = 'active'`)
-	if err != nil {
-		return fmt.Errorf("list plain memberships: %w", err)
-	}
-	defer rows.Close()
-	type segKey struct{ id, accountID string }
-	members := map[segKey][]string{}
-	for rows.Next() {
-		var k segKey
-		var uid string
-		if err := rows.Scan(&k.id, &k.accountID, &uid); err != nil {
-			return fmt.Errorf("scan membership: %w", err)
+		if err != nil {
+			return fmt.Errorf("list plain memberships: %w", err)
 		}
-		members[k] = append(members[k], uid)
-	}
-	if err := rows.Err(); err != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var k segKey
+			var uid string
+			if err := rows.Scan(&k.id, &k.accountID, &uid); err != nil {
+				return fmt.Errorf("scan membership: %w", err)
+			}
+			members[k] = append(members[k], uid)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return err
 	}
 

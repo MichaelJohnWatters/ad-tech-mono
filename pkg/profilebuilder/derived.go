@@ -18,26 +18,31 @@ import (
 
 // segmentMembers loads a segment's member ids, enforcing that the segment
 // belongs to accountID — a composite/lookalike rule must not read another
-// tenant's memberships.
+// tenant's memberships. The explicit account_id predicate carries the tenant
+// guarantee; the platform-read hatch only makes the rows VISIBLE under the
+// NOBYPASSRLS app role (without it this silently returned zero rows).
 func segmentMembers(ctx context.Context, db *sql.DB, accountID, segmentID string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `
+	var out []string
+	err := platformReadTx(ctx, db, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
 SELECT m.user_id
 FROM audience_segment_members m
 JOIN audience_segments s ON s.id = m.segment_id
 WHERE m.segment_id = $1::uuid AND s.account_id = $2::uuid`, segmentID, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("members of %s: %w", segmentID, err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var uid string
-		if err := rows.Scan(&uid); err != nil {
-			return nil, err
+		if err != nil {
+			return fmt.Errorf("members of %s: %w", segmentID, err)
 		}
-		out = append(out, uid)
-	}
-	return out, rows.Err()
+		defer rows.Close()
+		for rows.Next() {
+			var uid string
+			if err := rows.Scan(&uid); err != nil {
+				return err
+			}
+			out = append(out, uid)
+		}
+		return rows.Err()
+	})
+	return out, err
 }
 
 // personsOf maps member ids to their person keys (the id itself for

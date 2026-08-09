@@ -33,6 +33,9 @@ func main() {
 	bigPub := flag.Int("big-world-publishers", 0, "additive big-world publisher accounts (each loginable + placements)")
 	bigCampaigns := flag.Int("big-world-campaigns-per", 3, "campaigns per big-world advertiser")
 	bigPlacements := flag.Int("big-world-placements-per", 3, "placements per big-world publisher")
+	synthSegments := flag.Int("synthetic-segments", 0, "additive SYNTHETIC density tier: dummy audience segments seeded around the readable themed core (0 = none)")
+	synthMembersPer := flag.Int("synthetic-members-per", 1000, "memberships per synthetic segment")
+	synthUsers := flag.Int("synthetic-users", 100_000, "synthetic user-id universe the memberships draw from (users overlap across segments)")
 	flag.Parse()
 
 	log := logger.New(constants.ServiceSeed)
@@ -148,6 +151,17 @@ func main() {
 	if *bigAdv > 0 || *bigPub > 0 {
 		if err := in.SeedBigWorld(ctx, *bigAdv, *bigPub, *bigCampaigns, *bigPlacements); err != nil {
 			log.Error("seed big world failed", "error", err)
+			os.Exit(1)
+		}
+	}
+	// Synthetic density tier (additive, Phase-3 of the audience-pipeline
+	// work): bulk dummy segments + memberships AROUND the readable themed
+	// core, so density benchmarks don't sacrifice comprehension. Every
+	// membership insert fires the changelog trigger — that downstream drain
+	// is part of what the density run measures.
+	if *synthSegments > 0 {
+		if err := in.SeedSyntheticDensity(ctx, *synthSegments, *synthMembersPer, *synthUsers); err != nil {
+			log.Error("seed synthetic density failed", "error", err)
 			os.Exit(1)
 		}
 	}

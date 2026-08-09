@@ -23,6 +23,9 @@ func (in *inserter) SeedFeatureBaseline(ctx context.Context) error {
 	if err := in.seedAudienceSegments(ctx); err != nil {
 		return err
 	}
+	if err := in.seedThemedSegments(ctx); err != nil {
+		return err
+	}
 	if err := in.seedAgency(ctx); err != nil {
 		return err
 	}
@@ -108,6 +111,83 @@ VALUES ($1, $2, $3, now()) ON CONFLICT (segment_id, user_id) DO NOTHING`,
 		}
 	}
 	in.log.Info("seeded audience segments", "count", len(segments), "members_per", 5)
+	return nil
+}
+
+// seedThemedSegments builds the READABLE core of the themed two-tier world
+// (operator design decision, 2026-08-07): behavioural rule segments whose
+// membership is EARNED by the themed simulator personas browsing the themed
+// publishers (profiles/publishers/themed.yaml) — the hourly profile-builder
+// evaluates the category rules over behaviour_signals and enrolls them. The
+// themed campaigns in profiles/dsps/internal.yaml target these segments, so
+// verification reads like English: the dog food ad wins for dog people once
+// (and only once) they've browsed enough dog pages.
+//
+// The owning accounts are created by the campaign pass (upsertAccounts runs
+// before SeedFeatureBaseline), so this only has to attach segments — plus
+// friendly display names, because "Advertiser adv-barkbox" defeats the
+// memorable-world purpose.
+func (in *inserter) seedThemedSegments(ctx context.Context) error {
+	names := map[string]string{
+		"adv-barkbox":   "Premium Dog Food Co",
+		"adv-whiskerco": "Whisker & Co Cat Treats",
+		"adv-beanbarn":  "Bean Barn Roasters",
+		"adv-sweatlabs": "Sweat Labs Nutrition",
+	}
+	for ext, name := range names {
+		if _, err := in.db.ExecContext(ctx,
+			`UPDATE accounts SET name = $2, updated_at = now() WHERE id = $1`,
+			idgen.Derive("account", ext), name); err != nil {
+			return fmt.Errorf("themed account name %s: %w", ext, err)
+		}
+	}
+
+	dogLovers := idgen.Derive("segment", "seg-dog-lovers")
+	coffeeBrowsers := idgen.Derive("segment", "seg-coffee-browsers")
+	segments := []struct {
+		key, account, name, segType, visibility, rule string
+	}{
+		// The four flagship interest segments: ≥3 (or ≥2) consented visits
+		// to matching-category pages inside 30 days.
+		{"seg-dog-lovers", "adv-barkbox", "Dog Lovers", "behavioral", "dsp_private",
+			`{"event":"request","category":"dogs","min_count":3,"window_days":30}`},
+		{"seg-cat-lovers", "adv-whiskerco", "Cat Lovers", "behavioral", "dsp_private",
+			`{"event":"request","category":"cats","min_count":3,"window_days":30}`},
+		// Public on purpose: the one themed segment that exercises the SSP's
+		// public-visibility stamp path (user.ext.segments to bidders).
+		{"seg-coffee-snobs", "adv-beanbarn", "Coffee Snobs", "behavioral", "public",
+			`{"event":"request","category":"coffee","min_count":3,"window_days":30}`},
+		{"seg-fitness-fans", "adv-sweatlabs", "Fitness Fans", "behavioral", "dsp_private",
+			`{"event":"request","category":"fitness","min_count":2,"window_days":30}`},
+		// Barkbox's own coffee-interest rule, existing only so the composite
+		// below can reference same-account segments (composite rules are
+		// account-scoped).
+		{"seg-coffee-browsers", "adv-barkbox", "Coffee Browsers (Barkbox)", "behavioral", "dsp_private",
+			`{"event":"request","category":"coffee","min_count":2,"window_days":30}`},
+		// Derived kinds, one each, so every rule shape has a readable demo:
+		// composite (dog people who also browse coffee — the dog-cafe-regular
+		// persona) and lookalike (seeded from dog-lovers).
+		{"seg-dog-cafe-crowd", "adv-barkbox", "Dog Cafe Crowd", "composite", "dsp_private",
+			fmt.Sprintf(`{"kind":"composite","all_of":[%q,%q]}`, dogLovers, coffeeBrowsers)},
+		{"seg-dog-lookalikes", "adv-barkbox", "Dog Lover Lookalikes", "lookalike", "dsp_private",
+			fmt.Sprintf(`{"kind":"lookalike","seed_segment":%q,"min_similarity":0.5}`, dogLovers)},
+		// The fast-path demo: audience-rt enrolls a /v1/t/rt?tag=dogfood-cart
+		// visitor within seconds (min_count 1 = the real-time boundary).
+		{"seg-dogfood-cart", "adv-barkbox", "Dog Food Cart Abandoners", "retargeting", "dsp_private",
+			`{"event":"site_visit","tag":"dogfood-cart","min_count":1,"window_days":30}`},
+	}
+	for _, s := range segments {
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO audience_segments (id, account_id, name, type, visibility, rule, status, source, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'active', 'seed', now(), now())
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type,
+  visibility = EXCLUDED.visibility, rule = EXCLUDED.rule, status = 'active', updated_at = now()`,
+			idgen.Derive("segment", s.key), idgen.Derive("account", s.account),
+			s.name, s.segType, s.visibility, s.rule); err != nil {
+			return fmt.Errorf("seed themed segment %s: %w", s.key, err)
+		}
+	}
+	in.log.Info("seeded themed segments", "count", len(segments))
 	return nil
 }
 

@@ -1,0 +1,108 @@
+# Themed publishers — the READABLE core of the two-tier demo world
+# (operator design decision, 2026-08-07). Each publisher is a single-topic
+# site whose placements carry a human-checkable category slug ("dogs",
+# "cats", "coffee", "fitness"). The SSP stamps those categories onto every
+# consented request's behaviour signal, the hourly profile-builder's seeded
+# category rules (cmd/seed seedThemedSegments) turn repeat visits into
+# segment membership, and the themed campaigns in profiles/dsps/internal.yaml
+# target the resulting segments. Verification reads like English: the dog
+# food ad wins on waggy-tails.blog for dog personas and never shows to pure
+# cat people.
+#
+# The slugs are deliberately NOT IAB codes — they are matched verbatim by
+# both the profile-builder rule (behaviour_signals.categories) and the
+# simulator's persona Interests (pkg/simulator/request.ThemedPersonas).
+name: themed
+
+publishers:
+  - id: pub-waggy-tails
+    name: "Waggy Tails Daily"
+    domain: "waggy-tails.blog"
+    currency: USD
+    revshare_pct: 20
+    placements:
+      - id: pl-dog-blog-mpu
+        name: "Dog Blog MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 0.60
+        page_url: "https://waggy-tails.blog/training-tips"
+        categories: [dogs, pets]
+      - id: pl-dog-blog-leader
+        name: "Dog Blog Leaderboard"
+        format: display
+        width: 728
+        height: 90
+        floor_price: 0.80
+        page_url: "https://waggy-tails.blog/"
+        categories: [dogs, pets]
+
+  - id: pub-purrfect-living
+    name: "Purrfect Living"
+    domain: "purrfect-living.blog"
+    currency: USD
+    revshare_pct: 20
+    placements:
+      - id: pl-cat-blog-mpu
+        name: "Cat Blog MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 0.60
+        page_url: "https://purrfect-living.blog/breeds"
+        categories: [cats, pets]
+      - id: pl-cat-blog-halfpage
+        name: "Cat Blog Half Page"
+        format: display
+        width: 300
+        height: 600
+        floor_price: 0.90
+        page_url: "https://purrfect-living.blog/"
+        categories: [cats, pets]
+
+  - id: pub-third-wave-times
+    name: "Third Wave Times"
+    domain: "third-wave-times.blog"
+    currency: USD
+    revshare_pct: 22
+    placements:
+      - id: pl-coffee-mpu
+        name: "Coffee Review MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 0.70
+        page_url: "https://third-wave-times.blog/grinders"
+        categories: [coffee]
+      - id: pl-coffee-leader
+        name: "Coffee Homepage Leaderboard"
+        format: display
+        width: 728
+        height: 90
+        floor_price: 0.90
+        page_url: "https://third-wave-times.blog/"
+        categories: [coffee]
+
+  - id: pub-sweat-zine
+    name: "Sweat Zine"
+    domain: "sweat-zine.blog"
+    currency: USD
+    revshare_pct: 18
+    placements:
+      - id: pl-fitness-mpu
+        name: "Workout Guide MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 0.60
+        page_url: "https://sweat-zine.blog/programs"
+        categories: [fitness]
+      - id: pl-fitness-strip
+        name: "Mobile Session Strip"
+        format: display
+        width: 320
+        height: 50
+        floor_price: 0.30
+        page_url: "https://m.sweat-zine.blog/session"
+        categories: [fitness]
