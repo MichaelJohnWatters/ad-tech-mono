@@ -1,4 +1,33 @@
-# Session: product gaps — Privacy Sandbox ARA + PLAN phases 10-12
+# Session: product gaps — Privacy Sandbox ARA + PLAN phases 10-12 + DPA
+
+## Candidate epic (added 2026-08-09): Dynamic Product Ads (catalog creatives)
+Born from the retargeting chase demo (docs/demos/RETARGETING-CHASE-DEMO.md
++ memory: project_audience_pipeline_walkthrough). Today the WHO is precise
+(cart-abandoner segments, person+household, durable burn-list suppression)
+but the WHAT is a static campaign creative. Real cart retargeting
+(Criteo/Meta-DPA-style) is catalog-driven:
+
+1. **Product catalog entity** — advertiser-scoped product feed (SKU, title,
+   image URL, price, availability, product URL). Ingest rides the EXISTING
+   unified ingestion framework (pkg/ingest + audience_ingest_jobs pattern —
+   ADR 0007/0008: queue, strict validation, field mappings, PGP); this is
+   a second feed type, not new machinery.
+2. **SKU-aware pixel** — /v1/t/rt gains product params (sku=, or skus= CSV)
+   the way it carries tag=; enrollment remembers user↔SKUs (new table or
+   member metadata) with the same TTL semantics as membership.
+3. **Dynamic creative template** — a new creative format the adserver
+   assembles at render: template + catalog lookup for the user's carted
+   SKUs (macro substitution next to the existing beacon macros / native
+   asset assembly). Fallback to the campaign's static creative when no SKU
+   context exists.
+4. **Per-product suppression + cross-sell** — the purchase burn-list
+   (migration 082) gains an optional SKU dimension: bought SKU-A → stop
+   showing SKU-A, optionally rotate to complementary catalog items. This is
+   where retargeting revenue actually lives.
+
+Rough shape: comparable to the attribution epic. Natural order 1→2→3→4;
+each slice independently demoable on the chase demo (the shop demoadv gets
+a product grid, the chase ad starts showing THE actual carted product).
 
 ## Context
 Platform phases 1-9 are built (memory: project_phase9_status,
