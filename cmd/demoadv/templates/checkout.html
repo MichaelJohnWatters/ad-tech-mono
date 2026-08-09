@@ -10,6 +10,16 @@
     <p>Reserve your {{.Cfg.Brand}} {{.Cfg.Product}}. Completing the order reports a billed
        <code>/v1/t/conv</code> conversion — fired SERVER-TO-SERVER (HMAC-signed) by this
        advertiser's backend, not from your browser, because it drives CPA billing.</p>
+    <div style="margin:14px 0;padding:14px;border:1px dashed var(--line);border-radius:8px">
+      <label for="guest-email" style="font-size:13px;font-weight:600">Email for order updates (guest checkout)</label><br>
+      <input id="guest-email" type="email" placeholder="you@example.com"
+             style="margin-top:6px;padding:9px 12px;border:1px solid var(--line);border-radius:6px;width:260px;font-size:14px">
+      <button class="btn" style="padding:9px 16px;font-size:13px" id="save-email"
+              onclick="captureGuestEmail(document.getElementById('guest-email').value)">Save</button>
+      <p style="font-size:12px;color:#667085;margin:8px 0 0">This is THE identity moment: until you type an
+         email, you're an anonymous guest — captured in the cart audience but unreachable on other sites.
+         Saving it hashes the email in your browser and re-fires the pixel with the hash.</p>
+    </div>
     <p class="price">$38,000</p>
     <button class="btn alt" onclick="convert('purchase', 38000); document.getElementById('done').style.display='block';">
       Complete purchase

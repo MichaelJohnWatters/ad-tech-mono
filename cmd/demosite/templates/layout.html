@@ -91,7 +91,7 @@
   }
   document.addEventListener('DOMContentLoaded', function () {
     var bar = document.createElement('div');
-    bar.style.cssText = 'position:fixed;bottom:8px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
+    bar.style.cssText = 'position:fixed;top:64px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
     bar.innerHTML = '👤 <b>' + personaEmail() + '</b>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaNew();return false">New visitor</a>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaChange();return false">Change</a>';

@@ -32,10 +32,61 @@ type graphLoader interface {
 // background — the bid path never touches Postgres, so it stays QPS-safe (the
 // same warm-cache pattern the campaign/placement/deal caches use). Returns
 // (nil, no-op) when disabled or Postgres is unreachable at boot.
-func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolver, func()) {
-	if !keys.DSP.IdentityResolutionEnabled.Get(cfg) {
-		return nil, func() {}
+// lazyIdentityResolver defers construction until dsp.identity_resolution_enabled
+// is observed TRUE — however late that happens. The old shape latched the boot
+// value: openIdentityResolver ran once at startup, and on a cold VM start the
+// live-config snapshot can land seconds AFTER construction (observed 2026-08-09:
+// config poll delivered old:'' new:'true' 30s post-boot; the resolver had
+// already latched nil and the TierLive key silently required a pod restart).
+// Boot-latch doctrine: boot-time provisioning must retry/re-resolve, never
+// latch a fallback. Resolve() checks an atomic pointer (nil = no resolution,
+// same as before); a background loop constructs the real resolver once the
+// flag reads true. Flipping the flag OFF again still needs a restart —
+// tearing down a live snapshot under the bid path isn't worth the complexity.
+type lazyIdentityResolver struct {
+	inner atomic.Pointer[preloadIdentityResolver]
+}
+
+func (l *lazyIdentityResolver) ResolveIdentity(ctx context.Context, id string) ([]string, error) {
+	if p := l.inner.Load(); p != nil {
+		return p.ResolveIdentity(ctx, id)
 	}
+	return nil, nil
+}
+
+// openIdentityResolver returns a lazy resolver plus its stop func. The real
+// preload resolver is constructed by the retry loop as soon as the live flag
+// reads true (immediately when it already does).
+func openIdentityResolver(cfg *config.Config, log *slog.Logger) (identityResolver, func()) {
+	lazy := &lazyIdentityResolver{}
+	stopped := make(chan struct{})
+	var innerStop atomic.Pointer[func()]
+	go func() {
+		for {
+			if keys.DSP.IdentityResolutionEnabled.Get(cfg) {
+				if p, stop := buildIdentityResolver(cfg, log); p != nil {
+					lazy.inner.Store(p)
+					innerStop.Store(&stop)
+					return
+				}
+				// enabled but DB unreachable — retry, never latch
+			}
+			select {
+			case <-stopped:
+				return
+			case <-time.After(15 * time.Second):
+			}
+		}
+	}()
+	return lazy, func() {
+		close(stopped)
+		if s := innerStop.Load(); s != nil {
+			(*s)()
+		}
+	}
+}
+
+func buildIdentityResolver(cfg *config.Config, log *slog.Logger) (*preloadIdentityResolver, func()) {
 	dbURL := cfg.Get(keys.Database.URL.Key(), "")
 	if dbURL == "" {
 		log.Warn("dsp identity resolution enabled but database.url unset; resolution disabled")

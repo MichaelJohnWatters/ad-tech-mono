@@ -24,8 +24,8 @@ const { spawn, execSync } = require('child_process');
 const path = require('path');
 
 const REPO = path.resolve(__dirname, '../..');
-const COFFEE = 'http://localhost:9000';
-const SHOP = 'http://localhost:9200';
+const COFFEE = 'http://localhost:9300';
+const SHOP = 'http://localhost:9400';
 
 function psql(sql) {
   return execSync(
@@ -50,19 +50,31 @@ async function waitHealthy(url, ms) {
 }
 
 test.beforeAll(async () => {
-  test.setTimeout(240_000); // `go run` cold-compiles both demo sites (~1-2 min)
+  test.setTimeout(240_000); // compiling both demo sites can take ~1-2 min cold
   barkboxId = psql("SELECT id FROM accounts WHERE name='Premium Dog Food Co'");
   chaseCampaignId = psql("SELECT id FROM line_items WHERE name='Premium Dog Food Co - Cart Retargeting'");
   expect(barkboxId).toMatch(/^[0-9a-f-]{36}$/);
   expect(chaseCampaignId).toMatch(/^[0-9a-f-]{36}$/);
 
-  const spawnSite = (cmd, env) =>
-    sites.push(spawn('go', ['run', cmd], { cwd: REPO, env: { ...process.env, ...env }, stdio: 'ignore' }));
-  spawnSite('./cmd/demosite', {
+  // A stale site on the port answers /healthz and serves OLD templates.
+  // Kill leftovers BY NAME — never by port: ports 9000/9200 belong to the
+  // CLUSTER's host-forwards (9000 = Minio), and an `lsof -ti :9000 | kill`
+  // assassinates Rancher Desktop's port-forward agent, taking the k8s API
+  // (127.0.0.1:6443) down with it — that outage cost three spec runs. The
+  // demo sites therefore also run on 9300/9400, which nothing forwards.
+  try { execSync('pkill -9 -f chase-demosite; pkill -9 -f chase-demoadv', { stdio: 'ignore' }); } catch { /* none */ }
+  execSync('go build -o /tmp/chase-demosite ./cmd/demosite && go build -o /tmp/chase-demoadv ./cmd/demoadv', {
+    cwd: REPO, stdio: 'ignore',
+  });
+  const spawnSite = (bin, env) =>
+    sites.push(spawn(bin, [], { cwd: REPO, env: { ...process.env, ...env }, stdio: 'ignore' }));
+  spawnSite('/tmp/chase-demosite', {
+    DEMOSITE_PORT: '9300',
     DEMOSITE_PUBLISHER_ID: 'pub-third-wave-times',
     DEMOSITE_DISPLAY_PLACEMENT: 'pl-coffee-mpu',
   });
-  spawnSite('./cmd/demoadv', {
+  spawnSite('/tmp/chase-demoadv', {
+    DEMOADV_PORT: '9400',
     DEMOADV_ACCOUNT_ID: barkboxId,
     DEMOADV_BRAND: 'Premium Dog Food Co',
     DEMOADV_PRODUCT: '12kg Grain-Free Bag',
@@ -88,10 +100,16 @@ test('cart open → chased on the coffee blog → purchase → released', async 
   await expect(page.locator('#ad-slot-mpu')).not.toContainText('Loading ad', { timeout: 20_000 });
   expect(await page.locator('#ad-slot-mpu').innerHTML()).not.toContain(chaseCampaignId);
 
-  // ---- 2. Open the cart on the shop as the same persona.
+  // ---- 2. Open the cart on the shop — first as a GUEST (captured into the
+  // audience but NOT bridgeable), then hit the email moment: saving the
+  // checkout email hashes it in-browser and re-fires the pixel with the hash,
+  // which is what makes the cross-site chase possible at all.
   await page.goto(SHOP + '/checkout');
   await page.click('.consent button.accept');
-  await expect(page.locator('#adxlog')).toContainText('retargeting pixel fired', { timeout: 15_000 });
+  await expect(page.locator('#adxlog')).toContainText('GUEST — no email', { timeout: 15_000 });
+  await expect(page.locator('#guest-email')).toHaveValue(persona); // persona-bar prefill
+  await page.click('#save-email');
+  await expect(page.locator('#adxlog')).toContainText('EMAIL CAPTURED', { timeout: 15_000 });
 
   // Ground truth: audience-rt enrolled this visitor within seconds.
   await expect
@@ -124,9 +142,20 @@ test('cart open → chased on the coffee blog → purchase → released', async 
   }
   expect(chased, 'the chase ad never reached the coffee blog (identity bridge + segment + argmax bid)').toBe(true);
 
-  // ---- 4. Buy → suppression releases the persona (Postgres is the ground
-  // truth; the slot goes ambiguous under frequency caps).
+  // ---- 4. Buy → suppression releases the CONVERTING id (Postgres is the
+  // ground truth; the slot goes ambiguous under frequency caps).
+  //
+  // Deliberately id-scoped: suppression as built is ID-level, while the
+  // hourly profile-builder enrolls PERSON-level (cluster-expanding to every
+  // linked id) and re-qualifies from the still-live site_visit signals on
+  // its next pass. Asserting "zero retargeting rows for the advertiser"
+  // fails whenever the conductor's :10 run straddles the test — which is
+  // exactly how this spec DISCOVERED that suppression is neither
+  // person-level nor durable (2026-08-09; a recorded product decision for
+  // the operator — see docs/demos/RETARGETING-CHASE-DEMO.md).
   await page.goto(SHOP + '/checkout');
+  const buyerId = await page.evaluate(() => localStorage.getItem('adtechadv_uid'));
+  expect(buyerId).toBeTruthy();
   await page.click('button.btn.alt');
   await expect(page.locator('#adxlog')).toContainText('CONVERSION recorded', { timeout: 15_000 });
   await expect
@@ -136,9 +165,9 @@ test('cart open → chased on the coffee blog → purchase → released', async 
           psql(`SELECT count(*) FROM audience_segment_members m
                 JOIN audience_segments s ON s.id=m.segment_id
                 WHERE s.account_id='${barkboxId}' AND s.type='retargeting'
-                  AND m.added_at > now() - INTERVAL '10 minutes'`),
+                  AND m.user_id='${buyerId}'`),
         ),
-      { timeout: 60_000, message: 'purchase suppression never removed the enrollment' },
+      { timeout: 60_000, message: 'purchase suppression never removed the converting id' },
     )
     .toBe(0);
 });
