@@ -177,14 +177,16 @@ WHERE rule IS NOT NULL AND status = 'active'`).Scan(&maxDays)
 // returns the keys meeting min_count. The user key is the row's user_id,
 // falling back to household_id for anonymous CTV rows — mirroring the
 // serve-path lookup precedence.
-func evaluateRule(rows []datalake.Record, rule Rule, now time.Time) []string {
+func evaluateRule(rows []datalake.Record, rule Rule, now time.Time) []QualifiedKey {
 	cutoff := now.AddDate(0, 0, -rule.WindowDays)
 	counts := map[string]int{}
+	last := map[string]time.Time{}
 	for _, rec := range rows {
 		if !rule.matches(rec) {
 			continue
 		}
-		if at, ok := rec["observed_at"].(time.Time); ok && at.Before(cutoff) {
+		at, hasAt := rec["observed_at"].(time.Time)
+		if hasAt && at.Before(cutoff) {
 			continue
 		}
 		key := str(rec["user_id"])
@@ -195,11 +197,14 @@ func evaluateRule(rows []datalake.Record, rule Rule, now time.Time) []string {
 			continue
 		}
 		counts[key]++
+		if hasAt && at.After(last[key]) {
+			last[key] = at
+		}
 	}
-	var out []string
+	var out []QualifiedKey
 	for key, n := range counts {
 		if n >= rule.MinCount {
-			out = append(out, key)
+			out = append(out, QualifiedKey{Key: key, Last: last[key]})
 		}
 	}
 	return out

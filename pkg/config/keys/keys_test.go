@@ -29,7 +29,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"webhooks", WebhooksSchema(), 5},
 		{"notifications", NotificationsSchema(), 2},
 		{"identity-consumer", IdentityConsumerSchema(), 10},
-		{"audience-rt", AudienceRTSchema(), 4},
+		{"audience-rt", AudienceRTSchema(), 5},
 		{"publisher-adserver", PublisherAdServerSchema(), 9},
 		{"content-packager", ContentPackagerSchema(), 9},
 		{"prewarm", PrewarmSchema(), 2},

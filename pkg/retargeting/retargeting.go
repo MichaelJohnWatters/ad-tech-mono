@@ -70,6 +70,25 @@ type Enroller interface {
 	InvalidateAudience(ctx context.Context, userID string) error
 }
 
+// SuppressionStore persists the purchase "burn list" (migration 082): one
+// row per (advertiser, user id) recording WHEN the purchase happened.
+// Enrollment paths consult it with newer-than semantics — a signal older
+// than suppressed_at never re-enrolls; a genuinely new visit clears the row.
+type SuppressionStore interface {
+	Suppress(ctx context.Context, accountID string, userIDs []string, at time.Time, ttl time.Duration, originTrace string) error
+	SuppressedAt(ctx context.Context, accountID, userID string) (time.Time, bool, error)
+	ClearSuppression(ctx context.Context, accountID, userID string) error
+}
+
+// IdentityExpander returns the additional ids a converting user's purchase
+// should suppress: identity-cluster siblings (the person's other devices)
+// plus linked household ids — matching the person-level expansion the batch
+// profile-builder applies when ENROLLING, so suppression and enrollment
+// operate at the same granularity.
+type IdentityExpander interface {
+	ExpandPerson(ctx context.Context, userID string) ([]string, error)
+}
+
 // Service applies visit → enroll and conversion → suppress against a segment
 // source and enroller.
 type Service struct {
@@ -82,10 +101,22 @@ type Service struct {
 	// chase reaches any device in the home via the DSP's household-keyed
 	// segment lookup. nil/false = visitor-id-only (the original behaviour).
 	householdEnroll func() bool
+	// sup + expand + suppressionTTL wire the durable purchase burn-list
+	// (all optional: nil keeps the pre-082 delete-only behaviour).
+	sup            SuppressionStore
+	expand         IdentityExpander
+	suppressionTTL func() time.Duration
 }
 
 func New(src SegmentSource, enr Enroller, log *slog.Logger) *Service {
 	return &Service{src: src, enr: enr, log: log}
+}
+
+// SetSuppression wires the burn-list store, the person/household expander,
+// and the suppression TTL (bounds row lifetime; past every rule window the
+// historical signals can't qualify anyone, so the row is inert).
+func (s *Service) SetSuppression(store SuppressionStore, expand IdentityExpander, ttl func() time.Duration) {
+	s.sup, s.expand, s.suppressionTTL = store, expand, ttl
 }
 
 // SetHouseholdEnroll wires the live-config gate for household enrollment
@@ -131,6 +162,10 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 		if s.householdEnroll != nil && s.householdEnroll() && ev.HouseholdID != "" && ev.HouseholdID != ev.UserID {
 			members = append(members, ev.HouseholdID)
 		}
+		members = s.applySuppression(ctx, ev, members)
+		if len(members) == 0 {
+			continue
+		}
 		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, members, ttl, seg.Visibility, ev.TraceID)
 		if err != nil {
 			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
@@ -152,6 +187,66 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 // OnConversion suppresses a converter: it removes the user from the advertiser's
 // retargeting segments so we stop paying to chase someone who already bought.
 // Returns the segment ids the user was removed from.
+// applySuppression drops candidate ids whose burn-list entry is at/after the
+// visit — the purchase closed that cart, old signals must not re-enroll. A
+// visit NEWER than the suppression is a genuinely new abandoned cart: the
+// row is cleared (self-healing) and the id enrolls normally. No suppression
+// store wired = everything passes (pre-082 behaviour).
+func (s *Service) applySuppression(ctx context.Context, ev events.BehaviourSignalEvent, ids []string) []string {
+	if s.sup == nil {
+		return ids
+	}
+	at := ev.ObservedAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	kept := ids[:0]
+	for _, id := range ids {
+		supAt, ok, err := s.sup.SuppressedAt(ctx, ev.AccountID, id)
+		if err != nil {
+			s.log.Warn("suppression lookup failed — enrolling anyway", "user", id, "account", ev.AccountID, "error", err)
+			kept = append(kept, id)
+			continue
+		}
+		if !ok || at.After(supAt) {
+			if ok { // new cart after the purchase — burn-list entry served its purpose
+				if err := s.sup.ClearSuppression(ctx, ev.AccountID, id); err != nil {
+					s.log.Warn("suppression clear failed", "user", id, "account", ev.AccountID, "error", err)
+				}
+			}
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
+// suppressionIDs is the person+household expansion of a converting user: the
+// id itself, its identity-cluster siblings, and linked household ids. Capped
+// to bound pathological clusters.
+func (s *Service) suppressionIDs(ctx context.Context, userID string) []string {
+	ids := []string{userID}
+	if s.expand == nil {
+		return ids
+	}
+	more, err := s.expand.ExpandPerson(ctx, userID)
+	if err != nil {
+		s.log.Warn("suppression identity expansion failed — suppressing the converting id only", "user", userID, "error", err)
+		return ids
+	}
+	seen := map[string]bool{userID: true}
+	for _, id := range more {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+		if len(ids) >= 25 { // pathological-cluster guard
+			break
+		}
+	}
+	return ids
+}
+
 func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID string) ([]string, error) {
 	if accountID == "" || userID == "" {
 		return nil, nil
@@ -160,22 +255,47 @@ func (s *Service) OnConversion(ctx context.Context, accountID, userID, traceID s
 	if err != nil {
 		return nil, err
 	}
+	// Person+household suppression: remove EVERY id the buyer expands to
+	// (cluster siblings + household), not just the id on the conversion —
+	// otherwise the batch builder's person-level enrollment keeps the
+	// buyer's other devices in the chase.
+	ids := s.suppressionIDs(ctx, userID)
 	var removed []string
 	for _, seg := range segs {
-		n, err := s.enr.RemoveMember(ctx, accountID, seg.ID, userID, seg.Visibility)
-		if err != nil {
-			s.log.Warn("retargeting suppress failed", "segment", seg.ID, "account", accountID, "trace_id", traceID, "error", err)
-			continue
+		got := 0
+		for _, id := range ids {
+			n, err := s.enr.RemoveMember(ctx, accountID, seg.ID, id, seg.Visibility)
+			if err != nil {
+				s.log.Warn("retargeting suppress failed", "segment", seg.ID, "account", accountID, "user", id, "trace_id", traceID, "error", err)
+				continue
+			}
+			got += n
 		}
-		if n > 0 {
+		if got > 0 {
 			removed = append(removed, seg.ID)
 		}
 	}
-	if len(removed) > 0 {
-		if err := s.enr.InvalidateAudience(ctx, userID); err != nil {
-			s.log.Warn("audience invalidate after suppress failed", "trace_id", traceID, "error", err)
+	// Durable burn-list entries for ALL ids — the profile-builder consults
+	// these so its next pass cannot re-qualify the buyer from pre-purchase
+	// signals (the "re-enrolled at :10" gap, found live 2026-08-09).
+	if s.sup != nil {
+		ttl := 30 * 24 * time.Hour
+		if s.suppressionTTL != nil {
+			if v := s.suppressionTTL(); v > 0 {
+				ttl = v
+			}
 		}
-		s.log.Info("real-time retargeting suppress", "account", accountID, "user", userID, "segments", len(removed), "trace_id", traceID)
+		if err := s.sup.Suppress(ctx, accountID, ids, time.Now().UTC(), ttl, traceID); err != nil {
+			s.log.Warn("burn-list write failed — suppression is delete-only for this purchase", "account", accountID, "trace_id", traceID, "error", err)
+		}
+	}
+	if len(removed) > 0 || s.sup != nil {
+		for _, id := range ids {
+			if err := s.enr.InvalidateAudience(ctx, id); err != nil {
+				s.log.Warn("audience invalidate after suppress failed", "trace_id", traceID, "error", err)
+			}
+		}
+		s.log.Info("real-time retargeting suppress", "account", accountID, "user", userID, "expanded_ids", len(ids), "segments", len(removed), "trace_id", traceID)
 	}
 	return removed, nil
 }

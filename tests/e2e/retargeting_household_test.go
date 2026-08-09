@@ -92,12 +92,28 @@ RETURNING id::text`, w.AdvAcc.ID, fmt.Sprintf("hh-seg-%d", uniq), tag).Scan(&seg
 		t.Fatal("household chase LEAKED to a different household")
 	}
 
-	// Current suppression semantics, asserted deliberately: a purchase by the
-	// guest releases the guest's OWN id but the household row remains until
-	// its TTL (person/household-level suppression is a recorded open operator
-	// decision — see the audience pipeline memory/doc). If this assertion
-	// starts failing because the household row is ALSO removed, that decision
-	// shipped: update the demo doc and flip this check.
+	// Person+HOUSEHOLD suppression (migration 082): the purchase removes the
+	// guest's id AND the household row, so the home's other devices stop
+	// seeing the chase too. The expansion rides the guest↔household identity
+	// edge the rt pixel published — wait for the async identity-consumer to
+	// land it before buying, else the purchase has nothing to expand through.
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		var n int
+		if err := h.DB.QueryRow(`
+SELECT count(*) FROM identity_graph
+WHERE (user_id = $1 AND linked_id LIKE 'hh:%') OR (linked_id = $1 AND user_id LIKE 'hh:%')`,
+			guest).Scan(&n); err != nil {
+			t.Fatalf("identity edge query: %v", err)
+		}
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("rt pixel never produced a guest↔household identity edge")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	h.FireConversionForVisitor(t, fmt.Sprintf("hh-conv-%d", uniq), w.AdvAcc.ID, guest, "purchase", "USD", 42.00)
 	deadline = time.Now().Add(30 * time.Second)
 	for {
@@ -106,16 +122,22 @@ RETURNING id::text`, w.AdvAcc.ID, fmt.Sprintf("hh-seg-%d", uniq), tag).Scan(&seg
 			segID, guest).Scan(&n); err != nil {
 			t.Fatalf("guest membership query: %v", err)
 		}
-		if n == 0 {
+		if n == 0 && householdMembers() == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("purchase never suppressed the guest's own enrollment")
+			t.Fatalf("purchase never suppressed guest+household (guest rows=%d, hh rows=%d)", n, householdMembers())
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if householdMembers() == 0 {
-		t.Error("household row vanished on id-level suppression — if person/household suppression shipped, update this test + the demo doc")
+	// Both ids carry durable burn-list entries.
+	var sup int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM retargeting_suppressions WHERE account_id = $1::uuid AND expires_at > now()`,
+		w.AdvAcc.ID).Scan(&sup); err != nil {
+		t.Fatalf("suppression query: %v", err)
+	}
+	if sup < 2 {
+		t.Errorf("want burn-list entries for guest AND household, got %d", sup)
 	}
 }
 
