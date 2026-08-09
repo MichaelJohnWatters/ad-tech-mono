@@ -95,6 +95,27 @@ go run ./cmd/demoadv           # → http://localhost:9200
   segment match.
 - `docs/AUDIENCE-PIPELINE.md` for the architecture behind each hop.
 
+## Variant: the ANONYMOUS guest cart (no email, ever)
+
+Skip step 3b entirely — never touch the email field. The guest is still
+chased on the coffee blog, and faster (~10s, no identity-snapshot wait):
+the shop pixel carries the persona's demo IP, the tracker derives the
+HOUSEHOLD id (salted-IP hash, same derivation as the SSP) and audience-rt
+enrolls it alongside the visitor id (`audience_rt.household_enroll`, live
+key, default true); the coffee blog derives the same demo IP for the same
+persona, so the SSP resolves the same household and the DSP's
+household-keyed segment lookup matches. The email never leaves the browser
+in this variant — its hash only seeds the deterministic demo IP client-side.
+This is household chasing: coarser (any device in the home sees it, CTV
+included), which is exactly the story to narrate. Note: a purchase releases
+only the buying id — the household row ages out on its TTL (the
+person/household-level suppression decision is still open).
+
+Both variants are automated: `tests/browser/chase-demo.spec.js` (2 tests);
+the platform-level proof is `tests/e2e/retargeting_household_test.go`
+(enroll + same-home chase + cross-household leak check + suppression
+semantics).
+
 ## Gotchas
 
 - **Frequency caps are real**: the same user/household stops being served
@@ -115,3 +136,8 @@ go run ./cmd/demoadv           # → http://localhost:9200
   big-world premium stratum (19.5) to surface on density-seeded worlds.
 - Consent matters end-to-end: decline on either site and that side goes
   contextual-only (also demoable — the pixel overlay says so).
+- **The SDK tags (adtech.js / adtech-adv.js) are served by the GATEWAY**
+  (`localhost:8080/static/…`), not by the demo sites — an edit to either
+  tag needs `make deploy SVC=gateway` before browsers see it. A missing
+  method in a stale served tag fails silently (the promise chain dies, the
+  pixel overlay just stays "…").

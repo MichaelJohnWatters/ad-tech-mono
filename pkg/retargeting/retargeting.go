@@ -76,11 +76,22 @@ type Service struct {
 	src SegmentSource
 	enr Enroller
 	log *slog.Logger
+	// householdEnroll gates enrolling the site_visit's HOUSEHOLD id (hh:
+	// salted-IP hash, derived by the tracker's rt pixel) alongside the
+	// visitor id — the anonymous-guest-cart chase: no email bridge, the
+	// chase reaches any device in the home via the DSP's household-keyed
+	// segment lookup. nil/false = visitor-id-only (the original behaviour).
+	householdEnroll func() bool
 }
 
 func New(src SegmentSource, enr Enroller, log *slog.Logger) *Service {
 	return &Service{src: src, enr: enr, log: log}
 }
+
+// SetHouseholdEnroll wires the live-config gate for household enrollment
+// (audience_rt.household_enroll). Read per event so a config flip applies
+// without a restart.
+func (s *Service) SetHouseholdEnroll(fn func() bool) { s.householdEnroll = fn }
 
 const kindSiteVisit = "site_visit"
 
@@ -116,7 +127,11 @@ func (s *Service) OnSiteVisit(ctx context.Context, ev events.BehaviourSignalEven
 			windowDays = defaultWindowDays
 		}
 		ttl := time.Duration(windowDays) * 24 * time.Hour
-		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, []string{ev.UserID}, ttl, seg.Visibility, ev.TraceID)
+		members := []string{ev.UserID}
+		if s.householdEnroll != nil && s.householdEnroll() && ev.HouseholdID != "" && ev.HouseholdID != ev.UserID {
+			members = append(members, ev.HouseholdID)
+		}
+		n, err := s.enr.AddMembers(ctx, ev.AccountID, seg.ID, members, ttl, seg.Visibility, ev.TraceID)
 		if err != nil {
 			s.log.Warn("retargeting enroll failed", "segment", seg.ID, "account", ev.AccountID, "trace_id", ev.TraceID, "error", err)
 			continue

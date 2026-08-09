@@ -21,7 +21,7 @@
     'use strict';
 
     var config = { trackerUrl: '', accountId: '', tag: '', debug: false };
-    var state = { consented: false, uid: null, he: null };
+    var state = { consented: false, uid: null, he: null, ip: null };
 
     // sha256Hex hashes the normalised (trimmed, lower-cased) value to lowercase
     // hex — the standard hashed-email form advertisers and publishers share, so
@@ -115,13 +115,24 @@
                 // The tracker mints a real 32-hex trace for this visit server-side
                 // (its HTTPMiddleware), so we never invent a client-side id that
                 // would pollute the trace_id column with a non-standard format.
+                // Demo/dev household override: rides the tracker's allowlist-
+                // gated ?ip= (private callers only — inert from public browsers
+                // in prod), so local demo personas get their own household and
+                // ANONYMOUS guest carts are household-chaseable with no email.
+                var ip = state.ip ? '&ip=' + encodeURIComponent(state.ip) : '';
                 pixel(config.trackerUrl + '/v1/t/rt?uid=' + encodeURIComponent(uid) +
                     '&aid=' + encodeURIComponent(config.accountId) +
-                    '&tag=' + encodeURIComponent(config.tag) + he);
+                    '&tag=' + encodeURIComponent(config.tag) + he + ip);
                 log('retargeting pixel fired', config.tag + (state.he ? ' (+hashed email)' : ''));
                 return uid;
             });
         },
+
+        // setDemoIP sets the demo/dev shopper IP forwarded on the retargeting
+        // pixel (?ip=). Local demos only — the tracker honours it solely from
+        // allowlisted (private) callers, so a public browser setting this is
+        // ignored server-side.
+        setDemoIP: function (ip) { state.ip = ip || null; },
 
         // setEmail identifies the visitor by a hashed email (the advertiser knows
         // its logged-in customer). Stored first-party; included on the next
