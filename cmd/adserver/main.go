@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +13,11 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
+	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
@@ -140,6 +143,8 @@ func main() {
 	})
 
 	resolver := NewCreativeResolver(metaCache, objStore, bucket, knobs.CreativeTTL.Value, clk, log)
+	// DPA slice 3: render-time assembler for dynamic_product creatives.
+	dpRenderer := startDynamicProductRenderer(cfg, lc, log)
 
 	// Bandit warm-start: use whatever creatives loaded into the metadata cache
 	creativeIDs := resolver.ListIDs()
@@ -182,7 +187,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	serve := serveHandler(log, resolver, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value)
+	serve := serveHandler(log, resolver, dpRenderer, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value)
 	mux.HandleFunc(routes.AdServe, serve)
 	// Internal gRPC twin of the serve endpoint — the SSP's fast path.
 	// Browser-facing creative/asset endpoints stay HTTP.
@@ -337,6 +342,35 @@ func pickCreativeLoader(cfg *config.Config, log *slog.Logger) warm.Loader[models
 	}
 }
 
+// startDynamicProductRenderer builds the render-time assembler for
+// dynamic_product creatives (DPA slice 3). It lazy-opens Postgres (like the
+// gateway) for the catalog + product-view reads; a nil DB (offline dev) returns
+// a nil-safe renderer so dynamic creatives simply render their static {{else}}
+// branch. Not on the bid loop — a post-auction read, bounded + timeout-guarded.
+func startDynamicProductRenderer(cfg *config.Config, lc *lifecycle.Lifecycle, log *slog.Logger) *dynamicProductRenderer {
+	dbURL := cfg.Get(keys.Database.URL.Key(), "")
+	if dbURL == "" {
+		log.Warn("dynamic product renderer: database.url not set — dynamic_product creatives render static fallback")
+		return &dynamicProductRenderer{maxItems: 6, timeout: 100 * time.Millisecond, log: log}
+	}
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Warn("dynamic product renderer: db open failed — static fallback", "error", err)
+		return &dynamicProductRenderer{maxItems: 6, timeout: 100 * time.Millisecond, log: log}
+	}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	lc.OnShutdown("dpa-db", func(_ context.Context) error { return db.Close() })
+	return &dynamicProductRenderer{
+		skus:     audiencepg.New(db),
+		products: catalogpg.New(db),
+		maxItems: 6,
+		timeout:  100 * time.Millisecond,
+		log:      log,
+	}
+}
+
 // connectRedis returns a real Redis L2 cache if reachable, else MemoryL2.
 func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	addr := keys.Redis.URL.Get(cfg)
@@ -361,7 +395,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap, freqCapCache *warm.Cache[models.FreqCapRule], defaultLimitFn func() int, defaultWindowFn func() time.Duration, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dynamicProductRenderer, freqCap *FreqCap, freqCapCache *warm.Cache[models.FreqCapRule], defaultLimitFn func() int, defaultWindowFn func() time.Duration, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -495,6 +529,16 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, freqCap *FreqCap
 			}
 		}
 		phaseMark = obsAdServePhase("creative", phaseMark)
+
+		// DPA slice 3: a dynamic_product creative's html_content is a Go template
+		// assembled here from the advertiser's catalog + this user's carted SKUs.
+		// Non-dynamic creatives pass through untouched; no SKU context renders the
+		// template's static {{else}} branch. Macro substitution runs on the result
+		// below, so beacon/click macros work in either branch. BehaviourUserID is
+		// the consent-gated id (empty = no personalisation → static fallback).
+		if creative.Format == constants.FormatDynamicProduct {
+			creative.HTML = dpRenderer.Assemble(ctx, creative, req.AdvertiserID, req.BehaviourUserID)
+		}
 
 		macroCtx := adserving.MacroContext{
 			AuctionID:    req.TraceID,

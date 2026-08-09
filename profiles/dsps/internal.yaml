@@ -317,6 +317,9 @@ campaigns:
     targeting:
       include:
         segments: [seg-dogfood-cart, seg-shop-checkout]
+    # Dynamic Product Ads: the chase creative is assembled at render time from
+    # the barkbox catalog + the shopper's carted SKUs (recorded by the SKU-aware
+    # /v1/t/rt pixel). A visitor with no SKU context gets the static fallback.
     creatives:
-      - { id: cr-dogfood-cart-001, width: 300, height: 250 }
-      - { id: cr-dogfood-cart-001-leader, width: 728, height: 90 }
+      - { id: cr-dogfood-cart-001, width: 300, height: 250, format: dynamic_product }
+      - { id: cr-dogfood-cart-001-leader, width: 728, height: 90, format: dynamic_product }

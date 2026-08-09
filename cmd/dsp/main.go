@@ -1348,6 +1348,11 @@ func selectCreativeForRequest(c *models.Campaign, format string, reqW, reqH, min
 		if cvFmt == "" {
 			cvFmt = "display"
 		}
+		// A dynamic_product creative renders as a display banner (the ad server
+		// assembles it at serve time); it is eligible for a display request.
+		if cvFmt == constants.FormatDynamicProduct {
+			cvFmt = "display"
+		}
 		if cvFmt != format {
 			continue
 		}

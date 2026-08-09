@@ -42,6 +42,20 @@ type Product struct {
 	Category     string `json:"category,omitempty"`
 }
 
+// PriceDisplay formats the product's price for a creative template, e.g.
+// "$38.99" for USD or "129.00 EUR" otherwise. Micro-dollars → decimal.
+func (p Product) PriceDisplay() string {
+	whole := p.PriceMicros / 1_000_000
+	cents := (p.PriceMicros % 1_000_000) / 10_000
+	if p.Currency == "USD" || p.Currency == "" {
+		return fmt.Sprintf("$%d.%02d", whole, cents)
+	}
+	return fmt.Sprintf("%d.%02d %s", whole, cents, p.Currency)
+}
+
+// InStock reports whether the product is available to feature.
+func (p Product) InStock() bool { return p.Availability == AvailabilityInStock }
+
 // Store is the catalog persistence seam. Writes are tenant-scoped (RLS GUC per
 // account); the cross-tenant render-time read (slice 3) will add a platform-
 // hatch method when it lands.
