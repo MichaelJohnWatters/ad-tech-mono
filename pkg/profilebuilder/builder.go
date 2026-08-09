@@ -209,6 +209,18 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// them to Redis — membership freshness is no longer invalidate-driven.
 	_ = changed
 
+	// Zero-work guard: a builder that finds NO rule segments is either a
+	// genuinely rule-free world or a silently-broken read — and the second
+	// happened (2026-08-09: the RLS DB-role flip blanked the unscoped segment
+	// list to zero rows and every hourly run reported "done enrolled=0" for
+	// days). WARN so an operator scanning logs — or a log-based alert — can
+	// tell "nothing to do" from "reading nothing", and cross-check against a
+	// count the hatch does not gate.
+	if res.RuleSegments == 0 {
+		log.Warn("profile-builder found ZERO rule segments — verify this is a rule-free world, not a blanked read (RLS hatch, wrong DB role)",
+			"hint", "SELECT count(*) FROM audience_segments WHERE rule IS NOT NULL AND status='active' as a privileged role")
+	}
+
 	log.Info("profile-builder run complete",
 		"clusters", res.Clusters, "cluster_members", res.ClusterMembers, "dropped_clusters", res.DroppedClusters,
 		"rule_segments", res.RuleSegments, "enrolled", res.Enrolled, "pruned", res.Pruned,

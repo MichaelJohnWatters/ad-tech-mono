@@ -176,6 +176,25 @@ data:
             for: 5m
             annotations:
               summary: "JetStream consumer backlog >50k — reporting/dashboard numbers lag live traffic"
+          - alert: AudienceCacheWriterAbsent
+            # The audience changelog drainer is a SINGLE writer in the pipeline
+            # pod, and its backlog/lag gauges live IN that pod — when it dies
+            # the metrics vanish instead of alarming (proven in the 2026-08-09
+            # chaos pass: 3.5min writer outage = zero signal anywhere while
+            # bid-path memberships went stale). absent() is the only view that
+            # catches "the watcher itself is gone".
+            expr: absent(adtech_audience_cache_drain_age_seconds)
+            for: 3m
+            annotations:
+              summary: "audience cache writer gauges absent — pipeline pod down/crashlooping; Redis membership sets are going stale (new enrolls invisible to bidding)"
+          - alert: AudienceChangelogLag
+            # Writer alive but falling behind: oldest un-drained membership
+            # change older than 60s (drain cadence is 3s). Mirrors the WARN
+            # log in cmd/pipeline but as a first-class alert.
+            expr: adtech_audience_cache_changelog_lag_seconds > 60
+            for: 5m
+            annotations:
+              summary: "audience changelog drain lag >60s sustained — writer can't keep up; consider sharding or raising poll cadence"
 
 ---
 apiVersion: apps/v1

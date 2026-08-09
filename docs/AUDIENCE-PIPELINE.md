@@ -239,6 +239,22 @@ for the same user goes no-fill even though the DSP bid (check `dsp_calls`
 for the trace before blaming targeting); the DSP's campaign warm cache picks
 up reseeded campaigns on its bulk-refresh tick, not instantly.
 
+## Fault behaviour (measured, 2026-08-09 chaos pass)
+
+Every number below was measured live, not asserted:
+
+| Scenario | Behaviour observed | Blast radius |
+|---|---|---|
+| **Drainer (pipeline pod) down 3.5 min** | audience-rt kept enrolling into PG; changelog accrued 20 rows; on restart the boot reconcile + drain cleared the backlog in **2s**, watermark advanced with no loss or duplicates | New memberships invisible to bidding for the outage duration; nothing lost. Its gauges die WITH the pod — `AudienceCacheWriterAbsent` (absent-metric alert) now covers that hole |
+| **Redis FLUSHDB** | Pre-flush memberships stale-empty for **233s** until the 5m reconcile rewrote 10 keys and restored the watermark; **new enrollments kept flowing (≤8s)** the whole time because a missing watermark reads as 0 and fresh changelog rows apply on the 3s drain. `/debug/audience/refresh` collapses the window on demand | Retargeting/audience refinement degrades to contextual for ≤ one reconcile interval; bids never fail |
+| **NATS down 45s + audience-rt restarted mid-outage** | Pods stayed **NOT ready** (readiness reflects the dep), logged retry-until-stick, "stream ensured after boot-time retry" ~4s after NATS returned; first post-recovery pixel enrolled same-second → Redis ≤6s | No deaf-on-boot latch; enrollments during the outage window ride the tracker's publish resilience |
+| **TTL expiry via UPDATE** (trigger fires on INSERT/DELETE only) | Expired member stayed in Redis **43s** until the audience-rt purge ticker's DELETE fired the trigger; reconcile is the 5m backstop | Stale-targeting window bounded by `audience_rt.purge_interval` (60s) |
+| **Duplicate ingest of an identical file** | `members_added=0`, **zero** changelog rows (conflict-do-nothing never fires the trigger), no Redis churn; profile.signal chunks re-publish (append-only CH duplicates, read-side DISTINCT dedups) | None on serving |
+
+One non-chaos finding from the same pass: single e2e test runs truncate the
+audience tables, wiping the themed world's earned memberships (segments
+restore with `make seed`; memberships need traffic + a builder run).
+
 ## Cadence policy
 
 Current: behaviour rules recompute **hourly** (conductor chain), changelog
