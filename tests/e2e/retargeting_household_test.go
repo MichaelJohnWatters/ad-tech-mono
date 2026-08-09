@@ -26,10 +26,10 @@ func TestAnonymousGuestHouseholdChase(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "rt-household")
 	uniq := time.Now().UnixNano()
-	guest := fmt.Sprintf("hh-guest-%d", uniq)   // the anonymous shop visitor
-	other := fmt.Sprintf("hh-other-%d", uniq)   // a DIFFERENT device in the same home
+	guest := fmt.Sprintf("hh-guest-%d", uniq) // the anonymous shop visitor
+	other := fmt.Sprintf("hh-other-%d", uniq) // a DIFFERENT device in the same home
 	tag := fmt.Sprintf("cart-hh-%d", uniq)
-	homeIP := fmt.Sprintf("198.51.100.%d", 1+uniq%254)  // TEST-NET-2: this household
+	homeIP := fmt.Sprintf("198.51.100.%d", 1+uniq%254)      // TEST-NET-2: this household
 	otherIP := fmt.Sprintf("198.51.100.%d", 1+(uniq+7)%254) // a different household
 	if otherIP == homeIP {
 		otherIP = "198.51.100.250"
