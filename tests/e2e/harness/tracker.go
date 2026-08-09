@@ -157,6 +157,16 @@ func (h *Harness) FireRetargetingPixel(t *testing.T, accountID, uid, hashedEmail
 	h.fireRawReturningHeader(t, url, "retarget", "")
 }
 
+// FireRetargetingPixelSKUs fires the rt pixel carrying product SKUs (Dynamic
+// Product Ads): audience-rt records them as the visitor's viewed/carted
+// products (retargeting_product_views). skus is a comma-separated list.
+func (h *Harness) FireRetargetingPixelSKUs(t *testing.T, accountID, uid, tag, skus string) {
+	t.Helper()
+	url := fmt.Sprintf("%s/v1/t/rt?uid=%s&aid=%s&tag=%s&skus=%s&tid=rt-%d",
+		h.URLs.Tracker, uid, accountID, tag, skus, time.Now().UnixNano())
+	h.fireRawReturningHeader(t, url, "retarget", "")
+}
+
 // FireImpressionDeal is FireImpression with the winning deal's ID stamped
 // as the `deal` query param — production stamps it via
 // pkg/adserving.BuildImpressionURL when the serve context carries a deal.

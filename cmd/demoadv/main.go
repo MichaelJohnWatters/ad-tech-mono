@@ -47,6 +47,12 @@ type siteConfig struct {
 	// "Premium Dog Food Co" demo runs it as a 12kg dog-food bag — without
 	// forking templates. The /models/f150 route + its pixel tag stay stable.
 	Product string
+	// SKU is the catalog SKU the hero product maps to (Dynamic Product Ads).
+	// The product + checkout pages fire it on the retargeting pixel
+	// (setProductSKUs) so a dynamic creative renders THIS product. Default
+	// matches the seeded dog-food catalog (the chase demo runs as barkbox);
+	// a SKU with no catalog row just falls back to the static creative.
+	SKU string
 }
 
 type page struct {
@@ -54,6 +60,7 @@ type page struct {
 	Active string
 	Title  string
 	Tag    string // retargeting tag for this page (site_visit rule key)
+	SKU    string // catalog SKU this page's product maps to ("" = no product, e.g. home)
 }
 
 func env(k, def string) string {
@@ -94,6 +101,7 @@ func main() {
 		SigningKey: env("DEMOADV_SIGNING_KEY", ""),
 		Brand:      env("DEMOADV_BRAND", "Ford"),
 		Product:    env("DEMOADV_PRODUCT", "F-150"),
+		SKU:        env("DEMOADV_SKU", "DOG-KIBBLE-12KG"),
 	}
 	// No explicit key set → use the deterministic dev key the seed minted for
 	// this advertiser account, so S2S conversions validate under the strict
@@ -104,23 +112,26 @@ func main() {
 	port := env("DEMOADV_PORT", "9200")
 
 	tmpl := template.Must(template.ParseFS(templatesFS, "templates/*.html"))
-	render := func(name, title, active, tag string) http.HandlerFunc {
+	// render builds a page; sku is the catalog SKU this page's product maps to
+	// (empty for the home page, which shows no specific product) — it rides the
+	// retargeting pixel so a dynamic creative can render the viewed product.
+	render := func(name, title, active, tag, sku string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" && name == "home.html" {
 				http.NotFound(w, r)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := tmpl.ExecuteTemplate(w, name, page{Cfg: cfg, Active: active, Title: title, Tag: tag}); err != nil {
+			if err := tmpl.ExecuteTemplate(w, name, page{Cfg: cfg, Active: active, Title: title, Tag: tag, SKU: sku}); err != nil {
 				log.Printf("render %s: %v", name, err)
 			}
 		}
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", render("home.html", cfg.Brand, "home", "home"))
-	mux.HandleFunc("/models/f150", render("product.html", "F-150 — "+cfg.Brand, "f150", "f150-interest"))
-	mux.HandleFunc("/checkout", render("checkout.html", "Checkout — "+cfg.Brand, "checkout", "checkout"))
+	mux.HandleFunc("/", render("home.html", cfg.Brand, "home", "home", ""))
+	mux.HandleFunc("/models/f150", render("product.html", "F-150 — "+cfg.Brand, "f150", "f150-interest", cfg.SKU))
+	mux.HandleFunc("/checkout", render("checkout.html", "Checkout — "+cfg.Brand, "checkout", "checkout", cfg.SKU))
 
 	// Server-to-server SIGNED conversion postback. A conversion is the platform's
 	// CPA BILLING trigger, so /v1/t/conv is HMAC-signed and must NOT be fired

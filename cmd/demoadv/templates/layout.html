@@ -49,6 +49,10 @@
 <script src="{{ .Cfg.SDKURL }}"></script>
 <script>
   var TAG = {{ .Tag }};
+  // The catalog SKU this page's product maps to (Dynamic Product Ads); ""
+  // on the home page. Rides the retargeting pixel so a dynamic creative can
+  // render the actual viewed/carted product.
+  var PAGE_SKU = {{ .SKU }};
   function log(msg, cls){ var d=document.getElementById('adxlog'); if(d) d.innerHTML += '<div class="'+(cls||'')+'">'+msg+'</div>'; }
   adtechadv.init({ trackerUrl: {{ .Cfg.TrackerURL }}, accountId: {{ .Cfg.AccountID }}, tag: TAG, debug: true });
 
@@ -122,6 +126,8 @@
     localStorage.setItem('ford_consent', personalized ? 'yes' : 'no');
     var b=document.getElementById('consent'); if(b) b.style.display='none';
     if (!personalized) { log('✗ consent declined — no retargeting pixel (no audience)', 'no'); return; }
+    // DPA: tell the tag which product this page is — it rides the pixel as skus=.
+    adtechadv.setProductSKUs(PAGE_SKU ? [PAGE_SKU] : []);
     personaDemoIP().then(function(ip){
       adtechadv.setDemoIP(ip);
       return adtechadv.setConsent(true);

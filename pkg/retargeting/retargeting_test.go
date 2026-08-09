@@ -47,10 +47,74 @@ func (f *fakeEnroller) InvalidateAudience(_ context.Context, _ string) error {
 	return nil
 }
 
+// fakeProductViews records the SKU writes/removes the service makes.
+type fakeProductViews struct {
+	recorded map[string][]string // userID → skus
+	lastTTL  time.Duration
+	removed  []call // segment field reused as sku
+}
+
+func (f *fakeProductViews) RecordProductViews(_ context.Context, _, userID string, skus []string, _ time.Time, ttl time.Duration, _ string) error {
+	if f.recorded == nil {
+		f.recorded = map[string][]string{}
+	}
+	f.recorded[userID] = append(f.recorded[userID], skus...)
+	f.lastTTL = ttl
+	return nil
+}
+
+func (f *fakeProductViews) RemoveProductView(_ context.Context, _, userID, sku string) error {
+	f.removed = append(f.removed, call{sku, userID})
+	return nil
+}
+
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func visitEvent(account, user, tag string) events.BehaviourSignalEvent {
 	return events.BehaviourSignalEvent{Kind: "site_visit", AccountID: account, UserID: user, Tag: tag}
+}
+
+// A site_visit carrying SKUs records them per-user with the product-view TTL,
+// independent of segment matching (a product-page pixel builds SKU memory even
+// before the visitor enrolls).
+func TestOnSiteVisit_RecordsProductSKUs(t *testing.T) {
+	src := &fakeSource{segs: map[string][]Segment{}} // no segments → no enroll
+	enr := &fakeEnroller{}
+	pv := &fakeProductViews{}
+	s := New(src, enr, testLog())
+	s.SetProductViews(pv, func() time.Duration { return 14 * 24 * time.Hour })
+
+	ev := visitEvent("adv", "u1", "product")
+	ev.SKUs = "DOG-KIBBLE-12KG, DOG-TREAT-BOX ,DOG-KIBBLE-12KG" // dupes + spaces
+	if _, err := s.OnSiteVisit(context.Background(), ev); err != nil {
+		t.Fatalf("OnSiteVisit: %v", err)
+	}
+	got := pv.recorded["u1"]
+	if len(got) != 2 || got[0] != "DOG-KIBBLE-12KG" || got[1] != "DOG-TREAT-BOX" {
+		t.Fatalf("recorded SKUs = %v, want [DOG-KIBBLE-12KG DOG-TREAT-BOX] (deduped, trimmed)", got)
+	}
+	if pv.lastTTL != 14*24*time.Hour {
+		t.Errorf("product-view TTL = %v, want 14d", pv.lastTTL)
+	}
+}
+
+// Household enrollment being on records the SKUs for the household id too.
+func TestOnSiteVisit_ProductSKUsHouseholdEnroll(t *testing.T) {
+	src := &fakeSource{segs: map[string][]Segment{}}
+	pv := &fakeProductViews{}
+	s := New(src, &fakeEnroller{}, testLog())
+	s.SetProductViews(pv, func() time.Duration { return 30 * 24 * time.Hour })
+	s.SetHouseholdEnroll(func() bool { return true })
+
+	ev := visitEvent("adv", "u1", "product")
+	ev.SKUs = "SKU-A"
+	ev.HouseholdID = "hh:home1"
+	if _, err := s.OnSiteVisit(context.Background(), ev); err != nil {
+		t.Fatalf("OnSiteVisit: %v", err)
+	}
+	if len(pv.recorded["u1"]) != 1 || len(pv.recorded["hh:home1"]) != 1 {
+		t.Fatalf("recorded = %v, want both u1 and hh:home1", pv.recorded)
+	}
 }
 
 func TestOnSiteVisit_EnrollsMatchingSegmentAndInvalidates(t *testing.T) {

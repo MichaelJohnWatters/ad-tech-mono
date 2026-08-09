@@ -88,6 +88,12 @@ func main() {
 		svc.SetSuppression(store, store, func() time.Duration {
 			return time.Duration(keys.AudienceRT.SuppressionDays.Get(cfg)) * 24 * time.Hour
 		})
+		// DPA slice 2: SKU-aware retargeting memory — a site_visit pixel that
+		// carries SKUs records them per-user (person+household) so a dynamic
+		// creative can render the carted products.
+		svc.SetProductViews(store, func() time.Duration {
+			return time.Duration(keys.AudienceRT.ProductViewDays.Get(cfg)) * 24 * time.Hour
+		})
 
 		ctx := context.Background()
 		natsBus.EnsureStreamWithRetry(ctx, events.StreamName, []string{events.StreamSubjects})
@@ -140,6 +146,11 @@ func main() {
 					log.Warn("expired-suppression purge failed", "error", err)
 				} else if n > 0 {
 					log.Info("purged expired retargeting suppressions", "rows", n)
+				}
+				if n, err := store.PurgeExpiredProductViews(purgeCtx); err != nil {
+					log.Warn("expired-product-view purge failed", "error", err)
+				} else if n > 0 {
+					log.Info("purged expired retargeting product views", "rows", n)
 				}
 			}
 		}

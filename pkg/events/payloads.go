@@ -355,8 +355,13 @@ type BehaviourSignalEvent struct {
 	// "site_visit"): the advertiser account whose site fired the pixel and
 	// its self-chosen tag ("product-page"). Rules scope site_visit rows to
 	// the segment's own account so tag names can't collide across tenants.
-	AccountID  string    `json:"account_id,omitempty"`
-	Tag        string    `json:"tag,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	Tag       string `json:"tag,omitempty"`
+	// SKUs carries the product SKUs a site_visit pixel reported (sku= / skus=
+	// CSV), comma-separated (Dynamic Product Ads). audience-rt records them as
+	// the visitor's carted products so a dynamic creative can render them and
+	// per-product suppression can key on them. Empty for non-DPA pixels.
+	SKUs       string    `json:"skus,omitempty"`
 	ObservedAt time.Time `json:"observed_at"`
 }
 

@@ -77,3 +77,27 @@ func (h *Harness) ListProducts(t *testing.T, accountID string) []catalog.Product
 	}
 	return out.Products
 }
+
+// ProductViewSKUs returns the SKUs recorded for (account, user) in
+// retargeting_product_views (DPA slice 2), live rows only, freshest first —
+// a direct DB read for assertions.
+func (h *Harness) ProductViewSKUs(t *testing.T, accountID, userID string) []string {
+	t.Helper()
+	rows, err := h.DB.Query(`
+SELECT sku FROM retargeting_product_views
+WHERE account_id = $1::uuid AND user_id = $2 AND expires_at > now()
+ORDER BY seen_at DESC, sku`, accountID, userID)
+	if err != nil {
+		t.Fatalf("query product views: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sku string
+		if err := rows.Scan(&sku); err != nil {
+			t.Fatalf("scan sku: %v", err)
+		}
+		out = append(out, sku)
+	}
+	return out
+}

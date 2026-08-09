@@ -21,7 +21,7 @@
     'use strict';
 
     var config = { trackerUrl: '', accountId: '', tag: '', debug: false };
-    var state = { consented: false, uid: null, he: null, ip: null };
+    var state = { consented: false, uid: null, he: null, ip: null, skus: [] };
 
     // sha256Hex hashes the normalised (trimmed, lower-cased) value to lowercase
     // hex — the standard hashed-email form advertisers and publishers share, so
@@ -120,10 +120,17 @@
                 // in prod), so local demo personas get their own household and
                 // ANONYMOUS guest carts are household-chaseable with no email.
                 var ip = state.ip ? '&ip=' + encodeURIComponent(state.ip) : '';
+                // DPA: the SKUs the shopper viewed/carted (setProductSKUs) ride
+                // the pixel as a skus= CSV; audience-rt remembers them so a
+                // dynamic creative can render the actual carted products.
+                var skus = state.skus && state.skus.length
+                    ? '&skus=' + encodeURIComponent(state.skus.join(',')) : '';
                 pixel(config.trackerUrl + '/v1/t/rt?uid=' + encodeURIComponent(uid) +
                     '&aid=' + encodeURIComponent(config.accountId) +
-                    '&tag=' + encodeURIComponent(config.tag) + he + ip);
-                log('retargeting pixel fired', config.tag + (state.he ? ' (+hashed email)' : ''));
+                    '&tag=' + encodeURIComponent(config.tag) + he + ip + skus);
+                log('retargeting pixel fired', config.tag +
+                    (state.he ? ' (+hashed email)' : '') +
+                    (state.skus && state.skus.length ? ' (+' + state.skus.length + ' skus)' : ''));
                 return uid;
             });
         },
@@ -133,6 +140,16 @@
         // allowlisted (private) callers, so a public browser setting this is
         // ignored server-side.
         setDemoIP: function (ip) { state.ip = ip || null; },
+
+        // setProductSKUs sets the product SKUs the shopper is viewing/carting
+        // (Dynamic Product Ads). They ride the NEXT retargeting pixel as a
+        // skus= CSV; the platform records them per-user so a later dynamic
+        // creative renders the actual carted products. Accepts an array or a
+        // single SKU string.
+        setProductSKUs: function (skus) {
+            if (!skus) { state.skus = []; return; }
+            state.skus = Array.isArray(skus) ? skus.slice() : [String(skus)];
+        },
 
         // setEmail identifies the visitor by a hashed email (the advertiser knows
         // its logged-in customer). Stored first-party; included on the next
