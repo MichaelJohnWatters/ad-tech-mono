@@ -43,6 +43,12 @@ import (
 
 var log = logger.New("simulator")
 
+// loadUserPool > 0 makes the mirror path draw user ids from the seeded
+// synthetic universe ("synth-user-%06d", matching cmd/seed
+// --synthetic-users) instead of random high-cardinality ids — density load
+// runs need bid-time audience lookups to HIT. Set via --user-pool.
+var loadUserPool int
+
 // beaconLost64 counts wins whose impression beacon never delivered after 3
 // attempts — the reconciliation term for client-side beacon loss.
 var beaconLost64 int64
@@ -242,6 +248,7 @@ func runSimulation() {
 	}
 	geoOverride := getFlag("--geo", "")
 	deviceOverride := getFlag("--device", "")
+	loadUserPool = parseInt(getFlag("--user-pool", "0"))
 
 	// Load the seeded placement pool so requests spread across every publisher.
 	initInventory(getFlag("--publishers-dir", "profiles/publishers"), log)

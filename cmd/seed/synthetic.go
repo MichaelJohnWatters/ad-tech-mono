@@ -67,3 +67,60 @@ ON CONFLICT (segment_id, user_id) DO NOTHING`,
 		"note", "changelog trigger enqueued the same volume — watch the pipeline drainer backlog")
 	return nil
 }
+
+// SeedSyntheticCampaigns adds audience-PREDICATE campaigns over the synthetic
+// segments — the piece the big world never had (bigworld.go targets
+// geo+device only, so auction-side audience work was unmeasured). Each
+// campaign includes one synthetic segment and carries an audience bid
+// modifier on it, so a density load run exercises the full chain: Redis
+// SMEMBERS → targeting include match → ApplyModifiers pricing. Bids stay in
+// the standard 1.5-5.9 band so the market composition the perf baselines
+// assume is not distorted.
+func (in *inserter) SeedSyntheticCampaigns(ctx context.Context, campaigns, segments int) error {
+	if segments < 1 {
+		return fmt.Errorf("synthetic campaigns need --synthetic-segments > 0")
+	}
+	const acctKey = "adv-synthetic"
+	ioKey := acctKey + "-io"
+	internalDSP := DeriveID("dsp", "internal")
+	if err := in.upsertAccounts(ctx,
+		map[string]string{acctKey: "Synthetic Density Tier"},
+		map[string]string{acctKey: internalDSP}); err != nil {
+		return fmt.Errorf("synthetic advertiser: %w", err)
+	}
+	if err := in.upsertInsertionOrders(ctx, map[string]ioInsertPayload{
+		ioKey: {external: ioKey, accountID: DeriveID("account", acctKey), name: "Synthetic Density IO", currency: "USD"},
+	}); err != nil {
+		return fmt.Errorf("synthetic IO: %w", err)
+	}
+	budgets := []float64{300, 500, 1000}
+	for c := 0; c < campaigns; c++ {
+		segKey := fmt.Sprintf("synthetic-%03d", c%segments)
+		cc := CampaignConfig{
+			ID:          fmt.Sprintf("synthetic-camp-%03d", c),
+			AccountID:   acctKey,
+			IOId:        ioKey,
+			Name:        fmt.Sprintf("Synthetic Audience Campaign %03d (%s)", c, segKey),
+			BaseBid:     1.5 + float64(c%12)*0.4,
+			Currency:    "USD",
+			DailyBudget: budgets[c%len(budgets)],
+			BidModel:    "cpm",
+			PacingMode:  "even",
+			Status:      "live",
+			Creatives: []CreativeYAML{
+				{Width: 300, Height: 250}, {Width: 728, Height: 90}, {Width: 320, Height: 50},
+			},
+			Targeting: &TargetingYAML{
+				Include: TargetingSetYAML{Segments: []string{segKey}},
+			},
+			Modifiers: &ModifiersYAML{
+				Audience: map[string]float64{segKey: 10 + float64(c%3)*10}, // +10/+20/+30
+			},
+		}
+		if err := in.upsertCampaign(ctx, cc); err != nil {
+			return fmt.Errorf("synthetic campaign %d: %w", c, err)
+		}
+	}
+	in.log.Info("seeded synthetic audience campaigns", "campaigns", campaigns, "segments_targeted", min(campaigns, segments))
+	return nil
+}

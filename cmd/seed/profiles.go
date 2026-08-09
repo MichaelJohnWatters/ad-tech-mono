@@ -111,6 +111,11 @@ type TargetingSetYAML struct {
 type ModifiersYAML struct {
 	Device     map[string]float64 `yaml:"device,omitempty"`
 	GeoCountry map[string]float64 `yaml:"geo_country,omitempty"`
+	// Audience maps segment EXTERNAL keys ("seg-dog-lovers", "synthetic-042")
+	// to bid-modifier percentages. modifiersAsMap derives the segment UUIDs —
+	// the DSP's ModifierContext carries segment UUIDs, so raw keys would
+	// never match (same rule as targeting include_segments).
+	Audience map[string]float64 `yaml:"audience,omitempty"`
 }
 
 // LoadProfiles reads every YAML in dir and returns them sorted by filename.

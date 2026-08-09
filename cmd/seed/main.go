@@ -36,6 +36,7 @@ func main() {
 	synthSegments := flag.Int("synthetic-segments", 0, "additive SYNTHETIC density tier: dummy audience segments seeded around the readable themed core (0 = none)")
 	synthMembersPer := flag.Int("synthetic-members-per", 1000, "memberships per synthetic segment")
 	synthUsers := flag.Int("synthetic-users", 100_000, "synthetic user-id universe the memberships draw from (users overlap across segments)")
+	synthCampaigns := flag.Int("synthetic-campaigns", 0, "audience-predicate campaigns over the synthetic segments (include_segments + audience bid modifiers); needs --synthetic-segments")
 	flag.Parse()
 
 	log := logger.New(constants.ServiceSeed)
@@ -162,6 +163,12 @@ func main() {
 	if *synthSegments > 0 {
 		if err := in.SeedSyntheticDensity(ctx, *synthSegments, *synthMembersPer, *synthUsers); err != nil {
 			log.Error("seed synthetic density failed", "error", err)
+			os.Exit(1)
+		}
+	}
+	if *synthCampaigns > 0 {
+		if err := in.SeedSyntheticCampaigns(ctx, *synthCampaigns, *synthSegments); err != nil {
+			log.Error("seed synthetic campaigns failed", "error", err)
 			os.Exit(1)
 		}
 	}

@@ -142,8 +142,8 @@ perf-exchange: ## k6 load on exchange auctions with REAL seeded placements + sch
 
 perf-all: perf-tracker perf-exchange ## Run all k6 load tests
 
-loadtest: ## Full-path load via the simulator (auction→serve→beacons→reporting): make loadtest RPS=100 DURATION=10m; add VERIFY=1 to assert reporting counts match
-	go run ./cmd/simulator run --profile steady --rps $${RPS:-100} --duration $${DURATION:-10m} $$( [ "$${VERIFY}" = "1" ] && echo --verify )
+loadtest: ## Full-path load via the simulator (auction→serve→beacons→reporting): make loadtest RPS=100 DURATION=10m; add VERIFY=1 to assert reporting counts match; USER_POOL=N draws user ids from the seeded synthetic universe (audience density runs)
+	go run ./cmd/simulator run --profile steady --rps $${RPS:-100} --duration $${DURATION:-10m} $$( [ "$${VERIFY}" = "1" ] && echo --verify ) $$( [ -n "$${USER_POOL}" ] && echo --user-pool $${USER_POOL} )
 
 loadtest-ramp: ## Progressive full-path load: stages through RPS_STAGES (default "100 150 250") × STAGE_DURATION (default 5m), verifying pipeline counts between stages; aborts on degradation
 	scripts/loadtest-ramp.sh
