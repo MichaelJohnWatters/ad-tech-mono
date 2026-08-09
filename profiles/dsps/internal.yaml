@@ -185,3 +185,138 @@ campaigns:
       - { id: cr-saas-001-mobile, width: 320, height: 50 }
       - { id: cr-saas-001-audio-30s, format: audio, duration: 30,
           media_url: "http://localhost:8080/v1/creatives/media/audio-1.mp3" }
+
+  # ------------------------------------------------------------------
+  # THEMED WORLD (operator design decision, 2026-08-07): campaigns that
+  # target the seeded behavioural segments (cmd/seed seedThemedSegments).
+  # Membership is EARNED — themed simulator personas browse the themed
+  # publishers (profiles/publishers/themed.yaml), the hourly
+  # profile-builder's category rules enroll them, and only then do these
+  # campaigns start winning for those users. Segment keys here are
+  # external ids; the seed derives the segment UUIDs (same DeriveID
+  # namespace seedThemedSegments uses).
+  # ------------------------------------------------------------------
+
+  - id: li-dogfood-aud
+    account_id: adv-barkbox
+    advertiser_id: adv-barkbox
+    io_id: io-barkbox
+    name: "Premium Dog Food Co - Dog Lovers"
+    creative_domain: premium-dog-food.co
+    base_bid: 12.00
+    currency: USD
+    daily_budget: 300
+    total_budget: 5000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-dog-lovers]
+    creatives:
+      - { id: cr-dogfood-001, width: 300, height: 250 }
+      - { id: cr-dogfood-001-leader, width: 728, height: 90 }
+      - { id: cr-dogfood-001-mobile, width: 320, height: 50 }
+
+  - id: li-cattreats-aud
+    account_id: adv-whiskerco
+    advertiser_id: adv-whiskerco
+    io_id: io-whiskerco
+    name: "Whisker & Co Cat Treats - Cat Lovers"
+    creative_domain: whisker-co.com
+    base_bid: 12.00
+    currency: USD
+    daily_budget: 300
+    total_budget: 5000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-cat-lovers]
+    creatives:
+      - { id: cr-cattreats-001, width: 300, height: 250 }
+      - { id: cr-cattreats-001-halfpage, width: 300, height: 600 }
+
+  - id: li-espresso-aud
+    account_id: adv-beanbarn
+    advertiser_id: adv-beanbarn
+    io_id: io-beanbarn
+    name: "Bean Barn Roasters - Coffee Snobs"
+    creative_domain: bean-barn.coffee
+    base_bid: 12.00
+    currency: USD
+    daily_budget: 250
+    total_budget: 4000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-coffee-snobs]
+    creatives:
+      - { id: cr-espresso-001, width: 300, height: 250 }
+      - { id: cr-espresso-001-leader, width: 728, height: 90 }
+
+  - id: li-protein-aud
+    account_id: adv-sweatlabs
+    advertiser_id: adv-sweatlabs
+    io_id: io-sweatlabs
+    name: "Sweat Labs Protein - Fitness Fans"
+    creative_domain: sweat-labs.fit
+    base_bid: 12.00
+    currency: USD
+    daily_budget: 250
+    total_budget: 4000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-fitness-fans]
+    creatives:
+      - { id: cr-protein-001, width: 300, height: 250 }
+      - { id: cr-protein-001-mobile, width: 320, height: 50 }
+
+  # Targets the COMPOSITE segment (dog-lovers AND coffee-browsers) — the
+  # dog-cafe-regular persona is its natural audience.
+  - id: li-dogcafe-aud
+    account_id: adv-barkbox
+    advertiser_id: adv-barkbox
+    io_id: io-barkbox
+    name: "Premium Dog Food Co - Cafe Crossover"
+    creative_domain: premium-dog-food.co
+    base_bid: 13.00
+    currency: USD
+    daily_budget: 150
+    total_budget: 2000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-dog-cafe-crowd]
+    creatives:
+      - { id: cr-dogcafe-001, width: 300, height: 250 }
+
+  # The retargeting payoff: chases dog-food cart abandoners (enrolled by
+  # audience-rt within seconds of the /v1/t/rt?tag=dogfood-cart pixel).
+  - id: li-dogfood-cart-rt
+    account_id: adv-barkbox
+    advertiser_id: adv-barkbox
+    io_id: io-barkbox
+    name: "Premium Dog Food Co - Cart Retargeting"
+    creative_domain: premium-dog-food.co
+    base_bid: 14.00
+    currency: USD
+    daily_budget: 100
+    total_budget: 1500
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments: [seg-dogfood-cart]
+    creatives:
+      - { id: cr-dogfood-cart-001, width: 300, height: 250 }
+      - { id: cr-dogfood-cart-001-leader, width: 728, height: 90 }

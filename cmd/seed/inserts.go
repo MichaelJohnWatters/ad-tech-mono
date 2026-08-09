@@ -311,6 +311,12 @@ ON CONFLICT (line_item_id) DO UPDATE SET
   exclude_geo = EXCLUDED.exclude_geo,
   include_device = EXCLUDED.include_device,
   exclude_device = EXCLUDED.exclude_device,
+  include_segments = EXCLUDED.include_segments,
+  exclude_segments = EXCLUDED.exclude_segments,
+  include_domains = EXCLUDED.include_domains,
+  exclude_domains = EXCLUDED.exclude_domains,
+  include_categories = EXCLUDED.include_categories,
+  exclude_categories = EXCLUDED.exclude_categories,
   bid_modifiers = EXCLUDED.bid_modifiers,
   updated_at = now()`
 		trID := DeriveID("targeting", c.ID)
@@ -321,7 +327,7 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 			trID, lineItemID, accountID,
 			pqStrArr(targetingField(t, "include", "geo")), pqStrArr(targetingField(t, "exclude", "geo")),
 			pqStrArr(targetingField(t, "include", "device")), pqStrArr(targetingField(t, "exclude", "device")),
-			pqStrArr(targetingField(t, "include", "segments")), pqStrArr(targetingField(t, "exclude", "segments")),
+			pqStrArr(segmentIDs(targetingField(t, "include", "segments"))), pqStrArr(segmentIDs(targetingField(t, "exclude", "segments"))),
 			pqStrArr(targetingField(t, "include", "domains")), pqStrArr(targetingField(t, "exclude", "domains")),
 			pqStrArr(targetingField(t, "include", "categories")), pqStrArr(targetingField(t, "exclude", "categories")),
 			modsJSON,
@@ -470,6 +476,22 @@ func defaultStr(v, fallback string) string {
 
 func displayName(external, kind string) string {
 	return kind + " " + external
+}
+
+// segmentIDs maps the YAML's external segment keys ("seg-dog-lovers") to the
+// derived segment UUIDs. Membership rows, the changelog cache, and the DSP's
+// bid-time lookups all carry segment UUIDs, so targeting_rules must too —
+// raw external keys would never match. Same DeriveID namespace
+// seedThemedSegments / seedAudienceSegments create the segments under.
+func segmentIDs(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = DeriveID("segment", k)
+	}
+	return out
 }
 
 func pqStrArr(s []string) any {

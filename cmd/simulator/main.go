@@ -172,6 +172,17 @@ var profiles = map[string]profile{
 		Channels:   []channelWeight{{request.Display, 45}, {request.Video, 25}, {request.Audio, 15}, {request.Native, 15}},
 		FloorPrice: 0.50, ClickRate: 0.01, ViewPct: 60, ConvRate: 0.08,
 	},
+	// themed: the steady blend PLUS the readable-world personas (dog-lovers,
+	// cat-lovers, coffee-snobs, ...) whose browsing earns themed segment
+	// membership. Display-heavy because the themed publishers are display
+	// inventory. Kept out of steady/burst so perf baselines keep their exact
+	// persona mix.
+	"themed": {
+		Name: "themed", RPS: 10,
+		Personas:   append(append([]request.Persona{}, request.Personas...), request.ThemedPersonas...),
+		Channels:   []channelWeight{{request.Display, 70}, {request.Native, 15}, {request.Video, 10}, {request.Audio, 5}},
+		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10,
+	},
 }
 
 func runSimulation() {
@@ -441,7 +452,17 @@ func runOne(client *http.Client, eps endpoints, exchangeURL, trackerURL string, 
 	// Pick a seeded placement for this channel so traffic spreads across every
 	// publisher. Falls back to the built-in simulator placement when the
 	// inventory has none for the channel (native/audio) or wasn't loaded.
+	//
+	// Personas with Interests browse COHERENTLY: ~80% of their requests land
+	// on placements whose categories match an interest (dog people read dog
+	// blogs), the rest roam — so their behaviour signals earn the seeded
+	// themed segments' category rules without being deterministic.
 	pl, haveSeeded := invPick(ch, rng)
+	if len(persona.Interests) > 0 && rng.Float64() < 0.8 {
+		if themed, ok := invPickThemed(ch, persona.Interests, rng); ok {
+			pl, haveSeeded = themed, true
+		}
+	}
 	if !direct {
 		key := placementKeyFor(ch)
 		if haveSeeded {

@@ -148,6 +148,44 @@ func (inv *inventory) pick(ch request.Channel, rng *rand.Rand) (invPlacement, bo
 	return pool[rng.Intn(len(pool))], true
 }
 
+// pickByInterest returns a random placement for the channel whose categories
+// intersect the persona's interests — a dog person lands on dog pages. ok=false
+// when no placement matches (caller falls back to the unbiased pick).
+func (inv *inventory) pickByInterest(ch request.Channel, interests []string, rng *rand.Rand) (invPlacement, bool) {
+	if len(interests) == 0 {
+		return invPlacement{}, false
+	}
+	var matches []invPlacement
+	for _, pl := range inv.byChannel[ch] {
+		if categoriesIntersect(pl.Categories, interests) {
+			matches = append(matches, pl)
+		}
+	}
+	if len(matches) == 0 {
+		return invPlacement{}, false
+	}
+	return matches[rng.Intn(len(matches))], true
+}
+
+func categoriesIntersect(cats, interests []string) bool {
+	for _, c := range cats {
+		for _, i := range interests {
+			if c == i {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// invPickThemed is the interest-affine variant of invPick.
+func invPickThemed(ch request.Channel, interests []string, rng *rand.Rand) (invPlacement, bool) {
+	if simInv == nil {
+		return invPlacement{}, false
+	}
+	return simInv.pickByInterest(ch, interests, rng)
+}
+
 // count returns how many placements the inventory holds across all channels.
 func (inv *inventory) count() int {
 	n := 0

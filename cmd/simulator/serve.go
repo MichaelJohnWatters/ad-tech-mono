@@ -64,8 +64,17 @@ func serveMirror(client *http.Client, u endpoints, persona request.Persona, ch r
 	// Give each served impression a fresh high-cardinality user so fill reflects
 	// a realistic audience spread. Anonymous personas (no user_id) stay
 	// anonymous — they carry no identifier and bypass the cap by design.
+	//
+	// Themed personas (UserPool > 0) instead draw from a small STABLE pool:
+	// the same users recur, so repeat visits accumulate the behaviour signals
+	// that earn segment membership. Random ids would make min_count>1 rules
+	// unreachable — every visit would look like a brand-new user.
 	if params.Get(request.ParamUserID) != "" {
-		params.Set(request.ParamUserID, fmt.Sprintf("pub-user-%08x", rng.Uint32()))
+		if uid := persona.RequestUserID(rng); uid != "" {
+			params.Set(request.ParamUserID, uid)
+		} else {
+			params.Set(request.ParamUserID, fmt.Sprintf("pub-user-%08x", rng.Uint32()))
+		}
 	}
 	switch ch {
 	case request.Video:

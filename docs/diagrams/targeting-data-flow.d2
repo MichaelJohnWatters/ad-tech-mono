@@ -103,7 +103,6 @@ lake.behaviour -> builder.rules {style.stroke-dash: 2}
 lake.signals -> builder.rules {style.stroke-dash: 2}
 builder.cluster -> lake.clusters: versioned artifact
 builder.expand -> pg_members: AddMembers + replace-by-segment prune
-builder.expand -> nats: cache.invalidate.audience {style.stroke-dash: 3}
 
 # ============================================================
 # REAL-TIME loop - audience-rt (seconds, not the hourly batch)
@@ -117,21 +116,27 @@ audiencert: audience-rt :8097 (pkg/retargeting) {
 }
 nats -> audiencert: behaviour.observed (site_visit) + conversion {style.stroke-dash: 3}
 audiencert -> pg_members: enroll (TTL) / suppress / purge-expired
-audiencert -> nats: cache.invalidate.audience + retargeting.enrolled (push) {style.stroke-dash: 3}
+audiencert -> nats: retargeting.enrolled (abandoned-cart push) {style.stroke-dash: 3}
 
 # ============================================================
-# OUTPUT 1 - loaded back into live auctions
+# OUTPUT 1 - loaded back into live auctions (append-based change-log,
+# 2026-08-04): EVERY membership write - batch, real-time, upload, purge -
+# fires the migration-078 trigger into a changelog outbox; ONE drainer in
+# cmd/pipeline applies it to Redis. No invalidate broadcasts, no per-pod
+# rebuilds; the DSP/SSP lookups are READ-ONLY SMEMBERS.
 # ============================================================
 pg_members: audience_segment_members (PG) {shape: cylinder}
-preload: audience preloader - interval bulk push (pkg/audience/store/preload)
-redis: "Redis - audience:user:<id>:<visibility>" {
+changelog: audience_membership_changelog - trigger-fed outbox (mig 078) {shape: cylinder}
+drainer: cmd/pipeline single drainer - 3s delta drain (SADD/SREM) + 5m reconcile (ReplaceSet + prev-keys tombstone), watermark in Redis
+redis: "Redis - audience:set:<user>:<visibility> (SET of segment ids)" {
   shape: cylinder
   style.fill: "#fecaca"
 }
 
 onboarded.api -> pg_members: direct path - live today
-pg_members -> preload {style.stroke-dash: 2}
-preload -> redis
+pg_members -> changelog: DB trigger, same txn
+changelog -> drainer: poll seq > watermark, then trim {style.stroke-dash: 2}
+drainer -> redis: atomic SADD/SREM / ReplaceSet
 
 serve: Live auction path {
   style.fill: "#eff6ff"
