@@ -263,3 +263,36 @@ loads the pipeline at production density (synthetic tier + audience-predicate
 big-world campaigns) and will record deliberate choices here — including
 whether frequency rules deserve a 15m tier and whether 3s/5m survive
 O(100k-1M) memberships.
+
+## Scaling outlook (operator discussion, 2026-08-09)
+
+Big audiences do NOT slow the bid path in this design — Redis is an
+inverted per-USER index, so serving cost is O(segments-per-user) regardless
+of segment cardinality. Audience size bites three background places, in
+likely order of pain: the **5m reconcile** (full member scan + per-key
+SMEMBERS diff), **Redis memory** (~250-300MB at 1M users, because we store
+36-char segment UUIDs per user), and **profile-builder runtime**.
+
+Phase 3 trigger conditions — mitigate when any trips:
+1. reconcile duration approaches its own interval (the scan can't finish
+   inside 5m);
+2. Redis membership memory becomes a meaningful slice of the pod;
+3. DSP audience-phase p95 drifts from its ~15ms baseline under density.
+
+Mitigation ladder, cheapest first:
+1. **Interned integer segment ids** in the Redis sets instead of UUID
+   strings (~4× memory win, mechanical, no semantics change).
+2. **Incremental/sharded reconcile** (paginate by user-id range, spread
+   across the interval; or per-key checksums instead of full SMEMBERS
+   diffs).
+3. **In-process probabilistic filters** (bloom/cuckoo) per targetable
+   segment in the DSP — ~1.2 bytes/member at 1% FP, zero network on the
+   bid path. Nuances settled in discussion: *adds* are real-time (set bits
+   from the changelog stream); *deletes* are not — cuckoo filters or
+   rebuild-on-reconcile-cadence cover suppression/TTL/GDPR removal, which
+   fits the existing seconds-for-adds / ≤60s-for-expiry freshness envelope.
+   **HARD RULE: probabilistic structures are for INCLUDE targeting only.**
+   A false positive on an include list slightly over-targets (fine); a
+   false positive on a suppression/exclusion segment shows an ad to an
+   opted-out or already-converted user (never fine). Exclusion semantics
+   stay on exact sets whatever we adopt.
