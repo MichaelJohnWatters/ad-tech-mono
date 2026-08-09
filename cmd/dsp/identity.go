@@ -36,7 +36,7 @@ type graphLoader interface {
 // is observed TRUE — however late that happens. The old shape latched the boot
 // value: openIdentityResolver ran once at startup, and on a cold VM start the
 // live-config snapshot can land seconds AFTER construction (observed 2026-08-09:
-// config poll delivered old:'' new:'true' 30s post-boot; the resolver had
+// config poll delivered old:” new:'true' 30s post-boot; the resolver had
 // already latched nil and the TierLive key silently required a pod restart).
 // Boot-latch doctrine: boot-time provisioning must retry/re-resolve, never
 // latch a fallback. Resolve() checks an atomic pointer (nil = no resolution,
