@@ -16,6 +16,7 @@ import (
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
+	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
@@ -379,6 +380,7 @@ func main() {
 			Bus:          secretsBus,
 			Log:          log,
 			MaxRejectPct: keys.Pipeline.IngestMaxRejectPct.Get(cfg),
+			Catalog:      catalogpg.New(gwDB),
 		}
 		// ADR 0008: load the platform PGP private key from the secrets cache so
 		// providers can encrypt audience files to the platform public key. A
@@ -454,6 +456,13 @@ func main() {
 	mux.Handle(routes.APIAudienceProviders+"/", authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudienceProviders, authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
+	// DPA slice 1: the advertiser product catalog (feed upload rides the same
+	// ingest queue as audience files, kind=product; list reads the products table).
+	var productCatalogStore *catalogpg.Store
+	if gwDB != nil {
+		productCatalogStore = catalogpg.New(gwDB)
+	}
+	mux.Handle(routes.APIProducts, authMiddleware(http.HandlerFunc(productsHandler(audDeps, productCatalogStore))))
 	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +
 	// the tenant-scoped label write. More specific paths than the base

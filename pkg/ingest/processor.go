@@ -73,6 +73,9 @@ type Processor struct {
 	// all-or-nothing (any bad row rejects); 100 = never reject on bad rows
 	// (partial import, quarantine the rest). Default 0.
 	MaxRejectPct int
+	// Catalog persists product feeds (kind=product jobs, DPA slice 1). nil =
+	// product jobs fail with "not configured"; audience jobs are unaffected.
+	Catalog CatalogWriter
 }
 
 // defaultIDMappings normalize the common id column names to id_value so a file

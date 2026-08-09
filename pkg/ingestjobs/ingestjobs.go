@@ -30,6 +30,14 @@ const (
 	SourceDropzone = "dropzone" // 3rd-party partner drop-zone poller
 )
 
+// Job kinds — which feed TYPE the staged file is. One queue + one worker drain
+// both; the processor branches on it (audience → Process, product →
+// ProcessProducts). Empty is read as audience (pre-DPA rows).
+const (
+	KindAudience = "audience"
+	KindProduct  = "product"
+)
+
 // SegmentSpec carries everything the processor needs that used to be read from
 // the per-provider drop-zone manifest at process time — snapshotted onto the
 // job at enqueue so the file is self-describing when the worker claims it.
@@ -87,7 +95,9 @@ type Job struct {
 	ID        string `json:"id"`
 	AccountID string `json:"account_id"`
 	Source    string `json:"source"`
-	Provider  string `json:"provider,omitempty"`
+	// Kind is the feed type (KindAudience | KindProduct). Empty = audience.
+	Kind     string `json:"kind,omitempty"`
+	Provider string `json:"provider,omitempty"`
 	// ProviderID references the data_providers row this ingest is attributed to
 	// (ADR 0009); empty = no provider (plain upload). Nullable FK column.
 	ProviderID string `json:"provider_id,omitempty"`

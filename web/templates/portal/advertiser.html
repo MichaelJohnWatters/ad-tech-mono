@@ -277,6 +277,21 @@
     </section>
 
     <!-- ============ Conversions ============ -->
+    <!-- Dynamic Product Ads slice 1: the advertiser product catalog. Feed
+         uploads ride the unified ingestion path (kind=product) — same staging,
+         queue, and strict validation as audience files. Later slices read this
+         at render time (dynamic creatives) and per-SKU suppression. -->
+    <section id="section-products" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Product catalog" "subtitle" "Your product feed — dynamic ads assemble creatives from these rows at render time") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Upload feed" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newProductFeed').classList.remove('hidden')") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "" "SKU" "Title" "Price" "Availability" "Category" "Product page")) }}
+        <tbody id="productList"><tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
     <section id="section-conversions" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Conversion events" "subtitle" "Define named conversions and embed the pixel on your site's confirmation pages") }}
       <div class="flex justify-end mb-3">
@@ -787,6 +802,28 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- DPA: product feed upload — rides the unified ingestion path (kind=product).
+     No PII hashing (a catalog has none); strict all-or-nothing validation. -->
+{{ template "modal-start" (dict "id" "newProductFeed" "title" "Upload product feed") }}
+  <form onsubmit="uploadProductFeed(event)">
+    {{ template "form-field" (dict "label" "Feed name" "name" "pf_name" "placeholder" "shop-catalog" "required" true) }}
+    <label class="block text-sm mb-3">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">CSV / TSV file</span>
+      <input type="file" id="pf_file" accept=".csv,.tsv,text/csv,text/tab-separated-values" class="w-full text-xs" required />
+      <span class="block mt-1 text-[11px] text-gray-400">Columns: <code>sku</code> (or id/item_id), <code>title</code> (or name), <code>price</code> ("38.99" or "38.99 EUR"), and optionally image_url, product_url/link, availability, category, description. Google Merchant headers work as-is.</span>
+    </label>
+    <label class="block text-sm mb-4">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Notify additional emails (comma-separated, optional)</span>
+      <input type="text" id="pf_notify" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" placeholder="teammate@example.com" />
+    </label>
+    <p class="mb-4 text-xs text-gray-400">Re-uploading upserts by SKU (idempotent). A file with invalid rows is rejected whole — nothing imports — with the failing column named.</p>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "document.getElementById('newProductFeed').classList.add('hidden')") }}
+      {{ template "button" (dict "label" "Upload" "type" "submit") }}
+    </div>
+  </form>
+{{ template "modal-end" . }}
+
 <!-- IAB Audience Taxonomy picker: label a segment with a standard taxonomy
      node so external buyers can interpret it (user.data + segtax on the bid
      request). Fuzzy search by default; "quoted" input = strict substring. -->
@@ -995,9 +1032,9 @@ const fmtInt = (n) => Number(n || 0).toLocaleString();
 
 // ---- Section switching (portal-core initSectionRouter) ----
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'conversions', 'attribution', 'reports', 'billing', 'team', 'webhooks'],
+  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'conversions', 'attribution', 'reports', 'billing', 'team', 'webhooks'],
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
-    creatives: () => loadCreatives(), audiences: () => loadAudiences(), conversions: () => loadConversions(),
+    creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), conversions: () => loadConversions(),
     reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
     billing: () => loadBilling(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
@@ -1657,6 +1694,56 @@ async function loadAudiences() {
     tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
   loadDataEarnings();
+}
+
+// ---- Product catalog (Dynamic Product Ads) ----
+async function loadProducts() {
+  const tbody = document.getElementById('productList');
+  if (!tbody) return;
+  try {
+    const resp = await fetchJSON('/v1/api/products') || {};
+    const list = resp.products || [];
+    tbody.innerHTML = list.length ? list.map(p => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2">${p.image_url ? `<img src="${esc(p.image_url)}" alt="" class="h-10 w-10 rounded object-cover bg-surface-3">` : '<span class="inline-block h-10 w-10 rounded bg-surface-3"></span>'}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.sku)}</td>
+        <td class="px-3 py-2 font-medium">${esc(p.title)}</td>
+        <td class="px-3 py-2 font-mono text-xs">${esc(p.currency)} ${(p.price_micros / 1e6).toFixed(2)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${p.availability === 'in_stock' ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning'}">${esc(p.availability)}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(p.category || '—')}</td>
+        <td class="px-3 py-2 text-xs">${p.product_url ? `<a href="${esc(p.product_url)}" target="_blank" rel="noopener" class="text-info hover:underline">open</a>` : '—'}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No products yet — upload your first feed above.</td></tr>';
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function uploadProductFeed(ev) {
+  ev.preventDefault();
+  const name = $('pf_name').value.trim();
+  const file = $('pf_file').files[0];
+  if (!file) { toast('Choose a feed file', 'error'); return; }
+  try {
+    const fd = new FormData();
+    fd.append('name', name);
+    const notify = $('pf_notify') ? $('pf_notify').value.trim() : '';
+    if (notify) fd.append('additional_emails', notify);
+    fd.append('file', file, file.name);
+    const resp = await fetch('/v1/api/products', {method: 'POST', body: fd});
+    const text = await resp.text();
+    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    const r = JSON.parse(text);
+    if (resp.status === 202) {
+      toast(`Feed queued (job ${r.job_id.slice(0, 8)}…) — check Upload history`, 'success');
+    } else {
+      toast(`Feed imported — ${fmtInt(r.products_written)} product(s)`, 'success');
+    }
+    document.getElementById('newProductFeed').classList.add('hidden');
+    loadProducts();
+  } catch (err) {
+    toast('Upload failed: ' + err.message, 'error');
+  }
 }
 
 // ---- Real-time retargeting audiences ----
