@@ -42,6 +42,11 @@ type siteConfig struct {
 	// server-to-server conversion postbacks with (a real advertiser is issued its
 	// own key; the demo uses the dev key).
 	Brand string
+	// Product is the hero product's display name ("F-150" by default) so the
+	// shop can wear another advertiser's skin — e.g. the themed world's
+	// "Premium Dog Food Co" demo runs it as a 12kg dog-food bag — without
+	// forking templates. The /models/f150 route + its pixel tag stay stable.
+	Product string
 }
 
 type page struct {
@@ -88,6 +93,7 @@ func main() {
 		// prod-shaped strict per-advertiser posture with zero setup.
 		SigningKey: env("DEMOADV_SIGNING_KEY", ""),
 		Brand:      env("DEMOADV_BRAND", "Ford"),
+		Product:    env("DEMOADV_PRODUCT", "F-150"),
 	}
 	// No explicit key set → use the deterministic dev key the seed minted for
 	// this advertiser account, so S2S conversions validate under the strict

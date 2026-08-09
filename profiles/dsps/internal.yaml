@@ -307,7 +307,7 @@ campaigns:
     io_id: io-barkbox
     name: "Premium Dog Food Co - Cart Retargeting"
     creative_domain: premium-dog-food.co
-    base_bid: 14.00
+    base_bid: 22.00
     currency: USD
     daily_budget: 100
     total_budget: 1500
@@ -316,7 +316,7 @@ campaigns:
     status: live
     targeting:
       include:
-        segments: [seg-dogfood-cart]
+        segments: [seg-dogfood-cart, seg-shop-checkout]
     creatives:
       - { id: cr-dogfood-cart-001, width: 300, height: 250 }
       - { id: cr-dogfood-cart-001-leader, width: 728, height: 90 }

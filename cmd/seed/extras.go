@@ -175,6 +175,13 @@ func (in *inserter) seedThemedSegments(ctx context.Context) error {
 		// visitor within seconds (min_count 1 = the real-time boundary).
 		{"seg-dogfood-cart", "adv-barkbox", "Dog Food Cart Abandoners", "retargeting", "dsp_private",
 			`{"event":"site_visit","tag":"dogfood-cart","min_count":1,"window_days":30}`},
+		// Same rule, tag "checkout" — cmd/demoadv's checkout page fires that
+		// tag out of the box, so running the demo shop as this advertiser
+		// (DEMOADV_ACCOUNT_ID=adv-barkbox's uuid) enrolls real browser
+		// visitors with zero pixel configuration. The chase campaign
+		// (li-dogfood-cart-rt) targets both cart segments.
+		{"seg-shop-checkout", "adv-barkbox", "Shop Checkout Abandoners", "retargeting", "dsp_private",
+			`{"event":"site_visit","tag":"checkout","min_count":1,"window_days":30}`},
 	}
 	for _, s := range segments {
 		if _, err := in.db.ExecContext(ctx, `
