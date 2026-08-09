@@ -69,11 +69,22 @@ func serveMirror(client *http.Client, u endpoints, persona request.Persona, ch r
 	// the same users recur, so repeat visits accumulate the behaviour signals
 	// that earn segment membership. Random ids would make min_count>1 rules
 	// unreachable — every visit would look like a brand-new user.
+	//
+	// --user-pool N (density load runs) overrides both: user ids come from
+	// the SAME "synth-user-%06d" universe cmd/seed --synthetic-users seeds
+	// memberships for, so bid-time audience lookups get realistic HITS
+	// (SMEMBERS with members + include-segment matches) instead of universal
+	// misses against a random 4-billion-id space.
 	if params.Get(request.ParamUserID) != "" {
-		if uid := persona.RequestUserID(rng); uid != "" {
-			params.Set(request.ParamUserID, uid)
-		} else {
-			params.Set(request.ParamUserID, fmt.Sprintf("pub-user-%08x", rng.Uint32()))
+		switch {
+		case loadUserPool > 0:
+			params.Set(request.ParamUserID, fmt.Sprintf("synth-user-%06d", rng.Intn(loadUserPool)))
+		default:
+			if uid := persona.RequestUserID(rng); uid != "" {
+				params.Set(request.ParamUserID, uid)
+			} else {
+				params.Set(request.ParamUserID, fmt.Sprintf("pub-user-%08x", rng.Uint32()))
+			}
 		}
 	}
 	switch ch {

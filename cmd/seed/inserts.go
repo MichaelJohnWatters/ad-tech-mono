@@ -539,5 +539,12 @@ func modifiersAsMap(m *ModifiersYAML) map[string]any {
 	if len(m.GeoCountry) > 0 {
 		out["geo_country"] = m.GeoCountry
 	}
+	if len(m.Audience) > 0 {
+		aud := make(map[string]float64, len(m.Audience))
+		for k, v := range m.Audience {
+			aud[DeriveID("segment", k)] = v
+		}
+		out["audience"] = aud
+	}
 	return out
 }
