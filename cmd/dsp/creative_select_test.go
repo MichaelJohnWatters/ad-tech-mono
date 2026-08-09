@@ -65,6 +65,32 @@ func TestSelectCreativeForSize(t *testing.T) {
 	})
 }
 
+// A dynamic_product creative renders as a display banner, so it must be
+// eligible for a display request (size-matched like any display creative).
+func TestSelectCreativeForRequest_DynamicProductServesDisplay(t *testing.T) {
+	c := &models.Campaign{
+		Creatives: []models.CampaignCreative{
+			{ID: "dpa-mpu", Format: "dynamic_product", Width: 300, Height: 250},
+		},
+	}
+	t.Run("dynamic_product matches a display request of its size", func(t *testing.T) {
+		m := selectCreativeForRequest(c, "display", 300, 250, 0, 0)
+		if m == nil || m.ID != "dpa-mpu" {
+			t.Errorf("got %+v, want dpa-mpu (dynamic_product eligible for display)", m)
+		}
+	})
+	t.Run("dynamic_product still size-matches", func(t *testing.T) {
+		if m := selectCreativeForRequest(c, "display", 728, 90, 0, 0); m != nil {
+			t.Errorf("got %+v, want nil (wrong size)", m)
+		}
+	})
+	t.Run("dynamic_product is not eligible for a video request", func(t *testing.T) {
+		if m := selectCreativeForRequest(c, "video", 0, 0, 0, 30); m != nil {
+			t.Errorf("got %+v, want nil (dynamic_product is display-only)", m)
+		}
+	})
+}
+
 func TestSelectCreativeForRequest_VideoMatching(t *testing.T) {
 	c := &models.Campaign{
 		Creatives: []models.CampaignCreative{

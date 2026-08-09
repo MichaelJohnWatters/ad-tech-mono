@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog"
 )
 
@@ -112,6 +114,51 @@ WHERE account_id = $1 ORDER BY updated_at DESC, sku LIMIT $2`, accountID, limit)
 	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// ProductsBySKUs returns the account's products for the given SKUs, in the
+// SAME order as skus (freshest-viewed first, from RecentSKUs) — a SKU with no
+// catalog row is silently dropped. Reads cross-tenant under the platform hatch:
+// the render caller (ad server) is a platform service with no tenant session,
+// resolving the winning advertiser's catalog. Bounded by len(skus).
+func (s *Store) ProductsBySKUs(ctx context.Context, accountID string, skus []string) ([]catalog.Product, error) {
+	if len(skus) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin products by skus: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("products by skus platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT `+productColumns+` FROM products
+WHERE account_id = $1::uuid AND sku = ANY($2::text[])`, accountID, pq.StringArray(skus))
+	if err != nil {
+		return nil, fmt.Errorf("products by skus: %w", err)
+	}
+	defer rows.Close()
+	bySKU := map[string]catalog.Product{}
+	for rows.Next() {
+		p, err := scanProduct(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		bySKU[p.SKU] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Preserve the caller's SKU order (recency); drop unknown SKUs.
+	out := make([]catalog.Product, 0, len(skus))
+	for _, sku := range skus {
+		if p, ok := bySKU[sku]; ok {
+			out = append(out, p)
+		}
 	}
 	return out, nil
 }

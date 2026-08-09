@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	htmltemplate "html/template"
 	"log/slog"
 	"net/http"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 )
@@ -43,7 +45,7 @@ type creativeStore interface {
 	ListCreatives(ctx context.Context, accountID string) ([]creativeView, error)
 }
 
-var validCreativeFormats = map[string]bool{"display": true, "native": true, "video": true, "audio": true}
+var validCreativeFormats = map[string]bool{"display": true, "native": true, "video": true, "audio": true, "dynamic_product": true}
 
 // creativeUploadHandler is the advertiser creative library: GET lists the
 // caller's creatives with review state (creatives:read), POST uploads one
@@ -100,8 +102,17 @@ func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFu
 			in.Format = "display"
 		}
 		if !validCreativeFormats[in.Format] {
-			http.Error(w, `{"error":"format must be display, native, video or audio"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"format must be display, native, video, audio or dynamic_product"}`, http.StatusBadRequest)
 			return
+		}
+		// A dynamic_product creative's html_content is a Go template the ad server
+		// assembles at render time (DPA). Validate it parses now so a broken
+		// template is caught at authoring, not silently served as raw text.
+		if in.Format == constants.FormatDynamicProduct {
+			if _, err := htmltemplate.New("dpa").Parse(in.HTMLContent); err != nil {
+				http.Error(w, `{"error":`+jsonStr("dynamic_product html_content is not a valid template: "+err.Error())+`}`, http.StatusBadRequest)
+				return
+			}
 		}
 		id, err := store.CreateCreative(r.Context(), claims.AccountID, in)
 		if err != nil {

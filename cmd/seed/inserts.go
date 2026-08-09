@@ -394,6 +394,11 @@ ON CONFLICT (line_item_id) DO UPDATE SET
 					return fmt.Errorf("native_assets marshal (%s): %w", cv.ID, err)
 				}
 				nativeJSON = string(b)
+			case "dynamic_product":
+				// Dynamic Product Ads: html_content is a Go template the ad server
+				// assembles at render time from the advertiser's catalog + the
+				// user's carted SKUs; the {{else}} branch is the static fallback.
+				html = dynamicProductHTML(domain)
 			default:
 				html = themedCreativeHTML(cv.ID, domain)
 				if useAssetForSize(cv.Width, cv.Height) && in.creativeAssetBase != "" {
@@ -432,6 +437,37 @@ ON CONFLICT (line_item_id, creative_id) DO NOTHING`
 		}
 		return nil
 	})
+}
+
+// dynamicProductHTML is the seed's Dynamic Product Ads template
+// (html_content for a format=dynamic_product creative). The ad server executes
+// it at render time with the user's carted products ({{.Products}}); the
+// {{else}} branch is the static fallback for a visitor with no SKU context.
+// Ad macros (${CLICK_URL}, ${IMP_PIXEL}) survive template execution and are
+// substituted afterwards. {{.PriceDisplay}}/{{.Title}}/{{.ImageURL}} come from
+// catalog.Product.
+func dynamicProductHTML(domain string) string {
+	if domain == "" {
+		domain = "example.com"
+	}
+	return `<div style="width:${WIDTH}px;height:${HEIGHT}px;background:#fff;border:1px solid #e5e7eb;font-family:sans-serif;overflow:hidden;position:relative;">` +
+		`{{if .Products}}` +
+		`<div style="display:flex;gap:6px;padding:8px;overflow-x:auto;">` +
+		`{{range .Products}}` +
+		`<a href="${CLICK_URL}" style="flex:0 0 auto;width:96px;text-decoration:none;color:#111;">` +
+		`<img src="{{.ImageURL}}" alt="{{.Title}}" style="width:96px;height:96px;object-fit:cover;border-radius:6px;background:#f3f4f6;">` +
+		`<div style="font-size:11px;margin-top:4px;line-height:1.2;">{{.Title}}</div>` +
+		`<div style="font-size:12px;font-weight:600;color:#2563eb;">{{.PriceDisplay}}</div>` +
+		`</a>` +
+		`{{end}}` +
+		`</div>` +
+		`{{else}}` +
+		`<a href="${CLICK_URL}" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-decoration:none;color:#111;">` +
+		`<h3 style="margin:0 0 8px;">Shop ` + domain + `</h3>` +
+		`<span style="background:#2563eb;color:#fff;padding:8px 20px;border-radius:4px;font-size:13px;">Browse our range</span>` +
+		`</a>` +
+		`{{end}}` +
+		`<img src="${IMP_PIXEL}" width="1" height="1" style="position:absolute;"></div>`
 }
 
 // defaultCreativeHTML renders a minimal banner template for a YAML creative.

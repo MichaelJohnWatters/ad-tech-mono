@@ -132,6 +132,12 @@ const (
 	FormatAudio        = "audio"
 	FormatInterstitial = "interstitial"
 	FormatRewarded     = "rewarded"
+	// FormatDynamicProduct is a display creative whose html_content is a Go
+	// template the ad server assembles at render time from the advertiser's
+	// product catalog + the user's recently-viewed SKUs (Dynamic Product Ads).
+	// The template's {{else}} branch is the static fallback when the user has
+	// no SKU context.
+	FormatDynamicProduct = "dynamic_product"
 )
 
 // ============================================================

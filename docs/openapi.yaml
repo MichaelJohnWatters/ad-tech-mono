@@ -914,10 +914,10 @@ paths:
               required: [name, format, landing_url]
               properties:
                 name: { type: string }
-                format: { type: string, enum: [display, video, native, audio] }
+                format: { type: string, enum: [display, video, native, audio, dynamic_product] }
                 width: { type: integer }
                 height: { type: integer }
-                html_content: { type: string }
+                html_content: { type: string, description: "For format=dynamic_product this is a Go template the ad server assembles at render time from the advertiser's catalog + the user's carted SKUs ({{range .Products}}…{{else}}<static fallback>{{end}}); ad macros (${CLICK_URL} etc.) survive template execution. Validated at upload." }
                 landing_url: { type: string }
       responses:
         "201":
