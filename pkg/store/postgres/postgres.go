@@ -16,6 +16,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -83,7 +84,54 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("open read db: %w", err)
 	}
 
+	// Verify RLS is actually enforced for this connection's role. RLS is the
+	// multi-tenant safety net (see package doc), but a SUPERUSER / BYPASSRLS role
+	// silently ignores every tenant_isolation policy — so this is the one control
+	// that, if misconfigured per-environment, disables all row-level isolation
+	// without any other symptom. Log loudly; don't fail boot (some callers may
+	// legitimately be an admin path). The migrate/seed/admin superuser
+	// connections use raw sql.Open, not New, so they won't trip this.
+	LogRLSEnforcement(context.Background(), primary, slog.Default())
+
 	return &Store{primary: primary, read: read}, nil
+}
+
+// RLSEnforced reports whether the current database role actually has Row-Level
+// Security enforced against it. A role that is SUPERUSER or carries BYPASSRLS
+// ignores every tenant_isolation policy, so multi-tenant isolation is only as
+// strong as this returning true. App services must connect as the least-
+// privilege NOBYPASSRLS role (adtech_app, migration 067); only the migrate job
+// and the gateway's dev admin URL may use the owning superuser.
+func RLSEnforced(ctx context.Context, db *sql.DB) (enforced bool, role string, err error) {
+	var super, bypass bool
+	err = db.QueryRowContext(ctx,
+		`SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).
+		Scan(&role, &super, &bypass)
+	if err != nil {
+		return false, "", err
+	}
+	return !super && !bypass, role, nil
+}
+
+// LogRLSEnforcement checks the connected role and logs the result: an info line
+// when RLS is enforced, a loud ERROR (the security-misconfiguration signal) when
+// the role bypasses it. Never fails the caller — surfacing the mistake is the
+// point. Call it once, at boot, on any pool that carries tenant-scoped data.
+func LogRLSEnforcement(ctx context.Context, db *sql.DB, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	enforced, role, err := RLSEnforced(ctx, db)
+	if err != nil {
+		log.Warn("could not verify RLS enforcement for db role", "error", err)
+		return
+	}
+	if enforced {
+		log.Info("db role enforces row-level security", "role", role)
+		return
+	}
+	log.Error("SECURITY: db role BYPASSES row-level security — multi-tenant isolation is DISABLED on this connection; connect as the NOBYPASSRLS app role (adtech_app)",
+		"role", role)
 }
 
 func openDB(url string, cfg Config) (*sql.DB, error) {

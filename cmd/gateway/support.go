@@ -39,6 +39,13 @@ const (
 	maxMessageLen       = 16 << 10 // 16 KiB per message/resolution
 )
 
+// maxDisputeCreditMicros is an absolute per-adjustment ceiling on a staff dispute
+// credit ($100k). A dispute credit is real money drawn against the platform, so
+// it is additionally bounded by the amount the customer actually disputed (when
+// stated) — this const is the backstop for disputes with no stated amount and a
+// tripwire against a fat-fingered/compromised staff credit.
+const maxDisputeCreditMicros int64 = 100_000 * 1_000_000
+
 func isStaff(c *auth.Claims) bool { return c.AccountType == auth.AccountStaff }
 
 // supportTicketsHandler serves the collection: GET list + POST create.
@@ -297,6 +304,13 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 		http.Error(w, `{"error":"status must be open, pending, resolved or closed"}`, http.StatusBadRequest)
 		return
 	}
+	// Hard ceiling on a single dispute credit (backstop against a fat-fingered or
+	// compromised staff credit); the tighter per-ticket bound is applied below.
+	creditMicros := int64(req.CreditAmount*1e6 + 0.5)
+	if req.CreditAmount > 0 && creditMicros > maxDisputeCreditMicros {
+		http.Error(w, `{"error":"credit_amount exceeds the maximum permitted per adjustment"}`, http.StatusBadRequest)
+		return
+	}
 
 	// Double-credit guard: a billing-dispute credit may be issued only on the
 	// FIRST transition out of an open/pending state. Read the ticket's prior
@@ -310,6 +324,13 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 	}
 	if prior == nil {
 		http.Error(w, `{"error":"ticket not found"}`, http.StatusNotFound)
+		return
+	}
+	// A dispute credit cannot exceed what the customer actually disputed (when a
+	// disputed amount was stated). Checked BEFORE resolving so we never leave a
+	// resolved-but-uncredited ticket on rejection.
+	if req.CreditAmount > 0 && prior.AmountDisputedMicros != nil && creditMicros > *prior.AmountDisputedMicros {
+		http.Error(w, `{"error":"credit_amount cannot exceed the amount disputed on the ticket"}`, http.StatusBadRequest)
 		return
 	}
 	alreadyClosed := prior.Status == support.StatusResolved || prior.Status == support.StatusClosed

@@ -127,6 +127,19 @@ func TestRLSPlatformReadHatch(t *testing.T) {
 	// connections must be closed before teardown can DROP ROLE.
 	t.Cleanup(func() { app.Close() })
 
+	// The boot-time RLS-enforcement check must correctly classify both roles:
+	// the owning superuser BYPASSES RLS (would silently disable isolation), the
+	// limited probe role ENFORCES it. This is the linchpin the LogRLSEnforcement
+	// boot warning guards against per-environment.
+	t.Run("RLSEnforced_classifies_roles", func(t *testing.T) {
+		if enf, _, err := RLSEnforced(ctx, super); err != nil || enf {
+			t.Errorf("super: RLSEnforced=(%v,%v), want enforced=false (superuser bypasses RLS)", enf, err)
+		}
+		if enf, role, err := RLSEnforced(ctx, app); err != nil || !enf {
+			t.Errorf("app: RLSEnforced=(%v, role=%s, %v), want enforced=true (NOBYPASSRLS role)", enf, role, err)
+		}
+	})
+
 	// namesWith runs SELECT name FROM data_providers in a tx after applying the
 	// given session settings (key→value via set_config, tx-local).
 	namesWith := func(t *testing.T, settings map[string]string) []string {
