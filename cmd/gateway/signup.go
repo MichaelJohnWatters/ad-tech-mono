@@ -114,8 +114,21 @@ func (s pgSignupStore) EmailTaken(ctx context.Context, email string) (bool, erro
 	if s.db == nil {
 		return false, sql.ErrConnDone
 	}
+	// Cross-tenant collision check: an email may already belong to ANY account or
+	// team member. team_members (and accounts) carry tenant_isolation RLS, so
+	// under the NOBYPASSRLS app role this needs the platform_read hatch or the
+	// team_members half silently returns nothing — weakening duplicate detection
+	// (an email already used as a team member would pass as available).
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return false, err
+	}
 	var one int
-	err := s.db.QueryRowContext(ctx,
+	err = tx.QueryRowContext(ctx,
 		`SELECT 1 FROM accounts WHERE email = $1 UNION SELECT 1 FROM team_members WHERE email = $1 LIMIT 1`, email).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil

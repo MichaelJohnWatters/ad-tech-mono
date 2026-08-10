@@ -50,3 +50,34 @@ func TestActAsTarget_HeaderWinsThenCookie(t *testing.T) {
 		t.Errorf("no act-as: got %q", got)
 	}
 }
+
+// TestStripClientIdentityHeaders proves an inbound client cannot smuggle the
+// gateway-trusted identity headers past the edge — the fix for the
+// unauthenticated pass-through proxy laundering forged X-Account-Type: staff
+// into a downstream cross-tenant read.
+func TestStripClientIdentityHeaders(t *testing.T) {
+	var seen http.Header
+	h := StripClientIdentityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+	}))
+
+	r, _ := http.NewRequest("GET", "/v1/reporting/trace?trace_id=x", nil)
+	// A malicious client forging every trusted header.
+	r.Header.Set(constants.HeaderAccountID, "victim-account")
+	r.Header.Set(constants.HeaderAccountType, "staff")
+	r.Header.Set(constants.HeaderUserID, "attacker")
+	r.Header.Set(constants.HeaderPublisherID, "victim-pub")
+	r.Header.Set(constants.HeaderActAs, "advertiser:victim")
+	r.Header.Set("X-Trace-ID", "keep-me") // a non-identity header must survive
+
+	h.ServeHTTP(nil, r)
+
+	for _, hdr := range trustedIdentityHeaders {
+		if v := seen.Get(hdr); v != "" {
+			t.Errorf("trusted header %q leaked through: %q", hdr, v)
+		}
+	}
+	if seen.Get("X-Trace-ID") != "keep-me" {
+		t.Errorf("non-identity header was stripped: %q", seen.Get("X-Trace-ID"))
+	}
+}

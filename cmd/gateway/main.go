@@ -478,7 +478,7 @@ func main() {
 	}
 	mux.Handle(routes.APIMarketplaceListings, authMiddleware(http.HandlerFunc(marketplaceHandler(marketplaceStore, audStore, log))))
 	// Per-listing actions (POST .../{id}/purchase | /estimate) + the caller's grants.
-	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, log))))
+	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, gwDB, log))))
 	mux.Handle(routes.APIMarketplaceGrants, authMiddleware(http.HandlerFunc(marketplaceGrantsHandler(marketplaceStore, log))))
 	mux.Handle(routes.APIMarketplaceEarnings, authMiddleware(http.HandlerFunc(marketplaceEarningsHandler(marketplaceStore, log))))
 	// Account closure + data export (PLAN Phase 11, item 105).
@@ -675,14 +675,14 @@ func main() {
 
 	// Agency managed-accounts — staff assign advertiser accounts to an agency;
 	// an agency session lists its own (drives the act-as switcher).
-	mux.Handle(routes.APIAgencyAccounts, authMiddleware(http.HandlerFunc(agencyAccountsHandler(pgAgencyAccountStore{db: gwDB}, log))))
+	mux.Handle(routes.APIAgencyAccounts, authMiddleware(http.HandlerFunc(agencyAccountsHandler(pgAgencyAccountStore{db: gwDB}, gwDB, log))))
 
 	// Moderation — staff review queue (platform-wide, moderation:* gated).
-	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, secretsBus, log))))
+	mux.Handle(routes.APIModeration, authMiddleware(http.HandlerFunc(moderationHandler(pgModerationStore{db: gwDB}, secretsBus, gwDB, log))))
 
 	// Fraud blocklists — staff manager (platform-wide, fraud:* gated); mutations
 	// invalidate the tracker fraud-rules warm cache.
-	mux.Handle(routes.APIFraudBlocklists, authMiddleware(http.HandlerFunc(fraudRulesHandler(pgFraudRuleStore{db: gwDB}, secretsBus, log))))
+	mux.Handle(routes.APIFraudBlocklists, authMiddleware(http.HandlerFunc(fraudRulesHandler(pgFraudRuleStore{db: gwDB}, secretsBus, gwDB, log))))
 
 	// Webhooks — account subscription management (tenant-scoped, webhooks:*
 	// gated); mutations invalidate the dispatcher's webhook-subs warm cache.
@@ -1002,7 +1002,15 @@ func main() {
 	// response — including rate-limit 429s and error pages. CSRF sits just inside
 	// it: it blocks cross-site cookie-authed state changes (defense-in-depth on
 	// SameSite=Lax); Bearer/no-cookie/safe requests pass through untouched.
-	handler := middleware.SecurityHeaders(middleware.CSRF(tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux)))))
+	// StripClientIdentityHeaders is OUTERMOST-but-one so no inbound request can
+	// smuggle a gateway-trusted identity header (X-Account-*, X-User-ID,
+	// X-Publisher-ID, X-Act-As-Account) past the edge. The legitimate setters
+	// (ReverseProxy's JWT-claims block, injectTraceScope's validated publisher id)
+	// run inside the mux, after this strip, so authenticated flows are unaffected;
+	// the unauthenticated pass-through proxies (/v1/reporting/, /v1/billing/, …)
+	// then forward NO identity header, so downstream scoping denies rather than
+	// trusting a forged one.
+	handler := middleware.SecurityHeaders(middleware.StripClientIdentityHeaders(middleware.CSRF(tracing.HTTPMiddleware(constants.ServiceGateway)(metrics.Wrap(gwRL.Wrap(mux))))))
 
 	server := &http.Server{
 		Addr:         ":" + port,

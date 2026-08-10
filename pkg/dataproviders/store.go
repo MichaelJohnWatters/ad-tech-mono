@@ -141,7 +141,20 @@ func (s *PostgresStore) DeleteByAccount(ctx context.Context, accountID, id strin
 	if s.DB == nil {
 		return sql.ErrConnDone
 	}
-	_, err := s.DB.ExecContext(ctx,
-		`DELETE FROM data_providers WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID)
-	return err
+	// Tenant-scoped like GetByAccount: data_providers carries tenant_isolation
+	// RLS, so under the NOBYPASSRLS app role the DELETE's USING clause matches
+	// ZERO rows without the account GUC set and the delete silently no-ops.
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM data_providers WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

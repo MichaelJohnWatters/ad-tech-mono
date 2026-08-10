@@ -61,7 +61,7 @@ func TestFraudRulesHandler(t *testing.T) {
 	// List.
 	store := &fakeFraudStore{entries: []blocklistEntry{{ID: "b1", Type: "ip", Value: "1.2.3.4"}}}
 	rec := httptest.NewRecorder()
-	fraudRulesHandler(store, nil, quietLog())(rec, fraudReq(http.MethodGet, fraudPath, "", staff))
+	fraudRulesHandler(store, nil, nil, quietLog())(rec, fraudReq(http.MethodGet, fraudPath, "", staff))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "1.2.3.4") {
 		t.Fatalf("list code=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -70,7 +70,7 @@ func TestFraudRulesHandler(t *testing.T) {
 	store = &fakeFraudStore{}
 	bus := &countingBus{}
 	rec = httptest.NewRecorder()
-	fraudRulesHandler(store, bus, quietLog())(rec, fraudReq(http.MethodPost, fraudPath, `{"type":"domain","value":"bad.example","reason":"spam"}`, staff))
+	fraudRulesHandler(store, bus, nil, quietLog())(rec, fraudReq(http.MethodPost, fraudPath, `{"type":"domain","value":"bad.example","reason":"spam"}`, staff))
 	if rec.Code != http.StatusCreated || store.added != [3]string{"domain", "bad.example", "spam"} {
 		t.Errorf("add code=%d added=%v", rec.Code, store.added)
 	}
@@ -80,7 +80,7 @@ func TestFraudRulesHandler(t *testing.T) {
 
 	// Add with bad type → 400.
 	rec = httptest.NewRecorder()
-	fraudRulesHandler(&fakeFraudStore{}, nil, quietLog())(rec, fraudReq(http.MethodPost, fraudPath, `{"type":"nope","value":"x"}`, staff))
+	fraudRulesHandler(&fakeFraudStore{}, nil, nil, quietLog())(rec, fraudReq(http.MethodPost, fraudPath, `{"type":"nope","value":"x"}`, staff))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad type code = %d, want 400", rec.Code)
 	}
@@ -89,21 +89,21 @@ func TestFraudRulesHandler(t *testing.T) {
 	store = &fakeFraudStore{}
 	bus = &countingBus{}
 	rec = httptest.NewRecorder()
-	fraudRulesHandler(store, bus, quietLog())(rec, fraudReq(http.MethodDelete, fraudPath+"?id=b1", "", staff))
+	fraudRulesHandler(store, bus, nil, quietLog())(rec, fraudReq(http.MethodDelete, fraudPath+"?id=b1", "", staff))
 	if rec.Code != http.StatusOK || store.deleted != "b1" || bus.published != 1 {
 		t.Errorf("delete code=%d deleted=%q published=%d", rec.Code, store.deleted, bus.published)
 	}
 
 	// Delete unknown → 404.
 	rec = httptest.NewRecorder()
-	fraudRulesHandler(&fakeFraudStore{notFound: true}, nil, quietLog())(rec, fraudReq(http.MethodDelete, fraudPath+"?id=zzz", "", staff))
+	fraudRulesHandler(&fakeFraudStore{notFound: true}, nil, nil, quietLog())(rec, fraudReq(http.MethodDelete, fraudPath+"?id=zzz", "", staff))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("delete-unknown code = %d, want 404", rec.Code)
 	}
 
 	// Missing fraud perm → 403.
 	rec = httptest.NewRecorder()
-	fraudRulesHandler(&fakeFraudStore{}, nil, quietLog())(rec, fraudReq(http.MethodGet, fraudPath, "", &auth.Claims{Permissions: []string{"campaigns:read"}}))
+	fraudRulesHandler(&fakeFraudStore{}, nil, nil, quietLog())(rec, fraudReq(http.MethodGet, fraudPath, "", &auth.Claims{Permissions: []string{"campaigns:read"}}))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no perm code = %d, want 403", rec.Code)
 	}

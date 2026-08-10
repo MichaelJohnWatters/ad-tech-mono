@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 )
@@ -37,7 +38,7 @@ var validBlocklistTypes = map[string]bool{"ip": true, "ua": true, "domain": true
 // no account_id, so it's permission-gated, not tenant-scoped. Mutations publish
 // the fraud-rules cache invalidate so the tracker's warm cache reloads
 // sub-second.
-func fraudRulesHandler(store fraudRuleStore, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+func fraudRulesHandler(store fraudRuleStore, bus events.EventBus, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -91,6 +92,15 @@ func fraudRulesHandler(store fraudRuleStore, bus events.EventBus, log *slog.Logg
 				return
 			}
 			publishFraudInvalidate(r.Context(), bus, id)
+			// Platform-wide traffic control (affects every tenant's bidding) —
+			// audit who blocked what.
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				ActorID:      "user:" + claims.UserID,
+				Action:       "fraud:blocklist_add",
+				ResourceType: "fraud_blocklist",
+				ResourceID:   id,
+				Changes:      map[string]any{"type": in.Type, "value": in.Value, "reason": in.Reason},
+			})
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "type": in.Type, "value": in.Value})
 
@@ -115,6 +125,12 @@ func fraudRulesHandler(store fraudRuleStore, bus events.EventBus, log *slog.Logg
 				return
 			}
 			publishFraudInvalidate(r.Context(), bus, id)
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				ActorID:      "user:" + claims.UserID,
+				Action:       "fraud:blocklist_delete",
+				ResourceType: "fraud_blocklist",
+				ResourceID:   id,
+			})
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "deleted"})
 
 		default:

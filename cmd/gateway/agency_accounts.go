@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -57,7 +58,7 @@ type agencyAccountStore interface {
 // agencyAccountsHandler lists (GET), assigns (POST, staff), and unassigns
 // (DELETE, staff) agency→managed-advertiser links. An agency session (agency:read)
 // sees only its own managed accounts — that's the data behind the act-as switcher.
-func agencyAccountsHandler(store agencyAccountStore, log *slog.Logger) http.HandlerFunc {
+func agencyAccountsHandler(store agencyAccountStore, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -129,6 +130,15 @@ func agencyAccountsHandler(store agencyAccountStore, log *slog.Logger) http.Hand
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
+			// Privilege-granting cross-tenant link (agency may now act as this
+			// advertiser) — audit it.
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				AccountID:    in.AgencyAccountID,
+				ActorID:      "user:" + claims.UserID,
+				Action:       "agency:assign_managed",
+				ResourceType: "agency_managed_account",
+				ResourceID:   in.ManagedAccountID,
+			})
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "assigned"})
 
@@ -148,6 +158,13 @@ func agencyAccountsHandler(store agencyAccountStore, log *slog.Logger) http.Hand
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				AccountID:    agencyID,
+				ActorID:      "user:" + claims.UserID,
+				Action:       "agency:unassign_managed",
+				ResourceType: "agency_managed_account",
+				ResourceID:   managedID,
+			})
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unassigned"})
 
 		default:

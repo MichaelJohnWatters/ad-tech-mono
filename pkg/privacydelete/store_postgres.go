@@ -75,6 +75,16 @@ func (s *PostgresStore) PurgeUser(ctx context.Context, userID string) (Purge, er
 	}
 	defer tx.Rollback()
 
+	// A GDPR purge spans every tenant that ever saw the user, so it is a
+	// cross-tenant write. audience_segment_members carries the tenant_isolation
+	// RLS policy (mig 019 + the mig 065 platform hatch); under the NOBYPASSRLS
+	// app role the DELETE below would otherwise match ZERO rows and silently
+	// certify a purge that deleted nothing. platform_read='on' (tx-local) opts
+	// into the policy's escape hatch so the delete reaches every tenant's rows.
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return Purge{}, fmt.Errorf("set platform_read: %w", err)
+	}
+
 	edges, err := execCount(ctx, tx,
 		`DELETE FROM identity_graph WHERE user_id = $1 OR linked_id = $1`, userID)
 	if err != nil {
@@ -131,6 +141,20 @@ func (s *PostgresStore) Residual(ctx context.Context, userID string) ([]string, 
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
+	// Same cross-tenant scope as PurgeUser: the residual check reads
+	// audience_segment_members (RLS) across every tenant, so it must set the
+	// platform_read hatch or it would see zero rows on a pooled NOBYPASSRLS
+	// connection and falsely certify a clean purge. Run both checks in one
+	// tx-local hatch.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("set platform_read: %w", err)
+	}
+
 	var residual []string
 	checks := []struct {
 		system string
@@ -141,7 +165,7 @@ func (s *PostgresStore) Residual(ctx context.Context, userID string) ([]string, 
 	}
 	for _, c := range checks {
 		var one int
-		err := s.db.QueryRowContext(ctx, c.query, userID).Scan(&one)
+		err := tx.QueryRowContext(ctx, c.query, userID).Scan(&one)
 		switch {
 		case err == sql.ErrNoRows:
 			// clean

@@ -29,6 +29,16 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/support"
 )
 
+// Server-side bounds on customer free-text so a ticket/reply can't be an
+// unbounded persisted TEXT blob (storage-amplification / memory DoS). The byte
+// cap guards the whole request body before decode; the field caps give a clear
+// 400 rather than a silent truncation.
+const (
+	maxSupportBodyBytes = 64 << 10 // 64 KiB whole-request cap
+	maxSubjectLen       = 200
+	maxMessageLen       = 16 << 10 // 16 KiB per message/resolution
+)
+
 func isStaff(c *auth.Claims) bool { return c.AccountType == auth.AccountStaff }
 
 // supportTicketsHandler serves the collection: GET list + POST create.
@@ -92,6 +102,7 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 }
 
 func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, log *slog.Logger) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req struct {
 		Kind           string  `json:"kind"`
 		Subject        string  `json:"subject"`
@@ -114,6 +125,14 @@ func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.S
 	}
 	if req.Subject == "" {
 		http.Error(w, `{"error":"subject is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Subject) > maxSubjectLen {
+		http.Error(w, `{"error":"subject too long"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Body) > maxMessageLen {
+		http.Error(w, `{"error":"body too long"}`, http.StatusBadRequest)
 		return
 	}
 	t := support.Ticket{
@@ -211,11 +230,16 @@ func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Stor
 }
 
 func supportReply(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, ticketID string, log *slog.Logger) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req struct {
 		Body string `json:"body"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Body) == "" {
 		http.Error(w, `{"error":"body is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Body) > maxMessageLen {
+		http.Error(w, `{"error":"body too long"}`, http.StatusBadRequest)
 		return
 	}
 	var err error
@@ -251,6 +275,7 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req struct {
 		Status       string  `json:"status"`
 		Resolution   string  `json:"resolution"`
@@ -258,6 +283,10 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Resolution) > maxMessageLen {
+		http.Error(w, `{"error":"resolution too long"}`, http.StatusBadRequest)
 		return
 	}
 	if req.Status == "" {
@@ -268,6 +297,22 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 		http.Error(w, `{"error":"status must be open, pending, resolved or closed"}`, http.StatusBadRequest)
 		return
 	}
+
+	// Double-credit guard: a billing-dispute credit may be issued only on the
+	// FIRST transition out of an open/pending state. Read the ticket's prior
+	// status before resolving; re-resolving an already-resolved/closed ticket (a
+	// double-submit or retry) must not insert a second adjustment (real money).
+	prior, err := store.GetAny(r.Context(), ticketID)
+	if err != nil {
+		log.Error("support resolve: prior read failed", "error", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if prior == nil {
+		http.Error(w, `{"error":"ticket not found"}`, http.StatusNotFound)
+		return
+	}
+	alreadyClosed := prior.Status == support.StatusResolved || prior.Status == support.StatusClosed
 
 	t, err := store.Resolve(r.Context(), ticketID, req.Status, strings.TrimSpace(req.Resolution), claims.UserID)
 	if err != nil {
@@ -281,9 +326,10 @@ func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store,
 	}
 
 	// A billing dispute can resolve with a credit — recorded in the canonical
-	// adjustments table (manual credit/debit for disputes/refunds/errors).
+	// adjustments table (manual credit/debit for disputes/refunds/errors). Skip
+	// if the ticket was already resolved/closed (guards against double-crediting).
 	credited := false
-	if req.CreditAmount > 0 && t.Kind == support.KindBillingDispute && gwDB != nil {
+	if req.CreditAmount > 0 && t.Kind == support.KindBillingDispute && !alreadyClosed && gwDB != nil {
 		// adjustments has RLS (mig 017): set the tenant GUC to the ticket's account
 		// so the INSERT's WITH CHECK is satisfied (scoped, not a bare pool write).
 		if err := insertAdjustmentTx(r.Context(), gwDB, t.AccountID, req.CreditAmount, t.Currency,

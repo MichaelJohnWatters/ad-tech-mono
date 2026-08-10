@@ -163,10 +163,20 @@ func (g *Generator) GenerateForAllAccounts(ctx context.Context, periodStart, per
 
 // linesForAccount sums settled micros per campaign for one account over the
 // period, joining committed spend → line_items for the account filter + name.
-// Runs outside a tenant GUC (cross-table read like the DSP campaign loader);
-// the account filter is explicit in the WHERE.
+// line_items carries the tenant_isolation RLS policy, so under the NOBYPASSRLS
+// app role the join needs the tenant GUC set or it matches ZERO rows (silently
+// producing empty invoices). Scope to exactly this account — tighter than the
+// platform hatch and consistent with the explicit account filter in the WHERE.
 func (g *Generator) linesForAccount(ctx context.Context, accountID string, periodStart, periodEnd time.Time) ([]line, error) {
-	rows, err := g.db.QueryContext(ctx,
+	tx, err := g.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin lines tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return nil, fmt.Errorf("set tenant: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT ccs.campaign_id,
 		        COALESCE(li.name, ''),
 		        COALESCE(li.bid_strategy, ''),
@@ -201,7 +211,19 @@ func (g *Generator) linesForAccount(ctx context.Context, accountID string, perio
 // must not bill them again. An account with spend but no advertiser_balances
 // row (never topped up, default prepay) is likewise excluded.
 func (g *Generator) accountsWithSpend(ctx context.Context, periodStart, periodEnd time.Time) ([]string, error) {
-	rows, err := g.db.QueryContext(ctx,
+	// Cross-tenant enumeration (every advertiser with spend), joining the
+	// RLS-protected line_items + advertiser_balances. Under NOBYPASSRLS this
+	// needs the platform_read hatch or the join matches ZERO rows and the whole
+	// monthly run invoices nobody.
+	tx, err := g.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin accounts tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("set platform_read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT DISTINCT li.account_id::text
 		 FROM campaign_committed_spend ccs
 		 JOIN line_items li ON li.id::text = ccs.campaign_id
