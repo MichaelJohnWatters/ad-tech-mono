@@ -75,6 +75,7 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
+			support.RedactListForCustomer(tickets) // never expose staff identity to a customer
 			_ = json.NewEncoder(w).Encode(tickets)
 
 		case http.MethodPost:
@@ -203,6 +204,9 @@ func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Stor
 		http.Error(w, `{"error":"ticket not found"}`, http.StatusNotFound)
 		return
 	}
+	if !isStaff(claims) {
+		support.RedactForCustomer(t) // hide staff identity on the customer's view
+	}
 	_ = json.NewEncoder(w).Encode(t)
 }
 
@@ -240,7 +244,10 @@ func supportReply(w http.ResponseWriter, r *http.Request, store support.Store, c
 // supportResolve is staff-only: sets the ticket's status/resolution and, for a
 // billing dispute, optionally issues a credit adjustment to the account.
 func supportResolve(w http.ResponseWriter, r *http.Request, store support.Store, gwDB *sql.DB, claims *auth.Claims, ticketID string, log *slog.Logger) {
-	if !can(claims, "support:update") {
+	// Resolve is a cross-tenant (platform-hatch) write. Require BOTH the staff
+	// account type AND support:update — defence in depth, so it can never be
+	// reached by a non-staff principal even if the perm map changes.
+	if !isStaff(claims) || !can(claims, "support:update") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}

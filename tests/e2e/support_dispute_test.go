@@ -142,6 +142,19 @@ func TestSupportDisputeWorkflow(t *testing.T) {
 	if len(msgs) < 2 {
 		t.Errorf("thread has %d messages, want >=2 (opening + staff reply)", len(msgs))
 	}
+	// Staff identity must NOT leak to the customer (mig 094 guarantee): staff
+	// messages carry no author_id, and the ticket's assignee is hidden.
+	if av, ok := detail["assigned_to"]; ok && av != "" && av != nil {
+		t.Errorf("customer sees assigned_to %v — staff identity leak", av)
+	}
+	for _, mi := range msgs {
+		m, _ := mi.(map[string]any)
+		if m["author_type"] == "staff" {
+			if aid, ok := m["author_id"]; ok && aid != "" && aid != nil {
+				t.Errorf("customer sees staff message author_id %v — staff identity leak", aid)
+			}
+		}
+	}
 
 	// Customer reopens by replying → status returns to open.
 	if st, _ := supDo(t, cust, http.MethodPost, base+"/"+id+"/messages", map[string]any{"body": "Thanks, but please double-check the geo filter too."}); st != 200 {
