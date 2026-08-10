@@ -1483,6 +1483,63 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: "{ total_net_micros, total_gross_micros, total_impressions, by_segment: [{ segment_id, listing_name?, impressions, gross_micros, net_micros, margin_micros, buyers, last_settled_at }] }" }
+  /v1/api/account/close:
+    get:
+      tags: [Account]
+      summary: The caller's active account-closure status
+      description: >-
+        Returns the account's in-grace closure request, or null. Owner-only
+        (account:close). Part of the Account Closure and Data Export workflow
+        (PLAN Phase 11 item 105).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ closure: { id, account_id, status, reason?, requested_at, grace_ends_at, paused_line_items, deactivated_placements } | null }" }
+    post:
+      tags: [Account]
+      summary: Initiate account closure (starts a 30-day grace period)
+      description: >-
+        Opens a 30-day grace-period closure: the account is suspended, its live
+        campaigns are paused and its placements deactivated (no new spend, no new
+        auctions). The owner can still sign in and cancel during the grace window
+        — the pause is exactly reversible. Owner-only (account:close).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: "Optional free-text reason, recorded on the request + audit log" }
+      responses:
+        "200": { description: "The created closure request { id, account_id, status: grace, grace_ends_at, paused_line_items, deactivated_placements }" }
+        "409": { description: "A closure is already in progress" }
+        "403": { description: "Requires the account:close permission (owner)" }
+  /v1/api/account/close/cancel:
+    post:
+      tags: [Account]
+      summary: Cancel an in-grace account closure
+      description: >-
+        Reverses an open grace-period closure: reactivates the account and
+        restores exactly the campaigns / placements this closure paused. Owner-only
+        (account:close).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "The cancelled closure request { id, status: cancelled, cancelled_at }" }
+        "404": { description: "No closure in progress" }
+  /v1/api/account/export:
+    get:
+      tags: [Account]
+      summary: Request / poll the account data-export package
+      description: >-
+        Enqueues (or returns the status of) an account data-export job: the
+        account's campaigns, creatives, audiences (hashed), invoice/payout history
+        and audit log, materialized to CSV/JSON, zipped, and made available via a
+        time-limited download URL. Owner-only (account:export). Part of the Account
+        Closure and Data Export workflow (PLAN Phase 11 item 105).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ status: pending|running|completed|failed, download_url?, expires_at?, requested_at }" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]
