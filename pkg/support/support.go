@@ -68,6 +68,30 @@ type Message struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// RedactForCustomer strips internal staff identity from a ticket before it is
+// returned to a customer: the assignee and every STAFF message's author id (the
+// customer sees "Support" via author_type, never the staff member's JWT
+// subject). Migration 094's guarantee. Staff reads (GetAny/ListAll) keep them.
+func RedactForCustomer(t *Ticket) {
+	if t == nil {
+		return
+	}
+	t.AssignedTo = ""
+	for i := range t.Messages {
+		if t.Messages[i].AuthorType == AuthorStaff {
+			t.Messages[i].AuthorID = ""
+		}
+	}
+}
+
+// RedactListForCustomer redacts the staff-identity fields on each ticket in a
+// customer's list view.
+func RedactListForCustomer(tickets []Ticket) {
+	for i := range tickets {
+		RedactForCustomer(&tickets[i])
+	}
+}
+
 // Store persists tickets + their message threads. Customer-facing methods are
 // tenant-scoped (RLS GUC); the staff queue + resolve run under the platform hatch.
 type Store interface {

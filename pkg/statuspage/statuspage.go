@@ -83,8 +83,10 @@ type Incident struct {
 	AffectedComponents []string   `json:"affected_components"`
 	StartedAt          time.Time  `json:"started_at"`
 	ResolvedAt         *time.Time `json:"resolved_at,omitempty"`
-	CreatedBy          string     `json:"created_by,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// CreatedBy (staff JWT subject) is NEVER serialized — /v1/api/status is
+	// public, and this would leak internal staff identities to anyone.
+	CreatedBy string    `json:"-"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Open reports whether the incident is still unresolved.

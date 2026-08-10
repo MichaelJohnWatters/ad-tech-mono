@@ -115,6 +115,19 @@ func TestPublicStatusPageAndIncidents(t *testing.T) {
 	if !found {
 		t.Errorf("critical incident %q not in active_incidents", title)
 	}
+	// The PUBLIC status JSON must NOT leak the staff author id (created_by).
+	sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer scancel()
+	sreq, _ := http.NewRequestWithContext(sctx, http.MethodGet, h.URLs.Gateway+routes.APIStatus, nil)
+	sresp, err := harness.NewHTTPClient(10 * time.Second).Do(sreq)
+	if err != nil {
+		t.Fatalf("GET status raw: %v", err)
+	}
+	rawStatus, _ := io.ReadAll(sresp.Body)
+	sresp.Body.Close()
+	if strings.Contains(string(rawStatus), "created_by") {
+		t.Errorf("public status JSON leaks created_by (staff identity): %s", string(rawStatus))
+	}
 
 	// Resolve it → overall recovers, incident leaves the active list.
 	postIncident(t, h, client, map[string]any{"id": id, "title": title, "impact": "critical", "status": "resolved"})
