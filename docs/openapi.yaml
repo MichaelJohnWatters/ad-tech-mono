@@ -1429,6 +1429,34 @@ paths:
         "200": { description: "{ grant_id, segment_id }" }
         "400": { description: "can't buy your own listing" }
         "404": { description: "listing not found or not active" }
+  /v1/api/marketplace/listings/{id}/estimate:
+    post:
+      tags: [Audiences]
+      summary: Expansion estimate against a listing (clean-room-lite)
+      description: >-
+        Estimates the overlap + incremental reach between YOUR audience and the
+        listing's segment BEFORE purchasing (PLAN Phase 10, slice 4). Aggregate-
+        only — never a member list — with a min-aggregation privacy floor: an
+        overlap below the threshold is suppressed (you learn it's small, not the
+        exact number). The overlap is a real set intersection of the two member
+        sets. NOTE: this computes in-process; the full clean-room guarantee
+        (isolated job, no raw data leaves) is a documented deferred boundary.
+        Requires marketplace:read.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string }, description: "listing id" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [my_audience_id]
+              properties:
+                my_audience_id: { type: string, description: "One of YOUR OWN segments to compare against the listing" }
+      responses:
+        "200": { description: "{ listing_name, your_audience_size, listing_size, overlap?, overlap_pct?, overlap_suppressed, new_reachable_users, expansion_factor, min_aggregation }" }
+        "404": { description: "listing not found, or my_audience_id is not one of yours" }
   /v1/api/marketplace/grants:
     get:
       tags: [Audiences]
