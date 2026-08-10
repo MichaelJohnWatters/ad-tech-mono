@@ -20,6 +20,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
+	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
@@ -157,7 +159,25 @@ func main() {
 	// staging/prod overlays override with the real S3 endpoint.
 	creativesStoreURL := cfg.Get(keys.Gateway.CreativesStoreURL.Key(), "http://"+routes.DefaultMinioEndpoint+"/"+keys.S3.Bucket.Get(cfg)+"/")
 
-	authMiddleware := middleware.Auth(signingKey, log)
+	// Shared Redis L2 (self-healing: fail-open from memory until Redis dials).
+	// Backs session revocation and the optional distributed rate limiter — both
+	// need cluster-shared state that survives a pod restart.
+	gwL2 := cache.NewSelfHealingL2(func(ctx context.Context) (cache.L2Cache, error) {
+		return cacheredis.New(ctx, cacheredis.Config{
+			Addr:     keys.Redis.URL.Get(cfg),
+			Password: keys.Redis.Password.Get(cfg),
+			DB:       keys.Redis.DB.Get(cfg),
+			PoolSize: keys.Redis.PoolSize.Get(cfg),
+		})
+	}, 10*time.Second, keys.Redis.URL.Get(cfg), log)
+	lc.OnShutdown("gw-redis", func(context.Context) error { return gwL2.Close() })
+
+	// Session revocation: a checkpoint per user; tokens issued before it are
+	// rejected. Wired into the Auth middleware and threaded into portal page
+	// gating. maxTokenLifetime = the login token's 12h expiry.
+	revStore := middleware.NewRevocationStore(gwL2, 12*time.Hour, log)
+	portalRevocation = revStore // browser page gates consult the same store
+	authMiddleware := middleware.Auth(signingKey, log, middleware.WithRevocation(revStore))
 
 	metrics := middleware.NewMetrics(constants.ServiceGateway)
 
@@ -244,6 +264,8 @@ func main() {
 	})
 	mux.HandleFunc(routes.AuthLogin, loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
 	mux.HandleFunc(routes.AuthLogout, logoutHandler)
+	// Revoke-all-sessions is authenticated (you revoke your own sessions).
+	mux.Handle(routes.AuthRevokeSessions, authMiddleware(http.HandlerFunc(revokeSessionsHandler(revStore, log))))
 	mux.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "signup.html", nil)
 	})
@@ -1000,8 +1022,9 @@ func main() {
 			Burst:       keys.Gateway.RateLimitBurst.Get(cfg),
 			TrustedHops: keys.Gateway.RateLimitTrustedHops.Get(cfg),
 			Allowlist:   keys.Gateway.RateLimitAllowlist.Get(cfg),
+			Distributed: keys.Gateway.RateLimitDistributed.Get(cfg),
 		}
-	}, log)
+	}, log).WithDistributedBackend(constants.ServiceGateway, gwL2)
 	// SecurityHeaders is OUTERMOST so HSTS/X-Frame-Options/etc. ride every
 	// response — including rate-limit 429s and error pages. CSRF sits just inside
 	// it: it blocks cross-site cookie-authed state changes (defense-in-depth on

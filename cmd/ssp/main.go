@@ -250,8 +250,9 @@ func main() {
 			Burst:       keys.SSP.RateLimitBurst.Get(cfg),
 			TrustedHops: keys.SSP.RateLimitTrustedHops.Get(cfg),
 			Allowlist:   keys.SSP.RateLimitAllowlist.Get(cfg),
+			Distributed: keys.SSP.RateLimitDistributed.Get(cfg),
 		}
-	}, log)
+	}, log).WithDistributedBackend(constants.ServiceSSP, l2)
 	handler := tracing.HTTPMiddleware(constants.ServiceSSP)(metrics.Wrap(middleware.CORS(sspRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 

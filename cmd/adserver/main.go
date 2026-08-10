@@ -242,8 +242,9 @@ func main() {
 			Burst:       keys.AdServer.RateLimitBurst.Get(cfg),
 			TrustedHops: keys.AdServer.RateLimitTrustedHops.Get(cfg),
 			Allowlist:   keys.AdServer.RateLimitAllowlist.Get(cfg),
+			Distributed: keys.AdServer.RateLimitDistributed.Get(cfg),
 		}
-	}, log)
+	}, log).WithDistributedBackend(constants.ServiceAdServer, l2)
 	handler := tracing.HTTPMiddleware(constants.ServiceAdServer)(metrics.Wrap(middleware.CORS(adRL.Wrap(mux))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
 

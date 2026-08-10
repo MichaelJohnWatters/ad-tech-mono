@@ -132,6 +132,12 @@ services:
         value: "adtech.example.com"   # ← match global.domain
   exchange:
     replicas: 3
+    # Durable event spool (survives pod eviction/reschedule) — a plain emptyDir
+    # would lose un-drained money events if the pod moved while NATS was down.
+    # Per-replica PVC via StatefulSet; set storageClass to your fast SSD class.
+    persistence:
+      size: 1Gi
+      # storageClass: gp3
     # Strict ads.txt/schain enforcement is INHERITED from base values. Override
     # the seller identity to the real platform domain (publishers list THIS in
     # their ads.txt), and provide the ads.cert signing key from a SOPS secret —
@@ -144,6 +150,10 @@ services:
       # the inherited dev env fallback. Do NOT commit a real key here.
   adserver:
     replicas: 3
+    # Durable event spool (see exchange note above).
+    persistence:
+      size: 1Gi
+      # storageClass: gp3
     # PUBLIC browser-facing pixel base baked into served ad HTML. MUST be HTTPS
     # (an HTTPS publisher page blocks http pixels as mixed content) and match
     # global.domain. Points at the tracker's public ingress host.
@@ -159,6 +169,11 @@ services:
         value: "https://pubad.adtech.example.com"     # ← match global.domain
   tracker:
     replicas: 4
+    # Durable event spool (see exchange note above). Per-replica PVC — each of the
+    # 4 tracker pods keeps its own spool.
+    persistence:
+      size: 1Gi
+      # storageClass: gp3
   gateway:
     replicas: 2
     # Auth is MANDATORY in prod: refuse to boot with the dev auth-bypass. Needs

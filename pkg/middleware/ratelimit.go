@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -32,6 +34,19 @@ type RateLimitConfig struct {
 	Burst       int    // token-bucket burst; <= 0 defaults to RPS
 	TrustedHops int    // X-Forwarded-For entries-from-the-right added by trusted proxies
 	Allowlist   string // comma-separated CIDRs/IPs that BYPASS the limit (internal + private ranges by default, so local/cluster traffic is never throttled)
+	// Distributed, when true AND a backend is wired via WithDistributedBackend,
+	// switches to a CLUSTER-WIDE Redis fixed-window counter so the limit is
+	// enforced across all replicas (N pods no longer allow N× the rate). Default
+	// false → the per-pod in-process token bucket. Live-tunable like the rest.
+	Distributed bool
+}
+
+// RateCounter is the minimal shared-counter surface the distributed limiter
+// needs: an atomic increment plus a TTL. cache.L2Cache satisfies it structurally,
+// so a service passes its Redis L2 without pkg/middleware importing pkg/cache.
+type RateCounter interface {
+	Incr(ctx context.Context, key string) (int64, error)
+	Expire(ctx context.Context, key string, ttl time.Duration) error
 }
 
 type RateLimiter struct {
@@ -45,6 +60,43 @@ type RateLimiter struct {
 	curBurst int // rebuilds them so a live tune takes effect immediately.
 
 	allow clientip.Allowlist // cached CIDR matcher for the bypass allowlist
+
+	// Optional shared backend for distributed (cluster-wide) limiting. scope
+	// namespaces the Redis keys per service so tracker + gateway don't collide.
+	counter RateCounter
+	scope   string
+}
+
+// WithDistributedBackend attaches a shared counter so this limiter can enforce a
+// cluster-wide limit when RateLimitConfig.Distributed is true. scope namespaces
+// the keys per service. Chainable; a nil limiter is a no-op.
+func (rl *RateLimiter) WithDistributedBackend(scope string, c RateCounter) *RateLimiter {
+	if rl == nil {
+		return rl
+	}
+	rl.scope, rl.counter = scope, c
+	return rl
+}
+
+// allowDistributed enforces a shared per-IP limit via a Redis fixed-window
+// counter keyed to the current second. Coarser than the in-process token bucket
+// (a full window's worth is available at the top of each second) but SHARED
+// across replicas — the whole point. Fail-OPEN on a backend error, matching the
+// platform's Redis posture: a counter outage must not throttle real traffic.
+func (rl *RateLimiter) allowDistributed(ctx context.Context, ip string, cfg RateLimitConfig) bool {
+	limit := cfg.Burst
+	if limit <= 0 {
+		limit = cfg.RPS
+	}
+	key := fmt.Sprintf("ratelimit:%s:%s:%d", rl.scope, ip, time.Now().Unix())
+	n, err := rl.counter.Incr(ctx, key)
+	if err != nil {
+		return true // fail-open
+	}
+	if n == 1 {
+		_ = rl.counter.Expire(ctx, key, 2*time.Second) // outlive the 1s window; self-cleans
+	}
+	return n <= int64(limit)
 }
 
 type ipEntry struct {
@@ -137,7 +189,16 @@ func (rl *RateLimiter) Wrap(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !rl.limiterFor(ip, cfg.RPS, cfg.Burst).Allow() {
+		// Cluster-wide (Redis) limiting when enabled and a backend is wired; else
+		// the per-pod in-process token bucket. A distributed flag with no backend
+		// falls through to in-process (safe — never unlimited).
+		allowed := true
+		if cfg.Distributed && rl.counter != nil {
+			allowed = rl.allowDistributed(r.Context(), ip, cfg)
+		} else {
+			allowed = rl.limiterFor(ip, cfg.RPS, cfg.Burst).Allow()
+		}
+		if !allowed {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 			return

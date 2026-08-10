@@ -29,6 +29,7 @@ var SSP = struct {
 	RateLimitBurst             config.IntKey
 	RateLimitTrustedHops       config.IntKey
 	RateLimitAllowlist         config.StringKey
+	RateLimitDistributed       config.BoolKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -52,6 +53,7 @@ var SSP = struct {
 	RateLimitBurst:             sspSet.Int("ssp.ratelimit_burst", "200", config.TierLive, "Token-bucket burst for ssp.ratelimit_rps — max requests in an instantaneous spike before the per-second rate applies. 0 = default to the rps value. Only meaningful when ratelimit_rps > 0.", config.Since("v1.16")),
 	RateLimitTrustedHops:       sspSet.Int("ssp.ratelimit_trusted_proxy_hops", "0", config.TierLive, "Number of trusted reverse proxies in front of the SSP (your ingress, plus any CDN). The rate-limit client IP is taken this many entries from the RIGHT of X-Forwarded-For — the entries a trusted proxy appended — so a client cannot evade the limit by forging (prepending) X-Forwarded-For values. 0 (default) = the ingress is the only trusted hop: use the rightmost XFF entry. Set to 1 when a CDN sits in front of the ingress.", config.Since("v1.17")),
 	RateLimitAllowlist:         sspSet.String("ssp.ratelimit_allowlist", DefaultRateLimitAllowlist, config.TierLive, "Comma-separated CIDRs/IPs that BYPASS the SSP rate limit. Defaults to loopback + private/link-local ranges so internal + local traffic is never throttled. Only consulted when ssp.ratelimit_rps > 0 (off by default — bid-request intake is high-volume and better shielded at the CDN/WAF).", config.Since("v1.17")),
+	RateLimitDistributed:       sspSet.Bool("ssp.ratelimit_distributed", "false", config.TierLive, "Enforce ssp.ratelimit_rps CLUSTER-WIDE via a shared Redis fixed-window counter instead of per-pod in-process buckets. Costs one Redis op per limited request; fail-open if Redis is unreachable. Default false = per-pod. Only meaningful when ratelimit_rps > 0.", config.Since("v2.0")),
 	URL:                        config.RawString("ssp.url", routes.DefaultSSPURL),
 	Port:                       config.RawString("ssp.port", routes.PortSSP),
 	NATSURL:                    config.RawString("ssp.nats_url", routes.DefaultNATSURL),

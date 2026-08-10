@@ -22,6 +22,10 @@ const (
 	AuthLogin  = "/v1/auth/login"
 	AuthLogout = "/v1/auth/logout"
 	AuthSignup = "/v1/auth/signup"
+	// AuthRevokeSessions kills all of the caller's outstanding tokens at once
+	// (log out everywhere / respond to a stolen session). Authenticated: it
+	// revokes the session of whoever calls it, including their current token.
+	AuthRevokeSessions = "/v1/auth/revoke-sessions"
 	// AuthBootstrap is the one-shot endpoint for minting the first operator
 	// API key after a fresh deploy. Gated by PLATFORM_ROOT_PASSWORD env var
 	// (must match exactly); on success creates a row in the secrets table

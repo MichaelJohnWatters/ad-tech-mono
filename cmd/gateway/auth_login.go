@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -158,13 +159,50 @@ func loginSubmitHandler(lookup userLookupFn, signingKey string, log *slog.Logger
 	}
 }
 
-// logoutHandler clears the session cookie and returns to the login page.
+// logoutHandler clears the session cookie and returns to the login page. This is
+// a single-device logout: the cookie is dropped from THIS browser, but the token
+// itself stays valid until expiry. Use revokeSessionsHandler to kill a token
+// that may still be held elsewhere (a stolen/copied session).
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: middleware.SessionCookieName, Value: "", Path: "/",
 		HttpOnly: true, MaxAge: -1,
 	})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// revokeSessionsHandler kills EVERY outstanding token for the calling user by
+// stamping a revocation checkpoint at now — the "log out everywhere / I think my
+// session was stolen" button. Any token issued before this instant (including
+// the caller's current one and any copy held elsewhere) is rejected on its next
+// request. Runs behind authMiddleware, so the caller is already authenticated.
+func revokeSessionsHandler(rev *middleware.RevocationStore, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if err := rev.RevokeUser(r.Context(), claims.UserID, time.Now()); err != nil {
+			// A failed WRITE must be surfaced — unlike the read path, we can't
+			// silently pretend the sessions were revoked.
+			log.Error("revoke sessions failed", "user", claims.UserID, "error", err)
+			http.Error(w, `{"error":"could not revoke sessions"}`, http.StatusInternalServerError)
+			return
+		}
+		// Clear the caller's own cookie too (its token is now revoked anyway).
+		http.SetCookie(w, &http.Cookie{
+			Name: middleware.SessionCookieName, Value: "", Path: "/",
+			HttpOnly: true, MaxAge: -1,
+		})
+		log.Info("sessions revoked", "user", claims.UserID)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+	}
 }
 
 // portalHome maps an account type to its landing page.

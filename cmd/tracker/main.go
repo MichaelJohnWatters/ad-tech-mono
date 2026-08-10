@@ -693,8 +693,9 @@ func main() {
 			Burst:       keys.Tracker.RateLimitBurst.Get(cfg),
 			TrustedHops: keys.Tracker.RateLimitTrustedHops.Get(cfg),
 			Allowlist:   keys.Tracker.RateLimitAllowlist.Get(cfg),
+			Distributed: keys.Tracker.RateLimitDistributed.Get(cfg),
 		}
-	}, log)
+	}, log).WithDistributedBackend(constants.ServiceTracker, l2)
 	handler := tracing.HTTPMiddleware(constants.ServiceTracker)(metrics.Wrap(middleware.CORS(trkRL.Wrap(stampTracker(mux)))))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
 
