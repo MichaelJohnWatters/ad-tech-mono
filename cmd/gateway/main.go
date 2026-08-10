@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountexport"
+	accountexportpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountexport/postgres"
 	accountlifecyclepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountlifecycle/postgres"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
@@ -699,6 +701,16 @@ func main() {
 	reportObjects := objects.Connect(cfg, "/tmp/adtech-reports", log)
 	mux.Handle(routes.APIReportJobs, authMiddleware(http.HandlerFunc(reportJobsHandler(reportJobStore, reportScope, log))))
 	mux.Handle(routes.APIReportJobs+"/", authMiddleware(http.HandlerFunc(reportJobByIDHandler(reportJobStore, reportObjects, log))))
+
+	// Account data-export (PLAN Phase 11, item 105): status/enqueue + download
+	// stream. Reuses the private reports bucket + object store.
+	var exportStore accountexport.Store
+	if gwDB != nil {
+		exportStore = accountexportpg.New(gwDB)
+	}
+	exportH := accountExportHandler(exportStore, reportObjects, log)
+	mux.Handle(routes.APIAccountExport, authMiddleware(exportH))
+	mux.Handle(routes.APIAccountExport+"/", authMiddleware(exportH))
 
 	// Payouts — publisher earnings/payout history (read-only, tenant-scoped,
 	// earnings:view gated).
