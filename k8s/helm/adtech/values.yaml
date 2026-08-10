@@ -1368,3 +1368,27 @@ cronjobs:
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }
+
+  # account-closeout finalizes account closures whose 30-day grace period has
+  # elapsed (PLAN Phase 11, item 105): generates a final invoice, marks the
+  # account closed, and schedules the (deferred) 90-day purge. Idempotent —
+  # each closure flips grace→closed exactly once. Daily at 03:00, after the
+  # invoice run's window.
+  account-closeout:
+    image: adtech-account-closeout
+    schedule: "0 3 * * *"
+    component: billing
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+    restartPolicy: OnFailure
+    env:
+      - name: POD_NAME
+        value: "account-closeout"
+      - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "500m", memory: "256Mi" }
