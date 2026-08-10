@@ -8,6 +8,31 @@ persistence, rate limiting, public URLs). This runbook lists both.
 > **Legend:** 🟢 = turnkey (chart/values, done for you) · 🔵 = your cloud account
 > (I can't provision these from the repo).
 
+## Staging quickstart (host-agnostic) 🟢/🔵
+
+Staging validates the chart on a real node without the managed-services cost:
+**all data services in-cluster** (Postgres/Redis/NATS/ClickHouse as pods), only
+object storage on real S3, no registered domain required (sslip.io). The config
+is ready — `values-staging.yaml` + the SOPS overlay do it; you supply a node.
+
+1. **Images** — run the **build-push** workflow (Actions → build-push → Run) to
+   push `ghcr.io/<owner>/adtech-<svc>` images. Set `global.image.registry`/`tag`
+   in `values-staging.yaml`.
+2. **Node** 🔵 — any fresh k3s node (`curl -sfL https://get.k3s.io | sh -`).
+   Copy its kubeconfig locally; `kubectl config use-context` it.
+3. **cert-manager** 🔵 — `kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`.
+4. **Domain** — no DNS purchase: set `global.domain: <node-ip-dashed>.sslip.io`
+   (e.g. `203-0-113-5.sslip.io`) and match the seller-domain / public-URL
+   `REPLACE.sslip.io` placeholders in `values-staging.yaml`. Let's Encrypt HTTP-01
+   validates sslip.io. (Have a real domain? Use it instead.)
+5. **Secrets** — set up SOPS (Step 4 below), fill + encrypt the staging overlay.
+6. **Deploy** — `make deploy-staging` (helm upgrade with values-staging + the
+   SOPS-decrypted secrets; targets the current kubectl context). Seed with
+   `make seed` against the node's owner DB URL.
+
+The rest of this runbook is the prod path (managed stores, real domain); staging
+reuses the same steps with the in-cluster + sslip.io shortcuts above.
+
 ## What the chart already does for you 🟢
 
 | Concern | How | Where |
@@ -26,7 +51,10 @@ persistence, rate limiting, public URLs). This runbook lists both.
 - A **registered domain** you control DNS for.
 - **cert-manager** installed in the cluster (`kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`).
 - Managed data stores provisioned (see step 2).
-- Images built + pushed to a registry your cluster can pull (override `services.<svc>.image`).
+- Images built + pushed to a registry your cluster can pull. The **build-push**
+  GitHub Actions workflow pushes every service to `ghcr.io/<owner>/adtech-<svc>`;
+  point the chart at them with ONE knob — `global.image.registry` +
+  `global.image.tag` (see values-staging.yaml). No per-service overrides needed.
 
 ## Step 1 — set your domain 🟢/🔵
 
@@ -79,12 +107,41 @@ tls:
 Validate with the **staging** issuer first (`clusterIssuer: letsencrypt-staging`)
 to avoid Let's Encrypt rate limits, then switch to prod.
 
-## Step 4 — secrets 🔵
+## Step 4 — secrets (SOPS + age) 🔵
 
-Provide via SOPS at deploy time (never commit): `jwt_signing` secret (or
-`GATEWAY_JWT_SIGNING_KEY`), managed-store credentials, SMTP creds. Seed at least
-one `jwt_signing` secret or the gateway refuses to boot (that's the point of
-`GATEWAY_REQUIRE_AUTH=true`).
+Real credentials never enter git in plaintext. They live in a SOPS-encrypted
+**Helm values overlay** that's layered last at deploy time — so `sops -d` feeds
+the decrypted values straight into `helm upgrade` without ever writing plaintext
+to disk. Scaffolding: `.sops.yaml` (creation rules) +
+`k8s/helm/adtech/secrets/staging.secrets.example.yaml` (the template) + the
+`secrets-*` / `deploy-staging` Make targets.
+
+**One-time key setup** (`brew install sops age` first):
+
+```bash
+age-keygen -o age.key          # prints your public recipient (age1...)
+# paste the age1... recipient into .sops.yaml (replace the placeholder)
+# keep age.key OUT of git (.gitignored) — store it in a password manager / CI secret
+```
+
+**Fill + encrypt the overlay:**
+
+```bash
+cp k8s/helm/adtech/secrets/staging.secrets.example.yaml \
+   k8s/helm/adtech/secrets/staging.secrets.yaml
+$EDITOR k8s/helm/adtech/secrets/staging.secrets.yaml   # fill the REPLACE-* values
+make secrets-encrypt ENV=staging                        # → staging.secrets.enc.yaml (commit THIS)
+```
+
+The overlay carries the chart-consumed secrets: real-S3 `accessKey`/`secretKey`
+and the in-cluster Postgres/ClickHouse passwords. **App-level signing keys**
+(`jwt_signing`, `hmac_tracker`, `hmac_conversion`, `pgp_private`,
+`adcert_ed25519`) live in the Postgres `secrets` table — `make seed` mints
+dev-deterministic ones; for real keys insert them after first boot or add
+`SECRETS_ENCRYPTION_KEY` / `GATEWAY_JWT_SIGNING_KEY` as service `extraEnv` in the
+overlay. Seed at least one `jwt_signing` or the gateway refuses to boot (that's
+the point of `GATEWAY_REQUIRE_AUTH=true`). Rotate the `adtech_app` role password
+per the security note below.
 
 ## Step 5 — public browser-facing URLs 🟢/🔵
 

@@ -60,7 +60,14 @@ jobs:
           go-version-file: go.mod
       - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
       - run: helm lint k8s/helm/adtech
+      - run: helm lint k8s/helm/adtech -f k8s/helm/adtech/values-staging.yaml
+      - run: helm lint k8s/helm/adtech -f k8s/helm/adtech/values-prod.yaml
       - run: helm template adtech k8s/helm/adtech | kubeconform -strict -summary
+      # Validate the staging/prod renders too (catches env-specific template
+      # errors + config drift). The committed *.example.yaml stands in for the
+      # SOPS-decrypted secret overlay so no real secret is needed in CI.
+      - run: helm template adtech k8s/helm/adtech -f k8s/helm/adtech/values-staging.yaml -f k8s/helm/adtech/secrets/staging.secrets.example.yaml | kubeconform -strict -summary
+      - run: helm template adtech k8s/helm/adtech -f k8s/helm/adtech/values-prod.yaml | kubeconform -strict -summary
 
   # The duckdb-tagged reporting build is invisible to `go build ./...`
   # (build-tag-gated, CGO) — it once broke silently and every reporting
