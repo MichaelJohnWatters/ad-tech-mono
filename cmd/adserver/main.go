@@ -537,7 +537,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dyna
 		// below, so beacon/click macros work in either branch. BehaviourUserID is
 		// the consent-gated id (empty = no personalisation → static fallback).
 		if creative.Format == constants.FormatDynamicProduct {
-			creative.HTML = dpRenderer.Assemble(ctx, creative, req.AdvertiserID, req.BehaviourUserID)
+			creative.HTML = dpRenderer.Assemble(ctx, creative, req.AdvertiserID, req.BehaviourUserID, req.HouseholdID)
 		}
 
 		macroCtx := adserving.MacroContext{

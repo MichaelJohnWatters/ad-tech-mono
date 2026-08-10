@@ -61,7 +61,13 @@ type dpTemplateData struct {
 // creative it executes the html_content template with the user's carted
 // products; for any other format (or a nil renderer / parse error) it returns
 // the creative's HTML unchanged. Macro substitution runs on the result upstream.
-func (d *dynamicProductRenderer) Assemble(ctx context.Context, creative AdCreative, advertiserID, userID string) string {
+//
+// It resolves SKUs by the consented user id first, then falls back to the
+// HOUSEHOLD id — the cross-site chase stores carted SKUs under the shop's uid
+// or the hh: household, while the serve arrives with the PUBLISHER-side user id;
+// the household is the shared key that lets the chase render the actual carted
+// product cross-site (the same household the DSP matched to win the auction).
+func (d *dynamicProductRenderer) Assemble(ctx context.Context, creative AdCreative, advertiserID, userID, householdID string) string {
 	if creative.Format != constants.FormatDynamicProduct {
 		return creative.HTML
 	}
@@ -76,25 +82,32 @@ func (d *dynamicProductRenderer) Assemble(ctx context.Context, creative AdCreati
 	}
 
 	var products []catalog.Product
-	// Only attempt a data-driven render when we have the stores AND a user to
+	// Only attempt a data-driven render when we have the stores AND a key to
 	// personalise for. Otherwise fall straight through to the {{else}} branch.
-	if d != nil && d.skus != nil && d.products != nil && advertiserID != "" && userID != "" {
-		products = d.lookup(ctx, advertiserID, userID)
+	if d != nil && d.skus != nil && d.products != nil && advertiserID != "" {
+		lctx := ctx
+		if d.timeout > 0 {
+			var cancel context.CancelFunc
+			lctx, cancel = context.WithTimeout(ctx, d.timeout)
+			defer cancel()
+		}
+		// User id first (same-site / bridged), then the household (cross-site
+		// chase — the carted SKUs live under the hh: id the DSP matched).
+		products = d.lookup(lctx, advertiserID, userID)
+		if len(products) == 0 && householdID != "" && householdID != userID {
+			products = d.lookup(lctx, advertiserID, householdID)
+		}
 	}
 	return d.execute(tmpl, creative, dpTemplateData{Products: products, UserID: userID})
 }
 
-// lookup reads the user's recent SKUs then resolves them against the catalog,
-// under a bounded timeout. Any error → no products (the template's static
-// branch), logged but never fatal to the serve.
-func (d *dynamicProductRenderer) lookup(ctx context.Context, advertiserID, userID string) []catalog.Product {
-	lctx := ctx
-	if d.timeout > 0 {
-		var cancel context.CancelFunc
-		lctx, cancel = context.WithTimeout(ctx, d.timeout)
-		defer cancel()
+// lookup reads a key's recent SKUs then resolves them against the catalog. Any
+// error → no products (the template's static branch), logged but never fatal.
+func (d *dynamicProductRenderer) lookup(ctx context.Context, advertiserID, key string) []catalog.Product {
+	if key == "" {
+		return nil
 	}
-	skus, err := d.skus.RecentSKUs(lctx, advertiserID, userID, d.maxItems)
+	skus, err := d.skus.RecentSKUs(ctx, advertiserID, key, d.maxItems)
 	if err != nil {
 		d.log.Warn("dynamic product: recent skus read failed, static fallback", "advertiser", advertiserID, "error", err)
 		return nil
@@ -102,7 +115,7 @@ func (d *dynamicProductRenderer) lookup(ctx context.Context, advertiserID, userI
 	if len(skus) == 0 {
 		return nil
 	}
-	products, err := d.products.ProductsBySKUs(lctx, advertiserID, skus)
+	products, err := d.products.ProductsBySKUs(ctx, advertiserID, skus)
 	if err != nil {
 		d.log.Warn("dynamic product: catalog lookup failed, static fallback", "advertiser", advertiserID, "error", err)
 		return nil
