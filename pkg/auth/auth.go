@@ -269,6 +269,7 @@ var defaultPermissions = map[string][]string{
 		"support:read", "support:update",
 		"config:read", "config:update",
 		"ops:read", "ops:deploy", "ops:ab_test",
+		"incidents:read", "incidents:write",
 		"reports:read", "reports:export",
 		"audit:read",
 	},
@@ -278,6 +279,7 @@ var defaultPermissions = map[string][]string{
 	// fraud, or config mutation.
 	"staff:devops": {
 		"ops:read", "ops:deploy",
+		"incidents:read", "incidents:write",
 		"support:read",
 		"config:read",
 		"audit:read",

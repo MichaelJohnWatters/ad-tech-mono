@@ -92,6 +92,12 @@ const (
 	// APIAccountExport is the account data-export package (PLAN Phase 11, item
 	// 105): GET enqueues/returns the caller's export job (account:export).
 	APIAccountExport = apiPrefix + "/api/account/export"
+	// StatusPage is the PUBLIC status page (PLAN Phase 11, item 107) — unauthed
+	// HTML at /status; APIStatus is its JSON twin (also public). APIIncidents is
+	// the staff-only incident CRUD behind it (incidents:read/write).
+	StatusPage   = "/status"
+	APIStatus    = apiPrefix + "/api/status"
+	APIIncidents = apiPrefix + "/api/incidents"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
