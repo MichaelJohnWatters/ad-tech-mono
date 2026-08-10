@@ -34,7 +34,7 @@ spec:
           command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: migrate
-          image: {{ .Values.migrate.image }}
+          image: {{ include "adtech.image" (dict "name" .Values.migrate.image "g" .Values.global) }}
           imagePullPolicy: IfNotPresent
           env:
             {{- toYaml .Values.migrate.env | nindent 12 }}
