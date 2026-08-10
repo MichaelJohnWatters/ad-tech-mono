@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -46,7 +47,7 @@ type moderationStore interface {
 // gated, not tenant-scoped. Every decision publishes the creatives cache
 // invalidate so the adserver serves (or stops serving) the creative within
 // NATS RTT instead of the 30s poll.
-func moderationHandler(store moderationStore, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
+func moderationHandler(store moderationStore, bus events.EventBus, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -124,6 +125,15 @@ func moderationHandler(store moderationStore, bus events.EventBus, log *slog.Log
 				_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateCreatives,
 					[]byte(`{"source":"gateway-moderation","id":"`+req.CreativeID+`"}`))
 			}
+			// Staff cross-tenant decision on another account's creative — audit it.
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				ActorID:      "user:" + claims.UserID,
+				Action:       "moderation:" + req.Action,
+				ResourceType: "creative",
+				ResourceID:   req.CreativeID,
+				Changes:      map[string]any{"review_status": newStatus},
+				Reason:       req.Reason,
+			})
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": req.CreativeID, "review_status": newStatus})
 
 		default:

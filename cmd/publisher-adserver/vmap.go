@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -52,6 +53,18 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 		vastParams.Set("placement_id", placement)
 		vastBase := publicBase + routes.PublisherAdServeVAST + "?" + vastParams.Encode()
 
+		// Break-start/-end beacons hit the signature-gated /v1/t/view handler, so
+		// they must carry a valid HMAC `sig` or they 403 under strict signing
+		// (tracker.signature_validation=true) — silently dropping CTV break
+		// tracking. Sign each through the same helper the impression/audio
+		// trackers use; the signature covers every param (ev/br included), so the
+		// tracker validates it exactly like an adserver-built viewability URL.
+		breakTracker := func(ev, br string) string {
+			return adserving.SignURL(
+				publicBase+"/v1/t/view?tid="+traceID+"&ev="+ev+"&br="+br,
+				adserving.ActiveSigningKey())
+		}
+
 		specs := []vmap.BreakSpec{
 			{
 				BreakID:       "pre-roll",
@@ -59,8 +72,8 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 				AdTagURL:      vastBase + "&break=pre",
 				AdTagTemplate: "vast4.2",
 				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_start&br=pre"},
-					BreakEnd:   []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_end&br=pre"},
+					BreakStart: []string{breakTracker("break_start", "pre")},
+					BreakEnd:   []string{breakTracker("break_end", "pre")},
 				},
 			},
 			{
@@ -69,8 +82,8 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 				AdTagURL:      vastBase + "&break=mid",
 				AdTagTemplate: "vast4.2",
 				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_start&br=mid"},
-					BreakEnd:   []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_end&br=mid"},
+					BreakStart: []string{breakTracker("break_start", "mid")},
+					BreakEnd:   []string{breakTracker("break_end", "mid")},
 				},
 			},
 			{
@@ -79,8 +92,8 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 				AdTagURL:      vastBase + "&break=post",
 				AdTagTemplate: "vast4.2",
 				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_start&br=post"},
-					BreakEnd:   []string{publicBase + "/v1/t/view?tid=" + traceID + "&ev=break_end&br=post"},
+					BreakStart: []string{breakTracker("break_start", "post")},
+					BreakEnd:   []string{breakTracker("break_end", "post")},
 				},
 			},
 		}

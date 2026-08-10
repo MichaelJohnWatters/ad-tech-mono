@@ -74,6 +74,7 @@ func incidentsHandler(store statuspage.Store, auditDB *sql.DB, log *slog.Logger)
 }
 
 func handleIncidentWrite(w http.ResponseWriter, r *http.Request, store statuspage.Store, auditDB *sql.DB, userID string, log *slog.Logger) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req incidentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -82,6 +83,14 @@ func handleIncidentWrite(w http.ResponseWriter, r *http.Request, store statuspag
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" {
 		http.Error(w, `{"error":"title is required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Title) > maxSubjectLen {
+		http.Error(w, `{"error":"title too long"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Body) > maxMessageLen {
+		http.Error(w, `{"error":"body too long"}`, http.StatusBadRequest)
 		return
 	}
 	if req.Impact == "" {

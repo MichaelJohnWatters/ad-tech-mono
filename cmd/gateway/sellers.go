@@ -34,16 +34,27 @@ func sellersJSONHandler(src sellerSource, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// pgSellerStore reads active publishers. Like ContractLoader, this is a
-// platform-wide (cross-tenant) read: the app role owns the publishers table, so
-// RLS does not filter it, and sellers.json is inherently a whole-platform view.
+// pgSellerStore reads active publishers. sellers.json is inherently a
+// whole-platform view, so this is a cross-tenant read. publishers carries the
+// tenant_isolation RLS policy, so under the NOBYPASSRLS app role it needs the
+// platform_read hatch (mig 065) or it returns ZERO rows — serving an empty
+// sellers.json. (The old "app role owns the table so RLS doesn't filter it"
+// assumption stopped holding at the security #77 role flip.)
 type pgSellerStore struct{ db *sql.DB }
 
 func (s pgSellerStore) Sellers(ctx context.Context) ([]fraud.SellerEntry, error) {
 	if s.db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := s.db.QueryContext(ctx,
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
 		`SELECT id::text, name, domain FROM publishers WHERE status = 'active' ORDER BY name`)
 	if err != nil {
 		return nil, err

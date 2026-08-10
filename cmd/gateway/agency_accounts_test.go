@@ -47,7 +47,7 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	// Agency GET → scoped to its own account.
 	store := &fakeAgencyStore{list: []agencyManagedView{{AgencyID: agencyID, ManagedID: advID, ManagedName: "Acme"}}}
 	rec := httptest.NewRecorder()
-	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", agency))
+	agencyAccountsHandler(store, nil, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", agency))
 	if rec.Code != http.StatusOK || store.listForAgency != agencyID || !strings.Contains(rec.Body.String(), "Acme") {
 		t.Fatalf("agency GET code=%d forAgency=%q body=%s", rec.Code, store.listForAgency, rec.Body.String())
 	}
@@ -55,14 +55,14 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	// Staff GET → all (forAgency empty unless ?agency_id).
 	store = &fakeAgencyStore{}
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", staff))
+	agencyAccountsHandler(store, nil, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", staff))
 	if rec.Code != http.StatusOK || store.listForAgency != "" {
 		t.Fatalf("staff GET code=%d forAgency=%q", rec.Code, store.listForAgency)
 	}
 
 	// Advertiser GET → 403 (not staff, no agency:read).
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", adv))
+	agencyAccountsHandler(&fakeAgencyStore{}, nil, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts", "", adv))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("advertiser GET code=%d, want 403", rec.Code)
 	}
@@ -70,14 +70,14 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	// Staff GET ?list=agencies → the agency roster for the assign picker.
 	store = &fakeAgencyStore{agencies: []agencyOption{{ID: agencyID, Name: "Bright Media"}}}
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", staff))
+	agencyAccountsHandler(store, nil, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", staff))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Bright Media") {
 		t.Fatalf("staff roster GET code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Agency GET ?list=agencies → 403 (roster is staff-only).
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", agency))
+	agencyAccountsHandler(&fakeAgencyStore{}, nil, quietLog())(rec, aReq(http.MethodGet, "/v1/api/agency-accounts?list=agencies", "", agency))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("agency roster GET code=%d, want 403", rec.Code)
 	}
@@ -85,7 +85,7 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	// Staff POST assign → 201, store got the ids.
 	store = &fakeAgencyStore{}
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
+	agencyAccountsHandler(store, nil, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
 		`{"agency_account_id":"`+agencyID+`","managed_account_id":"`+advID+`"}`, staff))
 	if rec.Code != http.StatusCreated || store.assignAgency != agencyID || store.assignManaged != advID {
 		t.Fatalf("staff assign code=%d agency=%q managed=%q", rec.Code, store.assignAgency, store.assignManaged)
@@ -93,7 +93,7 @@ func TestAgencyAccountsHandler(t *testing.T) {
 
 	// Agency POST → 403 (staff only).
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
+	agencyAccountsHandler(&fakeAgencyStore{}, nil, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
 		`{"agency_account_id":"`+agencyID+`","managed_account_id":"`+advID+`"}`, agency))
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("agency POST code=%d, want 403", rec.Code)
@@ -101,7 +101,7 @@ func TestAgencyAccountsHandler(t *testing.T) {
 
 	// Bad UUID → 400.
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(&fakeAgencyStore{}, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
+	agencyAccountsHandler(&fakeAgencyStore{}, nil, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
 		`{"agency_account_id":"nope","managed_account_id":"`+advID+`"}`, staff))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad-uuid assign code=%d, want 400", rec.Code)
@@ -110,7 +110,7 @@ func TestAgencyAccountsHandler(t *testing.T) {
 	// Store rejects a non-advertiser → 400.
 	store = &fakeAgencyStore{assignErr: errNotAdvertiser}
 	rec = httptest.NewRecorder()
-	agencyAccountsHandler(store, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
+	agencyAccountsHandler(store, nil, quietLog())(rec, aReq(http.MethodPost, "/v1/api/agency-accounts",
 		`{"agency_account_id":"`+agencyID+`","managed_account_id":"`+advID+`"}`, staff))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("non-advertiser assign code=%d, want 400", rec.Code)

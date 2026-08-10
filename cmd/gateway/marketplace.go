@@ -11,12 +11,14 @@ package main
 // characteristics ride the listing — never individual members.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace"
 	marketplacepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace/postgres"
@@ -186,7 +188,7 @@ type marketplaceEstimateResponse struct {
 // marketplaceListingActionHandler dispatches per-listing subtree actions:
 // POST /v1/api/marketplace/listings/{id}/purchase (slice 2) and
 // POST /v1/api/marketplace/listings/{id}/estimate  (slice 4).
-func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audiencepg.Store, log *slog.Logger) http.HandlerFunc {
+func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audiencepg.Store, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -227,7 +229,7 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 
 		switch action {
 		case "purchase":
-			marketplaceDoPurchase(w, r, store, listing, claims, log)
+			marketplaceDoPurchase(w, r, store, listing, claims, auditDB, log)
 		case "estimate":
 			marketplaceDoEstimate(w, r, audStore, listing, claims, log)
 		default:
@@ -237,7 +239,7 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 }
 
 // marketplaceDoPurchase (slice 2): the caller buys targeting access → a grant.
-func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, log *slog.Logger) {
+func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, auditDB *sql.DB, log *slog.Logger) {
 	if !can(claims, "marketplace:buy") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
@@ -259,6 +261,19 @@ func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *market
 		return
 	}
 	log.Info("marketplace purchase", "grant", id, "listing", listing.ID, "buyer", claims.AccountID, "seller", listing.AccountID)
+	// Money action (drives the buyer-debit / seller-credit CPM surcharge
+	// settlement) — audit the grant against the buyer account.
+	_ = audit.Log(r.Context(), auditDB, audit.Entry{
+		AccountID:    claims.AccountID,
+		ActorID:      "user:" + claims.UserID,
+		Action:       "marketplace:purchase",
+		ResourceType: "marketplace_grant",
+		ResourceID:   id,
+		Changes: map[string]any{
+			"listing_id": listing.ID, "segment_id": listing.SegmentID,
+			"seller_account_id": listing.AccountID, "cpm_surcharge_micros": listing.CPMSurchargeMicros,
+		},
+	})
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"grant_id": id, "segment_id": listing.SegmentID})
 }

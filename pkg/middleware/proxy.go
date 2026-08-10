@@ -46,6 +46,38 @@ func ParseActAsTarget(s string) (auth.AccountType, string) {
 	return auth.AccountAdvertiser, s
 }
 
+// trustedIdentityHeaders are the request headers the gateway injects AFTER it
+// has authenticated a caller — from JWT claims (ReverseProxy's ClaimsFromContext
+// block) or a validated publisher lookup (injectTraceScope). Internal services
+// trust them implicitly for tenant scoping and redaction, so an inbound client
+// must never be able to set them: a request arriving with `X-Account-Type: staff`
+// would otherwise be forwarded verbatim by any UNAUTHENTICATED pass-through proxy
+// (Swagger try-it-out, /v1/reporting/, /v1/billing/…) and read as a platform
+// operator downstream — an un-scoped, un-redacted cross-tenant read with no auth.
+var trustedIdentityHeaders = []string{
+	constants.HeaderAccountID,
+	constants.HeaderAccountType,
+	constants.HeaderUserID,
+	constants.HeaderPublisherID,
+	constants.HeaderActAs,
+}
+
+// StripClientIdentityHeaders deletes the gateway-injected identity headers from
+// an inbound request so a client can't spoof them. Mount it OUTERMOST on the
+// gateway — before auth and any header-injecting middleware — so the strip runs
+// first and the legitimate setters (ReverseProxy's claims block, injectTraceScope)
+// re-add validated values further in. Requests that reach a pass-through proxy
+// with no injector in front then carry no identity headers at all, so the
+// downstream service denies rather than trusting a forged value.
+func StripClientIdentityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range trustedIdentityHeaders {
+			r.Header.Del(h)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
 // to a backend service. Used by the gateway to proxy API calls to internal services.
 func ReverseProxy(target string, log *slog.Logger) http.Handler {

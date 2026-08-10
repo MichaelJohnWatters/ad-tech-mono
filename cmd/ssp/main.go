@@ -670,19 +670,24 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 				}
 			}
 		}
-		if len(segs) > 0 {
+		// Consent gate for ALL audience signal leaving the platform. Evaluated
+		// once and applied to BOTH user.ext.segments and user.data (segtax): our
+		// own DSP re-evaluates consent before USING segments, but an external
+		// bidder can't be relied on to, so no personalisation consent → no
+		// audience membership (segments OR taxonomy data) rides the bid request.
+		// (Previously only user.data was gated; user.ext.segments leaked public
+		// audience-segment ids to external DSPs on GPC/opt-out/no-consent requests.)
+		sig := privacy.SignalsFromQuery(r.URL.Query().Get, r.Header.Get("Sec-GPC"))
+		personalise := privacy.Evaluate(sig).Personalise
+		if len(segs) > 0 && personalise {
 			user.Ext = &openrtb.UserExt{Segments: segs}
 		}
 		// Standard-taxonomy audience data for EXTERNAL buyers: OpenRTB
 		// user.data with ext.segtax=4 (IAB Audience Taxonomy 1.1). Only
 		// public segments carrying a taxonomy label ride here — unlabelled
-		// segments stay platform-internal on user.ext.segments. Consent is
-		// gated at source: our own DSP re-evaluates consent before USING
-		// segments, but an external bidder can't be relied on to, so no
-		// personalisation consent → no user.data leaves the platform.
-		if ds := taxCache.dataSegments(segs); len(ds) > 0 {
-			sig := privacy.SignalsFromQuery(r.URL.Query().Get, r.Header.Get("Sec-GPC"))
-			if privacy.Evaluate(sig).Personalise {
+		// segments stay platform-internal on user.ext.segments.
+		if personalise {
+			if ds := taxCache.dataSegments(segs); len(ds) > 0 {
 				user.Data = []openrtb.Data{{
 					Name:    sellerDomain,
 					Segment: ds,
