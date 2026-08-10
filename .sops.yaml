@@ -1,0 +1,23 @@
+# SOPS creation rules — how `sops -e` encrypts and `sops -d` decrypts the
+# staging/prod secret overlays. Real secret VALUES never enter git in plaintext;
+# only the encrypted *.enc.yaml is committed (the plaintext *.secrets.yaml is
+# .gitignored). See docs/DEPLOY.md → "Secrets (SOPS + age)".
+#
+# The overlay is a plain Helm values file: at deploy time
+#   helm upgrade -f values-staging.yaml -f <(sops -d k8s/helm/adtech/secrets/staging.secrets.enc.yaml)
+# feeds the decrypted secret values in without ever writing plaintext to disk.
+#
+# SETUP (each operator, once): generate an age key and set YOUR public recipient
+# below, keeping the private key out-of-band (a CI secret / password manager):
+#   age-keygen -o age.key            # prints the public recipient (age1...)
+#   # paste the age1... recipient into the `age:` field below
+# Rotate by adding a new recipient and re-encrypting (sops updatekeys).
+#
+# encrypted_regex keeps the YAML STRUCTURE readable (keys visible) and encrypts
+# only the secret-bearing leaves — passwords, keys, and access/secret pairs.
+creation_rules:
+  - path_regex: k8s/helm/adtech/secrets/.*\.enc\.yaml$
+    encrypted_regex: "^(password|secretKey|accessKey|.*[_-]?[Kk]ey|.*[Pp]assword|.*[Ss]ecret|value)$"
+    # REPLACE with your age public recipient (age-keygen prints it). This
+    # placeholder cannot decrypt anything — encrypting will fail until it's real.
+    age: age1REPLACE0000000000000000000000000000000000000000000000000000000

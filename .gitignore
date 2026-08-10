@@ -46,9 +46,15 @@ bin/
 .DS_Store
 Thumbs.db
 
-# Secrets (never commit)
+# Secrets (never commit). The DECRYPTED SOPS overlays + age keys stay local;
+# only the encrypted *.enc.yaml and the *.example.yaml template are committed.
 *.enc.yaml.dec
 secrets.yaml
+k8s/helm/adtech/secrets/*.secrets.yaml
+!k8s/helm/adtech/secrets/*.example.yaml
+age.key
+*.age
+age-key.txt
 
 # Python
 __pycache__/

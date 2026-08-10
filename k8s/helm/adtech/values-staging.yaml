@@ -25,6 +25,26 @@
 # cluster-wide — staging shares prod's posture.
 global:
   debugEndpoints: false
+  # ONE domain knob: every ingress host + cert SAN derives from it
+  # (templates/services.yaml). No registered domain? Point at the node IP with
+  # sslip.io — `<node-ip>.sslip.io` resolves anywhere and Let's Encrypt HTTP-01
+  # validates it, so staging needs no DNS purchase. Match the SSP/exchange
+  # seller-domain extraEnv below to whatever you set here.
+  domain: REPLACE.sslip.io        # e.g. 203-0-113-5.sslip.io, or adtech.staging.yourdomain.com
+  # App images from the build-push workflow (ghcr.io/<owner>/adtech-<svc>:<tag>).
+  # Owner must be lowercase. Pin tag to a sha-<hash> for reproducibility, or use
+  # the moving `main` tag. Infra images (postgres/nats/…) are unaffected.
+  image:
+    registry: ghcr.io/REPLACE-owner
+    tag: main
+  # Real object storage (in-cluster Minio disabled below). endpoint/region/useSSL
+  # are non-secret and set here; accessKey/secretKey come from the SOPS overlay
+  # (k8s/helm/adtech/secrets/staging.secrets.enc.yaml). Works with AWS S3,
+  # DigitalOcean Spaces, Cloudflare R2, Backblaze B2 — any S3-compatible endpoint.
+  s3:
+    endpoint: REPLACE-s3-endpoint    # e.g. s3.us-east-1.amazonaws.com, nyc3.digitaloceanspaces.com
+    region: us-east-1
+    useSSL: true
 
 # TLS via cert-manager (Let's Encrypt staging issuer — avoids the LE rate limit
 # while validating the pipeline). Install cert-manager + the issuer out-of-band.
@@ -40,6 +60,12 @@ infra:
       enabled: true
   registryMirror:
     enabled: false
+  # All data services stay IN-CLUSTER for staging (Postgres/Redis/NATS/ClickHouse
+  # as pods) — only object storage goes to real S3, so disable the in-cluster
+  # Minio and let global.s3 (above) + the SOPS creds take over. Postgres/
+  # ClickHouse passwords come from the SOPS overlay too.
+  minio:
+    enabled: false
 
 services:
   dsp-internal:
@@ -54,25 +80,40 @@ services:
     # staging platform domain (match global.domain).
     extraEnv:
       - name: SSP_SELLER_DOMAIN
-        value: "adtech.staging.example.com"   # ← match global.domain
+        value: "REPLACE.sslip.io"   # ← match global.domain
   exchange:
     replicas: 2
     extraEnv:
       - name: EXCHANGE_ADSTXT_SELLER_DOMAIN
-        value: "adtech.staging.example.com"   # ← match global.domain
-      # EXCHANGE_ADCERT_SIGN_KEY: provision via SOPS adcert_ed25519 secret.
+        value: "REPLACE.sslip.io"   # ← match global.domain
+      # EXCHANGE_ADCERT_SIGN_KEY: provision via the adcert_ed25519 secret
+      # (seeded into the Postgres secrets table, or add as extraEnv in the SOPS
+      # overlay). The exchange prefers the store key over the dev env fallback.
   adserver:
     replicas: 2
+    # PUBLIC browser-facing pixel base baked into served ad HTML — MUST be HTTPS
+    # (mixed-content blocks http pixels) and match global.domain.
+    extraEnv:
+      - name: ADSERVER_TRACKER_URL
+        value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
   publisher-adserver:
     replicas: 2
+    extraEnv:
+      - name: PUBLISHER_ADSERVER_TRACKER_URL
+        value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
+      - name: PUBLISHER_ADSERVER_PUBLIC_URL
+        value: "https://pubad.REPLACE.sslip.io"     # ← match global.domain
   tracker:
     replicas: 3
   gateway:
     replicas: 2
     # Auth mandatory in staging too (mirror prod). extraEnv APPENDS.
+    # public_tracker_url is baked into advertiser conversion pixels (HTTPS).
     extraEnv:
       - name: GATEWAY_REQUIRE_AUTH
         value: "true"
+      - name: GATEWAY_PUBLIC_TRACKER_URL
+        value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
   # Single-replica BY DESIGN (do not scale without code changes):
   # reporting (in-process billing Summary + spend-snapshot publisher),
   # identity-consumer (in-memory fingerprint buckets),

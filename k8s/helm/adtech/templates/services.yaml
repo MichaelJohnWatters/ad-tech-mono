@@ -95,6 +95,33 @@ spec:
             {{- with $svc.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- /* Real object storage (staging/prod): when global.s3.endpoint is
+                   set, inject the S3 endpoint + region + SSL + credentials so
+                   every service talks to real S3 instead of the in-cluster Minio
+                   (disabled in those envs). Injected LAST so it overrides each
+                   service's per-service Minio S3_* defaults — k8s takes the last
+                   value for a repeated env name. Per-service S3_BUCKET stays in
+                   the base env. Local dev leaves global.s3.endpoint empty → no
+                   injection → the Minio env is unchanged. accessKey/secretKey
+                   come from the SOPS overlay; omitted-when-empty so a partial
+                   overlay never blanks a value. */}}
+            {{- $s3 := (($.Values.global | default dict).s3 | default dict) }}
+            {{- if $s3.endpoint }}
+            - name: S3_ENDPOINT
+              value: {{ $s3.endpoint | quote }}
+            - name: S3_REGION
+              value: {{ $s3.region | default "us-east-1" | quote }}
+            - name: S3_USE_SSL
+              value: {{ $s3.useSSL | default false | quote }}
+            {{- with $s3.accessKey }}
+            - name: S3_ACCESS_KEY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $s3.secretKey }}
+            - name: S3_SECRET_KEY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
           {{- with $svc.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite demosites extbidder demoadv security-harness
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -239,6 +239,33 @@ deploy: ## Rebuild ONE service image + restart it: make deploy SVC=pipeline
 stack-down: ## Tear the local helm stack down (keeps PVCs; add PURGE=1 to wipe data)
 	helm uninstall adtech || true
 	@if [ "$(PURGE)" = "1" ]; then kubectl -n adtech delete pvc --all; fi
+
+# ---- Staging / SOPS secrets (host-agnostic; needs sops + age + helm) ----
+# The secret VALUES live in an encrypted overlay; only the .enc.yaml is committed
+# (see .sops.yaml + docs/DEPLOY.md "Secrets"). ENV defaults to staging.
+ENV ?= staging
+SECRETS_DIR := k8s/helm/adtech/secrets
+
+secrets-encrypt: ## Encrypt SECRETS_DIR/$(ENV).secrets.yaml → $(ENV).secrets.enc.yaml (commit only the .enc.yaml)
+	@command -v sops >/dev/null || { echo "sops not installed — brew install sops age, then set your recipient in .sops.yaml"; exit 1; }
+	sops -e $(SECRETS_DIR)/$(ENV).secrets.yaml > $(SECRETS_DIR)/$(ENV).secrets.enc.yaml
+	@echo "encrypted → $(SECRETS_DIR)/$(ENV).secrets.enc.yaml (safe to commit)"
+
+secrets-edit: ## Edit the encrypted $(ENV) secrets in place (sops opens $$EDITOR; re-encrypts on save)
+	@command -v sops >/dev/null || { echo "sops not installed"; exit 1; }
+	sops $(SECRETS_DIR)/$(ENV).secrets.enc.yaml
+
+secrets-decrypt: ## Print the decrypted $(ENV) secrets to stdout (debug only; never redirect into git)
+	@command -v sops >/dev/null || { echo "sops not installed"; exit 1; }
+	sops -d $(SECRETS_DIR)/$(ENV).secrets.enc.yaml
+
+deploy-staging: ## Deploy the chart to the CURRENT kubectl context: values-staging + SOPS secrets (host-agnostic). Prereqs: cert-manager + issuer installed, images pushed (build-push workflow), .sops.yaml recipient set + $(ENV).secrets.enc.yaml present.
+	@command -v sops >/dev/null || { echo "sops not installed"; exit 1; }
+	@[ -f $(SECRETS_DIR)/staging.secrets.enc.yaml ] || { echo "missing $(SECRETS_DIR)/staging.secrets.enc.yaml — copy the .example, fill it, 'make secrets-encrypt'"; exit 1; }
+	@# bash for process substitution — the decrypted secrets never touch disk.
+	bash -c 'helm upgrade --install adtech k8s/helm/adtech --timeout 10m \
+	  -f k8s/helm/adtech/values-staging.yaml \
+	  -f <(sops -d $(SECRETS_DIR)/staging.secrets.enc.yaml)'
 
 stack-doctor: ## Diagnose + repair the local stack (post-sleep wedge, node-IP flip, stale svclb tunnels, TB wedge)
 	scripts/stack-doctor.sh
