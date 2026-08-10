@@ -1368,6 +1368,48 @@ paths:
         "200": { description: "Inline (small feed): { products_written, total_rows, valid_rows, rejected_rows }" }
         "202": { description: "Queued (large feed / held): { job_id, status, run_at? }. Poll GET /v1/api/audiences/ingest/{id}." }
         "422": { description: "Feed rejected (bad shape / all-or-nothing threshold): { error } naming the failing column" }
+  /v1/api/marketplace/listings:
+    get:
+      tags: [Audiences]
+      summary: Browse the data marketplace catalog (or your own listings)
+      description: >-
+        The data marketplace (PLAN Phase 10). Default: the cross-tenant catalog
+        of ACTIVE listings other data owners have published (each shows aggregate
+        reach + the CPM surcharge + the seller, never individual members).
+        `?scope=mine` returns the caller's own listings (seller view).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: scope, schema: { type: string, enum: [mine] }, required: false, description: "mine = your own listings; omitted = browse the catalog" }
+      responses:
+        "200": { description: "[{ id, account_id, segment_id, name, description?, size_estimate, cpm_surcharge_micros, preview?, status, seller_name?, created_at, updated_at }]" }
+    post:
+      tags: [Audiences]
+      summary: List one of your PUBLIC segments on the marketplace
+      description: >-
+        Publishes a PUBLIC audience segment you own for other tenants to
+        discover + (later) buy targeting access to. Only public segments can be
+        listed (a dsp_private segment can't be shared cross-tenant). Re-listing a
+        segment upserts. The advertised reach snapshots the segment's live member
+        count. Requires marketplace:list.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [segment_id, name]
+              properties:
+                segment_id: { type: string, description: "One of your own PUBLIC segments" }
+                name: { type: string }
+                description: { type: string }
+                cpm_surcharge: { type: number, description: "USD CPM a buyer pays per impression served using this data; converted to micros" }
+                preview: { type: object, description: "Aggregate-only shop window (top IAB categories, geo/device split). Never individual users." }
+                status: { type: string, enum: [active, paused, withdrawn], default: active }
+      responses:
+        "200": { description: "{ id } — the listing id" }
+        "400": { description: "segment not public / missing fields" }
+        "404": { description: "segment not found (not one of yours)" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]
