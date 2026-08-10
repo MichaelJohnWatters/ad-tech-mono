@@ -79,6 +79,10 @@ const (
 	// APIMarketplaceGrants lists the caller's marketplace grants: GET the buyer's
 	// purchased data (default) or ?scope=sales for the seller's sales.
 	APIMarketplaceGrants = apiPrefix + "/api/marketplace/grants"
+	// APIMarketplaceEarnings is the seller's settled marketplace revenue
+	// (PLAN Phase 10, slice 3 surface): GET aggregates the CPM-surcharge earnings
+	// per segment the caller has sold. Tenant-scoped to the caller as seller.
+	APIMarketplaceEarnings = apiPrefix + "/api/marketplace/earnings"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

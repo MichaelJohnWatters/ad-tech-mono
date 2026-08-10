@@ -146,6 +146,47 @@ func (h *Harness) MarketplaceGrants(t *testing.T, accountID, scope string) []mar
 	return out
 }
 
+// MarketplaceEarnings is the seller's settled-revenue summary (per-segment rows
+// + roll-up totals).
+type MarketplaceEarnings struct {
+	TotalNetMicros   int64 `json:"total_net_micros"`
+	TotalGrossMicros int64 `json:"total_gross_micros"`
+	TotalImpressions int64 `json:"total_impressions"`
+	BySegment        []struct {
+		SegmentID    string `json:"segment_id"`
+		ListingName  string `json:"listing_name"`
+		Impressions  int64  `json:"impressions"`
+		GrossMicros  int64  `json:"gross_micros"`
+		NetMicros    int64  `json:"net_micros"`
+		MarginMicros int64  `json:"margin_micros"`
+		Buyers       int64  `json:"buyers"`
+	} `json:"by_segment"`
+}
+
+// MarketplaceEarningsFor fetches the account's settled marketplace revenue
+// (seller view).
+func (h *Harness) MarketplaceEarningsFor(t *testing.T, accountID string) MarketplaceEarnings {
+	t.Helper()
+	client := h.marketplaceClient(t, accountID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.URLs.Gateway+routes.APIMarketplaceEarnings, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("marketplace earnings: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("marketplace earnings status %d: %s", resp.StatusCode, string(b))
+	}
+	var out MarketplaceEarnings
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode earnings: %v (body=%s)", err, string(b))
+	}
+	return out
+}
+
 // FindListingID returns the id of the catalog listing with the given name, as
 // seen by the account (empty if not found).
 func (h *Harness) FindListingID(t *testing.T, accountID, name string) string {

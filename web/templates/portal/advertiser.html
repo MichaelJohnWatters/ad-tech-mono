@@ -308,6 +308,26 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
+      {{ template "card-start" (dict "title" "Earnings" "subtitle" "Real revenue settled to you through the CPM surcharge — one row per segment, updated as buyers' impressions serve") }}
+      <div id="marketplaceEarningsSummary" class="grid grid-cols-3 gap-4 mb-4">
+        <div class="rounded-lg border border-gray-100 dark:border-gray-800 p-3">
+          <div class="text-xs text-gray-500">Net earned</div>
+          <div id="mktEarnNet" class="text-lg font-semibold font-mono">$0.00</div>
+        </div>
+        <div class="rounded-lg border border-gray-100 dark:border-gray-800 p-3">
+          <div class="text-xs text-gray-500">Gross surcharge</div>
+          <div id="mktEarnGross" class="text-lg font-semibold font-mono">$0.00</div>
+        </div>
+        <div class="rounded-lg border border-gray-100 dark:border-gray-800 p-3">
+          <div class="text-xs text-gray-500">Impressions</div>
+          <div id="mktEarnImps" class="text-lg font-semibold font-mono">0</div>
+        </div>
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Segment" "Buyers" "Impressions" "Gross" "Net earned" "Last settled")) }}
+        <tbody id="marketplaceEarnings"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Your listings" "subtitle" "PUBLIC segments you've published for sale — set a CPM surcharge; buyers pay it per impression served using the data") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ List a segment" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newListing').classList.remove('hidden')") }}
@@ -1873,6 +1893,27 @@ async function loadMarketplace() {
       : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">You haven\'t listed any segments yet.</td></tr>';
   } catch (err) {
     mine.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+  // Earnings (seller's settled surcharge revenue).
+  const earn = document.getElementById('marketplaceEarnings');
+  try {
+    const e = await fetchJSON('/v1/api/marketplace/earnings') || {};
+    const rows = e.by_segment || [];
+    document.getElementById('mktEarnNet').textContent = '$' + ((e.total_net_micros || 0) / 1e6).toFixed(2);
+    document.getElementById('mktEarnGross').textContent = '$' + ((e.total_gross_micros || 0) / 1e6).toFixed(2);
+    document.getElementById('mktEarnImps').textContent = fmtInt(e.total_impressions || 0);
+    earn.innerHTML = rows.length ? rows.map(s => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(s.listing_name || s.segment_id.slice(0, 8) + '…')}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(s.buyers)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(s.impressions)}</td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">$${(s.gross_micros / 1e6).toFixed(2)}</td>
+        <td class="px-3 py-2 font-mono text-success">$${(s.net_micros / 1e6).toFixed(2)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(s.last_settled_at)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No earnings yet — you earn the surcharge each time a buyer serves an impression on a segment you sold.</td></tr>';
+  } catch (err) {
+    earn.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
   // Populate the segment picker with the caller's PUBLIC segments.
   const sel = $('ml_segment');

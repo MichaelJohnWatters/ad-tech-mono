@@ -273,6 +273,55 @@ ORDER BY g.granted_at DESC LIMIT $2`, accountID, limit)
 	return out, rows.Err()
 }
 
+// SellerEarnings aggregates the seller's settled surcharge revenue per segment,
+// newest-earning first. Platform-hatch read: the earnings row is seller-scoped
+// (RLS would admit the seller's own rows), but the LEFT JOIN to
+// marketplace_listings resolves the listing NAME, so run under the hatch — the
+// same posture as grantsBy. segment_id is TEXT in earnings, UUID in listings →
+// cast to match.
+func (s *Store) SellerEarnings(ctx context.Context, sellerAccountID string, limit int) ([]marketplace.SellerEarning, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin earnings: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("earnings platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT e.segment_id,
+       COALESCE(l.name, ''),
+       count(*),
+       COALESCE(SUM(e.surcharge_micros), 0),
+       COALESCE(SUM(e.seller_net_micros), 0),
+       COALESCE(SUM(e.margin_micros), 0),
+       COUNT(DISTINCT e.buyer_account_id),
+       MAX(e.created_at)
+FROM marketplace_surcharge_earnings e
+LEFT JOIN marketplace_listings l ON l.segment_id::text = e.segment_id
+WHERE e.seller_account_id = $1::uuid
+GROUP BY e.segment_id, l.name
+ORDER BY SUM(e.seller_net_micros) DESC
+LIMIT $2`, sellerAccountID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("earnings: %w", err)
+	}
+	defer rows.Close()
+	out := []marketplace.SellerEarning{}
+	for rows.Next() {
+		var e marketplace.SellerEarning
+		if err := rows.Scan(&e.SegmentID, &e.ListingName, &e.Impressions,
+			&e.GrossMicros, &e.NetMicros, &e.MarginMicros, &e.Buyers, &e.LastSettledAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ActiveGrantSegments returns the segment ids the buyer has a live grant for.
 // Platform-hatch read (settlement runs off the tenant session).
 func (s *Store) ActiveGrantSegments(ctx context.Context, buyerAccountID string) ([]string, error) {

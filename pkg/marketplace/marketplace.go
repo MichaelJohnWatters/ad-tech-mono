@@ -74,6 +74,20 @@ type Grant struct {
 	BuyerName   string `json:"buyer_name,omitempty"`
 }
 
+// SellerEarning is one row of a seller's marketplace revenue, aggregated per
+// segment they've sold: how many impressions settled the surcharge, and the
+// gross/net/margin split. Sourced from marketplace_surcharge_earnings (slice 3).
+type SellerEarning struct {
+	SegmentID     string    `json:"segment_id"`
+	ListingName   string    `json:"listing_name,omitempty"`
+	Impressions   int64     `json:"impressions"`
+	GrossMicros   int64     `json:"gross_micros"`  // total surcharge buyers paid
+	NetMicros     int64     `json:"net_micros"`    // what the seller earned (gross − margin)
+	MarginMicros  int64     `json:"margin_micros"` // platform's cut
+	Buyers        int64     `json:"buyers"`        // distinct buyers on this segment
+	LastSettledAt time.Time `json:"last_settled_at"`
+}
+
 // GrantStore persists marketplace purchase grants.
 type GrantStore interface {
 	// Purchase records the buyer's grant for a listing (upsert per buyer+listing,
@@ -88,6 +102,10 @@ type GrantStore interface {
 	// settlement authorization set. Platform-hatch read (used off the tenant
 	// session at settlement).
 	ActiveGrantSegments(ctx context.Context, buyerAccountID string) ([]string, error)
+	// SellerEarnings returns the seller's settled marketplace revenue aggregated
+	// per segment, newest-earning first. Sourced from the surcharge-settlement
+	// ledger (slice 3), so it reflects real money the seller has earned.
+	SellerEarnings(ctx context.Context, sellerAccountID string, limit int) ([]SellerEarning, error)
 }
 
 // Store is the marketplace persistence seam. Owner-facing writes/reads are
