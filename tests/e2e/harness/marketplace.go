@@ -100,3 +100,59 @@ func HasListing(ls []marketplace.Listing, name string) bool {
 	}
 	return false
 }
+
+// MarketplacePurchase buys a listing as the account. Returns (status, body).
+func (h *Harness) MarketplacePurchase(t *testing.T, accountID, listingID string) (int, string) {
+	t.Helper()
+	client := h.marketplaceClient(t, accountID)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	url := h.URLs.Gateway + routes.APIMarketplaceListingsSub + listingID + "/purchase"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("marketplace purchase: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// MarketplaceGrants fetches the caller's grants (scope="" = purchases,
+// "sales" = seller's sales).
+func (h *Harness) MarketplaceGrants(t *testing.T, accountID, scope string) []marketplace.Grant {
+	t.Helper()
+	client := h.marketplaceClient(t, accountID)
+	url := h.URLs.Gateway + routes.APIMarketplaceGrants
+	if scope != "" {
+		url += "?scope=" + scope
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("marketplace grants: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("marketplace grants status %d: %s", resp.StatusCode, string(b))
+	}
+	var out []marketplace.Grant
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode grants: %v (body=%s)", err, string(b))
+	}
+	return out
+}
+
+// FindListingID returns the id of the catalog listing with the given name, as
+// seen by the account (empty if not found).
+func (h *Harness) FindListingID(t *testing.T, accountID, name string) string {
+	for _, l := range h.MarketplaceCatalog(t, accountID, "") {
+		if l.Name == name {
+			return l.ID
+		}
+	}
+	return ""
+}

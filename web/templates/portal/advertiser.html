@@ -296,9 +296,15 @@
          owners have listed for sale, and list your own PUBLIC segments. A
          listing shows aggregate reach + the CPM surcharge — never members. -->
     <section id="section-marketplace" class="portal-section p-6 space-y-6 hidden">
-      {{ template "card-start" (dict "title" "Browse the data marketplace" "subtitle" "Audience segments other data owners have listed — buy targeting access without ever seeing members (purchase in a later release)") }}
-      {{ template "table-start" (dict "headers" (slice "Segment" "Seller" "Reach" "CPM surcharge" "Description")) }}
-        <tbody id="marketplaceCatalog"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "card-start" (dict "title" "Browse the data marketplace" "subtitle" "Audience segments other data owners have listed — buy targeting access without ever seeing members") }}
+      {{ template "table-start" (dict "headers" (slice "Segment" "Seller" "Reach" "CPM surcharge" "Description" "")) }}
+        <tbody id="marketplaceCatalog"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Purchased data" "subtitle" "Segments you've bought access to — target them in your campaigns; the CPM surcharge applies per impression served using the data") }}
+      {{ template "table-start" (dict "headers" (slice "Segment" "Seller" "CPM surcharge" "Purchased" "Segment ID (for targeting)")) }}
+        <tbody id="marketplacePurchases"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
@@ -1796,7 +1802,7 @@ async function uploadProductFeed(ev) {
 
 // ---- Data marketplace (PLAN Phase 10) ----
 async function loadMarketplace() {
-  // Catalog (cross-tenant listings to browse).
+  // Catalog (cross-tenant listings to browse + buy).
   const cat = document.getElementById('marketplaceCatalog');
   try {
     const list = await fetchJSON('/v1/api/marketplace/listings') || [];
@@ -1807,10 +1813,27 @@ async function loadMarketplace() {
         <td class="px-3 py-2 font-mono">${fmtInt(l.size_estimate)}</td>
         <td class="px-3 py-2 font-mono text-xs">$${(l.cpm_surcharge_micros / 1e6).toFixed(2)} CPM</td>
         <td class="px-3 py-2 text-xs text-gray-500">${esc(l.description || '')}</td>
+        <td class="px-3 py-2 text-right"><button onclick="buyListing('${esc(l.id)}')" class="text-xs px-2 py-1 rounded bg-info/15 text-info hover:bg-info/25">Buy access</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No listings yet — data owners can list public segments below.</td></tr>';
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No listings yet — data owners can list public segments below.</td></tr>';
   } catch (err) {
-    cat.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    cat.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+  // Purchased data (buyer's grants).
+  const pur = document.getElementById('marketplacePurchases');
+  try {
+    const grants = await fetchJSON('/v1/api/marketplace/grants') || [];
+    pur.innerHTML = grants.length ? grants.map(g => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(g.listing_name || '—')}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(g.seller_name || '—')}</td>
+        <td class="px-3 py-2 font-mono text-xs">$${(g.cpm_surcharge_micros / 1e6).toFixed(2)} CPM</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(g.granted_at)}</td>
+        <td class="px-3 py-2 font-mono text-[11px] text-gray-400">${esc(g.segment_id)}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No purchases yet — buy access to a listing above, then target its segment id in a campaign.</td></tr>';
+  } catch (err) {
+    pur.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
   // My listings (seller view).
   const mine = document.getElementById('marketplaceMine');
@@ -1837,6 +1860,18 @@ async function loadMarketplace() {
         ? segs.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtInt(s.members)} members)</option>`).join('')
         : '<option value="">No public segments — make one public under Audiences first</option>';
     } catch { /* leave the placeholder */ }
+  }
+}
+
+async function buyListing(id) {
+  try {
+    const resp = await fetch('/v1/api/marketplace/listings/' + encodeURIComponent(id) + '/purchase', {method: 'POST'});
+    const text = await resp.text();
+    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    toast('Access purchased — target the segment id in a campaign', 'success');
+    loadMarketplace();
+  } catch (err) {
+    toast('Purchase failed: ' + err.message, 'error');
   }
 }
 

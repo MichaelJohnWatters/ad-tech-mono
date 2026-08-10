@@ -18,7 +18,9 @@ import (
 
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace"
+	marketplacepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 )
 
 // marketplaceListingRequest is a POST body: list (or re-list) a public segment.
@@ -157,4 +159,112 @@ func handleMarketplaceListing(w http.ResponseWriter, r *http.Request, store mark
 	log.Info("marketplace listing upserted", "id", id, "segment", req.SegmentID, "account", accountID)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+// marketplacePurchaseHandler handles POST /v1/api/marketplace/listings/{id}/purchase
+// (slice 2): the caller buys targeting access to a listing → a grant.
+func marketplacePurchaseHandler(store *marketplacepg.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, map[string]string{}) {
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"marketplace unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "marketplace:buy") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		// Path: /v1/api/marketplace/listings/{id}/purchase
+		rest := strings.TrimPrefix(r.URL.Path, routes.APIMarketplaceListingsSub)
+		parts := strings.Split(strings.Trim(rest, "/"), "/")
+		if len(parts) != 2 || parts[1] != "purchase" || parts[0] == "" {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		listingID := parts[0]
+
+		listing, err := store.GetByID(r.Context(), listingID)
+		if err != nil {
+			log.Error("marketplace purchase: load listing failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if listing == nil {
+			http.Error(w, `{"error":"listing not found or not active"}`, http.StatusNotFound)
+			return
+		}
+		if listing.AccountID == claims.AccountID {
+			http.Error(w, `{"error":"you cannot purchase your own listing"}`, http.StatusBadRequest)
+			return
+		}
+
+		id, err := store.Purchase(r.Context(), marketplace.Grant{
+			ListingID:          listing.ID,
+			SegmentID:          listing.SegmentID,
+			SellerAccountID:    listing.AccountID,
+			BuyerAccountID:     claims.AccountID,
+			CPMSurchargeMicros: listing.CPMSurchargeMicros,
+		})
+		if err != nil {
+			log.Error("marketplace purchase failed", "listing", listingID, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		log.Info("marketplace purchase", "grant", id, "listing", listingID, "buyer", claims.AccountID, "seller", listing.AccountID)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"grant_id": id, "segment_id": listing.SegmentID})
+	}
+}
+
+// marketplaceGrantsHandler serves GET /v1/api/marketplace/grants — the caller's
+// purchased data (buyer view, default) or ?scope=sales (seller view).
+func marketplaceGrantsHandler(store *marketplacepg.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, []marketplace.Grant{}) {
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"marketplace unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "marketplace:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		var grants []marketplace.Grant
+		var err error
+		if r.URL.Query().Get("scope") == "sales" {
+			grants, err = store.SellerSales(r.Context(), claims.AccountID, 200)
+		} else {
+			grants, err = store.BuyerGrants(r.Context(), claims.AccountID, 200)
+		}
+		if err != nil {
+			log.Error("marketplace grants failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(grants)
+	}
 }

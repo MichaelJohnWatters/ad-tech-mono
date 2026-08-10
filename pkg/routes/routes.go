@@ -71,6 +71,14 @@ const (
 	// GET browses active cross-tenant listings (?scope=mine = the seller's own),
 	// POST lists one of the caller's PUBLIC segments for sale. Tenant-scoped.
 	APIMarketplaceListings = apiPrefix + "/api/marketplace/listings"
+	// APIMarketplaceListingsSub is the subtree for per-listing actions
+	// (POST /v1/api/marketplace/listings/{id}/purchase). Trailing-slash subtree
+	// so the ServeMux longest-match routes {id}/… here and the bare listings
+	// path stays on the catalog handler.
+	APIMarketplaceListingsSub = apiPrefix + "/api/marketplace/listings/"
+	// APIMarketplaceGrants lists the caller's marketplace grants: GET the buyer's
+	// purchased data (default) or ?scope=sales for the seller's sales.
+	APIMarketplaceGrants = apiPrefix + "/api/marketplace/grants"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
