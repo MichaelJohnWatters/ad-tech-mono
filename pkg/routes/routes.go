@@ -67,6 +67,10 @@ const (
 	// GET lists the account's products, POST uploads a feed CSV that rides
 	// the unified ingestion path (kind=product). Tenant-scoped.
 	APIProducts = apiPrefix + "/api/products"
+	// APIMarketplaceListings is the data marketplace catalog (PLAN Phase 10):
+	// GET browses active cross-tenant listings (?scope=mine = the seller's own),
+	// POST lists one of the caller's PUBLIC segments for sale. Tenant-scoped.
+	APIMarketplaceListings = apiPrefix + "/api/marketplace/listings"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

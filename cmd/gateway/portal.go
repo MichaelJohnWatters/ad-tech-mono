@@ -63,6 +63,8 @@ var advertiserNav = []NavItem{
 	// Products is the DPA catalog — ingested first-party data, so it rides the
 	// audience-data RBAC domain.
 	{Label: "Products", Href: "#products", Icon: "▢", Perm: "audiences:read"},
+	// Data marketplace (PLAN Phase 10): browse + list audience segments for sale.
+	{Label: "Marketplace", Href: "#marketplace", Icon: "⇄", Perm: "marketplace:read"},
 	{Label: "Conversions", Href: "#conversions", Icon: "◈", Perm: "campaigns:read"},
 	{Label: "Attribution", Href: "#attribution", Icon: "◔", Perm: "reports:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},

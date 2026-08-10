@@ -29,6 +29,9 @@ func (in *inserter) SeedFeatureBaseline(ctx context.Context) error {
 	if err := in.seedProductCatalog(ctx); err != nil {
 		return err
 	}
+	if err := in.seedMarketplaceListings(ctx); err != nil {
+		return err
+	}
 	if err := in.seedAgency(ctx); err != nil {
 		return err
 	}
@@ -239,6 +242,40 @@ ON CONFLICT (account_id, sku) DO UPDATE SET
 		}
 	}
 	in.log.Info("seeded product catalog", "account", "adv-barkbox", "products", len(products))
+	return nil
+}
+
+// seedMarketplaceListings publishes a couple of PUBLIC seeded segments to the
+// data marketplace (PLAN Phase 10) so the catalog isn't empty on a fresh stack:
+// Bean Barn's public "Coffee Snobs" (a themed behavioural segment) and Globex's
+// "Young Adults 18-34". Idempotent (upsert keyed on segment_id). size_estimate
+// snapshots the segment's live member count.
+func (in *inserter) seedMarketplaceListings(ctx context.Context) error {
+	listings := []struct {
+		segKey, account, name, description string
+		cpmMicros                          int64
+	}{
+		{"seg-coffee-snobs", "adv-beanbarn", "UK Coffee Enthusiasts",
+			"Consented readers who regularly browse coffee content — high purchase intent for premium beans + brewing gear.", 500_000},
+		{"seg-young-adults", "adv-globex", "Young Adults 18-34",
+			"A broad consented young-adult cohort for reach + brand campaigns.", 750_000},
+	}
+	for _, l := range listings {
+		account := idgen.Derive("account", l.account)
+		segID := idgen.Derive("segment", l.segKey)
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO marketplace_listings (account_id, segment_id, name, description, size_estimate, cpm_surcharge_micros, preview, status, created_at, updated_at)
+SELECT $1, $2, $3, $4, COALESCE((SELECT count(*) FROM audience_segment_members WHERE segment_id = $2), 0),
+       $5, '{}'::jsonb, 'active', now(), now()
+WHERE EXISTS (SELECT 1 FROM audience_segments WHERE id = $2 AND account_id = $1 AND visibility = 'public')
+ON CONFLICT (segment_id) DO UPDATE SET
+  name = EXCLUDED.name, description = EXCLUDED.description,
+  cpm_surcharge_micros = EXCLUDED.cpm_surcharge_micros, status = 'active', updated_at = now()`,
+			account, segID, l.name, l.description, l.cpmMicros); err != nil {
+			return fmt.Errorf("seed marketplace listing %s: %w", l.segKey, err)
+		}
+	}
+	in.log.Info("seeded marketplace listings", "count", len(listings))
 	return nil
 }
 
