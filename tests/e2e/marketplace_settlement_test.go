@@ -100,6 +100,27 @@ FROM ledger_entries WHERE reference_type='marketplace_surcharge' AND reference_i
 		t.Errorf("ledger debits %.9f / credits %.9f, want both %.9f", debits, credits, float64(surchargeMicros)/1e6)
 	}
 
+	// Seller earnings surface: the /earnings endpoint reflects the settled net,
+	// aggregated per segment (the seller's portal view of real revenue).
+	earn := h.MarketplaceEarningsFor(t, seller.ID)
+	if earn.TotalNetMicros != expNet || earn.TotalGrossMicros != surchargeMicros || earn.TotalImpressions != 1 {
+		t.Errorf("earnings totals = net %d / gross %d / imps %d, want %d/%d/1",
+			earn.TotalNetMicros, earn.TotalGrossMicros, earn.TotalImpressions, expNet, surchargeMicros)
+	}
+	var found bool
+	for _, s := range earn.BySegment {
+		if s.SegmentID == sellerSeg {
+			found = true
+			if s.NetMicros != expNet || s.Impressions != 1 || s.Buyers != 1 {
+				t.Errorf("earnings by-segment = net %d / imps %d / buyers %d, want %d/1/1",
+					s.NetMicros, s.Impressions, s.Buyers, expNet)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("earnings by_segment missing the sold segment %s", sellerSeg)
+	}
+
 	// Exactly-once: a redelivered impression must NOT double-settle.
 	h.FireImpression(t, trace, w.Campaign.ID, w.Campaign.CreativeID, w.Placement.ID, w.Publisher.ID, buyer.ID, "USD", 3.50)
 	time.Sleep(2 * time.Second)

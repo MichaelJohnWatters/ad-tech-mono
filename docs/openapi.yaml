@@ -1470,6 +1470,19 @@ paths:
         - { in: query, name: scope, schema: { type: string, enum: [sales] }, required: false, description: "sales = who bought your data; omitted = your purchases" }
       responses:
         "200": { description: "[{ id, listing_id, segment_id, seller_account_id, buyer_account_id, cpm_surcharge_micros, status, granted_at, expires_at?, listing_name?, seller_name?, buyer_name? }]" }
+  /v1/api/marketplace/earnings:
+    get:
+      tags: [Audiences]
+      summary: The caller's settled marketplace revenue (seller view)
+      description: >-
+        The seller's CPM-surcharge revenue that has actually SETTLED through the
+        money loop, aggregated per segment they've sold (impressions, gross
+        surcharge, net earned, distinct buyers, last-settled time) plus roll-up
+        totals. Distinct from `grants?scope=sales` (which lists WHO bought): this
+        is HOW MUCH has settled. Requires marketplace:read.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ total_net_micros, total_gross_micros, total_impressions, by_segment: [{ segment_id, listing_name?, impressions, gross_micros, net_micros, margin_micros, buyers, last_settled_at }] }" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

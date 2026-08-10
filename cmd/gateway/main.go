@@ -473,6 +473,7 @@ func main() {
 	// Per-listing actions (POST .../{id}/purchase | /estimate) + the caller's grants.
 	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, log))))
 	mux.Handle(routes.APIMarketplaceGrants, authMiddleware(http.HandlerFunc(marketplaceGrantsHandler(marketplaceStore, log))))
+	mux.Handle(routes.APIMarketplaceEarnings, authMiddleware(http.HandlerFunc(marketplaceEarningsHandler(marketplaceStore, log))))
 	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +
 	// the tenant-scoped label write. More specific paths than the base

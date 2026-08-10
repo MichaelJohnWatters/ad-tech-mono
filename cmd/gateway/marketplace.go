@@ -394,3 +394,55 @@ func marketplaceGrantsHandler(store *marketplacepg.Store, log *slog.Logger) http
 		_ = json.NewEncoder(w).Encode(grants)
 	}
 }
+
+// marketplaceEarningsResponse is the seller's settled-revenue summary: per-segment
+// rows plus the roll-up totals the portal shows at a glance.
+type marketplaceEarningsResponse struct {
+	TotalNetMicros   int64                       `json:"total_net_micros"`
+	TotalGrossMicros int64                       `json:"total_gross_micros"`
+	TotalImpressions int64                       `json:"total_impressions"`
+	BySegment        []marketplace.SellerEarning `json:"by_segment"`
+}
+
+// marketplaceEarningsHandler serves GET /v1/api/marketplace/earnings — the
+// caller's settled marketplace revenue (seller view). Distinct from ?scope=sales
+// grants (WHO bought): this is HOW MUCH has actually settled through the
+// surcharge money loop.
+func marketplaceEarningsHandler(store *marketplacepg.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if devTenantGuard(w, r, claims, marketplaceEarningsResponse{BySegment: []marketplace.SellerEarning{}}) {
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"marketplace unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "marketplace:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		earnings, err := store.SellerEarnings(r.Context(), claims.AccountID, 200)
+		if err != nil {
+			log.Error("marketplace earnings failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		resp := marketplaceEarningsResponse{BySegment: earnings}
+		for _, e := range earnings {
+			resp.TotalNetMicros += e.NetMicros
+			resp.TotalGrossMicros += e.GrossMicros
+			resp.TotalImpressions += e.Impressions
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
