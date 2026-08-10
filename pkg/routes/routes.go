@@ -83,6 +83,15 @@ const (
 	// (PLAN Phase 10, slice 3 surface): GET aggregates the CPM-surcharge earnings
 	// per segment the caller has sold. Tenant-scoped to the caller as seller.
 	APIMarketplaceEarnings = apiPrefix + "/api/marketplace/earnings"
+	// APIAccountClose is account closure (PLAN Phase 11, item 105): GET the
+	// caller's active closure status, POST initiates a 30-day grace closure
+	// (owner-only, account:close). Tenant-scoped.
+	APIAccountClose = apiPrefix + "/api/account/close"
+	// APIAccountCloseCancel cancels an in-grace closure (POST, owner-only).
+	APIAccountCloseCancel = apiPrefix + "/api/account/close/cancel"
+	// APIAccountExport is the account data-export package (PLAN Phase 11, item
+	// 105): GET enqueues/returns the caller's export job (account:export).
+	APIAccountExport = apiPrefix + "/api/account/export"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

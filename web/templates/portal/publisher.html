@@ -385,6 +385,12 @@
         <tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
+
+      <!-- Danger zone: account closure (PLAN Phase 11). The 30-day grace period
+           IS the undo — no confirm dialog (house rule); the banner + Cancel are. -->
+      {{ template "card-start" (dict "title" "Close account" "subtitle" "Start a 30-day grace period. Your placements deactivate and no new auctions run. Cancel any time before the grace period ends.") }}
+      <div id="closureBody" class="text-sm text-gray-400">loading…</div>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Webhooks ============ -->
@@ -1911,6 +1917,7 @@ async function loadTeam() {
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+  loadAccountClosure(); // shared: portal-core.js
 }
 function openInvite() {
   $('inviteForm').reset();

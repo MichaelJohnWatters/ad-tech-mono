@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	accountlifecyclepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountlifecycle/postgres"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
@@ -474,6 +475,13 @@ func main() {
 	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, log))))
 	mux.Handle(routes.APIMarketplaceGrants, authMiddleware(http.HandlerFunc(marketplaceGrantsHandler(marketplaceStore, log))))
 	mux.Handle(routes.APIMarketplaceEarnings, authMiddleware(http.HandlerFunc(marketplaceEarningsHandler(marketplaceStore, log))))
+	// Account closure + data export (PLAN Phase 11, item 105).
+	closure := &closureDeps{db: gwDB}
+	if gwDB != nil {
+		closure.store = accountlifecyclepg.New(gwDB)
+	}
+	mux.Handle(routes.APIAccountClose, authMiddleware(http.HandlerFunc(accountClosureHandler(closure, log))))
+	mux.Handle(routes.APIAccountCloseCancel, authMiddleware(http.HandlerFunc(accountCloseCancelHandler(closure, log))))
 	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +
 	// the tenant-scoped label write. More specific paths than the base

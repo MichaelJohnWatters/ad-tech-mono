@@ -146,6 +146,7 @@ var defaultPermissions = map[string][]string{
 		"reports:read", "reports:export", "reports:save",
 		"team:read", "team:invite", "team:update", "team:remove",
 		"settings:read", "settings:update",
+		"account:export", "account:close",
 		"webhooks:read", "webhooks:create", "webhooks:update", "webhooks:delete",
 	},
 	"advertiser:manager": {
@@ -193,6 +194,7 @@ var defaultPermissions = map[string][]string{
 		"pipeline:upload", "pipeline:read",
 		"team:read", "team:invite", "team:update", "team:remove",
 		"settings:read", "settings:update",
+		"account:export", "account:close",
 		"webhooks:read", "webhooks:create", "webhooks:update", "webhooks:delete",
 	},
 	"publisher:manager": {

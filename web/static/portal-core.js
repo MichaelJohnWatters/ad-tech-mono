@@ -139,3 +139,49 @@ function initNotifBell() {
   refreshNotifBadge();
   setInterval(refreshNotifBadge, 30000);
 }
+
+// ---- Account closure (PLAN Phase 11) — shared by advertiser + publisher portals.
+// Renders into #closureBody (present in each portal's Team/Account section);
+// no-ops when that element is absent. The 30-day grace period IS the undo, so
+// there is no confirm dialog (house rule) — the banner + Cancel button are.
+async function loadAccountClosure() {
+  const el = document.getElementById('closureBody');
+  if (!el) return;
+  try {
+    const resp = await fetchJSON('/v1/api/account/close') || {};
+    const c = resp.closure;
+    if (c && c.status === 'grace') {
+      const paused = (c.paused_line_items || []).length;
+      const deact = (c.deactivated_placements || []).length;
+      el.innerHTML = `
+        <div class="rounded-lg border border-warning/40 bg-warning/10 p-4">
+          <div class="font-medium text-warning mb-1">Closure scheduled</div>
+          <div class="text-gray-600 dark:text-gray-300">Your account is suspended and will close on <span class="font-medium">${esc(fmtDate(c.grace_ends_at))}</span>.
+            ${paused} campaign(s) paused, ${deact} placement(s) deactivated.</div>
+          <div class="mt-3">
+            <button onclick="cancelClosure()" class="text-sm px-3 py-1.5 rounded bg-success/15 text-success hover:bg-success/25">Cancel closure &amp; reactivate</button>
+          </div>
+        </div>`;
+    } else {
+      el.innerHTML = `
+        <p class="mb-3 text-gray-500">Closing starts a 30-day grace period. Campaigns pause immediately; you can cancel and reactivate any time before it ends.</p>
+        <button onclick="requestClosure()" class="text-sm px-3 py-1.5 rounded bg-error/15 text-error hover:bg-error/25">Close this account…</button>`;
+    }
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+async function requestClosure() {
+  try {
+    await fetchJSON('/v1/api/account/close', {method: 'POST', body: JSON.stringify({reason: 'owner requested'})});
+    toast('Closure scheduled — 30-day grace period started', 'success');
+    loadAccountClosure();
+  } catch (err) { toast('Closure failed: ' + err.message, 'error'); }
+}
+async function cancelClosure() {
+  try {
+    await fetchJSON('/v1/api/account/close/cancel', {method: 'POST'});
+    toast('Closure cancelled — account reactivated', 'success');
+    loadAccountClosure();
+  } catch (err) { toast('Cancel failed: ' + err.message, 'error'); }
+}
