@@ -81,3 +81,67 @@ Set these strict in `values-prod.yaml` (see `docs/DEPLOY.md`), supply a real
   (audience-only, consent-gated). Fix: unguessable per-advertiser pixel token.
 - **`/v1/pubad/serve`** has no per-request publisher auth (relies on ads.txt/schain).
 - **Prebid S2S endpoint** is open (`partner_shared` secret purpose defined, unused).
+- **RLS is only enforced when the app connects as `adtech_app` (`NOBYPASSRLS`).**
+  This is the linchpin of all tenant isolation (mig 067) — if any env's
+  `DATABASE_URL` uses a superuser, RLS is inert and only the explicit
+  `WHERE account_id` filters remain. Assert the role per-environment.
+- **JWTs are not revocable before their 12h expiry** — no deny-list / refresh
+  flow; a leaked token is valid until it expires (`pkg/middleware/auth.go`).
+- **Per-account self-serve `api_keys` table exists but isn't enforced** in
+  middleware — schema present (mig 003), unused. Wire it or drop it.
+- **Rate limiting is per-pod / in-process**, not cluster-wide
+  (`pkg/middleware/ratelimit.go`) — real edge defense assumes a CDN/WAF in front.
+- **Event spool survives container restart but not pod eviction**
+  (`pkg/events/spool.go`, emptyDir) — a deliberate money-loss window under
+  (NATS-down ∩ evicted). PVC/outbox is the fix for spot/preemptible nodes.
+- **Staff-issued credits (support disputes) are unbounded** by amount
+  (`cmd/gateway/support.go`) — audited, but add a cap / second approval.
+- **Free-text fields** (support/incident bodies) are not length-capped.
+
+## Enforcement catalog (platform-wide, beyond call-path anti-spoofing)
+
+The table at the top covers external call-path spoofing. The controls below are
+the rest of the enforcement surface. This is the reference an auditor checks
+against; the machine-runnable consistency audit lives in
+[`SECURITY-AUDIT-PROMPT.md`](SECURITY-AUDIT-PROMPT.md).
+
+**Authentication** — JWT HS256 with algorithm-confusion defense + constant-time
+verify, session cookie (HttpOnly/SameSite/Secure) + CSRF, platform `X-API-Key`
+(purpose-gated), bootstrap admin key (single-use, `PLATFORM_ROOT_PASSWORD`),
+bcrypt passwords, two-key secret rotation (sign=active, validate=active+rotating).
+`pkg/middleware/auth.go`, `pkg/middleware/api_key.go`, `pkg/secrets`,
+`cmd/gateway/{auth_login,bootstrap}.go`.
+
+**Authorization (RBAC)** — `resource:action` perms baked into the JWT at login;
+`RequirePermission` / `RequirePermissionByMethod` middleware + in-handler
+`can(claims, …)`; `"*"` only on `admin:owner`. Role→perm map in `pkg/auth/auth.go`.
+
+**Multi-tenant isolation** — Postgres RLS `tenant_isolation` on every
+`account_id` table (empty-safe `NULLIF(...)::UUID OR platform_read='on'`, migs
+017/065/087); the `adtech_app NOBYPASSRLS` role (mig 067) makes it bite; GUC
+helpers (`SetTenantContext`/`QueryPlatform`/`*TenantDB`) in
+`pkg/store/postgres`; `CallerScope`/`CanMutate` + agency act-as validation in
+`pkg/middleware/{scope,proxy}.go`. **Any write to an RLS table from the gateway
+pool must set the tenant GUC** (else WITH CHECK fails).
+
+**Privacy & consent** — 3-level opt-out registry + consent decision engine
+(GDPR/TCF, US-Privacy, GPP, COPPA, GPC) → downgrade-to-contextual or no-bid;
+behaviour/identity publish paths gate on `privacy.Evaluate().Personalise`;
+`public` vs `dsp_private` audience visibility gates external exposure; GDPR
+delete+verify. `pkg/privacy`, `pkg/privacydelete`, `pkg/audience`.
+
+**Idempotency / replay** — NATS `Nats-Msg-Id` + Redis SetNX dedup
+(`pkg/events`), PK-claim (`ON CONFLICT DO NOTHING RETURNING`) on all money-writes
+(ledger/spend/settlement/earnings/invoices/adjustments), signed-URL `exp` expiry,
+disk spool re-publish with stable ids.
+
+**Response info-leak hygiene** — structs serialized on PUBLIC or CUSTOMER paths
+must not carry internal staff identifiers (`created_by`/`author_id`/
+`assigned_to`) or other tenants' data; redact on the customer path even when the
+UI hides the field (`pkg/statuspage` drops `created_by`; `support.RedactForCustomer`).
+
+**Rate limiting / transport / SQL / audit** — per-IP token bucket
+(`pkg/middleware/ratelimit.go`); gRPC only on owned internal edges (`grpc://` vs
+`http://`, `pkg/grpcx`); parameterized queries only + RLS as the net; append-only
+`audit_log` (UPDATE/DELETE revoked, mig 013) for state-changing/staff/money
+actions; AES-256-GCM secrets-at-rest (`pkg/secrets/crypto.go`).
