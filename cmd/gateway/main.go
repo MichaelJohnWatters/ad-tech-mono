@@ -470,8 +470,8 @@ func main() {
 		marketplaceStore = marketplacepg.New(gwDB)
 	}
 	mux.Handle(routes.APIMarketplaceListings, authMiddleware(http.HandlerFunc(marketplaceHandler(marketplaceStore, audStore, log))))
-	// Per-listing actions (POST .../{id}/purchase) + the caller's grants.
-	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplacePurchaseHandler(marketplaceStore, log))))
+	// Per-listing actions (POST .../{id}/purchase | /estimate) + the caller's grants.
+	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, log))))
 	mux.Handle(routes.APIMarketplaceGrants, authMiddleware(http.HandlerFunc(marketplaceGrantsHandler(marketplaceStore, log))))
 	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +

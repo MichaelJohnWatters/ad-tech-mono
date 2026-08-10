@@ -850,6 +850,26 @@
   </form>
 {{ template "modal-end" . }}
 
+<!-- Data marketplace: estimate overlap/expansion of a listing vs your audience
+     BEFORE buying (clean-room-lite; aggregate-only, min-aggregation floor). -->
+{{ template "modal-start" (dict "id" "estimateModal" "title" "Expansion estimate") }}
+  <p class="mb-3 text-xs text-gray-400">See how much a listing overlaps your audience and how many NEW users it reaches — before you buy. Aggregate-only: you never see members, and a small overlap is suppressed.</p>
+  <label class="block text-sm mb-3">
+    <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Compare against your audience</span>
+    <select id="est_segment" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+      <option value="">Loading your segments…</option>
+    </select>
+  </label>
+  <div class="flex items-center gap-2 mb-3">
+    {{ template "button" (dict "label" "Run estimate" "variant" "primary" "size" "sm" "onclick" "runEstimate()") }}
+    <span id="est_msg" class="text-xs text-error"></span>
+  </div>
+  <div id="est_result" class="hidden rounded-lg bg-gray-50 dark:bg-surface-2 border border-gray-200 dark:border-gray-700 p-3 text-sm space-y-1"></div>
+  <div class="flex justify-end mt-4">
+    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('estimateModal').classList.add('hidden')") }}
+  </div>
+{{ template "modal-end" . }}
+
 <!-- Data marketplace: list one of your PUBLIC segments for sale. -->
 {{ template "modal-start" (dict "id" "newListing" "title" "List a segment on the marketplace") }}
   <form onsubmit="createListing(event)">
@@ -1813,7 +1833,10 @@ async function loadMarketplace() {
         <td class="px-3 py-2 font-mono">${fmtInt(l.size_estimate)}</td>
         <td class="px-3 py-2 font-mono text-xs">$${(l.cpm_surcharge_micros / 1e6).toFixed(2)} CPM</td>
         <td class="px-3 py-2 text-xs text-gray-500">${esc(l.description || '')}</td>
-        <td class="px-3 py-2 text-right"><button onclick="buyListing('${esc(l.id)}')" class="text-xs px-2 py-1 rounded bg-info/15 text-info hover:bg-info/25">Buy access</button></td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          <button onclick="estimateListing('${esc(l.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Estimate</button>
+          <button onclick="buyListing('${esc(l.id)}')" class="text-xs px-2 py-1 rounded bg-info/15 text-info hover:bg-info/25">Buy access</button>
+        </td>
       </tr>`).join('')
       : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No listings yet — data owners can list public segments below.</td></tr>';
   } catch (err) {
@@ -1860,6 +1883,47 @@ async function loadMarketplace() {
         ? segs.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtInt(s.members)} members)</option>`).join('')
         : '<option value="">No public segments — make one public under Audiences first</option>';
     } catch { /* leave the placeholder */ }
+  }
+}
+
+let estimateListingId = null;
+async function estimateListing(id) {
+  estimateListingId = id;
+  const sel = $('est_segment');
+  $('est_msg').textContent = '';
+  $('est_result').classList.add('hidden');
+  try {
+    const segs = (await fetchJSON('/v1/api/audiences') || []);
+    sel.innerHTML = segs.length
+      ? segs.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtInt(s.members)})</option>`).join('')
+      : '<option value="">You have no segments to compare — create one under Audiences</option>';
+  } catch { sel.innerHTML = '<option value="">failed to load your segments</option>'; }
+  document.getElementById('estimateModal').classList.remove('hidden');
+}
+
+async function runEstimate() {
+  const seg = $('est_segment').value;
+  if (!seg || !estimateListingId) { $('est_msg').textContent = 'Choose one of your segments'; return; }
+  $('est_msg').textContent = 'estimating…';
+  try {
+    const resp = await fetch('/v1/api/marketplace/listings/' + encodeURIComponent(estimateListingId) + '/estimate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({my_audience_id: seg})});
+    const text = await resp.text();
+    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    const e = JSON.parse(text);
+    $('est_msg').textContent = '';
+    const overlap = e.overlap_suppressed
+      ? `<span class="text-gray-400">&lt; ${e.min_aggregation} (suppressed for privacy)</span>`
+      : `${fmtInt(e.overlap)} <span class="text-gray-400">(${(e.overlap_pct || 0).toFixed(0)}% of yours)</span>`;
+    $('est_result').innerHTML =
+      `<div><b>${esc(e.listing_name)}</b></div>` +
+      `<div>Your audience: <span class="font-mono">${fmtInt(e.your_audience_size)}</span> · Listing: <span class="font-mono">${fmtInt(e.listing_size)}</span></div>` +
+      `<div>Overlap: ${overlap}</div>` +
+      `<div>New reachable: <span class="font-mono text-success">+${fmtInt(e.new_reachable_users)}</span></div>` +
+      `<div>Expansion: <span class="font-mono">${e.expansion_factor.toFixed(2)}x</span></div>`;
+    $('est_result').classList.remove('hidden');
+  } catch (err) {
+    $('est_msg').textContent = err.message;
   }
 }
 

@@ -444,6 +444,43 @@ WHERE m.expires_at IS NULL OR m.expires_at > now()`)
 	return out, rows.Err()
 }
 
+// SegmentOverlap holds the live-member set sizes of two segments and their
+// intersection — the raw inputs to a marketplace expansion estimate.
+type SegmentOverlap struct {
+	SizeA   int // live members of segment A (the buyer's own audience)
+	SizeB   int // live members of segment B (the listing's segment)
+	Overlap int // members in BOTH (|A ∩ B|)
+}
+
+// EstimateOverlap counts each segment's live members and their intersection —
+// a real set operation on the two member sets (expired members excluded, same
+// as the serving read paths). Cross-tenant under the platform hatch: the buyer's
+// segment and the seller's listed segment belong to different accounts, and the
+// caller (marketplace estimate) is a platform read. Returns ONLY aggregate
+// counts — never a member list. The privacy min-aggregation floor is applied by
+// the caller (marketplace handler), not here.
+func (s *Store) EstimateOverlap(ctx context.Context, segA, segB string) (SegmentOverlap, error) {
+	var o SegmentOverlap
+	err := s.withPlatformRead(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+SELECT
+  (SELECT count(*) FROM audience_segment_members
+     WHERE segment_id = $1::uuid AND (expires_at IS NULL OR expires_at > now())),
+  (SELECT count(*) FROM audience_segment_members
+     WHERE segment_id = $2::uuid AND (expires_at IS NULL OR expires_at > now())),
+  (SELECT count(*) FROM audience_segment_members a
+     WHERE a.segment_id = $1::uuid AND (a.expires_at IS NULL OR a.expires_at > now())
+       AND EXISTS (SELECT 1 FROM audience_segment_members b
+                   WHERE b.segment_id = $2::uuid AND b.user_id = a.user_id
+                     AND (b.expires_at IS NULL OR b.expires_at > now())))`,
+			segA, segB).Scan(&o.SizeA, &o.SizeB, &o.Overlap)
+	})
+	if err != nil {
+		return SegmentOverlap{}, fmt.Errorf("estimate overlap: %w", err)
+	}
+	return o, nil
+}
+
 // MembershipChange is one appended row of audience_membership_changelog — the
 // outbox that drives the audience cache's append-based refresh.
 type MembershipChange struct {

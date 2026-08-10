@@ -156,3 +156,43 @@ func (h *Harness) FindListingID(t *testing.T, accountID, name string) string {
 	}
 	return ""
 }
+
+// MarketplaceEstimate is the expansion-estimate response (clean-room-lite).
+type MarketplaceEstimate struct {
+	ListingName       string   `json:"listing_name"`
+	YourAudienceSize  int      `json:"your_audience_size"`
+	ListingSize       int      `json:"listing_size"`
+	Overlap           *int     `json:"overlap"`
+	OverlapPct        *float64 `json:"overlap_pct"`
+	OverlapSuppressed bool     `json:"overlap_suppressed"`
+	NewReachableUsers int      `json:"new_reachable_users"`
+	ExpansionFactor   float64  `json:"expansion_factor"`
+	MinAggregation    int      `json:"min_aggregation"`
+}
+
+// MarketplaceEstimateFor requests an expansion estimate of the account's own
+// segment against a listing.
+func (h *Harness) MarketplaceEstimateFor(t *testing.T, accountID, listingID, myAudienceID string) MarketplaceEstimate {
+	t.Helper()
+	client := h.marketplaceClient(t, accountID)
+	body, _ := json.Marshal(map[string]string{"my_audience_id": myAudienceID})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	url := h.URLs.Gateway + routes.APIMarketplaceListingsSub + listingID + "/estimate"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("marketplace estimate: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("marketplace estimate status %d: %s", resp.StatusCode, string(b))
+	}
+	var out MarketplaceEstimate
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("decode estimate: %v (body=%s)", err, string(b))
+	}
+	return out
+}
