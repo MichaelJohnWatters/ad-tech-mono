@@ -182,3 +182,123 @@ WHERE id = $1::uuid AND account_id = $2::uuid`, id, accountID, status); err != n
 		return nil
 	})
 }
+
+// --- Grants (slice 2) ---
+
+// Purchase upserts the buyer's grant for a listing (RLS = the buyer). Renews
+// status/price/expiry on re-purchase.
+func (s *Store) Purchase(ctx context.Context, g marketplace.Grant) (string, error) {
+	var id string
+	err := s.withTenant(ctx, g.BuyerAccountID, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+INSERT INTO marketplace_grants (listing_id, segment_id, seller_account_id, buyer_account_id, cpm_surcharge_micros, status, expires_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, 'active', $6)
+ON CONFLICT (buyer_account_id, listing_id) DO UPDATE SET
+    segment_id = EXCLUDED.segment_id, seller_account_id = EXCLUDED.seller_account_id,
+    cpm_surcharge_micros = EXCLUDED.cpm_surcharge_micros, status = 'active',
+    expires_at = EXCLUDED.expires_at, granted_at = now(), updated_at = now()
+RETURNING id::text`,
+			g.ListingID, g.SegmentID, g.SellerAccountID, g.BuyerAccountID, g.CPMSurchargeMicros, g.ExpiresAt).Scan(&id)
+	})
+	if err != nil {
+		return "", fmt.Errorf("purchase: %w", err)
+	}
+	return id, nil
+}
+
+func scanGrant(scan func(dest ...any) error) (marketplace.Grant, error) {
+	var g marketplace.Grant
+	var expires sql.NullTime
+	if err := scan(&g.ID, &g.ListingID, &g.SegmentID, &g.SellerAccountID, &g.BuyerAccountID,
+		&g.CPMSurchargeMicros, &g.Status, &g.GrantedAt, &expires, &g.ListingName, &g.SellerName, &g.BuyerName); err != nil {
+		return marketplace.Grant{}, err
+	}
+	if expires.Valid {
+		t := expires.Time
+		g.ExpiresAt = &t
+	}
+	return g, nil
+}
+
+// BuyerGrants returns the buyer's grants (purchased data) with listing + seller
+// names. Tenant-scoped (the buyer sees their own; RLS admits buyer rows).
+func (s *Store) BuyerGrants(ctx context.Context, buyerAccountID string, limit int) ([]marketplace.Grant, error) {
+	return s.grantsBy(ctx, buyerAccountID, "g.buyer_account_id", limit)
+}
+
+// SellerSales returns the seller's grants (who bought their data).
+func (s *Store) SellerSales(ctx context.Context, sellerAccountID string, limit int) ([]marketplace.Grant, error) {
+	return s.grantsBy(ctx, sellerAccountID, "g.seller_account_id", limit)
+}
+
+func (s *Store) grantsBy(ctx context.Context, accountID, whereCol string, limit int) ([]marketplace.Grant, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	// Platform-hatch read: a grant joins the counterparty's listing + account
+	// (which the caller's tenant session can't see under RLS), so the listing/
+	// seller/buyer NAMES resolve. The explicit `whereCol = accountID` keeps the
+	// result scoped to the caller's own side (buyer OR seller), same posture as
+	// the catalog read.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin grants: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("grants platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT g.id::text, g.listing_id::text, g.segment_id::text, g.seller_account_id::text, g.buyer_account_id::text,
+       g.cpm_surcharge_micros, g.status, g.granted_at, g.expires_at,
+       COALESCE(l.name,''), COALESCE(sa.name,''), COALESCE(ba.name,'')
+FROM marketplace_grants g
+LEFT JOIN marketplace_listings l ON l.id = g.listing_id
+LEFT JOIN accounts sa ON sa.id = g.seller_account_id
+LEFT JOIN accounts ba ON ba.id = g.buyer_account_id
+WHERE `+whereCol+` = $1::uuid
+ORDER BY g.granted_at DESC LIMIT $2`, accountID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("grants: %w", err)
+	}
+	defer rows.Close()
+	out := []marketplace.Grant{}
+	for rows.Next() {
+		g, err := scanGrant(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// ActiveGrantSegments returns the segment ids the buyer has a live grant for.
+// Platform-hatch read (settlement runs off the tenant session).
+func (s *Store) ActiveGrantSegments(ctx context.Context, buyerAccountID string) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin active grants: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("active grants platform-read: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT segment_id::text FROM marketplace_grants
+WHERE buyer_account_id = $1::uuid AND status = 'active'
+  AND (expires_at IS NULL OR expires_at > now())`, buyerAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("active grants: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var seg string
+		if err := rows.Scan(&seg); err != nil {
+			return nil, err
+		}
+		out = append(out, seg)
+	}
+	return out, rows.Err()
+}

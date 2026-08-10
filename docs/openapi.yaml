@@ -1410,6 +1410,38 @@ paths:
         "200": { description: "{ id } — the listing id" }
         "400": { description: "segment not public / missing fields" }
         "404": { description: "segment not found (not one of yours)" }
+  /v1/api/marketplace/listings/{id}/purchase:
+    post:
+      tags: [Audiences]
+      summary: Purchase targeting access to a marketplace listing
+      description: >-
+        Buys the right to target the listing's segment (PLAN Phase 10, slice 2) —
+        writes a grant (buyer = caller, seller = listing owner, surcharge snapshot
+        frozen at purchase). Because listed segments are PUBLIC they already ride
+        every bid request, so no bid-path change is needed; the grant is the
+        authorization + the settlement key (the CPM surcharge is billed per
+        impression the buyer wins using the segment). Re-purchase renews.
+        You cannot buy your own listing. Requires marketplace:buy.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string }, description: "listing id" }
+      responses:
+        "200": { description: "{ grant_id, segment_id }" }
+        "400": { description: "can't buy your own listing" }
+        "404": { description: "listing not found or not active" }
+  /v1/api/marketplace/grants:
+    get:
+      tags: [Audiences]
+      summary: The caller's marketplace grants (purchased data, or sales)
+      description: >-
+        Default: the buyer's grants (segments they've purchased access to, with
+        listing + seller names). `?scope=sales`: the seller's grants (who bought
+        their data). Requires marketplace:read.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: scope, schema: { type: string, enum: [sales] }, required: false, description: "sales = who bought your data; omitted = your purchases" }
+      responses:
+        "200": { description: "[{ id, listing_id, segment_id, seller_account_id, buyer_account_id, cpm_surcharge_micros, status, granted_at, expires_at?, listing_name?, seller_name?, buyer_name? }]" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

@@ -49,6 +49,47 @@ type Listing struct {
 // CPMSurchargeUSD renders the surcharge as dollars for display.
 func (l Listing) CPMSurchargeUSD() float64 { return float64(l.CPMSurchargeMicros) / 1e6 }
 
+// Grant statuses.
+const (
+	GrantActive    = "active"
+	GrantExpired   = "expired"
+	GrantCancelled = "cancelled"
+)
+
+// Grant is a buyer's purchased right to target a seller's segment.
+type Grant struct {
+	ID                 string     `json:"id"`
+	ListingID          string     `json:"listing_id"`
+	SegmentID          string     `json:"segment_id"`
+	SellerAccountID    string     `json:"seller_account_id"`
+	BuyerAccountID     string     `json:"buyer_account_id"`
+	CPMSurchargeMicros int64      `json:"cpm_surcharge_micros"`
+	Status             string     `json:"status"`
+	GrantedAt          time.Time  `json:"granted_at"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	// ListingName / SellerName / BuyerName are joined for display (buyer's
+	// purchased-data view or the seller's sales view).
+	ListingName string `json:"listing_name,omitempty"`
+	SellerName  string `json:"seller_name,omitempty"`
+	BuyerName   string `json:"buyer_name,omitempty"`
+}
+
+// GrantStore persists marketplace purchase grants.
+type GrantStore interface {
+	// Purchase records the buyer's grant for a listing (upsert per buyer+listing,
+	// renewing status/price/expiry). The caller resolves the listing first.
+	Purchase(ctx context.Context, g Grant) (string, error)
+	// BuyerGrants returns the buyer's grants (their purchased data), newest first.
+	BuyerGrants(ctx context.Context, buyerAccountID string, limit int) ([]Grant, error)
+	// SellerSales returns the seller's grants (who bought their data), newest first.
+	SellerSales(ctx context.Context, sellerAccountID string, limit int) ([]Grant, error)
+	// ActiveGrantSegments returns the segment ids the buyer has an ACTIVE,
+	// unexpired grant for — the buyer's targetable marketplace segments and the
+	// settlement authorization set. Platform-hatch read (used off the tenant
+	// session at settlement).
+	ActiveGrantSegments(ctx context.Context, buyerAccountID string) ([]string, error)
+}
+
 // Store is the marketplace persistence seam. Owner-facing writes/reads are
 // tenant-scoped (RLS GUC); the catalog browse is cross-tenant (platform hatch).
 type Store interface {
