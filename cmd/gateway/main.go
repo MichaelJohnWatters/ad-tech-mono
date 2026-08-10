@@ -42,6 +42,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage"
+	statuspagepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -811,6 +813,22 @@ func main() {
 	mux.Handle(routes.APIOpsLogs, opsRead(ops.logsHandler))
 	mux.Handle(routes.APIOpsRestart, opsDeploy(ops.restartHandler))
 	mux.Handle(routes.APIOpsCronJobTrigger, opsDeploy(ops.cronJobTriggerHandler))
+
+	// Public status page (PLAN Phase 11, item 107): unauthed /status HTML +
+	// /v1/api/status JSON, backed by readyz probes of the same ops targets and
+	// staff-authored incidents. Incident CRUD is staff-only (incidents:*).
+	statusServiceURLs := map[string]string{constants.ServiceGateway: ""}
+	for _, t := range opsTargets {
+		statusServiceURLs[t.Name] = t.URL
+	}
+	var incidentStore statuspage.Store
+	if gwDB != nil {
+		incidentStore = statuspagepg.New(gwDB)
+	}
+	statusAgg := newStatusAggregator(statusServiceURLs, incidentStore, templates, log)
+	mux.HandleFunc(routes.StatusPage, statusAgg.pageHandler)
+	mux.HandleFunc(routes.APIStatus, statusAgg.jsonHandler)
+	mux.Handle(routes.APIIncidents, authMiddleware(http.HandlerFunc(incidentsHandler(incidentStore, gwDB, log))))
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the

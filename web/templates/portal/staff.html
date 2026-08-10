@@ -468,6 +468,48 @@
       </div>
     </section>
 
+    <!-- ============ Incidents ============ -->
+    <section id="section-incidents" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Incidents" "subtitle" "Post + update incidents shown on the PUBLIC status page at /status") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New incident" "variant" "secondary" "size" "sm" "onclick" "openIncident()") }}
+        <a href="/status" target="_blank" class="ml-2 text-sm px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">View status page ↗</a>
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Title" "Impact" "Status" "Components" "Started" "")) }}
+        <tbody id="incidentList"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- New/edit incident modal -->
+    {{ template "modal-start" (dict "id" "incidentModal" "title" "Incident") }}
+      <form id="incidentForm" onsubmit="saveIncident(event)">
+        <input type="hidden" id="inc_id">
+        {{ template "form-field" (dict "label" "Title" "name" "inc_title" "required" true) }}
+        <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Details</label>
+        <textarea id="inc_body" rows="3" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm"></textarea>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Impact</label>
+            <select id="inc_impact" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+              <option value="minor">Minor</option><option value="major">Major</option><option value="critical">Critical</option><option value="none">None</option>
+            </select>
+          </div>
+          <div>
+            <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Status</label>
+            <select id="inc_status" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+              <option value="investigating">Investigating</option><option value="identified">Identified</option><option value="monitoring">Monitoring</option><option value="resolved">Resolved</option>
+            </select>
+          </div>
+        </div>
+        {{ template "form-field" (dict "label" "Affected components (comma-separated)" "name" "inc_components" "placeholder" "Bidding & Auctions, Ad Serving") }}
+        <div class="flex justify-end gap-2 mt-2">
+          {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closeIncident()") }}
+          {{ template "button" (dict "label" "Save" "type" "submit") }}
+        </div>
+      </form>
+    {{ template "modal-end" . }}
+
     <!-- ============ Tools ============ -->
     <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Interactive simulator") }}
@@ -709,7 +751,7 @@ async function staffLookupTrace(traceId) {
 }
 
 // ---- Section switching (portal-core initSectionRouter) ----
-const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'incidents', 'config', 'simulator', 'architecture', 'tools'];
 // Landing fallback: the first section in the RENDERED (permission-filtered)
 // sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
 // lands on a section it can actually see. Derived from the DOM at runtime —
@@ -726,9 +768,66 @@ function defaultSection() {
 const showSection = initSectionRouter({
   sections: SECTIONS,
   fallback: defaultSection,
-  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
-  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), ops: () => loadOps(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', incidents: 'Incidents', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), ops: () => loadOps(), incidents: () => loadIncidents(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
 });
+
+// ---- Incidents (PLAN Phase 11 status page) ----
+const INC_IMPACT_BADGE = {critical: 'bg-error/15 text-error', major: 'bg-warning/15 text-warning', minor: 'bg-surface-3 text-gray-500', none: 'bg-surface-3 text-gray-500'};
+let incidentCache = [];
+async function loadIncidents() {
+  const tb = document.getElementById('incidentList');
+  try {
+    incidentCache = await fetchJSON('/v1/api/incidents') || [];
+    tb.innerHTML = incidentCache.length ? incidentCache.map(i => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(i.title)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${INC_IMPACT_BADGE[i.impact] || ''}">${esc(i.impact)}</span></td>
+        <td class="px-3 py-2 text-xs">${i.status === 'resolved' ? '<span class="text-success">resolved</span>' : esc(i.status)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${(i.affected_components || []).map(esc).join(', ')}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(i.started_at)}</td>
+        <td class="px-3 py-2 text-right"><button onclick="editIncident('${esc(i.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Edit</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No incidents. Post one to communicate an outage on the public status page.</td></tr>';
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openIncident() {
+  document.getElementById('incidentForm').reset();
+  document.getElementById('inc_id').value = '';
+  document.getElementById('incidentModal').classList.remove('hidden');
+}
+function closeIncident() { document.getElementById('incidentModal').classList.add('hidden'); }
+function editIncident(id) {
+  const i = incidentCache.find(x => x.id === id);
+  if (!i) return;
+  document.getElementById('inc_id').value = i.id;
+  document.getElementById('inc_title').value = i.title;
+  document.getElementById('inc_body').value = i.body || '';
+  document.getElementById('inc_impact').value = i.impact;
+  document.getElementById('inc_status').value = i.status;
+  document.getElementById('inc_components').value = (i.affected_components || []).join(', ');
+  document.getElementById('incidentModal').classList.remove('hidden');
+}
+async function saveIncident(ev) {
+  ev.preventDefault();
+  const comps = document.getElementById('inc_components').value.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    id: document.getElementById('inc_id').value || undefined,
+    title: document.getElementById('inc_title').value.trim(),
+    body: document.getElementById('inc_body').value.trim(),
+    impact: document.getElementById('inc_impact').value,
+    status: document.getElementById('inc_status').value,
+    affected_components: comps,
+  };
+  try {
+    await fetchJSON('/v1/api/incidents', {method: 'POST', body: JSON.stringify(body)});
+    toast('Incident saved', 'success');
+    closeIncident();
+    loadIncidents();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
 
 const ago = (iso) => {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);

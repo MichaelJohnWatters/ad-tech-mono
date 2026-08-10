@@ -1552,6 +1552,50 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: "The export job status { status: queued|running|done, requested_at, expires_at }" }
+  /v1/api/status:
+    get:
+      tags: [Platform]
+      summary: Public platform status (health + incidents)
+      description: >-
+        PUBLIC (no auth) — the JSON twin of the /status page (PLAN Phase 11 item
+        107). Rolls each backing service's /readyz up into customer-facing
+        components and folds in open staff-authored incidents to report one
+        overall status.
+      responses:
+        "200": { description: "{ overall, overall_text, components: [{ name, status, healthy_services, total_services }], active_incidents: [...], recent_incidents: [...], generated_at }" }
+  /v1/api/incidents:
+    get:
+      tags: [Platform]
+      summary: List platform incidents (staff)
+      description: "Staff-only (incidents:read). Lists all incidents newest-first for the status-page console."
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, title, body?, impact, status, affected_components, started_at, resolved_at?, created_by?, updated_at }]" }
+    post:
+      tags: [Platform]
+      summary: Create or update a platform incident (staff)
+      description: >-
+        Staff-only (incidents:write). Creates an incident when no id is supplied,
+        or updates the given one. Setting status=resolved stamps resolved_at.
+        Incidents surface on the public /status page.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                id: { type: string, description: "omit to create; supply to update" }
+                title: { type: string }
+                body: { type: string }
+                impact: { type: string, enum: [none, minor, major, critical] }
+                status: { type: string, enum: [investigating, identified, monitoring, resolved] }
+                affected_components: { type: array, items: { type: string } }
+      responses:
+        "200": { description: "{ id } on create, or the updated incident object" }
+        "404": { description: "incident id not found (update)" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]
