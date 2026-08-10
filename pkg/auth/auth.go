@@ -147,6 +147,7 @@ var defaultPermissions = map[string][]string{
 		"team:read", "team:invite", "team:update", "team:remove",
 		"settings:read", "settings:update",
 		"account:export", "account:close",
+		"support:contact",
 		"webhooks:read", "webhooks:create", "webhooks:update", "webhooks:delete",
 	},
 	"advertiser:manager": {
@@ -159,6 +160,7 @@ var defaultPermissions = map[string][]string{
 		"reports:read", "reports:export", "reports:save",
 		"team:read", "team:invite",
 		"settings:read",
+		"support:contact",
 	},
 	"advertiser:analyst": {
 		"campaigns:read",
@@ -171,6 +173,7 @@ var defaultPermissions = map[string][]string{
 	"advertiser:finance": {
 		"billing:view", "billing:topup", "billing:dispute",
 		"reports:read",
+		"support:contact",
 	},
 	"advertiser:viewer": {
 		"campaigns:read",
@@ -195,6 +198,7 @@ var defaultPermissions = map[string][]string{
 		"team:read", "team:invite", "team:update", "team:remove",
 		"settings:read", "settings:update",
 		"account:export", "account:close",
+		"support:contact",
 		"webhooks:read", "webhooks:create", "webhooks:update", "webhooks:delete",
 	},
 	"publisher:manager": {

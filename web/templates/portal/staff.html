@@ -437,6 +437,45 @@
     </section>
 
     <!-- ============ Ops (stack console) ============ -->
+    <!-- ============ Support ============ -->
+    <section id="section-support" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Support queue" "subtitle" "Every tenant's tickets — open ones first. Reply on the thread and resolve; a billing dispute can resolve with a credit adjustment") }}
+      {{ template "table-start" (dict "headers" (slice "Account" "Subject" "Type" "Status" "Disputed" "")) }}
+        <tbody id="supportQueue"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      <div id="staffTicket" class="hidden">
+        {{ template "card-start" (dict "title" "Ticket" "subtitle" "") }}
+        <div id="staffTicketHead" class="mb-3 text-sm"></div>
+        <div id="staffTicketMessages" class="space-y-2 mb-3"></div>
+        <form onsubmit="staffReply(event)" class="mb-4">
+          <textarea id="staff_reply" rows="2" placeholder="Reply to the customer…" class="w-full mb-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm"></textarea>
+          <div class="flex justify-end">{{ template "button" (dict "label" "Send reply" "type" "submit" "size" "sm") }}</div>
+        </form>
+        <div class="border-t border-gray-100 dark:border-gray-800 pt-3">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Resolve</div>
+          <form onsubmit="staffResolve(event)">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block mb-1 text-xs text-gray-500">Status</label>
+                <select id="res_status" class="w-full mb-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+                  <option value="resolved">Resolved</option><option value="pending">Pending</option><option value="closed">Closed</option>
+                </select>
+              </div>
+              <div id="res_credit_wrap" class="hidden">
+                <label class="block mb-1 text-xs text-gray-500">Credit (USD)</label>
+                <input id="res_credit" type="number" step="0.01" class="w-full mb-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+              </div>
+            </div>
+            <input id="res_note" placeholder="Resolution note" class="w-full mb-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+            <div class="flex justify-end">{{ template "button" (dict "label" "Apply resolution" "type" "submit" "size" "sm") }}</div>
+          </form>
+        </div>
+        {{ template "card-end" . }}
+      </div>
+    </section>
+
     <section id="section-ops" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Service health" "subtitle" "Live /readyz from every service, probed in-cluster by the gateway") }}
       <div id="opsReadyz" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"><p class="text-sm text-gray-400">loading…</p></div>
@@ -751,7 +790,7 @@ async function staffLookupTrace(traceId) {
 }
 
 // ---- Section switching (portal-core initSectionRouter) ----
-const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'ops', 'incidents', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'support', 'ops', 'incidents', 'config', 'simulator', 'architecture', 'tools'];
 // Landing fallback: the first section in the RENDERED (permission-filtered)
 // sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
 // lands on a section it can actually see. Derived from the DOM at runtime —
@@ -768,8 +807,8 @@ function defaultSection() {
 const showSection = initSectionRouter({
   sections: SECTIONS,
   fallback: defaultSection,
-  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', ops: 'Ops', incidents: 'Incidents', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
-  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), ops: () => loadOps(), incidents: () => loadIncidents(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
 });
 
 // ---- Incidents (PLAN Phase 11 status page) ----
@@ -827,6 +866,71 @@ async function saveIncident(ev) {
     closeIncident();
     loadIncidents();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- Support queue (PLAN Phase 11 item 108) ----
+const SUP_STATUS_BADGE = {open: 'bg-info/15 text-info', pending: 'bg-warning/15 text-warning', resolved: 'bg-success/15 text-success', closed: 'bg-surface-3 text-gray-500'};
+let staffTicketId = null;
+async function loadSupportQueue() {
+  const tb = document.getElementById('supportQueue');
+  document.getElementById('staffTicket').classList.add('hidden');
+  try {
+    const list = await fetchJSON('/v1/api/support/tickets?scope=all') || [];
+    tb.innerHTML = list.length ? list.map(tk => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(tk.account_name || tk.account_id.slice(0,8))}</td>
+        <td class="px-3 py-2 font-medium">${esc(tk.subject)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${esc(tk.kind)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${SUP_STATUS_BADGE[tk.status]||''}">${esc(tk.status)}</span></td>
+        <td class="px-3 py-2 font-mono text-xs">${tk.amount_disputed_micros ? '$'+(tk.amount_disputed_micros/1e6).toFixed(2) : '—'}</td>
+        <td class="px-3 py-2 text-right"><button onclick="openStaffTicket('${esc(tk.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Open</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No tickets.</td></tr>';
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+async function openStaffTicket(id) {
+  try {
+    const tk = await fetchJSON('/v1/api/support/tickets/' + encodeURIComponent(id));
+    staffTicketId = tk.id;
+    document.getElementById('staffTicket').classList.remove('hidden');
+    const disp = tk.amount_disputed_micros ? ` · disputed $${(tk.amount_disputed_micros/1e6).toFixed(2)}` : '';
+    document.getElementById('staffTicketHead').innerHTML =
+      `<span class="font-medium">${esc(tk.subject)}</span> <span class="text-xs text-gray-400">${esc(tk.account_name||'')} · ${esc(tk.kind)}${disp}</span>`;
+    const msgs = tk.messages || [];
+    document.getElementById('staffTicketMessages').innerHTML = msgs.length ? msgs.map(m => `
+      <div class="rounded-lg px-3 py-2 text-sm ${m.author_type === 'staff' ? 'bg-info/10' : 'bg-surface-3'}">
+        <div class="text-[11px] text-gray-400 mb-0.5">${m.author_type === 'staff' ? 'Support' : 'Customer'} · ${fmtDate(m.created_at)}</div>
+        ${esc(m.body)}
+      </div>`).join('') : '<p class="text-sm text-gray-400">No messages yet.</p>';
+    document.getElementById('res_credit_wrap').classList.toggle('hidden', tk.kind !== 'billing_dispute');
+    document.getElementById('res_note').value = tk.resolution || '';
+  } catch (err) { toast('Load failed: ' + err.message, 'error'); }
+}
+async function staffReply(ev) {
+  ev.preventDefault();
+  const body = document.getElementById('staff_reply').value.trim();
+  if (!body || !staffTicketId) return;
+  try {
+    await fetchJSON('/v1/api/support/tickets/' + encodeURIComponent(staffTicketId) + '/messages', {method: 'POST', body: JSON.stringify({body})});
+    document.getElementById('staff_reply').value = '';
+    openStaffTicket(staffTicketId);
+  } catch (err) { toast('Reply failed: ' + err.message, 'error'); }
+}
+async function staffResolve(ev) {
+  ev.preventDefault();
+  if (!staffTicketId) return;
+  const body = {
+    status: document.getElementById('res_status').value,
+    resolution: document.getElementById('res_note').value.trim(),
+    credit_amount: parseFloat(document.getElementById('res_credit').value) || 0,
+  };
+  try {
+    const res = await fetchJSON('/v1/api/support/tickets/' + encodeURIComponent(staffTicketId) + '/resolve', {method: 'POST', body: JSON.stringify(body)});
+    toast(res.credited ? 'Resolved + credit issued' : 'Resolved', 'success');
+    loadSupportQueue();
+  } catch (err) { toast('Resolve failed: ' + err.message, 'error'); }
 }
 
 const ago = (iso) => {

@@ -46,6 +46,8 @@ import (
 	statuspagepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/support"
+	supportpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/support/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 	_ "github.com/lib/pq"
 )
@@ -486,6 +488,13 @@ func main() {
 	}
 	mux.Handle(routes.APIAccountClose, authMiddleware(http.HandlerFunc(accountClosureHandler(closure, log))))
 	mux.Handle(routes.APIAccountCloseCancel, authMiddleware(http.HandlerFunc(accountCloseCancelHandler(closure, log))))
+	// Support & dispute resolution (PLAN Phase 11, item 108).
+	var supportStore support.Store
+	if gwDB != nil {
+		supportStore = supportpg.New(gwDB)
+	}
+	mux.Handle(routes.APISupportTickets, authMiddleware(http.HandlerFunc(supportTicketsHandler(supportStore, log))))
+	mux.Handle(routes.APISupportTicketsSub, authMiddleware(http.HandlerFunc(supportTicketActionHandler(supportStore, gwDB, log))))
 	mux.Handle(routes.APIAudienceRetargeting, authMiddleware(http.HandlerFunc(retargetingAudienceHandler(audDeps.store, log))))
 	// IAB Audience Taxonomy: the global reference list for the portal picker +
 	// the tenant-scoped label write. More specific paths than the base

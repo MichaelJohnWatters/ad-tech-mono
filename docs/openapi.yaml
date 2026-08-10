@@ -1552,6 +1552,89 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: "The export job status { status: queued|running|done, requested_at, expires_at }" }
+  /v1/api/support/tickets:
+    get:
+      tags: [Account]
+      summary: List support tickets
+      description: >-
+        A customer's own tickets (support:contact), or the full staff queue with
+        `?scope=all` (staff, support:read). Part of the Customer Support and
+        Dispute Resolution workflow (PLAN Phase 11 item 108).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: scope, schema: { type: string, enum: [all] }, required: false, description: "all = staff queue across tenants" }
+      responses:
+        "200": { description: "[{ id, account_id, kind, subject, status, amount_disputed_micros?, currency, resolution?, created_at, account_name? }]" }
+    post:
+      tags: [Account]
+      summary: Open a support ticket or billing dispute
+      description: "Customer opens a ticket (support:contact). kind=billing_dispute may carry amount_disputed."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject]
+              properties:
+                kind: { type: string, enum: [question, technical, billing_dispute] }
+                subject: { type: string }
+                body: { type: string, description: "opening message" }
+                amount_disputed: { type: number, description: "dollars (billing_dispute)" }
+                currency: { type: string }
+      responses:
+        "200": { description: "{ id }" }
+  /v1/api/support/tickets/{id}:
+    get:
+      tags: [Account]
+      summary: Support ticket detail + message thread
+      description: "A customer's own ticket (support:contact) or any ticket for staff (support:read), including the message thread."
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ ...ticket, messages: [{ id, author_type, body, created_at }] }" }
+        "404": { description: "not found" }
+  /v1/api/support/tickets/{id}/messages:
+    post:
+      tags: [Account]
+      summary: Reply on a support ticket
+      description: "Customer reply (support:contact, reopens the ticket) or staff reply (support:update, marks pending)."
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [body], properties: { body: { type: string } } }
+      responses:
+        "200": { description: "{ status: ok }" }
+  /v1/api/support/tickets/{id}/resolve:
+    post:
+      tags: [Account]
+      summary: Resolve a support ticket (staff)
+      description: >-
+        Staff-only (support:update). Sets status + resolution; a billing_dispute
+        may resolve with credit_amount > 0, which issues a credit adjustment to
+        the ticket's account.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [open, pending, resolved, closed] }
+                resolution: { type: string }
+                credit_amount: { type: number, description: "dollars; issues a credit adjustment (billing_dispute only)" }
+      responses:
+        "200": { description: "{ ticket, credited }" }
+        "404": { description: "ticket not found" }
   /v1/api/status:
     get:
       tags: [Platform]
