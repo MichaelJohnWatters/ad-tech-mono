@@ -33,14 +33,20 @@ func filterNav(items []NavItem, claims *auth.Claims) []NavItem {
 	return out
 }
 
+// portalRevocation is the optional session-revocation checker consulted by the
+// browser page gates. Set once at boot (main). Nil = no revocation (dev/tests).
+// The API boundary (Auth middleware) is the authoritative enforcement; this just
+// stops a revoked user from seeing the portal shell.
+var portalRevocation middleware.RevocationChecker
+
 // requireLoginPage gates a browser page on a valid session. In dev (empty
 // signing key) it passes through — the Auth bypass already treats everyone as
-// admin. Otherwise, a missing/invalid session redirects to /login (a browser
-// redirect, not the JSON 401 the API middleware returns).
+// admin. Otherwise, a missing/invalid/revoked session redirects to /login (a
+// browser redirect, not the JSON 401 the API middleware returns).
 func requireLoginPage(signingKey string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if signingKey != "" {
-			if _, ok := middleware.ParseSession(r, signingKey); !ok {
+			if _, ok := middleware.ParseSession(r, signingKey, portalRevocation); !ok {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
@@ -127,7 +133,7 @@ func portalHandler(templates *templateManager, signingKey, page string, nav []Na
 	return func(w http.ResponseWriter, r *http.Request) {
 		var claims *auth.Claims
 		if signingKey != "" {
-			claims, _ = middleware.ParseSession(r, signingKey)
+			claims, _ = middleware.ParseSession(r, signingKey, portalRevocation)
 		}
 		data := portalData{HasOpsDeploy: true}
 		// Dev bypass (nil claims) = admin view: full nav. With a real

@@ -67,10 +67,27 @@ func WithClaims(ctx context.Context, c *auth.Claims) context.Context {
 	return context.WithValue(ctx, claimsKey{}, c)
 }
 
+// AuthOption configures optional Auth middleware behaviour.
+type AuthOption func(*authConfig)
+
+type authConfig struct {
+	rev RevocationChecker
+}
+
+// WithRevocation makes the Auth middleware reject tokens whose session has been
+// revoked (logout-everywhere / stolen-token response). A nil checker is ignored.
+func WithRevocation(rev RevocationChecker) AuthOption {
+	return func(c *authConfig) { c.rev = rev }
+}
+
 // Auth returns middleware that validates JWT tokens and injects claims into context.
 // In dev mode (signingKey empty), it creates a default admin claim for all requests.
-func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
+func Auth(signingKey string, log *slog.Logger, opts ...AuthOption) func(http.Handler) http.Handler {
 	devMode := signingKey == ""
+	var ac authConfig
+	for _, o := range opts {
+		o(&ac)
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +125,18 @@ func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Session revocation (logout-everywhere / stolen-token). Fail-open on a
+			// store error — revocation is defence-in-depth over the token's own
+			// expiry, so a Redis outage must not lock everyone out.
+			if ac.rev != nil {
+				if revoked, err := ac.rev.IsRevoked(r.Context(), claims.UserID, claims.IssuedAt); err != nil {
+					log.Warn("revocation check failed (allowing token)", "error", err)
+				} else if revoked {
+					http.Error(w, `{"error":"session revoked"}`, http.StatusUnauthorized)
+					return
+				}
+			}
+
 			ctx := context.WithValue(r.Context(), claimsKey{}, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -120,7 +149,7 @@ func Auth(signingKey string, log *slog.Logger) func(http.Handler) http.Handler {
 // on a session and redirect to /login on failure (rather than the JSON 401 the
 // Auth middleware returns). signingKey must be non-empty — dev bypass is the
 // caller's concern.
-func ParseSession(r *http.Request, signingKey string) (*auth.Claims, bool) {
+func ParseSession(r *http.Request, signingKey string, rev ...RevocationChecker) (*auth.Claims, bool) {
 	token := tokenFromRequest(r)
 	if token == "" {
 		return nil, false
@@ -131,6 +160,14 @@ func ParseSession(r *http.Request, signingKey string) (*auth.Claims, bool) {
 	}
 	if claims.ExpiresAt.Before(time.Now()) {
 		return nil, false
+	}
+	// Optional revocation check (browser page gating): a revoked session is
+	// treated as no session so the caller redirects to /login. Fail-open on a
+	// store error, same as the Auth middleware.
+	if len(rev) > 0 && rev[0] != nil {
+		if revoked, err := rev[0].IsRevoked(r.Context(), claims.UserID, claims.IssuedAt); err == nil && revoked {
+			return nil, false
+		}
 	}
 	return claims, true
 }

@@ -95,15 +95,16 @@ func readSpecPaths(t *testing.T) map[string]bool {
 func TestOpenAPICoversPlatformRoutes(t *testing.T) {
 	specPaths := readSpecPaths(t)
 	public := map[string]string{
-		"AuthToken":        AuthToken,
-		"AuthLogin":        AuthLogin,
-		"AuthLogout":       AuthLogout,
-		"AuthSignup":       AuthSignup,
-		"AuthBootstrap":    AuthBootstrap,
-		"Config":           Config,
-		"ServicesRegistry": ServicesRegistry,
-		"SellersJSON":      SellersJSON,
-		"AdCertKey":        AdCertKey,
+		"AuthToken":          AuthToken,
+		"AuthLogin":          AuthLogin,
+		"AuthLogout":         AuthLogout,
+		"AuthRevokeSessions": AuthRevokeSessions,
+		"AuthSignup":         AuthSignup,
+		"AuthBootstrap":      AuthBootstrap,
+		"Config":             Config,
+		"ServicesRegistry":   ServicesRegistry,
+		"SellersJSON":        SellersJSON,
+		"AdCertKey":          AdCertKey,
 	}
 	for name, path := range public {
 		if !specPaths[strings.TrimSuffix(path, "/")] {

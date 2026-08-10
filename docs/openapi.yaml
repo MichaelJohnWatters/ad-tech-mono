@@ -2404,6 +2404,20 @@ paths:
       summary: Log out (clears the session cookie)
       responses:
         "303": { description: Session cookie cleared — redirect to /login }
+  /v1/auth/revoke-sessions:
+    post:
+      tags: [Auth]
+      summary: Revoke all of the caller's sessions (log out everywhere / stolen token)
+      description: >-
+        Kills every outstanding token for the authenticated user by stamping a
+        revocation checkpoint at now. Any token issued before this instant —
+        including the caller's current one and any copy held elsewhere — is
+        rejected on its next request. Use to respond to a suspected stolen
+        session. Requires a valid session.
+      responses:
+        "200": { description: All sessions revoked; caller's cookie cleared }
+        "401": { description: Not authenticated }
+        "500": { description: Revocation store unavailable — sessions not revoked }
   /v1/auth/signup:
     post:
       tags: [Auth]

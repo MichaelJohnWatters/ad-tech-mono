@@ -83,6 +83,12 @@ services:
         value: "REPLACE.sslip.io"   # ← match global.domain
   exchange:
     replicas: 2
+    # Durable event spool (survives pod eviction/reschedule on multi-node) — the
+    # emptyDir in base values would lose un-drained money events if the pod moved
+    # while NATS was down. Per-replica PVC via StatefulSet. storageClass unset →
+    # cluster default; set it if you need a specific class.
+    persistence:
+      size: 512Mi
     extraEnv:
       - name: EXCHANGE_ADSTXT_SELLER_DOMAIN
         value: "REPLACE.sslip.io"   # ← match global.domain
@@ -91,6 +97,9 @@ services:
       # overlay). The exchange prefers the store key over the dev env fallback.
   adserver:
     replicas: 2
+    # Durable event spool (see exchange note above).
+    persistence:
+      size: 512Mi
     # PUBLIC browser-facing pixel base baked into served ad HTML — MUST be HTTPS
     # (mixed-content blocks http pixels) and match global.domain.
     extraEnv:
@@ -105,6 +114,10 @@ services:
         value: "https://pubad.REPLACE.sslip.io"     # ← match global.domain
   tracker:
     replicas: 3
+    # Durable event spool (see exchange note above). Per-replica PVC — each of the
+    # 3 tracker pods keeps its own spool.
+    persistence:
+      size: 512Mi
   gateway:
     replicas: 2
     # Auth mandatory in staging too (mirror prod). extraEnv APPENDS.

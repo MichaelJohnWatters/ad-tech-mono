@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 )
 
 func okHandler() http.Handler {
@@ -175,5 +177,34 @@ func TestRateLimiterDisabledPassthrough(t *testing.T) {
 	}
 	if NewRateLimiter(0, 5, slog.New(slog.NewTextHandler(io.Discard, nil))) != nil {
 		t.Error("rps<=0 should yield a nil (disabled) limiter")
+	}
+}
+
+// TestRateLimiterDistributed proves the Redis-backed (cluster-wide) path enforces
+// the limit via the shared counter. MemoryL2 stands in for Redis (it satisfies
+// RateCounter). A fixed 1-second window admits `limit` then 429s the rest.
+func TestRateLimiterDistributed(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	rl := NewLiveRateLimiter(func() RateLimitConfig {
+		return RateLimitConfig{RPS: 2, Burst: 2, Distributed: true}
+	}, log).WithDistributedBackend("test", cache.NewMemoryL2())
+	h := rl.Wrap(okHandler())
+
+	got200, got429 := 0, 0
+	for i := 0; i < 6; i++ {
+		if do(h, "/v1/api/x", "9.9.9.9") == http.StatusOK {
+			got200++
+		} else {
+			got429++
+		}
+	}
+	// At most one 1-second boundary can be crossed in a microsecond-fast loop, so
+	// allow up to 2 windows' worth of 200s; the limit must still bite (some 429s).
+	if got200 < 2 || got200 > 4 || got429 == 0 {
+		t.Errorf("distributed limit: got %d ok / %d limited, want ~2 ok and some 429", got200, got429)
+	}
+	// A different IP has its own counter — never limited by 9.9.9.9's window.
+	if code := do(h, "/v1/api/x", "8.8.8.8"); code != http.StatusOK {
+		t.Errorf("distinct IP should not be limited: got %d", code)
 	}
 }

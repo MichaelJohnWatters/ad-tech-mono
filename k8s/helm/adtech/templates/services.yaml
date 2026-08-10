@@ -9,13 +9,24 @@ port; per-service values override them verbatim.
 {{- if ne ($svc.enabled | default true) false }}
 ---
 apiVersion: apps/v1
-kind: Deployment
+{{- /* A service with a `persistence:` block becomes a StatefulSet so each replica
+       gets its OWN PVC (volumeClaimTemplates) that survives pod eviction/reschedule
+       — used by the event-spool services (exchange/tracker/adserver) so an evicted
+       pod doesn't lose un-drained money events while NATS is down. Without it, a
+       plain Deployment (+ emptyDir) as before. NOTE: switching a service between
+       kinds on a LIVE cluster needs the old object deleted first (helm can't patch
+       across kinds) — enable persistence on a fresh install or delete the old
+       Deployment during the upgrade. */}}
+kind: {{ if $svc.persistence }}StatefulSet{{ else }}Deployment{{ end }}
 metadata:
   name: {{ $name }}
   namespace: {{ $ns }}
   labels:
     app: {{ $name }}
 spec:
+  {{- if $svc.persistence }}
+  serviceName: {{ $name }}
+  {{- end }}
   replicas: {{ $svc.replicas | default 1 }}
   selector:
     matchLabels:
@@ -145,10 +156,31 @@ spec:
             periodSeconds: 2
             failureThreshold: 5
             {{- end }}
+      {{- /* Ephemeral volumes (emptyDir etc.). Skipped when persistence is on —
+             the PVC volumeClaimTemplate below backs the same mount name instead. */}}
+      {{- if not $svc.persistence }}
       {{- with $svc.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- end }}
+  {{- if $svc.persistence }}
+  {{- /* One PVC per replica, bound to the same mount the emptyDir used (the first
+         volumeMount — the event-spool dir). ReadWriteOnce is right: each pod owns
+         its own spool. storageClass unset → the cluster default (local-path on
+         k3s, gp3/pd-ssd in prod via the env's values). */}}
+  volumeClaimTemplates:
+    - metadata:
+        name: {{ (first $svc.volumeMounts).name }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $svc.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $svc.persistence.size | default "512Mi" }}
+  {{- end }}
 ---
 apiVersion: v1
 kind: Service
