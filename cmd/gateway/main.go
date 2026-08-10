@@ -80,6 +80,10 @@ func main() {
 			lc.OnShutdown("gw-db", func(_ context.Context) error { return d.Close() })
 			if err := d.Ping(); err != nil {
 				log.Warn("gateway db ping failed at boot; handlers will retry on demand", "error", err)
+			} else {
+				// The gateway's main pool carries most tenant-scoped writes, so it
+				// MUST connect as the NOBYPASSRLS app role or RLS is silently off.
+				postgres.LogRLSEnforcement(context.Background(), d, log)
 			}
 		} else {
 			log.Warn("gateway db open failed; bootstrap endpoint will return 503", "error", err)
