@@ -165,6 +165,7 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 			// settle as the per-message handler (fast PK misses).
 			for _, e := range es {
 				c.dataFee.AccrueOnImpression(ctx, e.TraceID)
+				c.marketplace.AccrueOnImpression(ctx, e)
 			}
 			if c.billing == nil {
 				return
