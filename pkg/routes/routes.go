@@ -92,6 +92,12 @@ const (
 	// APIAccountExport is the account data-export package (PLAN Phase 11, item
 	// 105): GET enqueues/returns the caller's export job (account:export).
 	APIAccountExport = apiPrefix + "/api/account/export"
+	// APISupportTickets is the support & dispute workflow (PLAN Phase 11, item
+	// 108): customers GET their own tickets / POST a new one; staff GET ?scope=all
+	// the queue. APISupportTicketsSub is the per-ticket subtree ({id},
+	// {id}/messages, {id}/resolve).
+	APISupportTickets    = apiPrefix + "/api/support/tickets"
+	APISupportTicketsSub = apiPrefix + "/api/support/tickets/"
 	// StatusPage is the PUBLIC status page (PLAN Phase 11, item 107) — unauthed
 	// HTML at /status; APIStatus is its JSON twin (also public). APIIncidents is
 	// the staff-only incident CRUD behind it (incidents:read/write).

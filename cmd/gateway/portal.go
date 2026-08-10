@@ -69,6 +69,7 @@ var advertiserNav = []NavItem{
 	{Label: "Attribution", Href: "#attribution", Icon: "◔", Perm: "reports:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
+	{Label: "Support", Href: "#support", Icon: "✉", Perm: "support:contact"},
 	{Label: "Webhooks", Href: "#webhooks", Icon: "⇄", Perm: "webhooks:read"},
 	{Label: "Team", Href: "#team", Icon: "◐", Perm: "team:read"},
 }
@@ -194,6 +195,7 @@ var staffNav = []NavItem{
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
 	{Label: "Demos", Href: "#demos", Icon: "🎓", Perm: "support:read"},
 	{Label: "Batch runs", Href: "#batchruns", Icon: "⛓", Perm: "support:read"},
+	{Label: "Support", Href: "#support", Icon: "✉", Perm: "support:read"},
 	{Label: "Ops", Href: "#ops", Icon: "⎈", Perm: "ops:read"},
 	{Label: "Incidents", Href: "#incidents", Icon: "⚠", Perm: "incidents:read"},
 	{Label: "Config", Href: "#config", Icon: "⚙", Perm: "config:read"},

@@ -536,6 +536,46 @@
     </section>
 
     <!-- ============ Team ============ -->
+    <!-- ============ Support ============ -->
+    <section id="section-support" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Support & disputes" "subtitle" "Open a ticket for a question, technical issue, or a billing dispute — our team replies on the thread") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New ticket" "variant" "secondary" "size" "sm" "onclick" "openSupportNew()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Subject" "Type" "Status" "Updated" "")) }}
+        <tbody id="supportList"><tr><td colspan="5" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      <div id="supportThread" class="hidden">
+        {{ template "card-start" (dict "title" "Ticket" "subtitle" "") }}
+        <div id="supportThreadHead" class="mb-3 text-sm"></div>
+        <div id="supportMessages" class="space-y-2 mb-3"></div>
+        <form onsubmit="supportReply(event)">
+          <textarea id="support_reply" rows="2" placeholder="Write a reply…" class="w-full mb-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm"></textarea>
+          <div class="flex justify-end">{{ template "button" (dict "label" "Send reply" "type" "submit" "size" "sm") }}</div>
+        </form>
+        {{ template "card-end" . }}
+      </div>
+    </section>
+
+    {{ template "modal-start" (dict "id" "supportNew" "title" "New support ticket") }}
+      <form id="supportNewForm" onsubmit="createTicket(event)">
+        <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Type</label>
+        <select id="sup_kind" onchange="supKindChanged()" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+          <option value="question">General question</option><option value="technical">Technical issue</option><option value="billing_dispute">Billing dispute</option>
+        </select>
+        {{ template "form-field" (dict "label" "Subject" "name" "sup_subject" "required" true) }}
+        <div id="sup_amount_wrap" class="hidden">{{ template "form-field" (dict "label" "Amount disputed (USD)" "name" "sup_amount" "type" "number") }}</div>
+        <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Details</label>
+        <textarea id="sup_body" rows="3" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm"></textarea>
+        <div class="flex justify-end gap-2">
+          {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closeSupportNew()") }}
+          {{ template "button" (dict "label" "Open ticket" "type" "submit") }}
+        </div>
+      </form>
+    {{ template "modal-end" . }}
+
     <section id="section-team" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Team members" "subtitle" "People who can sign in to this account") }}
       <div class="flex justify-end mb-3">
@@ -1137,11 +1177,11 @@ const fmtInt = (n) => Number(n || 0).toLocaleString();
 
 // ---- Section switching (portal-core initSectionRouter) ----
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'billing', 'team', 'webhooks'],
+  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'billing', 'support', 'team', 'webhooks'],
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
     creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), marketplace: () => loadMarketplace(), conversions: () => loadConversions(),
     reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
-    billing: () => loadBilling(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
+    billing: () => loadBilling(), support: () => loadSupport(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
   // The New-campaign action belongs to the Campaigns tab only (it was in
   // the global header, so it showed on every section).
@@ -1738,6 +1778,78 @@ async function loadTeam() {
   }
   loadAccountExport();  // shared: portal-core.js
   loadAccountClosure(); // shared: portal-core.js
+}
+
+// ---- Support & disputes (PLAN Phase 11) ----
+const SUP_STATUS_BADGE = {open: 'bg-info/15 text-info', pending: 'bg-warning/15 text-warning', resolved: 'bg-success/15 text-success', closed: 'bg-surface-3 text-gray-500'};
+const SUP_KIND_LABEL = {question: 'Question', technical: 'Technical', billing_dispute: 'Billing dispute'};
+let currentTicketId = null;
+async function loadSupport() {
+  const tb = document.getElementById('supportList');
+  document.getElementById('supportThread').classList.add('hidden');
+  try {
+    const list = await fetchJSON('/v1/api/support/tickets') || [];
+    tb.innerHTML = list.length ? list.map(tk => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(tk.subject)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${SUP_KIND_LABEL[tk.kind] || esc(tk.kind)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${SUP_STATUS_BADGE[tk.status] || ''}">${esc(tk.status)}</span></td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(tk.updated_at)}</td>
+        <td class="px-3 py-2 text-right"><button onclick="openTicket('${esc(tk.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">View</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No tickets yet — open one to reach support.</td></tr>';
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function renderTicketThread(tk) {
+  currentTicketId = tk.id;
+  document.getElementById('supportThread').classList.remove('hidden');
+  const disp = tk.amount_disputed_micros ? ` · disputed $${(tk.amount_disputed_micros/1e6).toFixed(2)}` : '';
+  document.getElementById('supportThreadHead').innerHTML =
+    `<span class="font-medium">${esc(tk.subject)}</span> <span class="text-xs px-1.5 py-0.5 rounded ${SUP_STATUS_BADGE[tk.status]||''}">${esc(tk.status)}</span>
+     <span class="text-xs text-gray-400">${SUP_KIND_LABEL[tk.kind]||esc(tk.kind)}${disp}</span>
+     ${tk.resolution ? `<div class="mt-1 text-xs text-success">Resolution: ${esc(tk.resolution)}</div>` : ''}`;
+  const msgs = tk.messages || [];
+  document.getElementById('supportMessages').innerHTML = msgs.length ? msgs.map(m => `
+    <div class="rounded-lg px-3 py-2 text-sm ${m.author_type === 'staff' ? 'bg-info/10' : 'bg-surface-3'}">
+      <div class="text-[11px] text-gray-400 mb-0.5">${m.author_type === 'staff' ? 'Support' : 'You'} · ${fmtDate(m.created_at)}</div>
+      ${esc(m.body)}
+    </div>`).join('')
+    : '<p class="text-sm text-gray-400">No messages yet.</p>';
+}
+async function openTicket(id) {
+  try { renderTicketThread(await fetchJSON('/v1/api/support/tickets/' + encodeURIComponent(id))); }
+  catch (err) { toast('Load failed: ' + err.message, 'error'); }
+}
+async function supportReply(ev) {
+  ev.preventDefault();
+  const body = document.getElementById('support_reply').value.trim();
+  if (!body || !currentTicketId) return;
+  try {
+    await fetchJSON('/v1/api/support/tickets/' + encodeURIComponent(currentTicketId) + '/messages', {method: 'POST', body: JSON.stringify({body})});
+    document.getElementById('support_reply').value = '';
+    openTicket(currentTicketId);
+    loadSupport();
+  } catch (err) { toast('Reply failed: ' + err.message, 'error'); }
+}
+function openSupportNew() { document.getElementById('supportNewForm').reset(); supKindChanged(); document.getElementById('supportNew').classList.remove('hidden'); }
+function closeSupportNew() { document.getElementById('supportNew').classList.add('hidden'); }
+function supKindChanged() { document.getElementById('sup_amount_wrap').classList.toggle('hidden', document.getElementById('sup_kind').value !== 'billing_dispute'); }
+async function createTicket(ev) {
+  ev.preventDefault();
+  const body = {
+    kind: document.getElementById('sup_kind').value,
+    subject: document.getElementById('sup_subject').value.trim(),
+    body: document.getElementById('sup_body').value.trim(),
+    amount_disputed: parseFloat(document.getElementById('sup_amount').value) || 0,
+  };
+  try {
+    await fetchJSON('/v1/api/support/tickets', {method: 'POST', body: JSON.stringify(body)});
+    toast('Ticket opened', 'success');
+    closeSupportNew();
+    loadSupport();
+  } catch (err) { toast('Open failed: ' + err.message, 'error'); }
 }
 function openInvite() {
   $('inviteForm').reset();
