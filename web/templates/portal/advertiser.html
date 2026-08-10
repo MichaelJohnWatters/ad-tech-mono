@@ -546,6 +546,11 @@
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
+      <!-- Export your data (PLAN Phase 11). -->
+      {{ template "card-start" (dict "title" "Export your data" "subtitle" "Download a zip of your account data — campaigns, creatives, audiences (aggregate), invoice/payout history and audit log") }}
+      <div id="exportBody" class="text-sm text-gray-400">loading…</div>
+      {{ template "card-end" . }}
+
       <!-- Danger zone: account closure (PLAN Phase 11). The 30-day grace period
            IS the undo — no confirm dialog (house rule); the banner + Cancel are. -->
       {{ template "card-start" (dict "title" "Close account" "subtitle" "Start a 30-day grace period. Your campaigns pause and no new spend occurs. Cancel any time before the grace period ends.") }}
@@ -1731,6 +1736,7 @@ async function loadTeam() {
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
+  loadAccountExport();  // shared: portal-core.js
   loadAccountClosure(); // shared: portal-core.js
 }
 function openInvite() {

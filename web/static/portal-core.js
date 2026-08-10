@@ -185,3 +185,43 @@ async function cancelClosure() {
     loadAccountClosure();
   } catch (err) { toast('Cancel failed: ' + err.message, 'error'); }
 }
+
+// ---- Account data export (PLAN Phase 11) — shared by advertiser + publisher.
+// Renders into #exportBody. GET is status-only; POST enqueues the async build.
+async function loadAccountExport() {
+  const el = document.getElementById('exportBody');
+  if (!el) return;
+  try {
+    renderAccountExport(el, await fetchJSON('/v1/api/account/export') || {});
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">load failed — ${esc(err.message)}</span>`;
+  }
+}
+function renderAccountExport(el, j) {
+  if (!el) return;
+  if (j.status === 'done' && j.download_url) {
+    const kb = j.artifact_bytes ? Math.max(1, Math.round(j.artifact_bytes / 1024)) : 0;
+    el.innerHTML = `
+      <p class="mb-3 text-gray-500">Your export is ready${kb ? ` (${kb} KB)` : ''}.</p>
+      <a href="${esc(j.download_url)}" class="text-sm px-3 py-1.5 rounded bg-info/15 text-info hover:bg-info/25">Download .zip</a>
+      <button onclick="requestExport()" class="ml-2 text-sm px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Regenerate</button>`;
+  } else if (j.status === 'queued' || j.status === 'running') {
+    el.innerHTML = `<p class="text-gray-500">Preparing your export… this refreshes automatically.</p>`;
+    setTimeout(loadAccountExport, 2500);
+  } else if (j.status === 'failed') {
+    el.innerHTML = `
+      <p class="mb-3 text-error">Export failed: ${esc(j.error || 'unknown')}</p>
+      <button onclick="requestExport()" class="text-sm px-3 py-1.5 rounded bg-info/15 text-info hover:bg-info/25">Try again</button>`;
+  } else {
+    el.innerHTML = `
+      <p class="mb-3 text-gray-500">Generate a downloadable archive of your account data.</p>
+      <button onclick="requestExport()" class="text-sm px-3 py-1.5 rounded bg-info/15 text-info hover:bg-info/25">Prepare export</button>`;
+  }
+}
+async function requestExport() {
+  try {
+    const j = await fetchJSON('/v1/api/account/export', {method: 'POST'}) || {};
+    toast('Export requested — preparing…', 'info');
+    renderAccountExport(document.getElementById('exportBody'), j);
+  } catch (err) { toast('Export failed: ' + err.message, 'error'); }
+}

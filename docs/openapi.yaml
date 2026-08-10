@@ -1530,16 +1530,28 @@ paths:
   /v1/api/account/export:
     get:
       tags: [Account]
-      summary: Request / poll the account data-export package
+      summary: Poll the account data-export status
       description: >-
-        Enqueues (or returns the status of) an account data-export job: the
-        account's campaigns, creatives, audiences (hashed), invoice/payout history
-        and audit log, materialized to CSV/JSON, zipped, and made available via a
-        time-limited download URL. Owner-only (account:export). Part of the Account
-        Closure and Data Export workflow (PLAN Phase 11 item 105).
+        Returns the status of the caller's most recent data-export job (or
+        status=none). When done and unexpired, download_url points at the
+        streamed archive. Owner-only (account:export). Part of the Account Closure
+        and Data Export workflow (PLAN Phase 11 item 105).
       security: [{ bearerAuth: [] }]
       responses:
-        "200": { description: "{ status: pending|running|completed|failed, download_url?, expires_at?, requested_at }" }
+        "200": { description: "{ status: none|queued|running|done|failed, artifact_bytes?, download_url?, error?, requested_at?, expires_at? }" }
+    post:
+      tags: [Account]
+      summary: Request an account data-export package
+      description: >-
+        Enqueues an export job (coalescing onto an in-flight one): the account's
+        campaigns, creatives, audiences (aggregate counts only), invoice/payout
+        history and audit log, materialized to CSV + metadata.json, zipped, and
+        uploaded to the private reports bucket. The report-runner builds it
+        asynchronously; poll GET for status, then stream via the download URL.
+        Owner-only (account:export).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "The export job status { status: queued|running|done, requested_at, expires_at }" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

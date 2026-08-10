@@ -21,6 +21,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountexport"
+	accountexportpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountexport/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
@@ -178,6 +180,15 @@ func main() {
 
 	sweeper := &reportjobs.Sweeper{Store: jobStore, Objects: objStore, Now: time.Now, Log: log}
 
+	// Account data-export worker (PLAN Phase 11, item 105): drains
+	// account_export_jobs, zipping each account's data into the same private
+	// artifact bucket the report jobs use. Shares this service's object store.
+	exportWorker := &accountexport.Worker{
+		Store:   accountexportpg.New(db),
+		Builder: &accountexport.Builder{DB: db, Objects: objStore, Bucket: bucket, Now: time.Now},
+		Log:     log,
+	}
+
 	// Crash recovery: reclaim jobs whose LEASE lapsed (claimant stopped
 	// heartbeating = genuinely dead). Lease-based, so this is safe with any
 	// number of worker replicas — a booting pod can no longer steal jobs a
@@ -208,6 +219,17 @@ func main() {
 			claimed, err := executor.RunOnce(ctx)
 			if err != nil {
 				log.Error("executor tick failed", "error", err)
+				break
+			}
+			if !claimed || ctx.Err() != nil {
+				break
+			}
+		}
+		// Drain the account-export queue on the same tick.
+		for {
+			claimed, err := exportWorker.RunOnce(ctx)
+			if err != nil {
+				log.Error("account-export tick failed", "error", err)
 				return
 			}
 			if !claimed || ctx.Err() != nil {
