@@ -16,6 +16,14 @@ createNamespace: true
 # registered domain and every ingress host + cert follows automatically.
 global:
   domain: adtech.local
+  # App-image source. EMPTY registry (local dev) = the bare locally-built image
+  # names (adtech-<svc>) resolved from the node's docker engine — unchanged.
+  # Staging/prod set these to the CI registry + a tag so every app image becomes
+  # <registry>/adtech-<svc>:<tag> (see templates/_helpers.tpl "adtech.image").
+  # Infra images (postgres/nats/…) are third-party and ignore this.
+  image:
+    registry: ""
+    tag: ""
 
 # TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
 # Same Ingress wiring in every env (templates/services.yaml terminates at

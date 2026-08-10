@@ -54,7 +54,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ $svc.containerName | default $name }}
-          image: {{ $svc.image }}
+          image: {{ include "adtech.image" (dict "name" $svc.image "g" $.Values.global) }}
           imagePullPolicy: {{ $svc.imagePullPolicy | default "IfNotPresent" }}
           {{- if and (eq (toString (($.Values.global | default dict).hardenedContainers)) "true") (ne (toString $svc.hardenedExempt) "true") }}
           securityContext:

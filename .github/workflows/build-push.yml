@@ -1,0 +1,109 @@
+# build-push — build every app-service image and push to GitHub Container
+# Registry (ghcr.io/<owner>/adtech-<svc>). This is the image half of the
+# staging pipeline (the deploy half is a manual `helm upgrade` for now — see
+# docs/DEPLOY.md; flip the trigger to push:main once a staging node exists and
+# auto-deploy is wired).
+#
+# Build strategy mirrors scripts/stack-images.sh but uses the self-contained
+# PROD Dockerfiles (build/Dockerfile*, in-image `go build`) as build/Dockerfile.dev
+# intends ("For prod / CI use build/Dockerfile"). Two services copy a pre-built
+# binary (transcoder needs the ffmpeg base, migrate needs the migrations dir),
+# so those cross-compile the binary first.
+#
+# Tags per image (docker/metadata-action): the full git sha (immutable, what
+# values-staging pins to), the branch name on a branch build, the git tag on a
+# release, and `latest` on main. The cluster pulls the sha for reproducibility.
+name: build-push
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (default: the triggering ref)"
+        required: false
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Self-contained generic services (build/Dockerfile, SERVICE=<name>).
+        service:
+          - dsp
+          - ssp
+          - exchange
+          - adserver
+          - publisher-adserver
+          - tracker
+          - pipeline
+          - webhooks
+          - notifications
+          - identity-consumer
+          - audience-rt
+          - report-runner
+          - ssai
+          - batch-conductor
+          - dayboundary
+          - invoice-runner
+        include:
+          # Variants with their own Dockerfile.
+          - { service: gateway, dockerfile: build/Dockerfile.gateway }
+          - { service: reporting, dockerfile: build/Dockerfile.reporting }
+          # Copy-binary Dockerfiles: cross-compile the binary first.
+          - { service: transcoder, dockerfile: build/Dockerfile.transcode, prebuild: "true" }
+          - { service: migrate, dockerfile: build/Dockerfile.migrate, prebuild: "true" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      # Copy-binary Dockerfiles (transcoder, migrate) need ./bin/<svc> in the
+      # build context — cross-compile it the same way stack-images.sh does.
+      - if: matrix.prebuild == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - if: matrix.prebuild == 'true'
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "bin/${{ matrix.service }}" "./cmd/${{ matrix.service }}"
+
+      # ghcr requires a lowercase owner.
+      - id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.lc }}/adtech-${{ matrix.service }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Generic services have no matrix.dockerfile → the shared build/Dockerfile.
+          file: ${{ matrix.dockerfile || 'build/Dockerfile' }}
+          # SERVICE is consumed by build/Dockerfile + Dockerfile.transcode; the
+          # gateway/reporting Dockerfiles ignore it (harmless unused-arg warning).
+          build-args: SERVICE=${{ matrix.service }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

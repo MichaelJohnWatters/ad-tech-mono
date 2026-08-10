@@ -30,7 +30,7 @@ spec:
           restartPolicy: {{ $job.restartPolicy | default "OnFailure" }}
           containers:
             - name: {{ $name }}
-              image: {{ $job.image }}
+              image: {{ include "adtech.image" (dict "name" $job.image "g" $.Values.global) }}
               imagePullPolicy: {{ $job.imagePullPolicy | default "IfNotPresent" }}
               env:
                 {{- toYaml $job.env | nindent 16 }}
