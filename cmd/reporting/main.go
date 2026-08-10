@@ -161,6 +161,9 @@ func main() {
 			lc.OnShutdown("datafee-db", func(_ context.Context) error { return dfDB.Close() })
 			consumer.SetDataFeeAccrual(newDataFeeAccrual(dfDB,
 				func() float64 { return keys.Reporting.DataFeeMarginPct.Get(cfg) }, log))
+			// Data-marketplace surcharge settlement (PLAN Phase 10) shares the DB.
+			consumer.SetMarketplaceAccrual(newMarketplaceAccrual(dfDB,
+				func() float64 { return keys.Reporting.MarketplaceSurchargeMarginPct.Get(cfg) }, log))
 		} else {
 			log.Warn("data-fee accrual disabled (postgres open failed)", "error", err)
 		}
@@ -541,6 +544,10 @@ type EventConsumer struct {
 	// time (datafee.go). nil = feature off (no Postgres) — all hooks no-op.
 	dataFee *dataFeeAccrual
 
+	// marketplace settles data-marketplace CPM surcharges at impression time
+	// (marketplace.go). nil = feature off — hooks no-op.
+	marketplace *marketplaceAccrual
+
 	// viewThrough credits click-less conversions to a prior viewable exposure
 	// (attribution.go). nil = not wired → Phase-0 (deterministic ctid) behaviour
 	// only, and settle is never gated.
@@ -549,6 +556,9 @@ type EventConsumer struct {
 
 // SetDataFeeAccrual connects data-monetization accrual (nil-tolerant).
 func (c *EventConsumer) SetDataFeeAccrual(a *dataFeeAccrual) { c.dataFee = a }
+
+// SetMarketplaceAccrual connects data-marketplace surcharge settlement (nil-tolerant).
+func (c *EventConsumer) SetMarketplaceAccrual(a *marketplaceAccrual) { c.marketplace = a }
 
 // SetViewThroughAttributor wires view-through conversion attribution (nil-tolerant).
 func (c *EventConsumer) SetViewThroughAttributor(a *viewThroughAttributor) { c.viewThrough = a }
@@ -729,6 +739,7 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 	// (single PK lookup; near-always a miss). Never blocks the Ack — the
 	// impression is already recorded and billed.
 	c.dataFee.AccrueOnImpression(ctx, e.TraceID)
+	c.marketplace.AccrueOnImpression(ctx, &e)
 
 	c.log.Debug("impression recorded + billed", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
 	return msg.Ack()

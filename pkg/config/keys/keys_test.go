@@ -16,7 +16,7 @@ func TestSchemaSizes(t *testing.T) {
 		entries []config.SchemaEntry
 		want    int
 	}{
-		{"reporting", ReportingSchema(), 33},
+		{"reporting", ReportingSchema(), 34},
 		{"report-runner", ReportRunnerSchema(), 13},
 		{"dsp", DSPSchema(), 23},
 		{"exchange", ExchangeSchema(), 32},
