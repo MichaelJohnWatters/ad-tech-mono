@@ -74,6 +74,36 @@ func TestValidateBidResponse_Violations(t *testing.T) {
 	}
 }
 
+func TestValidateBidResponse_NoBidWithBidsIsContradiction(t *testing.T) {
+	resp := goodResp()
+	resp.NoBid = true // declares no-bid yet carries a bid
+	fs := ValidateBidResponse(goldenReq(), resp)
+	if !HasErrors(fs) {
+		t.Errorf("nobid=true with bids present should error: %+v", fs)
+	}
+}
+
+func TestValidateBidResponse_MultiImpMultiSeat(t *testing.T) {
+	req := GoldenBidRequest("r")
+	req.Imp = append(req.Imp, Imp{ID: "2", Banner: &Banner{W: 728, H: 90}, BidFloor: 1.00, BidFloorCur: "USD"})
+	// Two seats, one bid each on distinct imps — the bid on imp "2" is BELOW its
+	// 1.00 floor, so exactly that one must error.
+	resp := &BidResponse{ID: "r", Cur: "USD", SeatBid: []SeatBid{
+		{Seat: "s1", Bid: []BidObj{{ID: "a", ImpID: "1", Price: 2.0, AdM: "x", CrID: "c", ADomain: []string{"a.example"}}}},
+		{Seat: "s2", Bid: []BidObj{{ID: "b", ImpID: "2", Price: 0.50, AdM: "y", CrID: "c", ADomain: []string{"b.example"}}}},
+	}}
+	fs := ValidateBidResponse(&req, resp)
+	if !HasErrors(fs) {
+		t.Fatalf("below-floor bid on imp 2 should error: %+v", fs)
+	}
+	// The good bid on imp "1" must NOT have produced an error.
+	for _, f := range fs {
+		if f.Severity == SevError && indexOf(f.Field, "bid[0]") >= 0 && indexOf(f.Field, "seatbid[0]") >= 0 {
+			t.Errorf("valid bid on imp 1 wrongly flagged: %+v", f)
+		}
+	}
+}
+
 func TestValidateBidResponse_WarnMissingCrid(t *testing.T) {
 	resp := goodResp()
 	resp.SeatBid[0].Bid[0].CrID = ""

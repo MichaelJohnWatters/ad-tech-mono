@@ -17,15 +17,63 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner"
 )
+
+// blockedProbeIP reports whether the test-bid probe must NOT connect to ip —
+// loopback / private / link-local (incl. cloud metadata 169.254.169.254) /
+// unspecified. Partner bid endpoints are public, so blocking these closes the
+// SSRF surface (the gateway must never be steered into the cluster or a metadata
+// service by a registered endpoint value).
+func blockedProbeIP(ip net.IP) bool {
+	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// safeProbeClient is the http.Client for the test-bid probe. It does NOT follow
+// redirects (a 3xx could hop past the scheme/IP check to an internal target) and
+// blocks connections to non-public IPs at CONNECT time via the dialer Control
+// hook — which sees the RESOLVED address, so it's DNS-rebinding-safe.
+func safeProbeClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if blockedProbeIP(net.ParseIP(host)) {
+				return fmt.Errorf("refusing to connect to non-public address %s", host)
+			}
+			return nil
+		},
+	}
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     &http.Transport{DialContext: dialer.DialContext},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// test-bid is an authenticated outbound probe; a light per-account cooldown stops
+// a partner turning the gateway into a request amplifier against its endpoint.
+var (
+	testBidMu   sync.Mutex
+	testBidLast = map[string]time.Time{}
+)
+
+const testBidMinInterval = 2 * time.Second
 
 // testBidResult is the response of both endpoints.
 type testBidResult struct {
@@ -71,7 +119,7 @@ func partnerValidateHandler(log *slog.Logger) http.HandlerFunc {
 // partnerTestBidHandler sends a golden request to the partner's registered
 // endpoint and validates what comes back.
 func partnerTestBidHandler(store partner.Store, log *slog.Logger) http.HandlerFunc {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := safeProbeClient(5 * time.Second)
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		accountID, ok := partnerGate(w, r, "partner:self")
@@ -82,6 +130,16 @@ func partnerTestBidHandler(store partner.Store, log *slog.Logger) http.HandlerFu
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
+		// Per-account cooldown (amplification guard).
+		testBidMu.Lock()
+		if now := time.Now(); now.Sub(testBidLast[accountID]) < testBidMinInterval {
+			testBidMu.Unlock()
+			http.Error(w, `{"error":"slow down — one test-bid every couple of seconds"}`, http.StatusTooManyRequests)
+			return
+		} else {
+			testBidLast[accountID] = now
+		}
+		testBidMu.Unlock()
 		if store == nil {
 			http.Error(w, `{"error":"partners unavailable"}`, http.StatusServiceUnavailable)
 			return
@@ -146,6 +204,9 @@ func partnerTestBidHandler(store partner.Store, log *slog.Logger) http.HandlerFu
 		}
 		if res.LatencyMs > int64(p.TimeoutMs) && p.TimeoutMs > 0 {
 			res.Findings = append(res.Findings, openrtb.Finding{Severity: openrtb.SevWarn, Field: "latency", Message: "response exceeded your configured timeout"})
+		}
+		if res.Findings == nil {
+			res.Findings = []openrtb.Finding{}
 		}
 		log.Info("partner test-bid", "account_id", accountID, "endpoint", p.EndpointBid, "status", httpResp.StatusCode, "latency_ms", latency, "valid", res.Valid)
 		_ = json.NewEncoder(w).Encode(res)

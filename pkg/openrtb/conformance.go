@@ -46,7 +46,7 @@ func contains(ss []string, v string) bool {
 // A genuine NO-BID (explicit NoBid, or no seatbid/bids) is VALID and returns no
 // errors — declining to bid is conformant. Returns errors (must-fix) + warnings.
 func ValidateBidResponse(req *BidRequest, resp *BidResponse) []Finding {
-	var fs []Finding
+	fs := []Finding{}
 	if resp == nil {
 		return []Finding{{SevError, "", "empty or unparseable response body"}}
 	}
@@ -56,8 +56,12 @@ func ValidateBidResponse(req *BidRequest, resp *BidResponse) []Finding {
 	for _, sb := range resp.SeatBid {
 		bids += len(sb.Bid)
 	}
-	if resp.NoBid || bids == 0 {
+	if bids == 0 {
 		return fs // valid no-bid — nothing more to check
+	}
+	// NoBid with bids present is contradictory — still validate the bids below.
+	if resp.NoBid {
+		fs = append(fs, Finding{SevError, "nobid", "nobid is set but the response carries bids — contradictory"})
 	}
 
 	if resp.ID == "" {
@@ -119,7 +123,7 @@ func ValidateBidResponse(req *BidRequest, resp *BidResponse) []Finding {
 // ValidateBidRequest checks a supply partner's (SSP's) inbound BidRequest for
 // spec-correctness — enough for the exchange to reject a malformed request.
 func ValidateBidRequest(req *BidRequest) []Finding {
-	var fs []Finding
+	fs := []Finding{}
 	if req == nil {
 		return []Finding{{SevError, "", "empty or unparseable request body"}}
 	}
