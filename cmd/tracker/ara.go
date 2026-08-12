@@ -7,13 +7,22 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
 	arapg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 )
+
+// araUUIDRe validates the advid so a garbage value can't reach the ::uuid cast
+// (and to keep a clean 400 rather than a 500).
+var araUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// araMaxDestLen bounds the destination string.
+const araMaxDestLen = 512
 
 // Privacy Sandbox ARA endpoints on the tracker (the single ARA reporting origin
 // for this platform). See docs/attribution-phase4-ara.md and pkg/ara.
@@ -32,8 +41,14 @@ import (
 type araDeps struct {
 	store   *arapg.Store
 	enabled func() bool
-	log     *slog.Logger
-	maxBody int64
+	// sigKeys / sigStrict enforce the same signature gate as the other tracker
+	// beacons on source registration, so advid can't be forged: the ad server
+	// bakes a signed /v1/t/ara/src; an unsigned request is rejected in strict mode
+	// (tracker.signature_validation) exactly like /v1/t/conv.
+	sigKeys   func(advid string) []string
+	sigStrict func() bool
+	log       *slog.Logger
+	maxBody   int64
 }
 
 // consented reports whether the request carries personalisation consent — the
@@ -54,8 +69,17 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	advid, dest := q.Get("advid"), q.Get("dest")
-	if advid == "" || dest == "" {
-		http.Error(w, `{"error":"advid and dest required"}`, http.StatusBadRequest)
+	if !araUUIDRe.MatchString(advid) || dest == "" || len(dest) > araMaxDestLen {
+		http.Error(w, `{"error":"advid (uuid) and dest required"}`, http.StatusBadRequest)
+		return
+	}
+	// Anti-spoofing: the source beacon is signed like every other tracker beacon,
+	// so advid is bound to a key an attacker can't produce. In strict mode an
+	// invalid signature is rejected (in dev warn mode it's lenient, matching the
+	// rest of the tracker) — this is what stops an unauthenticated cross-tenant
+	// write of ara_sources for an arbitrary advertiser account.
+	if !adserving.ValidateSignatureAny(r.URL.Path, q, d.sigKeys(advid)) && d.sigStrict() {
+		http.Error(w, `{"error":"invalid signature"}`, http.StatusForbidden)
 		return
 	}
 	if !araConsented(r) { // no personalisation consent → register nothing
@@ -157,7 +181,9 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		dest = rep.AttributionDestination
 	}
 
-	acct, err := d.store.ResolveAccount(r.Context(), sourceEventID, dest)
+	// Event reports resolve ONLY by the unguessable source_event_id; aggregatable
+	// reports (no source id) may use the destination fallback.
+	acct, err := d.store.ResolveAccount(r.Context(), sourceEventID, dest, typ == ara.ReportAggregate)
 	if errors.Is(err, arapg.ErrNoAccount) {
 		d.log.Warn("ara: report for an unregistered source/destination (dropped)", "dest", dest, "type", typ)
 		w.WriteHeader(http.StatusOK)

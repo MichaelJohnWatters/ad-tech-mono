@@ -43,7 +43,22 @@ func TestARARegistrationAndReportIngest(t *testing.T) {
 	// 1) Source registration returns a well-formed Register-Source header.
 	srcURL := fmt.Sprintf("%s%s?advid=%s&dest=%s&cid=%s",
 		h.URLs.Tracker, "/v1/t/ara/src", w.AdvAcc.ID, dest, w.Placement.ID)
-	req, _ := http.NewRequest(http.MethodGet, srcURL, nil)
+
+	// Enforcement: an UNSIGNED source beacon is rejected (strict signing on the
+	// stack) — advid can't be forged into an ara_sources row for any account.
+	ureq, _ := http.NewRequest(http.MethodGet, srcURL, nil)
+	uresp, err := client.Do(ureq)
+	if err != nil {
+		t.Fatalf("unsigned source beacon: %v", err)
+	}
+	ucode := uresp.StatusCode
+	uresp.Body.Close()
+	if ucode != http.StatusForbidden {
+		t.Errorf("unsigned source beacon = %d, want 403 (signature must be enforced)", ucode)
+	}
+
+	// Signed like the ad server → registers.
+	req, _ := http.NewRequest(http.MethodGet, adserving.SignURL(srcURL, adserving.DefaultSigningKey), nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("source beacon: %v", err)
@@ -154,17 +169,19 @@ func TestARARegistrationAndReportIngest(t *testing.T) {
 		t.Errorf("advertiser ARA summary.event = %d, want >= 1 (the ingested report)", out.Summary.Event)
 	}
 
-	// 5) A report for an UNREGISTERED source/destination is accepted (200) but
-	// dropped — never persisted under any account.
-	orphan := `{"attribution_destination":"https://nobody.example","source_event_id":"99999999999","trigger_data":"1","report_id":"orphan-1"}`
-	if code := post(ara.PathEventReport, orphan); code != http.StatusOK {
-		t.Errorf("orphan report = %d, want 200 (accepted, dropped)", code)
+	// 5) POISONING ATTEMPT: an event report claiming the victim's REAL destination
+	// but a source_event_id the victim never registered must NOT land in the
+	// victim's account — event reports resolve ONLY by the unguessable source id,
+	// never by the (public) destination.
+	poison := fmt.Sprintf(`{"attribution_destination":%q,"source_event_id":"99999999999","trigger_data":"1","report_id":"poison-1"}`, dest)
+	if code := post(ara.PathEventReport, poison); code != http.StatusOK {
+		t.Errorf("poison report = %d, want 200 (accepted, dropped)", code)
 	}
-	var orphanRows int
-	if err := h.DB.QueryRow(`SELECT count(*) FROM ara_reports WHERE report_id = 'orphan-1'`).Scan(&orphanRows); err != nil {
-		t.Fatalf("count orphan: %v", err)
+	var poisonRows int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM ara_reports WHERE report_id = 'poison-1'`).Scan(&poisonRows); err != nil {
+		t.Fatalf("count poison: %v", err)
 	}
-	if orphanRows != 0 {
-		t.Errorf("orphan report was persisted (%d rows) — must be dropped", orphanRows)
+	if poisonRows != 0 {
+		t.Errorf("poison report persisted (%d rows) — an event report was resolved by destination, not source id", poisonRows)
 	}
 }
