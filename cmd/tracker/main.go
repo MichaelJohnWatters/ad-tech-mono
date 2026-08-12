@@ -205,11 +205,12 @@ func main() {
 	// of the tracker is unaffected. Source/trigger registration is gated by
 	// tracker.ara_enabled + consent; the report-ingest endpoints stay mounted.
 	araH := araDeps{
-		enabled:   func() bool { return keys.Tracker.ARAEnabled.Get(cfg) },
-		sigKeys:   sigKeysForAdvertiser,
-		sigStrict: func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
-		log:       log,
-		maxBody:   128 << 10,
+		enabled:       func() bool { return keys.Tracker.ARAEnabled.Get(cfg) },
+		sigKeys:       sigKeysForAdvertiser,
+		sigStrict:     func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
+		expValidation: func() bool { return keys.Tracker.ExpValidation.Get(cfg) },
+		log:           log,
+		maxBody:       128 << 10,
 	}
 	if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
 		if st, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 4, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute}); err != nil {

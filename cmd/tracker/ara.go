@@ -45,10 +45,11 @@ type araDeps struct {
 	// beacons on source registration, so advid can't be forged: the ad server
 	// bakes a signed /v1/t/ara/src; an unsigned request is rejected in strict mode
 	// (tracker.signature_validation) exactly like /v1/t/conv.
-	sigKeys   func(advid string) []string
-	sigStrict func() bool
-	log       *slog.Logger
-	maxBody   int64
+	sigKeys       func(advid string) []string
+	sigStrict     func() bool
+	expValidation func() bool
+	log           *slog.Logger
+	maxBody       int64
 }
 
 // consented reports whether the request carries personalisation consent — the
@@ -80,6 +81,13 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 	// write of ara_sources for an arbitrary advertiser account.
 	if !adserving.ValidateSignatureAny(r.URL.Path, q, d.sigKeys(advid)) && d.sigStrict() {
 		http.Error(w, `{"error":"invalid signature"}`, http.StatusForbidden)
+		return
+	}
+	// Replay/expiry: reject a stale signed URL (exp=<unix-ts> in the past), same
+	// as every other tracker beacon — a captured source beacon can't be replayed
+	// past its window. URLs without exp pass (isExpired returns false).
+	if d.expValidation() && isExpired(q, time.Now()) {
+		http.Error(w, `{"error":"url expired"}`, http.StatusGone)
 		return
 	}
 	if !araConsented(r) { // no personalisation consent → register nothing
