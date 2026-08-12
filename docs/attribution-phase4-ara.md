@@ -29,7 +29,7 @@ bills and is stored separately from the exact conversions stream:
   EVENT reports resolve only by the unguessable source_event_id (no destination
   guessing). AGGREGATABLE reports carry no source id and are **never attributed to
   a tenant** — they land in a platform-global quarantine
-  (`ara_aggregatable_quarantine`, migration 096), staff-inspectable, never in an
+  (`ara_aggregatable_quarantine`, migration 096), SQL-inspectable only, never in an
   advertiser overlay. (This closed a cross-tenant write: the destination is public,
   so the earlier destination-fallback let a forged aggregatable POST land in a
   victim's rows — see **Security review** below + `docs/ara-review-findings.md`.)
@@ -204,8 +204,16 @@ Explicit **mock boundary** (label in code + this doc, don't pretend it's real):
   `pkg/events/subjects.go` + PLAN.md "NATS Subjects".
 - Multi-tenancy: report ingest scoped to the advertiser account like every other
   store method.
-- Privacy: source/trigger registration stays consent-gated
-  (`privacy.Evaluate().Personalise`) — organic/unconsented → no registration.
+- Privacy: source/trigger registration is gated by `privacy.Evaluate().Personalise`.
+  NUANCE (be precise): the beacons carry no TCF/GPP/US-Privacy *string*, so the
+  only opt-out actually honored at the beacon is the browser-injected `Sec-GPC`
+  header (or `?gpc=1`) — with no signals present, `Evaluate` defaults to
+  personalise=true. That is acceptable because the SOURCE is the binding control:
+  the ad server bakes the source beacon ONLY on a consented serve (empty
+  BehaviourUserID → no beacon), so an unconsented impression registers no source,
+  and a trigger with no matching source produces no report. GPC also covers
+  withdrawal before conversion. The residual gap (consented at impression, then
+  CMP-withdrawn without GPC before converting) is narrow and reporting-only.
 - Diagram: a new attribution stream + report-ingest path → update the matching
   `docs/diagrams/*.d2` per `docs/diagrams/README.md`.
 - New surface ops: if a report-ingest consumer is added, it follows the

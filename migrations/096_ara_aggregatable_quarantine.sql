@@ -13,9 +13,17 @@
 --
 -- So aggregatable reports no longer resolve to a tenant. They land here: a
 -- platform-global holding table — NOT tenant-scoped (no account_id, no RLS, like
--- incidents / batch_runs), NEVER shown in any advertiser overlay. Staff can
--- inspect it; the tracker purges it by age. Event reports (bound by the
--- unguessable source_event_id) are unaffected and still land in ara_reports.
+-- incidents / batch_runs), NEVER shown in any advertiser overlay. The tracker
+-- purges it by age; it is inspectable via SQL only (no portal/API view yet).
+-- Event reports (bound by the unguessable source_event_id) are unaffected and
+-- still land in ara_reports.
+--
+-- DoS note: this endpoint is unauthenticated, and the ingest path now
+-- unconditionally INSERTs every well-formed aggregatable report (it used to DROP
+-- unresolvable ones). A report with no report_id doesn't hit the dedup index, so
+-- a flood inserts distinct rows — bounded only by the tracker's per-IP rate limit
+-- (128 KiB body cap) and the age purge. Acceptable for a reporting-only overlay
+-- that never bills; tighten with a per-destination cap if it ever matters.
 CREATE TABLE ara_aggregatable_quarantine (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     claimed_destination TEXT NOT NULL,   -- browser/attacker-asserted; UNVERIFIED, never trusted as a tenant key

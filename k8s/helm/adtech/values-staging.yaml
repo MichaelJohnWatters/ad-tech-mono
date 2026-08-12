@@ -69,20 +69,23 @@ infra:
 
 services:
   dsp-internal:
-    replicas: 2
+    # Autoscaled from base (global.autoscaling). spec.replicas is omitted for an
+    # hpa'd service, so encode the staging floor as hpa.minReplicas — a plain
+    # `replicas:` here would be dead.
+    hpa: { minReplicas: 2, maxReplicas: 6 }
   dsp-competitor1:
     replicas: 2
   dsp-competitor2:
     replicas: 2
   ssp:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 6 }
     # Strict enforcement inherited from base; override the seller identity to the
     # staging platform domain (match global.domain).
     extraEnv:
       - name: SSP_SELLER_DOMAIN
         value: "REPLACE.sslip.io"   # ← match global.domain
   exchange:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 6 }
     # Durable event spool (survives pod eviction/reschedule on multi-node) — the
     # emptyDir in base values would lose un-drained money events if the pod moved
     # while NATS was down. Per-replica PVC via StatefulSet. storageClass unset →
@@ -96,7 +99,7 @@ services:
       # (seeded into the Postgres secrets table, or add as extraEnv in the SOPS
       # overlay). The exchange prefers the store key over the dev env fallback.
   adserver:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 6 }
     # Durable event spool (see exchange note above).
     persistence:
       size: 512Mi
@@ -106,20 +109,20 @@ services:
       - name: ADSERVER_TRACKER_URL
         value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
   publisher-adserver:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 5 }
     extraEnv:
       - name: PUBLISHER_ADSERVER_TRACKER_URL
         value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
       - name: PUBLISHER_ADSERVER_PUBLIC_URL
         value: "https://pubad.REPLACE.sslip.io"     # ← match global.domain
   tracker:
-    replicas: 3
-    # Durable event spool (see exchange note above). Per-replica PVC — each of the
-    # 3 tracker pods keeps its own spool.
+    hpa: { minReplicas: 3, maxReplicas: 8 }
+    # Durable event spool (see exchange note above). Per-replica PVC — each tracker
+    # pod keeps its own spool (min 3 — never below the readiness-flap floor).
     persistence:
       size: 512Mi
   gateway:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 6 }
     # Auth mandatory in staging too (mirror prod). extraEnv APPENDS.
     # public_tracker_url is baked into advertiser conversion pixels (HTTPS).
     extraEnv:
