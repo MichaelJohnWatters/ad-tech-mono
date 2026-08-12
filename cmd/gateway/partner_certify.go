@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner"
+	partnerpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner/postgres"
 )
 
 func partnerCertifyHandler(store partner.Store, log *slog.Logger) http.HandlerFunc {
@@ -79,11 +81,13 @@ func partnerCertifyHandler(store partner.Store, log *slog.Logger) http.HandlerFu
 			promoted := false
 			newStatus := p.Status
 			if result.Passed && p.Status == partner.StatusSandbox && partner.CanTransition(p.Status, partner.StatusCertified) {
-				if updated, serr := store.SetStatus(r.Context(), p.ID, partner.StatusCertified); serr != nil {
-					log.Error("cert auto-advance failed", "partner", p.ID, "error", serr)
-				} else {
+				// Atomic compare-and-swap from sandbox: if staff moved the partner
+				// meanwhile, this no-ops (ErrTransitionConflict) instead of clobbering.
+				if updated, serr := store.SetStatus(r.Context(), p.ID, partner.StatusSandbox, partner.StatusCertified); serr == nil {
 					promoted = true
 					newStatus = updated.Status
+				} else if !errors.Is(serr, partnerpg.ErrTransitionConflict) {
+					log.Error("cert auto-advance failed", "partner", p.ID, "error", serr)
 				}
 			}
 			log.Info("partner certification run", "partner", p.ID, "passed", result.Passed, "score", result.Score, "promoted", promoted)

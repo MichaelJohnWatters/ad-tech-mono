@@ -133,9 +133,11 @@ type Store interface {
 	List(ctx context.Context, status string) ([]Partner, error)
 	// Get returns one partner by id.
 	Get(ctx context.Context, id string) (Partner, error)
-	// SetStatus transitions a partner's lifecycle status (validated by the caller
-	// against CanTransition). Sets onboarded_at the first time it goes active.
-	SetStatus(ctx context.Context, id, status string) (Partner, error)
+	// SetStatus atomically transitions a partner from `from` to `to` (a
+	// compare-and-swap on the current status — the caller validates the transition
+	// with CanTransition; the store guards against a concurrent change). Sets
+	// onboarded_at the first time it goes active.
+	SetStatus(ctx context.Context, id, from, to string) (Partner, error)
 	// Update edits a partner's mutable metadata (endpoints/contacts/limits).
 	Update(ctx context.Context, id string, in Input) (Partner, error)
 	// ProvisionLogin creates the partner's self-serve login account (type

@@ -247,7 +247,11 @@ func partnerStatusHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger
 			http.Error(w, `{"error":"invalid transition from `+cur.Status+` to `+req.Status+`"}`, http.StatusConflict)
 			return
 		}
-		p, err := store.SetStatus(r.Context(), req.ID, req.Status)
+		p, err := store.SetStatus(r.Context(), req.ID, cur.Status, req.Status)
+		if errors.Is(err, partnerpg.ErrTransitionConflict) {
+			http.Error(w, `{"error":"the partner's status changed — reload and retry"}`, http.StatusConflict)
+			return
+		}
 		if err != nil {
 			log.Error("partner set status failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
