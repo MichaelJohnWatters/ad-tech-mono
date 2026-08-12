@@ -39,6 +39,8 @@ import (
 	marketplacepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/notifications"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner"
+	partnerpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
@@ -864,6 +866,15 @@ func main() {
 	mux.HandleFunc(routes.StatusPage, statusAgg.pageHandler)
 	mux.HandleFunc(routes.APIStatus, statusAgg.jsonHandler)
 	mux.Handle(routes.APIIncidents, authMiddleware(http.HandlerFunc(incidentsHandler(incidentStore, gwDB, log))))
+
+	// External-partner onboarding registry (PLAN Phase 11, item 112) — staff-only
+	// (partners:read/manage). Platform-global, like incidents.
+	var partnerStore partner.Store
+	if gwDB != nil {
+		partnerStore = partnerpg.New(gwDB)
+	}
+	mux.Handle(routes.APIPartners, authMiddleware(http.HandlerFunc(partnersHandler(partnerStore, gwDB, log))))
+	mux.Handle(routes.APIPartnerStatus, authMiddleware(http.HandlerFunc(partnerStatusHandler(partnerStore, gwDB, log))))
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the

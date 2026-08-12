@@ -1697,6 +1697,78 @@ paths:
       responses:
         "200": { description: "{ id } on create, or the updated incident object" }
         "404": { description: "incident id not found (update)" }
+  /v1/api/partners:
+    get:
+      tags: [Platform]
+      summary: List / get external partners (staff)
+      description: >-
+        Staff-only (partners:read). Lists the external-partner onboarding registry
+        newest-first; `?status=` filters by lifecycle status; `?id=` returns one
+        partner. External partners are demand DSPs or supply SSPs integrating over
+        OpenRTB (PLAN Phase 11, item 112).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [pending, sandbox, certified, active, paused, terminated] } }
+        - { name: id, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: "A partner, or [{ id, name, kind, status, endpoint_bid, seat?, channels, formats, timeout_ms, openrtb_version, created_at, ... }]" }
+        "404": { description: "partner id not found" }
+    post:
+      tags: [Platform]
+      summary: Register or edit an external partner (staff)
+      description: >-
+        Staff-only (partners:manage). Registers a partner (status starts pending)
+        when no id is supplied, or edits the given one's metadata (not status —
+        use /v1/api/partners/status).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                id: { type: string, description: "omit to register; supply to edit" }
+                name: { type: string }
+                kind: { type: string, enum: [dsp, ssp], default: dsp }
+                endpoint_bid: { type: string }
+                endpoint_nurl: { type: string }
+                seat: { type: string }
+                auth_method: { type: string, enum: [api_key, mtls, none] }
+                channels: { type: array, items: { type: string } }
+                formats: { type: array, items: { type: string } }
+                timeout_ms: { type: integer }
+                contact_tech: { type: string }
+      responses:
+        "201": { description: "the registered partner" }
+        "200": { description: "the updated partner" }
+        "400": { description: "name required / invalid kind" }
+        "404": { description: "partner id not found (edit)" }
+  /v1/api/partners/status:
+    post:
+      tags: [Platform]
+      summary: Transition an external partner's onboarding status (staff)
+      description: >-
+        Staff-only (partners:manage). Advances the lifecycle
+        pending → sandbox → certified → active, with paused/terminated off-ramps.
+        Invalid transitions are rejected 409. Going active stamps onboarded_at.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, status]
+              properties:
+                id: { type: string }
+                status: { type: string, enum: [pending, sandbox, certified, active, paused, terminated] }
+      responses:
+        "200": { description: "the updated partner" }
+        "400": { description: "id + valid status required" }
+        "404": { description: "partner not found" }
+        "409": { description: "invalid transition from the current status" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]
