@@ -324,6 +324,22 @@ paths:
   # ============================================================
   # Public API - Reports (proxied to Reporting)
   # ============================================================
+  /v1/api/ara/reports:
+    get:
+      tags: [Reports]
+      summary: Privacy Sandbox ARA reports (reporting-only overlay)
+      description: >-
+        Requires reports:read. Returns the caller account's Privacy Sandbox
+        Attribution Reporting API (ARA) reports plus a per-type summary. This
+        stream is a REPORTING-ONLY overlay — deliberately noised, aggregated and
+        delayed by the browser, and NEVER billed. It is stored separately from
+        the exact conversions stream. See docs/attribution-phase4-ara.md.
+      security:
+        - bearerAuth: []
+      responses:
+        "200": { description: The account's ARA reports + summary (note field explains the overlay) }
+        "401": { description: Not authenticated }
+        "403": { description: Missing reports:read }
   /v1/api/reports/:
     get:
       tags: [Reports]

@@ -25,6 +25,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
@@ -124,6 +125,33 @@ func TestARARegistrationAndReportIngest(t *testing.T) {
 	}
 	if got := countReports(); got != 1 {
 		t.Errorf("ara_reports rows after retry = %d, want 1 (dedup)", got)
+	}
+
+	// 4b) The advertiser reads its overlay back through the account-scoped API.
+	email := "ara-adv-" + sourceEventID + "@api.test"
+	h.CreateLoginUser(t, w.AdvAcc.ID, email, "pw-e2e-1", "owner")
+	adv := h.LoginAs(t, email, "pw-e2e-1")
+	areq, _ := http.NewRequest(http.MethodGet, h.URLs.Gateway+routes.APIARAReports, nil)
+	aresp, err := adv.Do(areq)
+	if err != nil {
+		t.Fatalf("read ara reports: %v", err)
+	}
+	if aresp.StatusCode != http.StatusOK {
+		aresp.Body.Close()
+		t.Fatalf("GET %s = %d, want 200", routes.APIARAReports, aresp.StatusCode)
+	}
+	var out struct {
+		Summary struct {
+			Event int `json:"event"`
+		} `json:"summary"`
+	}
+	derr := json.NewDecoder(aresp.Body).Decode(&out)
+	aresp.Body.Close()
+	if derr != nil {
+		t.Fatalf("decode ara reports: %v", derr)
+	}
+	if out.Summary.Event < 1 {
+		t.Errorf("advertiser ARA summary.event = %d, want >= 1 (the ingested report)", out.Summary.Event)
 	}
 
 	// 5) A report for an UNREGISTERED source/destination is accepted (200) but
