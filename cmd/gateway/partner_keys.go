@@ -38,14 +38,14 @@ type sandboxKeyItem struct {
 }
 
 // partnerGate returns the caller's partner account id, or writes a 401/403 and
-// returns ok=false. Sandbox keys are partner-account-only + apikeys:manage.
-func partnerGate(w http.ResponseWriter, r *http.Request) (accountID string, ok bool) {
+// returns ok=false. Partner-account-only + the given permission.
+func partnerGate(w http.ResponseWriter, r *http.Request, perm string) (accountID string, ok bool) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return "", false
 	}
-	if claims.AccountType != auth.AccountPartner || !can(claims, "apikeys:manage") {
+	if claims.AccountType != auth.AccountPartner || !can(claims, perm) {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return "", false
 	}
@@ -60,7 +60,7 @@ func partnerSandboxKeysHandler(db *sql.DB, bus events.EventBus, log *slog.Logger
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		accountID, ok := partnerGate(w, r)
+		accountID, ok := partnerGate(w, r, "apikeys:manage")
 		if !ok {
 			return
 		}
@@ -176,7 +176,7 @@ func rotateSandboxKey(w http.ResponseWriter, r *http.Request, db *sql.DB, bus ev
 func partnerSandboxKeyRevokeHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		accountID, ok := partnerGate(w, r)
+		accountID, ok := partnerGate(w, r, "apikeys:manage")
 		if !ok {
 			return
 		}
