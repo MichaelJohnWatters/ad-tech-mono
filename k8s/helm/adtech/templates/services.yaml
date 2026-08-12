@@ -321,5 +321,35 @@ spec:
     scaleUp:
       stabilizationWindowSeconds: {{ $svc.hpa.scaleUpStabilizationSeconds | default 0 }}
 {{- end }}
+{{- /* PodDisruptionBudget — keeps a multi-replica service from being taken to
+       zero (or below a safe count) by a VOLUNTARY disruption (node drain, rolling
+       upgrade, HPA-driven churn). Emitted for any service that is autoscaled OR
+       runs >1 replica; NEVER for a singleton (a PDB on a 1-replica workload would
+       deadlock its own eviction/drain). Default maxUnavailable:1 (drain one pod at
+       a time); override per-service with `pdb: {maxUnavailable: N}` or
+       `pdb: {minAvailable: N|%}`, or opt out with `pdb: false`. Gated by
+       global.pdb (default on). Involuntary failures (node crash) are NOT bounded
+       by a PDB — that's what replicas + HPA are for. */}}
+{{- $pdbCfg := ternary $svc.pdb (dict) (kindIs "map" $svc.pdb) }}
+{{- $pdbOn := and (ne (toString (($.Values.global | default dict).pdb)) "false") (ne (toString $svc.pdb) "false") (or $svc.hpa (gt (int ($svc.replicas | default 1)) 1)) }}
+{{- if $pdbOn }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  {{- if $pdbCfg.minAvailable }}
+  minAvailable: {{ $pdbCfg.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $pdbCfg.maxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+{{- end }}
 {{- end }}
 {{- end }}

@@ -180,13 +180,16 @@ FROM ara_reports ORDER BY received_at DESC LIMIT $1`, limit)
 	return out, rows.Err()
 }
 
-// Summary is a per-type count for the reporting overlay surface.
+// Summary is the reporting overlay surface. Only event-level reports are
+// tenant-attributed — aggregatable reports go to the platform quarantine and are
+// never per-account (see ResolveAccount / migration 096) — so this is just the
+// account's event-report count. (Was a per-type struct with an Aggregate field
+// that could only ever be 0 after the quarantine change.)
 type Summary struct {
-	Event     int `json:"event"`
-	Aggregate int `json:"aggregate"`
+	Event int `json:"event"`
 }
 
-// SummaryForAccount returns the account's ARA report counts by type.
+// SummaryForAccount returns the account's ARA event-report count.
 func (s *Store) SummaryForAccount(ctx context.Context, accountID string) (Summary, error) {
 	var sum Summary
 	if s.db == nil {
@@ -200,26 +203,9 @@ func (s *Store) SummaryForAccount(ctx context.Context, accountID string) (Summar
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
 		return sum, err
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT report_type, count(*) FROM ara_reports GROUP BY report_type`)
-	if err != nil {
-		return sum, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rt string
-		var n int
-		if err := rows.Scan(&rt, &n); err != nil {
-			return sum, err
-		}
-		switch ara.ReportType(rt) {
-		case ara.ReportEvent:
-			sum.Event = n
-		case ara.ReportAggregate:
-			sum.Aggregate = n
-		}
-	}
-	return sum, rows.Err()
+	err = tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM ara_reports WHERE report_type = 'event'`).Scan(&sum.Event)
+	return sum, err
 }
 
 // purgeBatch bounds each housekeeping DELETE so a backlog (purge loop down for a
