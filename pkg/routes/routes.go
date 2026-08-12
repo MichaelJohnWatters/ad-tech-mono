@@ -549,6 +549,12 @@ const (
 	// server bakes a signed, attributionsrc beacon here); the browser reads the
 	// returned Attribution-Reporting-Register-Source header. See pkg/ara.
 	TrackerARASource = "/v1/t/ara/src"
+	// TrackerARATrigger registers a Privacy Sandbox attribution TRIGGER. The
+	// advertiser embeds an attributionsrc beacon here on their conversion page; the
+	// browser reads the returned Attribution-Reporting-Register-Trigger header and
+	// matches it to a previously registered source. Reporting-only, unsigned, never
+	// bills (billing stays on the signed /v1/t/conv). See pkg/ara.
+	TrackerARATrigger = "/v1/t/ara/trigger"
 )
 
 // ============================================================

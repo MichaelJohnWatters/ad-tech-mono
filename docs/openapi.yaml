@@ -2584,10 +2584,10 @@ paths:
     get:
       tags: [Conversions]
       summary: List conversion-event configs (campaigns:read)
-      description: Tenant-scoped. Each config includes the ready-to-embed tracker pixel `<img>` and JS snippet pointing at /v1/t/conv.
+      description: Tenant-scoped. Each config includes the ready-to-embed tracker pixel `<img>` + JS snippet pointing at /v1/t/conv, and an optional Privacy Sandbox ARA trigger beacon (`ara_beacon`) pointing at /v1/t/ara/trigger (reporting-only, never bills).
       security: [{ bearerAuth: [] }]
       responses:
-        "200": { description: "[{ id, name, event_type, default_value, currency, status, created_at, pixel, snippet }]" }
+        "200": { description: "[{ id, name, event_type, default_value, currency, status, created_at, pixel, snippet, ara_beacon }]" }
     post:
       tags: [Conversions]
       summary: Create a conversion-event config (campaigns:create)
@@ -2605,7 +2605,7 @@ paths:
                 default_value: { type: number, minimum: 0 }
                 currency: { type: string, default: USD }
       responses:
-        "201": { description: "The created config incl. pixel + snippet" }
+        "201": { description: "The created config incl. pixel + snippet + ara_beacon" }
         "400": { description: Missing name or invalid event_type }
     delete:
       tags: [Conversions]

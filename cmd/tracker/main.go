@@ -233,6 +233,7 @@ func main() {
 		}
 	}
 	mux.HandleFunc(routes.TrackerARASource, araH.registerSource)
+	mux.HandleFunc(routes.TrackerARATrigger, araH.registerTrigger)
 	mux.HandleFunc(ara.PathEventReport, araH.ingestEvent)
 	mux.HandleFunc(ara.PathAggregateReport, araH.ingestAggregate)
 

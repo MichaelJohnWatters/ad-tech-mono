@@ -45,11 +45,15 @@ var (
 		Namespace: "adtech", Subsystem: "ara", Name: "reports_quarantined_total",
 		Help: "Aggregatable ARA reports accepted into the platform quarantine (never tenant-attributed).",
 	})
+	araTriggersServed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "ara", Name: "triggers_served_total",
+		Help: "Attribution-Reporting-Register-Trigger headers served via the browser-side /v1/t/ara/trigger beacon (consented).",
+	})
 )
 
 // araCollectors returns the ARA metrics for registration on the tracker registry.
 func araCollectors() []prometheus.Collector {
-	return []prometheus.Collector{araSourcesRegistered, araReportsIngested, araReportsDropped, araReportsQuarantined}
+	return []prometheus.Collector{araSourcesRegistered, araReportsIngested, araReportsDropped, araReportsQuarantined, araTriggersServed}
 }
 
 // Privacy Sandbox ARA endpoints on the tracker (the single ARA reporting origin
@@ -160,14 +164,10 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 
 // setTriggerHeader adds the Attribution-Reporting-Register-Trigger response
 // header for a conversion when ARA is on and the request is consented; a no-op
-// otherwise. Called from the /v1/t/conv handler (before the pixel is written).
-//
-// INERT BY DESIGN (F6): this platform's conversions are signed server-to-server
-// postbacks, and only a real Privacy-Sandbox browser acts on this header — so on
-// the current S2S path nothing reads it. It is served (correctly built) so that a
-// future browser-side, attribution-eligible conversion beacon registers the ARA
-// trigger with no tracker change. Until that beacon exists it has no effect. See
-// docs/attribution-phase4-ara.md → "TRIGGER NUANCE".
+// otherwise. Shared by the browser-side /v1/t/ara/trigger beacon (registerTrigger,
+// the live path a real browser acts on) and the S2S /v1/t/conv handler (where it
+// is inert — nothing reads it on a server-to-server postback, but it costs nothing
+// and keeps the header available if a signed browser conv ever fires it).
 func (d araDeps) setTriggerHeader(w http.ResponseWriter, r *http.Request, convType string, revenue float64) {
 	if !d.enabled() || !araConsented(r) {
 		return
@@ -184,7 +184,26 @@ func (d araDeps) setTriggerHeader(w http.ResponseWriter, r *http.Request, convTy
 	}
 	if hdr, err := t.MarshalHeader(); err == nil {
 		w.Header().Set(ara.HeaderRegisterTrigger, hdr)
+		araTriggersServed.Inc()
 	}
+}
+
+// registerTrigger: GET /v1/t/ara/trigger?type=&rev=&cur= — the browser-side ARA
+// trigger beacon. The advertiser embeds an attributionsrc pointing here on their
+// conversion page; a supporting browser fetches it attribution-eligible, reads the
+// Attribution-Reporting-Register-Trigger header, and matches it to a source it
+// registered earlier (same destination + reporting origin).
+//
+// Reporting-only and deliberately UNSIGNED: it writes nothing server-side and
+// never bills (CPA billing stays on the signed, S2S /v1/t/conv), so a third-party
+// page firing it just gets a header the browser only acts on when it already holds
+// a matching source. Consent + tracker.ara_enabled gate the header (in
+// setTriggerHeader); with either off this is a bare 204.
+func (d araDeps) registerTrigger(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	revenue, _ := strconv.ParseFloat(q.Get("rev"), 64)
+	d.setTriggerHeader(w, r, q.Get("type"), revenue)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ingestEvent / ingestAggregate are the well-known report callbacks the browser
