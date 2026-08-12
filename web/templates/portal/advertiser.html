@@ -384,6 +384,11 @@
       {{ template "table-end" . }}
       <p class="mt-3 text-xs text-gray-400">Billing always settles <strong>last touch</strong>; these models re-apportion the same conversion for reporting only. Credit sums to 100%.</p>
       {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Privacy Sandbox (ARA) overlay" "subtitle" "Browser-measured, privacy-preserving attribution — noised, aggregated, delayed by design, and NEVER billed. Kept separate from the exact conversions above.") }}
+      <div id="araOverlay" class="text-sm text-gray-500">Loading…</div>
+      <p class="mt-3 text-xs text-gray-400">Privacy Sandbox ARA moves the cross-site join <em>into the browser</em>. Reports are noised + delayed by design, so counts are approximate and shown for transparency only — they do not bill. Needs a Privacy-Sandbox browser + <code>tracker.ara_enabled</code>. See docs/attribution-phase4-ara.md.</p>
+      {{ template "card-end" . }}
     </section>
 
     <!-- ============ Reports ============ -->
@@ -1180,6 +1185,7 @@ const showSection = initSectionRouter({
   sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'billing', 'support', 'team', 'webhooks'],
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
     creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), marketplace: () => loadMarketplace(), conversions: () => loadConversions(),
+    attribution: () => loadARA(),
     reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
     billing: () => loadBilling(), support: () => loadSupport(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
@@ -1187,6 +1193,38 @@ const showSection = initSectionRouter({
   // the global header, so it showed on every section).
   onShow: (name) => $('newCampaignBtn')?.classList.toggle('hidden', name !== 'campaigns'),
 });
+
+// ---- Privacy Sandbox ARA overlay (reporting-only; never bills) ----
+async function loadARA() {
+  const el = $('araOverlay');
+  if (!el) return;
+  let data;
+  try {
+    data = await fetchJSON('/v1/api/ara/reports');
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">Load failed — ${esc(err.message)}</span>`;
+    return;
+  }
+  const s = data.summary || {event: 0, aggregate: 0};
+  const reports = (data.reports || []).slice(0, 50);
+  const rows = reports.length ? reports.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2">${esc(r.ReportType || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(r.AttributionDestination || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(r.SourceEventID || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${esc(r.TriggerData || '')}</td>
+      <td class="px-3 py-2 text-xs text-gray-500">${esc((r.ReceivedAt || '').replace('T', ' ').slice(0, 19))}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No ARA reports yet — needs a Privacy-Sandbox browser with ARA enabled.</td></tr>`;
+  el.innerHTML = `<div class="mb-3 flex gap-6 text-sm">
+      <span>Event-level: <strong>${s.event | 0}</strong></span>
+      <span>Aggregatable: <strong>${s.aggregate | 0}</strong></span>
+    </div>
+    <div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
+      <table class="min-w-full text-sm"><thead class="bg-gray-50 dark:bg-surface-3 text-xs uppercase text-gray-500">
+        <tr><th class="px-3 py-2 text-left">Type</th><th class="px-3 py-2 text-left">Destination</th><th class="px-3 py-2 text-left">Source id</th><th class="px-3 py-2 text-left">Trigger</th><th class="px-3 py-2 text-left">Received</th></tr>
+      </thead><tbody>${rows}</tbody></table>
+    </div>`;
+}
 
 // ---- Reporting queries ----
 function reportQuery(body) {
