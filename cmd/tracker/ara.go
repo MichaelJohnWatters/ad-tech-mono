@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
@@ -23,6 +26,27 @@ var araUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 
 // araMaxDestLen bounds the destination string.
 const araMaxDestLen = 512
+
+// ARA observability. Registered on the tracker's metrics registry in main.
+var (
+	araSourcesRegistered = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "ara", Name: "sources_registered_total",
+		Help: "Privacy Sandbox ARA attribution sources registered via /v1/t/ara/src.",
+	})
+	araReportsIngested = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "ara", Name: "reports_ingested_total",
+		Help: "ARA reports resolved to an account and persisted, by type.",
+	}, []string{"type"})
+	araReportsDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "ara", Name: "reports_dropped_total",
+		Help: "ARA reports accepted but dropped (malformed / no registered source), by type and reason.",
+	}, []string{"type", "reason"})
+)
+
+// araCollectors returns the ARA metrics for registration on the tracker registry.
+func araCollectors() []prometheus.Collector {
+	return []prometheus.Collector{araSourcesRegistered, araReportsIngested, araReportsDropped}
+}
 
 // Privacy Sandbox ARA endpoints on the tracker (the single ARA reporting origin
 // for this platform). See docs/attribution-phase4-ara.md and pkg/ara.
@@ -116,6 +140,7 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
+	araSourcesRegistered.Inc()
 	w.Header().Set(ara.HeaderRegisterSource, hdr)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -175,6 +200,7 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		rep, perr := ara.ParseEventReport(body)
 		if perr != nil {
 			d.log.Warn("ara: malformed event report (accepted, dropped)", "error", perr)
+			araReportsDropped.WithLabelValues(string(typ), "malformed").Inc()
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -183,6 +209,7 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		rep, perr := ara.ParseAggregatableReport(body)
 		if perr != nil {
 			d.log.Warn("ara: malformed aggregatable report (accepted, dropped)", "error", perr)
+			araReportsDropped.WithLabelValues(string(typ), "malformed").Inc()
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -194,6 +221,7 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 	acct, err := d.store.ResolveAccount(r.Context(), sourceEventID, dest, typ == ara.ReportAggregate)
 	if errors.Is(err, arapg.ErrNoAccount) {
 		d.log.Warn("ara: report for an unregistered source/destination (dropped)", "dest", dest, "type", typ)
+		araReportsDropped.WithLabelValues(string(typ), "unresolved").Inc()
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -212,8 +240,28 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
+	araReportsIngested.WithLabelValues(string(typ)).Inc()
 	d.log.Info("ara: report ingested", "type", typ, "account", acct, "new", inserted)
 	w.WriteHeader(http.StatusOK)
+}
+
+// araPurgeLoop periodically drops expired ara_sources rows (housekeeping so the
+// registration log can't grow unbounded). Stops when ctx is cancelled.
+func araPurgeLoop(ctx context.Context, store *arapg.Store, log *slog.Logger) {
+	t := time.NewTicker(6 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if n, err := store.DeleteExpiredSources(context.Background()); err != nil {
+				log.Warn("ara: purge expired sources failed", "error", err)
+			} else if n > 0 {
+				log.Info("ara: purged expired sources", "count", n)
+			}
+		}
+	}
 }
 
 // mintSourceID returns a random 64-bit source id (the entropy the event-level
