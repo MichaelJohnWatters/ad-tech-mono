@@ -382,6 +382,36 @@ ORDER BY created_at DESC LIMIT $2`, partnerID, limit)
 	return out, rows.Err()
 }
 
+// ActiveDSPEndpoints returns fan-out endpoint strings for active DSP partners, in
+// the exchange's dsp_endpoints format: "endpoint_bid[;seat=X][;notify=Y]".
+func (s *Store) ActiveDSPEndpoints(ctx context.Context) ([]string, error) {
+	if s.db == nil {
+		return nil, sql.ErrConnDone
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT endpoint_bid, seat, endpoint_nurl FROM partners
+		  WHERE kind = 'dsp' AND status = 'active' AND endpoint_bid <> ''`)
+	if err != nil {
+		return nil, fmt.Errorf("active dsp endpoints: %w", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var ep, seat, nurl string
+		if err := rows.Scan(&ep, &seat, &nurl); err != nil {
+			return nil, err
+		}
+		if seat != "" {
+			ep += ";seat=" + seat
+		}
+		if nurl != "" {
+			ep += ";notify=" + nurl
+		}
+		out = append(out, ep)
+	}
+	return out, rows.Err()
+}
+
 func nullStr(s string) any {
 	if s == "" {
 		return nil

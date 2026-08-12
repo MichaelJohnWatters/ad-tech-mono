@@ -72,9 +72,17 @@ func main() {
 	// lands in this map within NATS round-trip time, and every subsequent
 	// auction sees the new value. Empty entries are filtered so a trailing
 	// comma doesn't introduce a phantom endpoint.
+	// Assigned below once the DB is available; the closure captures it by
+	// reference (auctions only run after setup completes).
+	var partnerEP *partnerEndpoints
 	dspEndpointsFn := func() []string {
 		raw := keys.Exchange.DSPEndpoints.Get(cfg)
 		parts := strings.Split(raw, ",")
+		// Merge 'active' DSP partners from the registry warm cache when enabled —
+		// same "endpoint[;seat=][;notify=]" format, so the loop below handles them.
+		if partnerEP != nil && keys.Exchange.PartnerRegistryEnabled.Get(cfg) {
+			parts = append(parts, partnerEP.Snapshot()...)
+		}
 		out := make([]string, 0, len(parts))
 		notify := make(map[string]string, len(parts))
 		seats := make(map[string]string, len(parts))
@@ -238,6 +246,13 @@ func main() {
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
 
+	// Warm cache of active DSP partners (#112) — merged into the auction fan-out
+	// when exchange.partner_registry_enabled is on. Background-refreshed so the
+	// hot path reads an in-process snapshot, never a query.
+	partnerCtx, partnerCancel := context.WithCancel(context.Background())
+	lc.OnShutdown("partner-endpoints", func(context.Context) error { partnerCancel(); return nil })
+	partnerEP = startPartnerEndpoints(partnerCtx, cfg, log)
+
 	// Debug surface — all behind debug.endpoints_enabled (default true in
 	// dev, expected false in prod overlays). Reads + mutations both gated
 	// so the prod surface is purely the auction/win/loss/Prebid paths.
@@ -245,6 +260,9 @@ func main() {
 		refreshables := []warm.Refreshable{dealCache}
 		if adsTxtWarm != nil {
 			refreshables = append(refreshables, adsTxtWarm)
+		}
+		if partnerEP != nil {
+			refreshables = append(refreshables, partnerEP)
 		}
 		mux.HandleFunc(routes.DebugCacheRefresh, warm.RefreshHandler(refreshables...))
 
