@@ -40,8 +40,14 @@ bills and is stored separately from the exact conversions stream:
   consent-gated) + adtech.js registers it; advertiser portal → Attribution tab
   shows the ARA overlay (counts + recent reports, labelled noised/never-billed);
   Prometheus `adtech_ara_*` counters; a 6h expired-source purge; architecture
-  diagram updated. Only the SOURCE attributionsrc is client-wired (trigger nuance
-  above). Full source→tracker loop e2e: `TestARAAdServerBakesSourceBeacon`.
+  diagram updated. Full source→tracker loop e2e: `TestARAAdServerBakesSourceBeacon`.
+- **Trigger beacon (2026-08-12, follow-up shipped):** the browser-side ARA trigger
+  is now wired — `GET /v1/t/ara/trigger` returns the register-trigger header
+  (consent- + `tracker.ara_enabled`-gated, unsigned, never bills), and the
+  advertiser's conversion-event setup hands back a ready-to-embed `attributionsrc`
+  beacon (`ara_beacon`, portal "Copy ARA" button) to drop on the confirmation page
+  alongside the billing pixel. `adtech_ara_triggers_served_total` counter. e2e
+  `TestARATriggerBeacon`. (The S2S `/v1/t/conv` still emits the header too, inertly.)
 - **e2e** `TestARARegistrationAndReportIngest` — register-source header well-formed
   + recorded → signed conversion returns register-trigger → event report POST
   resolves the account + persists (idempotent retry, orphan dropped) → advertiser
@@ -67,12 +73,14 @@ The match/noise/delay only happen in a real Privacy-Sandbox browser:
 2. Set `tracker.ara_enabled=true` and `adserver.ara_source_registration=true`. On a
    CONSENTED serve the ad server bakes a signed `ara_source_url`, and adtech.js
    registers it via `attributionsrc` on the impression pixel — the browser fetches
-   it and reads the register-source header. Then fire a conversion at `/v1/t/conv`
-   (which returns the register-trigger header). TRIGGER NUANCE: this platform's
-   conversions are signed server-to-server postbacks, so for the browser to
-   register the ARA trigger the advertiser must fire a browser-side
-   attribution-eligible conversion beacon (a follow-up — the register-trigger
-   header is already served).
+   it and reads the register-source header. Then, on the advertiser's conversion
+   page, embed the ARA trigger beacon (`ara_beacon` from the conversion-event
+   setup, or `<img src=".../v1/t/ara/trigger?type=purchase&rev=42" attributionsrc>`)
+   — the browser fetches it attribution-eligible and reads the register-trigger
+   header. TRIGGER NUANCE: this platform's *billing* conversions are signed
+   server-to-server postbacks (`/v1/t/conv`), which a browser never processes; the
+   dedicated `/v1/t/ara/trigger` beacon is the browser-side path and is unsigned +
+   reporting-only (it never bills), so both can fire on the same confirmation page.
 3. Open `chrome://attribution-internals` — the Sources and Triggers tabs show the
    registered entries; after the browser's delay it POSTs event/aggregatable
    reports to the tracker's well-known endpoints, which persist into `ara_reports`.

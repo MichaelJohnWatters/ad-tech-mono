@@ -182,3 +182,40 @@ func TestConversionsHandler_Permissions(t *testing.T) {
 		t.Errorf("no-claims code = %d, want 401", rec.Code)
 	}
 }
+
+func TestConversionARABeacon(t *testing.T) {
+	c := conversionConfig{EventType: "purchase", DefaultValue: 42, Currency: "USD"}
+	beacon := conversionARABeacon(testTrackerURL, c)
+	// Fires the browser-side ARA trigger endpoint, attribution-eligible, and NOT
+	// the billing /v1/t/conv — it must never carry a trace id or signature.
+	for _, want := range []string{"/v1/t/ara/trigger", "attributionsrc", "type=purchase", "rev=42"} {
+		if !strings.Contains(beacon, want) {
+			t.Errorf("ara beacon missing %q: %s", want, beacon)
+		}
+	}
+	for _, bad := range []string{"/v1/t/conv", "__TRACE_ID__", "sig=", "tid="} {
+		if strings.Contains(beacon, bad) {
+			t.Errorf("ara beacon must not contain %q (reporting-only, unsigned): %s", bad, beacon)
+		}
+	}
+}
+
+func TestConversionsHandler_IncludesARABeacon(t *testing.T) {
+	store := &fakeConversionStore{rows: map[string][]conversionConfig{
+		convAcct: {{ID: "c1", Name: "Purchase", EventType: "purchase", DefaultValue: 10, Currency: "USD", Status: "active"}},
+	}}
+	rec := httptest.NewRecorder()
+	conversionsHandler(store, testTrackerURL, quietLog())(rec,
+		withClaims(httptest.NewRequest(http.MethodGet, "/v1/api/conversions", nil),
+			convClaims(convAcct, "campaigns:read")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET code = %d, want 200", rec.Code)
+	}
+	var list []conversionConfig
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(list) != 1 || !strings.Contains(list[0].ARABeacon, "/v1/t/ara/trigger") {
+		t.Errorf("list response missing ara_beacon: %+v", list)
+	}
+}

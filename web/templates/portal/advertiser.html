@@ -2543,6 +2543,7 @@ async function loadConversions() {
         <td class="px-3 py-2">
           <button onclick="copyPixel('${esc(c.id)}', 'pixel')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy pixel</button>
           <button onclick="copyPixel('${esc(c.id)}', 'snippet')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy JS</button>
+          <button onclick="copyPixel('${esc(c.id)}', 'ara')" title="Optional Privacy Sandbox ARA trigger beacon — reporting-only, never bills" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Copy ARA</button>
         </td>
         <td class="px-3 py-2 text-right"><button onclick="deleteConversion('${esc(c.id)}', '${esc(c.name)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Delete</button></td>
       </tr>`).join('')
@@ -2626,6 +2627,10 @@ async function queryAttribution() {
 function copyPixel(id, which) {
   const c = conversionCache[id];
   if (!c) return;
+  if (which === 'ara') {
+    navigator.clipboard?.writeText(c.ara_beacon).then(() => toast('Copied ARA beacon — optional; add it alongside your pixel on the same confirmation page', 'info'));
+    return;
+  }
   const text = which === 'snippet' ? c.snippet : c.pixel;
   navigator.clipboard?.writeText(text).then(() => toast('Copied — substitute __TRACE_ID__ with your captured trace id', 'info'));
 }

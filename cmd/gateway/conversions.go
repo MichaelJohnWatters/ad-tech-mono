@@ -32,6 +32,12 @@ type conversionConfig struct {
 	// a JS variant, built from the tracker base URL + this config.
 	Pixel   string `json:"pixel"`
 	Snippet string `json:"snippet"`
+	// ARABeacon is a derived, OPTIONAL Privacy Sandbox ARA trigger beacon — an
+	// attributionsrc img the advertiser can additionally drop on the same
+	// confirmation page. A supporting browser registers an ARA trigger and matches
+	// it to a source it saw on the ad; browsers without ARA just ignore it. It is
+	// reporting-only + unsigned and never bills (billing stays on the pixel above).
+	ARABeacon string `json:"ara_beacon"`
 }
 
 // conversionInput is a create request. account_id is never read from the body —
@@ -103,6 +109,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			for i := range list {
 				list[i].Pixel = conversionPixel(trackerURL, list[i])
 				list[i].Snippet = conversionSnippet(trackerURL, list[i])
+				list[i].ARABeacon = conversionARABeacon(trackerURL, list[i])
 			}
 			_ = json.NewEncoder(w).Encode(list)
 
@@ -141,6 +148,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			}
 			cfg.Pixel = conversionPixel(trackerURL, cfg)
 			cfg.Snippet = conversionSnippet(trackerURL, cfg)
+			cfg.ARABeacon = conversionARABeacon(trackerURL, cfg)
 			log.Info("conversion created", "id", cfg.ID, "name", cfg.Name, "event_type", cfg.EventType)
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(cfg)
@@ -201,6 +209,26 @@ func conversionPixel(trackerURL string, c conversionConfig) string {
 func conversionSnippet(trackerURL string, c conversionConfig) string {
 	return fmt.Sprintf(`<script>(function(){var i=new Image(1,1);i.src=%q;})();</script>`,
 		conversionURL(trackerURL, c))
+}
+
+// araTriggerURL builds the browser-side Privacy Sandbox ARA trigger beacon URL for
+// a config. Unlike conversionURL it carries no trace/click id and no signature —
+// it registers an ARA trigger in the browser only, never bills.
+func araTriggerURL(trackerURL string, c conversionConfig) string {
+	q := url.Values{}
+	q.Set("type", c.EventType)
+	q.Set("rev", strconv.FormatFloat(c.DefaultValue, 'f', -1, 64))
+	q.Set("cur", c.Currency)
+	return strings.TrimRight(trackerURL, "/") + routes.TrackerARATrigger + "?" + q.Encode()
+}
+
+// conversionARABeacon is the ready-to-embed ARA trigger beacon. The bare
+// `attributionsrc` boolean makes the img's own request attribution-eligible, so a
+// supporting browser reads the Attribution-Reporting-Register-Trigger header and
+// registers a trigger; other browsers just load a hidden 1x1 and ignore it.
+func conversionARABeacon(trackerURL string, c conversionConfig) string {
+	return fmt.Sprintf(`<img src=%q attributionsrc width="1" height="1" style="display:none" alt=""/>`,
+		araTriggerURL(trackerURL, c))
 }
 
 // pgConversionStore is the Postgres-backed conversionStore. Writes run inside a

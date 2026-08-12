@@ -30,6 +30,54 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/tests/e2e/harness"
 )
 
+// TestARATriggerBeacon exercises the browser-side ARA trigger beacon
+// (/v1/t/ara/trigger): a consented request gets a well-formed Register-Trigger
+// header (unsigned, reporting-only, never bills), a GPC opt-out gets nothing. The
+// browser's source↔trigger MATCH is the mock boundary — not tested here.
+func TestARATriggerBeacon(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	const pod = "tracker-0"
+	t.Cleanup(func() { h.SetConfigForPod(t, "tracker.ara_enabled", "false", pod) })
+	h.SetConfigForPod(t, "tracker.ara_enabled", "true", pod)
+
+	client := harness.NewHTTPClient(10 * time.Second)
+	trigURL := h.URLs.Tracker + routes.TrackerARATrigger + "?type=purchase&rev=42.00&cur=USD"
+
+	// Consented → the Register-Trigger header is served. No signature required.
+	req, _ := http.NewRequest(http.MethodGet, trigURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (e2e-harness)")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("trigger beacon: %v", err)
+	}
+	hdr := resp.Header.Get(ara.HeaderRegisterTrigger)
+	resp.Body.Close()
+	if hdr == "" {
+		t.Fatal("no Attribution-Reporting-Register-Trigger header on the consented trigger beacon")
+	}
+	var trig map[string]any
+	if err := json.Unmarshal([]byte(hdr), &trig); err != nil {
+		t.Fatalf("register-trigger header is not valid JSON: %v", err)
+	}
+	if _, ok := trig["event_trigger_data"]; !ok {
+		t.Errorf("register-trigger header missing event_trigger_data: %s", hdr)
+	}
+
+	// GPC opt-out → no trigger registered (consent-gated like source registration).
+	greq, _ := http.NewRequest(http.MethodGet, trigURL, nil)
+	greq.Header.Set("Sec-GPC", "1")
+	greq.Header.Set("User-Agent", "Mozilla/5.0 (e2e-harness)")
+	gresp, err := client.Do(greq)
+	if err != nil {
+		t.Fatalf("gpc trigger beacon: %v", err)
+	}
+	ghdr := gresp.Header.Get(ara.HeaderRegisterTrigger)
+	gresp.Body.Close()
+	if ghdr != "" {
+		t.Errorf("GPC opt-out still got a register-trigger header: %s", ghdr)
+	}
+}
+
 func TestARARegistrationAndReportIngest(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "ara")
