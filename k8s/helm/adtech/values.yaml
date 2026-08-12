@@ -19,7 +19,11 @@ global:
   # Master switch for HorizontalPodAutoscalers. A service scales only if it BOTH
   # has an `hpa:` block AND this is not false. Needs metrics-server (ships with
   # k3s / Rancher Desktop). Set false in an env without it to fall back to the
-  # fixed `replicas` counts. See templates/services.yaml + PLAN "Autoscaling (HPA)".
+  # fixed `replicas` counts. NOTE: env files (staging/prod) encode their floors as
+  # hpa.minReplicas, not `replicas:`, so disabling autoscaling there falls back to
+  # THIS file's base `replicas` (e.g. tracker → 3, not the prod min of 4). If you
+  # run an env with autoscaling off, set an explicit `replicas:` per service too.
+  # See templates/services.yaml + PLAN "Autoscaling (HPA)".
   autoscaling: true
   # Master switch for PodDisruptionBudgets. A PDB is emitted for every service that
   # is autoscaled OR runs >1 replica (never for singletons — a PDB on a 1-replica
