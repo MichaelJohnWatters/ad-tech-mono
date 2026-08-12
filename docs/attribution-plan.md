@@ -247,12 +247,18 @@ time-decay weights recent higher, last-touch still bills exactly once.
 
 ---
 
-## Phase 4 — Privacy-preserving attribution (Privacy Sandbox ARA) — DEFERRED
+## Phase 4 — Privacy-preserving attribution (Privacy Sandbox ARA) — BUILT (Framing A)
 
-**Parked on purpose (2026-08-02).** Full scoping/deferral doc:
-[`docs/attribution-phase4-ara.md`](attribution-phase4-ara.md).
+**BUILT 2026-08-12 as Framing A** (real headers + report ingest; mock boundary
+documented). Full doc + what-shipped + browser runbook:
+[`docs/attribution-phase4-ara.md`](attribution-phase4-ara.md). It's a
+reporting-only overlay (`pkg/ara`, migration 095, tracker registration +
+well-known report-ingest endpoints, `GET /v1/api/ara/reports`) that never bills
+and is stored separately from the exact conversions stream; e2e
+`TestARARegistrationAndReportIngest` proves the real parts. The browser match /
+noise / delay / aggregation-decrypt remain the documented mock boundary.
 
-Short version: ARA moves the cross-site join *into the browser* (noised,
+Original deferral rationale (retained): ARA moves the cross-site join *into the browser* (noised,
 aggregated, delayed), so it's the one attribution feature that structurally can't
 honor this project's real + e2e-proven + no-mocks contract — the browser does the
 work and you can't drive Privacy Sandbox from the Go harness. It also outputs

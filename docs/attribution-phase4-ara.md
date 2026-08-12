@@ -1,12 +1,54 @@
-# Attribution Phase 4 — Privacy Sandbox (ARA) — DEFERRED, scoping doc
+# Attribution Phase 4 — Privacy Sandbox (ARA) — BUILT (Framing A)
 
-**Status:** parked on purpose (2026-08-02). Not started, no code. This doc is the
-"pick it up later" reference — the decision, *why*, and a concrete build
-breakdown with the honest boundary marked. Phases 0–3 + gaps G1–G7 + the identity
-hardening are all shipped and e2e-proven; ARA is the point of diminishing returns
-where the effort stops being demonstrable the way everything else is.
+**Status:** BUILT 2026-08-12 as **Framing A** (real headers + report ingest;
+mock boundary documented). Was parked 2026-08-02. The scoping/decision content
+below is retained as the *why*; the box immediately under is *what shipped*.
 
 Supersedes the short stub in `docs/attribution-plan.md` → "Phase 4".
+
+## What shipped (Framing A)
+
+Real, standards-correct, inspectable — a **reporting-only overlay** that never
+bills and is stored separately from the exact conversions stream:
+
+- **`pkg/ara`** — `Source`/`Trigger` header builders (ARA wire format: 64-bit
+  numerics as JSON strings, expiry clamped to [1d,30d], aggregatable values as
+  numbers) + `ParseEventReport`/`ParseAggregatableReport` (aggregatable payloads
+  kept encrypted — never decrypted). Unit-tested.
+- **migration 095** — `ara_sources` (registration log for account resolution) +
+  `ara_reports` (raw browser-posted reports); both RLS + platform hatch. Separate
+  tables, **never joined into `conversions`**.
+- **tracker** (the single ARA reporting origin) — `GET /v1/t/ara/src` records a
+  source + returns `Attribution-Reporting-Register-Source`; `/v1/t/conv` also
+  returns `Attribution-Reporting-Register-Trigger`; the well-known
+  `report-{event,aggregate}-attribution` endpoints resolve the owning advertiser
+  (event by source_event_id, aggregatable by destination — via the platform hatch)
+  and persist. Registration is consent-gated + `tracker.ara_enabled` (default off).
+- **gateway** — `GET /v1/api/ara/reports` (reports:read, account-scoped): the
+  advertiser's overlay + summary, labelled "never billed".
+- **e2e** `TestARARegistrationAndReportIngest` — register-source header well-formed
+  + recorded → signed conversion returns register-trigger → event report POST
+  resolves the account + persists (idempotent retry, orphan dropped) → advertiser
+  reads it back through the API. Green against the live stack.
+
+### Runbook — verifying with a real browser (the part the Go harness can't)
+
+The match/noise/delay only happen in a real Privacy-Sandbox browser:
+
+1. Chrome with Attribution Reporting enabled (chrome://flags →
+   `#privacy-sandbox-ads-apis`, or `--enable-features=AttributionReportingCrossAppWeb`).
+2. Set `tracker.ara_enabled=true`. Serve an ad whose creative fetches
+   `/v1/t/ara/src?...` via `attributionsrc` (the ad server bakes this under
+   `adserver.ara_source_registration` — TODO if extending source registration to
+   the served markup); fire a consented conversion at `/v1/t/conv`.
+3. Open `chrome://attribution-internals` — the Sources and Triggers tabs show the
+   registered entries; after the browser's delay it POSTs event/aggregatable
+   reports to the tracker's well-known endpoints, which persist into `ara_reports`.
+
+**Mock boundary (unchanged):** the source↔trigger match, k-anonymity noise,
+multi-day delay, and aggregation-service decrypt are the browser's / coordinator's
+— not simulated here. ARA is **not** wired into `make test-e2e` beyond the
+ingest-endpoint check above.
 
 ---
 
