@@ -202,7 +202,28 @@ func TestPartnerSandboxKeys(t *testing.T) {
 	}
 	code, list = partnerListReq(t, partnerClient, keysURL)
 	if code != http.StatusOK || len(list) != 1 {
-		t.Errorf("after revoke: len %d, want 1", len(list))
+		t.Fatalf("after revoke: len %d, want 1", len(list))
+	}
+	survivingKeyID, _ := list[0]["id"].(string)
+
+	// Cross-partner isolation: a SECOND partner can't see partner 1's keys, and
+	// can't revoke partner 1's key by id (scoped to account_id → 404).
+	_, p2 := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+		fmt.Sprintf(`{"name":"E2E KeyPartner2 %d","kind":"dsp"}`, time.Now().UnixNano()))
+	id2, _ := p2["id"].(string)
+	email2 := fmt.Sprintf("keypartner2-%d@integrations.test", time.Now().UnixNano())
+	_, prov2 := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id2, email2))
+	temp2, _ := prov2["temp_password"].(string)
+	client2 := h.LoginAs(t, email2, temp2)
+
+	code, list2 := partnerListReq(t, client2, keysURL)
+	if code != http.StatusOK || len(list2) != 0 {
+		t.Errorf("partner2 sees %d keys, want 0 (isolation)", len(list2))
+	}
+	code, _ = partnerReq(t, client2, http.MethodPost, revokeURL, fmt.Sprintf(`{"id":%q}`, survivingKeyID))
+	if code != http.StatusNotFound {
+		t.Errorf("partner2 revoking partner1's key = %d, want 404 (account-scoped)", code)
 	}
 
 	// A staff (non-partner) account cannot touch partner sandbox keys.
