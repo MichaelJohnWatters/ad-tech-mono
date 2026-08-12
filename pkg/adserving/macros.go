@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // MacroContext holds the values available for macro substitution.
@@ -132,6 +134,56 @@ func BuildClickURL(ctx MacroContext) string {
 	setExp(params, ctx.URLTTL)
 	rawURL := ctx.TrackerURL + "/v1/t/click?" + params.Encode()
 	return SignURL(rawURL, ActiveSigningKey())
+}
+
+// BuildARASourceURL builds the SIGNED Privacy Sandbox ARA source-registration
+// beacon the browser fetches via attributionsrc (see pkg/ara + the tracker's
+// /v1/t/ara/src). Returns "" when there's no landing URL (no ARA destination) or
+// no advertiser. `dest` is the advertiser SITE (scheme + registrable domain) — the
+// thing ARA matches a conversion's destination against — and rides signed so the
+// tracker can't be handed a forged advid.
+func BuildARASourceURL(ctx MacroContext) string {
+	dest := araDestination(ctx.LandingURL)
+	if dest == "" || ctx.AdvertiserID == "" {
+		return ""
+	}
+	params := url.Values{}
+	params.Set("advid", ctx.AdvertiserID)
+	params.Set("dest", dest)
+	if ctx.CampaignID != "" {
+		params.Set("cid", ctx.CampaignID)
+	}
+	setExp(params, ctx.URLTTL)
+	rawURL := ctx.TrackerURL + "/v1/t/ara/src?" + params.Encode()
+	return SignURL(rawURL, ActiveSigningKey())
+}
+
+// araDestination returns the ARA destination — scheme + registrable domain — for
+// a landing URL (https://shop.acme.co.uk/x → https://acme.co.uk). Empty when the
+// URL has no host. Falls back to the bare host for names with no public suffix
+// (localhost, an IP) so local/dev demos still produce a usable destination.
+func araDestination(landingURL string) string {
+	if landingURL == "" {
+		return ""
+	}
+	// Tolerate a scheme-less landing (e.g. "acme.com/x") — default to https.
+	s := landingURL
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	site, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
+	if err != nil {
+		site = u.Hostname()
+	}
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + site
 }
 
 // BuildViewabilityURL builds the viewability beacon URL.

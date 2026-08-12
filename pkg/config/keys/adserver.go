@@ -28,6 +28,7 @@ var AdServer = struct {
 	RateLimitTrustedHops      config.IntKey
 	RateLimitAllowlist        config.StringKey
 	RateLimitDistributed      config.BoolKey
+	ARASourceRegistration     config.BoolKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL      config.StringKey
@@ -51,6 +52,7 @@ var AdServer = struct {
 	RateLimitTrustedHops:      adServerSet.Int("adserver.ratelimit_trusted_proxy_hops", "0", config.TierLive, "Number of trusted reverse proxies in front of the ad server (your ingress, plus any CDN). The rate-limit client IP is taken this many entries from the RIGHT of X-Forwarded-For — the entries a trusted proxy appended — so a client cannot evade the limit by forging (prepending) X-Forwarded-For values. 0 (default) = the ingress is the only trusted hop: use the rightmost XFF entry. Set to 1 when a CDN sits in front of the ingress.", config.Since("v1.17")),
 	RateLimitAllowlist:        adServerSet.String("adserver.ratelimit_allowlist", DefaultRateLimitAllowlist, config.TierLive, "Comma-separated CIDRs/IPs that BYPASS the ad server rate limit. Defaults to loopback + private/link-local ranges so internal + local traffic is never throttled. Only consulted when adserver.ratelimit_rps > 0 (off by default — ad serving is high-volume and better shielded at the CDN/WAF).", config.Since("v1.17")),
 	RateLimitDistributed:      adServerSet.Bool("adserver.ratelimit_distributed", "false", config.TierLive, "Enforce adserver.ratelimit_rps CLUSTER-WIDE via a shared Redis fixed-window counter instead of per-pod in-process buckets. Costs one Redis op per limited request; fail-open if Redis is unreachable. Default false = per-pod. Only meaningful when ratelimit_rps > 0.", config.Since("v2.0")),
+	ARASourceRegistration:     adServerSet.Bool("adserver.ara_source_registration", "false", config.TierLive, "Bake a SIGNED Privacy Sandbox ARA attribution-source beacon (ara_source_url) into the served ad response so a supporting browser registers an attribution source via attributionsrc. Consent-gated (only on a consented serve) and needs a creative landing_url for the destination. Pairs with tracker.ara_enabled (the tracker serves the register-source header + report ingest). Reporting-only overlay — never bills. Default off. See docs/attribution-phase4-ara.md.", config.Since("v2.0")),
 	URL:                       config.RawString("adserver.url", routes.DefaultAdServerURL),
 	Port:                      config.RawString("adserver.port", routes.PortAdServer),
 	GRPCPort:                  config.RawString("adserver.grpc_port", routes.PortAdServerGRPC),
