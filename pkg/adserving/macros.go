@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/publicsuffix"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
 )
 
 // MacroContext holds the values available for macro substitution.
@@ -160,30 +160,15 @@ func BuildARASourceURL(ctx MacroContext) string {
 
 // araDestination returns the ARA destination — scheme + registrable domain — for
 // a landing URL (https://shop.acme.co.uk/x → https://acme.co.uk). Empty when the
-// URL has no host. Falls back to the bare host for names with no public suffix
-// (localhost, an IP) so local/dev demos still produce a usable destination.
+// URL has no host. The tracker re-derives the same value from the beacon's dest=
+// param at registration, so this MUST stay the single canonical reduction:
+// ara.NormalizeDestination.
 func araDestination(landingURL string) string {
-	if landingURL == "" {
+	dest, ok := ara.NormalizeDestination(landingURL)
+	if !ok {
 		return ""
 	}
-	// Tolerate a scheme-less landing (e.g. "acme.com/x") — default to https.
-	s := landingURL
-	if !strings.Contains(s, "://") {
-		s = "https://" + s
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-	site, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
-	if err != nil {
-		site = u.Hostname()
-	}
-	scheme := u.Scheme
-	if scheme == "" {
-		scheme = "https"
-	}
-	return scheme + "://" + site
+	return dest
 }
 
 // BuildViewabilityURL builds the viewability beacon URL.

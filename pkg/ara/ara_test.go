@@ -157,3 +157,44 @@ func TestParseAggregatableReport_KeepsPayloadsEncrypted(t *testing.T) {
 		t.Error("payload envelope should be preserved as raw JSON")
 	}
 }
+
+func TestParseAggregatableReport_DestAndReportIDFromSharedInfo(t *testing.T) {
+	// A real aggregatable report carries attribution_destination + report_id inside
+	// the JSON-encoded shared_info, not top-level. We must still recover both.
+	body := []byte(`{
+		"shared_info": "{\"attribution_destination\":\"https://advertiser.example\",\"report_id\":\"rid-9\"}",
+		"aggregation_service_payloads": [{"payload":"CIPHER"}]
+	}`)
+	r, err := ParseAggregatableReport(body)
+	if err != nil {
+		t.Fatalf("ParseAggregatableReport: %v", err)
+	}
+	if r.AttributionDestination != "https://advertiser.example" {
+		t.Errorf("destination = %q, want it recovered from shared_info", r.AttributionDestination)
+	}
+	if r.ReportID != "rid-9" {
+		t.Errorf("report_id = %q, want rid-9 (from shared_info)", r.ReportID)
+	}
+}
+
+func TestNormalizeDestination(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"https://shop.acme.co.uk/checkout?x=1", "https://acme.co.uk", true}, // eTLD+1, path/query stripped
+		{"https://www.example.com", "https://example.com", true},
+		{"acme.com/x", "https://acme.com", true},                // scheme-less → https
+		{"http://sub.example.org", "http://example.org", true},  // scheme preserved
+		{"https://localhost:9200/y", "https://localhost", true}, // no public suffix → host (dev), port dropped
+		{"", "", false},
+		{"https:///nohost", "", false},
+	}
+	for _, c := range cases {
+		got, ok := NormalizeDestination(c.in)
+		if ok != c.wantOK || got != c.want {
+			t.Errorf("NormalizeDestination(%q) = (%q,%v), want (%q,%v)", c.in, got, ok, c.want, c.wantOK)
+		}
+	}
+}

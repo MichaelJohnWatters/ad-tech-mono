@@ -213,6 +213,13 @@ func main() {
 		log:           log,
 		maxBody:       128 << 10,
 	}
+	// The source beacon's advid (the advertiser account a source is recorded under)
+	// is only forgery-proof when signatures are enforced. In warn mode /v1/t/ara/src
+	// accepts an unsigned beacon, so a caller could record an ara_sources row for an
+	// arbitrary account. Shout at boot so this can't be the silent prod posture (F2).
+	if keys.Tracker.ARAEnabled.Get(cfg) && !keys.Tracker.SignatureValidation.Get(cfg) {
+		log.Warn("ara: ENABLED with signature_validation OFF — /v1/t/ara/src accepts UNSIGNED source beacons; advid can be forged into ara_sources. Enable tracker.signature_validation in production.")
+	}
 	if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
 		if st, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 4, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute}); err != nil {
 			log.Warn("ara: db connect failed; ARA endpoints will 503 on use", "error", err)

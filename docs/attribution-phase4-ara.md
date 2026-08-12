@@ -27,8 +27,12 @@ bills and is stored separately from the exact conversions stream:
   is signature-bound; unsigned → 403 in strict mode) so it can't be used to write
   `ara_sources` for an arbitrary account. Report resolution is **non-forgeable**:
   EVENT reports resolve only by the unguessable source_event_id (no destination
-  guessing); AGGREGATABLE reports use the destination fallback (no source id
-  exists), bounded by an active registered source + body cap + per-IP rate limit.
+  guessing). AGGREGATABLE reports carry no source id and are **never attributed to
+  a tenant** — they land in a platform-global quarantine
+  (`ara_aggregatable_quarantine`, migration 096), staff-inspectable, never in an
+  advertiser overlay. (This closed a cross-tenant write: the destination is public,
+  so the earlier destination-fallback let a forged aggregatable POST land in a
+  victim's rows — see **Security review** below + `docs/ara-review-findings.md`.)
 - **gateway** — `GET /v1/api/ara/reports` (reports:read, account-scoped): the
   advertiser's overlay + summary, labelled "never billed".
 - **Path-A completion (2026-08-12):** the ad server bakes the signed
@@ -42,6 +46,17 @@ bills and is stored separately from the exact conversions stream:
   + recorded → signed conversion returns register-trigger → event report POST
   resolves the account + persists (idempotent retry, orphan dropped) → advertiser
   reads it back through the API. Green against the live stack.
+
+### Security review (2026-08-12)
+
+Adversarial review against the 10 invariants (prompt: `docs/ara-review-prompt.md`;
+findings + fixes: `docs/ara-review-findings.md`). Money-separation verified (ARA is
+never read/joined by billing/reporting/dsp/conversions). One real hole fixed — the
+aggregatable **cross-tenant write** (F1), now closed by quarantining aggregatable
+reports out of tenant attribution. Also: boot warning if ARA is on with signatures
+off (F2), batched housekeeping deletes (F3), server-side eTLD+1 re-validation of
+`dest` (F5), trigger header labelled inert-by-design (F6). Deployment note (F4):
+the ingress must set the real client IP so the ingest rate limit isn't bypassed.
 
 ### Runbook — verifying with a real browser (the part the Go harness can't)
 
