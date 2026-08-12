@@ -65,9 +65,9 @@ serving: Serving · sync RTB {
   exchange: Exchange :8081 { style.fill: "#818cf8"; d: first-price auction · deal priority · 5-DSP fan-out }
   dsp: DSP internal :8082  { style.fill: "#22d3ee"; d: bid · targeting · pacing · shading }
   dspc: DSP competitors ×4 { style.fill: "#fb923c"; d: :8089 slowpoke · :8090 deadbeat · :8098 healthy · :8100 coinflip (SmartRouter scenarios) }
-  adserver: Ad Server :8085 { style.fill: "#a78bfa"; d: creative resolve · macros · pixel URLs }
+  adserver: Ad Server :8085 { style.fill: "#a78bfa"; d: creative resolve · macros · pixel URLs · signed ARA source beacon (opt) }
   pubad: Publisher Ad Server :8088 { style.fill: "#a78bfa"; d: serves markup to the page }
-  tracker: Tracker :8083   { style.fill: "#fbbf24"; d: imp · click · conv · view }
+  tracker: Tracker :8083   { style.fill: "#fbbf24"; d: imp · click · conv · view · ARA reporting-origin (overlay) }
 
   ssp -> exchange: OpenRTB · gRPC
   exchange -> dsp: OpenRTB · gRPC
@@ -79,6 +79,11 @@ control.gateway -> serving.ssp: ad request
 browser -> serving.pubad: page ad slot
 serving.pubad -> serving.ssp: bid request
 browser -> serving.tracker: pixels
+# Privacy Sandbox ARA (reporting-only overlay): the browser reads the ad server's
+# signed source beacon + the conversion trigger header, then POSTs noised/aggregated
+# reports back to the tracker's well-known endpoints → separate ara_reports table,
+# never joined into exact conversions. See docs/attribution-phase4-ara.md.
+browser -> serving.tracker: ARA register + reports (attributionsrc) { style.stroke-dash: 3; style.stroke: "#f59e0b" }
 
 # ============================================================
 # ASYNC / EVENTS plane  (NATS + consumers)
