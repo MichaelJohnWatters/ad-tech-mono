@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -171,12 +173,17 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-// revokeSessionsHandler kills EVERY outstanding token for the calling user by
-// stamping a revocation checkpoint at now — the "log out everywhere / I think my
-// session was stolen" button. Any token issued before this instant (including
-// the caller's current one and any copy held elsewhere) is rejected on its next
-// request. Runs behind authMiddleware, so the caller is already authenticated.
-func revokeSessionsHandler(rev *middleware.RevocationStore, log *slog.Logger) http.HandlerFunc {
+// revokeSessionsHandler kills EVERY outstanding token for a user by stamping a
+// revocation checkpoint at now — any token issued before this instant (a copy
+// held elsewhere included) is rejected on its next request.
+//
+// Default (no body / no user_id): the CALLER revokes their OWN sessions — the
+// "log out everywhere / I think my session was stolen" button; their cookie is
+// cleared too. With a body {"user_id":"<team-member-uuid>"} a STAFF caller
+// (IsPlatformUser + support:update) revokes ANOTHER user's sessions — the
+// help-desk compromise response for a user who lost their device. A non-staff
+// caller supplying user_id is forbidden. Runs behind authMiddleware.
+func revokeSessionsHandler(rev *middleware.RevocationStore, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -187,19 +194,54 @@ func revokeSessionsHandler(rev *middleware.RevocationStore, log *slog.Logger) ht
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		if err := rev.RevokeUser(r.Context(), claims.UserID, time.Now()); err != nil {
+
+		// Optional cross-user target (bounded body — a tiny JSON object).
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		var req struct {
+			UserID string `json:"user_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req) // empty/no body → self-revoke
+
+		target := claims.UserID // default: self
+		self := true
+		if uid := strings.TrimSpace(req.UserID); uid != "" {
+			// Revoking someone else's sessions is a privileged security action —
+			// a platform operator (staff or admin) with the help-desk perm.
+			if !auth.IsPlatformUser(claims) || !can(claims, "support:update") {
+				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+				return
+			}
+			if !uuidRe.MatchString(uid) {
+				http.Error(w, `{"error":"user_id must be a team-member UUID"}`, http.StatusBadRequest)
+				return
+			}
+			target = auth.MintUserID(uid) // JWT subject = "user-"+teamMemberID
+			self = target == claims.UserID
+		}
+
+		if err := rev.RevokeUser(r.Context(), target, time.Now()); err != nil {
 			// A failed WRITE must be surfaced — unlike the read path, we can't
 			// silently pretend the sessions were revoked.
-			log.Error("revoke sessions failed", "user", claims.UserID, "error", err)
+			log.Error("revoke sessions failed", "target", target, "by", claims.UserID, "error", err)
 			http.Error(w, `{"error":"could not revoke sessions"}`, http.StatusInternalServerError)
 			return
 		}
-		// Clear the caller's own cookie too (its token is now revoked anyway).
-		http.SetCookie(w, &http.Cookie{
-			Name: middleware.SessionCookieName, Value: "", Path: "/",
-			HttpOnly: true, MaxAge: -1,
-		})
-		log.Info("sessions revoked", "user", claims.UserID)
+		if self {
+			// Clear the caller's own cookie too (its token is now revoked anyway).
+			http.SetCookie(w, &http.Cookie{
+				Name: middleware.SessionCookieName, Value: "", Path: "/",
+				HttpOnly: true, MaxAge: -1,
+			})
+		} else {
+			// Staff revoking another user — audit the cross-user security action.
+			_ = audit.Log(r.Context(), auditDB, audit.Entry{
+				ActorID:      "user:" + claims.UserID,
+				Action:       "auth:revoke_sessions",
+				ResourceType: "user_sessions",
+				ResourceID:   target,
+			})
+		}
+		log.Info("sessions revoked", "target", target, "by", claims.UserID, "self", self)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
 	}

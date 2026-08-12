@@ -2407,16 +2407,32 @@ paths:
   /v1/auth/revoke-sessions:
     post:
       tags: [Auth]
-      summary: Revoke all of the caller's sessions (log out everywhere / stolen token)
+      summary: Revoke all sessions (log out everywhere / stolen token; staff can target another user)
       description: >-
-        Kills every outstanding token for the authenticated user by stamping a
-        revocation checkpoint at now. Any token issued before this instant —
-        including the caller's current one and any copy held elsewhere — is
-        rejected on its next request. Use to respond to a suspected stolen
-        session. Requires a valid session.
+        Kills every outstanding token for a user by stamping a revocation
+        checkpoint at now. Any token issued before this instant — including any
+        copy held elsewhere — is rejected on its next request. With no body the
+        AUTHENTICATED CALLER revokes their own sessions (their cookie is cleared
+        too). A STAFF caller (platform user with support:update) may pass
+        {"user_id":"<team-member-uuid>"} to revoke ANOTHER user's sessions — the
+        help-desk response for a user whose device was lost/stolen. A non-staff
+        caller supplying user_id is forbidden.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                  description: Team-member id of the user to revoke (staff only). Omit to revoke your own sessions.
       responses:
-        "200": { description: All sessions revoked; caller's cookie cleared }
+        "200": { description: Sessions revoked (caller's cookie cleared on self-revoke) }
+        "400": { description: user_id present but not a valid UUID }
         "401": { description: Not authenticated }
+        "403": { description: Non-staff caller supplied user_id }
         "500": { description: Revocation store unavailable — sessions not revoked }
   /v1/auth/signup:
     post:

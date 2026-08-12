@@ -265,7 +265,7 @@ func main() {
 	mux.HandleFunc(routes.AuthLogin, loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
 	mux.HandleFunc(routes.AuthLogout, logoutHandler)
 	// Revoke-all-sessions is authenticated (you revoke your own sessions).
-	mux.Handle(routes.AuthRevokeSessions, authMiddleware(http.HandlerFunc(revokeSessionsHandler(revStore, log))))
+	mux.Handle(routes.AuthRevokeSessions, authMiddleware(http.HandlerFunc(revokeSessionsHandler(revStore, gwDB, log))))
 	mux.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "signup.html", nil)
 	})
