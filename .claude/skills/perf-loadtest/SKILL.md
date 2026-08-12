@@ -88,6 +88,14 @@ mutex}, disarm with ?block=0&mutex=0.
 
 ## Hands-off host rules (violations invalidate the run)
 
+- **Pin replicas — disable HPA before a measured run.** The serving fleet
+  (tracker/adserver/gateway/ssp/exchange/dsp-internal/publisher-adserver/ssai)
+  has HorizontalPodAutoscalers (`services.<svc>.hpa` in the chart, gated by
+  `global.autoscaling`, default ON locally). Autoscaling mid-run changes replica
+  counts and makes runs non-comparable + hides regressions. Before a run either
+  `kubectl delete hpa --all -n adtech` (restore later with a `helm upgrade`) or
+  redeploy with `--set global.autoscaling=false`, then confirm `kubectl get hpa
+  -n adtech` is empty and the fleet sits at its fixed `replicas`. Re-enable after.
 - **Nothing on the host mid-run**: no builds, no npm/docker, no browsers — an
   `npm install` once collapsed fill 97→12% (simulator + VM share the cores).
 - **Never deploy ANYTHING mid-run** — even a configmap-only helm upgrade

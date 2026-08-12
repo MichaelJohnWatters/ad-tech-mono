@@ -16,6 +16,11 @@ createNamespace: true
 # registered domain and every ingress host + cert follows automatically.
 global:
   domain: adtech.local
+  # Master switch for HorizontalPodAutoscalers. A service scales only if it BOTH
+  # has an `hpa:` block AND this is not false. Needs metrics-server (ships with
+  # k3s / Rancher Desktop). Set false in an env without it to fall back to the
+  # fixed `replicas` counts. See templates/services.yaml + PLAN "Autoscaling (HPA)".
+  autoscaling: true
   # App-image source. EMPTY registry (local dev) = the bare locally-built image
   # names (adtech-<svc>) resolved from the node's docker engine — unchanged.
   # Staging/prod set these to the CI registry + a tag so every app image becomes
@@ -120,6 +125,9 @@ services:
   dsp-internal:
     image: adtech-dsp
     replicas: 3
+    # Stateless bidder (budgets/pacing/freq-caps are atomic Redis ops, shared
+    # across replicas) → CPU-autoscale safe. Competitors stay fixed (test fixtures).
+    hpa: { minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
     containerName: dsp
     ports: [{ name: http, port: 8082 }]
     grpcPort: 8182
@@ -388,6 +396,7 @@ services:
   ssp:
     image: adtech-ssp
     replicas: 3
+    hpa: { minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
     ports: [{ name: http, port: 8084 }]
     env:
       - name: REDIS_URL
@@ -448,6 +457,9 @@ services:
   exchange:
     image: adtech-exchange
     replicas: 3
+    # Auctions are request-scoped; the smart router learns in-memory per replica
+    # (warm-started from analytics, converges independently) — scale safe.
+    hpa: { minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
     ports: [{ name: http, port: 8081 }]
     grpcPort: 8181
     env:
@@ -527,6 +539,7 @@ services:
   adserver:
     image: adtech-adserver
     replicas: 3
+    hpa: { minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
     ports: [{ name: http, port: 8085 }]
     grpcPort: 8185
     env:
@@ -584,6 +597,7 @@ services:
   publisher-adserver:
     image: adtech-publisher-adserver
     replicas: 3
+    hpa: { minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
     ports: [{ name: http, port: 8088 }]
     env:
       - name: POD_NAME
@@ -625,6 +639,10 @@ services:
   tracker:
     image: adtech-tracker
     replicas: 3
+    # Highest-volume, internet-facing. Min 3: a single-replica tracker
+    # readiness-flapped under load (the old ~1% impression slippage), so never
+    # scale below 3. Higher ceiling than the rest.
+    hpa: { minReplicas: 3, maxReplicas: 8, targetCPU: 70 }
     ports: [{ name: http, port: 8083 }]
     env:
       - name: TRACKER_SIGNATURE_VALIDATION
@@ -681,6 +699,7 @@ services:
   gateway:
     image: adtech-gateway
     replicas: 3
+    hpa: { minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
     # Named service account (gateway-rbac.yaml) so the staff ops console can
     # list pods / restart deployments / trigger cronjobs in-namespace.
     serviceAccountName: gateway
@@ -953,6 +972,7 @@ services:
   ssai:
     image: adtech-ssai
     replicas: 3
+    hpa: { minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
     ports: [{ name: http, port: 8093 }]
     env:
       - name: POD_NAME
