@@ -35,12 +35,14 @@ import (
 var partnerEmailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 
 // randToken returns n random bytes as hex (used for a one-time temp password).
-func randToken(n int) string {
+// It surfaces a rand failure rather than returning "" — provisioning an account
+// with a password derived from empty/zero entropy would be an auth hole.
+func randToken(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 const maxPartnerNameLen = 200
@@ -299,7 +301,12 @@ func partnerProvisionHandler(store partner.Store, auditDB *sql.DB, log *slog.Log
 		if req.Name == "" {
 			req.Name = req.Email
 		}
-		temp := randToken(9) // 18 hex chars
+		temp, err := randToken(9) // 18 hex chars
+		if err != nil {
+			log.Error("partner provision: rand failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(temp), bcrypt.DefaultCost)
 		if err != nil {
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
