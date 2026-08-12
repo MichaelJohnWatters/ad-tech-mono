@@ -285,6 +285,14 @@ func TestPartnerConformanceTools(t *testing.T) {
 	if res["valid"] != false {
 		t.Errorf("test-bid against unreachable endpoint valid=%v, want false", res["valid"])
 	}
+	// The SSRF guard must have refused the private ClusterIP (not merely timed out).
+	if fs, _ := res["findings"].([]any); len(fs) > 0 {
+		if f, _ := fs[0].(map[string]any); f != nil {
+			if msg, _ := f["message"].(string); !strings.Contains(msg, "non-public") {
+				t.Errorf("test-bid finding = %q, want the SSRF guard to refuse the non-public address", msg)
+			}
+		}
+	}
 
 	// A non-partner (staff) cannot use these tools.
 	code, _ = partnerReq(t, client, http.MethodPost, validateURL, good)
