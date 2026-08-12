@@ -121,6 +121,10 @@ const (
 	// (generate/rotate/list-masked); …Revoke revokes one.
 	APIPartnerSandboxKeys       = apiPrefix + "/api/partner/sandbox-keys"
 	APIPartnerSandboxKeysRevoke = apiPrefix + "/api/partner/sandbox-keys/revoke"
+	// APIPartnerValidate checks a pasted OpenRTB BidResponse for conformance;
+	// APIPartnerTestBid sends a golden request to the partner's endpoint + validates.
+	APIPartnerValidate = apiPrefix + "/api/partner/validate"
+	APIPartnerTestBid  = apiPrefix + "/api/partner/test-bid"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

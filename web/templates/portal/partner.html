@@ -39,6 +39,25 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Sandbox test (OpenRTB conformance) ============ -->
+    <section id="section-sandbox" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Live test-bid" "subtitle" "Send a golden OpenRTB bid request to your registered endpoint and check the response for spec conformance") }}
+      <div class="flex items-center gap-3 mb-3">
+        {{ template "button" (dict "label" "Run test bid" "variant" "secondary" "size" "sm" "onclick" "runTestBid()") }}
+        <span class="text-xs text-gray-400">Probes the bid endpoint your account manager registered.</span>
+      </div>
+      <div id="testBidResult" class="text-sm text-gray-500"></div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Validate a response" "subtitle" "Paste a sample OpenRTB BidResponse to check it against the golden request — no call to your server") }}
+      <textarea id="respJson" rows="8" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-xs font-mono" placeholder='{"id":"...","seatbid":[{"seat":"you","bid":[{"id":"b1","impid":"1","price":1.25,"adm":"<div>ad</div>","crid":"cr1","adomain":["you.example"]}]}],"cur":"USD"}'></textarea>
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "Validate" "size" "sm" "onclick" "validateResponse()") }}
+      </div>
+      <div id="validateResult" class="text-sm text-gray-500"></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ API keys (sandbox) ============ -->
     <section id="section-apikeys" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Sandbox API keys" "subtitle" "Generate + rotate the X-API-Key that authenticates your sandbox integration. Shown in full once — store it securely.") }}
@@ -64,10 +83,36 @@ const PORTAL = {
 };
 
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'integration', 'apikeys'],
-  crumbs: {dashboard: 'Dashboard', integration: 'Integration', apikeys: 'API keys'},
-  loaders: {dashboard: () => loadPartnerStatus(), integration: () => {}, apikeys: () => loadApiKeys()},
+  sections: ['dashboard', 'integration', 'sandbox', 'apikeys'],
+  crumbs: {dashboard: 'Dashboard', integration: 'Integration', sandbox: 'Sandbox test', apikeys: 'API keys'},
+  loaders: {dashboard: () => loadPartnerStatus(), integration: () => {}, sandbox: () => {}, apikeys: () => loadApiKeys()},
 });
+
+// ---- Sandbox conformance tools ----
+function renderFindings(el, res) {
+  const badge = res.valid ? '<span class="text-xs px-1.5 py-0.5 rounded bg-success/15 text-success">valid</span>'
+                          : '<span class="text-xs px-1.5 py-0.5 rounded bg-error/15 text-error">not valid</span>';
+  const meta = [res.http_status ? `HTTP ${res.http_status}` : '', res.latency_ms != null ? `${res.latency_ms}ms` : '', res.note || ''].filter(Boolean).join(' · ');
+  const findings = (res.findings || []).map(f =>
+    `<li class="${f.severity === 'error' ? 'text-error' : 'text-warning'}">[${esc(f.severity)}] ${esc(f.field || '—')}: ${esc(f.message)}</li>`).join('');
+  el.innerHTML = `<div class="mb-2">${badge} <span class="text-xs text-gray-400 ml-2">${esc(meta)}</span></div>` +
+    (findings ? `<ul class="list-disc pl-5 space-y-0.5 text-xs">${findings}</ul>` : '<div class="text-xs text-gray-400">No findings.</div>');
+}
+async function runTestBid() {
+  const el = $('testBidResult');
+  el.innerHTML = 'Running…';
+  try {
+    renderFindings(el, await fetchJSON('/v1/api/partner/test-bid', {method: 'POST'}));
+  } catch (err) { el.innerHTML = `<span class="text-error">${esc(err.message)}</span>`; }
+}
+async function validateResponse() {
+  const el = $('validateResult');
+  const body = $('respJson').value.trim();
+  if (!body) { el.innerHTML = '<span class="text-gray-400">Paste a BidResponse first.</span>'; return; }
+  try {
+    renderFindings(el, await fetchJSON('/v1/api/partner/validate', {method: 'POST', body}));
+  } catch (err) { el.innerHTML = `<span class="text-error">${esc(err.message)}</span>`; }
+}
 
 const PT_STATUS_BADGE = {pending: 'bg-surface-3 text-gray-500', sandbox: 'bg-info/15 text-info', certified: 'bg-warning/15 text-warning', active: 'bg-success/15 text-success', paused: 'bg-warning/15 text-warning', terminated: 'bg-error/15 text-error'};
 

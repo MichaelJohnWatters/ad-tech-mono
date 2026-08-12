@@ -233,6 +233,66 @@ func TestPartnerSandboxKeys(t *testing.T) {
 	}
 }
 
+// TestPartnerConformanceTools (slice 3): the partner self-serves the OpenRTB
+// conformance validator (paste a response) and a live test-bid against its
+// registered endpoint (graceful on unreachable).
+func TestPartnerConformanceTools(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	staff := h.CreateStaff(t, fmt.Sprintf("conf-staff-%d", time.Now().UnixNano()))
+	client := h.OwnerClient(t, staff.ID)
+
+	// Register a partner with an UNREACHABLE bid endpoint (closed port) + provision.
+	_, p := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+		fmt.Sprintf(`{"name":"E2E ConfPartner %d","kind":"dsp","endpoint_bid":"http://dsp-internal:59999/bid"}`, time.Now().UnixNano()))
+	id, _ := p["id"].(string)
+	email := fmt.Sprintf("conf-%d@integrations.test", time.Now().UnixNano())
+	_, prov := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id, email))
+	temp, _ := prov["temp_password"].(string)
+	pc := h.LoginAs(t, email, temp)
+
+	validateURL := h.URLs.Gateway + routes.APIPartnerValidate
+
+	// A conformant response → valid, no error findings.
+	good := `{"id":"validate-probe","cur":"USD","seatbid":[{"seat":"you","bid":[{"id":"b1","impid":"1","price":1.25,"adm":"<div>ad</div>","crid":"cr1","adomain":["you.example"]}]}]}`
+	code, res := partnerReq(t, pc, http.MethodPost, validateURL, good)
+	if code != http.StatusOK || res["valid"] != true {
+		t.Fatalf("validate good = %d valid=%v, want 200 valid (%v)", code, res["valid"], res)
+	}
+
+	// A non-conformant response (price 0, below floor, no creative) → not valid.
+	bad := `{"id":"validate-probe","seatbid":[{"seat":"you","bid":[{"impid":"1","price":0}]}]}`
+	code, res = partnerReq(t, pc, http.MethodPost, validateURL, bad)
+	if code != http.StatusOK || res["valid"] != false {
+		t.Errorf("validate bad = %d valid=%v, want 200 not-valid", code, res["valid"])
+	}
+	if fs, _ := res["findings"].([]any); len(fs) == 0 {
+		t.Error("expected conformance findings for the bad response")
+	}
+
+	// A no-bid is valid.
+	code, res = partnerReq(t, pc, http.MethodPost, validateURL, `{"id":"validate-probe","nobid":true}`)
+	if res["valid"] != true {
+		t.Errorf("no-bid validate valid=%v, want true", res["valid"])
+	}
+
+	// Live test-bid against the unreachable endpoint → gracefully not-valid,
+	// never a 500.
+	code, res = partnerReq(t, pc, http.MethodPost, h.URLs.Gateway+routes.APIPartnerTestBid, "")
+	if code != http.StatusOK {
+		t.Fatalf("test-bid = %d, want 200 (graceful) (%v)", code, res)
+	}
+	if res["valid"] != false {
+		t.Errorf("test-bid against unreachable endpoint valid=%v, want false", res["valid"])
+	}
+
+	// A non-partner (staff) cannot use these tools.
+	code, _ = partnerReq(t, client, http.MethodPost, validateURL, good)
+	if code != http.StatusForbidden {
+		t.Errorf("staff validate = %d, want 403 (partner-only)", code)
+	}
+}
+
 func TestPartnerOnboardingLifecycle(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	staff := h.CreateStaff(t, fmt.Sprintf("partner-staff-%d", time.Now().UnixNano()))

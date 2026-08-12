@@ -187,6 +187,7 @@ func publisherPortalHandler(templates *templateManager, signingKey string) http.
 var partnerNav = []NavItem{
 	{Label: "Dashboard", Href: "#dashboard", Icon: "▤"},
 	{Label: "Integration", Href: "#integration", Icon: "⇄", Perm: "partner:self"},
+	{Label: "Sandbox test", Href: "#sandbox", Icon: "◎", Perm: "partner:self"},
 	{Label: "API keys", Href: "#apikeys", Icon: "⚿", Perm: "apikeys:manage"},
 }
 
