@@ -31,6 +31,13 @@ const (
 // IsValidKind reports whether k is a partner kind.
 func IsValidKind(k string) bool { return k == KindDSP || k == KindSSP }
 
+// IsValidAuthMethod reports whether m is a supported partner auth method (mirrors
+// the migration's CHECK, so the handler can reject a bad value with a 400 rather
+// than letting it 500 on the constraint).
+func IsValidAuthMethod(m string) bool {
+	return m == "api_key" || m == "mtls" || m == "none"
+}
+
 // IsValidStatus reports whether s is a lifecycle status.
 func IsValidStatus(s string) bool {
 	switch s {

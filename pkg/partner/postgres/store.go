@@ -14,8 +14,29 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner"
 )
 
-// ErrNotFound is returned when a partner id doesn't exist.
-var ErrNotFound = errors.New("partner: not found")
+// ErrNotFound is returned when a partner id doesn't exist. ErrDuplicateName /
+// ErrConstraint let the handler turn a client-caused DB violation into a 4xx
+// instead of a 500.
+var (
+	ErrNotFound      = errors.New("partner: not found")
+	ErrDuplicateName = errors.New("partner: duplicate name")
+	ErrConstraint    = errors.New("partner: constraint violation")
+)
+
+// classify maps a Postgres error to a client-facing sentinel where the cause is
+// a client input (unique/check violation), else returns it unchanged.
+func classify(err error) error {
+	var pe *pq.Error
+	if errors.As(err, &pe) {
+		switch pe.Code {
+		case "23505": // unique_violation
+			return ErrDuplicateName
+		case "23514", "22P02": // check_violation, invalid_text_representation (bad ::uuid etc.)
+			return ErrConstraint
+		}
+	}
+	return err
+}
 
 // Store is the Postgres-backed partner registry.
 type Store struct{ db *sql.DB }
@@ -101,6 +122,9 @@ RETURNING `+partnerCols,
 		in.ContactTech, in.ContactBilling, in.Notes, nullStr(createdBy))
 	p, err := scanPartner(row.Scan)
 	if err != nil {
+		if c := classify(err); c != err {
+			return partner.Partner{}, c
+		}
 		return partner.Partner{}, fmt.Errorf("create partner: %w", err)
 	}
 	return p, nil
@@ -171,21 +195,39 @@ RETURNING `+partnerCols, id, status)
 	return p, nil
 }
 
-// Update edits mutable metadata (never status — that's SetStatus).
+// Update edits mutable metadata (never status — that's SetStatus). It is a PATCH,
+// not a replace: a field left empty/zero (or an omitted max_qps / empty array)
+// PRESERVES the stored value rather than clobbering it. Callers (the staff portal
+// form, or a partial API edit) send only a subset of fields — without this,
+// editing one field would reset auth_method/openrtb_version to defaults and wipe
+// contact_billing/notes/max_qps. (Trade-off: a field can't be blanked back to
+// empty via edit — rare for a staff registry.) `name` is always set (the handler
+// requires it non-empty).
 func (s *Store) Update(ctx context.Context, id string, in partner.Input) (partner.Partner, error) {
 	if s.db == nil {
 		return partner.Partner{}, sql.ErrConnDone
 	}
-	in = defaulted(in)
 	var maxQPS any
 	if in.MaxQPS != nil {
 		maxQPS = *in.MaxQPS
 	}
 	row := s.db.QueryRowContext(ctx, `
 UPDATE partners
-   SET name=$2, kind=$3, endpoint_bid=$4, endpoint_nurl=$5, seat=$6, auth_method=$7,
-       channels=$8, formats=$9, timeout_ms=$10, max_qps=$11, openrtb_version=$12,
-       contact_tech=$13, contact_billing=$14, notes=$15, updated_at=now()
+   SET name            = $2,
+       kind            = COALESCE(NULLIF($3,''), kind),
+       endpoint_bid    = COALESCE(NULLIF($4,''), endpoint_bid),
+       endpoint_nurl   = COALESCE(NULLIF($5,''), endpoint_nurl),
+       seat            = COALESCE(NULLIF($6,''), seat),
+       auth_method     = COALESCE(NULLIF($7,''), auth_method),
+       channels        = CASE WHEN cardinality($8::text[]) > 0 THEN $8 ELSE channels END,
+       formats         = CASE WHEN cardinality($9::text[]) > 0 THEN $9 ELSE formats END,
+       timeout_ms      = COALESCE(NULLIF($10,0), timeout_ms),
+       max_qps         = COALESCE($11, max_qps),
+       openrtb_version = COALESCE(NULLIF($12,''), openrtb_version),
+       contact_tech    = COALESCE(NULLIF($13,''), contact_tech),
+       contact_billing = COALESCE(NULLIF($14,''), contact_billing),
+       notes           = COALESCE(NULLIF($15,''), notes),
+       updated_at      = now()
  WHERE id=$1::uuid
 RETURNING `+partnerCols,
 		id, in.Name, in.Kind, in.EndpointBid, in.EndpointNURL, in.Seat, in.AuthMethod,
@@ -196,6 +238,9 @@ RETURNING `+partnerCols,
 		return partner.Partner{}, ErrNotFound
 	}
 	if err != nil {
+		if c := classify(err); c != err {
+			return partner.Partner{}, c
+		}
 		return partner.Partner{}, fmt.Errorf("update partner: %w", err)
 	}
 	return p, nil

@@ -917,7 +917,8 @@ async function saveIncident(ev) {
 const PT_STATUS_BADGE = {pending: 'bg-surface-3 text-gray-500', sandbox: 'bg-info/15 text-info', certified: 'bg-warning/15 text-warning', active: 'bg-success/15 text-success', paused: 'bg-warning/15 text-warning', terminated: 'bg-error/15 text-error'};
 // Mirrors pkg/partner's state machine for the UI affordance only — the server
 // re-validates every transition (CanTransition).
-const PT_NEXT = {pending: ['sandbox'], sandbox: ['certified', 'paused'], certified: ['active', 'paused'], active: ['paused'], paused: ['active', 'terminated'], terminated: []};
+// Kept in sync with pkg/partner allowedTransitions (the server re-validates).
+const PT_NEXT = {pending: ['sandbox', 'terminated'], sandbox: ['certified', 'paused', 'terminated'], certified: ['active', 'sandbox', 'paused', 'terminated'], active: ['paused', 'terminated'], paused: ['sandbox', 'certified', 'active', 'terminated'], terminated: []};
 let partnerCache = [];
 async function loadPartners() {
   const tb = document.getElementById('partnerList');
