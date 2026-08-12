@@ -330,9 +330,11 @@ paths:
       summary: Privacy Sandbox ARA reports (reporting-only overlay)
       description: >-
         Requires reports:read. Returns the caller account's Privacy Sandbox
-        Attribution Reporting API (ARA) reports plus a per-type summary. This
-        stream is a REPORTING-ONLY overlay — deliberately noised, aggregated and
-        delayed by the browser, and NEVER billed. It is stored separately from
+        Attribution Reporting API (ARA) event-level reports plus a summary
+        ({ event: <count> }). Aggregatable reports carry no per-user source id and
+        are held in a platform quarantine, so they are never attributed per-account.
+        This stream is a REPORTING-ONLY overlay — deliberately noised, aggregated
+        and delayed by the browser, and NEVER billed. It is stored separately from
         the exact conversions stream. See docs/attribution-phase4-ara.md.
       security:
         - bearerAuth: []

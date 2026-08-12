@@ -1205,7 +1205,7 @@ async function loadARA() {
     el.innerHTML = `<span class="text-error">Load failed — ${esc(err.message)}</span>`;
     return;
   }
-  const s = data.summary || {event: 0, aggregate: 0};
+  const s = data.summary || {event: 0};
   const reports = (data.reports || []).slice(0, 50);
   const rows = reports.length ? reports.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2">${esc(r.ReportType || '')}</td>

@@ -21,6 +21,12 @@ global:
   # k3s / Rancher Desktop). Set false in an env without it to fall back to the
   # fixed `replicas` counts. See templates/services.yaml + PLAN "Autoscaling (HPA)".
   autoscaling: true
+  # Master switch for PodDisruptionBudgets. A PDB is emitted for every service that
+  # is autoscaled OR runs >1 replica (never for singletons — a PDB on a 1-replica
+  # workload would deadlock its own drain), default maxUnavailable:1. Set false to
+  # skip them (e.g. a single-node cluster where a drain must be allowed to take a
+  # service down). Per-service override: `pdb: {maxUnavailable: N}` / `{minAvailable: N}` / `false`.
+  pdb: true
   # App-image source. EMPTY registry (local dev) = the bare locally-built image
   # names (adtech-<svc>) resolved from the node's docker engine — unchanged.
   # Staging/prod set these to the CI registry + a tag so every app image becomes
