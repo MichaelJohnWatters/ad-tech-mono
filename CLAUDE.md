@@ -94,6 +94,35 @@ See `docs/PLAN.md` for the comprehensive project plan.
 - Every service loads config via `pkg/config/` (defaults -> env vars -> live config)
 
 ### Testing
+- **Always consider an e2e test.** Any new feature, endpoint, flow, or fix that
+  spans services (a new API + its behaviour, a portal action, an auth/RBAC gate, a
+  money/event/cache path) gets an e2e in `tests/e2e/*` (`-tags=e2e`) that exercises
+  it against the LIVE stack — build → `make deploy SVC=x` → run the e2e — not just
+  unit tests. Unit-test the pure logic too (validators, state machines, scoring),
+  but the e2e is what proves it actually works end-to-end. If a change genuinely
+  can't be e2e'd (a documented mock boundary, an external-only surface), say so
+  explicitly rather than skipping silently. See `tests/e2e/partners_test.go` for
+  the per-slice shape (register → act → assert persistence + the negative/RBAC case).
+- **Always consider the enforcement surface.** For every new endpoint / feature /
+  flow, deliberately work through which enforcements apply and cover them — don't
+  ship an unguarded surface:
+  - **Authentication** — is it behind `authMiddleware` / a valid session/API key? Or
+    deliberately public (say why)?
+  - **Authorization (RBAC)** — the right `resource:action` permission + account
+    type; a wrong-role/wrong-type caller gets 403.
+  - **Tenant isolation** — reads/writes scoped to `account_id` (RLS + explicit
+    filter); platform-global tables justified; cross-tenant only via the platform
+    hatch. A bare-pool query on an RLS table under `adtech_app` returns 0 rows.
+  - **Signing / HMAC** — beacons/postbacks/URLs that can be forged are signed
+    (`ValidateSignatureAny`); note strict-vs-warn mode.
+  - **Trusted vs self-declared** — bill/attribute on the value WE control (e.g. the
+    endpoint-bound seat), never the caller's self-declared field.
+  - **Consent / privacy** — personalisation gated on `privacy.Evaluate().Personalise`
+    where user data is involved.
+  - **Input safety** — body caps, id/UUID validation, client-error → 4xx not 500.
+  The catalog + an omission-focused audit prompt live in `docs/SECURITY.md` /
+  `docs/SECURITY-AUDIT-PROMPT.md`. The e2e SHOULD assert the negative case (the
+  forbidden/unsigned/cross-tenant caller is rejected), not just the happy path.
 - Unit tests: no mocks for databases. Use interfaces + fakes in `pkg/testutil/`
 - Integration tests: use testcontainers-go for real Postgres/Redis/NATS
 - Never mock Postgres, Redis, NATS, or filesystem
