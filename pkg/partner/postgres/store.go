@@ -23,6 +23,9 @@ var (
 	ErrDuplicateName      = errors.New("partner: duplicate name")
 	ErrConstraint         = errors.New("partner: constraint violation")
 	ErrAlreadyProvisioned = errors.New("partner: login already provisioned")
+	// ErrTransitionConflict means the partner was not in the expected `from`
+	// status when the guarded transition ran (a concurrent status change).
+	ErrTransitionConflict = errors.New("partner: status changed underneath the transition")
 )
 
 // classify maps a Postgres error to a client-facing sentinel where the cause is
@@ -175,22 +178,31 @@ func (s *Store) Get(ctx context.Context, id string) (partner.Partner, error) {
 	return p, nil
 }
 
-// SetStatus transitions the partner's lifecycle status. onboarded_at is stamped
-// the first time it becomes active (COALESCE keeps the original on later flips).
-func (s *Store) SetStatus(ctx context.Context, id, status string) (partner.Partner, error) {
+// SetStatus atomically transitions the partner from `from` to `to`. The
+// `AND status = $2` guard makes it a compare-and-swap: if the partner is no longer
+// in `from` (a concurrent staff change between the caller's read and this write),
+// zero rows update and it returns ErrTransitionConflict rather than clobbering the
+// new status. onboarded_at is stamped the first time it becomes active.
+func (s *Store) SetStatus(ctx context.Context, id, from, to string) (partner.Partner, error) {
 	if s.db == nil {
 		return partner.Partner{}, sql.ErrConnDone
 	}
 	row := s.db.QueryRowContext(ctx, `
 UPDATE partners
-   SET status = $2,
+   SET status = $3,
        updated_at = now(),
-       onboarded_at = CASE WHEN $2 = 'active' THEN COALESCE(onboarded_at, now()) ELSE onboarded_at END
- WHERE id = $1::uuid
-RETURNING `+partnerCols, id, status)
+       onboarded_at = CASE WHEN $3 = 'active' THEN COALESCE(onboarded_at, now()) ELSE onboarded_at END
+ WHERE id = $1::uuid AND status = $2
+RETURNING `+partnerCols, id, from, to)
 	p, err := scanPartner(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
-		return partner.Partner{}, ErrNotFound
+		// Either the id doesn't exist or it's not in `from` anymore. Disambiguate
+		// so the caller can 404 vs 409.
+		var exists bool
+		if e := s.db.QueryRowContext(ctx, `SELECT true FROM partners WHERE id = $1::uuid`, id).Scan(&exists); errors.Is(e, sql.ErrNoRows) {
+			return partner.Partner{}, ErrNotFound
+		}
+		return partner.Partner{}, ErrTransitionConflict
 	}
 	if err != nil {
 		return partner.Partner{}, fmt.Errorf("set partner status: %w", err)
