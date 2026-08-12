@@ -881,6 +881,7 @@ func main() {
 	mux.Handle(routes.APIPartnerSandboxKeysRevoke, authMiddleware(http.HandlerFunc(partnerSandboxKeyRevokeHandler(gwDB, secretsBus, log))))
 	mux.Handle(routes.APIPartnerValidate, authMiddleware(http.HandlerFunc(partnerValidateHandler(log))))
 	mux.Handle(routes.APIPartnerTestBid, authMiddleware(http.HandlerFunc(partnerTestBidHandler(partnerStore, log))))
+	mux.Handle(routes.APIPartnerCertify, authMiddleware(http.HandlerFunc(partnerCertifyHandler(partnerStore, log))))
 
 	// Partner self-serve portal (PLAN Phase 11 #112 slice 2).
 	partnerPortal := requireLoginPage(signingKey, partnerPortalHandler(templates, signingKey))

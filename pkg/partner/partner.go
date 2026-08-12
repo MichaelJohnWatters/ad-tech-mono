@@ -9,6 +9,7 @@ package partner
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -145,4 +146,19 @@ type Store interface {
 	// GetByAccount returns the partner registry row for a provisioned partner
 	// login account (partner self-view). ErrNotFound if the account isn't linked.
 	GetByAccount(ctx context.Context, accountID string) (Partner, error)
+	// RecordCertification persists a certification run for a partner.
+	RecordCertification(ctx context.Context, partnerID string, res CertificationResult, runBy string) (CertificationRecord, error)
+	// ListCertifications returns a partner's certification history, newest first.
+	ListCertifications(ctx context.Context, partnerID string, limit int) ([]CertificationRecord, error)
+}
+
+// CertificationRecord is a persisted certification run (read model).
+type CertificationRecord struct {
+	ID        string          `json:"id"`
+	Passed    bool            `json:"passed"`
+	Score     int             `json:"score"`
+	Total     int             `json:"total"`
+	Checks    json.RawMessage `json:"checks"`
+	RunBy     string          `json:"run_by,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }

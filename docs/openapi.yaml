@@ -1874,6 +1874,32 @@ paths:
         "200": { description: "{ valid, findings, latency_ms, http_status, note? }" }
         "400": { description: "no endpoint registered, or a non-http(s) endpoint" }
         "403": { description: "not a partner account" }
+  /v1/api/partner/certify:
+    get:
+      tags: [Platform]
+      summary: Certification scenarios + this partner's run history
+      description: "Partner accounts only (partner:self). Returns the golden scenarios to answer + past runs + current status."
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ scenarios: [{ name, description, request }], history: [...], status }" }
+        "403": { description: "not a partner account" }
+    post:
+      tags: [Platform]
+      summary: Run the certification suite (scored)
+      description: >-
+        Partner accounts only (partner:self). Body = the partner's responses to
+        each golden scenario ({responses:{scenario:BidResponse}}). Each is scored
+        for OpenRTB conformance; a PASS while the partner is in sandbox advances it
+        to certified (staff still gates certified → active). The run is recorded.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { responses: { type: object, additionalProperties: { type: object } } } }
+      responses:
+        "200": { description: "{ result: { passed, score, total, checks }, record, promoted, status }" }
+        "403": { description: "not a partner account" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]
