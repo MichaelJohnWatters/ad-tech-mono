@@ -447,6 +447,10 @@ type ServeResponse struct {
 	Currency       string  `json:"currency"`
 	Width          int     `json:"width"`
 	Height         int     `json:"height"`
+	// ARASourceURL, when set (adserver.ara_source_registration + consent), is the
+	// signed Privacy Sandbox attribution-source beacon the SDK registers via
+	// attributionsrc. Empty otherwise. Reporting-only overlay — see pkg/ara.
+	ARASourceURL string `json:"ara_source_url,omitempty"`
 }
 
 // DSPProfile is a YAML-based DSP configuration with campaign definitions.

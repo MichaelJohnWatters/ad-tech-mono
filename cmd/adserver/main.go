@@ -187,7 +187,7 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
-	serve := serveHandler(log, resolver, dpRenderer, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value)
+	serve := serveHandler(log, resolver, dpRenderer, freqCap, freqCapCache, knobs.FreqCapLimit.Value, knobs.FreqCapWindow.Value, trackerURL, adserverPub, knobs.URLTTL.Value, func() bool { return keys.AdServer.ARASourceRegistration.Get(cfg) })
 	mux.HandleFunc(routes.AdServe, serve)
 	// Internal gRPC twin of the serve endpoint — the SSP's fast path.
 	// Browser-facing creative/asset endpoints stay HTTP.
@@ -396,7 +396,7 @@ func connectNATS(cfg *config.Config, log *slog.Logger) events.EventBus {
 	return bus
 }
 
-func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dynamicProductRenderer, freqCap *FreqCap, freqCapCache *warm.Cache[models.FreqCapRule], defaultLimitFn func() int, defaultWindowFn func() time.Duration, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration) http.HandlerFunc {
+func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dynamicProductRenderer, freqCap *FreqCap, freqCapCache *warm.Cache[models.FreqCapRule], defaultLimitFn func() int, defaultWindowFn func() time.Duration, trackerURL string, adserverPub *events.Publisher, urlTTLFn func() time.Duration, araSourceEnabledFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -585,6 +585,14 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dyna
 			Currency:       req.Currency,
 			Width:          req.Width,
 			Height:         req.Height,
+		}
+
+		// Privacy Sandbox ARA source beacon (reporting-only overlay): bake the
+		// signed attributionsrc URL only on a CONSENTED serve (UserID present ==
+		// personalisation consent) with a landing URL, and only when enabled. The
+		// SDK registers it via attributionsrc; the tracker validates the signature.
+		if araSourceEnabledFn() && macroCtx.UserID != "" {
+			resp.ARASourceURL = adserving.BuildARASourceURL(macroCtx)
 		}
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
