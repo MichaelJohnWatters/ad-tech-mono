@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,20 @@ func TestARARegistrationAndReportIngest(t *testing.T) {
 	uresp.Body.Close()
 	if ucode != http.StatusForbidden {
 		t.Errorf("unsigned source beacon = %d, want 403 (signature must be enforced)", ucode)
+	}
+
+	// Enforcement: a SIGNED-but-EXPIRED source beacon is rejected (410) — a
+	// captured beacon can't be replayed past its window (exp_validation is on).
+	expired := srcURL + "&exp=" + strconv.FormatInt(time.Now().Add(-time.Hour).Unix(), 10)
+	ereq, _ := http.NewRequest(http.MethodGet, adserving.SignURL(expired, adserving.DefaultSigningKey), nil)
+	eresp, err := client.Do(ereq)
+	if err != nil {
+		t.Fatalf("expired source beacon: %v", err)
+	}
+	ecode := eresp.StatusCode
+	eresp.Body.Close()
+	if ecode != http.StatusGone {
+		t.Errorf("expired source beacon = %d, want 410 (replay window enforced)", ecode)
 	}
 
 	// Signed like the ad server → registers.
