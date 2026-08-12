@@ -113,6 +113,10 @@ const (
 	// APIPartnerStatus transitions the onboarding lifecycle.
 	APIPartners      = apiPrefix + "/api/partners"
 	APIPartnerStatus = apiPrefix + "/api/partners/status"
+	// APIPartnerProvision (staff) creates a partner's self-serve login;
+	// APIPartnerMe is the provisioned partner reading its own onboarding record.
+	APIPartnerProvision = apiPrefix + "/api/partners/provision"
+	APIPartnerMe        = apiPrefix + "/api/partner/me"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

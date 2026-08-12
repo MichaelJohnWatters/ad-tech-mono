@@ -43,6 +43,61 @@ func partnerReq(t *testing.T, client *http.Client, method, url, body string) (in
 	return resp.StatusCode, out
 }
 
+// TestPartnerProvisionAndSelfServe (slice 2): staff registers a partner and
+// provisions its self-serve login; the partner logs in and reads its own
+// onboarding record via /v1/api/partner/me, but cannot reach the staff registry.
+func TestPartnerProvisionAndSelfServe(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	staff := h.CreateStaff(t, fmt.Sprintf("prov-staff-%d", time.Now().UnixNano()))
+	client := h.OwnerClient(t, staff.ID)
+
+	partnersURL := h.URLs.Gateway + routes.APIPartners
+	name := fmt.Sprintf("E2E SSP %d", time.Now().UnixNano())
+
+	// Register a partner.
+	code, p := partnerReq(t, client, http.MethodPost, partnersURL,
+		fmt.Sprintf(`{"name":%q,"kind":"ssp","endpoint_bid":"https://bid.ssp.example"}`, name))
+	if code != http.StatusCreated {
+		t.Fatalf("register = %d, want 201", code)
+	}
+	id, _ := p["id"].(string)
+
+	// Provision a login for it → 201 + one-time temp password.
+	email := fmt.Sprintf("partner-%d@integrations.test", time.Now().UnixNano())
+	code, prov := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id, email))
+	if code != http.StatusCreated {
+		t.Fatalf("provision = %d, want 201 (%v)", code, prov)
+	}
+	temp, _ := prov["temp_password"].(string)
+	if temp == "" || prov["account_id"] == "" {
+		t.Fatalf("provision response missing temp_password/account_id: %v", prov)
+	}
+
+	// Double-provision → 409.
+	code, _ = partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":"other-%d@integrations.test"}`, id, time.Now().UnixNano()))
+	if code != http.StatusConflict {
+		t.Errorf("double provision = %d, want 409", code)
+	}
+
+	// The partner logs in with the temp password and reads its own record.
+	partnerClient := h.LoginAs(t, email, temp)
+	code, me := partnerReq(t, partnerClient, http.MethodGet, h.URLs.Gateway+routes.APIPartnerMe, "")
+	if code != http.StatusOK {
+		t.Fatalf("partner /me = %d, want 200 (%v)", code, me)
+	}
+	if me["name"] != name || me["status"] != "pending" {
+		t.Errorf("partner /me = %v, want name %q status pending", me, name)
+	}
+
+	// The partner CANNOT read the staff registry.
+	code, _ = partnerReq(t, partnerClient, http.MethodGet, partnersURL, "")
+	if code != http.StatusForbidden {
+		t.Errorf("partner GET staff registry = %d, want 403", code)
+	}
+}
+
 func TestPartnerOnboardingLifecycle(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	staff := h.CreateStaff(t, fmt.Sprintf("partner-staff-%d", time.Now().UnixNano()))

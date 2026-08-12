@@ -18,9 +18,10 @@ import (
 // ErrConstraint let the handler turn a client-caused DB violation into a 4xx
 // instead of a 500.
 var (
-	ErrNotFound      = errors.New("partner: not found")
-	ErrDuplicateName = errors.New("partner: duplicate name")
-	ErrConstraint    = errors.New("partner: constraint violation")
+	ErrNotFound           = errors.New("partner: not found")
+	ErrDuplicateName      = errors.New("partner: duplicate name")
+	ErrConstraint         = errors.New("partner: constraint violation")
+	ErrAlreadyProvisioned = errors.New("partner: login already provisioned")
 )
 
 // classify maps a Postgres error to a client-facing sentinel where the cause is
@@ -47,7 +48,8 @@ func New(db *sql.DB) *Store { return &Store{db: db} }
 const partnerCols = `id::text, name, kind, status, endpoint_bid, endpoint_nurl, seat,
        auth_method, auth_secret_ref, channels, formats, timeout_ms, max_qps,
        openrtb_version, contact_tech, contact_billing, notes,
-       COALESCE(created_by,''), created_at, updated_at, onboarded_at`
+       COALESCE(created_by,''), created_at, updated_at, onboarded_at,
+       COALESCE(account_id::text,'')`
 
 func scanPartner(scan func(dest ...any) error) (partner.Partner, error) {
 	var p partner.Partner
@@ -57,7 +59,7 @@ func scanPartner(scan func(dest ...any) error) (partner.Partner, error) {
 	if err := scan(&p.ID, &p.Name, &p.Kind, &p.Status, &p.EndpointBid, &p.EndpointNURL, &p.Seat,
 		&p.AuthMethod, &p.AuthSecretRef, &channels, &formats, &p.TimeoutMs, &maxQPS,
 		&p.OpenRTBVersion, &p.ContactTech, &p.ContactBilling, &p.Notes,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &onboarded); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &onboarded, &p.AccountID); err != nil {
 		return partner.Partner{}, err
 	}
 	p.Channels = channels
@@ -242,6 +244,72 @@ RETURNING `+partnerCols,
 			return partner.Partner{}, c
 		}
 		return partner.Partner{}, fmt.Errorf("update partner: %w", err)
+	}
+	return p, nil
+}
+
+// ProvisionLogin creates the partner's login account (type 'partner') + owner
+// user and links partners.account_id — one transaction. Mirrors signup's
+// CreateAccountWithOwner (the accounts insert is admitted for the app role; the
+// tenant GUC is set before the team_members insert so RLS admits it).
+func (s *Store) ProvisionLogin(ctx context.Context, partnerID, name, email, passwordHash string) (string, error) {
+	if s.db == nil {
+		return "", sql.ErrConnDone
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+
+	var existing sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT account_id::text FROM partners WHERE id=$1::uuid`, partnerID).Scan(&existing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if existing.Valid && existing.String != "" {
+		return "", ErrAlreadyProvisioned
+	}
+
+	var accountID string
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO accounts (name, email, type, status, created_at, updated_at)
+		 VALUES ($1, $2, 'partner', 'active', now(), now()) RETURNING id::text`,
+		name, email).Scan(&accountID); err != nil {
+		return "", classify(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO team_members (account_id, email, name, role, password_hash, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, 'owner', $4, 'active', now(), now())`,
+		accountID, email, name, passwordHash); err != nil {
+		return "", classify(err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE partners SET account_id = $2::uuid, updated_at = now() WHERE id = $1::uuid`,
+		partnerID, accountID); err != nil {
+		return "", err
+	}
+	return accountID, tx.Commit()
+}
+
+// GetByAccount returns the registry row a provisioned partner login owns.
+func (s *Store) GetByAccount(ctx context.Context, accountID string) (partner.Partner, error) {
+	if s.db == nil {
+		return partner.Partner{}, sql.ErrConnDone
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+partnerCols+` FROM partners WHERE account_id = $1::uuid`, accountID)
+	p, err := scanPartner(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return partner.Partner{}, ErrNotFound
+	}
+	if err != nil {
+		return partner.Partner{}, fmt.Errorf("get partner by account: %w", err)
 	}
 	return p, nil
 }

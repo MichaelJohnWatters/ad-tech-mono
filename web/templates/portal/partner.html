@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>Partner — AdTech</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100">
+<div class="flex min-h-screen">
+
+  {{ template "app-sidebar" (dict "persona" "Partner" "items" .Nav) }}
+
+  <main class="flex-1 min-w-0">
+    {{ template "impersonation-banner" . }}
+    <!-- Top bar -->
+    <div class="h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark flex items-center px-6">
+      <div id="crumb" class="text-sm text-gray-500 dark:text-gray-400">Partner · <span id="crumbSection" class="text-gray-900 dark:text-gray-100">Dashboard</span></div>
+    </div>
+
+    <!-- ============ Dashboard: this partner's onboarding record ============ -->
+    <section id="section-dashboard" class="portal-section p-6 space-y-6">
+      {{ template "card-start" (dict "title" "Onboarding status" "subtitle" "Your integration's current lifecycle stage. Your account manager advances you: pending → sandbox → certified → active.") }}
+      <div id="partnerStatus" class="text-sm text-gray-500">Loading…</div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ Integration guide (static) ============ -->
+    <section id="section-integration" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Integration guide" "subtitle" "How to integrate with the exchange over OpenRTB") }}
+      <div class="prose prose-sm dark:prose-invert max-w-none text-sm space-y-3">
+        <p><strong>DSP (demand):</strong> respond to our bid requests at your registered bid endpoint. Return a valid OpenRTB 2.5 <code>BidResponse</code> within your configured timeout (default 100ms). Include <code>seatbid[].bid[].adm</code>, <code>price</code> (CPM), and <code>adomain</code>. Honour the request's <code>bcat</code>/<code>badv</code> and floor.</p>
+        <p><strong>SSP (supply):</strong> send us OpenRTB bid requests with a valid <code>source.ext.schain</code> and impression floors. See <a href="/sellers.json" target="_blank" class="text-brand hover:underline">/sellers.json</a> for seller identity.</p>
+        <ul class="list-disc pl-5">
+          <li>Auth: send your sandbox API key as the <code>X-API-Key</code> header (generate one under <em>API keys</em>).</li>
+          <li>Sandbox runs real auctions with fake money — nothing you do bills.</li>
+          <li>When you're ready, your account manager runs the certification suite; passing promotes you to certified → active.</li>
+        </ul>
+        <p class="text-xs text-gray-400">This guide is a summary; your account manager shares the full spec + a golden bid request during sandbox.</p>
+      </div>
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- ============ API keys (sandbox) — wired in slice 2b ============ -->
+    <section id="section-apikeys" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Sandbox API keys" "subtitle" "Generate + rotate the key that authenticates your sandbox integration") }}
+      <div id="apiKeysBody" class="text-sm text-gray-500">Loading…</div>
+      {{ template "card-end" . }}
+    </section>
+  </main>
+</div>
+
+<script src="/static/theme.js"></script>
+<script src="/static/portal-core.js"></script>
+<script>
+const PORTAL = {
+  accountID: "{{ .AccountID }}",
+  scoped: {{ if .IsCustomer }}true{{ else }}false{{ end }},
+};
+
+const showSection = initSectionRouter({
+  sections: ['dashboard', 'integration', 'apikeys'],
+  crumbs: {dashboard: 'Dashboard', integration: 'Integration', apikeys: 'API keys'},
+  loaders: {dashboard: () => loadPartnerStatus(), integration: () => {}, apikeys: () => loadApiKeys()},
+});
+
+const PT_STATUS_BADGE = {pending: 'bg-surface-3 text-gray-500', sandbox: 'bg-info/15 text-info', certified: 'bg-warning/15 text-warning', active: 'bg-success/15 text-success', paused: 'bg-warning/15 text-warning', terminated: 'bg-error/15 text-error'};
+
+async function loadPartnerStatus() {
+  const el = $('partnerStatus');
+  let p;
+  try {
+    p = await fetchJSON('/v1/api/partner/me');
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">Could not load your record — ${esc(err.message)}</span>`;
+    return;
+  }
+  el.innerHTML = `<div class="grid sm:grid-cols-2 gap-4">
+      <div><div class="text-xs text-gray-400 mb-1">Partner</div><div class="font-medium">${esc(p.name)} <span class="text-xs uppercase text-gray-500">(${esc(p.kind)})</span></div></div>
+      <div><div class="text-xs text-gray-400 mb-1">Status</div><div><span class="text-xs px-1.5 py-0.5 rounded ${PT_STATUS_BADGE[p.status]||''}">${esc(p.status)}</span></div></div>
+      <div><div class="text-xs text-gray-400 mb-1">Bid endpoint</div><div class="font-mono text-xs">${esc(p.endpoint_bid || '— not set —')}</div></div>
+      <div><div class="text-xs text-gray-400 mb-1">Channels</div><div class="text-sm">${(p.channels||[]).map(esc).join(', ') || '—'}</div></div>
+    </div>`;
+}
+
+// Sandbox key management ships in slice 2b.
+async function loadApiKeys() {
+  $('apiKeysBody').innerHTML = '<span class="text-gray-400">Sandbox key management is coming shortly. Your account manager can issue a key in the meantime.</span>';
+}
+</script>
+</body>
+</html>

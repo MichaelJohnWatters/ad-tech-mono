@@ -12,7 +12,9 @@ package main
 // active). The partner-facing self-serve portal builds on this in a later slice.
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -20,11 +22,26 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner"
 	partnerpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner/postgres"
 )
+
+// partnerEmailRe is a light email sanity check (real validation is delivery).
+var partnerEmailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// randToken returns n random bytes as hex (used for a one-time temp password).
+func randToken(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
 
 const maxPartnerNameLen = 200
 
@@ -235,6 +252,114 @@ func partnerStatusHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger
 			return
 		}
 		auditPartner(r, auditDB, claims.UserID, "partner:status", p.ID, p.Name, p.Status)
+		_ = json.NewEncoder(w).Encode(p)
+	}
+}
+
+// partnerProvisionHandler: POST /v1/api/partners/provision {id, email, name?}
+// — staff (partners:manage) create the partner's self-serve login. Returns the
+// one-time temp password (never stored/shown again).
+func partnerProvisionHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if !can(claims, "partners:manage") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"partners unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
+		var req struct {
+			ID    string `json:"id"`
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		req.ID = strings.TrimSpace(req.ID)
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		req.Name = strings.TrimSpace(req.Name)
+		if !partnerUUIDRe.MatchString(req.ID) || !partnerEmailRe.MatchString(req.Email) {
+			http.Error(w, `{"error":"a valid id and email are required"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" {
+			req.Name = req.Email
+		}
+		temp := randToken(9) // 18 hex chars
+		hash, err := bcrypt.GenerateFromPassword([]byte(temp), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		accountID, err := store.ProvisionLogin(r.Context(), req.ID, req.Name, req.Email, string(hash))
+		switch {
+		case errors.Is(err, partnerpg.ErrNotFound):
+			http.Error(w, `{"error":"partner not found"}`, http.StatusNotFound)
+			return
+		case errors.Is(err, partnerpg.ErrAlreadyProvisioned):
+			http.Error(w, `{"error":"this partner already has a login"}`, http.StatusConflict)
+			return
+		case errors.Is(err, partnerpg.ErrDuplicateName) || errors.Is(err, partnerpg.ErrConstraint):
+			http.Error(w, `{"error":"that email is already in use"}`, http.StatusConflict)
+			return
+		case err != nil:
+			log.Error("partner provision failed", "id", req.ID, "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		auditPartner(r, auditDB, claims.UserID, "partner:provision", req.ID, req.Name, "login")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"account_id":    accountID,
+			"login_email":   req.Email,
+			"temp_password": temp,
+			"note":          "share this one-time password with the partner; it is not stored and won't be shown again",
+		})
+	}
+}
+
+// partnerMeHandler: GET /v1/api/partner/me — a provisioned partner reads its own
+// registry record (onboarding status, endpoint). Partner accounts only.
+func partnerMeHandler(store partner.Store, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if claims.AccountType != auth.AccountPartner || !can(claims, "partner:self") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"partners unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		p, err := store.GetByAccount(r.Context(), claims.AccountID)
+		if errors.Is(err, partnerpg.ErrNotFound) {
+			http.Error(w, `{"error":"no partner record for this account"}`, http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			log.Error("partner me failed", "error", err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(p)
 	}
 }

@@ -181,6 +181,20 @@ func publisherPortalHandler(templates *templateManager, signingKey string) http.
 	return portalHandler(templates, signingKey, "publisher.html", publisherNav, auth.AccountPublisher)
 }
 
+// partnerNav is the external-partner self-serve portal (PLAN Phase 11 #112) —
+// a minimal surface: onboarding status, the integration guide, and (slice 2b)
+// sandbox API keys.
+var partnerNav = []NavItem{
+	{Label: "Dashboard", Href: "#dashboard", Icon: "▤"},
+	{Label: "Integration", Href: "#integration", Icon: "⇄", Perm: "partner:self"},
+	{Label: "API keys", Href: "#apikeys", Icon: "⚿", Perm: "apikeys:manage"},
+}
+
+// partnerPortalHandler renders the external-partner portal.
+func partnerPortalHandler(templates *templateManager, signingKey string) http.HandlerFunc {
+	return portalHandler(templates, signingKey, "partner.html", partnerNav, auth.AccountPartner)
+}
+
 // staffNav is the operator console. Everything is permission-gated — a
 // support-only role sees just what it can act on. The Tools section links
 // out to the existing operator surfaces (config manager, trace explorer).
