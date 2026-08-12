@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
+	arapg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
@@ -34,6 +36,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
 )
 
@@ -196,6 +199,23 @@ func main() {
 	mux.Handle(routes.Healthz, hlth.LivenessHandler())
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
+
+	// Privacy Sandbox ARA (reporting-only overlay; docs/attribution-phase4-ara.md).
+	// Best-effort DB — if it can't connect the endpoints 503 on use but the rest
+	// of the tracker is unaffected. Source/trigger registration is gated by
+	// tracker.ara_enabled + consent; the report-ingest endpoints stay mounted.
+	araH := araDeps{enabled: func() bool { return keys.Tracker.ARAEnabled.Get(cfg) }, log: log, maxBody: 128 << 10}
+	if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
+		if st, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 4, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute}); err != nil {
+			log.Warn("ara: db connect failed; ARA endpoints will 503 on use", "error", err)
+		} else {
+			araH.store = arapg.New(st.Primary())
+			lc.OnShutdown("ara-db", func(context.Context) error { return st.Close() })
+		}
+	}
+	mux.HandleFunc(routes.TrackerARASource, araH.registerSource)
+	mux.HandleFunc(ara.PathEventReport, araH.ingestEvent)
+	mux.HandleFunc(ara.PathAggregateReport, araH.ingestAggregate)
 
 	// Debug-gated synchronous cache refresh — lets the e2e harness force a
 	// reload after inserting a fraud_blocklists row.
@@ -523,6 +543,10 @@ func main() {
 		}, reqLog)
 		go publisher.publishBehaviour(context.WithoutCancel(ctx), "conversion", q, reqLog)
 
+		// ARA: a conversion also registers a Privacy Sandbox trigger (consent-gated,
+		// tracker.ara_enabled). Reporting-only overlay — the deterministic
+		// attribution above is untouched.
+		araH.setTriggerHeader(w, r, convType, revenue)
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeGIF)
 		w.Header().Set(constants.HeaderCacheControl, constants.CacheNoStore)
 		w.Write(pixel)

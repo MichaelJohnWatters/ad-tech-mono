@@ -21,7 +21,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"dsp", DSPSchema(), 23},
 		{"exchange", ExchangeSchema(), 32},
 		{"gateway", GatewaySchema(), 22},
-		{"tracker", TrackerSchema(), 18},
+		{"tracker", TrackerSchema(), 19},
 		{"adserver", AdServerSchema(), 15},
 		{"ssp", SSPSchema(), 17},
 		{"ssai", SSAISchema(), 17},

@@ -542,6 +542,10 @@ const (
 	TrackerView     = "/v1/t/view"
 	TrackerVideo    = "/v1/t/video"
 	TrackerAudio    = "/v1/t/audio"
+	// TrackerARASource registers a Privacy Sandbox attribution SOURCE (the ad
+	// server bakes a signed, attributionsrc beacon here); the browser reads the
+	// returned Attribution-Reporting-Register-Source header. See pkg/ara.
+	TrackerARASource = "/v1/t/ara/src"
 )
 
 // ============================================================
