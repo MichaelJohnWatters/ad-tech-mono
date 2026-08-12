@@ -127,6 +127,7 @@ const (
 	SubjectCacheInvalidatePlacements   = "adtech.cache.invalidate.placements"
 	SubjectCacheInvalidateCreatives    = "adtech.cache.invalidate.creatives"
 	SubjectCacheInvalidateDSPs         = "adtech.cache.invalidate.dsp-endpoints"
+	SubjectCacheInvalidatePartnerEPs   = "adtech.cache.invalidate.partner-endpoints"
 	SubjectCacheInvalidatePublishers   = "adtech.cache.invalidate.publishers"
 	SubjectCacheInvalidateDeals        = "adtech.cache.invalidate.deals"
 	SubjectCacheInvalidateFraudRules   = "adtech.cache.invalidate.fraud-rules"
