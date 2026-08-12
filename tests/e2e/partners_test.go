@@ -96,6 +96,30 @@ func TestPartnerProvisionAndSelfServe(t *testing.T) {
 	if code != http.StatusForbidden {
 		t.Errorf("partner GET staff registry = %d, want 403", code)
 	}
+
+	// A second partner. Provisioning it with partner 1's email → 409 (email in use).
+	name2 := name + " two"
+	_, p2 := partnerReq(t, client, http.MethodPost, partnersURL, fmt.Sprintf(`{"name":%q,"kind":"dsp"}`, name2))
+	id2, _ := p2["id"].(string)
+	code, _ = partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id2, email))
+	if code != http.StatusConflict {
+		t.Errorf("email-collision provision = %d, want 409", code)
+	}
+	// Provision partner 2 with its own email → its /me returns ITS record, proving
+	// per-account isolation (not partner 1's).
+	email2 := fmt.Sprintf("partner2-%d@integrations.test", time.Now().UnixNano())
+	code, prov2 := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id2, email2))
+	if code != http.StatusCreated {
+		t.Fatalf("provision p2 = %d", code)
+	}
+	temp2, _ := prov2["temp_password"].(string)
+	client2 := h.LoginAs(t, email2, temp2)
+	_, me2 := partnerReq(t, client2, http.MethodGet, h.URLs.Gateway+routes.APIPartnerMe, "")
+	if me2["name"] != name2 {
+		t.Errorf("partner2 /me = %v, want its own record %q (cross-partner isolation)", me2["name"], name2)
+	}
 }
 
 func TestPartnerOnboardingLifecycle(t *testing.T) {
