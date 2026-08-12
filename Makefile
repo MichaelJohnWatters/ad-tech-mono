@@ -48,6 +48,10 @@ test-e2e: ## Run end-to-end tests against the live stack (real ClickHouse backen
 test-e2e-chaos: ## Chaos e2e: kills infra pods (nats/postgres/redis/minio) to prove fail-open behaviour. Run SEPARATELY — the pod churn flaps port-forwards and destabilises unrelated tests, so these are opt-in (E2E_CHAOS=1) and excluded from test-e2e.
 	E2E_CHAOS=1 go test ./tests/e2e -tags=e2e -count=1 -timeout=15m -run 'TestChaos'
 
+test-e2e-security: ## Security/auth e2e subset against the live stack: authn (API keys, session cookie), session revocation (self + staff cross-user), SSP consent gate, forged-identity-header strip, per-pod + distributed rate limits, tenant isolation, RBAC, SQL-injection safety, CSRF. A curated -run list — add new security tests here.
+	./scripts/e2e-preflight.sh
+	go test ./tests/e2e -tags=e2e -count=1 -timeout=10m -run 'TestSessionRevocation|TestStaffRevokesAnotherUsersSessions|TestSessionCookieTamperRejected|TestSSPConsentGatesSegmentsToExternalDSP|TestGatewayStripsForgedIdentityHeaders|TestRateLimitPerIP|TestDistributedRateLimitSharedAcrossPods|TestAuthCRUD|TestCSRFCrossSiteBlocked|TestViewerRoleCannotMutateCampaign|TestTenantIsolationAudienceList|TestCampaignNameInjectionSafe'
+
 test-e2e-hotcold: ## Long-running hot/cold store e2e (~3min). Needs a cold-store-enabled clickhouse stack. Sets a short hot_window for speed, then restores it. The test reads the ACTUAL deployed window, so it stays correct if this value is overridden. Cold reads are ClickHouse s3() over the Parquet export (ADR 0006); the test drives an export so the aged burst is in the archive.
 	kubectl set env deployment/reporting -n adtech REPORTING_HOT_WINDOW=90s
 	kubectl rollout status deployment/reporting -n adtech --timeout=150s

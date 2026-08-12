@@ -111,6 +111,19 @@ func (h *Harness) adminBearer() string {
 	return h.adminTok
 }
 
+// AdminToken mints (and caches) an admin JWT via the dev token endpoint — a
+// platform (staff) session for tests that need a privileged caller (e.g. a
+// staff-only endpoint). Fails the test if the endpoint is unavailable (the e2e
+// stack runs debug.endpoints_enabled=true, so it should always be reachable).
+func (h *Harness) AdminToken(t *testing.T) string {
+	t.Helper()
+	tok := h.adminBearer()
+	if tok == "" {
+		t.Fatal("could not mint admin token — is the dev token endpoint enabled?")
+	}
+	return tok
+}
+
 // RestoreConfigForPod is the cleanup counterpart of SetConfigForPod. Tests
 // capture a key's resolved value BEFORE mutating it and write it back in
 // t.Cleanup — but the captured value can be empty (row absent / pod not yet
