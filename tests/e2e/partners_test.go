@@ -301,6 +301,84 @@ func TestPartnerConformanceTools(t *testing.T) {
 	}
 }
 
+// TestPartnerCertification (slice 4): a sandbox partner submits conformant
+// responses to the golden scenarios → passes → auto-advances to certified. A
+// non-conformant submission fails and leaves the partner in sandbox.
+func TestPartnerCertification(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	staff := h.CreateStaff(t, fmt.Sprintf("cert-staff-%d", time.Now().UnixNano()))
+	client := h.OwnerClient(t, staff.ID)
+	statusURL := h.URLs.Gateway + routes.APIPartnerStatus
+	certifyURL := h.URLs.Gateway + routes.APIPartnerCertify
+
+	// A helper: register + provision + login a partner already advanced to sandbox.
+	sandboxPartner := func(tag string) (*http.Client, string) {
+		_, p := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+			fmt.Sprintf(`{"name":"E2E Cert %s %d","kind":"dsp"}`, tag, time.Now().UnixNano()))
+		id, _ := p["id"].(string)
+		email := fmt.Sprintf("cert-%s-%d@integrations.test", tag, time.Now().UnixNano())
+		_, prov := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+			fmt.Sprintf(`{"id":%q,"email":%q}`, id, email))
+		temp, _ := prov["temp_password"].(string)
+		if code, _ := partnerReq(t, client, http.MethodPost, statusURL, fmt.Sprintf(`{"id":%q,"status":"sandbox"}`, id)); code != http.StatusOK {
+			t.Fatalf("advance to sandbox = %d", code)
+		}
+		return h.LoginAs(t, email, temp), id
+	}
+
+	// --- PASS: conformant responses (one real bid + two no-bids) → certified. ---
+	pc, _ := sandboxPartner("pass")
+
+	// GET returns the golden scenarios + current status.
+	code, got := partnerReq(t, pc, http.MethodGet, certifyURL, "")
+	if code != http.StatusOK || got["status"] != "sandbox" {
+		t.Fatalf("GET certify = %d status=%v, want 200 sandbox", code, got["status"])
+	}
+	if scen, _ := got["scenarios"].([]any); len(scen) < 3 {
+		t.Fatalf("expected >=3 golden scenarios, got %v", got["scenarios"])
+	}
+
+	good := `{"responses":{
+		"standard":{"id":"cert-standard","cur":"USD","seatbid":[{"seat":"you","bid":[{"id":"b1","impid":"1","price":1.0,"adm":"<div>ad</div>","crid":"cr1","adomain":["you.example"]}]}]},
+		"respect_floor":{"id":"cert-respect-floor","nobid":true},
+		"honour_badv":{"id":"cert-honour-badv","nobid":true}
+	}}`
+	code, res := partnerReq(t, pc, http.MethodPost, certifyURL, good)
+	if code != http.StatusOK {
+		t.Fatalf("certify POST = %d (%v)", code, res)
+	}
+	if res["promoted"] != true || res["status"] != "certified" {
+		t.Errorf("pass run promoted=%v status=%v, want promoted true + certified (%v)", res["promoted"], res["status"], res)
+	}
+	// The partner's own record now shows certified.
+	_, me := partnerReq(t, pc, http.MethodGet, h.URLs.Gateway+routes.APIPartnerMe, "")
+	if me["status"] != "certified" {
+		t.Errorf("partner /me status = %v, want certified", me["status"])
+	}
+	// The run is in history.
+	_, hist := partnerReq(t, pc, http.MethodGet, certifyURL, "")
+	if hs, _ := hist["history"].([]any); len(hs) == 0 {
+		t.Error("certification run not recorded in history")
+	}
+
+	// --- FAIL: a non-conformant response (price 0, no creative) → stays sandbox. ---
+	fc, _ := sandboxPartner("fail")
+	bad := `{"responses":{"standard":{"seatbid":[{"bid":[{"impid":"1","price":0}]}]},"respect_floor":{"nobid":true},"honour_badv":{"nobid":true}}}`
+	code, res = partnerReq(t, fc, http.MethodPost, certifyURL, bad)
+	if code != http.StatusOK {
+		t.Fatalf("fail certify = %d", code)
+	}
+	if res["promoted"] != false || res["status"] != "sandbox" {
+		t.Errorf("failed run promoted=%v status=%v, want not-promoted + sandbox", res["promoted"], res["status"])
+	}
+
+	// A non-partner (staff) can't run certification.
+	code, _ = partnerReq(t, client, http.MethodGet, certifyURL, "")
+	if code != http.StatusForbidden {
+		t.Errorf("staff GET certify = %d, want 403", code)
+	}
+}
+
 func TestPartnerOnboardingLifecycle(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	staff := h.CreateStaff(t, fmt.Sprintf("partner-staff-%d", time.Now().UnixNano()))

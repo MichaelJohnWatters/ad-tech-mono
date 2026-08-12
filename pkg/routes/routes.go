@@ -125,6 +125,9 @@ const (
 	// APIPartnerTestBid sends a golden request to the partner's endpoint + validates.
 	APIPartnerValidate = apiPrefix + "/api/partner/validate"
 	APIPartnerTestBid  = apiPrefix + "/api/partner/test-bid"
+	// APIPartnerCertify: GET the golden scenarios + run history; POST scored
+	// responses — a pass advances the partner sandbox → certified.
+	APIPartnerCertify = apiPrefix + "/api/partner/certify"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"

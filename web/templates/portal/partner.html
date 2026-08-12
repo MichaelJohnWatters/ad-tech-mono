@@ -58,6 +58,21 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Certification ============ -->
+    <section id="section-certify" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Certification" "subtitle" "Answer the golden scenarios below and submit your responses. Passing every scenario certifies your integration (sandbox → certified).") }}
+      <div id="certScenarios" class="text-sm text-gray-500 mb-3">Loading…</div>
+      <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Your responses — { "responses": { "&lt;scenario&gt;": &lt;BidResponse&gt; } }</label>
+      <textarea id="certJson" rows="8" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-xs font-mono"></textarea>
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "Run certification" "size" "sm" "onclick" "runCertify()") }}
+      </div>
+      <div id="certResult" class="text-sm text-gray-500 mb-4"></div>
+      <div class="text-xs font-medium text-gray-500 mb-1">History</div>
+      <div id="certHistory" class="text-sm text-gray-500"></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ API keys (sandbox) ============ -->
     <section id="section-apikeys" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Sandbox API keys" "subtitle" "Generate + rotate the X-API-Key that authenticates your sandbox integration. Shown in full once — store it securely.") }}
@@ -83,10 +98,49 @@ const PORTAL = {
 };
 
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'integration', 'sandbox', 'apikeys'],
-  crumbs: {dashboard: 'Dashboard', integration: 'Integration', sandbox: 'Sandbox test', apikeys: 'API keys'},
-  loaders: {dashboard: () => loadPartnerStatus(), integration: () => {}, sandbox: () => {}, apikeys: () => loadApiKeys()},
+  sections: ['dashboard', 'integration', 'sandbox', 'certify', 'apikeys'],
+  crumbs: {dashboard: 'Dashboard', integration: 'Integration', sandbox: 'Sandbox test', certify: 'Certification', apikeys: 'API keys'},
+  loaders: {dashboard: () => loadPartnerStatus(), integration: () => {}, sandbox: () => {}, certify: () => loadCertify(), apikeys: () => loadApiKeys()},
 });
+
+// ---- Certification ----
+async function loadCertify() {
+  const el = $('certScenarios');
+  try {
+    const data = await fetchJSON('/v1/api/partner/certify');
+    el.innerHTML = '<div class="text-xs text-gray-400 mb-1">Golden scenarios (run your bidder against each request):</div>' +
+      (data.scenarios || []).map(s => `<div class="mb-1"><strong>${esc(s.name)}</strong> — ${esc(s.description)}</div>`).join('');
+    // Prefill a response template keyed by scenario name.
+    if (!$('certJson').value.trim()) {
+      const tmpl = {responses: {}};
+      (data.scenarios || []).forEach(s => { tmpl.responses[s.name] = {id: s.request.id, nobid: true}; });
+      $('certJson').value = JSON.stringify(tmpl, null, 2);
+    }
+    renderCertHistory(data.history || []);
+  } catch (err) { el.innerHTML = `<span class="text-error">${esc(err.message)}</span>`; }
+}
+function renderCertHistory(history) {
+  $('certHistory').innerHTML = history.length ? history.map(h =>
+    `<div class="text-xs py-0.5">${h.passed ? '<span class="text-success">passed</span>' : '<span class="text-error">failed</span>'} · ${h.score}/${h.total} · ${fmtDate(h.created_at)}</div>`).join('')
+    : '<span class="text-xs text-gray-400">No runs yet.</span>';
+}
+async function runCertify() {
+  const el = $('certResult');
+  let body;
+  try { body = JSON.parse($('certJson').value); } catch (e) { el.innerHTML = '<span class="text-error">responses are not valid JSON</span>'; return; }
+  try {
+    const res = await fetchJSON('/v1/api/partner/certify', {method: 'POST', body: JSON.stringify(body)});
+    const r = res.result || {};
+    const badge = r.passed ? '<span class="text-xs px-1.5 py-0.5 rounded bg-success/15 text-success">passed</span>'
+                           : '<span class="text-xs px-1.5 py-0.5 rounded bg-error/15 text-error">not passed</span>';
+    const checks = (r.checks || []).map(c =>
+      `<li class="${c.passed ? 'text-success' : 'text-error'}">${esc(c.scenario)}: ${c.passed ? 'ok' : (c.findings||[]).map(f => esc(f.message)).join('; ')}</li>`).join('');
+    el.innerHTML = `<div class="mb-2">${badge} <span class="text-xs text-gray-400 ml-2">${r.score}/${r.total}${res.promoted ? ' · promoted to certified 🎉' : ''}</span></div><ul class="list-disc pl-5 text-xs space-y-0.5">${checks}</ul>`;
+    if (res.promoted) toast('Certified! Your integration passed.', 'success');
+    loadCertify();
+    loadPartnerStatus();
+  } catch (err) { el.innerHTML = `<span class="text-error">${esc(err.message)}</span>`; }
+}
 
 // ---- Sandbox conformance tools ----
 function renderFindings(el, res) {

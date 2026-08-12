@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -312,6 +313,61 @@ func (s *Store) GetByAccount(ctx context.Context, accountID string) (partner.Par
 		return partner.Partner{}, fmt.Errorf("get partner by account: %w", err)
 	}
 	return p, nil
+}
+
+// RecordCertification persists a certification run.
+func (s *Store) RecordCertification(ctx context.Context, partnerID string, res partner.CertificationResult, runBy string) (partner.CertificationRecord, error) {
+	if s.db == nil {
+		return partner.CertificationRecord{}, sql.ErrConnDone
+	}
+	checks, err := json.Marshal(res.Checks)
+	if err != nil {
+		return partner.CertificationRecord{}, err
+	}
+	var rec partner.CertificationRecord
+	var raw []byte
+	if err := s.db.QueryRowContext(ctx, `
+INSERT INTO partner_certifications (partner_id, passed, score, total, checks, run_by)
+VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)
+RETURNING id::text, passed, score, total, checks, COALESCE(run_by,''), created_at`,
+		partnerID, res.Passed, res.Score, res.Total, string(checks), nullStr(runBy)).
+		Scan(&rec.ID, &rec.Passed, &rec.Score, &rec.Total, &raw, &rec.RunBy, &rec.CreatedAt); err != nil {
+		if c := classify(err); c != err {
+			return partner.CertificationRecord{}, c
+		}
+		return partner.CertificationRecord{}, fmt.Errorf("record certification: %w", err)
+	}
+	rec.Checks = raw
+	return rec, nil
+}
+
+// ListCertifications returns a partner's runs, newest first.
+func (s *Store) ListCertifications(ctx context.Context, partnerID string, limit int) ([]partner.CertificationRecord, error) {
+	if s.db == nil {
+		return nil, sql.ErrConnDone
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id::text, passed, score, total, checks, COALESCE(run_by,''), created_at
+FROM partner_certifications WHERE partner_id = $1::uuid
+ORDER BY created_at DESC LIMIT $2`, partnerID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list certifications: %w", err)
+	}
+	defer rows.Close()
+	out := []partner.CertificationRecord{}
+	for rows.Next() {
+		var rec partner.CertificationRecord
+		var raw []byte
+		if err := rows.Scan(&rec.ID, &rec.Passed, &rec.Score, &rec.Total, &raw, &rec.RunBy, &rec.CreatedAt); err != nil {
+			return nil, err
+		}
+		rec.Checks = raw
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 func nullStr(s string) any {
