@@ -407,7 +407,7 @@ func TestPartnerActiveInExchangeFanout(t *testing.T) {
 			r.Body.Close()
 		}
 	}
-	inFanout := func() bool {
+	inFanout := func(ep string) bool {
 		resp, err := exClient.Get(h.URLs.Exchange + routes.DebugExchangeRouting + "?preview=true")
 		if err != nil {
 			return false
@@ -420,7 +420,7 @@ func TestPartnerActiveInExchangeFanout(t *testing.T) {
 			return false
 		}
 		for _, e := range body.All {
-			if strings.Contains(e, endpoint) {
+			if strings.Contains(e, ep) {
 				return true
 			}
 		}
@@ -431,24 +431,38 @@ func TestPartnerActiveInExchangeFanout(t *testing.T) {
 	// the merge, so even a warm-loaded snapshot isn't used).
 	h.SetConfigForPod(t, "exchange.partner_registry_enabled", "false", pod)
 	refresh()
-	if inFanout() {
+	if inFanout(endpoint) {
 		t.Fatal("active partner is in the fan-out with the registry flag OFF")
 	}
 
-	// Flag ON → it appears (warm-loaded + merged), on every replica after the
-	// broadcast refresh + config propagation.
+	// Flag ON → it appears (warm-loaded + merged). refresh() broadcasts to every
+	// replica, so any pod the preview lands on has it.
 	h.SetConfigForPod(t, "exchange.partner_registry_enabled", "true", pod)
 	seen := false
-	for deadline := time.Now().Add(25 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
 		refresh()
-		if inFanout() {
+		if inFanout(endpoint) {
 			seen = true
 			break
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 	if !seen {
 		t.Error("active partner never appeared in the exchange fan-out with the flag ON")
+	}
+
+	// A SANDBOX partner (not active) must NOT be fanned out — proves the
+	// status='active' filter, so a partner can't receive live bids until certified.
+	sbEndpoint := fmt.Sprintf("http://partner-sb-%d.invalid:9999/bid", time.Now().UnixNano())
+	_, sp := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+		fmt.Sprintf(`{"name":"E2E Sandbox %d","kind":"dsp","endpoint_bid":%q}`, time.Now().UnixNano(), sbEndpoint))
+	sbID, _ := sp["id"].(string)
+	partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerStatus,
+		fmt.Sprintf(`{"id":%q,"status":"sandbox"}`, sbID))
+	refresh()
+	time.Sleep(1 * time.Second)
+	if inFanout(sbEndpoint) {
+		t.Error("a SANDBOX partner is in the fan-out — only 'active' should be")
 	}
 }
 

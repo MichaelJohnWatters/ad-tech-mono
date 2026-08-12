@@ -84,6 +84,7 @@ func main() {
 			parts = append(parts, partnerEP.Snapshot()...)
 		}
 		out := make([]string, 0, len(parts))
+		seen := make(map[string]struct{}, len(parts))
 		notify := make(map[string]string, len(parts))
 		seats := make(map[string]string, len(parts))
 		for _, p := range parts {
@@ -92,6 +93,13 @@ func main() {
 				continue
 			}
 			endpoint, notifyBase, seat := splitDSPEndpoint(p)
+			// Dedup: the same DSP in both config and the registry must be called
+			// ONCE (else two parallel calls + two bids from one seat). Config comes
+			// first in `parts`, so its seat/notify win.
+			if _, dup := seen[endpoint]; dup {
+				continue
+			}
+			seen[endpoint] = struct{}{}
 			out = append(out, endpoint)
 			if notifyBase != "" {
 				notify[endpoint] = notifyBase
@@ -251,7 +259,7 @@ func main() {
 	// hot path reads an in-process snapshot, never a query.
 	partnerCtx, partnerCancel := context.WithCancel(context.Background())
 	lc.OnShutdown("partner-endpoints", func(context.Context) error { partnerCancel(); return nil })
-	partnerEP = startPartnerEndpoints(partnerCtx, cfg, log)
+	partnerEP = startPartnerEndpoints(partnerCtx, cfg, connectInvalidateBus(cfg, log), log)
 
 	// Debug surface — all behind debug.endpoints_enabled (default true in
 	// dev, expected false in prod overlays). Reads + mutations both gated
