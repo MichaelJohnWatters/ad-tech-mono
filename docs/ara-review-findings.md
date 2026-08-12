@@ -46,7 +46,7 @@ tenant at all. `ResolveAccount` now resolves **only** by the unguessable
 `source_event_id` (the destination fallback is deleted). Aggregatable reports are
 parsed and dropped into a new **platform-global** holding table
 `ara_aggregatable_quarantine` (migration 096) — no `account_id`, no RLS, never
-shown in any advertiser overlay, staff-inspectable, age-purged (7d). We can't
+shown in any advertiser overlay, age-purged (7d), inspectable via SQL only. We can't
 verify/decrypt the payloads without the aggregation service (the mock boundary)
 anyway, so quarantine is the honest resting place. Event reports are unchanged.
 - `pkg/ara/postgres/store.go` — `ResolveAccount(sourceEventID)` (fallback removed),

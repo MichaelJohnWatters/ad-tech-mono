@@ -118,20 +118,24 @@ backup:
 
 services:
   dsp-internal:
-    replicas: 3
+    # Autoscaled (base sets global.autoscaling + an hpa block). spec.replicas is
+    # OMITTED for an hpa'd service, so a plain `replicas:` here would be dead and
+    # the prod floor would silently drop to the base minReplicas — encode the
+    # intended prod floor as hpa.minReplicas instead.
+    hpa: { minReplicas: 3, maxReplicas: 8 }
   dsp-competitor1:
     replicas: 2
   dsp-competitor2:
     replicas: 2
   ssp:
-    replicas: 3
+    hpa: { minReplicas: 3, maxReplicas: 8 }
     # Prod supply-chain identity: the schain asi must be the real platform
     # domain (match global.domain), not the local adtech.local from base.
     extraEnv:
       - name: SSP_SELLER_DOMAIN
         value: "adtech.example.com"   # ← match global.domain
   exchange:
-    replicas: 3
+    hpa: { minReplicas: 3, maxReplicas: 8 }
     # Durable event spool (survives pod eviction/reschedule) — a plain emptyDir
     # would lose un-drained money events if the pod moved while NATS was down.
     # Per-replica PVC via StatefulSet; set storageClass to your fast SSD class.
@@ -149,7 +153,7 @@ services:
       # adcert_ed25519 secret (SOPS) — the exchange prefers the store key over
       # the inherited dev env fallback. Do NOT commit a real key here.
   adserver:
-    replicas: 3
+    hpa: { minReplicas: 3, maxReplicas: 8 }
     # Durable event spool (see exchange note above).
     persistence:
       size: 1Gi
@@ -161,21 +165,21 @@ services:
       - name: ADSERVER_TRACKER_URL
         value: "https://tracker.adtech.example.com"   # ← match global.domain
   publisher-adserver:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 5 }
     extraEnv:
       - name: PUBLISHER_ADSERVER_TRACKER_URL
         value: "https://tracker.adtech.example.com"   # ← match global.domain
       - name: PUBLISHER_ADSERVER_PUBLIC_URL
         value: "https://pubad.adtech.example.com"     # ← match global.domain
   tracker:
-    replicas: 4
-    # Durable event spool (see exchange note above). Per-replica PVC — each of the
-    # 4 tracker pods keeps its own spool.
+    hpa: { minReplicas: 4, maxReplicas: 12 }
+    # Durable event spool (see exchange note above). Per-replica PVC — each tracker
+    # pod keeps its own spool (min 4 in prod; never below the readiness-flap floor).
     persistence:
       size: 1Gi
       # storageClass: gp3
   gateway:
-    replicas: 2
+    hpa: { minReplicas: 2, maxReplicas: 6 }
     # Auth is MANDATORY in prod: refuse to boot with the dev auth-bypass. Needs
     # an active jwt_signing secret (seeded/SOPS) or GATEWAY_JWT_SIGNING_KEY.
     # The public_tracker_url is baked into advertiser conversion pixels (HTTPS,

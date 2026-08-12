@@ -92,10 +92,13 @@ mutex}, disarm with ?block=0&mutex=0.
   (tracker/adserver/gateway/ssp/exchange/dsp-internal/publisher-adserver/ssai)
   has HorizontalPodAutoscalers (`services.<svc>.hpa` in the chart, gated by
   `global.autoscaling`, default ON locally). Autoscaling mid-run changes replica
-  counts and makes runs non-comparable + hides regressions. Before a run either
-  `kubectl delete hpa --all -n adtech` (restore later with a `helm upgrade`) or
-  redeploy with `--set global.autoscaling=false`, then confirm `kubectl get hpa
-  -n adtech` is empty and the fleet sits at its fixed `replicas`. Re-enable after.
+  counts and makes runs non-comparable + hides regressions. Pin with a redeploy:
+  `helm upgrade adtech k8s/helm/adtech --reuse-values --set global.autoscaling=false`
+  — this deletes the HPAs AND re-emits a fixed `spec.replicas`. Do NOT just
+  `kubectl delete hpa`: the chart OMITS `spec.replicas` for hpa'd services, so
+  deleting the HPA alone leaves pods FROZEN at their last-scaled count, not the
+  floor. After: `kubectl get hpa -n adtech` empty + pods at fixed counts; re-enable
+  with `--set global.autoscaling=true` post-run.
 - **Nothing on the host mid-run**: no builds, no npm/docker, no browsers — an
   `npm install` once collapsed fill 97→12% (simulator + VM share the cores).
 - **Never deploy ANYTHING mid-run** — even a configmap-only helm upgrade

@@ -84,8 +84,12 @@ type araDeps struct {
 	maxBody       int64
 }
 
-// consented reports whether the request carries personalisation consent — the
-// same gate the deterministic identity path uses.
+// araConsented reports whether the request carries personalisation consent — the
+// same gate the deterministic identity path uses. NOTE: the ARA beacons carry no
+// TCF/GPP consent string, so in practice this honors the browser's Sec-GPC header
+// (or ?gpc=1) / explicit opt-out params; with no signals it defaults to consented.
+// The binding control is the SOURCE gate (the ad server bakes a source only on a
+// consented serve), so an unconsented user has no source for a trigger to match.
 func araConsented(r *http.Request) bool {
 	q := r.URL.Query()
 	return privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC"))).Personalise
