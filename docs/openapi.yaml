@@ -1806,6 +1806,43 @@ paths:
         "200": { description: "the partner's own record" }
         "403": { description: "not a partner account" }
         "404": { description: "no partner record for this account" }
+  /v1/api/partner/sandbox-keys:
+    get:
+      tags: [Platform]
+      summary: List a partner's sandbox API keys (masked)
+      description: >-
+        Partner accounts only (apikeys:manage). Lists the caller partner's
+        non-revoked sandbox keys with the value MASKED. Account-scoped.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, status, value_preview, created_at, rotated_at? }]" }
+        "403": { description: "not a partner account" }
+    post:
+      tags: [Platform]
+      summary: Generate / rotate a partner sandbox API key
+      description: >-
+        Partner accounts only (apikeys:manage). Mints a new sandbox key (X-API-Key)
+        and demotes any current active key to 'rotating' (grace window). Returns
+        the FULL value ONCE — never shown again.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: "{ id, value, note }" }
+        "403": { description: "not a partner account" }
+  /v1/api/partner/sandbox-keys/revoke:
+    post:
+      tags: [Platform]
+      summary: Revoke a partner sandbox API key
+      description: "Partner accounts only (apikeys:manage). Revokes one of the caller's own keys."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [id], properties: { id: { type: string } } }
+      responses:
+        "200": { description: "{ id, status: revoked }" }
+        "400": { description: "invalid id" }
+        "404": { description: "key not found (or not this partner's)" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

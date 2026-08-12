@@ -39,9 +39,16 @@
       {{ template "card-end" . }}
     </section>
 
-    <!-- ============ API keys (sandbox) — wired in slice 2b ============ -->
+    <!-- ============ API keys (sandbox) ============ -->
     <section id="section-apikeys" class="portal-section p-6 space-y-6 hidden">
-      {{ template "card-start" (dict "title" "Sandbox API keys" "subtitle" "Generate + rotate the key that authenticates your sandbox integration") }}
+      {{ template "card-start" (dict "title" "Sandbox API keys" "subtitle" "Generate + rotate the X-API-Key that authenticates your sandbox integration. Shown in full once — store it securely.") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Generate / rotate key" "variant" "secondary" "size" "sm" "onclick" "generateSandboxKey()") }}
+      </div>
+      <div id="newKeyBanner" class="hidden mb-3 rounded-md border border-success/40 bg-success/10 p-3 text-sm">
+        <div class="font-medium mb-1">Your new key (copy it now — it won't be shown again):</div>
+        <code id="newKeyValue" class="font-mono text-xs break-all"></code>
+      </div>
       <div id="apiKeysBody" class="text-sm text-gray-500">Loading…</div>
       {{ template "card-end" . }}
     </section>
@@ -81,9 +88,43 @@ async function loadPartnerStatus() {
     </div>`;
 }
 
-// Sandbox key management ships in slice 2b.
+const KEY_STATUS_BADGE = {active: 'bg-success/15 text-success', rotating: 'bg-warning/15 text-warning'};
 async function loadApiKeys() {
-  $('apiKeysBody').innerHTML = '<span class="text-gray-400">Sandbox key management is coming shortly. Your account manager can issue a key in the meantime.</span>';
+  const el = $('apiKeysBody');
+  let keys;
+  try {
+    keys = await fetchJSON('/v1/api/partner/sandbox-keys') || [];
+  } catch (err) {
+    el.innerHTML = `<span class="text-error">Load failed — ${esc(err.message)}</span>`;
+    return;
+  }
+  el.innerHTML = keys.length ? `<div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
+      <table class="min-w-full text-sm"><thead class="bg-gray-50 dark:bg-surface-3 text-xs uppercase text-gray-500">
+        <tr><th class="px-3 py-2 text-left">Key</th><th class="px-3 py-2 text-left">Status</th><th class="px-3 py-2 text-left">Created</th><th class="px-3 py-2"></th></tr>
+      </thead><tbody>${keys.map(k => `
+        <tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-3 py-2 font-mono text-xs">${esc(k.value_preview)}</td>
+          <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${KEY_STATUS_BADGE[k.status]||''}">${esc(k.status)}</span></td>
+          <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(k.created_at)}</td>
+          <td class="px-3 py-2 text-right"><button onclick="revokeSandboxKey('${esc(k.id)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Revoke</button></td>
+        </tr>`).join('')}</tbody></table></div>`
+    : '<span class="text-gray-400">No keys yet. Generate one to authenticate your sandbox calls.</span>';
+}
+async function generateSandboxKey() {
+  try {
+    const res = await fetchJSON('/v1/api/partner/sandbox-keys', {method: 'POST'});
+    $('newKeyValue').textContent = res.value;
+    $('newKeyBanner').classList.remove('hidden');
+    toast('Sandbox key generated', 'success');
+    loadApiKeys();
+  } catch (err) { toast('Generate failed: ' + err.message, 'error'); }
+}
+async function revokeSandboxKey(id) {
+  try {
+    await fetchJSON('/v1/api/partner/sandbox-keys/revoke', {method: 'POST', body: JSON.stringify({id})});
+    toast('Key revoked', 'success');
+    loadApiKeys();
+  } catch (err) { toast('Revoke failed: ' + err.message, 'error'); }
 }
 </script>
 </body>

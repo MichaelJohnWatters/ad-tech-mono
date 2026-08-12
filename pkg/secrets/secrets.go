@@ -26,6 +26,7 @@ const (
 	PurposeHMACTracker    = "hmac_tracker"    // browser-pixel HMAC secrets (platform key)
 	PurposeHMACConversion = "hmac_conversion" // per-advertiser S2S conversion-postback HMAC key (G7)
 	PurposePartnerShared  = "partner_shared"  // external partners (Prebid, S2S)
+	PurposePartnerSandbox = "partner_sandbox" // per-partner self-serve sandbox API key (#112)
 	PurposeServiceS2S     = "service_s2s"     // internal service-to-service
 	PurposeAPIKey         = "api_key"         // operator-managed CRUD API keys
 	PurposePGPPrivate     = "pgp_private"     // armored OpenPGP private key: audience-file decrypt-on-ingest (ADR 0008)

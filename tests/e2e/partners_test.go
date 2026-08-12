@@ -122,6 +122,96 @@ func TestPartnerProvisionAndSelfServe(t *testing.T) {
 	}
 }
 
+// partnerList does an authed GET returning a JSON array.
+func partnerListReq(t *testing.T, client *http.Client, url string) (int, []map[string]any) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	var out []map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+// TestPartnerSandboxKeys (slice 2b): a provisioned partner self-serves its
+// sandbox API key — generate (full value once), list (masked), rotate (grace
+// window), revoke. Strictly account-scoped; non-partners are forbidden.
+func TestPartnerSandboxKeys(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	staff := h.CreateStaff(t, fmt.Sprintf("key-staff-%d", time.Now().UnixNano()))
+	client := h.OwnerClient(t, staff.ID)
+
+	// Register + provision a partner login.
+	_, p := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+		fmt.Sprintf(`{"name":"E2E KeyPartner %d","kind":"dsp"}`, time.Now().UnixNano()))
+	id, _ := p["id"].(string)
+	email := fmt.Sprintf("keypartner-%d@integrations.test", time.Now().UnixNano())
+	_, prov := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerProvision,
+		fmt.Sprintf(`{"id":%q,"email":%q}`, id, email))
+	temp, _ := prov["temp_password"].(string)
+	partnerClient := h.LoginAs(t, email, temp)
+
+	keysURL := h.URLs.Gateway + routes.APIPartnerSandboxKeys
+	revokeURL := h.URLs.Gateway + routes.APIPartnerSandboxKeysRevoke
+
+	// Starts empty.
+	code, list := partnerListReq(t, partnerClient, keysURL)
+	if code != http.StatusOK || len(list) != 0 {
+		t.Fatalf("initial keys = %d len %d, want 200 empty", code, len(list))
+	}
+
+	// Generate → 201 + full value once (sk_ prefix).
+	code, gen := partnerReq(t, partnerClient, http.MethodPost, keysURL, "")
+	if code != http.StatusCreated {
+		t.Fatalf("generate key = %d, want 201 (%v)", code, gen)
+	}
+	full, _ := gen["value"].(string)
+	firstID, _ := gen["id"].(string)
+	if !strings.HasPrefix(full, "sk_") || firstID == "" {
+		t.Fatalf("generated key malformed: %v", gen)
+	}
+
+	// List shows it ACTIVE + MASKED (never the full value).
+	code, list = partnerListReq(t, partnerClient, keysURL)
+	if code != http.StatusOK || len(list) != 1 || list[0]["status"] != "active" {
+		t.Fatalf("after generate: %d %v", code, list)
+	}
+	if prev, _ := list[0]["value_preview"].(string); prev == "" || prev == full {
+		t.Errorf("value_preview = %q must be masked, not the full key", list[0]["value_preview"])
+	}
+
+	// Rotate → the old key becomes 'rotating', the new one 'active' (2 total).
+	code, _ = partnerReq(t, partnerClient, http.MethodPost, keysURL, "")
+	if code != http.StatusCreated {
+		t.Fatalf("rotate = %d, want 201", code)
+	}
+	code, list = partnerListReq(t, partnerClient, keysURL)
+	if code != http.StatusOK || len(list) != 2 {
+		t.Fatalf("after rotate: %d len %d, want 2", code, len(list))
+	}
+
+	// Revoke the first key → it drops out of the list.
+	code, _ = partnerReq(t, partnerClient, http.MethodPost, revokeURL, fmt.Sprintf(`{"id":%q}`, firstID))
+	if code != http.StatusOK {
+		t.Errorf("revoke = %d, want 200", code)
+	}
+	code, list = partnerListReq(t, partnerClient, keysURL)
+	if code != http.StatusOK || len(list) != 1 {
+		t.Errorf("after revoke: len %d, want 1", len(list))
+	}
+
+	// A staff (non-partner) account cannot touch partner sandbox keys.
+	code, _ = partnerListReq(t, client, keysURL)
+	if code != http.StatusForbidden {
+		t.Errorf("staff GET sandbox-keys = %d, want 403 (partner-only)", code)
+	}
+}
+
 func TestPartnerOnboardingLifecycle(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	staff := h.CreateStaff(t, fmt.Sprintf("partner-staff-%d", time.Now().UnixNano()))
