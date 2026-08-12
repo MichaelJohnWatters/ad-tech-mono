@@ -178,6 +178,7 @@ func main() {
 		return ks
 	}
 	metrics := middleware.NewMetrics(constants.ServiceTracker)
+	metrics.Registry().MustRegister(araCollectors()...)
 	if bus != nil {
 		if sp, err := events.NewSpool(events.SpoolDirFromEnv(), events.DefaultSpoolCap, metrics.Registry()); err != nil {
 			log.Error("event spool init failed — publishes remain at-most-once", "error", err)
@@ -218,6 +219,10 @@ func main() {
 		} else {
 			araH.store = arapg.New(st.Primary())
 			lc.OnShutdown("ara-db", func(context.Context) error { return st.Close() })
+			// Housekeeping: periodically drop expired ARA source rows.
+			purgeCtx, purgeCancel := context.WithCancel(context.Background())
+			lc.OnShutdown("ara-purge", func(context.Context) error { purgeCancel(); return nil })
+			go araPurgeLoop(purgeCtx, araH.store, log)
 		}
 	}
 	mux.HandleFunc(routes.TrackerARASource, araH.registerSource)

@@ -209,6 +209,32 @@ func (s *Store) SummaryForAccount(ctx context.Context, accountID string) (Summar
 	return sum, rows.Err()
 }
 
+// DeleteExpiredSources removes source-registration rows past their expiry — pure
+// housekeeping (expired sources already don't resolve, since the destination
+// fallback filters expires_at > now()). Platform-wide, so it uses the hatch.
+func (s *Store) DeleteExpiredSources(ctx context.Context) (int64, error) {
+	if s.db == nil {
+		return 0, sql.ErrConnDone
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM ara_sources WHERE expires_at < now()`)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func nullStr(s string) any {
 	if s == "" {
 		return nil
