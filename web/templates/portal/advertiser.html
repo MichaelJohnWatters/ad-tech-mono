@@ -1215,9 +1215,9 @@ async function loadARA() {
       <td class="px-3 py-2 text-xs text-gray-500">${esc((r.ReceivedAt || '').replace('T', ' ').slice(0, 19))}</td>
     </tr>`).join('')
     : `<tr><td colspan="5" class="px-3 py-8 text-center text-sm text-gray-400">No ARA reports yet — needs a Privacy-Sandbox browser with ARA enabled.</td></tr>`;
-  el.innerHTML = `<div class="mb-3 flex gap-6 text-sm">
+  el.innerHTML = `<div class="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
       <span>Event-level: <strong>${s.event | 0}</strong></span>
-      <span>Aggregatable: <strong>${s.aggregate | 0}</strong></span>
+      <span class="text-gray-400" title="Aggregatable reports carry no per-user source id, so they can't be attributed to a single advertiser without the aggregation service. They're held for verification, not shown per-account.">Aggregatable: held for aggregation-service verification</span>
     </div>
     <div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
       <table class="min-w-full text-sm"><thead class="bg-gray-50 dark:bg-surface-3 text-xs uppercase text-gray-500">
