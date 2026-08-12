@@ -45,6 +45,11 @@ var Exchange = struct {
 	SchainAppendNode       config.BoolKey
 	AdCertSignKey          config.StringKey
 	IdentityObserveEnabled config.BoolKey
+	// PartnerRegistryEnabled merges 'active' DSP partners from the onboarding
+	// registry (#112) into the auction fan-out; PartnerRefreshInterval is the warm
+	// reload cadence (hot-path-safe — the auction reads an in-process snapshot).
+	PartnerRegistryEnabled config.BoolKey
+	PartnerRefreshInterval config.DurationKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL      config.StringKey
@@ -83,6 +88,8 @@ var Exchange = struct {
 	SchainAppendNode:       exchangeSet.Bool("exchange.schain_append_node", "false", config.TierLive, "When true, append this exchange as an additional schain node using adstxt_seller_domain/id. Only correct when the exchange is a distinct reselling entity from the SSP — with the single-platform default (SSP already emits the platform node) leave this off to avoid inflating the chain.", config.Since("v1.4")),
 	AdCertSignKey:          exchangeSet.String("exchange.adcert_sign_key", "", config.TierSecret, "ads.cert Ed25519 private key (base64, 64-byte seed+public form) used to sign outbound bid requests. Empty disables signing. DSPs verify with the matching public key (dsp.adcert_verify_key).", config.Since("v1.4")),
 	IdentityObserveEnabled: exchangeSet.Bool("exchange.identity_observe_enabled", "false", config.TierStatic, "Publish identity signals from inbound Prebid bid requests (external demand our own SSP never saw) to the identity-consumer, which builds identity_graph edges. Fire-and-forget, off the hot path. Off by default; needs NATS.", config.Since("v1.4")),
+	PartnerRegistryEnabled: exchangeSet.Bool("exchange.partner_registry_enabled", "false", config.TierLive, "Merge 'active' DSP partners from the onboarding registry (#112) into the auction fan-out, in addition to exchange.dsp_endpoints. The exchange warm-loads active partners from Postgres in the background; the auction reads an in-process snapshot (no per-auction query). Off by default — a partner only receives live bid traffic once staff flip it to 'active' AND this is on.", config.Since("v1.21")),
+	PartnerRefreshInterval: exchangeSet.Duration("exchange.partner_refresh_interval", "30s", config.TierStatic, "How often the exchange reloads the 'active' DSP-partner endpoint set from Postgres into its warm cache. Only consulted when exchange.partner_registry_enabled is on.", config.Since("v1.21")),
 	URL:                    config.RawString("exchange.url", routes.DefaultExchangeURL),
 	Port:                   config.RawString("exchange.port", routes.PortExchange),
 	GRPCPort:               config.RawString("exchange.grpc_port", routes.PortExchangeGRPC),

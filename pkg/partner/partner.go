@@ -152,6 +152,10 @@ type Store interface {
 	RecordCertification(ctx context.Context, partnerID string, res CertificationResult, runBy string) (CertificationRecord, error)
 	// ListCertifications returns a partner's certification history, newest first.
 	ListCertifications(ctx context.Context, partnerID string, limit int) ([]CertificationRecord, error)
+	// ActiveDSPEndpoints returns the auction fan-out endpoint strings for every
+	// ACTIVE dsp partner — "endpoint_bid[;seat=X][;notify=Y]" (the exchange's
+	// dsp_endpoints format). The exchange warm-loads these into the fan-out.
+	ActiveDSPEndpoints(ctx context.Context) ([]string, error)
 }
 
 // CertificationRecord is a persisted certification run (read model).

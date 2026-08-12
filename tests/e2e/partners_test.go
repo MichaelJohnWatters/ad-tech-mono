@@ -379,6 +379,79 @@ func TestPartnerCertification(t *testing.T) {
 	}
 }
 
+// TestPartnerActiveInExchangeFanout (follow-up): an 'active' DSP partner is merged
+// into the exchange auction fan-out when exchange.partner_registry_enabled is on,
+// and NOT when it's off — proving the warm-cache load + the flag gate, hot-path-safe.
+func TestPartnerActiveInExchangeFanout(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	staff := h.CreateStaff(t, fmt.Sprintf("fanout-staff-%d", time.Now().UnixNano()))
+	client := h.OwnerClient(t, staff.ID)
+	const pod = "exchange-0"
+	t.Cleanup(func() { h.SetConfigForPod(t, "exchange.partner_registry_enabled", "false", pod) })
+
+	// A distinctive, never-reachable endpoint (we only assert list membership).
+	endpoint := fmt.Sprintf("http://partner-e2e-%d.invalid:9999/bid", time.Now().UnixNano())
+	_, p := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
+		fmt.Sprintf(`{"name":"E2E Fanout %d","kind":"dsp","endpoint_bid":%q,"seat":"e2e-seat"}`, time.Now().UnixNano(), endpoint))
+	id, _ := p["id"].(string)
+	for _, st := range []string{"sandbox", "certified", "active"} {
+		if code, _ := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerStatus,
+			fmt.Sprintf(`{"id":%q,"status":%q}`, id, st)); code != http.StatusOK {
+			t.Fatalf("advance to %s = %d", st, code)
+		}
+	}
+
+	exClient := harness.NewHTTPClient(10 * time.Second)
+	refresh := func() { // broadcasts to every exchange replica
+		if r, err := exClient.Get(h.URLs.Exchange + routes.DebugCacheRefresh + "?name=partner-endpoints"); err == nil {
+			r.Body.Close()
+		}
+	}
+	inFanout := func() bool {
+		resp, err := exClient.Get(h.URLs.Exchange + routes.DebugExchangeRouting + "?preview=true")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var body struct {
+			All []string `json:"all"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&body) != nil {
+			return false
+		}
+		for _, e := range body.All {
+			if strings.Contains(e, endpoint) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Flag OFF (default) → the active partner is NOT in the fan-out (the flag gates
+	// the merge, so even a warm-loaded snapshot isn't used).
+	h.SetConfigForPod(t, "exchange.partner_registry_enabled", "false", pod)
+	refresh()
+	if inFanout() {
+		t.Fatal("active partner is in the fan-out with the registry flag OFF")
+	}
+
+	// Flag ON → it appears (warm-loaded + merged), on every replica after the
+	// broadcast refresh + config propagation.
+	h.SetConfigForPod(t, "exchange.partner_registry_enabled", "true", pod)
+	seen := false
+	for deadline := time.Now().Add(25 * time.Second); time.Now().Before(deadline); {
+		refresh()
+		if inFanout() {
+			seen = true
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if !seen {
+		t.Error("active partner never appeared in the exchange fan-out with the flag ON")
+	}
+}
+
 func TestPartnerOnboardingLifecycle(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	staff := h.CreateStaff(t, fmt.Sprintf("partner-staff-%d", time.Now().UnixNano()))
