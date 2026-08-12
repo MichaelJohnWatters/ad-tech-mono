@@ -43,7 +43,11 @@ test-clickhouse: ## Run the ClickHouse analytics integration tests (needs a live
 
 test-e2e: ## Run end-to-end tests against the live stack (real ClickHouse backend; preflight only fail-fasts; chaos tests excluded — see test-e2e-chaos)
 	./scripts/e2e-preflight.sh
-	go test ./tests/... -tags=e2e -count=1 -timeout=10m
+	# 20m, not 10m: the full ~190-test suite runs ~16m. A too-tight timeout makes
+	# go test KILL the binary mid-test, which SKIPS t.Cleanup and leaves the stack
+	# dirty (stale config like tracker.signature_validation, polluted router stats)
+	# → a cascade of false failures on the next run. Give it headroom.
+	go test ./tests/... -tags=e2e -count=1 -timeout=20m
 
 test-e2e-chaos: ## Chaos e2e: kills infra pods (nats/postgres/redis/minio) to prove fail-open behaviour. Run SEPARATELY — the pod churn flaps port-forwards and destabilises unrelated tests, so these are opt-in (E2E_CHAOS=1) and excluded from test-e2e.
 	E2E_CHAOS=1 go test ./tests/e2e -tags=e2e -count=1 -timeout=15m -run 'TestChaos'
