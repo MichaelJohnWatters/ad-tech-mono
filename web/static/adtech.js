@@ -372,8 +372,20 @@
         // tracker click URL with redir= baked in) work without any
         // client-side URL surgery.
         var imp = data.impression_url || '';
-        el.innerHTML = data.html +
-            (imp ? '<img src="' + imp + '" width="1" height="1" style="position:absolute;opacity:0;" alt="" />' : '');
+        // Privacy Sandbox ARA: when the server baked a source beacon
+        // (data.ara_source_url), register the attribution source via
+        // attributionsrc on the impression pixel — a supporting browser fetches it
+        // and reads the Attribution-Reporting-Register-Source header. No-op in
+        // browsers without ARA. Reporting-only overlay (docs/attribution-phase4-ara.md).
+        var ara = data.ara_source_url || '';
+        var araAttr = ara ? ' attributionsrc="' + ara + '"' : '';
+        var pixel = '';
+        if (imp) {
+            pixel = '<img src="' + imp + '"' + araAttr + ' width="1" height="1" style="position:absolute;opacity:0;" alt="" />';
+        } else if (ara) {
+            pixel = '<img' + araAttr + ' width="1" height="1" style="position:absolute;opacity:0;" alt="" />';
+        }
+        el.innerHTML = data.html + pixel;
 
         if (data.viewability_url) {
             observeViewability(el, data.viewability_url, 1000); // display: 1s dwell
