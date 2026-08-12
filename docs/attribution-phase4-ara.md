@@ -22,8 +22,13 @@ bills and is stored separately from the exact conversions stream:
   source + returns `Attribution-Reporting-Register-Source`; `/v1/t/conv` also
   returns `Attribution-Reporting-Register-Trigger`; the well-known
   `report-{event,aggregate}-attribution` endpoints resolve the owning advertiser
-  (event by source_event_id, aggregatable by destination — via the platform hatch)
-  and persist. Registration is consent-gated + `tracker.ara_enabled` (default off).
+  and persist. Registration is consent-gated + `tracker.ara_enabled` (default off),
+  and **the source beacon is HMAC-SIGNED** like every other tracker beacon (advid
+  is signature-bound; unsigned → 403 in strict mode) so it can't be used to write
+  `ara_sources` for an arbitrary account. Report resolution is **non-forgeable**:
+  EVENT reports resolve only by the unguessable source_event_id (no destination
+  guessing); AGGREGATABLE reports use the destination fallback (no source id
+  exists), bounded by an active registered source + body cap + per-IP rate limit.
 - **gateway** — `GET /v1/api/ara/reports` (reports:read, account-scoped): the
   advertiser's overlay + summary, labelled "never billed".
 - **e2e** `TestARARegistrationAndReportIngest` — register-source header well-formed
