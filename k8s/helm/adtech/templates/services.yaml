@@ -27,7 +27,15 @@ spec:
   {{- if $svc.persistence }}
   serviceName: {{ $name }}
   {{- end }}
+  {{- /* HPA ownership: a service with an `hpa:` block (and global.autoscaling not
+         explicitly false) is scaled by a HorizontalPodAutoscaler, so we OMIT
+         spec.replicas — helm's merge patch leaves an absent key untouched, so the
+         controller owns the count and a `helm upgrade` won't reset it. Services
+         without hpa keep their fixed replicas. */}}
+  {{- $hpaOn := and $svc.hpa (ne (toString (($.Values.global | default dict).autoscaling)) "false") }}
+  {{- if not $hpaOn }}
   replicas: {{ $svc.replicas | default 1 }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ $name }}
@@ -277,6 +285,41 @@ spec:
                 port:
                   number: {{ (first $svc.ports).port }}
     {{- end }}
+{{- end }}
+{{- if $hpaOn }}
+---
+# HorizontalPodAutoscaler — CPU-utilisation autoscaling for a stateless serving
+# service (opt-in via the service's `hpa:` block; needs metrics-server, present on
+# k3s). Utilisation is a % of the pod's CPU *request* (resources.requests.cpu), so
+# every hpa'd service must set one. spec.replicas is omitted above so this is the
+# sole owner of the count. Scale-up is fast; scale-down waits out a stabilisation
+# window to avoid flapping (PLAN "Autoscaling (HPA)").
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ if $svc.persistence }}StatefulSet{{ else }}Deployment{{ end }}
+    name: {{ $name }}
+  minReplicas: {{ $svc.hpa.minReplicas | default 2 }}
+  maxReplicas: {{ $svc.hpa.maxReplicas | default 6 }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $svc.hpa.targetCPU | default 70 }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $svc.hpa.scaleDownStabilizationSeconds | default 300 }}
+    scaleUp:
+      stabilizationWindowSeconds: {{ $svc.hpa.scaleUpStabilizationSeconds | default 0 }}
 {{- end }}
 {{- end }}
 {{- end }}
