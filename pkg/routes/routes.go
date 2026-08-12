@@ -542,6 +542,9 @@ const (
 	TrackerView     = "/v1/t/view"
 	TrackerVideo    = "/v1/t/video"
 	TrackerAudio    = "/v1/t/audio"
+	// APIARAReports is the advertiser-facing read surface for the Privacy Sandbox
+	// ARA reporting-only overlay (the browser-posted noised/aggregated reports).
+	APIARAReports = apiPrefix + "/api/ara/reports"
 	// TrackerARASource registers a Privacy Sandbox attribution SOURCE (the ad
 	// server bakes a signed, attributionsrc beacon here); the browser reads the
 	// returned Attribution-Reporting-Register-Source header. See pkg/ara.

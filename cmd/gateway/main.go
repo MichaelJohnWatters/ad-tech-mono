@@ -948,6 +948,9 @@ func main() {
 			middleware.StripPrefix(reportsBase, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log))))
 	mux.Handle(reportsBase, authMiddleware(reportsProxy))
 	mux.Handle(routes.APIReports, authMiddleware(reportsProxy))
+	// Privacy Sandbox ARA reporting-only overlay (advertiser-scoped, reports:read).
+	mux.Handle(routes.APIARAReports, authMiddleware(
+		middleware.RequirePermission("reports:read")(araReportsHandler(gwDB, log))))
 
 	// Trace inspector: GET proxies to reporting, which scopes + redacts per the
 	// X-Account-Type/-ID the auth middleware injects. Staff (unscoped) and
