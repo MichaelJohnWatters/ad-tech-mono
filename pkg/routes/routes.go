@@ -117,6 +117,10 @@ const (
 	// APIPartnerMe is the provisioned partner reading its own onboarding record.
 	APIPartnerProvision = apiPrefix + "/api/partners/provision"
 	APIPartnerMe        = apiPrefix + "/api/partner/me"
+	// APIPartnerSandboxKeys is the partner's self-serve sandbox API key
+	// (generate/rotate/list-masked); …Revoke revokes one.
+	APIPartnerSandboxKeys       = apiPrefix + "/api/partner/sandbox-keys"
+	APIPartnerSandboxKeysRevoke = apiPrefix + "/api/partner/sandbox-keys/revoke"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
