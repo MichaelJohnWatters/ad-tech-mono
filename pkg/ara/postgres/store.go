@@ -44,12 +44,19 @@ ON CONFLICT (source_event_id) DO NOTHING`,
 // dropped (accepted, not persisted) so the browser doesn't retry forever.
 var ErrNoAccount = errors.New("ara: no account for report")
 
-// ResolveAccount finds the advertiser account for an incoming report. Event
-// reports carry the source_event_id we minted (exact match); aggregatable
-// reports don't, so they fall back to the newest unexpired source for the
-// destination. Reads cross-tenant via the platform hatch (the browser POST has
-// no tenant context).
-func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination string) (string, error) {
+// ResolveAccount finds the advertiser account for an incoming report. The report
+// ingest is UNAUTHENTICATED (browsers POST it), so resolution is the only thing
+// standing between a report and a tenant's rows — it must not be forgeable.
+//
+// The strong path is the source_event_id we minted (a 64-bit random the attacker
+// can't guess), so EVENT reports resolve by that alone (allowDestFallback=false).
+// AGGREGATABLE reports structurally carry no source_event_id, so they fall back to
+// the newest unexpired source for the destination — a weaker match, mitigated by
+// requiring an active registered source (which only a signature-authenticated
+// /v1/t/ara/src could create), the body-size cap, and the per-IP rate limit. A
+// report that resolves to nothing is dropped by the caller. Reads cross-tenant via
+// the platform hatch (the POST has no tenant context).
+func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination string, allowDestFallback bool) (string, error) {
 	if s.db == nil {
 		return "", sql.ErrConnDone
 	}
@@ -72,7 +79,9 @@ func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination s
 			return "", err
 		}
 	}
-	// Fall back to the destination (aggregatable reports, or an unknown source).
+	if !allowDestFallback {
+		return "", ErrNoAccount
+	}
 	err = tx.QueryRowContext(ctx,
 		`SELECT account_id::text FROM ara_sources
 		  WHERE destination = $1 AND expires_at > now()

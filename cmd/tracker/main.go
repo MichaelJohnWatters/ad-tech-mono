@@ -204,7 +204,13 @@ func main() {
 	// Best-effort DB — if it can't connect the endpoints 503 on use but the rest
 	// of the tracker is unaffected. Source/trigger registration is gated by
 	// tracker.ara_enabled + consent; the report-ingest endpoints stay mounted.
-	araH := araDeps{enabled: func() bool { return keys.Tracker.ARAEnabled.Get(cfg) }, log: log, maxBody: 128 << 10}
+	araH := araDeps{
+		enabled:   func() bool { return keys.Tracker.ARAEnabled.Get(cfg) },
+		sigKeys:   sigKeysForAdvertiser,
+		sigStrict: func() bool { return keys.Tracker.SignatureValidation.Get(cfg) },
+		log:       log,
+		maxBody:   128 << 10,
+	}
 	if dbURL := cfg.Get(keys.Database.URL.Key(), ""); dbURL != "" {
 		if st, err := postgres.New(postgres.Config{PrimaryURL: dbURL, MaxOpenConns: 4, MaxIdleConns: 2, ConnMaxLifetime: 5 * time.Minute}); err != nil {
 			log.Warn("ara: db connect failed; ARA endpoints will 503 on use", "error", err)
