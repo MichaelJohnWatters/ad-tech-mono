@@ -549,6 +549,51 @@
       </form>
     {{ template "modal-end" . }}
 
+    <!-- ============ Partners (PLAN Phase 11 item 112) ============ -->
+    <section id="section-partners" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "External partners" "subtitle" "Register + shepherd demand (DSP) / supply (SSP) partners through onboarding: pending → sandbox → certified → active") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ Register partner" "variant" "secondary" "size" "sm" "onclick" "openPartner()") }}
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Name" "Kind" "Status" "Bid endpoint" "Channels" "Lifecycle" "")) }}
+        <tbody id="partnerList"><tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- Register/edit partner modal -->
+    {{ template "modal-start" (dict "id" "partnerModal" "title" "Partner") }}
+      <form id="partnerForm" onsubmit="savePartner(event)">
+        <input type="hidden" id="pt_id">
+        <div class="grid grid-cols-2 gap-3">
+          {{ template "form-field" (dict "label" "Name" "name" "pt_name" "required" true) }}
+          <div>
+            <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Kind</label>
+            <select id="pt_kind" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+              <option value="dsp">DSP (demand)</option><option value="ssp">SSP (supply)</option>
+            </select>
+          </div>
+        </div>
+        {{ template "form-field" (dict "label" "Bid endpoint (http:// or grpc://)" "name" "pt_endpoint_bid" "placeholder" "https://bid.partner.example/openrtb") }}
+        <div class="grid grid-cols-2 gap-3">
+          {{ template "form-field" (dict "label" "Notify base (optional)" "name" "pt_endpoint_nurl") }}
+          {{ template "form-field" (dict "label" "Billed seat (optional)" "name" "pt_seat") }}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          {{ template "form-field" (dict "label" "Channels (comma-separated)" "name" "pt_channels" "placeholder" "display, video") }}
+          {{ template "form-field" (dict "label" "Formats (comma-separated)" "name" "pt_formats" "placeholder" "banner, vast") }}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          {{ template "form-field" (dict "label" "Timeout (ms)" "name" "pt_timeout" "type" "number" "placeholder" "100") }}
+          {{ template "form-field" (dict "label" "Tech contact email" "name" "pt_contact_tech" "type" "email") }}
+        </div>
+        <div class="flex justify-end gap-2 mt-2">
+          {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closePartner()") }}
+          {{ template "button" (dict "label" "Save" "type" "submit") }}
+        </div>
+      </form>
+    {{ template "modal-end" . }}
+
     <!-- ============ Tools ============ -->
     <section id="section-simulator" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Interactive simulator") }}
@@ -790,7 +835,7 @@ async function staffLookupTrace(traceId) {
 }
 
 // ---- Section switching (portal-core initSectionRouter) ----
-const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'support', 'ops', 'incidents', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'support', 'ops', 'incidents', 'partners', 'config', 'simulator', 'architecture', 'tools'];
 // Landing fallback: the first section in the RENDERED (permission-filtered)
 // sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
 // lands on a section it can actually see. Derived from the DOM at runtime —
@@ -807,8 +852,8 @@ function defaultSection() {
 const showSection = initSectionRouter({
   sections: SECTIONS,
   fallback: defaultSection,
-  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
-  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', partners: 'Partners', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), partners: () => loadPartners(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
 });
 
 // ---- Incidents (PLAN Phase 11 status page) ----
@@ -866,6 +911,85 @@ async function saveIncident(ev) {
     closeIncident();
     loadIncidents();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- External partners (PLAN Phase 11 item 112) ----
+const PT_STATUS_BADGE = {pending: 'bg-surface-3 text-gray-500', sandbox: 'bg-info/15 text-info', certified: 'bg-warning/15 text-warning', active: 'bg-success/15 text-success', paused: 'bg-warning/15 text-warning', terminated: 'bg-error/15 text-error'};
+// Mirrors pkg/partner's state machine for the UI affordance only — the server
+// re-validates every transition (CanTransition).
+const PT_NEXT = {pending: ['sandbox'], sandbox: ['certified', 'paused'], certified: ['active', 'paused'], active: ['paused'], paused: ['active', 'terminated'], terminated: []};
+let partnerCache = [];
+async function loadPartners() {
+  const tb = document.getElementById('partnerList');
+  try {
+    partnerCache = await fetchJSON('/v1/api/partners') || [];
+    tb.innerHTML = partnerCache.length ? partnerCache.map(p => {
+      const steps = (PT_NEXT[p.status] || []).map(s =>
+        `<button onclick="transitionPartner('${esc(p.id)}','${s}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">→ ${s}</button>`).join(' ');
+      return `<tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-medium">${esc(p.name)}</td>
+        <td class="px-3 py-2 text-xs uppercase text-gray-500">${esc(p.kind)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${PT_STATUS_BADGE[p.status]||''}">${esc(p.status)}</span></td>
+        <td class="px-3 py-2 font-mono text-xs text-gray-500">${esc(p.endpoint_bid || '—')}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${(p.channels||[]).map(esc).join(', ') || '—'}</td>
+        <td class="px-3 py-2">${steps || '<span class="text-xs text-gray-400">—</span>'}</td>
+        <td class="px-3 py-2 text-right"><button onclick="editPartner('${esc(p.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Edit</button></td>
+      </tr>`;
+    }).join('')
+      : '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No partners yet. Register a DSP or SSP to start onboarding.</td></tr>';
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openPartner() {
+  document.getElementById('partnerForm').reset();
+  document.getElementById('pt_id').value = '';
+  document.getElementById('partnerModal').classList.remove('hidden');
+}
+function closePartner() { document.getElementById('partnerModal').classList.add('hidden'); }
+function editPartner(id) {
+  const p = partnerCache.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('pt_id').value = p.id;
+  document.getElementById('pt_name').value = p.name;
+  document.getElementById('pt_kind').value = p.kind;
+  document.getElementById('pt_endpoint_bid').value = p.endpoint_bid || '';
+  document.getElementById('pt_endpoint_nurl').value = p.endpoint_nurl || '';
+  document.getElementById('pt_seat').value = p.seat || '';
+  document.getElementById('pt_channels').value = (p.channels || []).join(', ');
+  document.getElementById('pt_formats').value = (p.formats || []).join(', ');
+  document.getElementById('pt_timeout').value = p.timeout_ms || '';
+  document.getElementById('pt_contact_tech').value = p.contact_tech || '';
+  document.getElementById('partnerModal').classList.remove('hidden');
+}
+function csv(id) { return document.getElementById(id).value.split(',').map(s => s.trim()).filter(Boolean); }
+async function savePartner(ev) {
+  ev.preventDefault();
+  const body = {
+    id: document.getElementById('pt_id').value || undefined,
+    name: document.getElementById('pt_name').value.trim(),
+    kind: document.getElementById('pt_kind').value,
+    endpoint_bid: document.getElementById('pt_endpoint_bid').value.trim(),
+    endpoint_nurl: document.getElementById('pt_endpoint_nurl').value.trim(),
+    seat: document.getElementById('pt_seat').value.trim(),
+    channels: csv('pt_channels'),
+    formats: csv('pt_formats'),
+    timeout_ms: Number(document.getElementById('pt_timeout').value) || 0,
+    contact_tech: document.getElementById('pt_contact_tech').value.trim(),
+  };
+  try {
+    await fetchJSON('/v1/api/partners', {method: 'POST', body: JSON.stringify(body)});
+    toast('Partner saved', 'success');
+    closePartner();
+    loadPartners();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+async function transitionPartner(id, status) {
+  try {
+    await fetchJSON('/v1/api/partners/status', {method: 'POST', body: JSON.stringify({id, status})});
+    toast('Partner → ' + status, 'success');
+    loadPartners();
+  } catch (err) { toast('Transition failed: ' + err.message, 'error'); }
 }
 
 // ---- Support queue (PLAN Phase 11 item 108) ----

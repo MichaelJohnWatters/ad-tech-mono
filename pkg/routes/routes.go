@@ -108,6 +108,11 @@ const (
 	StatusPage   = "/status"
 	APIStatus    = apiPrefix + "/api/status"
 	APIIncidents = apiPrefix + "/api/incidents"
+	// APIPartners is the staff-only external-partner onboarding registry (PLAN
+	// Phase 11, item 112) — list/register/edit (partners:read/manage);
+	// APIPartnerStatus transitions the onboarding lifecycle.
+	APIPartners      = apiPrefix + "/api/partners"
+	APIPartnerStatus = apiPrefix + "/api/partners/status"
 	// APIStaffRetargeting is the staff oversight of retargeting audiences across
 	// ALL advertisers (platform-wide): segment, tag, window, live enrollment.
 	APIStaffRetargeting = apiPrefix + "/api/staff/retargeting"
