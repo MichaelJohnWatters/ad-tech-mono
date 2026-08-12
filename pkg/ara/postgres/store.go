@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ara"
 )
@@ -48,17 +49,21 @@ var ErrNoAccount = errors.New("ara: no account for report")
 // ingest is UNAUTHENTICATED (browsers POST it), so resolution is the only thing
 // standing between a report and a tenant's rows — it must not be forgeable.
 //
-// The strong path is the source_event_id we minted (a 64-bit random the attacker
-// can't guess), so EVENT reports resolve by that alone (allowDestFallback=false).
-// AGGREGATABLE reports structurally carry no source_event_id, so they fall back to
-// the newest unexpired source for the destination — a weaker match, mitigated by
-// requiring an active registered source (which only a signature-authenticated
-// /v1/t/ara/src could create), the body-size cap, and the per-IP rate limit. A
-// report that resolves to nothing is dropped by the caller. Reads cross-tenant via
-// the platform hatch (the POST has no tenant context).
-func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination string, allowDestFallback bool) (string, error) {
+// The ONLY key we trust is the source_event_id we minted (a 64-bit random the
+// attacker can't guess). We deliberately do NOT fall back to the report's
+// attribution_destination: that is the advertiser's PUBLIC site, nameable by
+// anyone, so resolving on it would let an unauthenticated POST write into another
+// tenant's rows (see docs/ara-review-findings.md, F1). Aggregatable reports carry
+// no source_event_id and so never resolve here — the caller quarantines them
+// instead (QuarantineAggregatable). A report that resolves to nothing is dropped
+// by the caller. Reads cross-tenant via the platform hatch (the POST has no
+// tenant context).
+func (s *Store) ResolveAccount(ctx context.Context, sourceEventID string) (string, error) {
 	if s.db == nil {
 		return "", sql.ErrConnDone
+	}
+	if sourceEventID == "" {
+		return "", ErrNoAccount
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -69,23 +74,8 @@ func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination s
 		return "", err
 	}
 	var acct string
-	if sourceEventID != "" {
-		err = tx.QueryRowContext(ctx,
-			`SELECT account_id::text FROM ara_sources WHERE source_event_id = $1`, sourceEventID).Scan(&acct)
-		if err == nil {
-			return acct, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-	}
-	if !allowDestFallback {
-		return "", ErrNoAccount
-	}
 	err = tx.QueryRowContext(ctx,
-		`SELECT account_id::text FROM ara_sources
-		  WHERE destination = $1 AND expires_at > now()
-		  ORDER BY registered_at DESC LIMIT 1`, destination).Scan(&acct)
+		`SELECT account_id::text FROM ara_sources WHERE source_event_id = $1`, sourceEventID).Scan(&acct)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNoAccount
 	}
@@ -93,6 +83,29 @@ func (s *Store) ResolveAccount(ctx context.Context, sourceEventID, destination s
 		return "", err
 	}
 	return acct, nil
+}
+
+// QuarantineAggregatable persists an aggregatable report to the platform-global
+// quarantine (migration 096) — NOT tied to any tenant, never shown in an
+// advertiser overlay. Aggregatable reports carry no unguessable source id, so they
+// can only be matched to an advertiser by the public destination; attributing on
+// that basis is a cross-tenant write (F1), and we can't verify the payloads
+// without the aggregation service (the mock boundary) anyway. So we hold them
+// here for staff inspection. Idempotent on the browser's report_id. Returns
+// (inserted, error). The quarantine table has no RLS, so no GUC is needed.
+func (s *Store) QuarantineAggregatable(ctx context.Context, claimedDest, reportID string, body []byte) (bool, error) {
+	if s.db == nil {
+		return false, sql.ErrConnDone
+	}
+	res, err := s.db.ExecContext(ctx, `
+INSERT INTO ara_aggregatable_quarantine (claimed_destination, report_id, body)
+VALUES ($1, $2, $3::jsonb)
+ON CONFLICT DO NOTHING`, claimedDest, nullStr(reportID), string(body))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // SaveReport persists a report under its resolved account. Idempotent on the
@@ -209,13 +222,62 @@ func (s *Store) SummaryForAccount(ctx context.Context, accountID string) (Summar
 	return sum, rows.Err()
 }
 
+// purgeBatch bounds each housekeeping DELETE so a backlog (purge loop down for a
+// long window, or a registration flood) can't turn into one giant long-locking
+// transaction (F3). DeleteExpiredSources / DeleteOldQuarantine loop in this many
+// rows at a time until drained.
+const purgeBatch = 5000
+
 // DeleteExpiredSources removes source-registration rows past their expiry — pure
-// housekeeping (expired sources already don't resolve, since the destination
-// fallback filters expires_at > now()). Platform-wide, so it uses the hatch.
+// housekeeping (expired sources already don't resolve). Platform-wide, so it uses
+// the hatch. Batched: a single unbounded DELETE could lock the table for a long
+// time under a backlog, so we delete in bounded chunks until drained.
 func (s *Store) DeleteExpiredSources(ctx context.Context) (int64, error) {
 	if s.db == nil {
 		return 0, sql.ErrConnDone
 	}
+	var total int64
+	for {
+		n, err := s.deleteBatch(ctx,
+			`DELETE FROM ara_sources WHERE ctid IN (
+			   SELECT ctid FROM ara_sources WHERE expires_at < now() LIMIT $1)`)
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < purgeBatch {
+			return total, nil
+		}
+	}
+}
+
+// DeleteOldQuarantine drops aggregatable-quarantine rows older than maxAge. The
+// quarantine is fed by an unauthenticated ingest, so it must be age-bounded.
+// Platform-global table (no RLS) — no hatch needed. Batched like the above.
+func (s *Store) DeleteOldQuarantine(ctx context.Context, maxAge time.Duration) (int64, error) {
+	if s.db == nil {
+		return 0, sql.ErrConnDone
+	}
+	cutoff := time.Now().Add(-maxAge)
+	var total int64
+	for {
+		res, err := s.db.ExecContext(ctx,
+			`DELETE FROM ara_aggregatable_quarantine WHERE ctid IN (
+			   SELECT ctid FROM ara_aggregatable_quarantine WHERE received_at < $1 LIMIT $2)`,
+			cutoff, purgeBatch)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+		if n < purgeBatch {
+			return total, nil
+		}
+	}
+}
+
+// deleteBatch runs one bounded platform-hatch DELETE and returns the row count.
+func (s *Store) deleteBatch(ctx context.Context, query string) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -224,7 +286,7 @@ func (s *Store) DeleteExpiredSources(ctx context.Context) (int64, error) {
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM ara_sources WHERE expires_at < now()`)
+	res, err := tx.ExecContext(ctx, query, purgeBatch)
 	if err != nil {
 		return 0, err
 	}

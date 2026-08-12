@@ -199,4 +199,40 @@ func TestARARegistrationAndReportIngest(t *testing.T) {
 	if poisonRows != 0 {
 		t.Errorf("poison report persisted (%d rows) — an event report was resolved by destination, not source id", poisonRows)
 	}
+
+	// 6) AGGREGATABLE POISONING (F1): an aggregatable report names the victim's REAL
+	// (public) destination but carries no source id. It must NOT be attributed to
+	// the victim — aggregatable reports never resolve to a tenant; they land in the
+	// platform quarantine (staff-only, never in an advertiser overlay).
+	aggBody := fmt.Sprintf(`{"attribution_destination":%q,"report_id":"agg-poison-1","aggregation_service_payloads":[{"payload":"encrypted-opaque"}]}`, dest)
+	if code := post(ara.PathAggregateReport, aggBody); code != http.StatusOK {
+		t.Errorf("aggregatable report = %d, want 200 (accepted, quarantined)", code)
+	}
+	var aggInTenant int
+	if err := h.DB.QueryRow(
+		`SELECT count(*) FROM ara_reports WHERE account_id = $1::uuid AND report_type = 'aggregate'`,
+		w.AdvAcc.ID).Scan(&aggInTenant); err != nil {
+		t.Fatalf("count tenant aggregate: %v", err)
+	}
+	if aggInTenant != 0 {
+		t.Errorf("aggregatable report landed in the victim's ara_reports (%d rows) — cross-tenant write NOT closed", aggInTenant)
+	}
+	countQuarantine := func() int {
+		var n int
+		if err := h.DB.QueryRow(
+			`SELECT count(*) FROM ara_aggregatable_quarantine WHERE report_id = 'agg-poison-1'`).Scan(&n); err != nil {
+			t.Fatalf("count quarantine: %v", err)
+		}
+		return n
+	}
+	if got := countQuarantine(); got != 1 {
+		t.Errorf("aggregatable report not quarantined (%d rows), want 1", got)
+	}
+	// Idempotent: a browser retry (same report_id) doesn't duplicate.
+	if code := post(ara.PathAggregateReport, aggBody); code != http.StatusOK {
+		t.Errorf("retried aggregatable report = %d, want 200", code)
+	}
+	if got := countQuarantine(); got != 1 {
+		t.Errorf("quarantine rows after retry = %d, want 1 (dedup)", got)
+	}
 }

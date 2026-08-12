@@ -26,9 +26,46 @@ package ara
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
+
+// NormalizeDestination reduces a raw destination to the ARA canonical form —
+// scheme + registrable domain (eTLD+1), with no path, query, or port
+// (https://shop.acme.co.uk/x → https://acme.co.uk). This is the shape ARA matches
+// a conversion against, and the shape a real browser sends back. Both the ad
+// server (which produces the source beacon) and the tracker (which re-validates a
+// registration) call this, so a hand-crafted — even validly signed — beacon can't
+// record an arbitrary destination, and the stored value can't drift from what a
+// browser reports. Returns ("", false) when there is no usable host. Names with no
+// public suffix (localhost, a bare IP) fall back to the host so local/dev demos
+// still produce a usable value.
+func NormalizeDestination(raw string) (string, bool) {
+	if raw == "" {
+		return "", false
+	}
+	s := raw
+	if !strings.Contains(s, "://") {
+		s = "https://" + s // tolerate a scheme-less input, e.g. "acme.com/x"
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	site, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
+	if err != nil {
+		site = u.Hostname()
+	}
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + site, true
+}
 
 // Response headers a browser reads to register a source / trigger, and the
 // request header a Privacy-Sandbox browser sends to mark a request
@@ -216,6 +253,10 @@ type AggregatableReport struct {
 	SourceRegistrationTime     string            `json:"source_registration_time"`
 	SharedInfo                 string            `json:"shared_info"`
 	AggregationServicePayloads []json.RawMessage `json:"aggregation_service_payloads"`
+	// ReportID is the browser's report id, used only as a quarantine dedup key. In
+	// a real aggregatable report it lives inside the JSON-encoded shared_info; we
+	// also accept it top-level and fall back to parsing shared_info.
+	ReportID string `json:"report_id"`
 }
 
 // ParseEventReport decodes an event-level report body (strict-ish: unknown
@@ -237,6 +278,22 @@ func ParseAggregatableReport(body []byte) (*AggregatableReport, error) {
 	var r AggregatableReport
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil, fmt.Errorf("ara: parse aggregatable report: %w", err)
+	}
+	// attribution_destination and report_id normally live inside the JSON-encoded
+	// shared_info on a real aggregatable report; accept them there too.
+	if (r.AttributionDestination == "" || r.ReportID == "") && r.SharedInfo != "" {
+		var si struct {
+			AttributionDestination string `json:"attribution_destination"`
+			ReportID               string `json:"report_id"`
+		}
+		if json.Unmarshal([]byte(r.SharedInfo), &si) == nil {
+			if r.AttributionDestination == "" {
+				r.AttributionDestination = si.AttributionDestination
+			}
+			if r.ReportID == "" {
+				r.ReportID = si.ReportID
+			}
+		}
 	}
 	if r.AttributionDestination == "" {
 		return nil, fmt.Errorf("ara: aggregatable report missing attribution_destination")

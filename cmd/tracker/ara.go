@@ -41,11 +41,15 @@ var (
 		Namespace: "adtech", Subsystem: "ara", Name: "reports_dropped_total",
 		Help: "ARA reports accepted but dropped (malformed / no registered source), by type and reason.",
 	}, []string{"type", "reason"})
+	araReportsQuarantined = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "adtech", Subsystem: "ara", Name: "reports_quarantined_total",
+		Help: "Aggregatable ARA reports accepted into the platform quarantine (never tenant-attributed).",
+	})
 )
 
 // araCollectors returns the ARA metrics for registration on the tracker registry.
 func araCollectors() []prometheus.Collector {
-	return []prometheus.Collector{araSourcesRegistered, araReportsIngested, araReportsDropped}
+	return []prometheus.Collector{araSourcesRegistered, araReportsIngested, araReportsDropped, araReportsQuarantined}
 }
 
 // Privacy Sandbox ARA endpoints on the tracker (the single ARA reporting origin
@@ -118,6 +122,15 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// Canonicalise dest to scheme + eTLD+1 (the shape a real browser reports back),
+	// so even a validly signed but hand-crafted beacon can't record an arbitrary
+	// destination, and the stored value can't drift from what a browser sends (F5).
+	// The ad server produces the same value via ara.NormalizeDestination.
+	dest, ok := ara.NormalizeDestination(dest)
+	if !ok {
+		http.Error(w, `{"error":"dest not a valid site"}`, http.StatusBadRequest)
+		return
+	}
 
 	sid := mintSourceID()
 	sidStr := strconv.FormatUint(sid, 10)
@@ -147,8 +160,14 @@ func (d araDeps) registerSource(w http.ResponseWriter, r *http.Request) {
 
 // setTriggerHeader adds the Attribution-Reporting-Register-Trigger response
 // header for a conversion when ARA is on and the request is consented; a no-op
-// otherwise. Called from the /v1/t/conv handler (before the pixel is written) so
-// a conversion also registers an ARA trigger.
+// otherwise. Called from the /v1/t/conv handler (before the pixel is written).
+//
+// INERT BY DESIGN (F6): this platform's conversions are signed server-to-server
+// postbacks, and only a real Privacy-Sandbox browser acts on this header — so on
+// the current S2S path nothing reads it. It is served (correctly built) so that a
+// future browser-side, attribution-eligible conversion beacon registers the ARA
+// trigger with no tracker change. Until that beacon exists it has no effect. See
+// docs/attribution-phase4-ara.md → "TRIGGER NUANCE".
 func (d araDeps) setTriggerHeader(w http.ResponseWriter, r *http.Request, convType string, revenue float64) {
 	if !d.enabled() || !araConsented(r) {
 		return
@@ -195,17 +214,13 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		return
 	}
 
-	var dest, sourceEventID, triggerData, reportID string
-	if typ == ara.ReportEvent {
-		rep, perr := ara.ParseEventReport(body)
-		if perr != nil {
-			d.log.Warn("ara: malformed event report (accepted, dropped)", "error", perr)
-			araReportsDropped.WithLabelValues(string(typ), "malformed").Inc()
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		dest, sourceEventID, triggerData, reportID = rep.AttributionDestination, rep.SourceEventID, rep.TriggerData, rep.ReportID
-	} else {
+	// AGGREGATABLE reports carry no unguessable source id — the only thing tying
+	// one to an advertiser is the PUBLIC attribution_destination, which anyone can
+	// name. Attributing on that basis is a cross-tenant write (F1), and we can't
+	// verify/decrypt the payloads without the aggregation service (the mock
+	// boundary) anyway. So we never resolve them to a tenant: parse, drop into the
+	// platform-global quarantine (never shown in an advertiser overlay), done.
+	if typ == ara.ReportAggregate {
 		rep, perr := ara.ParseAggregatableReport(body)
 		if perr != nil {
 			d.log.Warn("ara: malformed aggregatable report (accepted, dropped)", "error", perr)
@@ -213,14 +228,29 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		dest = rep.AttributionDestination
+		if _, err := d.store.QuarantineAggregatable(r.Context(), rep.AttributionDestination, rep.ReportID, body); err != nil {
+			d.log.Error("ara: quarantine aggregatable report failed", "error", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
+		araReportsQuarantined.Inc()
+		d.log.Info("ara: aggregatable report quarantined (not tenant-attributed)", "claimed_dest", rep.AttributionDestination)
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
-	// Event reports resolve ONLY by the unguessable source_event_id; aggregatable
-	// reports (no source id) may use the destination fallback.
-	acct, err := d.store.ResolveAccount(r.Context(), sourceEventID, dest, typ == ara.ReportAggregate)
+	// EVENT report: resolve ONLY by the unguessable source_event_id we minted — no
+	// destination fallback, so a report can't be steered into another tenant.
+	rep, perr := ara.ParseEventReport(body)
+	if perr != nil {
+		d.log.Warn("ara: malformed event report (accepted, dropped)", "error", perr)
+		araReportsDropped.WithLabelValues(string(typ), "malformed").Inc()
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	acct, err := d.store.ResolveAccount(r.Context(), rep.SourceEventID)
 	if errors.Is(err, arapg.ErrNoAccount) {
-		d.log.Warn("ara: report for an unregistered source/destination (dropped)", "dest", dest, "type", typ)
+		d.log.Warn("ara: event report for an unregistered source (dropped)", "type", typ)
 		araReportsDropped.WithLabelValues(string(typ), "unresolved").Inc()
 		w.WriteHeader(http.StatusOK)
 		return
@@ -232,8 +262,8 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 	}
 
 	inserted, err := d.store.SaveReport(r.Context(), acct, ara.StoredReport{
-		ReportType: typ, AttributionDestination: dest, SourceEventID: sourceEventID,
-		TriggerData: triggerData, ReportID: reportID, Body: body,
+		ReportType: typ, AttributionDestination: rep.AttributionDestination, SourceEventID: rep.SourceEventID,
+		TriggerData: rep.TriggerData, ReportID: rep.ReportID, Body: body,
 	})
 	if err != nil {
 		d.log.Error("ara: save report failed", "error", err)
@@ -241,12 +271,18 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 		return
 	}
 	araReportsIngested.WithLabelValues(string(typ)).Inc()
-	d.log.Info("ara: report ingested", "type", typ, "account", acct, "new", inserted)
+	d.log.Info("ara: event report ingested", "account", acct, "new", inserted)
 	w.WriteHeader(http.StatusOK)
 }
 
-// araPurgeLoop periodically drops expired ara_sources rows (housekeeping so the
-// registration log can't grow unbounded). Stops when ctx is cancelled.
+// araQuarantineRetention bounds how long a (staff-inspectable, unauthenticated)
+// aggregatable-quarantine row lives before the purge loop drops it.
+const araQuarantineRetention = 7 * 24 * time.Hour
+
+// araPurgeLoop periodically drops expired ara_sources rows and old quarantine rows
+// (housekeeping so neither the registration log nor the quarantine — fed by an
+// unauthenticated ingest — can grow unbounded). Both deletes are batched in the
+// store so a backlog can't lock a table. Stops when ctx is cancelled.
 func araPurgeLoop(ctx context.Context, store *arapg.Store, log *slog.Logger) {
 	t := time.NewTicker(6 * time.Hour)
 	defer t.Stop()
@@ -259,6 +295,11 @@ func araPurgeLoop(ctx context.Context, store *arapg.Store, log *slog.Logger) {
 				log.Warn("ara: purge expired sources failed", "error", err)
 			} else if n > 0 {
 				log.Info("ara: purged expired sources", "count", n)
+			}
+			if n, err := store.DeleteOldQuarantine(context.Background(), araQuarantineRetention); err != nil {
+				log.Warn("ara: purge quarantine failed", "error", err)
+			} else if n > 0 {
+				log.Info("ara: purged old quarantined reports", "count", n)
 			}
 		}
 	}
