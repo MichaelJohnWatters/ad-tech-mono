@@ -379,6 +379,19 @@ func TestPartnerCertification(t *testing.T) {
 	}
 }
 
+// terminatePartner best-effort transitions a partner to 'terminated' so it drops
+// out of the exchange fan-out — cleanup for tests that create ACTIVE partners
+// (with the registry flag ON by default, a lingering active partner's endpoint
+// would otherwise pollute every later auction's fan-out).
+func terminatePartner(t *testing.T, h *harness.Harness, client *http.Client, id string) {
+	t.Helper()
+	if id == "" {
+		return
+	}
+	partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerStatus,
+		fmt.Sprintf(`{"id":%q,"status":"terminated"}`, id))
+}
+
 // TestPartnerActiveInExchangeFanout (follow-up): an 'active' DSP partner is merged
 // into the exchange auction fan-out when exchange.partner_registry_enabled is on,
 // and NOT when it's off — proving the warm-cache load + the flag gate, hot-path-safe.
@@ -387,13 +400,15 @@ func TestPartnerActiveInExchangeFanout(t *testing.T) {
 	staff := h.CreateStaff(t, fmt.Sprintf("fanout-staff-%d", time.Now().UnixNano()))
 	client := h.OwnerClient(t, staff.ID)
 	const pod = "exchange-0"
-	t.Cleanup(func() { h.SetConfigForPod(t, "exchange.partner_registry_enabled", "false", pod) })
+	// Restore the ON default after the test (not off — the flag ships on).
+	t.Cleanup(func() { h.SetConfigForPod(t, "exchange.partner_registry_enabled", "true", pod) })
 
 	// A distinctive, never-reachable endpoint (we only assert list membership).
 	endpoint := fmt.Sprintf("http://partner-e2e-%d.invalid:9999/bid", time.Now().UnixNano())
 	_, p := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartners,
 		fmt.Sprintf(`{"name":"E2E Fanout %d","kind":"dsp","endpoint_bid":%q,"seat":"e2e-seat"}`, time.Now().UnixNano(), endpoint))
 	id, _ := p["id"].(string)
+	t.Cleanup(func() { terminatePartner(t, h, client, id) })
 	for _, st := range []string{"sandbox", "certified", "active"} {
 		if code, _ := partnerReq(t, client, http.MethodPost, h.URLs.Gateway+routes.APIPartnerStatus,
 			fmt.Sprintf(`{"id":%q,"status":%q}`, id, st)); code != http.StatusOK {
@@ -482,6 +497,9 @@ func TestPartnerOnboardingLifecycle(t *testing.T) {
 		t.Fatalf("register partner = %d, want 201 (%v)", code, p)
 	}
 	id, _ := p["id"].(string)
+	// This test drives the partner to 'active'; terminate it so it doesn't linger
+	// in the (default-on) exchange fan-out for later auction tests.
+	t.Cleanup(func() { terminatePartner(t, h, client, id) })
 	if id == "" || p["status"] != "pending" {
 		t.Fatalf("registered partner malformed: %v", p)
 	}
