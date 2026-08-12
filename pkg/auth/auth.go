@@ -44,6 +44,10 @@ const (
 	AccountAgency     AccountType = "agency"
 	AccountStaff      AccountType = "staff"
 	AccountAdmin      AccountType = "admin"
+	// AccountPartner is an external integration partner (a demand DSP or supply
+	// SSP) with a self-serve portal to manage its sandbox integration. Registered
+	// + provisioned by staff (PLAN Phase 11 #112); minimal permissions.
+	AccountPartner AccountType = "partner"
 )
 
 // Role represents a user's role within their account type.
@@ -263,6 +267,21 @@ var defaultPermissions = map[string][]string{
 		"campaigns:read", "creatives:read",
 		"reports:read", "reports:export",
 		"agency:read",
+	},
+
+	// Partner roles — an external integration partner's self-serve portal. Minimal
+	// surface: view their own onboarding record, manage sandbox API keys, read the
+	// integration guide, contact support. NO buy/sell/report access.
+	"partner:owner": {
+		"partner:self",
+		"apikeys:manage",
+		"settings:read", "settings:update",
+		"support:contact",
+	},
+	"partner:manager": {
+		"partner:self",
+		"apikeys:manage",
+		"support:contact",
 	},
 
 	// Platform roles

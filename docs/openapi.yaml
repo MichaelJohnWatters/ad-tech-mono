@@ -1769,6 +1769,43 @@ paths:
         "400": { description: "id + valid status required" }
         "404": { description: "partner not found" }
         "409": { description: "invalid transition from the current status" }
+  /v1/api/partners/provision:
+    post:
+      tags: [Platform]
+      summary: Provision a partner's self-serve login (staff)
+      description: >-
+        Staff-only (partners:manage). Creates the partner's login account (type
+        'partner') + an owner user, and links the registry row to it. Returns a
+        ONE-TIME temp password (never stored/shown again) to hand to the partner.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, email]
+              properties:
+                id: { type: string, description: "partner registry id" }
+                email: { type: string, format: email }
+                name: { type: string, description: "defaults to the email" }
+      responses:
+        "201": { description: "{ account_id, login_email, temp_password, note }" }
+        "400": { description: "valid id + email required" }
+        "404": { description: "partner not found" }
+        "409": { description: "already has a login, or the email is in use" }
+  /v1/api/partner/me:
+    get:
+      tags: [Platform]
+      summary: A partner reads its own onboarding record
+      description: >-
+        Partner accounts only (partner:self). Returns the caller partner's
+        registry record (status, endpoint, channels) for the self-serve portal.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "the partner's own record" }
+        "403": { description: "not a partner account" }
+        "404": { description: "no partner record for this account" }
   /v1/api/taxonomy:
     get:
       tags: [Audiences]

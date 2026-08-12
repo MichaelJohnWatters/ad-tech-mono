@@ -96,6 +96,11 @@ type Partner struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	OnboardedAt    *time.Time `json:"onboarded_at,omitempty"`
+	// AccountID is the partner's self-serve login account (type 'partner'), set
+	// once staff provisions a login. Empty until then.
+	AccountID string `json:"account_id,omitempty"`
+	// LoginEmail is joined from the provisioned owner user (staff view only).
+	LoginEmail string `json:"login_email,omitempty"`
 }
 
 // Input is a create/register request. Status is not client-set (always starts
@@ -132,4 +137,12 @@ type Store interface {
 	SetStatus(ctx context.Context, id, status string) (Partner, error)
 	// Update edits a partner's mutable metadata (endpoints/contacts/limits).
 	Update(ctx context.Context, id string, in Input) (Partner, error)
+	// ProvisionLogin creates the partner's self-serve login account (type
+	// 'partner') + an owner user with passwordHash, and links partners.account_id
+	// to it — all in one transaction. Returns the new account id. Errors if the
+	// partner already has a login or the email is taken.
+	ProvisionLogin(ctx context.Context, partnerID, name, email, passwordHash string) (accountID string, err error)
+	// GetByAccount returns the partner registry row for a provisioned partner
+	// login account (partner self-view). ErrNotFound if the account isn't linked.
+	GetByAccount(ctx context.Context, accountID string) (Partner, error)
 }

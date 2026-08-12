@@ -875,6 +875,13 @@ func main() {
 	}
 	mux.Handle(routes.APIPartners, authMiddleware(http.HandlerFunc(partnersHandler(partnerStore, gwDB, log))))
 	mux.Handle(routes.APIPartnerStatus, authMiddleware(http.HandlerFunc(partnerStatusHandler(partnerStore, gwDB, log))))
+	mux.Handle(routes.APIPartnerProvision, authMiddleware(http.HandlerFunc(partnerProvisionHandler(partnerStore, gwDB, log))))
+	mux.Handle(routes.APIPartnerMe, authMiddleware(http.HandlerFunc(partnerMeHandler(partnerStore, log))))
+
+	// Partner self-serve portal (PLAN Phase 11 #112 slice 2).
+	partnerPortal := requireLoginPage(signingKey, partnerPortalHandler(templates, signingKey))
+	mux.HandleFunc("/portal/partner", partnerPortal)
+	mux.HandleFunc("/dev/portal/partner", partnerPortal)
 
 	// Cache refresh — exposes the secrets warm cache so e2e tests and
 	// ops can force a reload after rotation without waiting for the

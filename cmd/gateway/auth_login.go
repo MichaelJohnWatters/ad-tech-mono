@@ -256,6 +256,8 @@ func portalHome(t auth.AccountType) string {
 		return "/dev/portal/publisher"
 	case auth.AccountStaff, auth.AccountAdmin:
 		return "/dev/portal/staff"
+	case auth.AccountPartner:
+		return "/dev/portal/partner"
 	case auth.AccountAgency:
 		// Agencies reuse the advertiser portal; the account switcher (shown
 		// only for agencies) sets the act-as account they operate as.
