@@ -92,15 +92,37 @@ func TestPartnerOnboardingLifecycle(t *testing.T) {
 		t.Error("onboarded_at not stamped after going active")
 	}
 
-	// 6) Edit metadata (keep id) → 200, name updated.
+	// 6) PARTIAL edit (only id+name+endpoint) must PRESERVE fields the body omits
+	// (channels, openrtb_version) — not clobber them back to defaults.
 	newName := name + " (edited)"
 	code, p = partnerReq(t, client, http.MethodPost, partnersURL,
-		fmt.Sprintf(`{"id":%q,"name":%q,"kind":"dsp","endpoint_bid":"https://bid2.partner.example"}`, id, newName))
+		fmt.Sprintf(`{"id":%q,"name":%q,"endpoint_bid":"https://bid2.partner.example"}`, id, newName))
 	if code != http.StatusOK || p["name"] != newName {
-		t.Errorf("edit partner = %d name=%v, want 200 + %q", code, p["name"], newName)
+		t.Fatalf("edit partner = %d name=%v, want 200 + %q", code, p["name"], newName)
+	}
+	if chans, _ := p["channels"].([]any); len(chans) != 2 {
+		t.Errorf("partial edit clobbered channels: got %v, want the 2 registered", p["channels"])
+	}
+	if p["openrtb_version"] != "2.5" {
+		t.Errorf("partial edit changed openrtb_version to %v (should be preserved)", p["openrtb_version"])
 	}
 
-	// 7) A non-staff account cannot read the registry (tenant/RBAC gate).
+	// 7) Client-error status codes (were 500s before the review): duplicate name
+	// → 409, garbage id → 400, bad auth_method → 400.
+	code, _ = partnerReq(t, client, http.MethodPost, partnersURL, fmt.Sprintf(`{"name":%q,"kind":"dsp"}`, newName))
+	if code != http.StatusConflict {
+		t.Errorf("duplicate-name register = %d, want 409", code)
+	}
+	code, _ = partnerReq(t, client, http.MethodGet, partnersURL+"?id=not-a-uuid", "")
+	if code != http.StatusBadRequest {
+		t.Errorf("garbage id GET = %d, want 400", code)
+	}
+	code, _ = partnerReq(t, client, http.MethodPost, partnersURL, `{"name":"bad-auth-partner","auth_method":"telepathy"}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("bad auth_method = %d, want 400", code)
+	}
+
+	// 8) A non-staff account cannot read the registry (tenant/RBAC gate).
 	adv := h.CreateAdvertiser(t, fmt.Sprintf("partner-adv-%d", time.Now().UnixNano()))
 	advClient := h.OwnerClient(t, adv.ID)
 	code, _ = partnerReq(t, advClient, http.MethodGet, partnersURL, "")

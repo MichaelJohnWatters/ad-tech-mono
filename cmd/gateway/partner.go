@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
@@ -26,6 +27,26 @@ import (
 )
 
 const maxPartnerNameLen = 200
+
+// partnerUUIDRe validates an id param before it reaches the ::uuid cast, so a
+// garbage id is a clean 400 rather than a 500 from Postgres 22P02.
+var partnerUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// writePartnerErr maps a store error to a client-facing status. Returns true if
+// it handled (wrote) the error.
+func writePartnerErr(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, partnerpg.ErrNotFound):
+		http.Error(w, `{"error":"partner not found"}`, http.StatusNotFound)
+	case errors.Is(err, partnerpg.ErrDuplicateName):
+		http.Error(w, `{"error":"a partner with that name already exists"}`, http.StatusConflict)
+	case errors.Is(err, partnerpg.ErrConstraint):
+		http.Error(w, `{"error":"invalid field value"}`, http.StatusBadRequest)
+	default:
+		return false
+	}
+	return true
+}
 
 // partnersHandler serves list/get/register/edit on /v1/api/partners.
 func partnersHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
@@ -48,9 +69,12 @@ func partnersHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger) htt
 				return
 			}
 			if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" {
+				if !partnerUUIDRe.MatchString(id) {
+					http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+					return
+				}
 				p, err := store.Get(r.Context(), id)
-				if errors.Is(err, partnerpg.ErrNotFound) {
-					http.Error(w, `{"error":"partner not found"}`, http.StatusNotFound)
+				if writePartnerErr(w, err) {
 					return
 				}
 				if err != nil {
@@ -61,7 +85,12 @@ func partnersHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger) htt
 				_ = json.NewEncoder(w).Encode(p)
 				return
 			}
-			list, err := store.List(r.Context(), strings.TrimSpace(r.URL.Query().Get("status")))
+			statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+			if statusFilter != "" && !partner.IsValidStatus(statusFilter) {
+				http.Error(w, `{"error":"invalid status filter"}`, http.StatusBadRequest)
+				return
+			}
+			list, err := store.List(r.Context(), statusFilter)
 			if err != nil {
 				log.Error("partner list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -107,12 +136,19 @@ func handlePartnerWrite(w http.ResponseWriter, r *http.Request, store partner.St
 		http.Error(w, `{"error":"kind must be dsp or ssp"}`, http.StatusBadRequest)
 		return
 	}
+	if req.AuthMethod != "" && !partner.IsValidAuthMethod(req.AuthMethod) {
+		http.Error(w, `{"error":"auth_method must be api_key, mtls or none"}`, http.StatusBadRequest)
+		return
+	}
 
 	if req.ID == "" {
 		p, err := store.Create(r.Context(), req.Input, userID)
+		if writePartnerErr(w, err) {
+			return
+		}
 		if err != nil {
 			log.Error("partner create failed", "name", req.Name, "error", err)
-			http.Error(w, `{"error":"could not register partner (duplicate name?)"}`, http.StatusInternalServerError)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 		auditPartner(r, auditDB, userID, "partner:create", p.ID, p.Name, p.Status)
@@ -120,10 +156,13 @@ func handlePartnerWrite(w http.ResponseWriter, r *http.Request, store partner.St
 		_ = json.NewEncoder(w).Encode(p)
 		return
 	}
+	if !partnerUUIDRe.MatchString(req.ID) {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
 
 	p, err := store.Update(r.Context(), req.ID, req.Input)
-	if errors.Is(err, partnerpg.ErrNotFound) {
-		http.Error(w, `{"error":"partner not found"}`, http.StatusNotFound)
+	if writePartnerErr(w, err) {
 		return
 	}
 	if err != nil {
@@ -168,13 +207,12 @@ func partnerStatusHandler(store partner.Store, auditDB *sql.DB, log *slog.Logger
 		}
 		req.ID = strings.TrimSpace(req.ID)
 		req.Status = strings.TrimSpace(req.Status)
-		if req.ID == "" || !partner.IsValidStatus(req.Status) {
-			http.Error(w, `{"error":"id and a valid status are required"}`, http.StatusBadRequest)
+		if !partnerUUIDRe.MatchString(req.ID) || !partner.IsValidStatus(req.Status) {
+			http.Error(w, `{"error":"a valid id and status are required"}`, http.StatusBadRequest)
 			return
 		}
 		cur, err := store.Get(r.Context(), req.ID)
-		if errors.Is(err, partnerpg.ErrNotFound) {
-			http.Error(w, `{"error":"partner not found"}`, http.StatusNotFound)
+		if writePartnerErr(w, err) {
 			return
 		}
 		if err != nil {
