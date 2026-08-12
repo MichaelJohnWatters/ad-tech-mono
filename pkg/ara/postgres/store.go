@@ -91,7 +91,7 @@ func (s *Store) ResolveAccount(ctx context.Context, sourceEventID string) (strin
 // can only be matched to an advertiser by the public destination; attributing on
 // that basis is a cross-tenant write (F1), and we can't verify the payloads
 // without the aggregation service (the mock boundary) anyway. So we hold them
-// here for staff inspection. Idempotent on the browser's report_id. Returns
+// here for SQL inspection only (no portal/API view). Idempotent on report_id. Returns
 // (inserted, error). The quarantine table has no RLS, so no GUC is needed.
 func (s *Store) QuarantineAggregatable(ctx context.Context, claimedDest, reportID string, body []byte) (bool, error) {
 	if s.db == nil {

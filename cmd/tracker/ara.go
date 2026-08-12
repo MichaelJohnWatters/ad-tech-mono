@@ -298,7 +298,7 @@ func (d araDeps) ingest(w http.ResponseWriter, r *http.Request, typ ara.ReportTy
 	w.WriteHeader(http.StatusOK)
 }
 
-// araQuarantineRetention bounds how long a (staff-inspectable, unauthenticated)
+// araQuarantineRetention bounds how long an (SQL-inspectable, unauthenticated)
 // aggregatable-quarantine row lives before the purge loop drops it.
 const araQuarantineRetention = 7 * 24 * time.Hour
 
