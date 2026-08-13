@@ -779,7 +779,15 @@ func (c *ClickHouse) ViewableImpressionsForUsers(ctx context.Context, userIDs []
 	// links both). Match either column so a household-linked exposure counts when
 	// the exact user id doesn't line up (cross-device / CTV fallback).
 	ph := make([]string, len(userIDs))
-	args := []any{accountID, since.UTC()}
+	// Bind `since` as epoch MILLISECONDS, not a raw time.Time. observed_at is
+	// DateTime64(3), but the driver truncates a bound time.Time to whole seconds,
+	// so `observed_at >= ?` compared a ms-precise exposure against a second-floored
+	// bound — a same-second-prior exposure then slipped through even a zero/tight
+	// attribution window (view_window_hours:0 attributed an exposure 300ms before
+	// the conversion). Epoch-ms + fromUnixTimestamp64Milli(?) (below) is exact and
+	// timezone-unambiguous. Negligible for hour/day windows, but correct for tight
+	// per-campaign overrides.
+	args := []any{accountID, since.UTC().UnixMilli()}
 	for i, u := range userIDs {
 		ph[i] = "?"
 		args = append(args, u)
@@ -793,7 +801,7 @@ func (c *ClickHouse) ViewableImpressionsForUsers(ctx context.Context, userIDs []
 		FROM behaviour_signals AS b
 		LEFT JOIN (SELECT trace_id, max(iab_viewable) AS viewable FROM views GROUP BY trace_id) AS v
 		  ON v.trace_id = b.trace_id
-		WHERE b.kind = 'impression' AND b.account_id = ? AND b.observed_at >= ?
+		WHERE b.kind = 'impression' AND b.account_id = ? AND b.observed_at >= fromUnixTimestamp64Milli(?)
 		  AND (b.user_id IN (` + inList + `) OR b.household_id IN (` + inList + `))`
 	if campaignID != "" {
 		q += ` AND b.campaign_id = ?`
