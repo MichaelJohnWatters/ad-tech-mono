@@ -59,25 +59,44 @@ RETURNING id::text`, w.AdvAcc.ID).Scan(&hookID); err != nil {
 	}
 	wg.Wait()
 
-	members := func() int {
+	// Count SHOPPER and HOUSEHOLD members separately. With audience_rt.household_enroll
+	// on (the deployed default), each visit ALSO enrolls the visit's household
+	// (hh:<salted-IP hash>). Every fire here comes from the SAME loopback IP, so
+	// that's ONE shared household — and it must enroll exactly ONCE despite 20
+	// concurrent fires across both pods (a stronger exactly-once proof than the
+	// shoppers, deduped by the (segment_id,user_id) PK). Asserting the two
+	// populations separately keeps the test correct whether or not the gate is on.
+	shopperMembers := func() int {
 		var n int
-		if err := h.DB.QueryRow(`SELECT count(*) FROM audience_segment_members WHERE segment_id=$1`, segID).Scan(&n); err != nil {
-			t.Fatalf("member count: %v", err)
+		if err := h.DB.QueryRow(`SELECT count(*) FROM audience_segment_members WHERE segment_id=$1 AND user_id NOT LIKE 'hh:%'`, segID).Scan(&n); err != nil {
+			t.Fatalf("shopper member count: %v", err)
 		}
 		return n
 	}
-	// Exactly K members — one per shopper, no doubles from the two visits or the
-	// two pods.
+	householdMembers := func() int {
+		var n int
+		if err := h.DB.QueryRow(`SELECT count(*) FROM audience_segment_members WHERE segment_id=$1 AND user_id LIKE 'hh:%'`, segID).Scan(&n); err != nil {
+			t.Fatalf("household member count: %v", err)
+		}
+		return n
+	}
+	// Exactly K shopper members — one per shopper, no doubles from the two visits
+	// or the two pods.
 	deadline := time.Now().Add(30 * time.Second)
-	for members() < K {
+	for shopperMembers() < K {
 		if time.Now().After(deadline) {
-			t.Fatalf("only %d of %d shoppers enrolled (dropped work under replicas?)", members(), K)
+			t.Fatalf("only %d of %d shoppers enrolled (dropped work under replicas?)", shopperMembers(), K)
 		}
 		time.Sleep(time.Second)
 	}
 	time.Sleep(4 * time.Second) // let any straggler double-write surface
-	if n := members(); n != K {
-		t.Errorf("enrolled %d members, want EXACTLY %d (double-enroll under replicas)", n, K)
+	if n := shopperMembers(); n != K {
+		t.Errorf("enrolled %d shopper members, want EXACTLY %d (double-enroll under replicas)", n, K)
+	}
+	// The one shared household must be enrolled AT MOST once: 0 if the gate is off,
+	// 1 if on — never 2+, which would be the double-enroll bug this test guards.
+	if n := householdMembers(); n > 1 {
+		t.Errorf("shared household enrolled %d times, want <=1 (exactly-once under replicas)", n)
 	}
 
 	// Exactly K webhook dispatches (attempt=1 = one per dispatched event; retries
