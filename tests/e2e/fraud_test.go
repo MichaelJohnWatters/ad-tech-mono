@@ -27,7 +27,14 @@ func TestFraudDedupSameImpressionDropped(t *testing.T) {
 	// billing state is long-lived + hydrated on boot).
 	h.ResetBillingLedger(t)
 
-	traceID := "fraud-dedup-trace-001"
+	// Unique trace per run. The tracker's dedup (Redis SetNX on trace_id) has a
+	// TTL that OUTLIVES a single test, so a DETERMINISTIC trace_id already billed
+	// in an earlier run makes all 5 fires here dedup as repeats → 0 new billing →
+	// committed stays 0 forever (no amount of waiting fixes it — the real cause of
+	// this test's flake, not settlement lag). A time-based suffix keeps the first
+	// fire fresh every run; the intra-run dedup of fires 2-5 still holds. Same fix
+	// the sibling TestTrackerRejectedEventDedup already documents.
+	traceID := fmt.Sprintf("fraud-dedup-%d", time.Now().UnixNano())
 	for i := 0; i < 5; i++ {
 		// Fire the same impression 5 times. All 5 return 200 (the pixel
 		// always responds), but only the first should reach the analytics

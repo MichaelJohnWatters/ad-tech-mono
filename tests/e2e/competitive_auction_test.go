@@ -301,18 +301,19 @@ func TestCompetitiveA3_BudgetExhaustedCampaignExcludedSiblingBids(t *testing.T) 
 		t.Fatal("first auction should have a winner")
 	}
 
-	// Brief beat for the win to propagate through the DSP's budget tracker.
-	time.Sleep(150 * time.Millisecond)
-
-	second := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "comp-a3-user-2")
-	win := h.ExtractWinner(t, second)
-	if win.NoBid {
-		t.Fatal("second auction should still win — sibling has budget")
-	}
-	if win.CampaignID != sibling.ID {
-		t.Errorf("second-auction CampaignID = %q; want sibling %q (BasicWorld exhausted)",
-			win.CampaignID, sibling.ID)
-	}
+	// The win's budget drawdown settles async, then the DSP's budget tracker
+	// picks it up on its next warm-mirror refresh (dsp.bid_cache_refresh_interval,
+	// 1s) — so the exhausted campaign stays eligible for a beat. A fixed 150ms
+	// sleep raced that 1s refresh (structurally too short, worse under load), so
+	// POLL the auction until budget exclusion has propagated and the sibling wins.
+	// The sibling always has budget, so the winner flips to it once A is excluded.
+	var last harness.BidResponseWinner
+	harness.WaitFor(t, 15*time.Second, "budget-exhausted campaign excluded → sibling wins", func() bool {
+		second := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "comp-a3-user-2")
+		last = h.ExtractWinner(t, second)
+		return !last.NoBid && last.CampaignID == sibling.ID
+	})
+	t.Logf("budget exclusion propagated: second auction won by sibling %q", last.CampaignID)
 }
 
 // TestCompetitiveA4_PausedCampaignExcludedSiblingBids — pause the higher-
