@@ -67,8 +67,8 @@ func TestStripClientIdentityHeaders(t *testing.T) {
 	r.Header.Set(constants.HeaderAccountType, "staff")
 	r.Header.Set(constants.HeaderUserID, "attacker")
 	r.Header.Set(constants.HeaderPublisherID, "victim-pub")
-	r.Header.Set(constants.HeaderActAs, "advertiser:victim")
-	r.Header.Set("X-Trace-ID", "keep-me") // a non-identity header must survive
+	r.Header.Set(constants.HeaderActAs, "advertiser:victim") // must SURVIVE — see below
+	r.Header.Set("X-Trace-ID", "keep-me")                    // a non-identity header must survive
 
 	h.ServeHTTP(nil, r)
 
@@ -79,5 +79,13 @@ func TestStripClientIdentityHeaders(t *testing.T) {
 	}
 	if seen.Get("X-Trace-ID") != "keep-me" {
 		t.Errorf("non-identity header was stripped: %q", seen.Get("X-Trace-ID"))
+	}
+	// X-Act-As-Account must NOT be stripped at the edge: it's a client request
+	// the gateway VALIDATES + resolves in ReverseProxy (then Del's on forward),
+	// not a downstream-trusted injected header. Stripping it here silently broke
+	// agency act-as (it no-op'd to the caller's own account). This asserts the
+	// fix and guards against anyone re-adding it to trustedIdentityHeaders.
+	if seen.Get(constants.HeaderActAs) != "advertiser:victim" {
+		t.Errorf("X-Act-As-Account was stripped at the edge (%q) — act-as needs it to reach the gateway's resolver", seen.Get(constants.HeaderActAs))
 	}
 }
