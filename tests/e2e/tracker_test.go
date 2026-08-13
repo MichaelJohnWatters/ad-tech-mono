@@ -29,7 +29,12 @@ func TestTrackerClickRedirects(t *testing.T) {
 	w := harness.BuildBasicWorld(t, h, "tracker-click")
 
 	landing := "https://example.test/landing"
-	url := h.URLs.Tracker + "/v1/t/click?tid=trk-click-1&cid=" + w.Campaign.ID + "&redir=" + landing
+	// Sign like a real ad-server-issued click URL. The stack enforces
+	// tracker.signature_validation (strict is the deployed + schema default),
+	// so an unsigned pixel is correctly 403'd — signing makes this test
+	// prod-shaped and flag-agnostic (same discipline as the video/audio tests
+	// in analytics_gaps_test.go).
+	url := adserving.SignURL(h.URLs.Tracker+"/v1/t/click?tid=trk-click-1&cid="+w.Campaign.ID+"&redir="+landing, adserving.DefaultSigningKey)
 	resp := getNoFollow(t, url)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -55,7 +60,9 @@ func TestTrackerConversionPixel(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "tracker-conv")
 
-	url := h.URLs.Tracker + "/v1/t/conv?tid=trk-conv-1&cid=" + w.Campaign.ID + "&type=purchase&rev=29.99&cur=USD"
+	// Signed like a real conversion pixel — the stack enforces
+	// tracker.signature_validation (strict by default), so unsigned would 403.
+	url := adserving.SignURL(h.URLs.Tracker+"/v1/t/conv?tid=trk-conv-1&cid="+w.Campaign.ID+"&type=purchase&rev=29.99&cur=USD", adserving.DefaultSigningKey)
 	resp := get(t, h, url)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -91,8 +98,13 @@ func TestTrackerViewabilityBeacon(t *testing.T) {
 			// Spaces in c.name would land unescaped in the URL and trip
 			// Go's http.NewRequest before it reaches the server.
 			tid := "trk-view-" + strings.ReplaceAll(c.name, " ", "-")
-			url := h.URLs.Tracker + "/v1/t/view?tid=" + tid + "&cid=" + w.Campaign.ID +
-				"&dur=" + itoa(c.dur) + "&pct=" + itoa(c.pct)
+			// A real viewability beacon is signed WITHOUT the client-measured
+			// dur/pct/area (the tracker's viewSigParams excludes them — they're
+			// appended at fire time), so sign the base URL then append the
+			// measurements. Strict signature validation is the deployed + schema
+			// default, so an unsigned beacon is correctly 403'd.
+			signed := adserving.SignURL(h.URLs.Tracker+"/v1/t/view?tid="+tid+"&cid="+w.Campaign.ID, adserving.DefaultSigningKey)
+			url := signed + "&dur=" + itoa(c.dur) + "&pct=" + itoa(c.pct)
 			resp := get(t, h, url)
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusNoContent {
