@@ -51,12 +51,15 @@ var pixel = []byte{
 
 func main() {
 	log := logger.New(constants.ServiceTracker)
-	// Seed override: signature validation defaults OFF in the schema
-	// (phase-in affordance), but the local/prod deployments set
-	// TRACKER_SIGNATURE_VALIDATION=true and that must reach the PER-POD
-	// CONFIG ROW (TierLive rows outrank env at read time — without this
-	// override the seeded 'false' row silently kept warn-mode forever,
-	// which is how invalidly-signed VAST click URLs went unnoticed).
+	// Seed override: signature validation now defaults ON in the schema
+	// (secure baseline — see keys.Tracker.SignatureValidation). This env hook
+	// remains so a deployment can explicitly set TRACKER_SIGNATURE_VALIDATION
+	// (e.g. "false" to phase in signing on a fresh rollout) and have it reach
+	// the PER-POD CONFIG ROW — TierLive rows outrank env at read time, so a bare
+	// env var without this seed would be shadowed by the seeded default row.
+	// (History: the schema used to default 'false', and the seeded 'false' row
+	// silently kept warn-mode forever, letting invalidly-signed VAST click URLs
+	// go unnoticed — the reason the default was flipped to true.)
 	setupOpts := []config.SetupOption{}
 	if v := os.Getenv("TRACKER_SIGNATURE_VALIDATION"); v != "" {
 		setupOpts = append(setupOpts, config.WithSeedDefaults(map[string]string{
