@@ -122,9 +122,9 @@ func TestMediaGate_FraudBlockedSilent204(t *testing.T) {
 	}
 }
 
-// TestMediaGate_UnsignedAllowedInDevMode: with signature_validation off (dev
-// default), an unsigned beacon is warned-but-allowed — mirrors the impression
-// pixel so dev pipelines that don't yet sign keep flowing.
+// TestMediaGate_UnsignedAllowedInDevMode: with signature_validation explicitly
+// off (phase-in mode), an unsigned beacon is warned-but-allowed — mirrors the
+// impression pixel so dev pipelines that don't yet sign keep flowing.
 func TestMediaGate_UnsignedAllowedInDevMode(t *testing.T) {
 	g := newTestGate(false)
 	rec := httptest.NewRecorder()
