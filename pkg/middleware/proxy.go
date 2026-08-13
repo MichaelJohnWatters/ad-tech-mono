@@ -59,8 +59,18 @@ var trustedIdentityHeaders = []string{
 	constants.HeaderAccountType,
 	constants.HeaderUserID,
 	constants.HeaderPublisherID,
-	constants.HeaderActAs,
 }
+
+// NOTE: X-Act-As-Account is deliberately NOT in the list above. It is not a
+// gateway-injected, downstream-trusted header — it is a CLIENT REQUEST that the
+// gateway CONSUMES: ReverseProxy's claims block validates it against the caller's
+// authenticated claims (auth.CanAccessAccount → agency-managed set / staff-any),
+// resolves it into the trusted X-Account-ID/Type, and then Del's it on the
+// upstream forward (see below) so it never reaches a backend. No downstream
+// service reads it. Stripping it at the edge (as this list did briefly) deletes
+// it before the gateway's own act-as consumers (ReverseProxy, reports_scope,
+// report_jobs, portal) can read it — silently no-op'ing act-as to the caller's
+// own account. So it must survive the edge strip; the gateway is what guards it.
 
 // StripClientIdentityHeaders deletes the gateway-injected identity headers from
 // an inbound request so a client can't spoof them. Mount it OUTERMOST on the
