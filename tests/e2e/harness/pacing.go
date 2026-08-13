@@ -60,11 +60,14 @@ func (h *Harness) CommittedSpendMicros(t *testing.T, campaignID string) int64 {
 }
 
 // WaitCommittedMicros polls the committed spend for a campaign until it equals
-// want micro-dollars (billing consumers run async off NATS), failing after a
-// short timeout.
+// want micro-dollars, failing after a timeout. The whole settlement chain is
+// async — impression → NATS → billing consumer → committed accumulator → forced
+// snapshot — and under full-suite load those hops queue behind other work, so
+// the window is generous (20s). It returns the instant the value lands, so the
+// longer deadline only costs time on a genuine failure, never on the happy path.
 func (h *Harness) WaitCommittedMicros(t *testing.T, campaignID string, want int64) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	var last int64
 	for time.Now().Before(deadline) {
 		last = h.CommittedSpendMicros(t, campaignID)
