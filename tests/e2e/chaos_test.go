@@ -52,8 +52,12 @@ func TestChaosNATSDownPixelNeverFails(t *testing.T) {
 	harness.RequireKubectl(t)
 	w := harness.BuildBasicWorld(t, h, "chaos-nats")
 
+	// Unique trace per run — the tracker's dedup (Redis SetNX, tracker.dedup_ttl
+	// default 24h) outlives a run, so a deterministic trace_id billed by an
+	// earlier chaos run would dedup this fire to nothing. Same class as the fix
+	// in TestFraudDedupSameImpressionDropped.
 	h.WithChaos(t, "nats", func() {
-		h.FireImpression(t, "chaos-nats-trace", w.Campaign.ID, w.Campaign.CreativeID,
+		h.FireImpression(t, fmt.Sprintf("chaos-nats-trace-%d", time.Now().UnixNano()), w.Campaign.ID, w.Campaign.CreativeID,
 			w.Placement.ID, w.Publisher.ID, w.AdvAcc.ID, "USD", 3.50)
 	})
 }
