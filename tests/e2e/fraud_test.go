@@ -96,8 +96,11 @@ func TestTrackerRejectedEventHMACStrict(t *testing.T) {
 
 	const pod = "tracker-0"
 	const key = "tracker.signature_validation"
+	// Revert to the stack's DEPLOYED baseline (helm: true), not a hardcoded
+	// "false" — restoring "false" downgraded the prod-shaped stack and poisoned
+	// later tests that assume strict signing (see TestTrackerHMACStrictMode).
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, key, "false", pod)
+		h.DeleteConfig(t, key)
 	})
 	h.SetConfigForPod(t, key, "true", pod)
 
