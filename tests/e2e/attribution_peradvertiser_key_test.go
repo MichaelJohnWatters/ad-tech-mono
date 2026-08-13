@@ -32,11 +32,15 @@ func TestConversionPerAdvertiserKeyRejectsForgery(t *testing.T) {
 	const pod = "tracker-0"
 	const sigKey = "tracker.signature_validation"
 	const strictKey = "tracker.conversion_strict_advertiser_key"
-	// Reset BOTH knobs to their schema defaults on the way out so a leftover
-	// strict/true can't poison later tests (same discipline as TestTrackerHMACStrictMode).
+	// Revert BOTH knobs to their DEPLOYED baselines on the way out (helm sets
+	// both TRACKER_SIGNATURE_VALIDATION and TRACKER_CONVERSION_STRICT_ADVERTISER_KEY
+	// to true). DELETE the overrides rather than forcing "false" — restoring the
+	// schema default downgraded the prod-shaped stack and poisoned later tests
+	// that assume strict signing/keys are on (same discipline as
+	// TestTrackerHMACStrictMode).
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, strictKey, "false", pod)
-		h.SetConfigForPod(t, sigKey, "false", pod)
+		h.DeleteConfig(t, strictKey)
+		h.DeleteConfig(t, sigKey)
 	})
 	h.SetConfigForPod(t, sigKey, "true", pod)
 	h.SetConfigForPod(t, strictKey, "true", pod)

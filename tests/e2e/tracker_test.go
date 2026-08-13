@@ -120,12 +120,13 @@ func TestTrackerHMACStrictMode(t *testing.T) {
 
 	// Force baseline to "false" so the next assertion is unambiguous —
 	// don't rely on whatever a prior test happened to leave behind.
-	// Cleanup also resets to "false" (the schema default), not to whatever
-	// the row held before — leftover "true" from a previous failed run
-	// would otherwise poison every later test that hits a tracker
-	// endpoint without a sig param.
+	// Cleanup DELETES the override so the key reverts to the stack's DEPLOYED
+	// baseline (helm sets TRACKER_SIGNATURE_VALIDATION=true), NOT a hardcoded
+	// "false". Restoring "false" here used to DOWNGRADE the prod-shaped stack
+	// below its real baseline and poison every later test that assumes strict
+	// signing is on (e.g. the ARA trigger's unsigned-→403 negative case).
 	t.Cleanup(func() {
-		h.SetConfigForPod(t, key, "false", pod)
+		h.DeleteConfig(t, key)
 	})
 	h.SetConfigForPod(t, key, "false", pod)
 
