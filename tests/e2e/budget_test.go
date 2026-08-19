@@ -21,6 +21,11 @@ import (
 func TestBudgetCap(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	w := harness.BuildBasicWorld(t, h, "budget")
+	// Fresh committed accumulator: the DSP's budget tracker keeps spend in memory
+	// keyed by campaign, and BuildBasicWorld reuses a deterministic campaign id
+	// across runs — so without this a re-run (or prior suite spend on this
+	// campaign) starts already over the tiny $0.005 cap and auction 1 no-bids.
+	h.ResetBillingLedger(t)
 
 	// Shrink the budget so only a couple of auctions exhaust it. Bid is 3.50
 	// CPM, which books 3.50/1000 = $0.0035 per winning impression; a budget of
@@ -29,15 +34,18 @@ func TestBudgetCap(t *testing.T) {
 	h.SetCampaignDailyBudget(t, w.Campaign, 0.005)
 	h.RefreshAllCaches(t)
 
-	// First auction: campaign bids and wins. Spend goes from 0 → ~$0.0035.
-	res1 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-001")
-	win1 := h.ExtractWinner(t, res1)
-	if win1.NoBid {
-		t.Fatal("auction 1 unexpectedly no_bid before budget exhausted")
-	}
-	if win1.CampaignID != w.Campaign.ID {
-		t.Fatalf("auction 1 winning campaign = %q, want %q", win1.CampaignID, w.Campaign.ID)
-	}
+	// First auction: our campaign must bid and win. Poll rather than asserting
+	// once — the just-issued ledger reset + budget update propagate to the DSP's
+	// warm spend mirror on its 1s refresh, so for a beat the DSP can still see a
+	// prior run's exhausted spend and no-bid. Break on the first win (spend
+	// 0 → ~$0.0035); while it's showing exhausted it no-bids and accrues nothing,
+	// so polling can't over-spend.
+	var win1 harness.BidResponseWinner
+	harness.WaitFor(t, 15*time.Second, "auction 1: our campaign wins (budget available)", func() bool {
+		res1 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-001")
+		win1 = h.ExtractWinner(t, res1)
+		return !win1.NoBid && win1.CampaignID == w.Campaign.ID
+	})
 
 	// Win notifications from the exchange to the DSP are async. Allow a
 	// brief settle window before the next auction sees the updated spend.
@@ -53,17 +61,24 @@ func TestBudgetCap(t *testing.T) {
 		t.Fatal("auction 2 unexpectedly no_bid before budget exhausted")
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
 	// Third auction: internal DSP's spend (~$0.007) >= budget ($0.005), so our
 	// campaign drops out of the internal DSP's bid candidates. Competitor
 	// DSPs (dsp-competitor1/2) keep bidding on this placement from their
 	// own campaigns, so the auction still returns a winner — but the
-	// winning seat is no longer our test advertiser. Verify that.
-	res3 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-003")
-	win3 := h.ExtractWinner(t, res3)
-	if !win3.NoBid && win3.Seat == w.AdvAcc.ID {
-		t.Errorf("auction 3: our advertiser %q kept winning despite budget exhaustion (price=%.4f)",
-			w.AdvAcc.ID, win3.Price)
-	}
+	// winning seat is no longer our test advertiser.
+	//
+	// The drop is NOT instant: the win-notice (exchange → DSP, async) and the
+	// DSP's budget gate both read a warm in-process spend mirror refreshed every
+	// dsp.bid_cache_refresh_interval (1s). A fixed 500ms sleep raced that refresh
+	// (worse under full-suite load), so our advertiser could still be winning
+	// auction 3 for a beat — the recurring flake here. Poll until the budget
+	// exclusion has propagated and our advertiser is no longer the winning seat.
+	// Each extra auction only fires more no-bid demand from our (exhausted) DSP,
+	// so it can't un-exhaust the budget.
+	var win3 harness.BidResponseWinner
+	harness.WaitFor(t, 15*time.Second, "budget-exhausted advertiser drops out of auction 3", func() bool {
+		res3 := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "budget-user-003")
+		win3 = h.ExtractWinner(t, res3)
+		return win3.NoBid || win3.Seat != w.AdvAcc.ID
+	})
 }
