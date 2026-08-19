@@ -220,15 +220,23 @@ func TestFraudAdsTxtUnverifiedRejected(t *testing.T) {
 		h.RefreshAllCaches(t)
 	})
 
-	// Declare our seller identity.
+	// Declare our seller identity. Explicitly force enforcement OFF for the
+	// baseline rather than assuming the ambient default — a prior ads.txt test
+	// (or a slow cleanup) could leave it 'strict', which would make the baseline
+	// no-bid for the wrong reason (same discipline as the signature_validation
+	// baseline: set what you depend on, don't inherit it).
+	h.SetConfigForPod(t, "exchange.adstxt_enforcement", "off", pod)
 	h.SetConfigForPod(t, "exchange.adstxt_seller_domain", "adtech.example", pod)
 	h.SetConfigForPod(t, "exchange.adstxt_seller_id", "seat-1", pod)
 
-	// Baseline: enforcement off → auction wins even without an ads.txt row.
+	// Baseline: enforcement off → auction wins even without an ads.txt row. Poll
+	// rather than asserting once — the config sets + RefreshAllCaches propagate to
+	// the exchange's warm caches asynchronously, so the first auction can race the
+	// refresh under full-suite load.
 	h.RefreshAllCaches(t)
-	if h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u1")).NoBid {
-		t.Fatal("baseline (enforcement off): expected a winning bid")
-	}
+	harness.WaitFor(t, 15*time.Second, "baseline (enforcement off): our campaign wins", func() bool {
+		return !h.ExtractWinner(t, h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "adstxt-u1")).NoBid
+	})
 
 	// Publisher publishes an ads.txt that does NOT list us → not_listed.
 	h.SetAdsTxt(t, domain, []fraud.AdsTxtEntry{
