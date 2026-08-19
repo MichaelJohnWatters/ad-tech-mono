@@ -429,18 +429,23 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
 	h.RefreshAllCaches(t)
 
-	// Reset ONCE, fire the training batch ONCE, then poll — matching
-	// TestSmartRouting / TestRoutingShading. comp1 is already no_bid_rate=1.0
-	// (applied + cache-refreshed above), so every recorded call is a no-bid;
-	// the single reset stamps the reseed window (dsp_calls since resetAt) and
-	// the 30 no-bids land inside it. The OLD approach re-reset INSIDE the loop,
-	// which kept moving the window start forward faster than the 5s
-	// cross-replica reseed could act on the no-bids already recorded — so under
-	// load it thrashed to a timeout. 30 > routing_min_calls (20) for margin.
+	// Reset ONCE (stamps the reseed window: dsp_calls since resetAt), then feed
+	// no-bids until comp1 drops. comp1 is no_bid_rate=1.0, so every recorded call
+	// is a no-bid. The skip needs the (display, comp1) bucket to cross
+	// routing_min_calls (20) in the CLUSTER-GLOBAL aggregate, but the skip is
+	// SELF-LIMITING: once a pod starts skipping comp1 it stops recording its
+	// calls, which can freeze the aggregate JUST BELOW the threshold — a one-shot
+	// "fire 30 then poll" can strand comp1 at e.g. 17 recorded calls forever
+	// (below min_calls, so never skipped, yet nothing firing to push it over).
+	// (The OLD approach re-RESET inside the loop, which moved the window start
+	// forward faster than the 5s reseed could act — a different failure, also
+	// removed.) The escape: at the sub-threshold frozen state neither pod skips,
+	// so fresh auctions DO record + climb the aggregate. Fire a small batch each
+	// poll iteration until comp1 crosses over and the reseed converges the pods.
 	h.ResetSmartRouter(t)
-	h.FireNAuctions(t, 30, "pl-news-mpu", "GBR", "mobile")
+	h.FireNAuctions(t, 24, "pl-news-mpu", "GBR", "mobile")
 	var preview harness.RouterPreview
-	harness.WaitFor(t, 60*time.Second, "router learns to skip always-no-bid comp1", func() bool {
+	comp1Dropped := func() bool {
 		preview = h.SmartRouterPreview(t)
 		for _, ep := range preview.Selected {
 			// In pod mode, the exchange holds cluster-DNS endpoints
@@ -450,6 +455,13 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 			}
 		}
 		return true
+	}
+	harness.WaitFor(t, 90*time.Second, "router learns to skip always-no-bid comp1", func() bool {
+		if comp1Dropped() {
+			return true
+		}
+		h.FireNAuctions(t, 6, "pl-news-mpu", "GBR", "mobile")
+		return comp1Dropped()
 	})
 	// Sanity: at least one DSP should still be selected (internal at minimum).
 	if len(preview.Selected) == 0 {
