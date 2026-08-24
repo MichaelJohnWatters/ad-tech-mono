@@ -501,12 +501,16 @@ func TestCompetitiveE1_LosersReceiveLossNotifications(t *testing.T) {
 		t.Fatal("real DSP should have won at 3.50 over fake's 0.50; got no_bid")
 	}
 
-	// Win/loss notifications fan out asynchronously after the auction
-	// response. Brief poll instead of a fixed sleep so the test isn't
-	// timing-fragile if the fanout takes a little longer.
-	deadline := time.Now().Add(2 * time.Second)
+	// Win/loss notifications fan out asynchronously after the auction response
+	// (exchange → HTTP callback to the loser). Poll rather than a fixed sleep, and
+	// give it a generous window: the fanout runs in a goroutine after the auction
+	// reply, so under full-suite load or on a cold VM it can take several seconds
+	// to land. The old 2s deadline raced that (a flaky "never received /loss"),
+	// while the callback DOES arrive — the poll returns the instant it does, so the
+	// wider window only costs time on a genuine drop.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) && len(loser.LossCalls()) == 0 {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	loss := loser.LossCalls()
