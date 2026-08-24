@@ -4,6 +4,7 @@ package harness
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,7 +75,14 @@ func (h *Harness) Reset(t *testing.T) {
 		"accounts",
 	}
 	stmt := "TRUNCATE TABLE " + commaJoin(tables) + " RESTART IDENTITY CASCADE"
-	if _, err := h.DB.ExecContext(ctx, stmt); err != nil {
+	// Retry on deadlock: TRUNCATE takes an ACCESS EXCLUSIVE lock on every listed
+	// table, so a background writer touching any of them mid-suite (billing →
+	// ledger_entries, a cron → invoices/payouts, audience-rt →
+	// audience_segment_members) can deadlock it (pq 40P01). A deadlock is
+	// transient by design — Postgres aborts one side (us) and the other completes
+	// — so a short retry almost always succeeds. Without this, a random ~1-per-run
+	// test flaked on "truncate: pq: deadlock detected".
+	if err := execWithDeadlockRetry(ctx, h.DB.ExecContext, stmt); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -86,7 +94,7 @@ func (h *Harness) Reset(t *testing.T) {
 	// when the next test recreates that account — so under strict its conversions
 	// (signed with the platform key) would 403. Delete them so harness advertisers
 	// start keyless (platform-key fallback); the reseed re-mints for seed advertisers.
-	if _, err := h.DB.ExecContext(ctx, `DELETE FROM secrets WHERE account_id IS NOT NULL`); err != nil {
+	if err := execWithDeadlockRetry(ctx, h.DB.ExecContext, `DELETE FROM secrets WHERE account_id IS NOT NULL`); err != nil {
 		t.Fatalf("clean per-advertiser secrets: %v", err)
 	}
 
@@ -148,4 +156,32 @@ func commaJoin(parts []string) string {
 		out += ", " + p
 	}
 	return out
+}
+
+// execWithDeadlockRetry runs a statement, retrying on a Postgres deadlock
+// (SQLSTATE 40P01) or serialization failure (40001). Both are transient by
+// design — Postgres aborts one side of the conflict and the other completes —
+// so a short bounded retry clears them. Used for the reset TRUNCATE/DELETE,
+// which take table-level locks that a background writer (billing, crons,
+// audience-rt) can briefly conflict with mid-suite. Matches on the pq error
+// text to avoid taking a lib/pq type dependency in the harness.
+func execWithDeadlockRetry(ctx context.Context, exec func(context.Context, string, ...any) (sql.Result, error), stmt string) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err = exec(ctx, stmt); err == nil {
+			return nil
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "deadlock detected") && !strings.Contains(msg, "40P01") &&
+			!strings.Contains(msg, "could not serialize") && !strings.Contains(msg, "40001") {
+			return err // not a retryable lock conflict
+		}
+		// Short backoff — the conflicting txn just needs to finish.
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt+1) * 150 * time.Millisecond):
+		}
+	}
+	return err
 }
