@@ -696,11 +696,17 @@ func (c *ClickHouse) CommittedByCampaign(ctx context.Context, day string) (map[s
 // publisher crossing a volume tier mid-month gets the better split). Counts all
 // bid models: the tier is about supply volume, not billing model.
 func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time) (map[string]int64, error) {
+	// Bind `since` as epoch MILLISECONDS (not a raw time.Time, which the driver
+	// truncates to whole seconds against the DateTime64(3) column) so the boundary
+	// is exact and matches the memory-store impl's full-precision `!Before(since)`.
+	// Benign for the current month-start caller (midnight = no sub-second), but
+	// keeps this consistent with ViewableImpressionsForUsers and safe for any
+	// future sub-second `since`.
 	q := `SELECT publisher_id, count() AS n
 		FROM impressions
-		WHERE timestamp >= ?
+		WHERE timestamp >= fromUnixTimestamp64Milli(?)
 		GROUP BY publisher_id`
-	rows, err := c.db.QueryContext(ctx, q, since.UTC())
+	rows, err := c.db.QueryContext(ctx, q, since.UTC().UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("impressions by publisher: %w", err)
 	}
