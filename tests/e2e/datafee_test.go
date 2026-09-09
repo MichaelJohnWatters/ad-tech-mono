@@ -184,7 +184,14 @@ FROM ledger_entries WHERE reference_type='data_fee' AND reference_id LIKE $1 || 
 	}
 	h.FireImpression(t, trace, winner.CampaignID, winner.CreativeID,
 		w.Placement.ID, w.Publisher.ID, winner.Seat, "USD", winner.Price)
-	time.Sleep(2 * time.Second)
+	// Positively confirm the redelivery was PROCESSED before asserting no growth:
+	// the tracker dedups the repeat trace and publishes adtech.tracker.rejected
+	// reason=dedup. Waiting on that (not a blind fixed sleep) closes the false-pass
+	// window where a slow double-accrual lands AFTER the sleep yet the equality
+	// check still passes.
+	harness.WaitFor(t, 15*time.Second, "duplicate impression deduped by tracker", func() bool {
+		return len(h.TrackerRejectionsByTrace(t, trace, "dedup")) >= 1
+	})
 	var feeSum2 int64
 	if err := h.DB.QueryRow(
 		`SELECT COALESCE(SUM(fee_micros),0) FROM data_fee_earnings WHERE trace_id = $1`, trace).Scan(&feeSum2); err != nil {

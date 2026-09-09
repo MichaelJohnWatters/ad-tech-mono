@@ -121,9 +121,14 @@ FROM ledger_entries WHERE reference_type='marketplace_surcharge' AND reference_i
 		t.Errorf("earnings by_segment missing the sold segment %s", sellerSeg)
 	}
 
-	// Exactly-once: a redelivered impression must NOT double-settle.
+	// Exactly-once: a redelivered impression must NOT double-settle. Positively
+	// confirm the dup was PROCESSED (tracker dedups the repeat trace → publishes
+	// adtech.tracker.rejected reason=dedup) before asserting no growth — a blind
+	// fixed sleep could let a slow double-settle land after it and false-pass.
 	h.FireImpression(t, trace, w.Campaign.ID, w.Campaign.CreativeID, w.Placement.ID, w.Publisher.ID, buyer.ID, "USD", 3.50)
-	time.Sleep(2 * time.Second)
+	harness.WaitFor(t, 15*time.Second, "duplicate impression deduped by tracker", func() bool {
+		return len(h.TrackerRejectionsByTrace(t, trace, "dedup")) >= 1
+	})
 	var surSum2 int64
 	if err := h.DB.QueryRow(
 		`SELECT COALESCE(SUM(surcharge_micros),0) FROM marketplace_surcharge_earnings WHERE trace_id = $1`, trace).Scan(&surSum2); err != nil {
@@ -134,11 +139,16 @@ FROM ledger_entries WHERE reference_type='marketplace_surcharge' AND reference_i
 	}
 
 	// Negative: a buyer campaign that targets a NON-granted segment settles nothing.
+	// Positively confirm trace2's impression was PROCESSED (landed in analytics)
+	// before asserting zero surcharge — otherwise a blind sleep shorter than the
+	// settlement latency makes count==0 trivially true even if the gate is broken.
 	other := h.CreatePublicSegment(t, buyer.ID, "e2e-settle-owned", []string{"x1"})
 	setTargeting(t, h, w.Campaign.ID, "include_segments", pq.StringArray{other})
 	trace2 := fmt.Sprintf("mkt-settle-neg-%d", uniq)
 	h.FireImpression(t, trace2, w.Campaign.ID, w.Campaign.CreativeID, w.Placement.ID, w.Publisher.ID, buyer.ID, "USD", 3.50)
-	time.Sleep(2 * time.Second)
+	harness.WaitFor(t, 15*time.Second, "negative-case impression processed", func() bool {
+		return h.ImpressionsByTrace(t, trace2) >= 1
+	})
 	var negCount int
 	if err := h.DB.QueryRow(`SELECT count(*) FROM marketplace_surcharge_earnings WHERE trace_id = $1`, trace2).Scan(&negCount); err != nil {
 		t.Fatalf("negative recheck: %v", err)

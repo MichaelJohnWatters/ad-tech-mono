@@ -13,6 +13,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -82,7 +83,12 @@ func TestVideoTrackerEventReachesReporting(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	_ = harness.BuildBasicWorld(t, h, "evt-video")
 
-	traceID := "evt-video-trace-001"
+	// Unique per-run trace: the tracker media gate dedups on (channel, event,
+	// trace_id) via Redis SetNX with a 24h TTL, so a hardcoded trace collides with
+	// a prior run's key (unless an earlier test's Reset happened to FLUSHDB first)
+	// → the beacon is silently 204'd, no media event, and the WaitFor below times
+	// out. Same dedup-collision class as the fraud/chaos trace fixes.
+	traceID := fmt.Sprintf("evt-video-trace-%d", time.Now().UnixNano())
 	// Sign the beacon like a real player does (the ad server hands out signed
 	// video tracker URLs), so it validates whether or not the stack has strict
 	// tracker.signature_validation on — matching production, not the lax dev
@@ -111,7 +117,10 @@ func TestAudioTrackerEventReachesReporting(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	_ = harness.BuildBasicWorld(t, h, "evt-audio")
 
-	traceID := "evt-audio-trace-001"
+	// Unique per-run trace — the media gate dedups on (channel, event, trace_id)
+	// with a 24h TTL, so a hardcoded trace collides across runs → silent 204 → the
+	// WaitFor below times out. (See the video test.)
+	traceID := fmt.Sprintf("evt-audio-trace-%d", time.Now().UnixNano())
 	// Signed like production (see the video test) so it validates under strict
 	// tracker.signature_validation too.
 	url := adserving.SignURL(h.URLs.Tracker+routes.TrackerAudio+"?tid="+traceID+"&event=complete", adserving.DefaultSigningKey)
