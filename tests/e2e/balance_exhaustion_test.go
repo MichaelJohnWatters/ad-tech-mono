@@ -72,8 +72,15 @@ func TestBalanceExhaustionStopsBidding(t *testing.T) {
 	if !noBidSeen {
 		t.Fatalf("gate never flipped: %d straight wins on a $0.006 wallet at $0.0025/win", wins)
 	}
-	if wins < 2 {
-		t.Errorf("wins before exhaustion = %d, want >=2 ($0.006 wallet funds 2 clean wins at $0.0025; overshoot above that is the polled-gate tolerance)", wins)
+	// Lower bound: the wallet funds 2 clean wins. Upper bound: the polled gate
+	// overshoots by however many auctions clear in the settle+refresh window
+	// (~1-2s → a handful at 400ms/auction), but NOT unboundedly — keep a generous
+	// ceiling so a gate that flips FAR too late (reads a stale mirror, lets the
+	// account run deep negative) still fails. A healthy gate flips at 2-5 wins; 10
+	// is ~4× the wallet, well clear of the tolerance yet catches gross overspend —
+	// this ceiling is the money-invariant guard, don't drop it for flake-proofing.
+	if wins < 2 || wins > 10 {
+		t.Errorf("wins before exhaustion = %d, want 2-10 ($0.006 wallet funds 2 at $0.0025; >10 = gate flipped far too late, gross overspend)", wins)
 	}
 	t.Logf("exhaustion: %d wins on a $0.006 wallet (2 funded + polled-gate overshoot), then no-bid", wins)
 
