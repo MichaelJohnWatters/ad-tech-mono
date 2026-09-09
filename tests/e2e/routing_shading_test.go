@@ -74,40 +74,11 @@ func TestSmartRoutingSkipsAlwaysNoBidDSP(t *testing.T) {
 		t.Errorf("router skipped comp1 after only 10 calls; expected it to wait for routing_min_calls (default 20)")
 	}
 
-	// Train past the threshold and re-check — comp1 must drop now. This is
-	// subtle under N exchange replicas: the skip rule needs the (display, comp1)
-	// bucket to reach TotalCalls > routing_min_calls in the CLUSTER-GLOBAL
-	// aggregate (events → NATS → ClickHouse dsp_calls → routing_reseed_interval),
-	// but the skip is SELF-LIMITING — once a pod starts skipping comp1 (its local
-	// count transiently crosses the threshold during a burst) it stops recording
-	// comp1 calls, which can freeze the aggregate JUST BELOW the threshold. A
-	// one-shot "fire 20 then poll" can strand comp1 at e.g. 17 recorded calls
-	// forever: below min_calls, so the aggregate-driven preview never skips it,
-	// yet nothing is firing to push it over.
-	//
-	// The escape is that at the sub-threshold frozen state NEITHER pod skips
-	// (TotalCalls <= min_calls), so a FRESH auction is guaranteed to record a
-	// comp1 call and climb the aggregate. So keep firing a small batch each poll
-	// iteration until comp1 crosses the threshold and the reseed propagates the
-	// skip to whichever pod the LB hands the preview to.
-	dropped := func() bool {
-		for _, ep := range h.SmartRouterPreview(t).Selected {
-			if ep == h.URLs.ClusterDSPComp1 {
-				return false
-			}
-		}
-		return true
-	}
-	harness.WaitFor(t, 90*time.Second, "router to drop comp1 after enough no-bids (cross-replica reseed)", func() bool {
-		if dropped() {
-			return true
-		}
-		// Feed more no-bids; at the frozen sub-threshold state these DO record and
-		// push the cluster aggregate past min_calls. Small batch so we don't blow
-		// far past the threshold before the next reseed tick converges the pods.
-		h.FireNAuctions(t, 6, "pl-news-mpu", "GBR", "mobile")
-		return dropped()
-	})
+	// Train past the threshold — comp1 must drop now. Shared helper feeds no-bids
+	// until the cluster-global (display,comp1) aggregate crosses routing_min_calls
+	// and the reseed converges every pod (see trainRouterUntilComp1Skipped for why
+	// firing must happen inside the poll — the skip is self-limiting).
+	trainRouterUntilComp1Skipped(t, h)
 }
 
 // TestBidShadingTrackerRecords — DSPs maintain a per-placement shading
