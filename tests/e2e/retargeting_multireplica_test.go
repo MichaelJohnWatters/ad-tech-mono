@@ -93,10 +93,18 @@ RETURNING id::text`, w.AdvAcc.ID).Scan(&hookID); err != nil {
 	if n := shopperMembers(); n != K {
 		t.Errorf("enrolled %d shopper members, want EXACTLY %d (double-enroll under replicas)", n, K)
 	}
-	// The one shared household must be enrolled AT MOST once: 0 if the gate is off,
-	// 1 if on — never 2+, which would be the double-enroll bug this test guards.
-	if n := householdMembers(); n > 1 {
-		t.Errorf("shared household enrolled %d times, want <=1 (exactly-once under replicas)", n)
+	// The one shared household (same loopback IP for all fires) must enroll EXACTLY
+	// once: PRESENT (household enrollment working — audience_rt.household_enroll
+	// defaults on, and it rides the same OnSiteVisit as the shoppers) AND deduped
+	// (never 2+ despite 20 concurrent fires across both pods). Assert both bounds:
+	// a bare `<=1` would let a silently-broken enroll path (gate wrongly off, event
+	// dropped) pass as 0. Poll for it to appear (same async path as shoppers), then
+	// assert no double.
+	harness.WaitFor(t, 15*time.Second, "shared household enrolled", func() bool {
+		return householdMembers() >= 1
+	})
+	if n := householdMembers(); n != 1 {
+		t.Errorf("shared household enrolled %d times, want EXACTLY 1 (enrolled once + deduped under replicas)", n)
 	}
 
 	// Exactly K webhook dispatches (attempt=1 = one per dispatched event; retries
