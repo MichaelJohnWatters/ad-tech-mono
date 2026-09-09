@@ -53,7 +53,7 @@ See `docs/PLAN.md` for the comprehensive project plan.
 
 ### Event Bus
 - Services never import NATS directly - use `pkg/events/` interface
-- All NATS messages are protobuf-encoded
+- NATS payloads are JSON (`pkg/events` `PublishJSON`/`PublishJSONID`; typed payload structs in `pkg/events/payloads.go`) — not protobuf
 - New subjects must be added to `docs/PLAN.md` -> "NATS Subjects"
 
 ### Protobuf

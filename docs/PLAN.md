@@ -15650,12 +15650,12 @@ channel-specific simulator template polish, radio-vs-podcast, SSAI extras.
 98. 🟨 In-game **MVP SHIPPED 2026-08-03**: BatchStrategy real (batch scene auction, competitive separation — one advertiser + one category per scene, per-surface sub-trace billing); rewarded verification + intrinsic viewability open — see the in-game "Built (MVP)" block
 99. 🟨 **+ Publisher Simulator:** in-game tab shipped (e0dc800); `game_scene` polish (rewarded prompt) open
 
-### ⬜ Phase 10: Clean Rooms and Data Marketplace  — not started (but 104's payout spine partially exists)
-100. Clean room computation engine (`pkg/cleanroom/`)
-101. Clean room isolated job runner (`cmd/cleanroom/`)
-102. Data marketplace - listings, expansion estimates, purchase flow
-103. Data bartering - proposals, fairness scoring, mutual activation
-104. 🟨 Marketplace billing - CPM surcharge tracking, data provider payouts — the payout SPINE shipped with segtax data monetization (data fees per delivered impression: `data_fee_pending` durable join → ledger + owner balance, trusted-seat billing); listings/purchase-flow billing itself not started
+### 🟨 Phase 10: Clean Rooms and Data Marketplace  — marketplace SHIPPED 2026-08-10; clean-room engine + bartering deferred
+100. ⬜ Clean room computation engine (`pkg/cleanroom/`) — deferred (dir is .gitkeep-only; the shipped clean-room-LITE expansion estimate lives in `pkg/marketplace` + gateway)
+101. ⬜ Clean room isolated job runner (`cmd/cleanroom/`) — deferred (.gitkeep-only)
+102. ✅ Data marketplace - listings, expansion estimates, purchase flow — **COMPLETE 2026-08-10**: listings+discovery (mig 088), purchase+activation grants (mig 089), expansion estimates (clean-room-lite, min-agg-100 privacy floor); gateway list/browse/purchase/grants/estimate + portal Marketplace tab + RBAC marketplace:read/list/buy; PUBLIC-only listable, publishers sell-only; bid-time matching unchanged
+103. ⬜ Data bartering - proposals, fairness scoring, mutual activation — deferred
+104. ✅ Marketplace billing - CPM surcharge tracking, data provider payouts — **COMPLETE 2026-08-10**: CPM-surcharge settlement (mig 090, reporting-only; buyer debit / seller credit net / platform margin, ledger-balanced, exactly-once) on top of the earlier segtax data-fee payout spine (`data_fee_pending` durable join → ledger + owner balance, trusted-seat billing)
 
 ### ⬜ Phase 11: Business Operations  — not started
 105. Account closure and data export workflow

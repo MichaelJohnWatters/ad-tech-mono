@@ -20,7 +20,7 @@ staging/prod (values files per env).
     driven by the `services:` map (probes default `/healthz` + `/readyz`)
   - `templates/infra/`, `templates/observability/` — per-component templates
   - `templates/cronjobs.yaml` — from the `cronjobs:` map (batch-conductor,
-    dayboundary)
+    dayboundary, invoice-runner, account-closeout)
   - `templates/migrate-job.yaml` — goose migrations as a post-install/upgrade
     hook (init container waits for postgres)
   - `templates/localhost-lb.yaml` — `<svc>-lb` LoadBalancer services; k3s
