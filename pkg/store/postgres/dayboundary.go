@@ -25,8 +25,10 @@ type FlightTransition struct {
 // line_item.status, so activation must cascade or nothing starts bidding.
 // Returns the line-item transitions.
 //
-// Platform-wide job: relies on the connecting role bypassing RLS (dev superuser
-// locally; a service role in prod), so it doesn't SET LOCAL a tenant.
+// Platform-wide job: crosses tenants by design, so the tx sets the
+// app.platform_read hatch (mig 065). The connecting role is adtech_app
+// (NOBYPASSRLS, security #77) — WITHOUT the hatch every SELECT here silently
+// matches 0 rows and the job no-ops without error.
 func (s *Store) ActivateFlights(ctx context.Context, day time.Time) ([]FlightTransition, error) {
 	return s.transitionIOFlights(ctx,
 		`status = 'draft' AND start_date <= $1 AND end_date >= $1`, day, "active",
@@ -48,6 +50,14 @@ func (s *Store) transitionIOFlights(ctx context.Context, ioPredicate string, day
 		return nil, fmt.Errorf("begin flight tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Cross-tenant sweep → platform hatch (security #77): insertion_orders and
+	// line_items carry RLS; under adtech_app a bare tx sees 0 rows, silently.
+	// Their tenant_isolation policies are USING-only (mig 017 + 065 hatch), so
+	// the hatch admits the UPDATEs below too — same pattern as balances.go.
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("set platform hatch: %w", err)
+	}
 
 	// Which IOs transition. ioPredicate binds `day` as $1.
 	ioRows, err := tx.QueryContext(ctx, `SELECT id::text FROM insertion_orders WHERE `+ioPredicate, day)

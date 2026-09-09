@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"testing"
@@ -46,13 +47,19 @@ func TestDayBoundaryEndsExpiredFlights(t *testing.T) {
 		t.Fatalf("new display campaign status = %q, want live", got)
 	}
 
+	// Run the job as the NOBYPASSRLS app role — the SAME role the in-cluster
+	// CronJob connects with. The harness superuser DSN bypasses RLS and MASKED
+	// a real bug here: without the platform hatch the job silently no-ops
+	// under adtech_app (0 rows matched, exit 0). Never "fix" this back to
+	// h.URLs.PostgresURL.
+	appDSN := appRoleDSN(t, h.URLs.PostgresURL)
 	runDayBoundary := func(date string) {
 		t.Helper()
 		cmd := exec.Command("go", "run", "./cmd/dayboundary", "--date", date)
 		cmd.Dir = "../.."
-		// dayboundary hard-exits without DATABASE_URL; pass the harness DSN
-		// explicitly rather than relying on it being in the caller's env.
-		cmd.Env = append(os.Environ(), "DATABASE_URL="+h.URLs.PostgresURL)
+		// dayboundary hard-exits without DATABASE_URL; pass the DSN explicitly
+		// rather than relying on it being in the caller's env.
+		cmd.Env = append(os.Environ(), "DATABASE_URL="+appDSN)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("dayboundary --date %s failed: %v\n%s", date, err, out)
 		}
@@ -70,6 +77,24 @@ func TestDayBoundaryEndsExpiredFlights(t *testing.T) {
 	if got := lineItemStatus(t, h, campaignID); got != "ended" {
 		t.Errorf("after re-run, line item status = %q, want ended (job must be idempotent)", got)
 	}
+}
+
+// appRoleDSN derives the adtech_app (NOBYPASSRLS) DSN from the harness owner
+// URL — the same credential swap as rls_test.go's openAppRoleDB, but returning
+// the DSN for a subprocess. Override wholesale with E2E_APP_POSTGRES_URL.
+// Unlike openAppRoleDB this FAILS rather than skips: running dayboundary as
+// the owner role would bypass RLS and mask the exact bug this test guards.
+func appRoleDSN(t *testing.T, ownerURL string) string {
+	t.Helper()
+	if v := os.Getenv("E2E_APP_POSTGRES_URL"); v != "" {
+		return v
+	}
+	u, err := url.Parse(ownerURL)
+	if err != nil {
+		t.Fatalf("parse owner postgres URL: %v", err)
+	}
+	u.User = url.UserPassword("adtech_app", "adtech-app-local")
+	return u.String()
 }
 
 // lineItemStatus reads a line item's status directly (h.DB is the BYPASSRLS dev
