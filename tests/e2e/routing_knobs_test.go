@@ -32,6 +32,28 @@ func comp1Selected(t *testing.T, h *harness.Harness) bool {
 	return false
 }
 
+// trainRouterUntilComp1Skipped feeds no-bid auctions until the SmartRouter skips
+// the always-no-bid comp1, then returns. Firing INSIDE the poll is the whole
+// point: the skip is self-limiting — once a pod skips comp1 it stops recording
+// its calls, so a one-shot burst can freeze the CLUSTER-GLOBAL (display,comp1)
+// aggregate JUST BELOW routing_min_calls and strand comp1 as "too thin to skip"
+// forever (measured: stranded at 17 recorded calls). At the sub-threshold frozen
+// state neither pod skips, so fresh auctions DO record + climb the aggregate over
+// the threshold; the reseed (events → ClickHouse dsp_calls → routing_reseed_
+// interval) then converges every pod, incl. whichever the LB hands the preview to.
+// Callers do their own initial FireNAuctions first (e.g. to assert the
+// below-threshold "still included" case) before calling this.
+func trainRouterUntilComp1Skipped(t *testing.T, h *harness.Harness) {
+	t.Helper()
+	harness.WaitFor(t, 90*time.Second, "router to skip always-no-bid comp1 (cross-replica reseed)", func() bool {
+		if !comp1Selected(t, h) {
+			return true
+		}
+		h.FireNAuctions(t, 6, "pl-news-mpu", "GBR", "mobile")
+		return !comp1Selected(t, h)
+	})
+}
+
 func TestRoutingKnobsLiveAndConfigDeleteReverts(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	h.SeedStandard(t)
@@ -47,24 +69,12 @@ func TestRoutingKnobsLiveAndConfigDeleteReverts(t *testing.T) {
 		h.DeleteConfig(t, "exchange.routing_min_calls")
 	})
 
-	// Train comp1 into a skip: no-bid calls converged cluster-wide by the reseed
-	// (events → ClickHouse → routing_reseed_interval). Fire inside the poll loop,
-	// not one-shot: the skip is self-limiting (once a pod skips comp1 it stops
-	// recording its calls), so a fixed burst can freeze the cluster aggregate
-	// JUST BELOW routing_min_calls and strand comp1 as "too thin to skip" forever.
-	// At the sub-threshold frozen state neither pod skips, so fresh auctions DO
-	// record + climb the aggregate over the threshold. (Same fix as
-	// TestSmartRoutingSkipsAlwaysNoBidDSP / TestCompetitiveB7.) Once firmly over
-	// 20 here, the later knob phases hold (they change only whether the skip rule
-	// APPLIES, not the recorded call count).
+	// Train comp1 into a skip (shared helper: fires no-bids until the cluster
+	// aggregate crosses routing_min_calls and every pod converges). Once firmly
+	// over the threshold here, the later knob phases hold — they change only
+	// whether the skip rule APPLIES, not the recorded call count.
 	h.FireNAuctions(t, 24, "pl-news-mpu", "GBR", "mobile")
-	harness.WaitFor(t, 90*time.Second, "router to skip comp1 after training", func() bool {
-		if !comp1Selected(t, h) {
-			return true
-		}
-		h.FireNAuctions(t, 6, "pl-news-mpu", "GBR", "mobile")
-		return !comp1Selected(t, h)
-	})
+	trainRouterUntilComp1Skipped(t, h)
 
 	// Knob 1 — kill-switch. routing_enabled=false must bypass the learned
 	// skip and fan out to everyone, live.

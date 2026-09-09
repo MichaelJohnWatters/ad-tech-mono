@@ -429,42 +429,17 @@ func TestCompetitiveB7_SmartRouterPreFiltersAlwaysNoBidDSP(t *testing.T) {
 	h.MakeDSPAlwaysNoBid(t, harness.PodDSPCompetitor1)
 	h.RefreshAllCaches(t)
 
-	// Reset ONCE (stamps the reseed window: dsp_calls since resetAt), then feed
-	// no-bids until comp1 drops. comp1 is no_bid_rate=1.0, so every recorded call
-	// is a no-bid. The skip needs the (display, comp1) bucket to cross
-	// routing_min_calls (20) in the CLUSTER-GLOBAL aggregate, but the skip is
-	// SELF-LIMITING: once a pod starts skipping comp1 it stops recording its
-	// calls, which can freeze the aggregate JUST BELOW the threshold — a one-shot
-	// "fire 30 then poll" can strand comp1 at e.g. 17 recorded calls forever
-	// (below min_calls, so never skipped, yet nothing firing to push it over).
-	// (The OLD approach re-RESET inside the loop, which moved the window start
-	// forward faster than the 5s reseed could act — a different failure, also
-	// removed.) The escape: at the sub-threshold frozen state neither pod skips,
-	// so fresh auctions DO record + climb the aggregate. Fire a small batch each
-	// poll iteration until comp1 crosses over and the reseed converges the pods.
+	// Reset ONCE (stamps the reseed window: dsp_calls since resetAt), then train
+	// comp1 into a skip via the shared helper — it feeds no-bids until the
+	// cluster-global (display,comp1) aggregate crosses routing_min_calls and the
+	// reseed converges every pod. comp1 is no_bid_rate=1.0, so every recorded call
+	// is a no-bid. (Firing must happen inside the poll because the skip is
+	// self-limiting — see trainRouterUntilComp1Skipped.)
 	h.ResetSmartRouter(t)
 	h.FireNAuctions(t, 24, "pl-news-mpu", "GBR", "mobile")
-	var preview harness.RouterPreview
-	comp1Dropped := func() bool {
-		preview = h.SmartRouterPreview(t)
-		for _, ep := range preview.Selected {
-			// In pod mode, the exchange holds cluster-DNS endpoints
-			// (http://dsp-competitor1:8089), so compare against Cluster*.
-			if ep == h.URLs.ClusterDSPComp1 {
-				return false // comp1 still selected — reseed hasn't converged yet
-			}
-		}
-		return true
-	}
-	harness.WaitFor(t, 90*time.Second, "router learns to skip always-no-bid comp1", func() bool {
-		if comp1Dropped() {
-			return true
-		}
-		h.FireNAuctions(t, 6, "pl-news-mpu", "GBR", "mobile")
-		return comp1Dropped()
-	})
+	trainRouterUntilComp1Skipped(t, h)
 	// Sanity: at least one DSP should still be selected (internal at minimum).
-	if len(preview.Selected) == 0 {
+	if preview := h.SmartRouterPreview(t); len(preview.Selected) == 0 {
 		t.Fatalf("router excluded EVERY DSP; preview=%+v", preview)
 	}
 }
