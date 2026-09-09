@@ -130,10 +130,10 @@ services:
         value: "true"
       - name: GATEWAY_PUBLIC_TRACKER_URL
         value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
-  # Single-replica BY DESIGN (do not scale without code changes):
-  # reporting (in-process billing Summary + spend-snapshot publisher),
-  # identity-consumer (in-memory fingerprint buckets),
-  # report-runner (boot-time stuck-job requeue).
+  # Replica constraints: docs/MULTIPOD.md is the source of truth.
+  # reporting / identity-consumer / report-runner are multi-replica-safe now
+  # (cluster-global TB summary, Redis-backed FP buckets, job leases);
+  # single-writer rules (e.g. pipeline) still apply per that doc.
 
 # No localhost klipper-lb exposure outside local dev.
 localExpose:

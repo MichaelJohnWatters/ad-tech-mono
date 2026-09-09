@@ -6,8 +6,8 @@
 // batch builder would and invalidates the audience cache, so the DSP retargets on
 // the fresh membership within seconds with no bid-time changes.
 //
-// Run ONE replica: it's a light stateless consumer; a single queue-group member
-// keeps enroll/suppress ordering simple. Enrollment is idempotent regardless.
+// Multi-replica safe (helm runs 2): enrollment is an idempotent upsert, events
+// are queue-group consumed, and the purge is an idempotent DELETE.
 package main
 
 import (

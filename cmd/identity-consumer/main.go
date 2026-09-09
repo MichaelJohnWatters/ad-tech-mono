@@ -4,9 +4,10 @@
 // (deterministic co-occurrence + optional probabilistic IP+UA matching) to the
 // identity_graph table.
 //
-// Splitting observation (cheap, on every serving pod) from the write (one
-// consumer) keeps the write off the hot path and gives the probabilistic
-// fingerprint state a single coherent view — run ONE replica for that reason.
+// Splitting observation (cheap, on every serving pod) from the write keeps the
+// write off the hot path. Probabilistic fingerprint state needs one coherent
+// view: multi-replica is safe with the Redis-backed FPStore (the in-cluster
+// default); the in-memory fallback is single-replica only.
 package main
 
 import (
@@ -71,8 +72,8 @@ func main() {
 	// key is unset, fall back to the PLATFORM redis (always present in-
 	// cluster) — multi-replica correctness must not depend on an operator
 	// remembering a config when bumping replicas. In-memory only when no
-	// redis is reachable at all (host runs, unit-test contexts), and then
-	// the peer guard below screams if replicas exist.
+	// redis is reachable at all (host runs, unit-test contexts) — NOT
+	// replica-safe; in-cluster that state logs ERROR below.
 	var fpStore identityobserve.FPStore
 	addr := keys.IdentityConsumer.RedisURL.Get(cfg)
 	if addr == "" {

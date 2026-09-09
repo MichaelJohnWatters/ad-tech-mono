@@ -280,7 +280,7 @@ func (e *Engine) SweepExpiredReservations() int {
 }
 
 // PacingState returns the UTC day plus the persistable settled and open-reserved
-// cents per campaign. Reporting persists this each snapshot tick so a restart
+// micro-dollars per campaign. Reporting persists this each snapshot tick so a restart
 // can HydratePacing it back — without it, a restart resets committed to zero and
 // reconciles DSP pacing counters down.
 func (e *Engine) PacingState() (string, map[string]int64, map[string]int64) {

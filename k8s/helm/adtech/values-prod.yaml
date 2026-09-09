@@ -192,9 +192,10 @@ services:
         value: "https://tracker.adtech.example.com"   # ← match global.domain
       - name: GATEWAY_CREATIVES_STORE_URL
         value: "https://cdn.adtech.example.com/adtech-creatives/"  # ← your S3/CDN
-  # Single-replica BY DESIGN (do not scale without code changes):
-  # reporting, identity-consumer, report-runner — see the deployment comments
-  # in k8s/base/*/deployment.yaml.
+  # Replica constraints: docs/MULTIPOD.md is the source of truth.
+  # reporting / identity-consumer / report-runner are multi-replica-safe now
+  # (cluster-global TB summary, Redis-backed FP buckets, job leases);
+  # single-writer rules (e.g. pipeline) still apply per that doc.
 
 # No localhost klipper-lb exposure outside local dev.
 localExpose:

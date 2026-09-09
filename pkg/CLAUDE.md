@@ -7,18 +7,18 @@ All reusable libraries live here. Every service imports from `pkg/`. Nothing is 
 | Package | Purpose | Key interface/pattern |
 |---|---|---|
 | `models/` | Domain models (Campaign, Creative, Placement, etc.) | Shared structs, used everywhere |
-| `auction/` | Auction logic, deal priority, smart DSP routing | `router.go` for fan-out phases 1-3 |
+| `auction/` | Auction logic (first-price, strategies) | Deal priority lives in `deals/`; SmartRouter fan-out routing lives in `optimise/` |
 | `targeting/` | Targeting rule evaluation engine | Evaluates if a bid request matches campaign rules |
 | `pacing/` | Budget pacing calculations | Spread spend evenly over campaign flight |
 | `deals/` | Deal types (PMP, PG, preferred), matching, priority | Deal priority order in exchange |
 | `openrtb/` | OpenRTB request/response types | JSON serialisation, spec compliance |
 | `store/` | Database access layer | Interface per store type, implementations in subdirs |
 | `store/postgres/` | PostgreSQL implementation | Multi-tenant: always reads account_id from context |
-| `store/analytics/` | DuckDB + ClickHouse implementations | Pluggable behind interface |
+| `store/analytics/` | ClickHouse implementation (hot) + HotColdStore routing to the Parquet lake (cold) | DuckDB deleted in ADR 0006; cold reads via CH `s3()` |
 | `store/objects/` | Filesystem + S3 implementations | Pluggable behind interface |
 | `store/datalake/` | Parquet read/write, Delta Log | Used by pipeline and rollups |
 | `events/` | Event bus interface | `EventBus` interface - Publish/Subscribe/Ack/Nak |
-| `events/nats/` | NATS JetStream implementation | Swappable for Kafka later |
+| `events/natsbus/` | NATS JetStream implementation | Swappable for Kafka later |
 | `config/` | Configuration loading | defaults -> env vars -> live Postgres config; every key is a typed handle in `config/keys/` (`keys.DSP.NoisePct.Get(cfg)`) — no magic strings at call sites |
 | `middleware/` | HTTP/gRPC middleware | Auth, tenant, rate limit, circuit breaker, audit |
 | `logger/` | Structured logging (slog) | JSON output, trace_id in every line |
@@ -41,7 +41,7 @@ All reusable libraries live here. Every service imports from `pkg/`. Nothing is 
 
 ## Conventions
 
-- **Interfaces at package root, implementations in subdirectories** (e.g. `events/events.go` has the interface, `events/nats/` has the implementation)
+- **Interfaces at package root, implementations in subdirectories** (e.g. `events/events.go` has the interface, `events/natsbus/` has the implementation)
 - **Multi-tenancy in every store method** - see root CLAUDE.md
 - **No direct NATS/Redis/Postgres imports in services** - always go through `pkg/` abstractions
 - **Proto changes require `make proto`** - regenerates Go code via Buf
