@@ -349,20 +349,22 @@ func main() {
 	}
 	retailMinRelFn := func() float64 { return keys.Exchange.RetailMinRelevance.Get(cfg) }
 	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn, retailMinRelFn)
-	// Partner inbound auth (#112): gate the EXTERNAL HTTP OpenRTB surfaces on a
-	// per-partner sandbox key. The internal gRPC twin (our own SSP) is handed the
-	// UNGATED `auction` below — trusted transport, no partner key to present.
-	strictInboundFn := func() bool { return keys.Exchange.InboundPartnerAuthStrict.Get(cfg) }
-	gatedAuction := partnerAuthGate(auction, adcertSecrets, strictInboundFn, log)
-	mux.HandleFunc(routes.OpenRTBAuction, gatedAuction)
+	// Partner inbound auth (#112): authenticate the EXTERNAL HTTP OpenRTB surfaces
+	// against a per-partner sandbox key. Wrapped at the OUTERMOST layer of each
+	// external handler — including Prebid, so a rejected caller is 401'd BEFORE the
+	// Prebid handler reads the body / publishes identity signals. The internal gRPC
+	// twin (our own SSP) is handed the UNGATED `auction` below (trusted transport,
+	// no partner key). Reuses the shared middleware.PartnerInboundAuth.
+	partnerAuth := middleware.PartnerInboundAuth(adcertSecrets, func() bool { return keys.Exchange.InboundPartnerAuthStrict.Get(cfg) }, log)
+	mux.Handle(routes.OpenRTBAuction, partnerAuth(http.HandlerFunc(auction)))
 	mux.HandleFunc(routes.AdCertKey, adCertKeyHandler(adcertSigner))
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	// Prebid Server-compatible bidder endpoint. See pkg/prebid + docs/PLAN.md
-	// → "Prebid Server Integration". Reuses the same (gated) auction path with the
-	// inbound floor policy + opaque deal-id logging applied first.
-	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, gatedAuction, idPub, log))
+	// → "Prebid Server Integration". Reuses the same auction path with the inbound
+	// floor policy + opaque deal-id logging applied first; gated at the outer layer.
+	mux.Handle(routes.PrebidAuction, partnerAuth(prebidAuctionHandler(cfg, auction, idPub, log)))
 	mux.HandleFunc(routes.PrebidSetUID, prebidSetUIDHandler(log))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceExchange)(metrics.Wrap(middleware.CORS(mux)))
