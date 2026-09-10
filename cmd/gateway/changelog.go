@@ -119,8 +119,8 @@ func (c *changelogServer) entriesHandler(auditDB *sql.DB) http.HandlerFunc {
 				return
 			}
 			id := r.URL.Query().Get("id")
-			if id == "" {
-				http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+			if !uuidRe.MatchString(id) {
+				http.Error(w, `{"error":"valid id required"}`, http.StatusBadRequest)
 				return
 			}
 			if err := c.store.Delete(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
@@ -183,8 +183,24 @@ func (c *changelogServer) handleWrite(w http.ResponseWriter, r *http.Request, au
 		http.Error(w, `{"error":"release_date must be YYYY-MM-DD"}`, http.StatusBadRequest)
 		return
 	}
+	if req.ID != "" && !uuidRe.MatchString(req.ID) {
+		http.Error(w, `{"error":"invalid id"}`, http.StatusBadRequest)
+		return
+	}
 	if req.AffectedEndpoints == nil {
 		req.AffectedEndpoints = []string{}
+	}
+	// Cap the array (it renders as chips on the PUBLIC page) — the whole-body cap
+	// alone would allow thousands of short elements.
+	if len(req.AffectedEndpoints) > 50 {
+		http.Error(w, `{"error":"too many affected_endpoints (max 50)"}`, http.StatusBadRequest)
+		return
+	}
+	for _, ep := range req.AffectedEndpoints {
+		if len(ep) > 200 {
+			http.Error(w, `{"error":"affected_endpoint too long"}`, http.StatusBadRequest)
+			return
+		}
 	}
 	in := changelog.Input{
 		Version: req.Version, ReleaseDate: date, Category: req.Category, Breaking: req.Breaking,
