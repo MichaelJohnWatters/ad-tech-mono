@@ -16112,6 +16112,21 @@ Cross-region:
 
 **For MVP:** single region deployment. Data residency is a configuration flag that restricts where user data is stored. Full multi-region is a future phase.
 
+**BUILT (2026-09-10):** MVP data residency shipped as two slices.
+*Control plane* — `accounts.residency_region` (mig 103) + a `platform.region`
+config key (this deployment's home region, default `us-east-1`); the region rides
+the JWT (`auth.Claims.ResidencyRegion`, loaded at login) and `middleware.Auth`'s
+region gate rejects out-of-region accounts' MUTATIONS with 403 (reads allowed,
+staff/admin exempt). Staff pin an account via `PUT /v1/api/accounts/residency`
+(`support:update`, audited). *Data plane* — the SSP reads `regs.ext.data_residency`
+and, when it differs from `platform.region`, suppresses all user-level data
+emission (identity-graph observe, behaviour observe, and the audience
+segment/taxonomy stamp onto the outbound bid request) via
+`privacy.AllowsUserData`; the flag propagates downstream on `regs.ext`. Empty
+region on either side disables the gate, so single-region deployments are
+unaffected. Not yet built: actual multi-region infra (federated NATS,
+per-region stores/buckets, region-routed reporting).
+
 **Data residency flag in bid request:**
 
 ```json

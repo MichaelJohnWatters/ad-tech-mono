@@ -2247,7 +2247,32 @@ paths:
       tags: [Staff]
       summary: List accounts for the staff impersonation picker (support:read)
       security: [{ bearerAuth: [] }]
-      responses: { "200": { description: "[{ id, name, type }]" } }
+      responses: { "200": { description: "[{ id, name, type, residency_region }]" } }
+  /v1/api/accounts/residency:
+    put:
+      tags: [Staff]
+      summary: Set an account's data-residency region (support:update, staff-only)
+      description: >
+        Pins an account to a data-residency region (PLAN Phase 11 #111). An account
+        whose region differs from a deployment's home region (platform.region) has
+        its mutations rejected there and its out-of-region bid-time user data not
+        stored. Takes effect on the account's next login (the region rides the JWT).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, residency_region]
+              properties:
+                account_id: { type: string, format: uuid }
+                residency_region: { type: string, example: eu, description: "region token [a-z0-9-]{2,32}" }
+      responses:
+        "200": { description: "{ account_id, residency_region }" }
+        "400": { description: invalid account_id or residency_region }
+        "403": { description: not staff / lacks support:update }
+        "404": { description: account not found }
   /v1/api/moderation:
     get:
       tags: [Moderation]

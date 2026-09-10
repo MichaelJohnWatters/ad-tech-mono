@@ -13,6 +13,11 @@ user-data path — DSP bidding, SSP capture, tracker pixels, ARA — plus the
 - `SignalsFromQuery(get, secGPCHeader)` (`consent.go`) — builds `Signals` from
   ad-tag/pixel query params + the `Sec-GPC` header. Shared by SSP behaviour
   capture and the tracker's retargeting pixel so the capture-time gates can't drift.
+- `AllowsResidency(reqRegion, homeRegion)` / `AllowsUserData(decision, reqRegion, homeRegion)`
+  (`residency.go`) — data-residency gate (PLAN #111). `AllowsUserData` = consented
+  `Personalise` AND the request's `regs.ext.data_residency` (empty = none) matches
+  this deployment's `platform.region`. The SSP gates ALL user-data emission through
+  it (`requestStoresUserData`); empty region on either side = no constraint.
 - `OptOut` + `LevelFromInt` (`consent.go`) — the warm-cache row for the user
   opt-out registry; loaded by `pkg/store/postgres/optouts.go` (`OptOutLoader`)
   into `pkg/cache/warm` caches (DSP), invalidated via
