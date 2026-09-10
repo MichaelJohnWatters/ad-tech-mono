@@ -33,10 +33,11 @@ type AnalyticsPurger interface {
 //     (buyers' marketplace_grants cascade off it), data_providers (other tenants'
 //     segments reference it).
 //
-// Object-storage blobs: the export ZIP behind account_export_jobs IS deleted
-// (purgeObjects, before the PG rows). Creative assets are NOT — creatives.asset_url
-// points at shared/demo theme objects reused across accounts (deleting them would
-// harm other tenants); a documented follow-up until per-account creative keys exist.
+// Object-storage blobs (purgeObjects, before the PG rows): the export ZIP behind
+// account_export_jobs AND the account's transcoded SSAI creative segments (keyed by
+// the account's own creative ids) ARE deleted. Shared/demo creative theme objects
+// (creatives.asset_url → themes/…) are NOT — reused across accounts; there is no
+// advertiser creative-upload path writing account-scoped blobs yet.
 var purgeableTables = map[string]bool{
 	// Campaign / serving config
 	"line_items": true, "publisher_line_items": true, "insertion_orders": true,
@@ -66,8 +67,13 @@ type Purger struct {
 	DB        *sql.DB
 	Analytics AnalyticsPurger // nil = skip the ClickHouse half (logged)
 	Objects   objects.Store   // nil = skip object-storage blobs (logged)
-	Now       func() time.Time
-	Log       *slog.Logger
+	// CreativesBucket + CondPrefix locate the account's transcoded SSAI segments
+	// (keyed {CondPrefix}/{creativeID}/…). Empty = skip that class. Set from
+	// s3.bucket + transcoder.prefix config.
+	CreativesBucket string
+	CondPrefix      string
+	Now             func() time.Time
+	Log             *slog.Logger
 }
 
 func (p *Purger) now() time.Time {
@@ -189,18 +195,25 @@ func (p *Purger) purgePostgres(ctx context.Context, accountID string) (int64, er
 }
 
 // purgeObjects deletes the account's object-storage blobs whose Postgres pointer
-// rows are about to be purged — the export ZIP (account_export_jobs), a full copy
-// of the account's exported data in the private reports bucket. Any failure aborts
-// the purge (so the account is retried, never marked 'purged' with the export still
-// sitting in the bucket). Creative assets are deliberately NOT purged:
-// creatives.asset_url points at shared/demo theme objects reused across accounts,
-// so deleting them would harm other tenants — a documented follow-up until a
-// per-account creative-upload key convention exists.
+// rows are about to be purged:
+//   - the export ZIP (account_export_jobs) — a full copy of the account's exported
+//     data in the private reports bucket;
+//   - the account's transcoded SSAI creative segments ({CondPrefix}/{creativeID}/…
+//     in the creatives bucket) — the one class of account-OWNED creative blob that
+//     exists today, keyed by the account's own (UUID) creative ids so deletion is
+//     tenant-safe.
+//
+// Any failure aborts the purge (so the account is retried, never marked 'purged'
+// with a blob still in a bucket). Shared/demo creative theme assets
+// (creatives.asset_url → themes/…) are NOT purged: they are reused across accounts,
+// and there is no advertiser creative-upload path that writes account-scoped blobs
+// (a follow-up if that feature ever lands).
 func (p *Purger) purgeObjects(ctx context.Context, accountID string) error {
 	if p.Objects == nil {
-		p.Log.Warn("object store not wired — export artifacts NOT purged", "account", accountID)
+		p.Log.Warn("object store not wired — export artifacts + creative segments NOT purged", "account", accountID)
 		return nil
 	}
+	// Export ZIPs.
 	arts, err := p.exportArtifacts(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("list export artifacts: %w", err)
@@ -218,7 +231,59 @@ func (p *Purger) purgeObjects(ctx context.Context, accountID string) error {
 		}
 		p.Log.Info("purged export artifact", "account", accountID, "bucket", a.bucket, "key", a.key)
 	}
+	// Transcoded SSAI creative segments — per the account's own creative ids.
+	if p.CreativesBucket != "" && p.CondPrefix != "" {
+		creativeIDs, err := p.accountCreativeIDs(ctx, accountID)
+		if err != nil {
+			return fmt.Errorf("list creative ids: %w", err)
+		}
+		for _, cid := range creativeIDs {
+			// UUID ids are fixed-length so this prefix bounds exactly one creative's
+			// objects — both {cid}/… and {cid}-{version}/… variants.
+			prefix := strings.TrimRight(p.CondPrefix, "/") + "/" + cid
+			keys, err := p.Objects.List(ctx, p.CreativesBucket, prefix)
+			if err != nil {
+				return fmt.Errorf("list segments %s/%s: %w", p.CreativesBucket, prefix, err)
+			}
+			for _, k := range keys {
+				if err := p.Objects.Delete(ctx, p.CreativesBucket, k); err != nil {
+					return fmt.Errorf("delete segment %s/%s: %w", p.CreativesBucket, k, err)
+				}
+			}
+			if len(keys) > 0 {
+				p.Log.Info("purged transcoded creative segments", "account", accountID, "creative", cid, "objects", len(keys))
+			}
+		}
+	}
 	return nil
+}
+
+// accountCreativeIDs lists the account's creative ids. Platform hatch — creatives
+// has RLS; a bare read as adtech_app returns 0 rows. Read BEFORE the Postgres purge
+// deletes the creatives rows.
+func (p *Purger) accountCreativeIDs(ctx context.Context, accountID string) ([]string, error) {
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id::text FROM creatives WHERE account_id = $1::uuid`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 type objectRef struct{ bucket, key string }

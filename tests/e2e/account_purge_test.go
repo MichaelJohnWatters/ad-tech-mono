@@ -69,6 +69,21 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		 VALUES ($1::uuid, 'done', $2, $3, 22, now())`, adv.ID, reportsBucket, exportKey); err != nil {
 		t.Fatalf("seed export job: %v", err)
 	}
+
+	// A transcoded SSAI segment under the account's OWN creative (keyed by creative
+	// id, ssai/cond/{creativeID}/…) — the one account-owned creative blob that exists
+	// today. The purge MUST delete it (tenant-safe; shared theme assets are left).
+	var creativeID string
+	if err := h.DB.QueryRow(`SELECT id::text FROM creatives WHERE account_id = $1::uuid LIMIT 1`, adv.ID).Scan(&creativeID); err != nil {
+		t.Fatalf("creative id: %v", err)
+	}
+	const creativesBucket = "adtech-creatives"
+	segPrefix := "ssai/cond/" + creativeID
+	segKey := segPrefix + "/deadbeef/index.m3u8"
+	if err := reportsStore.Put(context.Background(), creativesBucket, segKey,
+		strings.NewReader("#EXTM3U"), int64(len("#EXTM3U")), "application/x-mpegURL"); err != nil {
+		t.Fatalf("put transcoded segment: %v", err)
+	}
 	harness.WaitFor(t, 30*time.Second, "impression in ClickHouse", func() bool {
 		return chImpressionsForAccount(t, adv.ID) >= 1
 	})
@@ -131,6 +146,13 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		t.Fatalf("export zip exists check: %v", err)
 	} else if exists {
 		t.Errorf("export zip %q still in bucket after purge (object-storage blob not purged)", exportKey)
+	}
+
+	// The account's transcoded SSAI creative segments are gone from the bucket.
+	if segs, err := reportsStore.List(context.Background(), creativesBucket, segPrefix); err != nil {
+		t.Fatalf("list segments: %v", err)
+	} else if len(segs) != 0 {
+		t.Errorf("transcoded creative segments after purge = %d, want 0 (creative blobs not purged): %v", len(segs), segs)
 	}
 
 	// The financial record SURVIVES — the purge must not destroy settlement/tax

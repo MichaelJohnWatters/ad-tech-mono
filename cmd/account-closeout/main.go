@@ -20,6 +20,7 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountlifecycle"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/invoicing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/payouts"
@@ -83,12 +84,19 @@ func main() {
 	if ch != nil {
 		analyticsPurger = ch
 	}
-	// Object store (export-zip blobs). objects.Connect never returns nil — it serves
-	// the fs fallback when s3.endpoint/S3_ENDPOINT is unset (host one-off runs).
-	objStore := objects.Connect(config.Load(), "/tmp/adtech-reports", log)
+	// Object store (export-zip blobs + transcoded SSAI creative segments).
+	// objects.Connect never returns nil — it serves the fs fallback when
+	// s3.endpoint/S3_ENDPOINT is unset (host one-off runs).
+	cfg := config.Load()
+	objStore := objects.Connect(cfg, "/tmp/adtech-reports", log)
 	purgeCtx, purgeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer purgeCancel()
-	purger := &accountlifecycle.Purger{DB: db, Analytics: analyticsPurger, Objects: objStore, Now: time.Now, Log: log}
+	purger := &accountlifecycle.Purger{
+		DB: db, Analytics: analyticsPurger, Objects: objStore,
+		CreativesBucket: keys.S3.Bucket.Get(cfg),
+		CondPrefix:      keys.Transcoder.Prefix.Get(cfg),
+		Now:             time.Now, Log: log,
+	}
 	purged, err := purger.RunDuePurges(purgeCtx)
 	if err != nil {
 		log.Error("account purge failed", "purged", purged, "error", err)
