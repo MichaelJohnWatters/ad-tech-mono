@@ -47,9 +47,18 @@ agencies), marks the account `closed`, and closes the request row.
   (`marketplace_listings` — buyers' grants cascade off it — and `data_providers`).
   Idempotent (only `'closed'` selected) + best-effort per account. Skips the
   ClickHouse half (logs, retries next run) if CH is unreachable.
-  KNOWN GAPS (documented follow-ups): object-storage blobs (S3 creative assets +
-  export zips) behind the purged PG pointer rows are NOT yet deleted; a very large
-  ClickHouse table's `mutations_sync=1` delete could exceed the job's 5-min ctx.
+- **Object-storage purge** (`Purger.purgeObjects`, runs BEFORE the Postgres purge so
+  the pointer rows are still present; aborts the whole purge on any failure so an
+  account is never marked `'purged'` with a blob left behind): deletes the account's
+  export ZIP (`account_export_jobs.artifact_bucket/key` — a full copy of the exported
+  data) AND its transcoded SSAI creative segments (`{transcoder.prefix}/{creativeID}/…`
+  in `s3.bucket`, keyed by the account's own UUID creative ids → tenant-safe). Needs
+  `S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY` env (real S3 injected over these in
+  staging/prod). NOT purged: shared/demo creative theme assets (`creatives.asset_url`
+  → `themes/…`, reused across accounts) — there is no advertiser creative-upload path
+  writing account-scoped blobs (a follow-up only if that feature lands).
+  KNOWN GAP: a very large ClickHouse table's `mutations_sync=1` delete could exceed
+  the purge's 30-min ctx (then it retries next run).
 
 ## Pointers
 
