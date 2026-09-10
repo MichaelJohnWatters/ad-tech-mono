@@ -16124,8 +16124,25 @@ emission (identity-graph observe, behaviour observe, and the audience
 segment/taxonomy stamp onto the outbound bid request) via
 `privacy.AllowsUserData`; the flag propagates downstream on `regs.ext`. Empty
 region on either side disables the gate, so single-region deployments are
-unaffected. Not yet built: actual multi-region infra (federated NATS,
-per-region stores/buckets, region-routed reporting).
+unaffected.
+
+*Scope of the MVP enforcement (be precise — this is a compliance surface):* the
+control-plane gate covers **gateway HTTP JWT-authed mutations only**; the SSP
+data-plane gate covers the **bid/serve path** (segments, identity + behaviour
+observe, and — because the beacon user key is the gated `behaviourUserKey` — the
+tracker beacon that path emits). **NOT yet gated** (documented follow-ups, not
+holes we claim to close): API-key ingest paths (e.g. `POST /v1/api/identity-links`)
+and non-serve tracker entries (retargeting pixel, conversion postback), which
+carry their own user id and never see `data_residency`; internal gRPC and
+NATS-consumer/background writes; **act-as** (the gate evaluates the *caller's*
+region, so an in-region agency acting-as an out-of-region advertiser is not
+blocked); the residency signal is **self-declared** on the request and permissive
+by omission (not yet bound to the publisher account's region); the region rides a
+**12h JWT** (a staff region change applies at next login, no revocation tie-in);
+and an out-of-region account exercises data-subject rights (export/close) in its
+**home** region. Opt-out writes are deliberately never residency-blocked. Also not
+built: actual multi-region infra (federated NATS, per-region stores/buckets,
+region-routed reporting).
 
 **Data residency flag in bid request:**
 

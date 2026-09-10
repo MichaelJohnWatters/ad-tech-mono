@@ -12,6 +12,9 @@ func TestAllowsResidency(t *testing.T) {
 		{"us-east-1", "us-east-1", true}, // in-region
 		{"eu", "us-east-1", false},       // out-of-region → suppress
 		{"eu", "eu", true},               // in-region (eu deploy)
+		{"US-East-1", "us-east-1", true}, // case-insensitive: no lockout on case drift
+		{" us-east-1 ", "us-east-1", true},
+		{"eu", "US-EAST-1", false}, // still out-of-region after normalising
 	} {
 		if got := AllowsResidency(tc.req, tc.home); got != tc.want {
 			t.Errorf("AllowsResidency(%q,%q)=%v want %v", tc.req, tc.home, got, tc.want)
