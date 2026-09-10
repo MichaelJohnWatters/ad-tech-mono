@@ -1399,6 +1399,38 @@ cronjobs:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }
 
+  # payout-runner pays the calendar month that just closed OUT to publishers —
+  # the money-OUT mirror of invoice-runner. Sums each publisher's gross revenue
+  # from ClickHouse, applies their rev-share contract to get the net owed, gates
+  # on the publisher's minimum-payout threshold, and writes one idempotent
+  # `payouts` row per (publisher, period). 03:00 (after invoice-runner at 02:00)
+  # so settlement + invoicing have finished. Needs ClickHouse (the earnings
+  # source) in addition to Postgres.
+  payout-runner:
+    image: adtech-payout-runner
+    schedule: "0 3 1 * *"
+    component: billing
+    concurrencyPolicy: Forbid
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 3
+    backoffLimit: 2
+    activeDeadlineSeconds: 600
+    restartPolicy: OnFailure
+    env:
+      - name: POD_NAME
+        value: "payout-runner"
+      - name: DATABASE_URL
+        value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      - name: CLICKHOUSE_ADDR
+        value: "clickhouse:9000"
+      - name: CLICKHOUSE_USER
+        value: "adtech"
+      - name: CLICKHOUSE_PASSWORD
+        value: "adtech-local-dev"
+    resources:
+      requests: { cpu: "50m", memory: "64Mi" }
+      limits: { cpu: "500m", memory: "256Mi" }
+
   # account-closeout finalizes account closures whose 30-day grace period has
   # elapsed (PLAN Phase 11, item 105): generates a final invoice, marks the
   # account closed, and schedules the (deferred) 90-day purge. Idempotent —

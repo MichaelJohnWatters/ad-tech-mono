@@ -726,6 +726,36 @@ func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time
 	return out, rows.Err()
 }
 
+// GrossByPublisher returns publisher_id -> gross revenue (USD, sum of winning
+// clearing_price_usd) over [start, end). Powers the publisher payout runner
+// (pkg/payouts): gross × the publisher's rev-share contract = the net payout.
+// Half-open window with epoch-ms bounds (exact against the DateTime64(3)
+// timestamp — no seconds truncation).
+func (c *ClickHouse) GrossByPublisher(ctx context.Context, start, end time.Time) (map[string]float64, error) {
+	const q = `SELECT publisher_id, sum(clearing_price_usd) AS gross
+		FROM impressions
+		WHERE timestamp >= fromUnixTimestamp64Milli(?) AND timestamp < fromUnixTimestamp64Milli(?)
+		GROUP BY publisher_id`
+	rows, err := c.db.QueryContext(ctx, q, start.UTC().UnixMilli(), end.UTC().UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("gross by publisher: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]float64)
+	for rows.Next() {
+		var pub string
+		var gross float64
+		if err := rows.Scan(&pub, &gross); err != nil {
+			return nil, fmt.Errorf("scan gross by publisher: %w", err)
+		}
+		if pub == "" {
+			continue
+		}
+		out[pub] = gross
+	}
+	return out, rows.Err()
+}
+
 // InsertAttributionTouchpoints bulk-writes a conversion's multi-touch chain.
 func (c *ClickHouse) InsertAttributionTouchpoints(ctx context.Context, rows []*AttributionTouchpointRow) error {
 	if len(rows) == 0 {
