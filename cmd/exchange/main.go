@@ -349,20 +349,26 @@ func main() {
 	}
 	retailMinRelFn := func() float64 { return keys.Exchange.RetailMinRelevance.Get(cfg) }
 	auction := auctionHandler(log, clk, engine, httpClient, knobs.BidTimeout.Value, dspEndpointsFn, knobs.Channel, debugEnabledFn, pub, adsTxtCache, adsTxtGate, schainGate, signReq, dealCache, router, auctionM, emitDSPCallFn, retailMinRelFn)
-	mux.HandleFunc(routes.OpenRTBAuction, auction)
+	// Partner inbound auth (#112): gate the EXTERNAL HTTP OpenRTB surfaces on a
+	// per-partner sandbox key. The internal gRPC twin (our own SSP) is handed the
+	// UNGATED `auction` below — trusted transport, no partner key to present.
+	strictInboundFn := func() bool { return keys.Exchange.InboundPartnerAuthStrict.Get(cfg) }
+	gatedAuction := partnerAuthGate(auction, adcertSecrets, strictInboundFn, log)
+	mux.HandleFunc(routes.OpenRTBAuction, gatedAuction)
 	mux.HandleFunc(routes.AdCertKey, adCertKeyHandler(adcertSigner))
 	mux.HandleFunc(routes.OpenRTBWin, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc(routes.OpenRTBLoss, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	// Prebid Server-compatible bidder endpoint. See pkg/prebid + docs/PLAN.md
-	// → "Prebid Server Integration". Reuses the same auction path with the
+	// → "Prebid Server Integration". Reuses the same (gated) auction path with the
 	// inbound floor policy + opaque deal-id logging applied first.
-	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, auction, idPub, log))
+	mux.HandleFunc(routes.PrebidAuction, prebidAuctionHandler(cfg, gatedAuction, idPub, log))
 	mux.HandleFunc(routes.PrebidSetUID, prebidSetUIDHandler(log))
 
 	handler := tracing.HTTPMiddleware(constants.ServiceExchange)(metrics.Wrap(middleware.CORS(mux)))
 
-	// Internal gRPC twin of the auction endpoint — our SSP's fast path.
+	// Internal gRPC twin of the auction endpoint — our SSP's fast path. Handed the
+	// UNGATED auction: internal callers are trusted and carry no partner key.
 	startInternalGRPC(lc, cfg, log, metrics, auction)
 
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
