@@ -214,6 +214,21 @@ func (t *HotColdStore) ImpressionsByPublisher(ctx context.Context, since time.Ti
 	return pr.ImpressionsByPublisher(ctx, since)
 }
 
+// GrossByPublisher delegates the payout runner's per-publisher gross-revenue
+// query to the hot store (the period being paid out is recent). Forwarding it
+// here keeps the documented invariant that every new ClickHouse method is
+// reachable through the wrapper (pkg/store/CLAUDE.md). Returns nil when the hot
+// store lacks the capability.
+func (t *HotColdStore) GrossByPublisher(ctx context.Context, start, end time.Time) (map[string]float64, error) {
+	pr, ok := t.hot.(interface {
+		GrossByPublisher(context.Context, time.Time, time.Time) (map[string]float64, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return pr.GrossByPublisher(ctx, start, end)
+}
+
 // ViewableImpressionsForUsers delegates view-through lookback to the hot store —
 // attribution windows (≤30d) sit well inside the hot window. Returns nil when the
 // hot store doesn't implement ViewThroughReader.
