@@ -128,26 +128,31 @@ func (c *CloseOut) closeOne(ctx context.Context, d dueClosure) error {
 			}
 		}
 	case "publisher":
-		if c.Payouts != nil {
-			// Pay out the un-paid tail per publisher entity the account owns. Start
-			// = the latest existing payout's period_end (or account creation) so the
-			// final payout NEVER overlaps a monthly one — the same double-pay guard
-			// finalInvoiceStart gives invoices. End = start of tomorrow so today's
-			// impressions are included (gross is timestamp-bound in ClickHouse).
-			pubIDs, err := c.publisherIDs(ctx, d.accountID)
+		// The final payout needs ClickHouse (the gross source). If it's down we must
+		// NOT close the account this run — closeout only re-selects 'grace' closures,
+		// so closing now would strand the publisher's final payment forever. Defer:
+		// leave it in grace (logged as an error, retried next run) until CH is back.
+		if c.Payouts == nil {
+			return fmt.Errorf("publisher final payout deferred: clickhouse (gross source) unavailable")
+		}
+		// Pay out the un-paid tail per publisher entity the account owns. Start
+		// = the latest existing payout's period_end (or account creation) so the
+		// final payout NEVER overlaps a monthly one — the same double-pay guard
+		// finalInvoiceStart gives invoices. End = start of tomorrow so today's
+		// impressions are included (gross is timestamp-bound in ClickHouse).
+		pubIDs, err := c.publisherIDs(ctx, d.accountID)
+		if err != nil {
+			return fmt.Errorf("load publisher ids: %w", err)
+		}
+		end := dayFloor(c.now().UTC()).AddDate(0, 0, 1)
+		for _, pubID := range pubIDs {
+			start := c.finalPayoutStart(ctx, pubID, createdAt)
+			wrote, err := c.Payouts.GenerateForPublisher(ctx, pubID, start, end)
 			if err != nil {
-				return fmt.Errorf("load publisher ids: %w", err)
+				return fmt.Errorf("final payout for publisher %s: %w", pubID, err)
 			}
-			end := dayFloor(c.now().UTC()).AddDate(0, 0, 1)
-			for _, pubID := range pubIDs {
-				start := c.finalPayoutStart(ctx, pubID, createdAt)
-				wrote, err := c.Payouts.GenerateForPublisher(ctx, pubID, start, end)
-				if err != nil {
-					return fmt.Errorf("final payout for publisher %s: %w", pubID, err)
-				}
-				if wrote {
-					c.Log.Info("final payout generated", "account", d.accountID, "publisher", pubID)
-				}
+			if wrote {
+				c.Log.Info("final payout generated", "account", d.accountID, "publisher", pubID)
 			}
 		}
 	}
@@ -176,7 +181,7 @@ func (c *CloseOut) closeOne(ctx context.Context, d dueClosure) error {
 
 	purgeDue := c.now().AddDate(0, 0, RetentionDays)
 	c.Log.Info("account closed out", "account", d.accountID, "closure", d.id,
-		"purge_scheduled", purgeDue.Format(time.RFC3339), "note", "purge deferred (documented follow-up)")
+		"purge_scheduled", purgeDue.Format(time.RFC3339))
 	return nil
 }
 
