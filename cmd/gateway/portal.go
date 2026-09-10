@@ -220,6 +220,7 @@ var staffNav = []NavItem{
 	{Label: "Support", Href: "#support", Icon: "✉", Perm: "support:read"},
 	{Label: "Ops", Href: "#ops", Icon: "⎈", Perm: "ops:read"},
 	{Label: "Incidents", Href: "#incidents", Icon: "⚠", Perm: "incidents:read"},
+	{Label: "Changelog", Href: "#changelog", Icon: "📝", Perm: "changelog:read"},
 	{Label: "Partners", Href: "#partners", Icon: "⇲", Perm: "partners:read"},
 	{Label: "Config", Href: "#config", Icon: "⚙", Perm: "config:read"},
 	{Label: "Simulator", Href: "#simulator", Icon: "▶", Perm: "config:read"},

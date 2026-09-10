@@ -549,6 +549,50 @@
       </form>
     {{ template "modal-end" . }}
 
+    <!-- ============ Changelog (PLAN Phase 11 item 109) ============ -->
+    <section id="section-changelog" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "API Changelog" "subtitle" "Publish API-change entries shown on the PUBLIC changelog at /changelog") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "+ New entry" "variant" "secondary" "size" "sm" "onclick" "openChangelog()") }}
+        <a href="/changelog" target="_blank" class="ml-2 text-sm px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">View changelog ↗</a>
+      </div>
+      {{ template "table-start" (dict "headers" (slice "Version" "Date" "Category" "Breaking" "Title" "")) }}
+        <tbody id="changelogList"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+    </section>
+
+    <!-- New/edit changelog modal -->
+    {{ template "modal-start" (dict "id" "changelogModal" "title" "Changelog entry") }}
+      <form id="changelogForm" onsubmit="saveChangelog(event)">
+        <input type="hidden" id="cl_id">
+        <div class="grid grid-cols-2 gap-3">
+          {{ template "form-field" (dict "label" "Version" "name" "cl_version" "placeholder" "1.2.0" "required" true) }}
+          {{ template "form-field" (dict "label" "Release date" "name" "cl_date" "type" "date" "required" true) }}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Category</label>
+            <select id="cl_category" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm">
+              <option value="added">Added</option><option value="changed">Changed</option><option value="fixed">Fixed</option><option value="deprecated">Deprecated</option><option value="removed">Removed</option><option value="security">Security</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 mt-6 text-sm"><input type="checkbox" id="cl_breaking"> Breaking change</label>
+        </div>
+        {{ template "form-field" (dict "label" "Title" "name" "cl_title" "required" true) }}
+        <label class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Details</label>
+        <textarea id="cl_body" rows="3" class="w-full mb-3 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm"></textarea>
+        {{ template "form-field" (dict "label" "Affected endpoints (comma-separated)" "name" "cl_endpoints" "placeholder" "/v1/api/campaigns, /v1/api/reports") }}
+        <div class="flex justify-between gap-2 mt-2">
+          {{ template "button" (dict "label" "Delete" "variant" "ghost" "onclick" "deleteChangelog()") }}
+          <div class="flex gap-2">
+            {{ template "button" (dict "label" "Cancel" "variant" "ghost" "onclick" "closeChangelog()") }}
+            {{ template "button" (dict "label" "Save" "type" "submit") }}
+          </div>
+        </div>
+      </form>
+    {{ template "modal-end" . }}
+
     <!-- ============ Partners (PLAN Phase 11 item 112) ============ -->
     <section id="section-partners" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "External partners" "subtitle" "Register + shepherd demand (DSP) / supply (SSP) partners through onboarding: pending → sandbox → certified → active") }}
@@ -852,8 +896,8 @@ function defaultSection() {
 const showSection = initSectionRouter({
   sections: SECTIONS,
   fallback: defaultSection,
-  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', partners: 'Partners', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
-  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), partners: () => loadPartners(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', changelog: 'Changelog', partners: 'Partners', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), changelog: () => loadChangelog(), partners: () => loadPartners(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
 });
 
 // ---- Incidents (PLAN Phase 11 status page) ----
@@ -911,6 +955,77 @@ async function saveIncident(ev) {
     closeIncident();
     loadIncidents();
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+
+// ---- API changelog (PLAN Phase 11 item 109) ----
+const CL_CAT_BADGE = {added: 'bg-success/15 text-success', security: 'bg-error/15 text-error', removed: 'bg-error/10 text-error', deprecated: 'bg-warning/15 text-warning', changed: 'bg-surface-3 text-gray-500', fixed: 'bg-surface-3 text-gray-500'};
+let changelogCache = [];
+async function loadChangelog() {
+  const tb = document.getElementById('changelogList');
+  try {
+    changelogCache = await fetchJSON('/v1/api/changelog/entries') || [];
+    tb.innerHTML = changelogCache.length ? changelogCache.map(e => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-3 py-2 font-mono text-xs">${esc(e.version)}</td>
+        <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(e.release_date)}</td>
+        <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${CL_CAT_BADGE[e.category] || ''}">${esc(e.category)}</span></td>
+        <td class="px-3 py-2 text-xs">${e.breaking ? '<span class="text-error font-semibold">breaking</span>' : ''}</td>
+        <td class="px-3 py-2">${esc(e.title)}</td>
+        <td class="px-3 py-2 text-right"><button onclick="editChangelog('${esc(e.id)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Edit</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No entries. Publish one to document an API change on the public changelog.</td></tr>';
+  } catch (err) {
+    tb.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+function openChangelog() {
+  document.getElementById('changelogForm').reset();
+  document.getElementById('cl_id').value = '';
+  document.getElementById('changelogModal').classList.remove('hidden');
+}
+function closeChangelog() { document.getElementById('changelogModal').classList.add('hidden'); }
+function editChangelog(id) {
+  const e = changelogCache.find(x => x.id === id);
+  if (!e) return;
+  document.getElementById('cl_id').value = e.id;
+  document.getElementById('cl_version').value = e.version;
+  document.getElementById('cl_date').value = (e.release_date || '').slice(0, 10);
+  document.getElementById('cl_category').value = e.category;
+  document.getElementById('cl_breaking').checked = !!e.breaking;
+  document.getElementById('cl_title').value = e.title;
+  document.getElementById('cl_body').value = e.body || '';
+  document.getElementById('cl_endpoints').value = (e.affected_endpoints || []).join(', ');
+  document.getElementById('changelogModal').classList.remove('hidden');
+}
+async function saveChangelog(ev) {
+  ev.preventDefault();
+  const eps = document.getElementById('cl_endpoints').value.split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    id: document.getElementById('cl_id').value || undefined,
+    version: document.getElementById('cl_version').value.trim(),
+    release_date: document.getElementById('cl_date').value,
+    category: document.getElementById('cl_category').value,
+    breaking: document.getElementById('cl_breaking').checked,
+    title: document.getElementById('cl_title').value.trim(),
+    body: document.getElementById('cl_body').value.trim(),
+    affected_endpoints: eps,
+  };
+  try {
+    await fetchJSON('/v1/api/changelog/entries', {method: 'POST', body: JSON.stringify(body)});
+    toast('Changelog entry saved', 'success');
+    closeChangelog();
+    loadChangelog();
+  } catch (err) { toast('Save failed: ' + err.message, 'error'); }
+}
+async function deleteChangelog() {
+  const id = document.getElementById('cl_id').value;
+  if (!id || !confirm('Delete this changelog entry?')) return;
+  try {
+    await fetchJSON('/v1/api/changelog/entries?id=' + encodeURIComponent(id), {method: 'DELETE'});
+    toast('Entry deleted', 'success');
+    closeChangelog();
+    loadChangelog();
+  } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
 }
 
 // ---- External partners (PLAN Phase 11 item 112) ----

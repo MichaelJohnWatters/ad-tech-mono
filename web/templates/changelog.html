@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  {{ template "head-meta" . }}
+  <title>API Changelog — AdTech</title>
+</head>
+<body class="bg-gray-50 dark:bg-surface-page text-gray-900 dark:text-gray-100 min-h-screen">
+  <div class="max-w-2xl mx-auto px-6 py-10">
+    <div class="flex items-center justify-between mb-8">
+      <div class="text-2xl font-semibold text-brand">AdTech</div>
+      <a href="/login" class="text-sm text-gray-500 hover:text-brand">Sign in →</a>
+    </div>
+
+    <h1 class="text-xl font-semibold mb-1">API Changelog</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-8">Changes to the AdTech REST + OpenRTB APIs. Breaking changes are flagged.</p>
+
+    {{ if .Entries }}
+    <div class="space-y-4">
+      {{ range .Entries }}
+      <div class="rounded-xl border p-5
+        {{ if .Breaking }}border-error/40 bg-error/5{{ else }}border-gray-100 dark:border-gray-800{{ end }}">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-surface-3">{{ .Version }}</span>
+            {{ $cat := .Category }}
+            <span class="text-[11px] uppercase tracking-wide px-2 py-0.5 rounded
+              {{ if eq $cat "security" }}bg-error/15 text-error
+              {{ else if eq $cat "removed" }}bg-error/10 text-error
+              {{ else if eq $cat "deprecated" }}bg-warning/15 text-warning
+              {{ else if eq $cat "added" }}bg-success/15 text-success
+              {{ else }}bg-surface-2 text-gray-500{{ end }}">{{ .Category }}</span>
+            {{ if .Breaking }}<span class="text-[11px] uppercase tracking-wide px-2 py-0.5 rounded bg-error/20 text-error font-semibold">Breaking</span>{{ end }}
+          </div>
+          <span class="text-[11px] text-gray-400">{{ .ReleaseDate.Format "2006-01-02" }}</span>
+        </div>
+        <div class="font-medium mt-3">{{ .Title }}</div>
+        {{ if .Body }}<p class="text-sm text-gray-500 dark:text-gray-400 mt-1 whitespace-pre-line">{{ .Body }}</p>{{ end }}
+        {{ if .AffectedEndpoints }}
+        <div class="mt-3 flex flex-wrap gap-1">
+          {{ range .AffectedEndpoints }}<code class="text-[11px] px-1.5 py-0.5 rounded bg-surface-2 text-gray-500">{{ . }}</code>{{ end }}
+        </div>
+        {{ end }}
+      </div>
+      {{ end }}
+    </div>
+    {{ else }}
+    <p class="text-sm text-gray-400">No changelog entries yet.</p>
+    {{ end }}
+
+    <p class="text-center text-xs text-gray-400 mt-10">Also available as JSON at <code>/v1/api/changelog</code></p>
+  </div>
+  <script src="/static/theme.js"></script>
+</body>
+</html>

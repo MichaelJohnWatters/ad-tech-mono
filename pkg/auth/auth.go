@@ -298,6 +298,7 @@ var defaultPermissions = map[string][]string{
 		"config:read", "config:update",
 		"ops:read", "ops:deploy", "ops:ab_test",
 		"incidents:read", "incidents:write",
+		"changelog:read", "changelog:write",
 		"partners:read", "partners:manage",
 		"reports:read", "reports:export",
 		"audit:read",

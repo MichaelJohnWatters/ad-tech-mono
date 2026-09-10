@@ -1697,6 +1697,57 @@ paths:
       responses:
         "200": { description: "{ id } on create, or the updated incident object" }
         "404": { description: "incident id not found (update)" }
+  /v1/api/changelog:
+    get:
+      tags: [Platform]
+      summary: Public API changelog feed
+      description: >-
+        PUBLIC (no auth) — the JSON twin of the /changelog page (PLAN Phase 11 item
+        109). Staff-authored API-change entries, newest release first, breaking
+        changes flagged. For external integrators.
+      responses:
+        "200": { description: "{ entries: [{ id, version, release_date, category, breaking, title, body, affected_endpoints, created_at, updated_at }] }" }
+  /v1/api/changelog/entries:
+    get:
+      tags: [Platform]
+      summary: List changelog entries (staff)
+      description: "Staff-only (changelog:read). Lists entries newest-first for the changelog console."
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "[{ id, version, release_date, category, breaking, title, body, affected_endpoints, created_at, updated_at }]" }
+    post:
+      tags: [Platform]
+      summary: Create or update a changelog entry (staff)
+      description: "Staff-only (changelog:write). Creates when no id is supplied, else updates. Surfaces on the public /changelog feed."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, release_date, title]
+              properties:
+                id: { type: string, description: "omit to create; supply to update" }
+                version: { type: string, example: "1.2.0" }
+                release_date: { type: string, format: date, example: "2026-09-10" }
+                category: { type: string, enum: [added, changed, deprecated, removed, fixed, security] }
+                breaking: { type: boolean }
+                title: { type: string }
+                body: { type: string }
+                affected_endpoints: { type: array, items: { type: string } }
+      responses:
+        "200": { description: "{ id }" }
+        "400": { description: "invalid body (version/title required, bad category or release_date)" }
+        "404": { description: "entry id not found (update)" }
+    delete:
+      tags: [Platform]
+      summary: Delete a changelog entry (staff)
+      description: "Staff-only (changelog:write). Deletes the entry given by ?id=."
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ status: deleted }" }
+        "404": { description: "entry id not found" }
   /v1/api/partners:
     get:
       tags: [Platform]

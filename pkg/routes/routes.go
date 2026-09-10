@@ -108,6 +108,13 @@ const (
 	StatusPage   = "/status"
 	APIStatus    = apiPrefix + "/api/status"
 	APIIncidents = apiPrefix + "/api/incidents"
+
+	// Changelog is the PUBLIC API-changelog page (PLAN Phase 11, item 109) —
+	// unauthed HTML at /changelog; APIChangelog is its public JSON feed.
+	// APIChangelogEntries is the staff CRUD (changelog:read/write).
+	Changelog           = "/changelog"
+	APIChangelog        = apiPrefix + "/api/changelog"
+	APIChangelogEntries = apiPrefix + "/api/changelog/entries"
 	// APIPartners is the staff-only external-partner onboarding registry (PLAN
 	// Phase 11, item 112) — list/register/edit (partners:read/manage);
 	// APIPartnerStatus transitions the onboarding lifecycle.

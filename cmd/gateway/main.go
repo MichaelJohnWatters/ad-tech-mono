@@ -24,6 +24,8 @@ import (
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	catalogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/catalog/postgres"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/changelog"
+	changelogpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/changelog/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/clock"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
@@ -885,6 +887,17 @@ func main() {
 	mux.HandleFunc(routes.StatusPage, statusAgg.pageHandler)
 	mux.HandleFunc(routes.APIStatus, statusAgg.jsonHandler)
 	mux.Handle(routes.APIIncidents, authMiddleware(http.HandlerFunc(incidentsHandler(incidentStore, gwDB, log))))
+
+	// Public API changelog (PLAN Phase 11, item 109): unauthed /changelog HTML +
+	// /v1/api/changelog JSON feed; staff CRUD at /v1/api/changelog/entries.
+	var changelogStore changelog.Store
+	if gwDB != nil {
+		changelogStore = changelogpg.New(gwDB)
+	}
+	clog := &changelogServer{store: changelogStore, templates: templates, log: log}
+	mux.HandleFunc(routes.Changelog, clog.pageHandler)
+	mux.HandleFunc(routes.APIChangelog, clog.jsonHandler)
+	mux.Handle(routes.APIChangelogEntries, authMiddleware(http.HandlerFunc(clog.entriesHandler(gwDB))))
 
 	// External-partner onboarding registry (PLAN Phase 11, item 112) — staff-only
 	// (partners:read/manage). Platform-global, like incidents.
