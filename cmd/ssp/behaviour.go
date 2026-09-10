@@ -47,7 +47,7 @@ func (p *behaviourPublisher) Observe(r *http.Request, traceID, userKey, househol
 	if p == nil || (userKey == "" && householdID == "") {
 		return
 	}
-	if !requestConsent(r).Personalise {
+	if !requestStoresUserData(r) {
 		return
 	}
 	if channel == "" {
@@ -77,7 +77,7 @@ func (p *behaviourPublisher) Observe(r *http.Request, traceID, userKey, househol
 // models.ServeRequest.BehaviourUserID, which the ad server bakes into
 // tracker beacons so interaction events can feed behaviour_signals.
 func behaviourUserKey(r *http.Request) string {
-	if !requestConsent(r).Personalise {
+	if !requestStoresUserData(r) {
 		return ""
 	}
 	if uid := r.URL.Query().Get("user_id"); uid != "" {
@@ -94,4 +94,18 @@ func behaviourUserKey(r *http.Request) string {
 func requestConsent(r *http.Request) privacy.Decision {
 	q := r.URL.Query()
 	return privacy.Evaluate(privacy.SignalsFromQuery(q.Get, r.Header.Get("Sec-GPC")))
+}
+
+// sspHomeRegion is this deployment's data-residency home region (platform.region),
+// set once at boot in main(). Empty = no residency gate (single-region deploys).
+var sspHomeRegion string
+
+// requestStoresUserData reports whether user-level data (identity-graph edges,
+// behaviour rows, audience segments leaving on the bid request) may be retained or
+// emitted for this ad-tag request: personalisation must be consented AND data
+// residency (regs.ext.data_residency vs this deployment's home region) must permit
+// storing it here. The single gate for every user-data emission point on the SSP
+// serve path (PLAN #111, data plane).
+func requestStoresUserData(r *http.Request) bool {
+	return privacy.AllowsUserData(requestConsent(r), r.URL.Query().Get("data_residency"), sspHomeRegion)
 }

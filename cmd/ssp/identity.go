@@ -37,13 +37,14 @@ func (p *identityPublisher) Observe(r *http.Request, userID, uid2, householdID, 
 	if p == nil {
 		return
 	}
-	// Consent gate (mirrors behaviourPublisher.Observe): building identity-graph
-	// edges links a user's identifiers, so it needs personalisation consent — the
-	// same gate the behaviour publish right after this uses. Without it, a
-	// GDPR-no-consent / GPC / opt-out serve would still silently build the graph
-	// (a privacy gap, and — since attribution now reads the graph for billing — a
-	// poisoning surface from unauthenticated browser serves).
-	if !requestConsent(r).Personalise {
+	// User-data gate (mirrors behaviourPublisher.Observe): building identity-graph
+	// edges links a user's identifiers, so it needs personalisation consent AND
+	// data residency permitting storage here — the same gate the behaviour publish
+	// right after this uses. Without it, a GDPR-no-consent / GPC / opt-out /
+	// out-of-region serve would still silently build the graph (a privacy gap, and
+	// — since attribution now reads the graph for billing — a poisoning surface
+	// from unauthenticated browser serves).
+	if !requestStoresUserData(r) {
 		return
 	}
 	// Everything request-derived is extracted HERE, synchronously — r is dead
