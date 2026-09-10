@@ -34,10 +34,27 @@ The central auction marketplace. Receives bid requests from SSPs, fans out to DS
 
 ## OpenRTB Endpoints (HTTP)
 
-- `POST /v1/openrtb/auction` - receives bid requests from SSP
+- `POST /v1/openrtb/auction` - receives bid requests (external SSP partners / Prebid; our own SSP uses the gRPC twin)
 - `POST /v1/openrtb/bid` - sends bid requests to DSPs
 - `GET /v1/openrtb/win` - win notification to DSP
 - `GET /v1/openrtb/loss` - loss notification to DSP
+
+### Inbound partner auth (#112)
+
+The EXTERNAL HTTP OpenRTB surfaces (`/v1/openrtb/auction` + the Prebid endpoint) are
+wrapped by `middleware.PartnerInboundAuth` (sibling of `AuthAPIKey`): a per-partner
+sandbox key (`X-API-Key`, `purpose=partner_sandbox`) validated against the exchange's
+in-process secrets warm cache. Gated by the live `exchange.inbound_partner_auth_strict`
+flag — **default false = warn** (validate + expose the authed secret via
+`SecretFromContext`, but allow missing/invalid), **true = 401** on missing/invalid.
+The gate is the OUTERMOST layer of each external handler (so a strict-mode rejection
+precedes the Prebid body read / identity publish). **The internal gRPC twin
+(`:8181`, our own SSP) is deliberately handed the UNGATED handler** — trusted
+transport, cluster-internal (relies on NetworkPolicy for that boundary), no partner
+key. Known limits: no request-time partner-STATUS re-check (offboarding must revoke
+keys), sandbox creds also gate live traffic (no `partner_prod` yet), and `/readyz`
+is not gated on the secrets cache (a cold-boot pod in strict mode can 401 valid keys
+until its first secrets load).
 
 ## Dependencies
 
