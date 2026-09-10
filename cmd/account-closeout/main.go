@@ -50,10 +50,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ClickHouse powers BOTH the publisher final-payout (gross source) and the
+	// 90-day purge (analytics deletion). Built once; nil = degrade gracefully.
+	ch := connectClickHouse(log)
+
+	var payoutGen accountlifecycle.PayoutGenerator
+	if ch != nil {
+		payoutGen = payouts.New(store, ch)
+	}
 	co := &accountlifecycle.CloseOut{
 		DB:       db,
 		Invoices: invoicing.New(db),
-		Payouts:  connectPayouts(store, log),
+		Payouts:  payoutGen,
 		Now:      time.Now,
 		Log:      log,
 	}
@@ -64,13 +72,27 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("account close-out complete", "closed", n)
+
+	// 90-day destructive purge of accounts closed past the retention window.
+	var analyticsPurger accountlifecycle.AnalyticsPurger
+	if ch != nil {
+		analyticsPurger = ch
+	}
+	purger := &accountlifecycle.Purger{DB: db, Analytics: analyticsPurger, Now: time.Now, Log: log}
+	purged, err := purger.RunDuePurges(ctx)
+	if err != nil {
+		log.Error("account purge failed", "purged", purged, "error", err)
+		os.Exit(1)
+	}
+	log.Info("account purge complete", "purged", purged)
 }
 
-// connectPayouts builds the publisher-payout generator (needs ClickHouse for
-// gross revenue). Degrades gracefully: if ClickHouse is unreachable it returns
-// nil, so advertiser closeouts still settle and publisher closeouts log a
-// deferral instead of failing the whole run.
-func connectPayouts(store *postgres.Store, log *slog.Logger) accountlifecycle.PayoutGenerator {
+// connectClickHouse opens the analytics store used by BOTH the publisher
+// final-payout (gross source) and the 90-day purge (analytics deletion). Degrades
+// gracefully: if ClickHouse is unreachable it returns nil, so advertiser closeouts
+// still settle, publisher payouts log a deferral, and the purge skips the
+// ClickHouse half (leaving those accounts for a later run) instead of failing.
+func connectClickHouse(log *slog.Logger) *analytics.ClickHouse {
 	chAddr := os.Getenv("CLICKHOUSE_ADDR")
 	if chAddr == "" {
 		chAddr = "127.0.0.1:9000"
@@ -91,8 +113,8 @@ func connectPayouts(store *postgres.Store, log *slog.Logger) accountlifecycle.Pa
 		Addrs: strings.Split(chAddr, ","), Database: chDB, Username: chUser, Password: chPass,
 	})
 	if err != nil {
-		log.Warn("clickhouse unavailable — publisher final payouts will be skipped this run", "addr", chAddr, "error", err)
+		log.Warn("clickhouse unavailable — publisher payouts + analytics purge will be skipped this run", "addr", chAddr, "error", err)
 		return nil
 	}
-	return payouts.New(store, ch)
+	return ch
 }

@@ -726,6 +726,42 @@ func (c *ClickHouse) ImpressionsByPublisher(ctx context.Context, since time.Time
 	return out, rows.Err()
 }
 
+// PurgeAccount destructively removes an account's rows from every analytics table
+// that carries account_id — the ClickHouse half of the 90-day account purge
+// (pkg/accountlifecycle). Tables are discovered from system.columns (no drift as
+// new analytics tables are added); materialized-view objects (…_mv) are skipped —
+// their target base tables are purged directly. Uses mutations_sync=1 so the
+// deletes are visible on return (a background purge job, not a hot path).
+func (c *ClickHouse) PurgeAccount(ctx context.Context, accountID string) error {
+	rows, err := c.db.QueryContext(ctx,
+		`SELECT table FROM system.columns WHERE database = 'adtech' AND name = 'account_id' AND table NOT LIKE '%_mv' GROUP BY table`)
+	if err != nil {
+		return fmt.Errorf("discover analytics tables: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan analytics table: %w", err)
+		}
+		tables = append(tables, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, t := range tables {
+		// Table name is from system.columns (not user input); account_id is a bound
+		// parameter. mutations_sync=1 waits for the delete to apply on this replica.
+		q := fmt.Sprintf("ALTER TABLE adtech.`%s` DELETE WHERE account_id = ? SETTINGS mutations_sync = 1", t)
+		if _, err := c.db.ExecContext(ctx, q, accountID); err != nil {
+			return fmt.Errorf("purge %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
 // GrossByPublisher returns publisher_id -> gross revenue (USD, sum of winning
 // clearing_price_usd) over [start, end). Powers the publisher payout runner
 // (pkg/payouts): gross × the publisher's rev-share contract = the net payout.
