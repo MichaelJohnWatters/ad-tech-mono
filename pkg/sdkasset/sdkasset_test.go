@@ -1,6 +1,9 @@
 package sdkasset
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestNewParsesVersionAndDerives(t *testing.T) {
 	a, err := New([]byte("(function(){ var SDK_VERSION = '2.3.1'; })();"))
@@ -65,5 +68,23 @@ func TestCacheControl(t *testing.T) {
 	}
 	if CacheControl(ChannelLatest) != "public, max-age=300" {
 		t.Error("latest must be short")
+	}
+}
+
+func TestMetadataScopesIntegrityToPinned(t *testing.T) {
+	a, _ := New([]byte("var SDK_VERSION = '2.0.0';"))
+	m := a.Metadata()
+	if m.Pinned.URL != "/sdk/2.0.0/adtech.js" || m.Pinned.Integrity != a.Integrity {
+		t.Errorf("pinned = %+v, want url+integrity set", m.Pinned)
+	}
+	if m.MajorURL != "/sdk/v2/adtech.js" || m.LatestURL != "/sdk/latest/adtech.js" {
+		t.Errorf("major/latest urls = %q / %q", m.MajorURL, m.LatestURL)
+	}
+	// Integrity must NOT ride at the top level (it's valid only for the pinned URL).
+	b, _ := json.Marshal(m)
+	var raw map[string]any
+	_ = json.Unmarshal(b, &raw)
+	if _, topLevel := raw["integrity"]; topLevel {
+		t.Error("integrity must be nested under pinned, not top-level (misuse risk)")
 	}
 }
