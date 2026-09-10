@@ -1570,6 +1570,74 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: "The export job status { status: queued|running|done, requested_at, expires_at }" }
+  /v1/api/account/sso:
+    get:
+      tags: [Account]
+      summary: Get the account's OIDC SSO configuration (owner)
+      description: >-
+        Owner-only (sso:manage). Returns the account's OIDC SSO config for its login
+        (PLAN Phase 11 item 110). The client_secret is NEVER returned — has_client_secret
+        indicates whether one is set. start_url is the /v1/auth/sso/start link for this account.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ enabled, issuer, client_id, allowed_domains, default_role, has_client_secret, start_url }" }
+    put:
+      tags: [Account]
+      summary: Configure the account's OIDC SSO (owner)
+      description: >-
+        Owner-only (sso:manage). Upserts the OIDC config. When enabled, issuer (URL),
+        client_id and a non-empty allowed_domains are required. client_secret is
+        write-only: an empty value on update keeps the existing secret. default_role is
+        the least-privilege role JIT-provisioned SSO users receive.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                issuer: { type: string, example: "https://idp.example.com" }
+                client_id: { type: string }
+                client_secret: { type: string, description: "write-only; empty on update keeps existing" }
+                allowed_domains: { type: array, items: { type: string }, example: ["example.com"] }
+                default_role: { type: string, enum: [viewer, analyst, ad_ops, finance, manager] }
+      responses:
+        "200": { description: "{ status: saved }" }
+        "400": { description: "invalid config (bad issuer/role, or enabled without client_id+allowed_domains)" }
+        "403": { description: "not an owner (lacks sso:manage)" }
+  /v1/auth/sso/start:
+    get:
+      tags: [Auth]
+      summary: Begin OIDC SSO login (public)
+      description: >-
+        PUBLIC. Redirects (302) the browser to the account's IdP for the OIDC
+        auth-code flow (PKCE + state + nonce). Requires ?account=<uuid> whose SSO is
+        enabled; otherwise redirects to /login.
+      parameters:
+        - { name: account, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "303": { description: redirect to the IdP (or /login when SSO is not enabled) }
+        "400": { description: invalid account }
+  /v1/auth/sso/callback:
+    get:
+      tags: [Auth]
+      summary: OIDC SSO callback (public)
+      description: >-
+        PUBLIC. The IdP redirect target. Verifies state (CSRF) + the id_token
+        (signature/iss/aud/exp/nonce), gates on email_verified + allowed_domains +
+        eligible account type, JIT-provisions a least-privilege team_member, and mints
+        the standard session cookie. Never provisions staff/admin/partner accounts and
+        never logs a user into an account their email doesn't belong to.
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        "303": { description: redirect to the portal on success }
+        "400": { description: "state mismatch / no flow / missing code" }
+        "401": { description: "id_token verification failed or email not verified" }
+        "403": { description: "domain not permitted / account not eligible / user belongs to another account" }
   /v1/api/support/tickets:
     get:
       tags: [Account]

@@ -49,6 +49,8 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/sdkasset"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssoauth"
+	ssoauthpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssoauth/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage"
 	statuspagepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
@@ -286,6 +288,16 @@ func main() {
 	})
 	mux.HandleFunc(routes.AuthLogin, loginSubmitHandler(dbUserLookup(gwDB), signingKey, log))
 	mux.HandleFunc(routes.AuthLogout, logoutHandler)
+
+	// Per-account OIDC SSO (PLAN Phase 11 #110): public start/callback (auth-code
+	// flow); owner-only config CRUD behind auth. Password auth (above) is unaffected.
+	var ssoStore ssoauth.Store
+	if gwDB != nil {
+		ssoStore = ssoauthpg.New(gwDB)
+	}
+	mux.HandleFunc(routes.AuthSSOStart, ssoStartHandler(ssoStore, signingKey, log))
+	mux.HandleFunc(routes.AuthSSOCallback, ssoCallbackHandler(ssoStore, gwDB, signingKey, log))
+	mux.Handle(routes.APIAccountSSO, authMiddleware(http.HandlerFunc(ssoConfigHandler(ssoStore, gwDB, log))))
 	// Revoke-all-sessions is authenticated (you revoke your own sessions).
 	mux.Handle(routes.AuthRevokeSessions, authMiddleware(http.HandlerFunc(revokeSessionsHandler(revStore, gwDB, log))))
 	mux.HandleFunc("/signup", func(w http.ResponseWriter, r *http.Request) {
