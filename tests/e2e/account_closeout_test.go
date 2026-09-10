@@ -8,6 +8,8 @@
 package e2e
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -99,5 +101,67 @@ func TestAccountCloseoutFinalizesAndInvoices(t *testing.T) {
 	}
 	if invoices2 != invoices {
 		t.Errorf("re-run changed invoice count %d → %d (not idempotent)", invoices, invoices2)
+	}
+}
+
+// TestAccountCloseoutFinalPublisherPayout — the publisher mirror: when a
+// publisher account's grace elapses, the close-out generates a FINAL PAYOUT for
+// its un-paid revenue (via the payout generator, ClickHouse gross × contract),
+// then marks the account closed. Proves the deferred hook is wired.
+func TestAccountCloseoutFinalPublisherPayout(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "closeout-pub")
+
+	// Real revenue on this publisher's inventory (high CPM so the net is
+	// meaningful in cents — see the payout-runner test for the 0.0035 rounding trap).
+	auc := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "closeout-pub-user")
+	win := h.ExtractWinner(t, auc)
+	if win.NoBid {
+		t.Fatal("expected a winning bid")
+	}
+	for i := 0; i < 3; i++ {
+		tr := fmt.Sprintf("closeout-pub-imp-%d-%d", time.Now().UnixNano(), i)
+		h.FireImpression(t, tr, win.CampaignID, win.CreativeID,
+			auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", 1000.0)
+	}
+	harness.WaitFor(t, 30*time.Second, "publisher gross in ClickHouse", func() bool {
+		return chGrossForPublisher(t, w.Publisher.ID) >= 3.0-0.001
+	})
+
+	chPort := startCHPortForward(t)
+
+	// Owner closes the publisher account; backdate grace so it's due now.
+	client := h.OwnerClient(t, w.PubAcc.ID)
+	if st, _ := h.AccountClose(t, client); st != 200 {
+		t.Fatalf("publisher close initiate status %d", st)
+	}
+	if _, err := h.DB.Exec(
+		`UPDATE account_closure_requests SET grace_ends_at = now() - interval '1 hour'
+		 WHERE account_id = $1::uuid AND status = 'grace'`, w.PubAcc.ID); err != nil {
+		t.Fatalf("backdate grace: %v", err)
+	}
+
+	// Run close-out with ClickHouse wired (gross source) + the NOBYPASSRLS role.
+	cmd := exec.Command("go", "run", "./cmd/account-closeout")
+	cmd.Dir = "../.."
+	cmd.Env = append(os.Environ(),
+		"CLICKHOUSE_ADDR=127.0.0.1:"+chPort,
+		"DATABASE_URL=postgres://adtech_app:adtech-app-local@localhost:5432/adtech?sslmode=disable")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("account-closeout failed: %v\n%s", err, out)
+	}
+
+	if got := accountStatus(t, h, w.PubAcc.ID); got != "closed" {
+		t.Errorf("publisher account status = %q, want closed", got)
+	}
+	var payouts int
+	var amount float64
+	if err := h.DB.QueryRow(
+		`SELECT count(*), COALESCE(SUM(amount),0) FROM payouts WHERE publisher_id = $1::uuid`,
+		w.Publisher.ID).Scan(&payouts, &amount); err != nil {
+		t.Fatalf("payouts query: %v", err)
+	}
+	if payouts < 1 || amount <= 0 {
+		t.Errorf("final payout: count=%d amount=%v, want >=1 payout with positive amount", payouts, amount)
 	}
 }

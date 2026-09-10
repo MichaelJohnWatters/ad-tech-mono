@@ -19,6 +19,13 @@ type InvoiceGenerator interface {
 	GenerateForAccount(ctx context.Context, accountID string, periodStart, periodEnd time.Time) (string, error)
 }
 
+// PayoutGenerator is the publisher-side settlement seam. Satisfied by
+// payouts.Generator (GenerateForPublisher writes nothing — returns false — when
+// there's no un-paid revenue or it's below the minimum threshold).
+type PayoutGenerator interface {
+	GenerateForPublisher(ctx context.Context, publisherID string, start, end time.Time) (bool, error)
+}
+
 // CloseOut finalizes account closures whose grace period has elapsed: it
 // generates a final invoice (advertisers), marks the account closed, and closes
 // the request. The actual 90-day data purge is DEFERRED (a documented follow-up)
@@ -27,6 +34,7 @@ type InvoiceGenerator interface {
 type CloseOut struct {
 	DB       *sql.DB
 	Invoices InvoiceGenerator
+	Payouts  PayoutGenerator
 	Now      func() time.Time
 	Log      *slog.Logger
 }
@@ -120,9 +128,28 @@ func (c *CloseOut) closeOne(ctx context.Context, d dueClosure) error {
 			}
 		}
 	case "publisher":
-		// Publisher final payout reuses the existing payout path — deferred (no
-		// payout generator exists yet). Documented follow-up.
-		c.Log.Info("publisher final payout deferred", "account", d.accountID)
+		if c.Payouts != nil {
+			// Pay out the un-paid tail per publisher entity the account owns. Start
+			// = the latest existing payout's period_end (or account creation) so the
+			// final payout NEVER overlaps a monthly one — the same double-pay guard
+			// finalInvoiceStart gives invoices. End = start of tomorrow so today's
+			// impressions are included (gross is timestamp-bound in ClickHouse).
+			pubIDs, err := c.publisherIDs(ctx, d.accountID)
+			if err != nil {
+				return fmt.Errorf("load publisher ids: %w", err)
+			}
+			end := dayFloor(c.now().UTC()).AddDate(0, 0, 1)
+			for _, pubID := range pubIDs {
+				start := c.finalPayoutStart(ctx, pubID, createdAt)
+				wrote, err := c.Payouts.GenerateForPublisher(ctx, pubID, start, end)
+				if err != nil {
+					return fmt.Errorf("final payout for publisher %s: %w", pubID, err)
+				}
+				if wrote {
+					c.Log.Info("final payout generated", "account", d.accountID, "publisher", pubID)
+				}
+			}
+		}
 	}
 
 	// Flip account + closure to closed under the platform hatch (cross-tenant).
@@ -169,6 +196,56 @@ func (c *CloseOut) finalInvoiceStart(ctx context.Context, accountID string, crea
 	if err := tx.QueryRowContext(ctx,
 		`SELECT max(period_end) FROM invoices WHERE account_id = $1::uuid`, accountID).Scan(&last); err != nil {
 		return createdAt
+	}
+	if last.Valid && last.Time.After(createdAt) {
+		return last.Time
+	}
+	return dayFloor(createdAt.UTC())
+}
+
+// publisherIDs returns the publisher entity ids owned by a (publisher) account —
+// usually one, but the schema allows several. Platform hatch: cross-tenant read.
+func (c *CloseOut) publisherIDs(ctx context.Context, accountID string) ([]string, error) {
+	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id::text FROM publishers WHERE account_id = $1::uuid`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// finalPayoutStart is the start of the un-paid tail for a publisher: the latest
+// existing payout's period_end, or the account's creation date when none exists.
+// Keeps the closeout final payout from overlapping monthly ones (no double-pay).
+func (c *CloseOut) finalPayoutStart(ctx context.Context, publisherID string, createdAt time.Time) time.Time {
+	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return dayFloor(createdAt.UTC())
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return dayFloor(createdAt.UTC())
+	}
+	var last sql.NullTime
+	if err := tx.QueryRowContext(ctx,
+		`SELECT max(period_end) FROM payouts WHERE publisher_id = $1::uuid`, publisherID).Scan(&last); err != nil {
+		return dayFloor(createdAt.UTC())
 	}
 	if last.Valid && last.Time.After(createdAt) {
 		return last.Time
