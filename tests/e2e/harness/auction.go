@@ -52,6 +52,10 @@ type AuctionParams struct {
 	GPP       string // GPP string → Regs.ext.gpp
 	GPPSID    string // GPP section ids → Regs.ext.gpp_sid
 	GPC       string // "1" sets Regs.ext.gpc (Global Privacy Control)
+	// DataResidency sets Regs.ext.data_residency — the bid request's asserted
+	// residency region. When it differs from the SSP's home region (platform.region)
+	// the SSP suppresses all user-level data (segments/identity/behaviour).
+	DataResidency string
 }
 
 // RunAuction drives an auction through SSP → Exchange → DSPs as if a real
@@ -96,6 +100,7 @@ func (h *Harness) RunAuctionWith(t *testing.T, p AuctionParams) AuctionResult {
 	add("gpp", p.GPP)
 	add("gpp_sid", p.GPPSID)
 	add("gpc", p.GPC)
+	add("data_residency", p.DataResidency)
 
 	url := h.URLs.SSP + "/v1/ssp/request"
 	if len(vals) > 0 {
@@ -201,6 +206,7 @@ func (h *Harness) ServeViaSSP(t *testing.T, p AuctionParams) SSPServeResult {
 	add("gpp", p.GPP)
 	add("gpp_sid", p.GPPSID)
 	add("gpc", p.GPC)
+	add("data_residency", p.DataResidency)
 
 	url := h.URLs.SSP + routes.SSPServe
 	if len(vals) > 0 {

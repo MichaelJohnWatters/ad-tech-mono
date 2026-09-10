@@ -44,7 +44,6 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/models"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/native"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
-	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
@@ -67,6 +66,10 @@ func main() {
 	// This platform's advertising-system domain, used as the asi of the first
 	// schain node on outbound bid requests. Read once at boot (static tier).
 	sellerDomain := keys.SSP.SellerDomain.Get(cfg)
+	// Data-residency home region of this deployment (PLAN #111). A request whose
+	// regs.ext.data_residency names a different region has its user-level data
+	// suppressed (see requestStoresUserData). Deployment-static; read once.
+	sspHomeRegion = keys.Platform.Region.Get(cfg)
 
 	// OTel — required so HTTPMiddleware's server span has a real trace ID
 	// that flows into logs / NATS events / analytics store.
@@ -671,23 +674,23 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 				}
 			}
 		}
-		// Consent gate for ALL audience signal leaving the platform. Evaluated
+		// User-data gate for ALL audience signal leaving the platform. Evaluated
 		// once and applied to BOTH user.ext.segments and user.data (segtax): our
 		// own DSP re-evaluates consent before USING segments, but an external
-		// bidder can't be relied on to, so no personalisation consent → no
-		// audience membership (segments OR taxonomy data) rides the bid request.
+		// bidder can't be relied on to, so no personalisation consent (or an
+		// out-of-region data-residency assertion) → no audience membership
+		// (segments OR taxonomy data) rides the bid request.
 		// (Previously only user.data was gated; user.ext.segments leaked public
 		// audience-segment ids to external DSPs on GPC/opt-out/no-consent requests.)
-		sig := privacy.SignalsFromQuery(r.URL.Query().Get, r.Header.Get("Sec-GPC"))
-		personalise := privacy.Evaluate(sig).Personalise
-		if len(segs) > 0 && personalise {
+		storeUserData := requestStoresUserData(r)
+		if len(segs) > 0 && storeUserData {
 			user.Ext = &openrtb.UserExt{Segments: segs}
 		}
 		// Standard-taxonomy audience data for EXTERNAL buyers: OpenRTB
 		// user.data with ext.segtax=4 (IAB Audience Taxonomy 1.1). Only
 		// public segments carrying a taxonomy label ride here — unlabelled
 		// segments stay platform-internal on user.ext.segments.
-		if personalise {
+		if storeUserData {
 			if ds := taxCache.dataSegments(segs); len(ds) > 0 {
 				user.Data = []openrtb.Data{{
 					Name:    sellerDomain,
@@ -843,6 +846,7 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 	usPrivacy := q.Get("us_privacy")
 	gpp := q.Get("gpp")
 	gppSID := q.Get("gpp_sid")
+	dataResidency := q.Get("data_residency")
 
 	// Global Privacy Control: a browser-level "do not sell/share" signal,
 	// carried either as the Sec-GPC request header or an explicit ?gpc=1.
@@ -862,13 +866,14 @@ func applyPrivacySignals(r *http.Request, bidReq *openrtb.BidRequest) {
 
 	// Only attach Regs when at least one signal is present, so minimal bid
 	// requests (and any golden-file comparisons) serialise identically.
-	if gdpr != "" || usPrivacy != "" || gpp != "" || gppSID != "" || coppa == 1 || gpc == 1 {
+	if gdpr != "" || usPrivacy != "" || gpp != "" || gppSID != "" || coppa == 1 || gpc == 1 || dataResidency != "" {
 		bidReq.Regs = &openrtb.Regs{COPPA: coppa, Ext: &openrtb.RegsExt{
-			GDPR:      gdprFlag,
-			USPrivacy: usPrivacy,
-			GPP:       gpp,
-			GPPSID:    gppSID,
-			GPC:       gpc,
+			GDPR:          gdprFlag,
+			USPrivacy:     usPrivacy,
+			GPP:           gpp,
+			GPPSID:        gppSID,
+			GPC:           gpc,
+			DataResidency: dataResidency,
 		}}
 	}
 
