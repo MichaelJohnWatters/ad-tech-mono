@@ -112,7 +112,7 @@ func main() {
 		log.Error("payout generation failed", "written", res.Written, "error", err)
 		os.Exit(1)
 	}
-	log.Info("payout run complete", "written", res.Written, "held_below_minimum", res.HeldLow, "zero_revenue", res.ZeroRev)
+	log.Info("payout run complete", "written", res.Written, "unchanged_already_paid", res.Unchanged, "held_below_minimum", res.HeldLow, "zero_revenue", res.ZeroRev)
 }
 
 // resolvePeriod picks the [start, end) payout window from the flags, defaulting

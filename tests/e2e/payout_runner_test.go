@@ -57,7 +57,12 @@ func TestPayoutRunnerGeneratesPublisherPayout(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command("go", "run", "./cmd/payout-runner", "--period-start", today, "--period-end", tomorrow)
 		cmd.Dir = "../.."
-		cmd.Env = append(os.Environ(), "CLICKHOUSE_ADDR=127.0.0.1:"+chPort)
+		// Run as the NOBYPASSRLS app role (adtech_app), NOT the superuser default
+		// — otherwise the runner's platform_read hatch + per-account tenant GUC are
+		// no-ops and an RLS regression (the repo's #1 bug class) would ship green.
+		cmd.Env = append(os.Environ(),
+			"CLICKHOUSE_ADDR=127.0.0.1:"+chPort,
+			"DATABASE_URL=postgres://adtech_app:adtech-app-local@localhost:5432/adtech?sslmode=disable")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("payout-runner failed: %v\n%s", err, out)
@@ -103,8 +108,11 @@ func TestPayoutRunnerGeneratesPublisherPayout(t *testing.T) {
 	if amount <= fee {
 		t.Errorf("net %v <= platform_fee %v — the publisher should keep the majority at a 20%% fee", amount, fee)
 	}
-	if got := amount + fee; got < wantGross-0.02 || got > wantGross+0.02 {
-		t.Errorf("amount+platform_fee = %v, want ~= gross %v (net+margin must reconstruct gross)", got, wantGross)
+	// net + margin must reconstruct gross to the CENT (ComputePayout derives the
+	// fee as grossCents − amountCents, so no rounding drift). Half-cent tolerance
+	// only absorbs float noise in the ClickHouse sum.
+	if got := amount + fee; got < wantGross-0.005 || got > wantGross+0.005 {
+		t.Errorf("amount+platform_fee = %v, want == gross %v to the cent (no rounding drift)", got, wantGross)
 	}
 
 	// 3) IDEMPOTENCY: a re-run for the same publisher+period must not duplicate

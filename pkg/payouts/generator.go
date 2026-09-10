@@ -46,9 +46,10 @@ func New(store *postgres.Store, gross GrossReader) *Generator {
 
 // Result is the outcome of a generation pass.
 type Result struct {
-	Written int // payout rows upserted
-	HeldLow int // publishers skipped: net below their minimum-payout threshold
-	ZeroRev int // publishers with no gross revenue in the period
+	Written   int // payout rows actually inserted/updated
+	Unchanged int // publishers whose existing payout was already paid/processing (upsert no-op'd)
+	HeldLow   int // publishers skipped: net below their minimum-payout threshold
+	ZeroRev   int // publishers with no gross revenue in the period
 }
 
 // publisher is the per-publisher facts the run needs, joined once up front.
@@ -85,10 +86,15 @@ func (g *Generator) GenerateForAllPublishers(ctx context.Context, start, end tim
 			res.HeldLow++
 			continue
 		}
-		if err := g.write(ctx, p, amount, fee, start, end); err != nil {
+		wrote, err := g.write(ctx, p, amount, fee, start, end)
+		if err != nil {
 			return res, fmt.Errorf("write payout for publisher %s: %w", p.id, err)
 		}
-		res.Written++
+		if wrote {
+			res.Written++
+		} else {
+			res.Unchanged++ // an already paid/processing payout — upsert no-op'd
+		}
 	}
 	return res, nil
 }
@@ -123,10 +129,7 @@ func (g *Generator) GenerateForPublisher(ctx context.Context, publisherID string
 	if !ok {
 		return false, nil
 	}
-	if err := g.write(ctx, *p, amount, fee, start, end); err != nil {
-		return false, fmt.Errorf("write payout: %w", err)
-	}
-	return true, nil
+	return g.write(ctx, *p, amount, fee, start, end)
 }
 
 // ComputePayout is the pure payout math: net = gross × (1 − fee%), applying the
@@ -136,12 +139,19 @@ func (g *Generator) GenerateForPublisher(ctx context.Context, publisherID string
 // earnings are held, not carried forward — a documented MVP limitation).
 func ComputePayout(gross float64, c *billing.Contract, minCents int64) (amount, platformFee float64, write bool) {
 	rev := c.CalculateRevenue(gross, "")
-	amount = math.Round(rev.PublisherRevenue*100) / 100
-	platformFee = math.Round(rev.PlatformMargin*100) / 100
-	if amount <= 0 {
+	// Work in integer cents so the split reconciles EXACTLY: derive the fee as
+	// grossCents − amountCents rather than rounding the margin independently (which
+	// drifts a cent, creating/destroying money — and float subtraction like
+	// 1.0−0.8 isn't exact). amount + platform_fee == gross-at-cents by construction.
+	grossCents := int64(math.Round(gross * 100))
+	amountCents := int64(math.Round(rev.PublisherRevenue * 100))
+	feeCents := grossCents - amountCents // negative when a guaranteed-min contract subsidizes above gross
+	amount = float64(amountCents) / 100
+	platformFee = float64(feeCents) / 100
+	if amountCents <= 0 {
 		return 0, 0, false
 	}
-	if int64(math.Round(amount*100)) < minCents {
+	if amountCents < minCents {
 		return amount, platformFee, false
 	}
 	return amount, platformFee, true
@@ -197,15 +207,17 @@ WHERE p.status = 'active'`
 // write UPSERTs one payout row, scoped to the owning account's tenant GUC so the
 // payouts RLS policy admits it. ON CONFLICT refreshes amount/platform_fee ONLY
 // while the payout is still 'pending' — an already 'processing'/'paid' payout is
-// never rewritten by a re-run.
-func (g *Generator) write(ctx context.Context, p publisher, amount, fee float64, start, end time.Time) error {
+// never rewritten by a re-run. Returns wrote=false (RowsAffected 0) when the
+// status guard blocked the upsert, so the caller doesn't count a no-op as a fresh
+// payout.
+func (g *Generator) write(ctx context.Context, p publisher, amount, fee float64, start, end time.Time) (wrote bool, err error) {
 	tx, err := g.store.Primary().BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, p.account); err != nil {
-		return fmt.Errorf("set tenant GUC: %w", err)
+		return false, fmt.Errorf("set tenant GUC: %w", err)
 	}
 	const up = `
 INSERT INTO payouts (publisher_id, account_id, amount, currency, platform_fee, status, period_start, period_end)
@@ -213,9 +225,14 @@ VALUES ($1::uuid, $2::uuid, $3, $4, $5, 'pending', $6, $7)
 ON CONFLICT (publisher_id, period_start, period_end) DO UPDATE
    SET amount = EXCLUDED.amount, platform_fee = EXCLUDED.platform_fee, currency = EXCLUDED.currency
    WHERE payouts.status = 'pending'`
-	if _, err := tx.ExecContext(ctx, up, p.id, p.account, amount, p.currency, fee,
-		start.Format("2006-01-02"), end.Format("2006-01-02")); err != nil {
-		return err
+	res, err := tx.ExecContext(ctx, up, p.id, p.account, amount, p.currency, fee,
+		start.Format("2006-01-02"), end.Format("2006-01-02"))
+	if err != nil {
+		return false, err
 	}
-	return tx.Commit()
+	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }

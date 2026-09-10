@@ -39,10 +39,12 @@ func TestComputePayout(t *testing.T) {
 			wantAmount: 0, wantFee: 0, wantWrite: false,
 		},
 		{
-			name: "rounds to cents (no float dust)",
-			// gross $0.333 → net 0.2664 → rounds to $0.27, fee 0.0666 → $0.07.
+			name: "rounds to cents, and fee reconciles to gross (no dust)",
+			// gross $0.333 → round to $0.33 payable; net 0.2664 → $0.27; fee is
+			// DERIVED as 0.33 − 0.27 = $0.06 so amount+fee == gross-at-cents
+			// exactly (independent rounding would give 0.07 → 0.34, a cent of dust).
 			gross: 0.333, contract: fixed20, minCents: 0,
-			wantAmount: 0.27, wantFee: 0.07, wantWrite: true,
+			wantAmount: 0.27, wantFee: 0.06, wantWrite: true,
 		},
 		{
 			name: "guaranteed minimum floor lifts net (subsidy absorbed)",
