@@ -242,3 +242,31 @@ func TestCreateAndValidateToken(t *testing.T) {
 		t.Errorf("account_type = %s, want publisher", parsed.AccountType)
 	}
 }
+
+func TestRegionAllowed(t *testing.T) {
+	adv := func(region string) *auth.Claims {
+		return &auth.Claims{AccountID: "a1", AccountType: auth.AccountAdvertiser, ResidencyRegion: region}
+	}
+	for _, tc := range []struct {
+		name   string
+		home   string
+		claims *auth.Claims
+		method string
+		want   bool
+	}{
+		{"gate disabled (no home region)", "", adv("eu"), http.MethodPost, true},
+		{"in-region write allowed", "us-east-1", adv("us-east-1"), http.MethodPost, true},
+		{"out-of-region write rejected", "us-east-1", adv("eu"), http.MethodPost, false},
+		{"out-of-region read allowed", "us-east-1", adv("eu"), http.MethodGet, true},
+		{"out-of-region PUT rejected", "us-east-1", adv("eu"), http.MethodPut, false},
+		{"out-of-region DELETE rejected", "us-east-1", adv("eu"), http.MethodDelete, false},
+		{"unpinned account treated as home", "us-east-1", adv(""), http.MethodPost, true},
+		{"staff exempt cross-region", "us-east-1", &auth.Claims{AccountType: auth.AccountStaff, ResidencyRegion: "eu"}, http.MethodPost, true},
+		{"admin exempt cross-region", "us-east-1", &auth.Claims{AccountType: auth.AccountAdmin, ResidencyRegion: "eu"}, http.MethodPost, true},
+		{"nil claims allowed (auth handles)", "us-east-1", nil, http.MethodPost, true},
+	} {
+		if got := regionAllowed(tc.home, tc.claims, tc.method); got != tc.want {
+			t.Errorf("%s: regionAllowed=%v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

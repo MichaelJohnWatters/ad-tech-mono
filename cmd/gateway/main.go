@@ -179,7 +179,11 @@ func main() {
 	// gating. maxTokenLifetime = the login token's 12h expiry.
 	revStore := middleware.NewRevocationStore(gwL2, 12*time.Hour, log)
 	portalRevocation = revStore // browser page gates consult the same store
-	authMiddleware := middleware.Auth(signingKey, log, middleware.WithRevocation(revStore))
+	// Data-residency home region: out-of-region accounts' mutations are rejected
+	// (empty/default region = no gate, single-region deployments unaffected).
+	authMiddleware := middleware.Auth(signingKey, log,
+		middleware.WithRevocation(revStore),
+		middleware.WithRegionGate(keys.Platform.Region.Get(cfg)))
 
 	metrics := middleware.NewMetrics(constants.ServiceGateway)
 
@@ -787,6 +791,7 @@ func main() {
 	// Accounts list — powers the staff impersonation picker (support:read,
 	// platform-wide, read-only).
 	mux.Handle(routes.APIAccounts, authMiddleware(middleware.RequirePermission("support:read")(accountsListHandler(gwDB, log))))
+	mux.Handle(routes.APIAccountResidency, authMiddleware(middleware.RequirePermission("support:update")(setAccountResidencyHandler(gwDB, gwDB, log))))
 
 	// Revshare — staff editor for publisher revenue-share splits (support:read
 	// list / support:update edit); invalidates the billing-rates cache.

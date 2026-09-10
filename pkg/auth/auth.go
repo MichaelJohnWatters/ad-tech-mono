@@ -71,8 +71,13 @@ type Claims struct {
 	Role            Role        `json:"role"`
 	Permissions     []string    `json:"permissions"`
 	ManagedAccounts []string    `json:"managed_accounts"` // agency only
-	IssuedAt        time.Time   `json:"iat"`
-	ExpiresAt       time.Time   `json:"exp"`
+	// ResidencyRegion is the account's data-residency region (accounts.residency_region),
+	// carried so the gateway's region gate can reject out-of-region mutations without a
+	// per-request DB lookup. Empty = unpinned (treated as the home region). Stale until
+	// the next login if an operator changes it.
+	ResidencyRegion string    `json:"residency_region,omitempty"`
+	IssuedAt        time.Time `json:"iat"`
+	ExpiresAt       time.Time `json:"exp"`
 }
 
 // IsExpired checks if the token has expired using the provided clock.

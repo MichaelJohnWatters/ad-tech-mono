@@ -320,6 +320,10 @@ const (
 	// impersonation picker (GET only, support:read). Platform-wide, read-only.
 	APIAccounts = apiPrefix + "/api/accounts"
 
+	// APIAccountResidency sets an account's data-residency region (PUT,
+	// support:update, staff-only). PLAN Phase 11 #111.
+	APIAccountResidency = apiPrefix + "/api/accounts/residency"
+
 	// APIBillingTerms is the staff advertiser-billing-terms editor
 	// (GET ?account_id= on support:read, PUT on support:update). Sets an
 	// advertiser account's payment_terms ('prepay'|'invoiced') + credit_limit;
