@@ -104,6 +104,13 @@ var S3 = struct {
 	UseSSL:    platformSet.Bool("s3.use_ssl", "false", TierStatic, "Connect to S3/Minio over HTTPS. False for local Minio, true for real S3.", Since("v1.0")),
 }
 
+// Platform — deployment-wide identity/policy shared across every service.
+var Platform = struct {
+	Region StringKey
+}{
+	Region: platformSet.String("platform.region", "us-east-1", TierStatic, "Data-residency HOME region of this deployment. An account whose accounts.residency_region differs is not served here (its mutations are rejected 403), and user-level data for out-of-region bid requests (regs.ext.data_residency) is not stored. Single-region deployments leave this at the default (matches s3.region), so no account is ever out-of-region.", Since("v2.4")),
+}
+
 // Debug — static because registering/unregistering routes requires restart.
 var Debug = struct {
 	EndpointsEnabled BoolKey

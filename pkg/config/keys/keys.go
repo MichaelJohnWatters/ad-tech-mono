@@ -41,6 +41,7 @@ var (
 	Database           = config.Database
 	Redis              = config.Redis
 	S3                 = config.S3
+	Platform           = config.Platform
 	Debug              = config.Debug
 	Otel               = config.Otel
 	CacheWarm          = config.CacheWarm

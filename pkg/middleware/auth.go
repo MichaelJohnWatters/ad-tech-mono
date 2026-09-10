@@ -71,13 +71,41 @@ func WithClaims(ctx context.Context, c *auth.Claims) context.Context {
 type AuthOption func(*authConfig)
 
 type authConfig struct {
-	rev RevocationChecker
+	rev        RevocationChecker
+	homeRegion string
 }
 
 // WithRevocation makes the Auth middleware reject tokens whose session has been
 // revoked (logout-everywhere / stolen-token response). A nil checker is ignored.
 func WithRevocation(rev RevocationChecker) AuthOption {
 	return func(c *authConfig) { c.rev = rev }
+}
+
+// WithRegionGate enforces data residency: a request that MUTATES data for an
+// account whose ResidencyRegion differs from this deployment's home region is
+// rejected 403 (the account's data lives elsewhere; this region must not store
+// it). Reads are allowed anywhere, and platform staff/admin are exempt (they
+// operate cross-region). Empty homeRegion (or empty account region) disables the
+// gate — single-region deployments are unaffected.
+func WithRegionGate(homeRegion string) AuthOption {
+	return func(c *authConfig) { c.homeRegion = homeRegion }
+}
+
+// regionAllowed reports whether a request may proceed under the residency gate.
+func regionAllowed(homeRegion string, claims *auth.Claims, method string) bool {
+	if homeRegion == "" || claims == nil {
+		return true // gate disabled / no identity (auth handles the latter)
+	}
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true // reads are not residency-gated
+	}
+	switch claims.AccountType {
+	case auth.AccountStaff, auth.AccountAdmin:
+		return true // platform operators are not region-bound
+	}
+	// Empty = unpinned (legacy/default) → treated as the home region.
+	return claims.ResidencyRegion == "" || claims.ResidencyRegion == homeRegion
 }
 
 // Auth returns middleware that validates JWT tokens and injects claims into context.
@@ -135,6 +163,13 @@ func Auth(signingKey string, log *slog.Logger, opts ...AuthOption) func(http.Han
 					http.Error(w, `{"error":"session revoked"}`, http.StatusUnauthorized)
 					return
 				}
+			}
+
+			if !regionAllowed(ac.homeRegion, claims, r.Method) {
+				log.Warn("data residency gate: out-of-region mutation rejected",
+					"account", claims.AccountID, "account_region", claims.ResidencyRegion, "home_region", ac.homeRegion, "method", r.Method, "path", r.URL.Path)
+				http.Error(w, `{"error":"data residency: this account's data is not served by this region"}`, http.StatusForbidden)
+				return
 			}
 
 			ctx := context.WithValue(r.Context(), claimsKey{}, claims)

@@ -23,6 +23,7 @@ type teamMember struct {
 	AccountType     auth.AccountType
 	Role            auth.Role
 	PasswordHash    string
+	ResidencyRegion string   // accounts.residency_region — carried into the session claims
 	ManagedAccounts []string // agency only — advertiser accounts it may act as
 }
 
@@ -44,9 +45,9 @@ func dbUserLookup(db *sql.DB) userLookupFn {
 		// (security #77) it must use the platform-read hatch — otherwise RLS on
 		// team_members hides every row and login is impossible. Read-only.
 		err := postgres.NewFromDB(db).QueryRowPlatform(ctx, func(row *sql.Row) error {
-			return row.Scan(&u.ID, &u.AccountID, &acctType, &role, &u.PasswordHash)
+			return row.Scan(&u.ID, &u.AccountID, &acctType, &role, &u.PasswordHash, &u.ResidencyRegion)
 		},
-			`SELECT tm.id::text, tm.account_id::text, a.type, tm.role, tm.password_hash
+			`SELECT tm.id::text, tm.account_id::text, a.type, tm.role, tm.password_hash, a.residency_region
 			 FROM team_members tm JOIN accounts a ON a.id = tm.account_id
 			 WHERE tm.email = $1 AND tm.status = 'active'`, email)
 		if err == sql.ErrNoRows {
@@ -138,6 +139,7 @@ func loginSubmitHandler(lookup userLookupFn, signingKey string, log *slog.Logger
 			Role:            u.Role,
 			Permissions:     auth.RolePermissions(u.AccountType, u.Role),
 			ManagedAccounts: u.ManagedAccounts,
+			ResidencyRegion: u.ResidencyRegion,
 			IssuedAt:        now,
 			ExpiresAt:       now.Add(12 * time.Hour),
 		}
