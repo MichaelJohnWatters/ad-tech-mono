@@ -4,7 +4,15 @@ Single entry point for all external traffic (except Tracker and Exchange hot pat
 
 ## Responsibilities
 
-- Authentication: JWT issuance, validation, refresh
+- Authentication: JWT issuance, validation, refresh; per-account **OIDC SSO** (#110)
+  alongside password auth (`sso.go` + `pkg/ssoauth`): `/v1/auth/sso/start` →
+  `/v1/auth/sso/callback` (auth-code + PKCE + state + nonce; go-oidc verifies the
+  id_token). Gates: email_verified, domain allowlist (empty=deny), eligible account
+  type only (never staff/admin/partner), least-privilege JIT, no cross-account
+  hijack. Mints the SAME session cookie. Owner config at `/v1/api/account/sso`
+  (sso:manage); client_secret is write-only, never returned. The full IdP round-trip
+  is covered by the in-process `pkg/ssoauth` test (the in-cluster gateway can't reach
+  a host-run fake IdP), the live e2e covers config/RBAC + start/callback negatives.
 - Authorisation: RBAC checks before proxying
 - Multi-tenancy: extracts account_id from JWT, injects into gRPC metadata
 - REST API: translates HTTP/JSON to gRPC calls to internal services

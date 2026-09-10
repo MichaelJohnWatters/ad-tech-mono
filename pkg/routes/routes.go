@@ -22,6 +22,10 @@ const (
 	AuthLogin  = "/v1/auth/login"
 	AuthLogout = "/v1/auth/logout"
 	AuthSignup = "/v1/auth/signup"
+	// SSO auth-code flow (PLAN Phase 11 #110). Public, no auth. AuthSSOStart
+	// redirects to the account's IdP; AuthSSOCallback consumes the IdP response.
+	AuthSSOStart    = "/v1/auth/sso/start"
+	AuthSSOCallback = "/v1/auth/sso/callback"
 	// AuthRevokeSessions kills all of the caller's outstanding tokens at once
 	// (log out everywhere / respond to a stolen session). Authenticated: it
 	// revokes the session of whoever calls it, including their current token.
@@ -96,6 +100,9 @@ const (
 	// APIAccountExport is the account data-export package (PLAN Phase 11, item
 	// 105): GET enqueues/returns the caller's export job (account:export).
 	APIAccountExport = apiPrefix + "/api/account/export"
+	// APIAccountSSO is the per-account OIDC SSO config (PLAN Phase 11, item 110):
+	// owner GET/PUT (sso:manage). Client secret is never returned.
+	APIAccountSSO = apiPrefix + "/api/account/sso"
 	// APISupportTickets is the support & dispute workflow (PLAN Phase 11, item
 	// 108): customers GET their own tickets / POST a new one; staff GET ?scope=all
 	// the queue. APISupportTicketsSub is the per-ticket subtree ({id},
