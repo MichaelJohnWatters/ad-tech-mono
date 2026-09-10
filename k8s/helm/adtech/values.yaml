@@ -1451,6 +1451,14 @@ cronjobs:
         value: "account-closeout"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
+      # ClickHouse for the publisher final-payout path (gross-revenue source); if
+      # unreachable the run degrades to advertiser-only + logs a deferral.
+      - name: CLICKHOUSE_ADDR
+        value: "clickhouse:9000"
+      - name: CLICKHOUSE_USER
+        value: "adtech"
+      - name: CLICKHOUSE_PASSWORD
+        value: "adtech-local-dev"
     resources:
       requests: { cpu: "50m", memory: "64Mi" }
       limits: { cpu: "500m", memory: "256Mi" }

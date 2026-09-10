@@ -24,8 +24,15 @@ agencies), marks the account `closed`, and closes the request row.
   (invoicing sets `app.current_account_id`).
 - Final-invoice window is DAY-bounded (committed spend is DATE-keyed): start = last
   `invoices.period_end` (else account creation day), end = start of tomorrow so today bills.
-- Publisher final payout + the 90-day data purge are DEFERRED — `closed_at` is left set
-  so the future purge job can scan `closed_at + accountlifecycle.RetentionDays <= now`.
+- **Publisher final payout is WIRED** (`pkg/payouts.Generator.GenerateForPublisher`):
+  for each publisher entity the account owns, generates a payout over the un-paid
+  tail (start = last `payouts.period_end` else account creation, so it never
+  overlaps a monthly payout — no double-pay), end = start of tomorrow. Needs
+  ClickHouse (the gross source) — `CLICKHOUSE_ADDR/_USER/_PASSWORD` env; if
+  unreachable the run DEGRADES GRACEFULLY (advertiser closeouts still settle,
+  publisher payouts are skipped + logged, not fatal).
+- The 90-day data purge is still DEFERRED — `closed_at` is left set so the future
+  purge job can scan `closed_at + accountlifecycle.RetentionDays <= now`.
 
 ## Pointers
 
