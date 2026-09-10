@@ -21,23 +21,10 @@ import (
 // A version segment we don't host → 404 (never silently serve the current build for
 // a mismatched pin). All responses carry ACAO:* so SRI/crossorigin fetches work.
 func sdkHandler(a *sdkasset.Asset, log *slog.Logger) http.HandlerFunc {
-	metadata, _ := json.Marshal(struct {
-		Version   string `json:"version"`
-		Major     string `json:"major"`
-		Integrity string `json:"integrity"`
-		URLs      struct {
-			Pinned string `json:"pinned"`
-			Major  string `json:"major"`
-			Latest string `json:"latest"`
-		} `json:"urls"`
-	}{
-		Version: a.Version, Major: a.Major, Integrity: a.Integrity,
-		URLs: struct {
-			Pinned string `json:"pinned"`
-			Major  string `json:"major"`
-			Latest string `json:"latest"`
-		}{Pinned: a.PinnedURL(), Major: a.MajorURL(), Latest: a.LatestURL()},
-	})
+	// Precomputed once — the metadata never changes after boot. nosniff is set by
+	// the outer SecurityHeaders middleware; ACAO:* is set here (/sdk/ is not
+	// CORS-wrapped) so cross-origin script/SRI fetches work.
+	metadata, _ := json.Marshal(a.Metadata())
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -46,7 +33,6 @@ func sdkHandler(a *sdkasset.Asset, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
 		rest := strings.TrimPrefix(r.URL.Path, "/sdk/")
 
 		if rest == "version.json" {
@@ -67,6 +53,9 @@ func sdkHandler(a *sdkasset.Asset, log *slog.Logger) http.HandlerFunc {
 		}
 		ch, hosted := a.Resolve(seg)
 		if !hosted {
+			// Worth observing: a request for a version we don't host is a publisher
+			// on a sunset/typo'd pin — the signal a deprecation workflow needs.
+			log.Warn("sdk: request for unhosted version", "requested", seg, "current", a.Version)
 			http.Error(w, "unknown sdk version", http.StatusNotFound)
 			return
 		}

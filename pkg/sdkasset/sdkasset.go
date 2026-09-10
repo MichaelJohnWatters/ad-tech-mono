@@ -101,3 +101,33 @@ func (a *Asset) Resolve(seg string) (Channel, bool) {
 func (a *Asset) PinnedURL() string { return "/sdk/" + a.Version + "/adtech.js" }
 func (a *Asset) MajorURL() string  { return "/sdk/" + a.Major + "/adtech.js" }
 func (a *Asset) LatestURL() string { return "/sdk/latest/adtech.js" }
+
+// PinnedRef is the immutable exact-version URL together with the SRI hash valid
+// for it. The integrity is scoped HERE (not top-level) on purpose: it is valid ONLY
+// for this immutable URL — the major/latest channels receive patches, so applying
+// this hash to them would break the script on the next patch.
+type PinnedRef struct {
+	URL       string `json:"url"`
+	Integrity string `json:"integrity"`
+}
+
+// Metadata is the public /sdk/version.json contract. One source of truth for the
+// wire shape (handler + any future CDN-manifest job share it).
+type Metadata struct {
+	Version   string    `json:"version"`
+	Major     string    `json:"major"`
+	Pinned    PinnedRef `json:"pinned"`     // immutable + SRI-safe
+	MajorURL  string    `json:"major_url"`  // stable line, patched, NO SRI
+	LatestURL string    `json:"latest_url"` // floats, NO SRI
+}
+
+// Metadata builds the version.json payload for this asset.
+func (a *Asset) Metadata() Metadata {
+	return Metadata{
+		Version:   a.Version,
+		Major:     a.Major,
+		Pinned:    PinnedRef{URL: a.PinnedURL(), Integrity: a.Integrity},
+		MajorURL:  a.MajorURL(),
+		LatestURL: a.LatestURL(),
+	}
+}
