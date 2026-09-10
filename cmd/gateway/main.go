@@ -45,6 +45,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/sdkasset"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/secrets"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage"
 	statuspagepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/statuspage/postgres"
@@ -200,6 +201,19 @@ func main() {
 
 	// Static files (no auth)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
+
+	// Versioned SDK serving (#106): publishers embed /sdk/v<major>/adtech.js with
+	// per-channel cache headers + a /sdk/version.json metadata + integrity. Falls
+	// back to the plain /static/ URL for the ad-tag snippet if the SDK can't load
+	// (the bytes are baked into the gateway image, so this is belt-and-suspenders).
+	sdkTagSrc := "/static/adtech.js"
+	if sdkAsset, err := sdkasset.Load("web/static/adtech.js"); err != nil {
+		log.Error("sdk asset load failed; versioned /sdk/ routes disabled", "error", err)
+	} else {
+		mux.HandleFunc("/sdk/", sdkHandler(sdkAsset, log))
+		sdkTagSrc = sdkAsset.MajorURL()
+		log.Info("sdk versioned serving ready", "version", sdkAsset.Version, "major", sdkAsset.Major, "integrity", sdkAsset.Integrity)
+	}
 
 	// Templates — loaded once, re-parsed on every render in dev mode so
 	// editing a .html file in the editor shows up on the next browser
@@ -770,7 +784,7 @@ func main() {
 
 	// Ad-tag generator — publisher embed snippet per placement (read-only,
 	// tenant-scoped, placements:read gated).
-	mux.Handle(routes.APIAdTag, authMiddleware(http.HandlerFunc(adTagHandler(pgAdTagStore{db: gwDB}, log))))
+	mux.Handle(routes.APIAdTag, authMiddleware(http.HandlerFunc(adTagHandler(pgAdTagStore{db: gwDB}, sdkTagSrc, log))))
 
 	// Topup — advertiser prepay credit (billing:view / billing:topup gated).
 	// Money-touching: idempotency-keyed, double-entry ledger + balance in one

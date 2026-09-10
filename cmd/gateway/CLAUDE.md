@@ -11,6 +11,13 @@ Single entry point for all external traffic (except Tracker and Exchange hot pat
 - HTMX Dashboard: serves Go HTML templates for the UI
 - Swagger UI: serves OpenAPI docs at `/docs`
 - sellers.json: auto-generated at `/sellers.json`
+- adtech.js SDK: versioned serving at `/sdk/` (#106) — public, no auth. `pkg/sdkasset`
+  parses the SDK's own `SDK_VERSION` at boot → serves `/sdk/<exact>/adtech.js`
+  (immutable 1y, SRI-safe), `/sdk/v<major>/adtech.js` (1h, patched, no SRI),
+  `/sdk/latest/adtech.js` (short), + `/sdk/version.json` metadata (version, sha384
+  integrity, urls). ACAO:* on all. Unhosted version → 404. `/static/adtech.js` still
+  served for old embeds; the ad-tag generator now emits the `/sdk/v<major>/` URL.
+  Served as bare literals (like `/static/`), not `pkg/routes` consts.
 - Rate limiting: per-account, per-API-key
 
 ## Key Packages Used
