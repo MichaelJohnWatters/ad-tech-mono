@@ -33,14 +33,23 @@ agencies), marks the account `closed`, and closes the request row.
   publisher payouts are skipped + logged, not fatal).
 - **The 90-day data purge is WIRED** (`accountlifecycle.Purger.RunDuePurges`, runs
   as a second pass after the closeouts): scans closures 'closed' for
-  `RetentionDays` (90), then destructively deletes the account's data across
-  Postgres (EVERY account-keyed table, discovered from `information_schema` so
-  there's no drift — FK order handled by retry passes; deletes scoped by the
-  tenant GUC) and ClickHouse (`analytics.ClickHouse.PurgeAccount`, `ALTER … DELETE`
-  with `mutations_sync=1`), then flips the closure to the terminal `'purged'`
-  state (`purged_at` set). The `accounts` row + the closure record + `audit_log`
-  survive as a tombstone. Idempotent (only `'closed'` selected) + best-effort per
-  account. Skips the ClickHouse half (logs, retries next run) if CH is unreachable.
+  `RetentionDays` (90), then destructively deletes the account's **private**
+  data across Postgres (the `purgeableTables` **allowlist** ∩ tables that carry an
+  `account_id` — a destructive op FAILS SAFE, so a new table isn't swept in until
+  someone adds it; FK order handled by retry passes; deletes scoped by the tenant
+  GUC + explicit `WHERE account_id`) and ClickHouse
+  (`analytics.ClickHouse.PurgeAccount`, `ALTER … DELETE` with `mutations_sync=1`),
+  then flips the closure to the terminal `'purged'` state (`purged_at` set).
+  **RETAINED** (NOT purged): financial/legal records (invoices, invoice_line_items,
+  payouts, adjustments, topups, advertiser_balances, data_fee_earnings — tax
+  retention), the `accounts` row + closure record + `audit_log` (tombstone),
+  platform-global (`partners`), and cross-tenant-referenced tables
+  (`marketplace_listings` — buyers' grants cascade off it — and `data_providers`).
+  Idempotent (only `'closed'` selected) + best-effort per account. Skips the
+  ClickHouse half (logs, retries next run) if CH is unreachable.
+  KNOWN GAPS (documented follow-ups): object-storage blobs (S3 creative assets +
+  export zips) behind the purged PG pointer rows are NOT yet deleted; a very large
+  ClickHouse table's `mutations_sync=1` delete could exceed the job's 5-min ctx.
 
 ## Pointers
 

@@ -42,6 +42,16 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 	if campaignsBefore == 0 {
 		t.Fatalf("no campaigns for the account before purge — test setup broken")
 	}
+
+	// A financial record (invoices) that the purge MUST retain — settlement/tax
+	// records survive the destructive purge (only the account's private operational
+	// data is wiped; invoices/payouts/adjustments are on the keep-side allowlist).
+	if _, err := h.DB.Exec(
+		`INSERT INTO invoices (account_id, total, currency, period_start, period_end, due_date)
+		 VALUES ($1::uuid, 12.34, 'USD', now() - interval '30 days', now(), now() + interval '30 days')`,
+		adv.ID); err != nil {
+		t.Fatalf("seed retained invoice: %v", err)
+	}
 	harness.WaitFor(t, 30*time.Second, "impression in ClickHouse", func() bool {
 		return chImpressionsForAccount(t, adv.ID) >= 1
 	})
@@ -92,6 +102,16 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 	// ClickHouse data is gone.
 	if n := chImpressionsForAccount(t, adv.ID); n != 0 {
 		t.Errorf("ClickHouse impressions after purge = %d, want 0 (analytics not purged)", n)
+	}
+
+	// The financial record SURVIVES — the purge must not destroy settlement/tax
+	// records (the allowlist excludes invoices/payouts/adjustments).
+	var invoicesAfter int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM invoices WHERE account_id = $1::uuid`, adv.ID).Scan(&invoicesAfter); err != nil {
+		t.Fatalf("invoices after: %v", err)
+	}
+	if invoicesAfter != 1 {
+		t.Errorf("invoices after purge = %d, want 1 (financial records must be retained)", invoicesAfter)
 	}
 
 	// Closure flipped to the terminal 'purged' state with purged_at set.

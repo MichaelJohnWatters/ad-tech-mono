@@ -3,10 +3,13 @@ package accountlifecycle
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // AnalyticsPurger destructively removes an account's analytics rows (ClickHouse).
@@ -15,21 +18,46 @@ type AnalyticsPurger interface {
 	PurgeAccount(ctx context.Context, accountID string) error
 }
 
-// purgeKeepTables are account-keyed tables the purge preserves: the closure
-// record itself (the tombstone that records the purge) and the audit log
-// (retained for compliance — it holds actor events, not the account's PII data).
-var purgeKeepTables = map[string]bool{
-	"account_closure_requests": true,
-	"audit_log":                true,
+// purgeableTables is an EXPLICIT ALLOWLIST of the account's private, operational
+// data that the 90-day purge destroys. A destructive op must FAIL SAFE: a new
+// account-keyed table is NOT swept in until someone deliberately adds it here
+// (an information_schema denylist would auto-destroy new tables — including
+// financial or shared ones — silently). Deliberately EXCLUDED and RETAINED:
+//   - financial/legal (tax retention): invoices, invoice_line_items, payouts,
+//     adjustments, topups, advertiser_balances, data_fee_earnings.
+//   - tombstone/audit: account_closure_requests, audit_log.
+//   - platform-global (not the account's data): partners.
+//   - cross-tenant-referenced (deleting harms OTHER tenants): marketplace_listings
+//     (buyers' marketplace_grants cascade off it), data_providers (other tenants'
+//     segments reference it).
+//
+// (Object-storage blobs behind account_export_jobs/creatives are a documented
+// follow-up — the PG pointer rows are purged here; the S3 objects are not yet.)
+var purgeableTables = map[string]bool{
+	// Campaign / serving config
+	"line_items": true, "publisher_line_items": true, "insertion_orders": true,
+	"creatives": true, "placements": true, "targeting_rules": true, "deals": true,
+	"conversion_configs": true, "creative_review_queue": true, "quality_controls": true,
+	// Audience / identity / retargeting (PII-adjacent)
+	"audience_segments": true, "audience_segment_members": true, "audience_mappings": true,
+	"audience_ingest_jobs": true, "audience_membership_changelog": true,
+	"retargeting_product_views": true, "retargeting_suppressions": true, "products": true,
+	// Attribution / Privacy Sandbox
+	"ara_reports": true, "ara_sources": true,
+	// Account operational + auth (PII / credentials)
+	"notifications": true, "notification_preferences": true, "saved_reports": true,
+	"report_jobs": true, "support_tickets": true, "webhooks": true, "team_members": true,
+	"api_keys": true, "secrets": true, "payout_methods": true, "account_export_jobs": true,
 }
 
 // Purger runs the 90-day destructive account purge — the last account-closure
 // deferral. It scans closures that have been 'closed' for RetentionDays and wipes
-// the account's data across Postgres (every account-keyed tenant table) and
-// ClickHouse (analytics), then marks the closure 'purged'. The accounts row + the
-// closure record survive as a tombstone. Idempotent (only 'closed' selected) and
-// best-effort per account (one failure is logged + skipped, leaving it for the
-// next run).
+// the account's private data across Postgres (the purgeableTables allowlist) and
+// ClickHouse (analytics), then marks the closure 'purged'. The accounts row, the
+// closure record, and the retained tables (financial/legal records, platform-global
+// and cross-tenant-referenced tables — see purgeableTables) survive. Idempotent
+// (only 'closed' selected) and best-effort per account (one failure is logged +
+// skipped, leaving it for the next run).
 type Purger struct {
 	DB        *sql.DB
 	Analytics AnalyticsPurger // nil = skip the ClickHouse half (logged)
@@ -114,9 +142,9 @@ func (p *Purger) purgeOne(ctx context.Context, closureID, accountID string) erro
 	return nil
 }
 
-// purgePostgres deletes the account's rows from every account-keyed tenant table
-// (discovered from information_schema, so new tables are covered automatically),
-// preserving the tombstone tables. FK dependencies are handled by retry passes:
+// purgePostgres deletes the account's rows from every purgeable tenant table (the
+// allowlist ∩ tables that actually carry an account_id column). FK dependencies
+// are handled by retry passes:
 // a delete blocked by a child row (23503) is retried after the child's table is
 // cleared. Each delete is scoped by BOTH the account tenant-GUC (RLS) and an
 // explicit WHERE account_id — belt and suspenders on a destructive write.
@@ -148,8 +176,9 @@ func (p *Purger) purgePostgres(ctx context.Context, accountID string) (int64, er
 	return total, nil
 }
 
-// accountKeyedTables returns every public table with an account_id column, minus
-// the tombstone keep-list.
+// accountKeyedTables returns the purge allowlist intersected with the tables that
+// actually carry an account_id column (guards against a rename/drop leaving a
+// stale allowlist entry, and skips any allowlisted table missing the column).
 func (p *Purger) accountKeyedTables(ctx context.Context) ([]string, error) {
 	rows, err := p.DB.QueryContext(ctx,
 		`SELECT table_name FROM information_schema.columns
@@ -164,7 +193,7 @@ func (p *Purger) accountKeyedTables(ctx context.Context) ([]string, error) {
 		if err := rows.Scan(&t); err != nil {
 			return nil, err
 		}
-		if !purgeKeepTables[t] {
+		if purgeableTables[t] {
 			out = append(out, t)
 		}
 	}
@@ -183,8 +212,8 @@ func (p *Purger) deleteAccountRows(ctx context.Context, table, accountID string)
 	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.current_account_id', $1, true)`, accountID); err != nil {
 		return 0, err
 	}
-	// table is from information_schema (not user input); account_id is bound.
-	res, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE account_id = $1", pq(table)), accountID)
+	// table is a catalog identifier (not user input); account_id is bound.
+	res, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE account_id = $1", pq.QuoteIdentifier(table)), accountID)
 	if err != nil {
 		return 0, err
 	}
@@ -214,10 +243,9 @@ func (p *Purger) markPurged(ctx context.Context, closureID string) error {
 	return tx.Commit()
 }
 
-// pq double-quotes an identifier (defensive — the names come from the catalog).
-func pq(ident string) string { return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"` }
-
-// isForeignKeyViolation reports whether err is a Postgres FK violation (23503).
+// isForeignKeyViolation reports whether err is a Postgres FK violation (SQLSTATE
+// 23503) — checked via the typed driver code, not fragile message-string matching.
 func isForeignKeyViolation(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "23503") || strings.Contains(err.Error(), "violates foreign key"))
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23503"
 }
