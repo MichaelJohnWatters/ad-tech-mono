@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/privacy"
 )
 
 type claimsKey struct{}
@@ -104,8 +105,10 @@ func regionAllowed(homeRegion string, claims *auth.Claims, method string) bool {
 	case auth.AccountStaff, auth.AccountAdmin:
 		return true // platform operators are not region-bound
 	}
-	// Empty = unpinned (legacy/default) → treated as the home region.
-	return claims.ResidencyRegion == "" || claims.ResidencyRegion == homeRegion
+	// THE residency rule lives in pkg/privacy (also used by the SSP data-plane
+	// gate) — call it so the two planes can't drift, and get case/whitespace
+	// normalisation for free. Empty account region = unpinned → treated as home.
+	return privacy.AllowsResidency(claims.ResidencyRegion, homeRegion)
 }
 
 // Auth returns middleware that validates JWT tokens and injects claims into context.
