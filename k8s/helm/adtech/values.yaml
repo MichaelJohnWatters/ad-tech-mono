@@ -1444,20 +1444,32 @@ cronjobs:
     successfulJobsHistoryLimit: 3
     failedJobsHistoryLimit: 3
     backoffLimit: 2
-    activeDeadlineSeconds: 600
+    # Wide enough for both passes: the 5-min closeout budget plus the purge's own
+    # 30-min budget (slow ClickHouse mutations_sync deletes + S3 blob deletes).
+    activeDeadlineSeconds: 2400
     restartPolicy: OnFailure
     env:
       - name: POD_NAME
         value: "account-closeout"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
-      # ClickHouse for the publisher final-payout path (gross-revenue source); if
-      # unreachable the run degrades to advertiser-only + logs a deferral.
+      # ClickHouse for the publisher final-payout path (gross-revenue source) AND
+      # the analytics half of the 90-day purge; if unreachable the run degrades to
+      # advertiser-only + logs a deferral (purge retries the CH half next run).
       - name: CLICKHOUSE_ADDR
         value: "clickhouse:9000"
       - name: CLICKHOUSE_USER
         value: "adtech"
       - name: CLICKHOUSE_PASSWORD
+        value: "adtech-local-dev"
+      # Object storage — the purge deletes the account's export ZIP (a full copy of
+      # its exported data) from the private reports bucket. Real S3 in staging/prod
+      # is injected over these by the global.s3 template block.
+      - name: S3_ENDPOINT
+        value: "minio:9000"
+      - name: S3_ACCESS_KEY
+        value: "adtech"
+      - name: S3_SECRET_KEY
         value: "adtech-local-dev"
     resources:
       requests: { cpu: "50m", memory: "64Mi" }

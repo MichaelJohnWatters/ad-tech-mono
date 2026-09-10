@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/accountlifecycle"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/invoicing"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/payouts"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	_ "github.com/lib/pq"
 )
@@ -73,13 +75,21 @@ func main() {
 	}
 	log.Info("account close-out complete", "closed", n)
 
-	// 90-day destructive purge of accounts closed past the retention window.
+	// 90-day destructive purge of accounts closed past the retention window. Runs
+	// under its OWN generous timeout (not the 5-min closeout budget): the ClickHouse
+	// mutations_sync=1 deletes + S3 blob deletes can be slow on large accounts, and
+	// starving them mid-delete would strand a half-purged account for a retry.
 	var analyticsPurger accountlifecycle.AnalyticsPurger
 	if ch != nil {
 		analyticsPurger = ch
 	}
-	purger := &accountlifecycle.Purger{DB: db, Analytics: analyticsPurger, Now: time.Now, Log: log}
-	purged, err := purger.RunDuePurges(ctx)
+	// Object store (export-zip blobs). objects.Connect never returns nil — it serves
+	// the fs fallback when s3.endpoint/S3_ENDPOINT is unset (host one-off runs).
+	objStore := objects.Connect(config.Load(), "/tmp/adtech-reports", log)
+	purgeCtx, purgeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer purgeCancel()
+	purger := &accountlifecycle.Purger{DB: db, Analytics: analyticsPurger, Objects: objStore, Now: time.Now, Log: log}
+	purged, err := purger.RunDuePurges(purgeCtx)
 	if err != nil {
 		log.Error("account purge failed", "purged", purged, "error", err)
 		os.Exit(1)

@@ -259,6 +259,28 @@ func (h *Harness) OnboardingBucket(t *testing.T) (objects.Store, string) {
 	return store, bucket
 }
 
+// ReportsBucket returns an S3 client on the local Minio plus the private
+// report/export-artifact bucket name — where report-runner writes account export
+// ZIPs and the account purge deletes them from.
+func (h *Harness) ReportsBucket(t *testing.T) (objects.Store, string) {
+	t.Helper()
+	store, err := objs3.New(objs3.Config{
+		Endpoint:  h.URLs.MinioEndpt,
+		AccessKey: "adtech",
+		SecretKey: "adtech-local-dev",
+		Region:    "us-east-1",
+		UseSSL:    false,
+	})
+	if err != nil {
+		t.Fatalf("minio connect: %v", err)
+	}
+	const bucket = "adtech-reports"
+	if err := store.EnsureBucket(context.Background(), bucket); err != nil {
+		t.Fatalf("ensure reports bucket: %v", err)
+	}
+	return store, bucket
+}
+
 // SignalResidual counts the user's rows in the ClickHouse profile-store tables
 // (profile_signals keyed on id_value, behaviour_signals on user_id/household_id)
 // — the GDPR residual check, also handy as "have this user's rows landed yet?"

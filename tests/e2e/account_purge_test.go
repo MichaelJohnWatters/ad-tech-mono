@@ -8,6 +8,7 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,6 +53,22 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		adv.ID); err != nil {
 		t.Fatalf("seed retained invoice: %v", err)
 	}
+
+	// A completed data-export job + its ZIP in the private reports bucket — the zip
+	// is a full copy of the account's exported data, so the purge MUST delete the
+	// object, not just the pointer row (GDPR completeness + no orphaned blob).
+	reportsStore, reportsBucket := h.ReportsBucket(t)
+	exportKey := "exports/purge-e2e-" + adv.ID + ".zip"
+	const exportBody = "PK\x03\x04 fake export zip"
+	if err := reportsStore.Put(context.Background(), reportsBucket, exportKey,
+		strings.NewReader(exportBody), int64(len(exportBody)), "application/zip"); err != nil {
+		t.Fatalf("put export zip: %v", err)
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO account_export_jobs (account_id, status, artifact_bucket, artifact_key, artifact_bytes, finished_at)
+		 VALUES ($1::uuid, 'done', $2, $3, 22, now())`, adv.ID, reportsBucket, exportKey); err != nil {
+		t.Fatalf("seed export job: %v", err)
+	}
 	harness.WaitFor(t, 30*time.Second, "impression in ClickHouse", func() bool {
 		return chImpressionsForAccount(t, adv.ID) >= 1
 	})
@@ -63,7 +80,12 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		cmd.Dir = "../.."
 		cmd.Env = append(os.Environ(),
 			"CLICKHOUSE_ADDR=127.0.0.1:"+chPort,
-			"DATABASE_URL=postgres://adtech_app:adtech-app-local@localhost:5432/adtech?sslmode=disable")
+			"DATABASE_URL=postgres://adtech_app:adtech-app-local@localhost:5432/adtech?sslmode=disable",
+			// Reach the real Minio so the purge deletes the export ZIP (else the
+			// binary falls back to a local fs store and the object survives).
+			"S3_ENDPOINT="+h.URLs.MinioEndpt,
+			"S3_ACCESS_KEY=adtech",
+			"S3_SECRET_KEY=adtech-local-dev")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("account-closeout failed: %v\n%s", err, out)
 		}
@@ -102,6 +124,13 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 	// ClickHouse data is gone.
 	if n := chImpressionsForAccount(t, adv.ID); n != 0 {
 		t.Errorf("ClickHouse impressions after purge = %d, want 0 (analytics not purged)", n)
+	}
+
+	// The export ZIP object is gone from the reports bucket (not just its PG row).
+	if exists, err := reportsStore.Exists(context.Background(), reportsBucket, exportKey); err != nil {
+		t.Fatalf("export zip exists check: %v", err)
+	} else if exists {
+		t.Errorf("export zip %q still in bucket after purge (object-storage blob not purged)", exportKey)
 	}
 
 	// The financial record SURVIVES — the purge must not destroy settlement/tax
