@@ -15659,7 +15659,7 @@ channel-specific simulator template polish, radio-vs-podcast, SSAI extras.
 
 ### ⬜ Phase 11: Business Operations  — not started
 105. Account closure and data export workflow
-106. adtech.js SDK versioning and CDN deployment pipeline
+106. ✅ adtech.js SDK versioning and CDN deployment pipeline — MVP SHIPPED 2026-09-10 (versioned serving + cache contract; CDN infra + deprecation lifecycle deferred). `pkg/sdkasset` loads web/static/adtech.js, parses its own `SDK_VERSION` constant → semver + major channel + a sha384 SRI integrity hash + a content ETag (pure, unit-tested). The gateway serves it (public, no auth) at `/sdk/<exact>/adtech.js` (immutable, 1y — safe to pin with SRI), `/sdk/v<major>/adtech.js` (1h, receives backwards-compatible patches → NO SRI, a patch would break a pinned hash), `/sdk/latest/adtech.js` (short, floats), all with `Access-Control-Allow-Origin: *` + `X-Content-Type-Options: nosniff` + ETag/If-None-Match 304; an unhosted version → 404 (never silently serve the current build for a mismatched pin). `GET /sdk/version.json` is the public metadata (version, major, integrity, urls). The ad-tag generator now emits the stable major URL (`/sdk/v<major>/adtech.js`) instead of the floating `/static/adtech.js` (which still works for old embeds). e2e TestSDKVersionedServing. DEFERRED: an actual CDN (S3 upload + CloudFront/Fastly — the versioned+immutable URL contract is exactly what a CDN fronts, so it's a deploy choice not a code change), concurrent multi-version STORAGE (v1 and v2 side-by-side), the deprecation→sunset lifecycle (console warnings, sunset fallback ads), and build-time semver injection/fingerprinted filenames.
 107. Public status page
 108. Customer support / dispute resolution workflow
 109. API changelog system

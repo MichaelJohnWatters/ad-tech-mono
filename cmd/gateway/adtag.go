@@ -49,7 +49,7 @@ type adTagResponse struct {
 //   - js     → adtech.js slot div + init + requestAd (display/native)
 //   - prebid → a Prebid ad-unit config stub
 //   - vast   → a VAST tag URL for the video/audio player
-func adTagHandler(store adTagStore, log *slog.Logger) http.HandlerFunc {
+func adTagHandler(store adTagStore, sdkSrc string, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -101,7 +101,7 @@ func adTagHandler(store adTagStore, log *slog.Logger) http.HandlerFunc {
 			PlacementID: p.ID,
 			Format:      p.Format,
 			TagType:     tagType,
-			Tag:         renderAdTag(tagType, p),
+			Tag:         renderAdTag(tagType, p, sdkSrc),
 		})
 	}
 }
@@ -109,7 +109,7 @@ func adTagHandler(store adTagStore, log *slog.Logger) http.HandlerFunc {
 // renderAdTag builds the embed snippet for one placement + tag type. It mirrors
 // the real adtech.js SDK contract (web/static/adtech.js) and the pubad routes so
 // a pasted tag actually resolves against this stack.
-func renderAdTag(tagType string, p placementTag) string {
+func renderAdTag(tagType string, p placementTag, sdkSrc string) string {
 	slotID := "adtech-slot-" + shortID(p.ID)
 	switch tagType {
 	case "prebid":
@@ -124,11 +124,11 @@ func renderAdTag(tagType string, p placementTag) string {
 		return fmt.Sprintf(`%s?placement_id=%s`, routes.PublisherAdServeVAST, p.ID)
 	default: // js
 		return fmt.Sprintf(`<div id=%q style="width:%dpx;height:%dpx"></div>
-<script src="/static/adtech.js"></script>
+<script src=%q></script>
 <script>
   adtech.init({ debug: false });
   adtech.requestAd({ placementId: %q, elementId: %q });
-</script>`, slotID, p.Width, p.Height, p.ID, slotID)
+</script>`, slotID, p.Width, p.Height, sdkSrc, p.ID, slotID)
 	}
 }
 
