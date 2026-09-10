@@ -108,9 +108,10 @@ func FilterFor(serviceName string) Filter {
 	case "exchange":
 		// External Prebid partners present a shared secret; internal services may
 		// eventually use service_s2s; the exchange also SIGNS outbound bid
-		// requests with the active ads.cert Ed25519 key (Phase I).
+		// requests with the active ads.cert Ed25519 key (Phase I); and it validates
+		// inbound partner traffic against per-partner sandbox keys (#112).
 		return Filter{
-			Purposes: []string{PurposePartnerShared, PurposeServiceS2S, PurposeAdCertEd25519},
+			Purposes: []string{PurposePartnerShared, PurposeServiceS2S, PurposeAdCertEd25519, PurposePartnerSandbox},
 		}
 	case "tracker":
 		// HMAC sigs on every pixel URL: the platform hmac_tracker key(s) for
