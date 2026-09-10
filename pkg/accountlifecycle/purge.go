@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
 
 // AnalyticsPurger destructively removes an account's analytics rows (ClickHouse).
@@ -31,8 +33,10 @@ type AnalyticsPurger interface {
 //     (buyers' marketplace_grants cascade off it), data_providers (other tenants'
 //     segments reference it).
 //
-// (Object-storage blobs behind account_export_jobs/creatives are a documented
-// follow-up — the PG pointer rows are purged here; the S3 objects are not yet.)
+// Object-storage blobs: the export ZIP behind account_export_jobs IS deleted
+// (purgeObjects, before the PG rows). Creative assets are NOT — creatives.asset_url
+// points at shared/demo theme objects reused across accounts (deleting them would
+// harm other tenants); a documented follow-up until per-account creative keys exist.
 var purgeableTables = map[string]bool{
 	// Campaign / serving config
 	"line_items": true, "publisher_line_items": true, "insertion_orders": true,
@@ -61,6 +65,7 @@ var purgeableTables = map[string]bool{
 type Purger struct {
 	DB        *sql.DB
 	Analytics AnalyticsPurger // nil = skip the ClickHouse half (logged)
+	Objects   objects.Store   // nil = skip object-storage blobs (logged)
 	Now       func() time.Time
 	Log       *slog.Logger
 }
@@ -123,7 +128,14 @@ func (p *Purger) selectDue(ctx context.Context) ([]duePurge, error) {
 }
 
 // purgeOne wipes one account's data everywhere, then marks the closure 'purged'.
+// Order matters: object-storage blobs are deleted FIRST, while their Postgres
+// pointer rows still exist to locate them; a failure here aborts before markPurged
+// so the account is retried (never marked 'purged' with the full-data-copy export
+// zip still sitting in the bucket).
 func (p *Purger) purgeOne(ctx context.Context, closureID, accountID string) error {
+	if err := p.purgeObjects(ctx, accountID); err != nil {
+		return fmt.Errorf("purge objects: %w", err)
+	}
 	pgRows, err := p.purgePostgres(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("purge postgres: %w", err)
@@ -174,6 +186,71 @@ func (p *Purger) purgePostgres(ctx context.Context, accountID string) (int64, er
 		remaining = blocked
 	}
 	return total, nil
+}
+
+// purgeObjects deletes the account's object-storage blobs whose Postgres pointer
+// rows are about to be purged — the export ZIP (account_export_jobs), a full copy
+// of the account's exported data in the private reports bucket. Any failure aborts
+// the purge (so the account is retried, never marked 'purged' with the export still
+// sitting in the bucket). Creative assets are deliberately NOT purged:
+// creatives.asset_url points at shared/demo theme objects reused across accounts,
+// so deleting them would harm other tenants — a documented follow-up until a
+// per-account creative-upload key convention exists.
+func (p *Purger) purgeObjects(ctx context.Context, accountID string) error {
+	if p.Objects == nil {
+		p.Log.Warn("object store not wired — export artifacts NOT purged", "account", accountID)
+		return nil
+	}
+	arts, err := p.exportArtifacts(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("list export artifacts: %w", err)
+	}
+	for _, a := range arts {
+		exists, err := p.Objects.Exists(ctx, a.bucket, a.key)
+		if err != nil {
+			return fmt.Errorf("stat %s/%s: %w", a.bucket, a.key, err)
+		}
+		if !exists {
+			continue // already gone (idempotent re-run, or never materialised)
+		}
+		if err := p.Objects.Delete(ctx, a.bucket, a.key); err != nil {
+			return fmt.Errorf("delete %s/%s: %w", a.bucket, a.key, err)
+		}
+		p.Log.Info("purged export artifact", "account", accountID, "bucket", a.bucket, "key", a.key)
+	}
+	return nil
+}
+
+type objectRef struct{ bucket, key string }
+
+// exportArtifacts lists the account's export-zip object locations. Platform hatch —
+// account_export_jobs has RLS; a bare read as adtech_app returns 0 rows.
+func (p *Purger) exportArtifacts(ctx context.Context, accountID string) ([]objectRef, error) {
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT artifact_bucket, artifact_key FROM account_export_jobs
+		 WHERE account_id = $1::uuid AND coalesce(artifact_bucket, '') <> '' AND coalesce(artifact_key, '') <> ''`,
+		accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []objectRef
+	for rows.Next() {
+		var r objectRef
+		if err := rows.Scan(&r.bucket, &r.key); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // accountKeyedTables returns the purge allowlist intersected with the tables that
