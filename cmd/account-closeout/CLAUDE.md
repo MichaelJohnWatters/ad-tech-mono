@@ -31,8 +31,16 @@ agencies), marks the account `closed`, and closes the request row.
   ClickHouse (the gross source) — `CLICKHOUSE_ADDR/_USER/_PASSWORD` env; if
   unreachable the run DEGRADES GRACEFULLY (advertiser closeouts still settle,
   publisher payouts are skipped + logged, not fatal).
-- The 90-day data purge is still DEFERRED — `closed_at` is left set so the future
-  purge job can scan `closed_at + accountlifecycle.RetentionDays <= now`.
+- **The 90-day data purge is WIRED** (`accountlifecycle.Purger.RunDuePurges`, runs
+  as a second pass after the closeouts): scans closures 'closed' for
+  `RetentionDays` (90), then destructively deletes the account's data across
+  Postgres (EVERY account-keyed table, discovered from `information_schema` so
+  there's no drift — FK order handled by retry passes; deletes scoped by the
+  tenant GUC) and ClickHouse (`analytics.ClickHouse.PurgeAccount`, `ALTER … DELETE`
+  with `mutations_sync=1`), then flips the closure to the terminal `'purged'`
+  state (`purged_at` set). The `accounts` row + the closure record + `audit_log`
+  survive as a tombstone. Idempotent (only `'closed'` selected) + best-effort per
+  account. Skips the ClickHouse half (logs, retries next run) if CH is unreachable.
 
 ## Pointers
 
