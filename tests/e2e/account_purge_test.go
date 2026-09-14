@@ -88,6 +88,23 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		return chImpressionsForAccount(t, adv.ID) >= 1
 	})
 
+	// A DIFFERENT account (the publisher) with its OWN audience segment + marketplace
+	// listing — purging the advertiser is account-scoped and must NOT touch another
+	// tenant's data (locks the isolation guarantee + the decision to keep
+	// marketplace_listings off the purge allowlist).
+	pub := w.PubAcc
+	var pubSeg string
+	if err := h.DB.QueryRow(
+		`INSERT INTO audience_segments (account_id, name, type) VALUES ($1::uuid, 'pub-own-seg', 'first_party') RETURNING id::text`,
+		pub.ID).Scan(&pubSeg); err != nil {
+		t.Fatalf("seed publisher segment: %v", err)
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO marketplace_listings (account_id, segment_id, name) VALUES ($1::uuid, $2::uuid, 'pub-own-listing')`,
+		pub.ID, pubSeg); err != nil {
+		t.Fatalf("seed publisher listing: %v", err)
+	}
+
 	chPort := startCHPortForward(t)
 	runCloseout := func() {
 		t.Helper()
@@ -189,9 +206,32 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		t.Errorf("accounts row count = %d, want 1 (the tombstone must survive)", accounts)
 	}
 
+	// Tenant isolation: the OTHER account's own segment + marketplace listing are
+	// untouched by the advertiser's purge.
+	var pubSegAfter, pubListingAfter int
+	h.DB.QueryRow(`SELECT count(*) FROM audience_segments WHERE account_id = $1::uuid`, pub.ID).Scan(&pubSegAfter)
+	h.DB.QueryRow(`SELECT count(*) FROM marketplace_listings WHERE account_id = $1::uuid`, pub.ID).Scan(&pubListingAfter)
+	if pubSegAfter < 1 || pubListingAfter < 1 {
+		t.Errorf("advertiser purge deleted the publisher's own data: segments=%d listings=%d (want >=1 each — cross-tenant over-delete)", pubSegAfter, pubListingAfter)
+	}
+
 	// Idempotent: the closure is now 'purged', not 'closed', so a re-run selects
-	// nothing and does not error.
+	// nothing, does not error, and does NOT re-stamp purged_at.
+	firstPurgedAt := purgedAt
 	runCloseout()
+	var status2 string
+	var purgedAt2 *time.Time
+	if err := h.DB.QueryRow(
+		`SELECT status, purged_at FROM account_closure_requests WHERE account_id = $1::uuid ORDER BY requested_at DESC LIMIT 1`,
+		adv.ID).Scan(&status2, &purgedAt2); err != nil {
+		t.Fatalf("closure row after re-run: %v", err)
+	}
+	if status2 != "purged" {
+		t.Errorf("closure status after re-run = %q, want purged (idempotent)", status2)
+	}
+	if firstPurgedAt != nil && purgedAt2 != nil && !firstPurgedAt.Equal(*purgedAt2) {
+		t.Errorf("purged_at changed on re-run: %v → %v (not idempotent)", *firstPurgedAt, *purgedAt2)
+	}
 }
 
 // chImpressionsForAccount counts an account's ClickHouse impressions via kubectl
