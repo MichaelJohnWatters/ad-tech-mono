@@ -165,3 +165,65 @@ func TestAccountCloseoutFinalPublisherPayout(t *testing.T) {
 		t.Errorf("final payout: count=%d amount=%v, want >=1 payout with positive amount", payouts, amount)
 	}
 }
+
+// TestAccountCloseoutPublisherDeferredWhenCHDown locks the money-safety invariant:
+// a publisher closure whose final payout can't be computed (ClickHouse — the gross
+// source — is down) must NOT be stranded 'closed'; it stays 'grace' and is retried.
+// Closeout only re-selects 'grace' closures, so closing without paying would drop
+// the publisher's final payment forever.
+func TestAccountCloseoutPublisherDeferredWhenCHDown(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "closeout-chdown")
+
+	client := h.OwnerClient(t, w.PubAcc.ID)
+	if st, _ := h.AccountClose(t, client); st != 200 {
+		t.Fatalf("publisher close initiate status %d", st)
+	}
+	if _, err := h.DB.Exec(
+		`UPDATE account_closure_requests SET grace_ends_at = now() - interval '1 hour'
+		 WHERE account_id = $1::uuid AND status = 'grace'`, w.PubAcc.ID); err != nil {
+		t.Fatalf("backdate grace: %v", err)
+	}
+
+	// Run close-out with ClickHouse UNREACHABLE (no port-forward; a dead addr) — the
+	// publisher branch must defer (best-effort: logged + skipped, binary still exits 0).
+	runCloseout := func(chAddr string) []byte {
+		t.Helper()
+		cmd := exec.Command("go", "run", "./cmd/account-closeout")
+		cmd.Dir = "../.."
+		cmd.Env = append(os.Environ(),
+			"CLICKHOUSE_ADDR="+chAddr,
+			"DATABASE_URL=postgres://adtech_app:adtech-app-local@localhost:5432/adtech?sslmode=disable")
+		out, _ := cmd.CombinedOutput() // ignore exit: a deferral is logged, not fatal
+		return out
+	}
+	// The deferral signal is the CLOSURE REQUEST status (accounts.status is
+	// 'suspended' throughout grace; it only flips to 'closed' at closeout).
+	closureStatus := func() string {
+		t.Helper()
+		var s string
+		if err := h.DB.QueryRow(`SELECT status FROM account_closure_requests WHERE account_id = $1::uuid ORDER BY requested_at DESC LIMIT 1`, w.PubAcc.ID).Scan(&s); err != nil {
+			t.Fatalf("closure status: %v", err)
+		}
+		return s
+	}
+	out := runCloseout("127.0.0.1:1") // nothing listening → CH unavailable
+	if got := closureStatus(); got != "grace" {
+		t.Errorf("CH-down: closure status = %q, want 'grace' (deferred, not stranded closed)\n%s", got, out)
+	}
+	var payouts int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM payouts WHERE publisher_id = $1::uuid`, w.Publisher.ID).Scan(&payouts); err != nil {
+		t.Fatalf("payouts query: %v", err)
+	}
+	if payouts != 0 {
+		t.Errorf("CH-down: %d payouts written, want 0 (nothing settled while deferred)", payouts)
+	}
+
+	// Recovery: with ClickHouse reachable, the same due closure now closes (proving
+	// the CH-down state was a retriable deferral, not a permanent strand).
+	chPort := startCHPortForward(t)
+	runCloseout("127.0.0.1:" + chPort)
+	if got := closureStatus(); got != "closed" {
+		t.Errorf("after CH recovery: closure status = %q, want 'closed'", got)
+	}
+}
