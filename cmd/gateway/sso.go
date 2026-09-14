@@ -273,18 +273,35 @@ func ssoJITProvision(ctx context.Context, db *sql.DB, accountID, email, name, de
 	if name == "" {
 		name = email
 	}
-	// JIT create at the config's default (least-privilege) role. password_hash is a
-	// non-bcrypt sentinel so this user can never password-login.
-	var id string
-	err = postgres.QueryRowTenantDB(ctx, db, accountID, func(row *sql.Row) error {
-		return row.Scan(&id)
-	}, `INSERT INTO team_members (account_id, email, name, role, password_hash, status)
-	    VALUES ($1::uuid, $2, $3, $4, 'sso-no-password', 'active') RETURNING id::text`,
-		accountID, email, name, defaultRole)
+	// Defence in depth: never provision above least-privilege even if a bad
+	// default_role somehow reached the config row (the PUT validator + the mig-105
+	// CHECK both constrain it, but don't trust the stored value at login).
+	role := defaultRole
+	if !ssoDefaultRoles[role] {
+		role = "viewer"
+	}
+	// JIT create. password_hash is a non-bcrypt sentinel so this user can never
+	// password-login. This is a WRITE, so it needs a read-WRITE tenant tx —
+	// QueryRowTenantDB opens a read-only tx (INSERT there fails 25006).
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", "", err
 	}
-	return id, defaultRole, nil
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT set_config('app.current_account_id', $1, true)", accountID); err != nil {
+		return "", "", err
+	}
+	var id string
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO team_members (account_id, email, name, role, password_hash, status)
+		 VALUES ($1::uuid, $2, $3, $4, 'sso-no-password', 'active') RETURNING id::text`,
+		accountID, email, name, role).Scan(&id); err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return id, role, nil
 }
 
 // --- Config management (owner) ---
@@ -359,12 +376,14 @@ func ssoConfigHandler(store ssoauth.Store, auditDB *sql.DB, log *slog.Logger) ht
 				http.Error(w, `{"error":"default_role must be a least-privilege role (viewer/analyst/ad_ops/finance/manager)"}`, http.StatusBadRequest)
 				return
 			}
-			// When enabling, the config must be complete + safe: a valid https-ish
-			// issuer URL, a client id, and a non-empty domain allowlist (an empty
-			// allowlist denies all, so enabling with none is a footgun).
+			// When enabling, the config must be complete + safe: an HTTPS issuer URL
+			// (OIDC discovery + token exchange + JWKS carry the client_secret and
+			// id_token — cleartext would expose them to a MITM), a client id, and a
+			// non-empty domain allowlist (an empty allowlist denies all, so enabling
+			// with none is a footgun).
 			if req.Enabled {
-				if u, err := url.Parse(req.Issuer); err != nil || u.Scheme == "" || u.Host == "" {
-					http.Error(w, `{"error":"issuer must be a valid URL"}`, http.StatusBadRequest)
+				if u, err := url.Parse(req.Issuer); err != nil || u.Scheme != "https" || u.Host == "" {
+					http.Error(w, `{"error":"issuer must be an https URL"}`, http.StatusBadRequest)
 					return
 				}
 				if strings.TrimSpace(req.ClientID) == "" {
@@ -378,6 +397,18 @@ func ssoConfigHandler(store ssoauth.Store, auditDB *sql.DB, log *slog.Logger) ht
 			}
 			if req.AllowedDomains == nil {
 				req.AllowedDomains = []string{}
+			}
+			// Cap the allowlist (scanned on every callback; owner-writable) — mirrors
+			// the changelog affected_endpoints cap.
+			if len(req.AllowedDomains) > 50 {
+				http.Error(w, `{"error":"too many allowed_domains (max 50)"}`, http.StatusBadRequest)
+				return
+			}
+			for _, d := range req.AllowedDomains {
+				if len(d) > 253 {
+					http.Error(w, `{"error":"allowed_domain too long"}`, http.StatusBadRequest)
+					return
+				}
 			}
 			if err := store.Upsert(r.Context(), ssoauth.Config{
 				AccountID: claims.AccountID, Enabled: req.Enabled, Issuer: req.Issuer, ClientID: req.ClientID,
