@@ -87,3 +87,45 @@ func TestSSPResidencyGatesUserDataToExternalDSP(t *testing.T) {
 		t.Errorf("regs.ext.data_residency not propagated to the DSP: %+v", br.Regs)
 	}
 }
+
+// TestSSPResidencySuppressesUserDataSinks closes the data-plane coverage gap: the
+// residency gate (requestStoresUserData) suppresses ALL THREE SSP user-data sinks,
+// not just the audience segments on the bid request. Here we assert the OTHER two —
+// identity-graph edges (identity.Observe) and behaviour signals (behaviour.Observe)
+// — are NOT written for an out-of-region user, while an in-region control user's ARE
+// (the control both proves the pipeline works and that we waited long enough for the
+// async writes, so the absence assertion isn't vacuous).
+func TestSSPResidencySuppressesUserDataSinks(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "ressink")
+	uniq := time.Now().UnixNano()
+	// UID2 gives identity.Observe a second identifier so it links an edge.
+	control := fmt.Sprintf("res-ctl-%d", uniq)
+	eu := fmt.Sprintf("res-eu-%d", uniq)
+	controlUID2 := fmt.Sprintf("res-ctl-uid2-%d", uniq)
+	euUID2 := fmt.Sprintf("res-eu-uid2-%d", uniq)
+
+	for i := 0; i < 5; i++ {
+		h.RunAuctionWith(t, harness.AuctionParams{
+			Placement: w.Placement.ExternalID, Geo: "GBR", Device: "mobile", UserID: control, UID2: controlUID2,
+		})
+		h.RunAuctionWith(t, harness.AuctionParams{
+			Placement: w.Placement.ExternalID, Geo: "GBR", Device: "mobile", UserID: eu, UID2: euUID2, DataResidency: "eu",
+		})
+	}
+
+	// Wait until the in-region control's user-data has landed in BOTH sinks — this
+	// proves the pipeline works and enough async time has elapsed for the negative
+	// assertion below to be meaningful.
+	harness.WaitFor(t, 30*time.Second, "in-region control user-data lands (behaviour + identity)", func() bool {
+		return h.SignalResidual(t, control)["behaviour_signals"] >= 1 && h.IdentityEdgeCount(t, control) >= 1
+	})
+
+	// The out-of-region user's data was suppressed at the SSP → nothing downstream.
+	if n := h.SignalResidual(t, eu)["behaviour_signals"]; n != 0 {
+		t.Errorf("out-of-region user LEAKED %d behaviour_signals rows (data-residency gate missed behaviour.Observe)", n)
+	}
+	if n := h.IdentityEdgeCount(t, eu); n != 0 {
+		t.Errorf("out-of-region user LEAKED %d identity_graph edges (data-residency gate missed identity.Observe)", n)
+	}
+}
