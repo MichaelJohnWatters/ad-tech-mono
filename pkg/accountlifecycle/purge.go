@@ -53,6 +53,7 @@ var purgeableTables = map[string]bool{
 	"notifications": true, "notification_preferences": true, "saved_reports": true,
 	"report_jobs": true, "support_tickets": true, "webhooks": true, "team_members": true,
 	"api_keys": true, "secrets": true, "payout_methods": true, "account_export_jobs": true,
+	"sso_configurations": true, // holds the account's OIDC client_secret — destroy on purge
 }
 
 // Purger runs the 90-day destructive account purge — the last account-closure
