@@ -46,6 +46,16 @@ func TestDataResidencyGatesOutOfRegionMutations(t *testing.T) {
 		t.Fatalf("staff set-residency: got %d, want 200", st)
 	}
 
+	// The compliance-relevant residency change is audited (audit_log has no RLS →
+	// bare superuser read is fine).
+	var auditN int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM audit_log WHERE action = 'account:set_residency' AND account_id = $1::uuid`, adv.ID).Scan(&auditN); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if auditN < 1 {
+		t.Errorf("staff set-residency was not audited (account:set_residency): got %d entries, want >=1", auditN)
+	}
+
 	// Fresh login → the JWT now carries residency_region=eu.
 	advEU := h.OwnerClient(t, adv.ID)
 
@@ -56,6 +66,18 @@ func TestDataResidencyGatesOutOfRegionMutations(t *testing.T) {
 	// Reads are NOT residency-gated — the out-of-region account can still view.
 	if st := h.APIStatus(t, advEU, http.MethodGet, "/v1/api/campaigns", ""); st/100 != 2 {
 		t.Errorf("out-of-region read: got %d, want 2xx (reads are not gated)", st)
+	}
+
+	// The gate is account-type-agnostic (only staff/admin exempt) — a PUBLISHER's
+	// out-of-region mutation is 403'd too (proves the gate wraps publisher routes,
+	// not just the advertiser campaign path).
+	pub := w.PubAcc
+	if st := setResidency(staffCl, pub.ID, "eu"); st != http.StatusOK {
+		t.Fatalf("staff set publisher residency: got %d, want 200", st)
+	}
+	pubEU := h.OwnerClient(t, pub.ID)
+	if st := h.APIStatus(t, pubEU, http.MethodPost, "/v1/api/publishers", `{"name":"blocked","domain":"blocked.example"}`); st != http.StatusForbidden {
+		t.Errorf("out-of-region publisher mutation: got %d, want 403", st)
 	}
 
 	// Staff themselves are exempt (cross-region operators): the staff client can

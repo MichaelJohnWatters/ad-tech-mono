@@ -80,4 +80,22 @@ func TestPartnerInboundAuctionAuth(t *testing.T) {
 	if code := postAuction(key); code == http.StatusUnauthorized {
 		t.Errorf("valid partner key: got 401, want authenticated (non-401)")
 	}
+
+	// A REVOKED key no longer authenticates (the secrets warm cache honours the
+	// revoked status; propagation via invalidate/poll).
+	keyID, _ := gen["id"].(string)
+	if keyID == "" {
+		t.Fatalf("no sandbox key id to revoke: %v", gen)
+	}
+	partnerReq(t, partnerClient, http.MethodPost, h.URLs.Gateway+routes.APIPartnerSandboxKeysRevoke, fmt.Sprintf(`{"id":%q}`, keyID))
+	harness.WaitFor(t, 45*time.Second, "revoked partner key rejected", func() bool {
+		return postAuction(key) == http.StatusUnauthorized
+	})
+
+	// Warn mode (strict=false, the backwards-compatible default): a missing key is
+	// ALLOWED through (validated + bound when present, but not enforced).
+	h.SetConfigForPod(t, "exchange.inbound_partner_auth_strict", "false", harness.PodExchange)
+	harness.WaitFor(t, 30*time.Second, "warn mode allows a no-key request", func() bool {
+		return postAuction("") != http.StatusUnauthorized
+	})
 }
