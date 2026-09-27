@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -209,6 +209,12 @@ stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
 	    --cert=dev/tls/localhost.pem --key=dev/tls/localhost-key.pem \
 	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "adtech-tls (ingress) secret applied"; \
 	else echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS ingress"; fi
+
+demo-forward: ## Bridge host↔Rancher cluster: port-forward the serving fleet to localhost (run in its OWN terminal; Ctrl-C stops). Do this before demo-setup/demosite on k3s.
+	bash scripts/demo-forward.sh
+
+demo-setup: ## Interview-ready: seed + warm (prewarm/SSAI) + baseline traffic + VERIFY every ad format serves. Needs `make demo-forward` running.
+	bash scripts/demo-setup.sh
 
 demosite: ## Run the external demo publisher site (host process, :9000). Needs the stack up + seeded.
 	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
