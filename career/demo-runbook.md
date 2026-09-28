@@ -74,6 +74,14 @@ Explorer.
 6. **SAY** the close: *"That's the whole loop, live on Kubernetes. Happy to go
    deep on any layer."*
 
+**Business-impact bookend (optional but strong):** *before* step 1, open the
+**Advertiser** + **Publisher** portals and note the baseline; *after* step 5,
+refresh them → spend up, winning campaigns + impressions, publisher revenue up.
+(Logins below; details in "Show the business impact".)
+
+**Pub-sim note:** leave **"Prebid mode" OFF** — it hits an inbound endpoint with
+schain enforcement and shows `nobid` (cosmetic; not your real demand path).
+
 **If something breaks:** re-click Run demo (no-bid/in-flight self-heal), or cut to
 the backup video and narrate. Never troubleshoot silently for >20s.
 
@@ -189,16 +197,24 @@ OpenRTB round-trip. Walk the tabs in this order (simple → complex, ending on C
    - **Ad pods** = several ads *within* one break, sequenced, with **competitive
      separation** (never two ads from the same advertiser in a pod). "Each break is
      its own per-slot auction — that's a lot more than a single banner."
-5. **SSAI (CTV)** *(~2 min — THE headline)* — pick HLS (or show DASH/CMAF too),
-   click **Play SSAI Stream**. The content plays, the **stitched ad plays inline**
-   (badge lights up), then expand **"Stitched HLS manifest"** to show the ad
-   segments spliced into the content playlist.
+5. **SSAI (CTV)** *(~2 min — THE headline)* — pick **"Video · HLS (CTV)"**, click
+   **Play SSAI Stream**. Watch: a **pre-roll** ad plays first (badge = "Stitched Ad
+   · server-side beacons"), then content, then **partway through a MID-ROLL ad
+   plays inline** — same player, no separate ad call. Expand **"Stitched HLS
+   manifest"** to show it: `#EXT-X-CUE-OUT` (pre-roll) → transcoded ad segments →
+   `#EXT-X-CUE-IN` → content → `#EXT-X-DISCONTINUITY` + `#EXT-X-CUE-OUT` (mid-roll)
+   → more transcoded ad segments. This is **server-side stitching *with*
+   transcoding** — distinct from the demo sites' client-side VAST pre-roll.
    > *"This is server-side ad insertion — the CTV standard, and what I worked
-   > around at a prior ad-tech employer. The ad is stitched into the manifest server-side, so the ad
-   > segments are indistinguishable from content — ad-blocker-proof. And notice:
-   > the impression/quartile beacons fire **server-side** as the player fetches
-   > each ad segment, not from client JS. The transcoder conditions each ad onto
-   > the content's bitrate ladder first so the splice is seamless."*
+   > around at a prior ad-tech employer. The ads — pre-roll AND mid-roll — are stitched into the
+   > manifest server-side, so the ad segments are indistinguishable from content
+   > (ad-blocker-proof). The transcoder conditions each ad onto the content's
+   > bitrate ladder first so the splice is seamless, and the impression/quartile
+   > beacons fire **server-side** as the player fetches each ad segment, not from
+   > client JS. Notice the mid-roll is spliced *between content segments* with a
+   > DISCONTINUITY marker — that's a real mid-roll break, not a pre-roll."*
+   > **Note:** SSAI is **not** on the demo sites (`:9001-9500`) — those do
+   > client-side VAST. The stitched stream is here in the Publisher Simulator only.
 6. **The exotic auction types** *(~30s, optional breadth)* — flip through **DOOH**,
    **Retail**, **In-game** tabs: "Five distinct auction strategies — DOOH is one
    screen, many viewers (an impression multiplier + timeslot auction); Retail is
@@ -219,6 +235,97 @@ the differentiator.
 > `.test`-URL test artifact (`vvast`) whose asset can't be fetched, so it never
 > conditions. **`make reset` clears it** (wipes + reseeds clean) — that's the fix
 > we proved. Diagnose via `kubectl logs -n adtech -l app=transcoder | grep "condition failed"`.
+
+---
+
+## Show the business impact — portals before & after (do this!)
+
+Numbers moving in the **real product UI** is the most convincing part of the whole
+demo. Do a **before → traffic → after** on the customer portals so the audience
+sees the campaigns that won and the money change on both sides.
+
+**Logins** (all password `admin`):
+- **Advertiser:** `advertiser@adtech.local` (or `adv-acme@adtech.local`)
+- **Publisher:** `publisher@adtech.local` (or `tech-review@adtech.local`)
+- **Staff** (can *Impersonate* any account): `admin@adtech.local`
+
+**Flow:**
+1. **Before** — open the **Advertiser portal** (campaigns, spend, impressions,
+   budget pacing) and the **Publisher portal** (fill rate, revenue/earnings). Note
+   the baseline — or `make reset` first for a clean zero.
+2. **Generate** — run `make traffic` (or fire the Auction Trace demo a few times /
+   click through the demosites) to push real auctions through.
+3. **After** — refresh both portals and show the deltas: advertiser **spend up**,
+   **which campaigns won** (+ impressions/clicks), and publisher **revenue + fill
+   up**. Same auctions, both sides of the marketplace.
+
+> Payoff line: *"every one of those auctions moved real money — here's the
+> advertiser being charged and the publisher being paid, reconciled to the cent."*
+
+Links: Advertiser `…/portal/advertiser` · Publisher `…/portal/publisher` · Staff
+`…/portal/staff` (all on `localhost:8080`).
+
+---
+
+## Security & anti-spoof — the integrity story (strong demo)
+
+The platform's edge is **transparency + integrity**: every externally-reachable
+call path is protected against spoofing, and there's a **one-command harness** that
+proves it live. This is a differentiated, senior-level thing to show.
+
+**The model:** a secret can't live in a browser (devtools exposes it), so
+browser-fired calls use **server-issued signed URLs + supply-chain auth + fraud
+checks**; only server-to-server calls carry a real shared secret/signature.
+
+### Call-path anti-spoofing (the headline)
+| Mechanism | Prevents | How to show |
+|---|---|---|
+| **HMAC-signed tracker pixels** (imp/click/view, `sig`) | forged / replayed impressions & clicks | unsigned `/v1/t/imp` → **403** |
+| **Per-advertiser conversion HMAC key** (validated by `advid`) | one advertiser forging a CPA conversion billed to **another** | conversion signed with the wrong key → rejected |
+| **Trusted endpoint-bound seat** (data-fee) | a bidder dodging/misdirecting data fees via a fake `SeatBid.Seat` | fee always bills the seat bound to the **winning endpoint**, never the bidder's claim |
+| **ads.txt / sellers.json** | domain spoofing / unauthorized resellers | `spoofer.example` (excludes us) → **nobid** |
+| **schain (SupplyChain)** | opaque / forged supply paths | missing schain → **nobid** — *this is the `nobid` you saw in Prebid mode* |
+| **ads.cert (Ed25519)** | forged / replayed bid requests to DSPs | unsigned request → **nobid** (same request bids with adcert off) |
+| **JWT + `X-API-Key`** on `/v1/api/*` | unauthenticated management calls | no/invalid token → **401** |
+
+### Platform defense-in-depth (mention; don't have to click each)
+- **RBAC** — `resource:action` perms baked into the JWT; wrong role → **403**.
+- **Multi-tenant RLS** — Postgres row-level security; an unscoped/cross-tenant query returns **0 rows** (fail-safe), enforced by the `adtech_app NOBYPASSRLS` role.
+- **StripClientIdentityHeaders** — the edge strips client-supplied identity headers so a caller can't forge `X-Account-ID` through a CORS pass-through proxy.
+- **Consent / privacy** — personalisation gated on `privacy.Evaluate()`; consent flows the whole chain; `public` vs `dsp_private` audience visibility.
+- **Idempotency / replay** — `Nats-Msg-Id` + Redis dedup + PK-claim on every money write → exactly-once.
+- **Also:** append-only **audit log** (UPDATE/DELETE revoked), per-IP **rate limiting**, **AES-256-GCM** secrets at rest, parameterized queries only.
+
+### Demo it live — the enforcement harness
+```
+make security-harness ARG=on      # set up keys/ads.txt/schain, flip all 4 controls to STRICT
+make security-harness ARG=status  # show what's enforced
+make security-harness ARG=off     # revert to dev defaults (do this after)
+```
+With strict on (prerequisites set so legit traffic still fills ~77%), show **both directions**:
+
+| Mechanism | Accept legit | Reject spoofed |
+|---|---|---|
+| ads.cert | exchange-signed request → bids | unsigned → nobid |
+| ads.txt | authorised domain → bids | `spoofer.example` → nobid |
+| schain | valid schain → bids | missing schain → nobid |
+| tracker HMAC | signed pixel → recorded | unsigned pixel → **403** |
+
+**Talking track:** *"Every spoofable call path is authenticated — browser pixels are
+HMAC-signed and server-issued; conversions are signed per-advertiser so nobody can
+forge a competitor's CPA; data fees bill the trusted endpoint-bound seat, not the
+bidder's self-declared one; and the supply path is validated via ads.txt / sellers.json
+/ schain. I can flip it all to strict and watch it reject spoofed traffic while legit
+still fills."*
+
+**Be honest about the gaps too (senior signal):** `docs/SECURITY.md` → "Known open
+gaps" lists what's *not* covered and why (unsigned retargeting pixel, JWTs not
+revocable before 12h, per-pod rate limiting assumes a CDN/WAF, etc.). Naming your own
+gaps is a strong interview move.
+
+> Note: `security-harness ARG=on` sets schain **strict** — that's exactly when Prebid
+> mode (no schain) will `nobid`, *by design*. For the normal demo, `demo-setup` keeps
+> schain at its default so Prebid mode bids. Run `ARG=off` when you're done showing security.
 
 ---
 
