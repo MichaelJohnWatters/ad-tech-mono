@@ -2249,6 +2249,8 @@
                         'note': 'new-tab navigation — backend click event was recorded; check Jaeger for the tracker span',
                     },
                 });
+                // Re-arm the poll so the click's tracker span is pulled into the timeline.
+                if (currentTraceID) startJaegerPoll(currentTraceID);
             });
         }
 
@@ -2264,6 +2266,10 @@
             } catch (err) {
                 // fetch with redirect:manual throws on 302, but the click was still tracked
             }
+            // Re-arm the Jaeger poll: the click's server-side tracker span ingests
+            // ~1-3s later, but the poll self-terminates ~10s after ad load (before a
+            // user-timed click), so without this the click span is never pulled in.
+            if (currentTraceID) startJaegerPoll(currentTraceID);
             const clickEntry = document.createElement('div');
             clickEntry.className = 'debug-entry';
             clickEntry.innerHTML = '<div class="label">Click</div><div class="value success">Click tracked ✓ → redirect to landing page</div>';
