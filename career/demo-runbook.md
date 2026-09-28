@@ -79,8 +79,10 @@ Explorer.
 refresh them → spend up, winning campaigns + impressions, publisher revenue up.
 (Logins below; details in "Show the business impact".)
 
-**Pub-sim note:** leave **"Prebid mode" OFF** — it hits an inbound endpoint with
-schain enforcement and shows `nobid` (cosmetic; not your real demand path).
+**Pub-sim note:** Prebid mode **bids** after `demo-setup` (it sets a live
+`exchange.schain_enforcement=warn` row that overrides the strict env). If it still
+`nobid`s right after setup, the exchange hasn't polled config yet (≤30s) — re-fire.
+(That `nobid` is itself the schain anti-spoof mechanism — see the Security section.)
 
 **If something breaks:** re-click Run demo (no-bid/in-flight self-heal), or cut to
 the backup video and narrate. Never troubleshoot silently for >20s.
