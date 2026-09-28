@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +46,8 @@ func main() {
 	prefix := strings.TrimRight(keys.ContentPackager.PackagerPrefix.Get(cfg), "/")
 	breakAt := keys.ContentPackager.PackagerBreakAtSegment.Get(cfg)
 	breakSegs := keys.ContentPackager.PackagerBreakSegments.Get(cfg)
+	targetDur := keys.ContentPackager.PackagerTargetDuration.Get(cfg)
+	breaksSpec := keys.ContentPackager.PackagerBreaks.Get(cfg)
 	// Audio mode: package a single audio-only rendition (podcast / streaming
 	// radio) instead of the video ABR ladder, and skip the master playlist —
 	// audio is single-rendition, so the origin is the media playlist directly.
@@ -62,6 +66,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer os.Remove(src)
+
+	// 1b. Loop the source up to the target duration so a short demo clip becomes a
+	//     longer content stream with room for pre/mid/post ad breaks.
+	if targetDur > 0 {
+		looped, err := loopSource(ctx, src, targetDur)
+		if err != nil {
+			log.Error("loop source failed", "target_sec", targetDur, "error", err)
+			os.Exit(1)
+		}
+		defer os.Remove(looped)
+		src = looped
+		log.Info("source looped", "target_sec", targetDur)
+	}
 
 	// 2-4. Package every ABR rung: segment → stamp the mid-roll break → upload,
 	//      collecting variants for the master. Real content carries SCTE-35; we
@@ -88,7 +105,7 @@ func main() {
 			log.Error("ffmpeg package failed", "rung", profile.RungName(), "error", err)
 			os.Exit(1)
 		}
-		playlist, err := insertBreak(res.Playlist, breakAt, breakSegs, profile.SegDurSec)
+		playlist, err := insertBreaks(res.Playlist, breaksSpec, breakAt, breakSegs, profile.SegDurSec)
 		if err != nil {
 			log.Error("insert break failed", "rung", profile.RungName(), "error", err)
 			os.Exit(1)
@@ -161,6 +178,69 @@ func insertBreak(playlist string, breakAt, breakSegs, segDur int) (string, error
 	m.Segments[breakAt].CueOut = float64((end - breakAt) * segDur)
 	m.Segments[end].CueIn = true
 	return m.Render(), nil
+}
+
+// insertBreaks stamps one or more ad-break avails. When spec is empty it falls
+// back to the single legacy break (breakAt/breakSegs). A spec like "pre,mid,post"
+// stamps a pre-roll (segment 0), a mid-roll (the middle segment), and a
+// post-roll (the second-to-last segment) — each a one-segment avail the stitcher
+// fills. Positions are derived from the actual segment count so they land in-range.
+func insertBreaks(playlist, spec string, breakAt, breakSegs, segDur int) (string, error) {
+	if strings.TrimSpace(spec) == "" {
+		return insertBreak(playlist, breakAt, breakSegs, segDur)
+	}
+	m, err := ssai.ParseMedia(playlist)
+	if err != nil {
+		return "", err
+	}
+	n := len(m.Segments)
+	type bp struct{ at, segs int }
+	var positions []bp
+	for _, s := range strings.Split(spec, ",") {
+		switch strings.TrimSpace(strings.ToLower(s)) {
+		case "pre":
+			positions = append(positions, bp{0, 1})
+		case "mid":
+			if n >= 3 {
+				positions = append(positions, bp{n / 2, 1})
+			}
+		case "post":
+			if n >= 3 {
+				positions = append(positions, bp{n - 2, 1})
+			}
+		}
+	}
+	for _, p := range positions {
+		at, end := p.at, p.at+p.segs
+		if at < 0 || at >= n {
+			continue
+		}
+		if end >= n {
+			end = n - 1
+		}
+		if end <= at {
+			continue
+		}
+		m.Segments[at].CueOut = float64((end - at) * segDur)
+		m.Segments[end].CueIn = true
+	}
+	return m.Render(), nil
+}
+
+// loopSource loops the source MP4 up to targetSec seconds (re-encoding so the
+// looped boundaries are clean for downstream per-rung segmenting) and returns the
+// path to the looped temp file.
+func loopSource(ctx context.Context, src string, targetSec int) (string, error) {
+	out := src + ".looped.mp4"
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-stream_loop", "-1", "-i", src,
+		"-t", strconv.Itoa(targetSec),
+		"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-movflags", "+faststart", out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("ffmpeg loop: %w\n%s", err, b)
+	}
+	return out, nil
 }
 
 func download(ctx context.Context, store objects.Store, bucket, key string) (string, error) {
