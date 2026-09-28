@@ -88,6 +88,18 @@ echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are
 DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
   go run ./cmd/prewarm 2>&1 | tail -3 || echo "  ⚠ prewarm had issues (SSAI/slate may 404 until conditioned)"
 
+echo "▶ [3b] ensuring the SSAI CONTENT origin is packaged (sample/master.m3u8) — without it the pub-sim shows 'Packaged content not available'…"
+if curl -fsS -o /dev/null --max-time 4 "http://localhost:8080/v1/creatives/ssai/content/sample/master.m3u8" 2>/dev/null; then
+  echo "  ✔ sample content already packaged (persists in S3)"
+else
+  echo "  … packaging bbb-720 → HLS with a CUE-OUT ad break (ffmpeg, ~10s)…"
+  S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
+  DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
+    go run ./cmd/content-packager 2>&1 | tail -2 \
+    && echo "  ✔ SSAI content packaged" \
+    || echo "  ⚠ packaging failed (needs ffmpeg on host) — SSAI player falls back to the demo player"
+fi
+
 echo "▶ [4/6] generating baseline traffic (display/native/video/audio)…"
 go run ./cmd/simulator run --profile steady --requests "${DEMO_REQUESTS:-300}" --rps "${DEMO_RPS:-50}" \
   || echo "  ⚠ simulator run had issues"
