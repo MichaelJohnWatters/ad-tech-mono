@@ -1562,6 +1562,7 @@
         // can't hit :16686 directly from a page served on a different port.
         const JAEGER_API = window.location.protocol + '//' + window.location.host + '/v1/jaeger/api';
         let jaegerPollTimer = null;
+        let ssaiPollTimer = null; // multi-trace poller for SSAI (N ads = N traces)
         let jaegerPollIteration = 0;
         let jaegerNoNewStreak = 0; // consecutive polls that added no new spans
         const JAEGER_POLL_INTERVAL = 3000;
@@ -1582,6 +1583,7 @@
 
         function stopJaegerPoll() {
             if (jaegerPollTimer) { clearInterval(jaegerPollTimer); jaegerPollTimer = null; }
+            if (ssaiPollTimer) { clearInterval(ssaiPollTimer); ssaiPollTimer = null; }
             document.getElementById('tracePollStatus').textContent = '';
         }
 
@@ -1631,12 +1633,12 @@
                 const resp = await fetch(`${JAEGER_API}/traces/${traceID}`);
                 if (!resp.ok) {
                     lastJaegerError = `Jaeger returned HTTP ${resp.status}`;
-                    return;
+                    return 0;
                 }
                 lastJaegerError = '';
                 const data = await resp.json();
                 const traces = data.data || [];
-                if (traces.length === 0) return;
+                if (traces.length === 0) return 0;
                 const trace = traces[0];
                 const procs = trace.processes || {};
                 const spans = trace.spans || [];
@@ -1701,10 +1703,41 @@
                         }
                     }, 1500);
                 }
+                return newCount;
             } catch (err) {
                 lastJaegerError = `Jaeger fetch failed: ${err.message} (CORS? see k8s/base/jaeger/deployment.yaml QUERY_HTTP_CORS_ALLOWED_ORIGINS)`;
                 status.textContent = `· ${lastJaegerError}`;
+                return 0;
             }
+        }
+
+        // startJaegerPollMulti polls SEVERAL traces at once. SSAI splices N ads
+        // into one stream and each ad is minted on its OWN billable trace (a
+        // distinct tid per ad — see cmd/ssai). The single-trace poller followed
+        // only the first ad and gave up after ~9s, so the mid/post-roll ad
+        // impressions — fetched seconds into playback, on other traces — never
+        // surfaced. This fetches every ad trace each tick (spans merge into the
+        // one timeline via knownSpans dedup) for the whole playback window, so
+        // each break's server-side impression + quartile spans land as they fire.
+        function startJaegerPollMulti(traceIDs) {
+            stopJaegerPoll(); // cancels both the single-trace and any prior multi poll
+            const ids = Array.from(new Set((traceIDs || []).filter(Boolean)));
+            if (ids.length === 0) return;
+            const status = document.getElementById('tracePollStatus');
+            let iteration = 0;
+            const tick = async () => {
+                iteration += 1;
+                let added = 0;
+                for (const id of ids) { added += (await fetchJaegerTrace(id)) || 0; }
+                if (iteration >= JAEGER_POLL_MAX) { // 90s hard cap — covers the full stream (ads spread across playback)
+                    if (ssaiPollTimer) { clearInterval(ssaiPollTimer); ssaiPollTimer = null; }
+                    status.textContent = `· ${ids.length} SSAI ad trace${ids.length === 1 ? '' : 's'} tracked (${knownSpans.size} spans)`;
+                } else {
+                    status.textContent = `· polling ${ids.length} SSAI ad trace${ids.length === 1 ? '' : 's'} for server-side beacons (${iteration}/${JAEGER_POLL_MAX})`;
+                }
+            };
+            tick();
+            ssaiPollTimer = setInterval(tick, JAEGER_POLL_INTERVAL);
         }
 
         // Map a port to the friendly DSP name. Mirrors the Tiltfile's
@@ -4067,6 +4100,11 @@
             var img = new Image();
             img.src = url;
             logVideoEvent('Audio beacon: ' + name, '', name === 'impression' ? 'success' : '');
+            // Quartile/complete beacons fire during playback — seconds after the audio
+            // request, long after the Jaeger poll's stable-stop gave up. Re-arm the poll
+            // (same fix as clicks) so each server-side audio_event span shows in the
+            // trace panel as it lands, instead of looking like "no downstream events".
+            if (typeof startJaegerPoll === 'function' && currentTraceID) startJaegerPoll(currentTraceID);
         }
         // Quartile firing driven by the <audio> element's timeupdate.
         (function wireAudioQuartiles(){
@@ -4119,6 +4157,22 @@
         // media. The ad media + trace id are pulled from the manifest.
         var ssaiHls = null;
         var ssaiDash = null;
+        // setSsaiBadge flips the overlay between the live "ad playing" and
+        // "content" states as the player crosses each stitched break — the
+        // on-screen cue for content→ad→content in the demo.
+        function setSsaiBadge(badge, isAd) {
+            if (!badge) return;
+            badge.style.display = '';
+            if (isAd) {
+                badge.textContent = '▶ AD PLAYING · server-side beacons';
+                badge.style.background = 'rgba(180,30,30,.85)';
+                badge.style.color = '#fff';
+            } else {
+                badge.textContent = '● CONTENT';
+                badge.style.background = 'rgba(0,0,0,.7)';
+                badge.style.color = '#7ee787';
+            }
+        }
         function playSSAIStream() {
             var v = document.getElementById('ssai-video');
             var badge = document.getElementById('ssai-badge');
@@ -4175,7 +4229,23 @@
                     // fires the beacon SERVER-SIDE and 302s to the conditioned .ts
                     // — real SSAI, no client-side beacon code.
                     ssaiHls = new Hls();
+                    v.loop = false; // play once through so content→ad→content reads cleanly (no confusing VOD replay)
                     ssaiHls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); logVideoEvent('SSAI stream playing (hls.js · server-side beacons)', '', 'success'); });
+                    // Live AD / CONTENT indicator: flip the overlay badge as the
+                    // player crosses each stitched break, so the viewer SEES the
+                    // content→ad→content transitions instead of guessing. An ad
+                    // fragment is one whose URL is the /v1/ssai/seg beacon endpoint.
+                    var ssaiWasAd = null;
+                    ssaiHls.on(Hls.Events.FRAG_CHANGED, function(e, data){
+                        var u = (data && data.frag && data.frag.url) || '';
+                        var isAd = u.indexOf('/v1/ssai/seg') >= 0;
+                        if (isAd !== ssaiWasAd) {
+                            ssaiWasAd = isAd;
+                            setSsaiBadge(badge, isAd);
+                            logVideoEvent(isAd ? '▶ AD break — ad segment playing' : '● CONTENT resumed', '', isAd ? 'success' : '');
+                        }
+                    });
+                    v.addEventListener('ended', function(){ if (badge) { badge.style.display = ''; badge.textContent = '■ Stream ended'; badge.style.background = 'rgba(0,0,0,.7)'; badge.style.color = '#8b949e'; } logVideoEvent('SSAI stream ended', '', ''); }, { once: true });
                     // Client-side timed metadata (ssai.timed_metadata): surface any
                     // #EXT-X-DATERANGE quartile markers hls.js parses — the HLS
                     // analogue of the DASH EventStream.
@@ -4263,8 +4333,18 @@
         // fetch the first variant (a stitcher URL) to read them.
         function ssaiTraceAndBadge(manifest, isMaster, badge) {
             var apply = function(text){
-                var tm = text.match(/tid%3D([0-9a-f]{32})/) || text.match(/tid=([0-9a-f]{32})/);
-                if (tm) { videoTraceID = tm[1]; logVideoEvent('Auction trace', tm[1], 'success'); if (typeof startJaegerPoll === 'function') startJaegerPoll(tm[1]); }
+                // SSAI splices N ads, each on its OWN billable trace. Collect ALL
+                // distinct ad tids (not just the first) so every break's
+                // server-side impression + quartiles get polled — not one, and not
+                // just for the first ~9s of the request.
+                var tids = [], seen = {}, re = /tid(?:%3D|=)([0-9a-f]{32})/g, mm;
+                while ((mm = re.exec(text)) !== null) { if (!seen[mm[1]]) { seen[mm[1]] = true; tids.push(mm[1]); } }
+                if (tids.length) {
+                    videoTraceID = tids[0];
+                    tids.forEach(function(t, i){ logVideoEvent('SSAI ad #' + (i + 1) + ' trace', t, 'success'); });
+                    if (typeof startJaegerPollMulti === 'function') startJaegerPollMulti(tids);
+                    else if (typeof startJaegerPoll === 'function') startJaegerPoll(tids[0]);
+                }
                 if (badge) badge.style.display = text.indexOf('/v1/ssai/seg') >= 0 ? '' : 'none';
             };
             if (!isMaster) { apply(manifest); return; }
