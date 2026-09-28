@@ -88,12 +88,14 @@ echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are
 DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
   go run ./cmd/prewarm 2>&1 | tail -3 || echo "  ⚠ prewarm had issues (SSAI/slate may 404 until conditioned)"
 
-echo "▶ [3b] packaging the SSAI CONTENT origin from SINTEL (a DIFFERENT clip than the bbb ads) so the stream visibly changes content→ad→content (ffmpeg, ~10s)…"
+echo "▶ [3b] packaging a ~60s SINTEL content origin with PRE+MID+POST ad breaks (distinct from the bbb ads) so the stream visibly plays content→ad→content→ad→content (ffmpeg, ~40s)…"
 S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
 PACKAGER_SOURCE_KEY=media/sintel-360-1mb.mp4 \
+PACKAGER_TARGET_DURATION_SEC=60 \
+PACKAGER_BREAKS=pre,mid,post \
 DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
   go run ./cmd/content-packager 2>&1 | tail -2 \
-  && echo "  ✔ SSAI content = Sintel; ads = bbb → visible content→ad→content transition" \
+  && echo "  ✔ SSAI content = 60s Sintel with pre/mid/post breaks; ads = bbb → multiple visible content→ad transitions" \
   || echo "  ⚠ packaging failed (needs ffmpeg on host) — SSAI player falls back to the demo player"
 
 echo "▶ [4/6] generating baseline traffic (display/native/video/audio)…"

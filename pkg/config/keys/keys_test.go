@@ -31,7 +31,7 @@ func TestSchemaSizes(t *testing.T) {
 		{"identity-consumer", IdentityConsumerSchema(), 10},
 		{"audience-rt", AudienceRTSchema(), 6},
 		{"publisher-adserver", PublisherAdServerSchema(), 9},
-		{"content-packager", ContentPackagerSchema(), 9},
+		{"content-packager", ContentPackagerSchema(), 11},
 		{"prewarm", PrewarmSchema(), 2},
 		{"pipeline", PipelineSchema(), 18},
 	} {
