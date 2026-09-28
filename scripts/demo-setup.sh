@@ -58,7 +58,7 @@ kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
 # carries no beacons (not billed) — it's an honest no-fill fallback, not a fake ad.
 echo "▶ [2c] SSAI reliability: pre-conditioned SLATE (distinct Sintel clip) so breaks reliably show a video…"
 read -r SLATE_ID SLATE_URL < <(kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -tAF' ' -c \
-  "SELECT id, asset_url FROM creatives WHERE format='video' AND asset_url LIKE '%sintel%' AND review_status='approved' LIMIT 1" 2>/dev/null)
+  "SELECT id, asset_url FROM creatives WHERE format='video' AND asset_url LIKE '%bbb%' AND review_status='approved' LIMIT 1" 2>/dev/null)
 if [ -n "${SLATE_ID:-}" ]; then
   kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
     "INSERT INTO config (pod_id,key,value,service,updated_by,updated_at) VALUES
@@ -88,17 +88,13 @@ echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are
 DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
   go run ./cmd/prewarm 2>&1 | tail -3 || echo "  ⚠ prewarm had issues (SSAI/slate may 404 until conditioned)"
 
-echo "▶ [3b] ensuring the SSAI CONTENT origin is packaged (sample/master.m3u8) — without it the pub-sim shows 'Packaged content not available'…"
-if curl -fsS -o /dev/null --max-time 4 "http://localhost:8080/v1/creatives/ssai/content/sample/master.m3u8" 2>/dev/null; then
-  echo "  ✔ sample content already packaged (persists in S3)"
-else
-  echo "  … packaging bbb-720 → HLS with a CUE-OUT ad break (ffmpeg, ~10s)…"
-  S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
-  DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
-    go run ./cmd/content-packager 2>&1 | tail -2 \
-    && echo "  ✔ SSAI content packaged" \
-    || echo "  ⚠ packaging failed (needs ffmpeg on host) — SSAI player falls back to the demo player"
-fi
+echo "▶ [3b] packaging the SSAI CONTENT origin from SINTEL (a DIFFERENT clip than the bbb ads) so the stream visibly changes content→ad→content (ffmpeg, ~10s)…"
+S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
+PACKAGER_SOURCE_KEY=media/sintel-360-1mb.mp4 \
+DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
+  go run ./cmd/content-packager 2>&1 | tail -2 \
+  && echo "  ✔ SSAI content = Sintel; ads = bbb → visible content→ad→content transition" \
+  || echo "  ⚠ packaging failed (needs ffmpeg on host) — SSAI player falls back to the demo player"
 
 echo "▶ [4/6] generating baseline traffic (display/native/video/audio)…"
 go run ./cmd/simulator run --profile steady --requests "${DEMO_REQUESTS:-300}" --rps "${DEMO_RPS:-50}" \
