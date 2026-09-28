@@ -45,25 +45,18 @@ for port in 8082 8089 8090 8084 8081 8085 8086; do
   curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
 done
 
-echo "▶ [2b] demo config hygiene: schain enforcement → warn (a live-config row beats the strict env, so pub-sim Prebid mode bids)…"
-if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
-   "INSERT INTO config (pod_id, key, value, service, updated_by, updated_at) VALUES ('', 'exchange.schain_enforcement', '\"warn\"'::jsonb, 'exchange', 'demo-setup', now()) ON CONFLICT (pod_id, key) DO UPDATE SET value=EXCLUDED.value, updated_by='demo-setup', updated_at=now();" >/dev/null 2>&1; then
-  echo "  ✔ schain enforcement → warn — Prebid mode bids after the exchange's next config poll (≤30s)"
-else
-  echo "  ⚠ couldn't set schain config — Prebid mode may nobid (or run: make security-harness ARG=off)"
-fi
-
-echo "▶ [2c] demo visual clarity: make the video/SSAI AD a DIFFERENT clip than the content…"
-echo "    (SSAI content is Big Buck Bunny; reject bbb video AD creatives so a Sintel ad wins → visible content→ad→content)"
-if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
-   "UPDATE creatives SET review_status='rejected', updated_at=now() WHERE format='video' AND asset_url LIKE '%bbb%';" >/dev/null 2>&1; then
-  for port in 8082 8089 8090 8084 8081 8085 8088 8093; do
-    curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
-  done
-  echo "  ✔ video/SSAI ads now use a distinct clip (Sintel) — the ad is visibly different from the content"
-else
-  echo "  ⚠ couldn't adjust creatives — SSAI ad may match the content (no visible diff)"
-fi
+echo "▶ [2b] cleanup: drop any leftover schain 'warn' override (the pub-sim now sends a REAL schain, so enforcement can stay strict)…"
+kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
+  "DELETE FROM config WHERE key='exchange.schain_enforcement' AND updated_by='demo-setup';" >/dev/null 2>&1 \
+  && echo "  ✔ warn override removed — Prebid mode bids via its own schain (passes strict too)" \
+  || echo "  ⚠ couldn't clean schain override (non-fatal)"
+# NOTE: we intentionally do NOT reject creatives to force a "distinct" SSAI ad —
+# that thinned demand → flaky no-fills, and rigging the auction isn't honest. All
+# ad demand stays; SSAI fills reliably. The ad can visually match the content
+# (both are Big Buck Bunny placeholder clips) — that's a seed-asset artifact; the
+# honest proof of SSAI is the stitched manifest + server-side beacons (Network
+# tab). A genuinely distinct CONTENT clip is future work (package a real HLS
+# origin + point ssai.origin_url at it).
 
 if [ "${PREWARM:-0}" = "1" ]; then
   echo "▶ [3/6] conditioning ALL creatives up-front (prewarm — slow; optional)…"
