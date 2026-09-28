@@ -45,13 +45,12 @@ for port in 8082 8089 8090 8084 8081 8085 8086; do
   curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
 done
 
-echo "▶ [2b] demo config hygiene: reverting schain enforcement to default (so pub-sim Prebid mode bids)…"
+echo "▶ [2b] demo config hygiene: schain enforcement → warn (a live-config row beats the strict env, so pub-sim Prebid mode bids)…"
 if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
-   "DELETE FROM config WHERE key='exchange.schain_enforcement';" >/dev/null 2>&1; then
-  curl -fsS -X POST "http://localhost:8081/debug/cache/refresh" >/dev/null 2>&1 || true
-  echo "  ✔ schain enforcement at default (warn) — Prebid mode will bid"
+   "INSERT INTO config (pod_id, key, value, service, updated_by, updated_at) VALUES ('', 'exchange.schain_enforcement', '\"warn\"'::jsonb, 'exchange', 'demo-setup', now()) ON CONFLICT (pod_id, key) DO UPDATE SET value=EXCLUDED.value, updated_by='demo-setup', updated_at=now();" >/dev/null 2>&1; then
+  echo "  ✔ schain enforcement → warn — Prebid mode bids after the exchange's next config poll (≤30s)"
 else
-  echo "  ⚠ couldn't reset schain config — Prebid mode may nobid (harness ARG=off also resets it)"
+  echo "  ⚠ couldn't set schain config — Prebid mode may nobid (or run: make security-harness ARG=off)"
 fi
 
 if [ "${PREWARM:-0}" = "1" ]; then
