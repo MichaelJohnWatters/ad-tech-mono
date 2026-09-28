@@ -71,6 +71,19 @@ else
   echo "  ⚠ no Sintel creative found for the slate (skipping)"
 fi
 
+echo "▶ [2d] SSAI/video demand: make OUR (conditionable) DSP win the video break…"
+echo "    (competitor DSPs outbid us ~\$7.8 but their creatives aren't conditionable → unfilled breaks;"
+echo "     raise our video/audio bids above that + asap pacing so our servable ad wins → reliable fill)"
+if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
+   "UPDATE line_items SET base_bid=GREATEST(base_bid,15.0), pacing_mode='asap', updated_at=now()
+      WHERE id IN (SELECT DISTINCT line_item_id FROM line_item_creatives lic
+                   JOIN creatives cr ON cr.id=lic.creative_id WHERE cr.format IN ('video','audio'));" >/dev/null 2>&1; then
+  for p in 8082 8089 8090; do curl -fsS -X POST "http://localhost:$p/debug/cache/refresh" >/dev/null 2>&1 || true; done
+  echo "  ✔ our video/audio line items bid \$15 asap — win the SSAI break reliably (slate backs up the rest)"
+else
+  echo "  ⚠ couldn't raise bids — SSAI may fill intermittently (competitors win unservable breaks)"
+fi
+
 echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are cache-ready (fast when S3 segments persist across resets)…"
 DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
   go run ./cmd/prewarm 2>&1 | tail -3 || echo "  ⚠ prewarm had issues (SSAI/slate may 404 until conditioned)"
