@@ -21,6 +21,20 @@ if ! curl -fsS -o /dev/null --max-time 3 "$GW/healthz"; then
 fi
 echo "  ✔ gateway reachable"
 
+echo "▶ [0b] ensuring full trace sampling (so the pub-sim trace panel shows Jaeger spans)…"
+cur=$(kubectl get deploy exchange -n adtech -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OTEL_SAMPLE_RATIO")].value}' 2>/dev/null)
+if [ "$cur" = "1.0" ]; then
+  echo "  ✔ already at 1.0 (no restart)"
+else
+  echo "  … was '$cur' → setting 1.0 on the serving fleet (rolling restart ~1 min)"
+  kubectl set env -n adtech \
+    deploy/exchange deploy/ssp deploy/dsp-internal deploy/adserver deploy/tracker \
+    deploy/reporting deploy/publisher-adserver deploy/ssai deploy/transcoder \
+    deploy/dsp-competitor1 deploy/dsp-competitor2 OTEL_SAMPLE_RATIO=1.0 >/dev/null 2>&1 \
+    && kubectl rollout status -n adtech deploy/exchange --timeout=120s >/dev/null 2>&1 \
+    || echo "  ⚠ couldn't set sampling (kubectl?) — pub-sim Jaeger rows may stay sparse"
+fi
+
 echo "▶ [1/6] seeding accounts, campaigns, placements, creatives…"
 S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
   SEED_CREATIVES_URL_BASE="$GW/v1/creatives" \
@@ -30,6 +44,15 @@ echo "▶ [2/6] refreshing warm caches so services see the seed…"
 for port in 8082 8089 8090 8084 8081 8085 8086; do
   curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
 done
+
+echo "▶ [2b] demo config hygiene: reverting schain enforcement to default (so pub-sim Prebid mode bids)…"
+if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
+   "DELETE FROM config WHERE key='exchange.schain_enforcement';" >/dev/null 2>&1; then
+  curl -fsS -X POST "http://localhost:8081/debug/cache/refresh" >/dev/null 2>&1 || true
+  echo "  ✔ schain enforcement at default (warn) — Prebid mode will bid"
+else
+  echo "  ⚠ couldn't reset schain config — Prebid mode may nobid (harness ARG=off also resets it)"
+fi
 
 if [ "${PREWARM:-0}" = "1" ]; then
   echo "▶ [3/6] conditioning ALL creatives up-front (prewarm — slow; optional)…"
