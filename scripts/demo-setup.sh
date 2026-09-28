@@ -50,21 +50,30 @@ kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
   "DELETE FROM config WHERE key='exchange.schain_enforcement' AND updated_by='demo-setup';" >/dev/null 2>&1 \
   && echo "  ✔ warn override removed — Prebid mode bids via its own schain (passes strict too)" \
   || echo "  ⚠ couldn't clean schain override (non-fatal)"
-# NOTE: we intentionally do NOT reject creatives to force a "distinct" SSAI ad —
-# that thinned demand → flaky no-fills, and rigging the auction isn't honest. All
-# ad demand stays; SSAI fills reliably. The ad can visually match the content
-# (both are Big Buck Bunny placeholder clips) — that's a seed-asset artifact; the
-# honest proof of SSAI is the stitched manifest + server-side beacons (Network
-# tab). A genuinely distinct CONTENT clip is future work (package a real HLS
-# origin + point ssai.origin_url at it).
-
-if [ "${PREWARM:-0}" = "1" ]; then
-  echo "▶ [3/6] conditioning ALL creatives up-front (prewarm — slow; optional)…"
-  DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
-    go run ./cmd/prewarm 2>&1 | tail -6 || echo "  ⚠ prewarm had issues"
+# We do NOT reject creatives to force a distinct ad (that rigs the auction + thins
+# demand). Instead we use SSAI's own design lever: a pre-conditioned SLATE. The ad
+# break reliably splices the slate clip whenever the racing auction-winner isn't
+# cache-ready yet (async conditioning) — so the break always shows a video, and a
+# DISTINCT (Sintel) slate reads as a clear ad break vs the (bbb) content. A slate
+# carries no beacons (not billed) — it's an honest no-fill fallback, not a fake ad.
+echo "▶ [2c] SSAI reliability: pre-conditioned SLATE (distinct Sintel clip) so breaks reliably show a video…"
+read -r SLATE_ID SLATE_URL < <(kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -tAF' ' -c \
+  "SELECT id, asset_url FROM creatives WHERE format='video' AND asset_url LIKE '%sintel%' AND review_status='approved' LIMIT 1" 2>/dev/null)
+if [ -n "${SLATE_ID:-}" ]; then
+  kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
+    "INSERT INTO config (pod_id,key,value,service,updated_by,updated_at) VALUES
+       ('','ssai.slate_creative_id','\"$SLATE_ID\"'::jsonb,'ssai','demo-setup',now()),
+       ('','ssai.slate_media_url','\"$SLATE_URL\"'::jsonb,'ssai','demo-setup',now())
+     ON CONFLICT (pod_id,key) DO UPDATE SET value=EXCLUDED.value,updated_by='demo-setup',updated_at=now();" >/dev/null 2>&1 \
+    && echo "  ✔ SSAI slate → Sintel ($SLATE_ID) — reliable distinct clip on any break the winner can't fill" \
+    || echo "  ⚠ couldn't set slate config"
 else
-  echo "▶ [3/6] skipping bulk prewarm — SSAI warms on-demand in the verify step (set PREWARM=1 to force)"
+  echo "  ⚠ no Sintel creative found for the slate (skipping)"
 fi
+
+echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are cache-ready (fast when S3 segments persist across resets)…"
+DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
+  go run ./cmd/prewarm 2>&1 | tail -3 || echo "  ⚠ prewarm had issues (SSAI/slate may 404 until conditioned)"
 
 echo "▶ [4/6] generating baseline traffic (display/native/video/audio)…"
 go run ./cmd/simulator run --profile steady --requests "${DEMO_REQUESTS:-300}" --rps "${DEMO_RPS:-50}" \
