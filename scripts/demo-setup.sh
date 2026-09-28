@@ -75,7 +75,7 @@ echo "▶ [2d] SSAI/video demand: make OUR (conditionable) DSP win the video bre
 echo "    (competitor DSPs outbid us ~\$7.8 but their creatives aren't conditionable → unfilled breaks;"
 echo "     raise our video/audio bids above that + asap pacing so our servable ad wins → reliable fill)"
 if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
-   "UPDATE line_items SET base_bid=GREATEST(base_bid,15.0), pacing_mode='asap', updated_at=now()
+   "UPDATE line_items SET base_bid=GREATEST(base_bid,15.0), daily_budget=GREATEST(daily_budget,1000000), pacing_mode='asap', updated_at=now()
       WHERE id IN (SELECT DISTINCT line_item_id FROM line_item_creatives lic
                    JOIN creatives cr ON cr.id=lic.creative_id WHERE cr.format IN ('video','audio'));" >/dev/null 2>&1; then
   for p in 8082 8089 8090; do curl -fsS -X POST "http://localhost:$p/debug/cache/refresh" >/dev/null 2>&1 || true; done
