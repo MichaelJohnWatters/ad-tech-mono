@@ -160,6 +160,23 @@ func NewClientTraceparent() (traceID, traceparent string) {
 	return
 }
 
+// TraceparentForTraceID formats a W3C traceparent that adopts an EXISTING 32-hex
+// trace ID with a fresh child span id — for firing a request ON a known trace
+// (e.g. SSAI beacons onto their ad's distinct trace, so the tracker's
+// impression/quartile spans join the ad's auction spans) rather than minting a
+// brand-new trace as NewClientTraceparent does. Returns "" for a malformed id.
+func TraceparentForTraceID(traceID string) string {
+	if len(traceID) != 32 {
+		return ""
+	}
+	if _, err := hex.DecodeString(traceID); err != nil {
+		return ""
+	}
+	var sid [8]byte
+	_, _ = rand.Read(sid[:])
+	return "00-" + traceID + "-" + hex.EncodeToString(sid[:]) + "-01"
+}
+
 // TraceIDFromContext returns the W3C trace ID (32 hex chars) from the
 // active OTel span on ctx, or "" if there is none. This is the value that
 // flows into logs, NATS events, and the analytics store as `trace_id` —

@@ -1023,9 +1023,14 @@ func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 	// time (a segment may carry several: the impression plus any quartiles it
 	// crosses). Firing them here (not reconstructing them) is what keeps SSAI's
 	// beacons identical to the ones the player would fire in the client-side flow.
+	// Fire each beacon ON this ad's distinct trace (the `ad` param, = the trace
+	// its auction/win spans use) so the tracker's impression + quartile spans
+	// join the ad in Jaeger instead of scattering onto the per-seg-request trace.
+	// Still one distinct trace per ad, so no (impression, trace) dedup clash.
+	adTP := tracing.TraceparentForTraceID(q.Get("ad"))
 	for _, beacon := range q["beacon"] {
 		if beacon != "" {
-			d.fireBeacon(r.Context(), beacon)
+			d.fireBeaconTP(r.Context(), beacon, adTP)
 		}
 	}
 	if redir == "" {
@@ -1059,13 +1064,28 @@ func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, events,
 // tracker's fraud check doesn't drop it as a bot (matches the simulator's
 // pixel-firing). Fire-and-forget.
 func (d *stitcherDeps) fireBeacon(ctx context.Context, beaconURL string) {
+	d.fireBeaconTP(ctx, beaconURL, "")
+}
+
+// fireBeaconTP fires a pre-signed beacon, optionally forcing the outbound
+// traceparent to a specific trace. The segment handler passes the ad's distinct
+// trace so the tracker's impression/quartile spans land ON that ad's trace (the
+// same one its auction/win spans use) — otherwise InjectHTTP would scatter them
+// onto the unrelated per-seg-request trace, and the trace panel (which follows
+// the ad trace) would never show that the ad was actually recorded as seen.
+// Empty traceparent → the original InjectHTTP behaviour (used by error beacons).
+func (d *stitcherDeps) fireBeaconTP(ctx context.Context, beaconURL, traceparent string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, beaconURL, nil)
 	if err != nil {
 		return
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (adtech-ssai)")
 	req.Header.Set("Referer", "https://ssai.adtech.local/")
-	tracing.InjectHTTP(ctx, req)
+	if traceparent != "" {
+		req.Header.Set("traceparent", traceparent)
+	} else {
+		tracing.InjectHTTP(ctx, req)
+	}
 	if resp, err := d.client.Do(req); err == nil {
 		resp.Body.Close()
 	}
