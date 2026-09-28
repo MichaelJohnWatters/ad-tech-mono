@@ -2445,6 +2445,19 @@
                     devicetype: device,
                 },
                 user: { id: userID },
+                // Real Prebid.js / Prebid Server always attach a SupplyChain (schain)
+                // at source.ext.schain. Sending a well-formed one lets the exchange's
+                // STRICT schain enforcement pass legitimately — no need to relax it to
+                // warn. (A missing/malformed schain is what strict is meant to reject.)
+                source: {
+                    ext: {
+                        schain: {
+                            complete: 1,
+                            ver: '1.0',
+                            nodes: [{ asi: 'adtech.local', sid: (sel.PublisherID || 'pub-simulator'), hp: 1 }],
+                        },
+                    },
+                },
                 tmax: 1000,
             };
 

@@ -88,6 +88,14 @@ export const spec = {
       tmax: (bidderRequest && bidderRequest.timeout) || 1000,
     };
 
+    // Forward the publisher's SupplyChain (schain) at source.ext.schain so the
+    // exchange can verify the supply path. Prebid's schain module populates it on
+    // the bid; passing it through is what lets strict schain enforcement accept us.
+    const schain = validBidRequests[0].schain;
+    if (schain) {
+      openrtbRequest.source = { ext: { schain: schain } };
+    }
+
     // Endpoint override: first valid bid's params win. Publishers using
     // multiple environments per page is rare enough that we don't try to
     // batch per-endpoint.
