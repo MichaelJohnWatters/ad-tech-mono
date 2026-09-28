@@ -71,17 +71,27 @@ else
   echo "  ⚠ no Sintel creative found for the slate (skipping)"
 fi
 
-echo "▶ [2d] SSAI/video demand: make OUR (conditionable) DSP win the video break…"
+echo "▶ [2d] SSAI/video demand: make our BUNNY (bbb) ad win the break — visually distinct from the Sintel content…"
 echo "    (competitor DSPs outbid us ~\$7.8 but their creatives aren't conditionable → unfilled breaks;"
-echo "     raise our video/audio bids above that + asap pacing so our servable ad wins → reliable fill)"
+echo "     boost bbb video/audio bids above that + asap pacing so a servable BUNNY ad wins → reliable fill."
+echo "     CRITICAL: the CONTENT is Sintel, and a seeded video AD creative is ALSO Sintel — if it wins, the"
+echo "     ad is real+tracked but looks identical to the content. So we boost bbb and suppress sintel ADS.)"
 if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
-   "UPDATE line_items SET base_bid=GREATEST(base_bid,15.0), daily_budget=GREATEST(daily_budget,1000000), pacing_mode='asap', updated_at=now()
-      WHERE id IN (SELECT DISTINCT line_item_id FROM line_item_creatives lic
-                   JOIN creatives cr ON cr.id=lic.creative_id WHERE cr.format IN ('video','audio'));" >/dev/null 2>&1; then
+   "UPDATE line_items SET base_bid=GREATEST(base_bid,20.0), daily_budget=GREATEST(daily_budget,1000000), pacing_mode='asap', updated_at=now()
+      WHERE id IN (SELECT DISTINCT lic.line_item_id FROM line_item_creatives lic
+                   JOIN creatives cr ON cr.id=lic.creative_id
+                   WHERE cr.format IN ('video','audio') AND cr.asset_url LIKE '%bbb%');
+    -- Suppress Sintel-based video AD creatives: bid them to the floor so the (bbb) bunny ad
+    -- always outbids them for the SSAI break. Content is Sintel; an ad that looks like the
+    -- content defeats the demo. If a break still can't fill a bbb ad, the slate (also bbb) covers it.
+    UPDATE line_items SET base_bid=0.10, pacing_mode='even', updated_at=now()
+      WHERE id IN (SELECT DISTINCT lic.line_item_id FROM line_item_creatives lic
+                   JOIN creatives cr ON cr.id=lic.creative_id
+                   WHERE cr.format='video' AND cr.asset_url LIKE '%sintel%');" >/dev/null 2>&1; then
   for p in 8082 8089 8090; do curl -fsS -X POST "http://localhost:$p/debug/cache/refresh" >/dev/null 2>&1 || true; done
-  echo "  ✔ our video/audio line items bid \$15 asap — win the SSAI break reliably (slate backs up the rest)"
+  echo "  ✔ bbb video/audio bid \$20 asap (win the break, distinct bunny ad); sintel ADS floored to \$0.10"
 else
-  echo "  ⚠ couldn't raise bids — SSAI may fill intermittently (competitors win unservable breaks)"
+  echo "  ⚠ couldn't set demand — SSAI may show a Sintel ad (looks like content) or fill intermittently"
 fi
 
 echo "▶ [3/6] conditioning creatives (prewarm) so SSAI ad + SLATE segments are cache-ready (fast when S3 segments persist across resets)…"
