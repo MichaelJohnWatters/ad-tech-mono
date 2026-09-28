@@ -53,6 +53,18 @@ else
   echo "  ⚠ couldn't set schain config — Prebid mode may nobid (or run: make security-harness ARG=off)"
 fi
 
+echo "▶ [2c] demo visual clarity: make the video/SSAI AD a DIFFERENT clip than the content…"
+echo "    (SSAI content is Big Buck Bunny; reject bbb video AD creatives so a Sintel ad wins → visible content→ad→content)"
+if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c \
+   "UPDATE creatives SET review_status='rejected', updated_at=now() WHERE format='video' AND asset_url LIKE '%bbb%';" >/dev/null 2>&1; then
+  for port in 8082 8089 8090 8084 8081 8085 8088 8093; do
+    curl -fsS -X POST "http://localhost:$port/debug/cache/refresh" >/dev/null 2>&1 || true
+  done
+  echo "  ✔ video/SSAI ads now use a distinct clip (Sintel) — the ad is visibly different from the content"
+else
+  echo "  ⚠ couldn't adjust creatives — SSAI ad may match the content (no visible diff)"
+fi
+
 if [ "${PREWARM:-0}" = "1" ]; then
   echo "▶ [3/6] conditioning ALL creatives up-front (prewarm — slow; optional)…"
   DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \

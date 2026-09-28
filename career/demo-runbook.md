@@ -238,6 +238,17 @@ the differentiator.
 > conditions. **`make reset` clears it** (wipes + reseeds clean) — that's the fix
 > we proved. Diagnose via `kubectl logs -n adtech -l app=transcoder | grep "condition failed"`.
 
+> **Make the ad LOOK different from the content (for a visible transition):** the
+> SSAI content is Big Buck Bunny, and many seeded ad creatives are *also* Big Buck
+> Bunny — so a stitched ad can be invisible (bunny-into-bunny). `demo-setup [2c]`
+> rejects the `bbb` video ad creatives so a **Sintel** ad (a different film) wins the
+> break → a clear **bunny content → Sintel ad → bunny content** cut, with the
+> "Stitched Ad" badge lit during the ad. **Reliability:** conditioning is async per
+> session, so the *first* Play can no-fill / take 2–3 tries — **click "Play SSAI
+> Stream" once in pre-flight to warm it.** For a technical audience the **Network tab
+> + stitched manifest** (content `bbb-*`/`seg_N.ts` vs the break's `seg?ad=…` →
+> server-side beacon 302 → transcoded ad segment) is the clearest proof of SSAI.
+
 ---
 
 ## Show the business impact — portals before & after (do this!)
