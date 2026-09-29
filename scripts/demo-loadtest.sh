@@ -108,6 +108,12 @@ kubectl exec -n adtech "$CH" -- clickhouse-client -q "
   SELECT channel, count() imps, round(sum(clearing_price_usd),2) usd
   FROM adtech.impressions WHERE timestamp >= now() - INTERVAL ${WINDOW_MIN} MINUTE
   GROUP BY channel ORDER BY imps DESC FORMAT PrettyCompactMonoBlock;" 2>/dev/null
+echo "  — deals vs open auction (PG > Preferred > PMP > Open priority stack) —"
+kubectl exec -n adtech "$CH" -- clickhouse-client -q "
+  SELECT if(deal_id='' OR deal_id IS NULL,'open auction','private deal') AS kind,
+         count() imps, round(sum(clearing_price_usd),2) usd
+  FROM adtech.impressions WHERE timestamp >= now() - INTERVAL ${WINDOW_MIN} MINUTE
+  GROUP BY kind ORDER BY imps DESC FORMAT PrettyCompactMonoBlock;" 2>/dev/null
 echo "  — spend per advertiser (top bidders win their targeted inventory — real) —"
 kubectl exec -n adtech "$CH" -- clickhouse-client -q "
   SELECT account_id AS advertiser, round(sum(clearing_price_usd),2) usd, count() imps
