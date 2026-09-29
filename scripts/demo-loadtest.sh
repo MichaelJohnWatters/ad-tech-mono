@@ -42,28 +42,36 @@ if ! curl -fsS -o /dev/null --max-time 3 "$GW/healthz"; then
   echo "✗ can't reach $GW — run 'make demo-forward' in another terminal first."; exit 1
 fi
 
-echo "▶ [1/5] realistic demand — VARIED bids \$4–20 (real valuations), pacing=$PACE, internal noise→0…"
-# Varied per-line-item bids from a deterministic hash → a realistic CPM spread, so
-# the highest bidder wins each impression (real first-price concentration) and the
-# spread across advertisers comes from targeting + freq caps. Sintel ADS stay floored.
+BW_ADV="${BIGWORLD_ADVERTISERS:-20}"
+echo "▶ [1/5] bigger market — seed +$BW_ADV big-world advertisers (diverse bid strata + geo/device targeting), idempotent…"
+# SeedBigWorld already builds a realistic, well-spread demand pool: varied bid
+# strata (1.5–5.9 + a narrowed 9–19.5 premium tier), rotating geo/device/format,
+# real creatives, funded + loginable accounts. So the honest move is to USE it and
+# NOT override its bids — the earlier concentration came from THIS script clobbering
+# those strata with a flat hash. We seed it, then tune ONLY pacing + noise.
+S3_ENDPOINT=localhost:9000 S3_ACCESS_KEY=adtech S3_SECRET_KEY=adtech-local-dev \
+  SEED_CREATIVES_URL_BASE="$GW/v1/creatives" \
+  DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/adtech?sslmode=disable}" \
+  go run ./cmd/seed --profile standard --big-world-advertisers "$BW_ADV" --big-world-publishers 5 --big-world-campaigns-per 3 2>&1 | tail -1
+
+echo "▶ [1b] tune for the window: pacing=$PACE + internal noise→0 — KEEP the seeded bid strata (no clobber)…"
+# Bids are left exactly as the market seeded them (real valuation spread → different
+# advertisers win different slices). We only set pacing (asap so spend lands inside
+# the short window; even for SOAK) and drop injected DSP jitter (real: variance is
+# the bids, not noise). Sintel AD creatives stay floored so the SSAI demo is intact.
 if kubectl exec -n adtech postgres-0 -- psql -U adtech -d adtech -q -c "
-  UPDATE line_items SET
-    base_bid     = 4.0 + (abs(hashtext(id::text)) % 1600)::numeric/100.0,  -- \$4.00–\$20.00
-    daily_budget = 1500,
-    pacing_mode  = '$PACE',
-    updated_at   = now()
+  UPDATE line_items SET pacing_mode = '$PACE', updated_at = now()
   WHERE status='live'
     AND id NOT IN (
       SELECT lic.line_item_id FROM line_item_creatives lic
       JOIN creatives cr ON cr.id = lic.creative_id
       WHERE cr.format='video' AND cr.asset_url LIKE '%sintel%'
     );
-  -- Real: no injected jitter on our DSP. Bid variance = the varied bids above.
   UPDATE config SET value='0', updated_at=now()
     WHERE key='dsp.noise_pct' AND pod_id LIKE 'dsp-internal%';" >/dev/null 2>&1; then
-  echo "  ✔ bids \$4–20 varied · budgets \$1500 · pacing=$PACE · internal noise 0 (sintel ADS floored)"
+  echo "  ✔ pacing=$PACE · internal noise 0 · seeded bid strata preserved (sintel ADS floored)"
 else
-  echo "  ⚠ demand tuning failed (psql)"
+  echo "  ⚠ tuning failed (psql)"
 fi
 
 echo "▶ [2/5] warming caches (all serving ports + every dsp pod)…"
