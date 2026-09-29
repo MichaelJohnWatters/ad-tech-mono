@@ -19,11 +19,23 @@ func (s *SingleWinnerStrategy) Select(ctx context.Context, bids []Bid, request A
 		return Result{}, ErrNoBids
 	}
 
-	// Sort by price descending
+	// Sort by price descending, with an explicit FAIR tie-break for equal bids.
+	// Highest price wins (first-price). When two bids are exactly equal, we must
+	// NOT let Go's unstable sort pick the winner — that arbitrarily hands one
+	// bidder every tie. Instead rank equal bids by a uniform per-impression hash
+	// of (impression, bidder), so equal bidders each win a fair, reproducible
+	// share across impressions. Deterministic (no rand) — this runs in the hot
+	// path and must stay fake-able; matches the pod/retail/batch convention of
+	// SliceStable + an explicit tiebreak. Exact ties are rare with continuous
+	// bids (flat CPM deals, floor-clamped bids), but when they happen this
+	// removes the arbitrary-winner gap.
 	sorted := make([]Bid, len(bids))
 	copy(sorted, bids)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Price > sorted[j].Price
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Price != sorted[j].Price {
+			return sorted[i].Price > sorted[j].Price
+		}
+		return tieBreakKey(request.TraceID, sorted[i]) < tieBreakKey(request.TraceID, sorted[j])
 	})
 
 	winner := sorted[0]
@@ -68,4 +80,30 @@ func (s *SingleWinnerStrategy) Select(ctx context.Context, bids []Bid, request A
 	}
 
 	return result, nil
+}
+
+// tieBreakKey is a uniform per-impression ordering key for a bid, used only to
+// resolve EXACTLY-equal bids fairly. Because it mixes the impression's trace id
+// with the bidder identity, equal bidders each win a uniform share as the trace
+// id varies across impressions — fair rotation — while remaining fully
+// deterministic for a given impression (reproducible, no rand).
+func tieBreakKey(traceID string, b Bid) uint64 {
+	// Inline FNV-1a over the strings — allocation-free (no hasher object, no
+	// []byte conversion), so it stays cheap even if the sort comparator calls it
+	// many times when lots of bids tie. Pure CPU, no I/O.
+	const offset64 = uint64(14695981039346656037)
+	const prime64 = uint64(1099511628211)
+	h := offset64
+	for i := 0; i < len(traceID); i++ {
+		h = (h ^ uint64(traceID[i])) * prime64
+	}
+	h *= prime64 // field separator
+	for i := 0; i < len(b.DSPID); i++ {
+		h = (h ^ uint64(b.DSPID[i])) * prime64
+	}
+	h *= prime64
+	for i := 0; i < len(b.CampaignID); i++ {
+		h = (h ^ uint64(b.CampaignID[i])) * prime64
+	}
+	return h
 }

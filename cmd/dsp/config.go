@@ -53,3 +53,7 @@ func (k *Knobs) NoisePct() float64 { return keys.DSP.NoisePct.Get(k.cfg) }
 
 // NoBidRate is the probability (0-1) of a random no-bid. TierLive.
 func (k *Knobs) NoBidRate() float64 { return keys.DSP.NoBidRate.Get(k.cfg) }
+
+// FlightPacingEnabled: pace lifetime budget across the IO flight window instead
+// of daily budget across a 24h day (for campaigns that have both). TierLive.
+func (k *Knobs) FlightPacingEnabled() bool { return keys.DSP.FlightPacingEnabled.Get(k.cfg) }

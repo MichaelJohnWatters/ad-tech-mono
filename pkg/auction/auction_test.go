@@ -2,6 +2,7 @@ package auction_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auction"
@@ -298,5 +299,65 @@ func TestFilterBidsWithSeparation(t *testing.T) {
 	}
 	if eligible[0].AdvertiserID != "nike" || eligible[1].AdvertiserID != "bmw" {
 		t.Error("expected nike and bmw to pass separation filter")
+	}
+}
+
+// TestSingleWinner_EqualBidsFairTieBreak verifies the explicit tie-break: two
+// EXACTLY-equal top bids must (a) resolve deterministically for a given
+// impression (reproducible), and (b) each win a roughly fair share as the
+// impression trace id varies — never one bidder sweeping every tie (the old
+// unstable-sort behaviour). A clearly-higher bid must still always win.
+func TestSingleWinner_EqualBidsFairTieBreak(t *testing.T) {
+	engine := auction.NewEngine(clock.Real{})
+	mkBids := func() []auction.Bid {
+		return []auction.Bid{
+			{DSPID: "dsp_a", CampaignID: "camp_a", Price: 5.00, AdvertiserID: "adv_a"},
+			{DSPID: "dsp_b", CampaignID: "camp_b", Price: 5.00, AdvertiserID: "adv_b"},
+		}
+	}
+
+	// (a) deterministic for a fixed impression.
+	req := auction.AuctionRequest{Channel: "display", PriceMode: "first_price", FloorPrice: 1.00, TraceID: "imp-fixed"}
+	first, _ := engine.RunAuction(context.Background(), mkBids(), req)
+	for i := 0; i < 20; i++ {
+		r, _ := engine.RunAuction(context.Background(), mkBids(), req)
+		if r.Winners[0].Bid.CampaignID != first.Winners[0].Bid.CampaignID {
+			t.Fatalf("tie-break not deterministic for a fixed trace: got %s then %s",
+				first.Winners[0].Bid.CampaignID, r.Winners[0].Bid.CampaignID)
+		}
+	}
+
+	// (b) fair split across impressions — neither bidder should sweep.
+	wins := map[string]int{}
+	const n = 2000
+	for i := 0; i < n; i++ {
+		req := auction.AuctionRequest{Channel: "display", PriceMode: "first_price", FloorPrice: 1.00,
+			TraceID: "imp-" + strconv.Itoa(i)}
+		r, err := engine.RunAuction(context.Background(), mkBids(), req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		wins[r.Winners[0].Bid.CampaignID]++
+	}
+	for _, camp := range []string{"camp_a", "camp_b"} {
+		share := float64(wins[camp]) / float64(n)
+		if share < 0.40 || share > 0.60 {
+			t.Errorf("campaign %s won %.1f%% of equal-bid ties, want ~50%% (fair rotation); dist=%v",
+				camp, share*100, wins)
+		}
+	}
+
+	// A clearly-higher bid still always wins, regardless of the tie-break.
+	for i := 0; i < 200; i++ {
+		bids := []auction.Bid{
+			{DSPID: "dsp_a", CampaignID: "camp_a", Price: 5.00, AdvertiserID: "adv_a"},
+			{DSPID: "dsp_b", CampaignID: "camp_b", Price: 9.99, AdvertiserID: "adv_b"},
+		}
+		req := auction.AuctionRequest{Channel: "display", PriceMode: "first_price", FloorPrice: 1.00,
+			TraceID: "imp-high-" + strconv.Itoa(i)}
+		r, _ := engine.RunAuction(context.Background(), bids, req)
+		if r.Winners[0].Bid.CampaignID != "camp_b" {
+			t.Fatalf("higher bid must win regardless of tie-break; got %s", r.Winners[0].Bid.CampaignID)
+		}
 	}
 }
