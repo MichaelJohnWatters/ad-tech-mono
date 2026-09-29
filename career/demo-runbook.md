@@ -39,8 +39,13 @@ demosite` running. If localhost fails, swap `localhost:8080` → `192.168.64.2:8
 > website" version — nicer for the display/video "wow," but one format per page.
 | 📊 Advertiser portal | http://localhost:8080/portal/advertiser |
 | 📰 Publisher portal | http://localhost:8080/portal/publisher |
-| 📈 Grafana (live dashboards) | http://192.168.64.2:3000 |
-| 🧭 Jaeger (traces) | http://192.168.64.2:16686 |
+| 📈 Grafana (live dashboards — watch during the load test) | http://localhost:3000 |
+| 🧭 Jaeger (traces) | http://localhost:16686 |
+| 🚀 **Grand finale — live load test** (`make demo-loadtest`) | see "The grand finale" below |
+
+> Grafana / Jaeger / Prometheus are now bridged by `make demo-forward`
+> (`localhost:3000` / `:16686` / `:9090`). If localhost fails, the LoadBalancer
+> fallback is `192.168.64.2:<same port>`.
 
 **Tab order to pre-open:** login → staff/#demos → demosite (`:9000`) → Trace
 Explorer.
@@ -277,6 +282,62 @@ sees the campaigns that won and the money change on both sides.
 
 Links: Advertiser `…/portal/advertiser` · Publisher `…/portal/publisher` · Staff
 `…/portal/staff` (all on `localhost:8080`).
+
+---
+
+## 🚀 The grand finale — live load test → Grafana → portal reports
+
+The closer, and the strongest single moment: after the walkthrough, put the platform
+under real load, **watch it live in Grafana**, then log into the customer portals to
+show the money that just moved. This is the "it's a real system, not a toy" beat.
+
+**Sequence (≈8 min):**
+
+1. **Set the scene (before).** Open the **Advertiser** and **Publisher** portals and
+   note the baseline (or `make reset` for a clean zero). *SAY:* "Two customers — an
+   advertiser buying, a publisher selling. Watch both sides."
+2. **Open Grafana** → http://localhost:3000 → the serving / "Phase profiling" +
+   "Stack pressure" dashboards. *SAY:* "The live control room — auctions/sec, fill,
+   per-service latency."
+3. **Fire the load test** (Terminal B; `make demo-forward` still running in A):
+   ```
+   make demo-loadtest
+   ```
+   It seeds a **bigger market** (+20 advertisers with diverse bids + targeting),
+   runs ~4 min at 120 rps, and prints a money-verified summary. **While it runs,
+   narrate Grafana:** throughput climbing, fill ~94%, latency steady, zero errors.
+   *SAY:* "~28k auctions in 4 minutes; every win booked as exactly one impression —
+   money-lossless, and I verify that programmatically."
+4. **Read the finale summary** (in the terminal): impressions, spend per channel, and
+   **spend spread across ~16 advertisers** with frequency caps rotating delivery.
+   *SAY:* "Highest bidder wins each impression, but targeting + pacing + frequency
+   caps spread the spend across the market — nothing rigged."
+5. **Show the reports (after).** Refresh the portals:
+   - **Advertiser** (`/portal/advertiser`, or Staff → *Impersonate* a top spender):
+     spend up, which campaigns won, impressions/clicks, budget pacing.
+   - **Publisher** (`/portal/publisher`): revenue + fill up, top advertisers.
+   *SAY:* "Same auctions, both sides — the advertiser charged and the publisher paid,
+   reconciled to the cent."
+
+**Variants:**
+- `SOAK=1 make demo-loadtest` — longer **even-paced** run to show the pacing throttle
+  curve in Grafana (pacing distributes over a 24h day, so it needs a longer window).
+- `RPS=150 DURATION=6m make demo-loadtest` — push harder.
+
+**Honest talking points (an interviewer *will* probe these):**
+- **Winner selection:** highest bid per impression (first-price). Concentration on
+  the strongest bidder *for a slice* is correct — spread comes from targeting +
+  pacing + freq caps, not from flattening bids.
+- **Ties:** an explicit fair tie-break (equal bids rotate uniformly by a
+  per-impression hash) — I added it; in production ties are rare (continuous bids).
+- **Pacing:** `even` spreads a budget over a 24h day; `asap` is accelerated delivery.
+  The short demo uses asap; the even-pace curve shows in a longer soak. (There's also
+  opt-in flight-aware pacing — spread lifetime budget over the flight window.)
+- **Money integrity:** `--verify` asserts every win = exactly one impression and the
+  engine's own metrics agree — the run is money-lossless.
+
+**Reset after:** `make demo-setup` restores the SSAI bunny-ad demo state (the load
+test retunes pacing + seeds the bigger market).
 
 ---
 

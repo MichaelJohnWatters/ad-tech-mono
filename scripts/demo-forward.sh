@@ -31,6 +31,9 @@ FORWARDS=(
   postgres:5432:5432
   redis:6379:6379
   minio:9000:9000
+  grafana:3000:3000
+  jaeger:16686:16686
+  prometheus:9090:9090
 )
 
 PIDS=()
