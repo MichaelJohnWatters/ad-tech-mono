@@ -216,6 +216,9 @@ demo-forward: ## Bridge host↔Rancher cluster: port-forward the serving fleet t
 demo-setup: ## Interview-ready: seed + warm (prewarm/SSAI) + baseline traffic + VERIFY every ad format serves. Needs `make demo-forward` running.
 	bash scripts/demo-setup.sh
 
+demo-loadtest: ## Interview grand-finale: short (~4m) soak tuned for SPREAD (competitive bids + asap pacing + freq caps) so dashboards come alive. Tune RPS/DURATION/USER_POOL. Needs `make demo-forward`.
+	bash scripts/demo-loadtest.sh
+
 demosite: ## Run the external demo publisher site (host process, :9000). Needs the stack up + seeded.
 	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
 	@echo "for the public TLS path: see cmd/demosite/README.md"
