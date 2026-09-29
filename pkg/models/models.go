@@ -70,7 +70,12 @@ type Campaign struct {
 	Currency       string
 	DailyBudget    float64
 	TotalBudget    float64
-	Format         string // display, native, video, audio (line_items.format)
+	// FlightStart / FlightEnd are the IO flight window (insertion_orders.start_date
+	// / end_date). Zero when the IO has no dates. Used for flight-aware pacing
+	// (spread TotalBudget across the flight) when dsp.flight_pacing_enabled is on.
+	FlightStart time.Time
+	FlightEnd   time.Time
+	Format      string // display, native, video, audio (line_items.format)
 	// ProductCategory is the advertised product's OWN IAB category (line_items.
 	// product_category) — the retail relevance signal, distinct from the content-
 	// targeting Include.Categories. Empty → the DSP falls back to Include.Categories.

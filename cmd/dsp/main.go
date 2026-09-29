@@ -148,6 +148,7 @@ func main() {
 		}
 		return dspRowLive.Load().NoBidRate
 	}
+	flightPacingFn := knobs.FlightPacingEnabled
 
 	// Redis budget tracker.
 	l2 := connectRedis(cfg, log)
@@ -294,7 +295,7 @@ func main() {
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
-	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked)
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn)
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
@@ -785,7 +786,7 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	}, 10*time.Second, addr, log)
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -1037,6 +1038,7 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// analysis then attributes no-bids to pacing vs budget vs targeting
 		// with one GROUP BY instead of log archaeology.
 		declines := make(map[string]int, 8)
+		flightPacing := flightPacingFn() // read the live flag once per request
 		for i := range all {
 			c := &all[i]
 			if c.Status != constants.StatusLive {
@@ -1082,11 +1084,21 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				continue
 			}
 
-			pacer := pacing.New(clk, pacing.Config{
+			pcfg := pacing.Config{
 				Mode:        pacingMode(c.PacingMode),
 				DailyBudget: c.DailyBudget,
 				DayStartUTC: clk.Now().Truncate(24 * time.Hour),
-			})
+			}
+			// Flight-aware pacing (opt-in): spread the IO lifetime budget across the
+			// flight window instead of the daily budget across 24h. The pacer only
+			// switches when LifetimeBudget>0 AND FlightEnd>FlightStart, so campaigns
+			// without an IO flight/budget keep daily pacing regardless.
+			if flightPacing {
+				pcfg.FlightStart = c.FlightStart
+				pcfg.FlightEnd = c.FlightEnd
+				pcfg.LifetimeBudget = c.TotalBudget
+			}
+			pacer := pacing.New(clk, pcfg)
 			currentSpend := budget.Spend(c.ID)
 			// Exhaustion check FIRST. The pacer's ShouldBid also returns
 			// false when over-budget but conflates that with intra-day

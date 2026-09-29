@@ -21,6 +21,7 @@ var DSP = struct {
 	BudgetResetInterval                config.DurationKey
 	WarmCampaignsPollInterval          config.DurationKey
 	SpendReconcileEnabled              config.BoolKey
+	FlightPacingEnabled                config.BoolKey
 	WarmOptOutsPollInterval            config.DurationKey
 	AdCertVerifyKey                    config.StringKey
 	AdCertEnforcement                  config.StringKey
@@ -52,6 +53,7 @@ var DSP = struct {
 	BudgetResetInterval:                dspSet.Duration("dsp.budget_reset_interval", "24h", config.TierLive, "How long Redis keeps a campaign's daily-spend counter before it expires back to zero. Effectively the rolling budget window length.", config.Since("v1.1")),
 	WarmCampaignsPollInterval:          dspSet.Duration("cache.warm.campaigns.poll_interval", "30s", config.TierStatic, "How often the in-memory campaign cache refreshes from Postgres. Lower = faster pickup of campaign edits, higher = less DB load.", config.Since("v1.1")),
 	SpendReconcileEnabled:              dspSet.Bool("dsp.spend_reconcile_enabled", "true", config.TierLive, "Reconcile campaign pacing counters to the billing engine's committed-spend snapshots (adtech.billing.campaign_spend_snapshot from reporting). Corrects the local win-notice decrement's over-count (phantom wins, full clearing price on CPC/CPA). Disable to pace purely on local win notices.", config.Since("v1.5")),
+	FlightPacingEnabled:                dspSet.Bool("dsp.flight_pacing_enabled", "false", config.TierLive, "When true, campaigns with an IO flight (start_date/end_date) and a lifetime budget (io.budget) pace that lifetime budget across the flight window instead of the daily budget across a 24h day (the daily budget stays a per-day cap). Off = legacy daily pacing. Enables short-flight campaigns to pace visibly over minutes.", config.Since("v2.6")),
 	WarmOptOutsPollInterval:            dspSet.Duration("cache.warm.opt_outs.poll_interval", "30s", config.TierStatic, "How often the user opt-out registry cache (consent enforcement on the bid path) refreshes from Postgres. Lower = faster pickup of new opt-outs, higher = less DB load. NATS invalidate on adtech.cache.invalidate.opt-outs propagates changes sub-second regardless.", config.Since("v1.3")),
 	AdCertVerifyKey:                    dspSet.String("dsp.adcert_verify_key", "", config.TierStatic, "The exchange's ads.cert Ed25519 public key (base64) used to verify signed bid requests. Empty disables verification. Pairs with exchange.adcert_sign_key.", config.Since("v1.4")),
 	AdCertEnforcement:                  dspSet.String("dsp.adcert_enforcement", "off", config.TierLive, "ads.cert signed-bid-request verification: 'off' (no check), 'warn' (bid but log requests with a missing/invalid signature), or 'strict' (no-bid them). Needs dsp.adcert_verify_key set and the exchange signing. Off by default.", config.Since("v1.4")),

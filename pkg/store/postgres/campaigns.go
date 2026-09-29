@@ -88,7 +88,9 @@ SELECT
     -- that pre-date migration 028.
     COALESCE(NULLIF(cr.advertiser_domain, ''), SPLIT_PART(cr.landing_url, '/', 3), '') AS creative_domain,
     li.viewability_target_pct,
-    COALESCE(cv.creatives_json, '[]')::text AS creatives_json
+    COALESCE(cv.creatives_json, '[]')::text AS creatives_json,
+    io.start_date,
+    io.end_date
 FROM line_items li
 JOIN insertion_orders io ON io.id = li.insertion_order_id
 JOIN accounts acc ON acc.id = li.account_id
@@ -164,6 +166,7 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 	var modifiersJSON string
 	var viewTarget sql.NullInt32
 	var creativesJSON string
+	var flightStart, flightEnd sql.NullTime
 	if err := scan(
 		&c.ID, &c.AccountID, &c.AdvertiserID, &c.IOId, &c.Name,
 		&c.BaseBid, &c.Currency, &c.DailyBudget, &c.TotalBudget,
@@ -177,8 +180,15 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 		&c.CreativeID, &c.CreativeDomain,
 		&viewTarget,
 		&creativesJSON,
+		&flightStart, &flightEnd,
 	); err != nil {
 		return models.Campaign{}, fmt.Errorf("scan campaign: %w", err)
+	}
+	if flightStart.Valid {
+		c.FlightStart = flightStart.Time
+	}
+	if flightEnd.Valid {
+		c.FlightEnd = flightEnd.Time
 	}
 	c.Creatives = parseCreativesJSON(creativesJSON)
 	if viewTarget.Valid {
