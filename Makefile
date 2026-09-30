@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites hosts devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites hosts security-demo devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -231,6 +231,9 @@ deploy-demosites: ## Deploy/refresh the 6 in-cluster demo publisher sites (own `
 
 hosts: ## Point every *.adtech.local ingress host (core + demo sites, derived from the chart) at the local Traefik ingress in /etc/hosts (idempotent; needs sudo). Override IP with ADTECH_HOSTS_IP.
 	bash scripts/hosts-setup.sh
+
+security-demo: ## LIVE "try to break it" run: fires real forgery/tamper/spoof/fraud/input attacks at the money+attribution paths and shows each rejected (fill-independent — constructs its own signed beacon). Needs `make demo-forward`. Full 9-attack proof = make test-e2e-security.
+	go run ./cmd/securitydemo
 
 demo-forward: ## Bridge host↔Rancher cluster: port-forward the serving fleet to localhost (run in its OWN terminal; Ctrl-C stops). Do this before demo-setup/demosite on k3s.
 	bash scripts/demo-forward.sh
