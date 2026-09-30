@@ -23,7 +23,7 @@
 
     {{range $i, $s := .Layout.Slots}}
     <div class="ad-label">Advertisement — {{$s.Label}} · {{$s.Format}}</div>
-    <div id="slot-{{$i}}" class="slot-box" data-idx="{{$i}}" data-format="{{$s.Format}}" data-placement="{{$s.PlacementKey}}"
+    <div id="slot-{{$i}}" class="slot-box" data-idx="{{$i}}" data-format="{{$s.Format}}" data-placement="{{$.Cfg.PlacementFor $s}}"
          {{if $s.Width}}style="max-width:{{$s.Width}}px"{{end}}>Loading {{$s.Format}}…</div>
     <div class="status" id="status-{{$i}}"></div>
     {{end}}

@@ -52,6 +52,12 @@ global:
     useSSL: true
     accessKey: ""
     secretKey: ""
+  # External demo publisher sites (cmd/demosite) as real in-cluster workloads in
+  # their OWN `demosites` namespace, gated OFF by default so they never affect the
+  # core stack. Enable with --set global.demosites=true (see templates/demosites.yaml
+  # + the `demosites:` block below). Purely additive: a new namespace + 3
+  # Deployments/Services/Ingresses (chronicle/gadget/streamhub).
+  demosites: false
 
 # TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
 # Same Ingress wiring in every env (templates/services.yaml terminates at
@@ -67,6 +73,59 @@ global:
 tls:
   enabled: true
   secretName: adtech-tls
+
+# External demo publisher sites (cmd/demosite). Only rendered when
+# global.demosites=true (default off). Each entry in `sites` becomes a branded
+# origin (DEMOSITE_SITE=<slug>) with its own Deployment + Service + Ingress at
+# <slug>.<global.domain>. The demosite is a THIRD PARTY by design: its HTML hands
+# the BROWSER these PUBLIC ingress URLs (cross-origin fetch), NEVER in-cluster DNS.
+# urls.* default to <scheme>://{pubad,gateway}.<global.domain> — override for a real
+# public domain. tls.crt/tls.key are the base64 PEM of the wildcard *.adtech.local
+# dev cert, COPIED into the demosites namespace so the per-site Ingress can
+# reference it (Ingress→Secret is same-namespace only); `make stack-up` fills them
+# from the same dev/tls material as the core adtech-tls secret. Empty → the
+# Ingress falls back to plain HTTP (:80).
+demosites:
+  namespace: demosites
+  image: adtech-demosite
+  imagePullPolicy: IfNotPresent
+  port: 9000
+  # Each site maps to its OWN seeded "DEMO SITE -" publisher + full placement set
+  # (profiles/publishers/demosites.yaml) so ads serve and impressions attribute to
+  # that distinct tenant, not the shared pub-simulator. slug = DEMOSITE_SITE +
+  # ingress subdomain. (A bare slug string still works — legacy pub-simulator mode.)
+  sites:
+    - slug: chronicle
+      siteName: "DEMO SITE - The Daily Chronicle"
+      publisherId: pub-demosite-chronicle
+      placements:
+        display: pl-demosite-chronicle-display
+        native: pl-demosite-chronicle-native
+        video: pl-demosite-chronicle-video
+        audio: pl-demosite-chronicle-audio
+    - slug: gadget
+      siteName: "DEMO SITE - Gadget Grotto"
+      publisherId: pub-demosite-gadget
+      placements:
+        display: pl-demosite-gadget-display
+        native: pl-demosite-gadget-native
+        video: pl-demosite-gadget-video
+        audio: pl-demosite-gadget-audio
+    - slug: streamhub
+      siteName: "DEMO SITE - StreamHub"
+      publisherId: pub-demosite-streamhub
+      placements:
+        display: pl-demosite-streamhub-display
+        native: pl-demosite-streamhub-native
+        video: pl-demosite-streamhub-video
+        audio: pl-demosite-streamhub-audio
+  urls:
+    pubad: ""   # default https://pubad.<domain>
+    sdk: ""     # default https://gateway.<domain>/static/adtech.js
+    media: ""   # default https://gateway.<domain>
+  tls:
+    crt: ""     # base64 PEM cert (wildcard *.adtech.local), filled by dev loop
+    key: ""     # base64 PEM key
 
 # Traefik ingress controller (own `traefik` namespace). Rendered verbatim from
 # files/traefik-install.yaml (a copy of k8s/base/traefik/install.yaml) because

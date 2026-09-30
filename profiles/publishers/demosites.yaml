@@ -1,0 +1,118 @@
+# DEMO SITE publishers — one dedicated, real seeded publisher per in-cluster
+# demosite (cmd/demosite, deployed into the `demosites` namespace via
+# k8s/helm/adtech/templates/demosites.yaml). Each is DISTINCT so every page slot
+# fills and impressions attribute to THAT site's own publisher, findable by the
+# "DEMO SITE -" name prefix in the publisher portal / impressions.
+#
+# Each publisher carries a FULL placement set (one display / native / video /
+# audio) so every pkg/simulator/pages layout slot has a properly-typed placement
+# to serve against. Floors mirror pub-simulator (pl-sim-*) so the seeded demand
+# clears. External keys are deterministic (pub-demosite-<slug>, pl-demosite-<slug>-<fmt>);
+# the demosite deployment points its slots at these via DEMOSITE_*_PLACEMENT.
+name: demosites
+
+publishers:
+  - id: pub-demosite-chronicle
+    name: "DEMO SITE - The Daily Chronicle"
+    domain: "chronicle.adtech.local"
+    currency: USD
+    revshare_pct: 70
+    placements:
+      - id: pl-demosite-chronicle-display
+        name: "DEMO SITE - The Daily Chronicle · Display MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "https://chronicle.adtech.local/"
+        categories: [IAB12]
+      - id: pl-demosite-chronicle-native
+        name: "DEMO SITE - The Daily Chronicle · Native In-Feed"
+        format: native
+        floor_price: 1.00
+        page_url: "https://chronicle.adtech.local/"
+        categories: [IAB12]
+      - id: pl-demosite-chronicle-video
+        name: "DEMO SITE - The Daily Chronicle · Video Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "https://chronicle.adtech.local/"
+        categories: [IAB12]
+      - id: pl-demosite-chronicle-audio
+        name: "DEMO SITE - The Daily Chronicle · Audio Spot"
+        format: audio
+        floor_price: 1.50
+        page_url: "https://chronicle.adtech.local/"
+        categories: [IAB12]
+
+  - id: pub-demosite-gadget
+    name: "DEMO SITE - Gadget Grotto"
+    domain: "gadget.adtech.local"
+    currency: USD
+    revshare_pct: 65
+    placements:
+      - id: pl-demosite-gadget-display
+        name: "DEMO SITE - Gadget Grotto · Display MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "https://gadget.adtech.local/"
+        categories: [IAB19]
+      - id: pl-demosite-gadget-native
+        name: "DEMO SITE - Gadget Grotto · Native In-Feed"
+        format: native
+        floor_price: 1.00
+        page_url: "https://gadget.adtech.local/"
+        categories: [IAB19]
+      - id: pl-demosite-gadget-video
+        name: "DEMO SITE - Gadget Grotto · Video Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "https://gadget.adtech.local/"
+        categories: [IAB19]
+      - id: pl-demosite-gadget-audio
+        name: "DEMO SITE - Gadget Grotto · Audio Spot"
+        format: audio
+        floor_price: 1.50
+        page_url: "https://gadget.adtech.local/"
+        categories: [IAB19]
+
+  - id: pub-demosite-streamhub
+    name: "DEMO SITE - StreamHub"
+    domain: "streamhub.adtech.local"
+    currency: USD
+    revshare_pct: 80
+    placements:
+      - id: pl-demosite-streamhub-display
+        name: "DEMO SITE - StreamHub · Display MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "https://streamhub.adtech.local/"
+        categories: [IAB1]
+      - id: pl-demosite-streamhub-native
+        name: "DEMO SITE - StreamHub · Native In-Feed"
+        format: native
+        floor_price: 1.00
+        page_url: "https://streamhub.adtech.local/"
+        categories: [IAB1]
+      - id: pl-demosite-streamhub-video
+        name: "DEMO SITE - StreamHub · Video Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "https://streamhub.adtech.local/"
+        categories: [IAB1]
+      - id: pl-demosite-streamhub-audio
+        name: "DEMO SITE - StreamHub · Audio Spot"
+        format: audio
+        floor_price: 1.50
+        page_url: "https://streamhub.adtech.local/"
+        categories: [IAB1]
