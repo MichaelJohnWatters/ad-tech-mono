@@ -21,6 +21,15 @@ if ! curl -fsS -o /dev/null --max-time 3 "$GW/healthz"; then
 fi
 echo "  ✔ gateway reachable"
 
+echo "▶ [0a] mapping *.adtech.local hostnames in /etc/hosts (so the browser can reach the HTTPS ingress by name)…"
+# Idempotent + sudo-aware; on a no-op it won't prompt. Set SKIP_HOSTS=1 to skip
+# (e.g. non-interactive runs where you don't want a sudo prompt).
+if [ "${SKIP_HOSTS:-0}" = "1" ]; then
+  echo "  ~ SKIP_HOSTS=1 — skipping (run 'make hosts' yourself)"
+else
+  bash scripts/hosts-setup.sh || echo "  ⚠ couldn't update /etc/hosts — run 'make hosts' (needs sudo)"
+fi
+
 echo "▶ [0b] ensuring full trace sampling (so the pub-sim trace panel shows Jaeger spans)…"
 # Bump the whole fleet's trace sampling to 1.0 THROUGH helm (global.otelSampleRatio),
 # not an out-of-band `kubectl set env` — the latter created a competing field-manager
