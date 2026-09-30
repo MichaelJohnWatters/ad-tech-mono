@@ -1178,6 +1178,7 @@ async function loadPlacements() {
       <td class="px-3 py-2 text-right whitespace-nowrap">
         <button onclick="togglePlacement('${esc(p.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">${p.Status === 'paused' ? 'Resume' : 'Pause'}</button>
         <button onclick="openEditPlacement('${esc(p.ID)}')" class="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">Edit</button>
+        <button onclick="archivePlacement('${esc(p.ID)}','${esc(p.Name)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Archive</button>
       </td>
     </tr>`).join('');
   loadPlacementFill();
@@ -1369,6 +1370,17 @@ async function togglePlacement(id) {
     toast(next === 'paused' ? 'Placement paused' : 'Placement resumed', 'success');
     loadPlacements();
   } catch (err) { toast('Update failed: ' + err.message, 'error'); }
+}
+
+// Archive = soft-delete (DELETE sets status='archived'); it stops serving and drops
+// from the list. Enabled by migration 106 (the archived status was previously
+// rejected by placements_status_check → 500).
+async function archivePlacement(id, name) {
+  try {
+    await fetchJSON('/v1/api/placements/' + encodeURIComponent(id), {method: 'DELETE'});
+    toast(`Archived "${name}" — no longer serving`, 'success');
+    loadPlacements();
+  } catch (err) { toast('Archive failed: ' + err.message, 'error'); }
 }
 
 function openEditPlacement(id) {
