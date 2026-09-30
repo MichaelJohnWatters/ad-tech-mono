@@ -22,17 +22,22 @@ fi
 echo "  ✔ gateway reachable"
 
 echo "▶ [0b] ensuring full trace sampling (so the pub-sim trace panel shows Jaeger spans)…"
+# Bump the whole fleet's trace sampling to 1.0 THROUGH helm (global.otelSampleRatio),
+# not an out-of-band `kubectl set env` — the latter created a competing field-manager
+# on the deployments that then broke every later `helm upgrade` (field conflict).
+# The chart injects this env LAST so it wins over each service's per-service default.
 cur=$(kubectl get deploy exchange -n adtech -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="OTEL_SAMPLE_RATIO")].value}' 2>/dev/null)
 if [ "$cur" = "1.0" ]; then
   echo "  ✔ already at 1.0 (no restart)"
-else
-  echo "  … was '$cur' → setting 1.0 on the serving fleet (rolling restart ~1 min)"
-  kubectl set env -n adtech \
-    deploy/exchange deploy/ssp deploy/dsp-internal deploy/adserver deploy/tracker \
-    deploy/reporting deploy/publisher-adserver deploy/ssai deploy/transcoder \
-    deploy/dsp-competitor1 deploy/dsp-competitor2 OTEL_SAMPLE_RATIO=1.0 >/dev/null 2>&1 \
+elif [ "$(kubectl config current-context 2>/dev/null)" = "rancher-desktop" ]; then
+  echo "  … was '$cur' → helm upgrade --set global.otelSampleRatio=1.0 (rolling restart ~1 min)"
+  helm upgrade --install adtech k8s/helm/adtech --reuse-values \
+    --set global.otelSampleRatio=1.0 --timeout 5m >/dev/null 2>&1 \
     && kubectl rollout status -n adtech deploy/exchange --timeout=120s >/dev/null 2>&1 \
-    || echo "  ⚠ couldn't set sampling (kubectl?) — pub-sim Jaeger rows may stay sparse"
+    && echo "  ✔ sampling at 1.0 (helm-owned)" \
+    || echo "  ⚠ couldn't set sampling via helm — pub-sim Jaeger rows may stay sparse"
+else
+  echo "  ⚠ context is not rancher-desktop — skipping sampling bump"
 fi
 
 echo "▶ [1/6] seeding accounts, campaigns, placements, creatives…"

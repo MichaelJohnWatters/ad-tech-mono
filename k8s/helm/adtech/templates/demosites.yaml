@@ -12,9 +12,9 @@ Why a self-contained template instead of the generic `services:` map:
     browser-reachable PUBLIC ingress URLs only — never in-cluster DNS. So all its
     platform URLs are the ingress hostnames the BROWSER fetches cross-origin
     (SDK/pubad/media), not service DNS.
-  - It serves three BRANDED origins from ONE image via DEMOSITE_SITE
-    (chronicle/gadget/streamhub — pkg/simulator/pages), each its own
-    Deployment + Service + per-site Ingress hostname.
+  - It serves several BRANDED origins from ONE image via DEMOSITE_SITE
+    (chronicle/gadget/primereel/soundwave/twitchr — pkg/simulator/pages), each
+    its own Deployment + Service + per-site Ingress hostname.
 
 Enable:  helm upgrade adtech k8s/helm/adtech --reuse-values --set global.demosites=true
 Verify:  curl -skL --resolve chronicle.adtech.local:443:<LB-IP> https://chronicle.adtech.local/
@@ -45,6 +45,10 @@ the same tls.certManager knob as the core chart.
 {{- $pubadURL := $urls.pubad | default (printf "%s://pubad.%s" $scheme $domain) }}
 {{- $sdkURL := $urls.sdk | default (printf "%s://gateway.%s/static/adtech.js" $scheme $domain) }}
 {{- $mediaURL := $urls.media | default (printf "%s://gateway.%s" $scheme $domain) }}
+{{- /* SSAI stitcher is reached BROWSER-side via the gateway proxy
+       (routes.ProxySSAI = /v1/ssai) — the ssai service has no public ingress of
+       its own (cmd/ssai/CLAUDE.md). */ -}}
+{{- $ssaiURL := $urls.ssai | default (printf "%s://gateway.%s/v1/ssai" $scheme $domain) }}
 {{- /* Only wire the copied TLS cert if BOTH the crt and key are present (local
        mkcert path). cert-manager path: tls.certManager set → per-ingress secret. */ -}}
 {{- $dtls := $d.tls | default dict }}
@@ -56,7 +60,7 @@ the same tls.certManager knob as the core chart.
        OWN seeded "DEMO SITE -" publisher (profiles/publishers/demosites.yaml):
          { slug, publisherId, siteName, placements: {display,native,video,audio} }
        slug = DEMOSITE_SITE + the ingress subdomain. */ -}}
-{{- $sites := $d.sites | default (list "chronicle" "gadget" "streamhub") }}
+{{- $sites := $d.sites | default (list "chronicle" "gadget" "primereel" "soundwave" "twitchr") }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -164,6 +168,8 @@ spec:
               value: {{ $sdkURL | quote }}
             - name: DEMOSITE_MEDIA_URL
               value: {{ $mediaURL | quote }}
+            - name: DEMOSITE_SSAI_URL
+              value: {{ $ssaiURL | quote }}
             {{- with $d.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

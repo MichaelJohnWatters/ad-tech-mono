@@ -43,12 +43,18 @@ type siteConfig struct {
 	// default demo property showing every layout.
 	SiteName    string
 	SiteTagline string
+	Kind        string         // pages.Site.Kind — drives nav + which pages this origin shows
 	Layouts     []pages.Layout // the layouts this site shows (its "Pages" nav)
 	// Per-format seeded placement external IDs (idgen-derived server-side).
 	DisplayPlacement string
 	VideoPlacement   string
 	AudioPlacement   string
 	NativePlacement  string
+	// SSAIURL is the BROWSER-reachable base of the SSAI stitcher. The stitcher
+	// has no public ingress of its own; the browser reaches it via the gateway
+	// proxy (routes.ProxySSAI = /v1/ssai — cmd/ssai/CLAUDE.md), so this defaults
+	// to the gateway.
+	SSAIURL string
 }
 
 type page struct {
@@ -108,6 +114,7 @@ func main() {
 		PubadURL:         env("DEMOSITE_PUBAD_URL", "http://localhost:8088"),
 		SDKURL:           env("DEMOSITE_SDK_URL", "http://localhost:8080/static/adtech.js"),
 		MediaURL:         env("DEMOSITE_MEDIA_URL", "http://localhost:8080"),
+		SSAIURL:          env("DEMOSITE_SSAI_URL", "http://localhost:8080/v1/ssai"),
 		PublisherID:      env("DEMOSITE_PUBLISHER_ID", "pub-simulator"),
 		DisplayPlacement: env("DEMOSITE_DISPLAY_PLACEMENT", "pl-sim-mpu"),
 		VideoPlacement:   env("DEMOSITE_VIDEO_PLACEMENT", "pl-sim-video"),
@@ -127,6 +134,7 @@ func main() {
 		}
 		cfg.SiteName = site.Name
 		cfg.SiteTagline = site.Tagline
+		cfg.Kind = site.Kind
 		cfg.Layouts = site.Layouts()
 	}
 	// Explicit masthead override — lets a deployment brand the site exactly (e.g.
@@ -142,10 +150,6 @@ func main() {
 
 	render := func(name, title, active string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" && name == "home.html" {
-				http.NotFound(w, r)
-				return
-			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			if err := tmpl.ExecuteTemplate(w, name, page{Cfg: cfg, Active: active, Title: title}); err != nil {
 				log.Printf("render %s: %v", name, err)
@@ -154,10 +158,32 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", render("home.html", cfg.SiteName, "home"))
+	// The homepage template depends on the property's Kind: an audio-only app
+	// (SoundWave) opens on the player, an SSAI/live app (Twitchr) opens on the
+	// live stitched stream; everything else keeps the news homepage. The "/"
+	// handler is a catch-all in http.ServeMux, so 404 any non-root path here.
+	homeTmpl, homeActive := "home.html", "home"
+	switch cfg.Kind {
+	case "audio":
+		homeTmpl, homeActive = "audio.html", "audio"
+	case "ssai":
+		homeTmpl, homeActive = "ssai.html", "live"
+	}
+	homeRender := render(homeTmpl, cfg.SiteName, homeActive)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		homeRender(w, r)
+	})
 	mux.HandleFunc("/video", render("video.html", "Video — "+cfg.SiteName, "video"))
 	mux.HandleFunc("/audio", render("audio.html", "Audio — "+cfg.SiteName, "audio"))
 	mux.HandleFunc("/native", render("native.html", "Native — "+cfg.SiteName, "native"))
+	// Live/CTV page with server-side ad insertion (Twitchr). The player fetches
+	// the STITCHED manifest from the SSAI stitcher (via the gateway proxy) — the
+	// ad breaks are spliced server-side, never fetched by the client.
+	mux.HandleFunc("/live", render("ssai.html", "Live — "+cfg.SiteName, "live"))
 
 	// Multi-slot combo pages, defined once in pkg/simulator/pages (the same
 	// layouts the e2e replays). /pages lists THIS site's set; /p/{slug} renders one

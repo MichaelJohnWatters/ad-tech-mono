@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -209,6 +209,25 @@ stack-up: ## Deploy/upgrade the full local stack via helm (builds images first)
 	    --cert=dev/tls/localhost.pem --key=dev/tls/localhost-key.pem \
 	    --dry-run=client -o yaml | kubectl apply -f - >/dev/null && echo "adtech-tls (ingress) secret applied"; \
 	else echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS ingress"; fi
+	@if [ "$(DEMOSITES)" = "1" ]; then $(MAKE) deploy-demosites; fi
+
+deploy-demosites: ## Deploy/refresh the 6 in-cluster demo publisher sites (own `demosites` ns, HTTPS from dev/tls). Scoped apply — never touches adtech-core. Needs the stack up + seeded (profiles/publishers/demosites.yaml).
+	@[ "$$(kubectl config current-context)" = "rancher-desktop" ] || { echo "kubectl context is not rancher-desktop"; exit 1; }
+	@[ -f dev/tls/localhost.pem ] || { echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS demo sites"; exit 1; }
+	scripts/stack-images.sh demosite
+	@# The demosites Ingress needs the wildcard cert COPIED into its namespace as a
+	@# base64 `data:` Secret; feed it from the same dev/tls material as adtech-tls.
+	@# Scoped `helm template … --show-only | kubectl apply` deploys ONLY the
+	@# demosites objects — it deliberately avoids a full `helm upgrade`, which can
+	@# conflict on fields a prior `kubectl set env` (pre-fix demo-setup) owned.
+	@CRT=$$(base64 < dev/tls/localhost.pem | tr -d '\n'); \
+	 KEY=$$(base64 < dev/tls/localhost-key.pem | tr -d '\n'); \
+	 helm template adtech k8s/helm/adtech --set global.demosites=true --set tls.enabled=true \
+	   --set-string demosites.tls.crt="$$CRT" --set-string demosites.tls.key="$$KEY" \
+	   --show-only templates/demosites.yaml | kubectl apply -f -
+	@for d in $$(kubectl -n demosites get deploy -o name 2>/dev/null); do kubectl -n demosites rollout status $$d --timeout=180s; done
+	@echo "demo sites → https://{chronicle,gadget,primereel,soundwave,twitchr,viewtube}.adtech.local"
+	@echo "add to /etc/hosts:  192.168.64.2  primereel.adtech.local soundwave.adtech.local twitchr.adtech.local viewtube.adtech.local"
 
 demo-forward: ## Bridge host↔Rancher cluster: port-forward the serving fleet to localhost (run in its OWN terminal; Ctrl-C stops). Do this before demo-setup/demosite on k3s.
 	bash scripts/demo-forward.sh

@@ -141,6 +141,19 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- /* OTEL sampling override: one global.otelSampleRatio, when set,
+                   wins over each service's per-service OTEL_SAMPLE_RATIO default
+                   (appended last → k8s uses the last value for a repeated env
+                   name). Lets `helm upgrade --set global.otelSampleRatio=1.0`
+                   bump the whole fleet's trace sampling THROUGH helm, so
+                   demo-setup no longer needs an out-of-band `kubectl set env`
+                   (which created a competing field-manager that broke later
+                   `helm upgrade`s). Empty → no override, per-service default stands. */}}
+            {{- $otel := (($.Values.global | default dict).otelSampleRatio) }}
+            {{- if $otel }}
+            - name: OTEL_SAMPLE_RATIO
+              value: {{ $otel | quote }}
+            {{- end }}
           {{- with $svc.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

@@ -147,6 +147,29 @@ var layouts = []Layout{
 			{Format: Audio, PlacementKey: placeAudio, Label: "Audio spot"},
 		},
 	},
+	{
+		// Audio-only property (Spotify-style app, DEMO SITE - SoundWave). One
+		// audio slot: the branded origin plays a DAAST audio ad, then content.
+		Slug:  "audio-only",
+		Title: "Now playing",
+		Desc:  "A music/podcast app that serves only audio ads — a single DAAST spot before the stream.",
+		Slots: []Slot{
+			{Format: Audio, PlacementKey: placeAudio, Label: "Audio spot"},
+		},
+	},
+	{
+		// SSAI/live property (Twitch-style, DEMO SITE - Twitchr). The break
+		// auction is a real video auction (SSP→exchange→DSP); the stitcher
+		// splices the winner into the live manifest server-side. Modelled as a
+		// single video slot so the layout is well-formed; the demosite renders
+		// it via a dedicated SSAI player page, not a /v1/pubad/* fetch.
+		Slug:  "ssai-live",
+		Title: "Live stream",
+		Desc:  "A live/CTV stream with server-side ad insertion — ad breaks are stitched into the manifest, not fetched by the player.",
+		Slots: []Slot{
+			{Format: Video, PlacementKey: placeVideo, Label: "SSAI break", Width: 640, Height: 360},
+		},
+	},
 }
 
 // All returns every registered layout in stable order.

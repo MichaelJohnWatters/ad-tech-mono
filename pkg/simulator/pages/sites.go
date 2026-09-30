@@ -62,10 +62,35 @@ var sites = []Site{
 		LayoutSlugs: []string{"feed-8ad", "all-formats"},
 	},
 	{
-		Slug: "streamhub", Name: "StreamHub", Tagline: "Watch and listen",
-		Kind: "video", Publisher: "pub-streamhub", Domain: "streamhub.example",
+		Slug: "primereel", Name: "PrimeReel", Tagline: "Stream the good stuff",
+		Kind: "video", Publisher: "pub-primereel", Domain: "primereel.example",
 		RevsharePct: 80,
 		LayoutSlugs: []string{"video-hub", "all-formats", "longread-6ad"},
+	},
+	{
+		// Spotify-style audio/music app — audio-only. Its only page is the
+		// audio player (no display/native/video layouts) so the branded origin
+		// serves DAAST audio exclusively.
+		Slug: "soundwave", Name: "SoundWave", Tagline: "Music, podcasts, and audio ads",
+		Kind: "audio", Publisher: "pub-soundwave", Domain: "soundwave.example",
+		RevsharePct: 75,
+		LayoutSlugs: []string{"audio-only"},
+	},
+	{
+		// Twitch-style live/CTV streaming — SSAI-only. Its page is the live
+		// stitched-stream player (server-side ad insertion), no client VAST.
+		Slug: "twitchr", Name: "Twitchr", Tagline: "Live streams, stitched ads",
+		Kind: "ssai", Publisher: "pub-twitchr", Domain: "twitchr.example",
+		RevsharePct: 70,
+		LayoutSlugs: []string{"ssai-live"},
+	},
+	{
+		// YouTube-style UGC video — client-side VAST (the player inserts the
+		// pre-roll itself, the counterpoint to Twitchr's server-side SSAI).
+		Slug: "viewtube", Name: "ViewTube", Tagline: "Watch, upload, pre-roll",
+		Kind: "video", Publisher: "pub-viewtube", Domain: "viewtube.example",
+		RevsharePct: 68,
+		LayoutSlugs: []string{"video-hub", "feed-8ad"},
 	},
 }
 
