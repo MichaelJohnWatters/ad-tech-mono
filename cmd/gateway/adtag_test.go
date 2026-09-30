@@ -86,9 +86,16 @@ func TestAdTagHandler(t *testing.T) {
 		t.Errorf("no placement_id code = %d, want 400", rec.Code)
 	}
 
-	// Unknown/cross-tenant placement → 404.
+	// Malformed (non-UUID) placement_id → 400 (client error, not a store 500).
 	rec = httptest.NewRecorder()
-	adTagHandler(&fakeAdTagStore{notFound: true}, "/sdk/v2/adtech.js", quietLog())(rec, adtagReq("/v1/api/adtag?placement_id=zzz", pub))
+	adTagHandler(&fakeAdTagStore{p: p}, "/sdk/v2/adtech.js", quietLog())(rec, adtagReq("/v1/api/adtag?placement_id=zzz", pub))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed placement_id code = %d, want 400", rec.Code)
+	}
+
+	// Unknown/cross-tenant placement (valid UUID, not found) → 404.
+	rec = httptest.NewRecorder()
+	adTagHandler(&fakeAdTagStore{notFound: true}, "/sdk/v2/adtech.js", quietLog())(rec, adtagReq("/v1/api/adtag?placement_id=11111111-1111-1111-1111-111111111111", pub))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("not-found code = %d, want 404", rec.Code)
 	}
