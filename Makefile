@@ -219,6 +219,9 @@ demo-setup: ## Interview-ready: seed + warm (prewarm/SSAI) + baseline traffic + 
 demo-loadtest: ## Interview grand-finale: short (~4m) soak tuned for SPREAD (competitive bids + asap pacing + freq caps) so dashboards come alive. Tune RPS/DURATION/USER_POOL. Needs `make demo-forward`.
 	bash scripts/demo-loadtest.sh
 
+demo-cmaf: ## Opt-in: make the SSAI "Video · DASH (CMAF)" path real — package an fMP4/CMAF content origin + warm the fMP4 ad conditioning. Run after demo-setup. Needs `make demo-forward`.
+	bash scripts/ssai-cmaf.sh
+
 demosite: ## Run the external demo publisher site (host process, :9000). Needs the stack up + seeded.
 	@echo "demosite (external publisher) → http://localhost:9000  (Ctrl-C to stop)"
 	@echo "for the public TLS path: see cmd/demosite/README.md"
