@@ -423,6 +423,12 @@ const (
 	// assembled 5-step before→after timeline.
 	APIDemoRetargetingRun = apiPrefix + "/api/demo/retargeting/run"
 
+	// APIGlossary is the staff-only ad-tech glossary reference (GET, support:read):
+	// static, code-grounded term/definition data served from pkg/glossary (no DB).
+	// A read-only learning/interview study aid; platform-global (same list for
+	// every staff caller).
+	APIGlossary = apiPrefix + "/api/glossary"
+
 	// APIBatchRuns is the staff batch-conductor monitor (GET, support:read):
 	// recent chain runs with per-step status — what ran, in what order,
 	// what failed, what got skipped.

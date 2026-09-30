@@ -701,6 +701,9 @@ func main() {
 
 	mux.Handle(routes.APIBatchRuns, authMiddleware(http.HandlerFunc(batchMonitorHandler(gwDB, log))))
 	mux.Handle(routes.APIBatchLake, authMiddleware(http.HandlerFunc(batchLakeHandler(reportingURL, log))))
+	// Staff ad-tech glossary — static, code-grounded reference (pkg/glossary,
+	// no DB). Read-only learning aid gated on support:read.
+	mux.Handle(routes.APIGlossary, authMiddleware(http.HandlerFunc(glossaryHandler(log))))
 	mux.Handle(routes.APIIdentityLinks, secretsAuth(http.HandlerFunc(identityLinksHandler(idStore, log))))
 
 	// Privacy opt-out intake — operator-API-key auth like the others. Records
