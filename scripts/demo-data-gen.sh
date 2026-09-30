@@ -20,7 +20,7 @@ curl -fsS -o /dev/null --max-time 3 "$GW/healthz" || { echo "✗ run 'make demo-
 # campaign_committed_spend.campaign_id is TEXT and == line_items.id.
 ADVS=$(PSQL -tAc "SELECT DISTINCT li.account_id::text
   FROM campaign_committed_spend ccs JOIN line_items li ON li.id::text = ccs.campaign_id
-  WHERE ccs.settled_micros > 0 LIMIT 4" 2>/dev/null)
+  WHERE ccs.settled_micros > 0 LIMIT 8" 2>/dev/null)
 echo "  advertisers with spend to work from: $(echo "$ADVS" | grep -c . )"
 
 echo "▶ [1/7] cleanup: purge orphaned marketplace_surcharge_earnings (seller account deleted)…"
@@ -96,7 +96,7 @@ echo "▶ [7/7] audiences: load 1st-party segments (+members) + a 3rd-party data
 # generate_series so size + match_rate are honest), plus one third-party data
 # provider + licensed segments. Idempotent: skip an advertiser that already has any.
 i=0
-for ADV in $(echo "$ADVS" | head -2); do
+for ADV in $(echo "$ADVS" | head -6); do
   i=$((i+1))
   have=$(PSQL -tAc "SELECT count(*) FROM audience_segments WHERE account_id='$ADV'" 2>/dev/null | tr -d ' ')
   [ "${have:-0}" -gt 0 ] && { echo "  ~ $ADV already has $have segments — skip"; continue; }
