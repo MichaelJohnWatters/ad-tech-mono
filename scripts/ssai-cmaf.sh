@@ -43,12 +43,17 @@ echo "        content until the async warm lands ~30s later)…"
 ORIGIN="$GW/v1/creatives/ssai/content/sample-cmaf/master.m3u8"
 OENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$ORIGIN")
 URL="$GW/v1/ssai/manifest.mpd?placement_id=pl-sim-video&geo=USA&device=ctv&origin=$OENC"
-ads=0
-for i in $(seq 1 16); do
+# The break auction rotates across several eligible bunny creatives, and EACH needs
+# its own fMP4 conditioning (a different transcode profile than the TS one prewarm
+# does). So keep fetching until fill is STABLE (3 fetches in a row all filled) — that
+# means every creative that can win a break has been conditioned to CMAF and cached.
+stable=0
+for i in $(seq 1 30); do
   ads=$(curl -s --max-time 8 "$URL" 2>/dev/null | grep -c '/v1/ssai/seg' || true)
-  printf "  t=%3ds → ad segments in MPD: %s\n" "$(((i-1)*12))" "$ads"
-  [ "$ads" -gt 0 ] && break
-  sleep 12
+  if [ "$ads" -gt 0 ]; then stable=$((stable+1)); else stable=0; fi
+  printf "  t=%3ds → ad segments: %-2s  (consecutive fills: %s/3)\n" "$(((i-1)*10))" "$ads" "$stable"
+  [ "$stable" -ge 3 ] && break
+  sleep 10
 done
 
 echo "▶ [3/3] VERIFY — does the DASH multi-period MPD splice ads?"
