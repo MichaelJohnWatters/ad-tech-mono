@@ -59,6 +59,36 @@ type page struct {
 	Layouts []pages.Layout // all layouts (pages_index.html)
 }
 
+// PlacementFor maps a page layout's Slot.Format to THIS site's own seeded
+// placement external key. The pkg/simulator/pages Layout carries the shared
+// pub-simulator placement keys (so the e2e can replay them), but a branded
+// demosite instance must serve — and attribute impressions to — its OWN
+// publisher's placements. We therefore override the slot's placement by format
+// at render time using the per-format DEMOSITE_*_PLACEMENT env values captured
+// in siteConfig, falling back to the layout's own key when unset (the default
+// pub-simulator behaviour — backward compatible).
+func (c siteConfig) PlacementFor(s pages.Slot) string {
+	switch s.Format {
+	case pages.Display:
+		if c.DisplayPlacement != "" {
+			return c.DisplayPlacement
+		}
+	case pages.Native:
+		if c.NativePlacement != "" {
+			return c.NativePlacement
+		}
+	case pages.Video:
+		if c.VideoPlacement != "" {
+			return c.VideoPlacement
+		}
+	case pages.Audio:
+		if c.AudioPlacement != "" {
+			return c.AudioPlacement
+		}
+	}
+	return s.PlacementKey
+}
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -98,6 +128,13 @@ func main() {
 		cfg.SiteName = site.Name
 		cfg.SiteTagline = site.Tagline
 		cfg.Layouts = site.Layouts()
+	}
+	// Explicit masthead override — lets a deployment brand the site exactly (e.g.
+	// "DEMO SITE - The Daily Chronicle") independent of the DEMOSITE_SITE slug's
+	// pages.Site name, so the property is trivially findable by its "DEMO SITE -"
+	// prefix everywhere it surfaces.
+	if name := env("DEMOSITE_SITE_NAME", ""); name != "" {
+		cfg.SiteName = name
 	}
 	port := env("DEMOSITE_PORT", "9000")
 

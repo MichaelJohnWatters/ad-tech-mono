@@ -1,0 +1,240 @@
+{{- /*
+External demo publisher sites (cmd/demosite) — deployed INTO the cluster as
+real in-cluster workloads, but in their OWN namespace (default `demosites`) and
+gated behind global.demosites (default FALSE) so they NEVER touch the core
+`adtech` stack unless explicitly enabled.
+
+Why a self-contained template instead of the generic `services:` map:
+  - It must live in a SEPARATE namespace (a real "external publisher" origin,
+    isolated from the app), which the generic template can't express (it stamps
+    everything into adtech.namespace).
+  - The demosite is a THIRD PARTY by design (cmd/demosite/CLAUDE.md): plain env,
+    browser-reachable PUBLIC ingress URLs only — never in-cluster DNS. So all its
+    platform URLs are the ingress hostnames the BROWSER fetches cross-origin
+    (SDK/pubad/media), not service DNS.
+  - It serves three BRANDED origins from ONE image via DEMOSITE_SITE
+    (chronicle/gadget/streamhub — pkg/simulator/pages), each its own
+    Deployment + Service + per-site Ingress hostname.
+
+Enable:  helm upgrade adtech k8s/helm/adtech --reuse-values --set global.demosites=true
+Verify:  curl -skL --resolve chronicle.adtech.local:443:<LB-IP> https://chronicle.adtech.local/
+
+TLS: the per-site Ingress terminates at Traefik's websecure(443) exactly like the
+core ingresses. Locally the wildcard mkcert cert (*.adtech.local, secret
+`adtech-tls`) covers chronicle/gadget/streamhub — but that secret lives in the
+`adtech` namespace, and an Ingress can only reference a Secret in its OWN
+namespace, so we COPY the cert bytes into `demosites` (values.demosites.tls.crt/
+key, populated by `make stack-up` / a helper from the same dev/tls/*.pem). If the
+copied cert is absent we still create the Ingress but skip the `tls:` block (plain
+HTTP on :80) rather than reference a missing Secret. Prod uses cert-manager per
+the same tls.certManager knob as the core chart.
+*/ -}}
+{{- if eq (toString (($.Values.global | default dict).demosites)) "true" }}
+{{- $d := .Values.demosites | default dict }}
+{{- $ns := $d.namespace | default "demosites" }}
+{{- $domain := (($.Values.global | default dict).domain | default "adtech.local") }}
+{{- $tls := $.Values.tls | default dict }}
+{{- $port := int ($d.port | default 9000) }}
+{{- $image := $d.image | default "adtech-demosite" }}
+{{- $pullPolicy := $d.imagePullPolicy | default "IfNotPresent" }}
+{{- /* Browser-reachable ingress URLs the demosite HTML hands to the browser.
+       Derived from global.domain so they follow the env (adtech.local locally,
+       the real domain in prod). Overridable via values.demosites.urls.* . */ -}}
+{{- $urls := $d.urls | default dict }}
+{{- $scheme := ternary "https" "http" ($tls.enabled | default false) }}
+{{- $pubadURL := $urls.pubad | default (printf "%s://pubad.%s" $scheme $domain) }}
+{{- $sdkURL := $urls.sdk | default (printf "%s://gateway.%s/static/adtech.js" $scheme $domain) }}
+{{- $mediaURL := $urls.media | default (printf "%s://gateway.%s" $scheme $domain) }}
+{{- /* Only wire the copied TLS cert if BOTH the crt and key are present (local
+       mkcert path). cert-manager path: tls.certManager set → per-ingress secret. */ -}}
+{{- $dtls := $d.tls | default dict }}
+{{- $haveCopiedCert := and $dtls.crt $dtls.key }}
+{{- $tlsOn := and ($tls.enabled | default false) (or $haveCopiedCert $tls.certManager) }}
+{{- /* The branded sites. Each entry may be either a bare slug string (legacy —
+       DEMOSITE_SITE only, serves via pub-simulator) or a map with per-site
+       publisher/placement/name wiring so the site serves + attributes ads to its
+       OWN seeded "DEMO SITE -" publisher (profiles/publishers/demosites.yaml):
+         { slug, publisherId, siteName, placements: {display,native,video,audio} }
+       slug = DEMOSITE_SITE + the ingress subdomain. */ -}}
+{{- $sites := $d.sites | default (list "chronicle" "gadget" "streamhub") }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: adtech-mono
+    adtech.io/purpose: external-demo-publishers
+{{- if and $tlsOn $haveCopiedCert }}
+---
+{{- /* Copy the wildcard *.adtech.local dev cert into the demosites namespace so
+       the per-site Ingresses can reference it (Ingress→Secret is same-namespace
+       only). Populated from values.demosites.tls.{crt,key} (base64 PEM), which
+       the dev loop fills from the same dev/tls material as the core adtech-tls. */ -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tls.secretName | default "adtech-tls" }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: adtech-mono
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $dtls.crt }}
+  tls.key: {{ $dtls.key }}
+{{- end }}
+{{- range $site := $sites }}
+{{- /* Normalise: a bare string is just a slug; a map carries per-site wiring. */ -}}
+{{- $slug := "" }}
+{{- $siteCfg := dict }}
+{{- if kindIs "string" $site }}
+{{-   $slug = $site }}
+{{- else }}
+{{-   $siteCfg = $site }}
+{{-   $slug = $site.slug }}
+{{- end }}
+{{- $pl := $siteCfg.placements | default dict }}
+{{- $host := printf "%s.%s" $slug $domain }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demosite-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demosite-{{ $slug }}
+    adtech.io/component: demosite
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demosite-{{ $slug }}
+  template:
+    metadata:
+      labels:
+        app: demosite-{{ $slug }}
+        adtech.io/component: demosite
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: demosite
+          image: {{ include "adtech.image" (dict "name" $image "g" $.Values.global) }}
+          imagePullPolicy: {{ $pullPolicy }}
+          ports:
+            - containerPort: {{ $port }}
+              name: http
+          env:
+            - name: DEMOSITE_PORT
+              value: {{ $port | quote }}
+            - name: DEMOSITE_SITE
+              value: {{ $slug | quote }}
+            {{- /* Per-site publisher + placement wiring: point THIS site's slots
+                   at its own seeded "DEMO SITE -" publisher so ads serve and
+                   impressions attribute to that distinct tenant (not the shared
+                   pub-simulator). Omitted → demosite defaults to pub-simulator. */ -}}
+            {{- if $siteCfg.siteName }}
+            - name: DEMOSITE_SITE_NAME
+              value: {{ $siteCfg.siteName | quote }}
+            {{- end }}
+            {{- if $siteCfg.publisherId }}
+            - name: DEMOSITE_PUBLISHER_ID
+              value: {{ $siteCfg.publisherId | quote }}
+            {{- end }}
+            {{- if $pl.display }}
+            - name: DEMOSITE_DISPLAY_PLACEMENT
+              value: {{ $pl.display | quote }}
+            {{- end }}
+            {{- if $pl.native }}
+            - name: DEMOSITE_NATIVE_PLACEMENT
+              value: {{ $pl.native | quote }}
+            {{- end }}
+            {{- if $pl.video }}
+            - name: DEMOSITE_VIDEO_PLACEMENT
+              value: {{ $pl.video | quote }}
+            {{- end }}
+            {{- if $pl.audio }}
+            - name: DEMOSITE_AUDIO_PLACEMENT
+              value: {{ $pl.audio | quote }}
+            {{- end }}
+            # Browser-reachable PUBLIC ingress URLs — the browser fetches these
+            # cross-origin. MUST NOT be in-cluster service DNS.
+            - name: DEMOSITE_PUBAD_URL
+              value: {{ $pubadURL | quote }}
+            - name: DEMOSITE_SDK_URL
+              value: {{ $sdkURL | quote }}
+            - name: DEMOSITE_MEDIA_URL
+              value: {{ $mediaURL | quote }}
+            {{- with $d.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            initialDelaySeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            periodSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demosite-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demosite-{{ $slug }}
+spec:
+  selector:
+    app: demosite-{{ $slug }}
+  ports:
+    - name: http
+      port: {{ $port }}
+      targetPort: {{ $port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demosite-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demosite-{{ $slug }}
+  annotations:
+    {{- if $tlsOn }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    {{- if $tls.certManager }}
+    cert-manager.io/cluster-issuer: {{ $tls.certManager.clusterIssuer | quote }}
+    {{- end }}
+    {{- else }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
+spec:
+  ingressClassName: traefik
+  {{- if $tlsOn }}
+  tls:
+    - hosts:
+        - {{ $host }}
+      secretName: {{ if $tls.certManager }}demosite-{{ $slug }}-tls{{ else }}{{ $tls.secretName | default "adtech-tls" }}{{ end }}
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demosite-{{ $slug }}
+                port:
+                  number: {{ $port }}
+{{- end }}
+{{- end }}
