@@ -216,6 +216,7 @@ var staffNav = []NavItem{
 	{Label: "Retargeting", Href: "#retargeting", Icon: "🎯", Perm: "support:read"},
 	{Label: "Onboarding", Href: "#onboarding", Icon: "⇥", Perm: "support:read"},
 	{Label: "Demos", Href: "#demos", Icon: "🎓", Perm: "support:read"},
+	{Label: "Glossary", Href: "#glossary", Icon: "📖", Perm: "support:read"},
 	{Label: "Batch runs", Href: "#batchruns", Icon: "⛓", Perm: "support:read"},
 	{Label: "Support", Href: "#support", Icon: "✉", Perm: "support:read"},
 	{Label: "Ops", Href: "#ops", Icon: "⎈", Perm: "ops:read"},

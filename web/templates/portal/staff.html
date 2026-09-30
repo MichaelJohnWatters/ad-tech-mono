@@ -426,6 +426,18 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Glossary (ad-tech terms + how this platform does it) ============ -->
+    <section id="section-glossary" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Ad-tech glossary" "subtitle" "Plain-English definitions of the terms this platform touches — each paired with a \"How this platform does it\" note pointing at the actual service / package / file. A learning + interview study aid. Static reference (pkg/glossary); read-only.") }}
+      <div class="flex flex-wrap items-center gap-3 mb-4">
+        <input id="glSearch" type="text" placeholder="Search terms, definitions, categories, files…" oninput="renderGlossary()"
+          class="flex-1 min-w-[220px] rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-3 py-2 text-sm" />
+        <span id="glCount" class="text-xs text-gray-400"></span>
+      </div>
+      <div id="glossaryBody"><p class="text-sm text-gray-400">loading…</p></div>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Batch runs (conductor) ============ -->
     <section id="section-batchruns" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Batch chain runs" "subtitle" "checkpoint → compact → rollups → profile-builder → privacy — every step, in order, with its outcome") }}
@@ -879,7 +891,7 @@ async function staffLookupTrace(traceId) {
 }
 
 // ---- Section switching (portal-core initSectionRouter) ----
-const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'batchruns', 'support', 'ops', 'incidents', 'changelog', 'partners', 'config', 'simulator', 'architecture', 'tools'];
+const SECTIONS = ['overview', 'impersonate', 'moderation', 'fraud', 'revshare', 'billingterms', 'agencies', 'houseads', 'audit', 'profiles', 'privacy', 'shading', 'retargeting', 'onboarding', 'demos', 'glossary', 'batchruns', 'support', 'ops', 'incidents', 'changelog', 'partners', 'config', 'simulator', 'architecture', 'tools'];
 // Landing fallback: the first section in the RENDERED (permission-filtered)
 // sidebar, so a partial-perm role (e.g. moderation-only, no Overview nav entry)
 // lands on a section it can actually see. Derived from the DOM at runtime —
@@ -896,8 +908,8 @@ function defaultSection() {
 const showSection = initSectionRouter({
   sections: SECTIONS,
   fallback: defaultSection,
-  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', changelog: 'Changelog', partners: 'Partners', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
-  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), changelog: () => loadChangelog(), partners: () => loadPartners(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
+  crumbs: {overview: 'Overview', impersonate: 'Impersonate', moderation: 'Moderation', fraud: 'Fraud rules', revshare: 'Revshare', billingterms: 'Billing terms', agencies: 'Agencies', houseads: 'House ads', audit: 'Audit log', profiles: 'Profiles', privacy: 'Privacy', shading: 'Shading', retargeting: 'Retargeting', onboarding: 'Onboarding', demos: 'Demos', glossary: 'Glossary', batchruns: 'Batch runs', support: 'Support', ops: 'Ops', incidents: 'Incidents', changelog: 'Changelog', partners: 'Partners', config: 'Config', simulator: 'Simulator', architecture: 'Architecture', tools: 'Control center'},
+  loaders: {overview: () => loadOverview(), impersonate: () => loadImpersonate(), moderation: () => loadModeration(), fraud: () => loadFraud(), revshare: () => loadRevshare(), billingterms: () => loadBillingTerms(), agencies: () => loadAgencies(), houseads: () => loadHouseAds(), audit: () => loadAudit(), privacy: () => loadPrivacy(), shading: () => loadShading(), retargeting: () => loadStaffRetargeting(), onboarding: () => loadOnboarding(), demos: () => loadDemos(), glossary: () => loadGlossary(), batchruns: () => loadBatchRuns(), support: () => loadSupportQueue(), ops: () => loadOps(), incidents: () => loadIncidents(), changelog: () => loadChangelog(), partners: () => loadPartners(), config: () => loadConfig(), architecture: () => loadArchitecture(), tools: () => loadControlCenter()},
 });
 
 // ---- Incidents (PLAN Phase 11 status page) ----
@@ -1026,6 +1038,53 @@ async function deleteChangelog() {
     closeChangelog();
     loadChangelog();
   } catch (err) { toast('Delete failed: ' + err.message, 'error'); }
+}
+
+// ---- Ad-tech glossary (static reference from pkg/glossary) ----
+// The data is static, so we fetch once and re-filter client-side on search.
+let glossaryGroups = null;
+async function loadGlossary() {
+  if (glossaryGroups) { renderGlossary(); return; }
+  const body = document.getElementById('glossaryBody');
+  try {
+    const data = await fetchJSON('/v1/api/glossary');
+    glossaryGroups = data.groups || [];
+    renderGlossary();
+  } catch (err) {
+    body.innerHTML = `<p class="text-sm text-error">load failed — ${esc(err.message)}</p>`;
+  }
+}
+function renderGlossary() {
+  const body = document.getElementById('glossaryBody');
+  if (!glossaryGroups) return;
+  const q = (document.getElementById('glSearch').value || '').trim().toLowerCase();
+  const match = (t) => !q ||
+    t.name.toLowerCase().includes(q) ||
+    (t.definition || '').toLowerCase().includes(q) ||
+    (t.how_we_do_it || '').toLowerCase().includes(q);
+  let shown = 0, total = 0;
+  const sections = glossaryGroups.map(g => {
+    total += (g.terms || []).length;
+    const terms = (g.terms || []).filter(match);
+    shown += terms.length;
+    if (!terms.length) return '';
+    const cards = terms.map(t => `
+      <div class="rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-surface-dark p-4">
+        <div class="font-semibold text-gray-900 dark:text-gray-100">${esc(t.name)}</div>
+        <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">${esc(t.definition)}</p>
+        <div class="mt-3 border-t border-gray-100 dark:border-gray-800 pt-2">
+          <div class="text-xs font-medium text-brand uppercase tracking-wide">How this platform does it</div>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">${esc(t.how_we_do_it)}</p>
+        </div>
+      </div>`).join('');
+    return `
+      <div>
+        <h3 class="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">${esc(g.category)} <span class="text-gray-400 font-normal normal-case">· ${terms.length}</span></h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${cards}</div>
+      </div>`;
+  }).join('');
+  body.innerHTML = sections || '<p class="text-sm text-gray-400">No terms match your search.</p>';
+  document.getElementById('glCount').textContent = q ? `${shown} of ${total} terms` : `${total} terms`;
 }
 
 // ---- External partners (PLAN Phase 11 item 112) ----
