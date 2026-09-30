@@ -83,21 +83,27 @@ func publishersListHandler(db *sql.DB, log *slog.Logger) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		// Tenant read filter: a customer session (publisher via the gateway)
-		// only gets its own publishers as attach targets.
-		q := "SELECT id::text, name, domain FROM publishers WHERE status != 'archived' ORDER BY name"
-		args := []any{}
+		// `publishers` is RLS-protected; the SSP runs as the NOBYPASSRLS role
+		// adtech_app, so a BARE pooled query returns 0 rows even with an explicit
+		// account_id filter — the tenant GUC must be set (or the platform hatch
+		// used). A customer (publisher) session reads only its own publishers via
+		// the tenant GUC; a platform (staff) session uses QueryPlatform to see all.
+		const base = "SELECT id::text, name, domain FROM publishers WHERE status != 'archived'"
+		var rows *sql.Rows
+		var closeFn func()
+		var err error
 		if scope := middleware.CallerScope(r); scope.Resolved && !scope.Platform {
-			q = "SELECT id::text, name, domain FROM publishers WHERE status != 'archived' AND account_id = $1::uuid ORDER BY name"
-			args = append(args, scope.AccountID)
+			rows, closeFn, err = postgres.QueryTenantDB(ctx, db, scope.AccountID,
+				base+" AND account_id = $1::uuid ORDER BY name", scope.AccountID)
+		} else {
+			rows, closeFn, err = postgres.NewFromDB(db).QueryPlatform(ctx, base+" ORDER BY name")
 		}
-		rows, err := db.QueryContext(ctx, q, args...)
 		if err != nil {
 			log.Error("publishers list query failed", "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer rows.Close()
+		defer closeFn()
 		out := []publisherOption{}
 		for rows.Next() {
 			var p publisherOption

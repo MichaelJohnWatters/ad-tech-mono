@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -69,6 +71,13 @@ func adTagHandler(store adTagStore, sdkSrc string, log *slog.Logger) http.Handle
 		placementID := strings.TrimSpace(r.URL.Query().Get("placement_id"))
 		if placementID == "" {
 			http.Error(w, `{"error":"placement_id query param required"}`, http.StatusBadRequest)
+			return
+		}
+		// Validate the UUID up front: a malformed id would otherwise reach the
+		// store, hit Postgres' ::uuid cast (22P02), and surface as a generic 500.
+		// A client error deserves a 400 (SECURITY.md "client-error → 4xx not 500").
+		if _, err := uuid.Parse(placementID); err != nil {
+			http.Error(w, `{"error":"placement_id must be a valid UUID"}`, http.StatusBadRequest)
 			return
 		}
 		tagType := r.URL.Query().Get("tag_type")
