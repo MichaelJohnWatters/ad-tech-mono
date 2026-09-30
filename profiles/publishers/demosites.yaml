@@ -82,37 +82,97 @@ publishers:
         page_url: "https://gadget.adtech.local/"
         categories: [IAB19]
 
-  - id: pub-demosite-streamhub
-    name: "DEMO SITE - StreamHub"
-    domain: "streamhub.adtech.local"
+  - id: pub-demosite-primereel
+    name: "DEMO SITE - PrimeReel"
+    domain: "primereel.adtech.local"
     currency: USD
     revshare_pct: 80
     placements:
-      - id: pl-demosite-streamhub-display
-        name: "DEMO SITE - StreamHub · Display MPU"
+      - id: pl-demosite-primereel-display
+        name: "DEMO SITE - PrimeReel · Display MPU"
         format: display
         width: 300
         height: 250
         floor_price: 1.00
-        page_url: "https://streamhub.adtech.local/"
+        page_url: "https://primereel.adtech.local/"
         categories: [IAB1]
-      - id: pl-demosite-streamhub-native
-        name: "DEMO SITE - StreamHub · Native In-Feed"
+      - id: pl-demosite-primereel-native
+        name: "DEMO SITE - PrimeReel · Native In-Feed"
         format: native
         floor_price: 1.00
-        page_url: "https://streamhub.adtech.local/"
+        page_url: "https://primereel.adtech.local/"
         categories: [IAB1]
-      - id: pl-demosite-streamhub-video
-        name: "DEMO SITE - StreamHub · Video Pre-Roll"
+      - id: pl-demosite-primereel-video
+        name: "DEMO SITE - PrimeReel · Video Pre-Roll"
         format: video
         width: 640
         height: 360
         floor_price: 2.50
-        page_url: "https://streamhub.adtech.local/"
+        page_url: "https://primereel.adtech.local/"
         categories: [IAB1]
-      - id: pl-demosite-streamhub-audio
-        name: "DEMO SITE - StreamHub · Audio Spot"
+      - id: pl-demosite-primereel-audio
+        name: "DEMO SITE - PrimeReel · Audio Spot"
         format: audio
         floor_price: 1.50
-        page_url: "https://streamhub.adtech.local/"
+        page_url: "https://primereel.adtech.local/"
+        categories: [IAB1]
+
+  # Spotify-style audio/music app — AUDIO-ONLY. One audio placement; floor
+  # mirrors pub-simulator's audio placement (pl-sim-audio, 1.50) so the seeded
+  # demand clears.
+  - id: pub-demosite-soundwave
+    name: "DEMO SITE - SoundWave"
+    domain: "soundwave.adtech.local"
+    currency: USD
+    revshare_pct: 75
+    placements:
+      - id: pl-demosite-soundwave-audio
+        name: "DEMO SITE - SoundWave · Audio Spot"
+        format: audio
+        floor_price: 1.50
+        page_url: "https://soundwave.adtech.local/"
+        categories: [IAB1]
+
+  # Twitch-style live/CTV streaming — SSAI/LIVE-ONLY. One video placement the
+  # SSAI break auction runs against (SSP→exchange→DSP); floor mirrors
+  # pub-simulator's video placement (pl-sim-video, 2.50).
+  - id: pub-demosite-twitchr
+    name: "DEMO SITE - Twitchr"
+    domain: "twitchr.adtech.local"
+    currency: USD
+    revshare_pct: 70
+    placements:
+      - id: pl-demosite-twitchr-ssai
+        name: "DEMO SITE - Twitchr · SSAI Live Break"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "https://twitchr.adtech.local/"
+        categories: [IAB1]
+
+  # YouTube-style UGC video — CLIENT-SIDE VAST (the player fetches the VAST tag
+  # and inserts the pre-roll itself; contrast with Twitchr's server-side SSAI).
+  # Video pre-roll + a display companion banner. Floors mirror pub-simulator.
+  - id: pub-demosite-viewtube
+    name: "DEMO SITE - ViewTube"
+    domain: "viewtube.adtech.local"
+    currency: USD
+    revshare_pct: 68
+    placements:
+      - id: pl-demosite-viewtube-video
+        name: "DEMO SITE - ViewTube · Video Pre-Roll"
+        format: video
+        width: 640
+        height: 360
+        floor_price: 2.50
+        page_url: "https://viewtube.adtech.local/"
+        categories: [IAB1]
+      - id: pl-demosite-viewtube-display
+        name: "DEMO SITE - ViewTube · Companion MPU"
+        format: display
+        width: 300
+        height: 250
+        floor_price: 1.00
+        page_url: "https://viewtube.adtech.local/"
         categories: [IAB1]

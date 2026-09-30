@@ -56,8 +56,19 @@ global:
   # their OWN `demosites` namespace, gated OFF by default so they never affect the
   # core stack. Enable with --set global.demosites=true (see templates/demosites.yaml
   # + the `demosites:` block below). Purely additive: a new namespace + 3
-  # Deployments/Services/Ingresses (chronicle/gadget/streamhub).
+  # Deployments/Services/Ingresses (chronicle/gadget/primereel/soundwave/
+  # twitchr/viewtube).
   demosites: false
+
+  # OTEL trace sampling override for the WHOLE serving fleet, applied through
+  # helm (injected LAST in templates/services.yaml → k8s takes the last value
+  # for the repeated OTEL_SAMPLE_RATIO env). Empty (default) → each service
+  # keeps its per-service default ("0.1"). Set to "1.0" to fully trace the
+  # fleet for a demo/deep-debug: `helm upgrade --reuse-values --set
+  # global.otelSampleRatio=1.0`. This is what `make demo-setup` now uses instead
+  # of an out-of-band `kubectl set env` — the latter created a competing
+  # field-manager that then broke every later `helm upgrade` (field conflict).
+  otelSampleRatio: ""
 
 # TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
 # Same Ingress wiring in every env (templates/services.yaml terminates at
@@ -82,9 +93,10 @@ tls:
 # urls.* default to <scheme>://{pubad,gateway}.<global.domain> — override for a real
 # public domain. tls.crt/tls.key are the base64 PEM of the wildcard *.adtech.local
 # dev cert, COPIED into the demosites namespace so the per-site Ingress can
-# reference it (Ingress→Secret is same-namespace only); `make stack-up` fills them
-# from the same dev/tls material as the core adtech-tls secret. Empty → the
-# Ingress falls back to plain HTTP (:80).
+# reference it (Ingress→Secret is same-namespace only); `make deploy-demosites`
+# (or `DEMOSITES=1 make stack-up`) fills them with the base64 of dev/tls/*.pem —
+# the same material as the core adtech-tls secret. Empty → the Ingress falls back
+# to plain HTTP (:80).
 demosites:
   namespace: demosites
   image: adtech-demosite
@@ -111,18 +123,43 @@ demosites:
         native: pl-demosite-gadget-native
         video: pl-demosite-gadget-video
         audio: pl-demosite-gadget-audio
-    - slug: streamhub
-      siteName: "DEMO SITE - StreamHub"
-      publisherId: pub-demosite-streamhub
+    - slug: primereel
+      siteName: "DEMO SITE - PrimeReel"
+      publisherId: pub-demosite-primereel
       placements:
-        display: pl-demosite-streamhub-display
-        native: pl-demosite-streamhub-native
-        video: pl-demosite-streamhub-video
-        audio: pl-demosite-streamhub-audio
+        display: pl-demosite-primereel-display
+        native: pl-demosite-primereel-native
+        video: pl-demosite-primereel-video
+        audio: pl-demosite-primereel-audio
+    # Spotify-style audio-only app (DEMO SITE - SoundWave). Only an audio
+    # placement wired; the `soundwave` site slug shows the audio-only layout.
+    - slug: soundwave
+      siteName: "DEMO SITE - SoundWave"
+      publisherId: pub-demosite-soundwave
+      placements:
+        audio: pl-demosite-soundwave-audio
+    # Twitch-style SSAI/live app (DEMO SITE - Twitchr). The SSAI break auction
+    # runs a video auction against this placement; the `twitchr` site slug shows
+    # the live stitched-stream player page.
+    - slug: twitchr
+      siteName: "DEMO SITE - Twitchr"
+      publisherId: pub-demosite-twitchr
+      placements:
+        video: pl-demosite-twitchr-ssai
+    # YouTube-style UGC video app (DEMO SITE - ViewTube). Client-side VAST: the
+    # player fetches the VAST tag and inserts the pre-roll itself (contrast with
+    # Twitchr's server-side SSAI). Video pre-roll + a display companion banner.
+    - slug: viewtube
+      siteName: "DEMO SITE - ViewTube"
+      publisherId: pub-demosite-viewtube
+      placements:
+        video: pl-demosite-viewtube-video
+        display: pl-demosite-viewtube-display
   urls:
     pubad: ""   # default https://pubad.<domain>
     sdk: ""     # default https://gateway.<domain>/static/adtech.js
     media: ""   # default https://gateway.<domain>
+    ssai: ""    # default https://gateway.<domain>/v1/ssai (browser→gateway proxy→ssai)
   tls:
     crt: ""     # base64 PEM cert (wildcard *.adtech.local), filled by dev loop
     key: ""     # base64 PEM key

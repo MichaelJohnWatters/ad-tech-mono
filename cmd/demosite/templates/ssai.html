@@ -1,0 +1,105 @@
+{{define "ssai.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+</head>
+<body>
+{{template "nav" .}}
+<main>
+  <article>
+    <h2>🔴 LIVE — {{.Cfg.SiteName}}</h2>
+    <div class="byline">Live channel · Server-Side Ad Insertion (SSAI)</div>
+    <p>Unlike a YouTube-style pre-roll (where the <em>player</em> fetches a VAST tag and
+       inserts the ad itself), a live/CTV stream uses <strong>SSAI</strong>: the ad breaks are
+       <strong>stitched into the manifest server-side</strong>. The player just plays one
+       continuous stream — it can't tell ad from content, can't skip, can't block. As the
+       player walks the manifest and fetches each <em>ad</em> segment, the
+       <strong>server</strong> (not the browser) fires the impression + quartile beacons.
+       Each break is a real SSP→Exchange→DSP auction on its own billable trace.</p>
+
+    <div class="ad-label">Live player (content = Sintel · stitched ad = Big Buck Bunny)</div>
+    <div style="position:relative;width:100%;max-width:640px;">
+      <video id="ssai-video" width="640" height="360" controls playsinline preload="none"
+             style="background:#000;width:100%;height:auto;"></video>
+      <div id="ssai-badge" style="display:none;position:absolute;top:8px;left:8px;font:11px sans-serif;padding:3px 10px;border-radius:4px;"></div>
+    </div>
+    <div style="margin-top:10px;">
+      <button id="ssai-play" onclick="playSSAIStream()"
+              style="background:var(--accent,#b1002e);color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer;font:13px sans-serif;">▶ Watch live</button>
+    </div>
+    <div class="status" id="ssai-status">awaiting consent…</div>
+    <details style="margin-top:10px;">
+      <summary style="cursor:pointer;color:#6b7280;font-size:12px;">Stitched manifest (content + spliced ad segments)</summary>
+      <pre id="ssai-preview" style="font-size:11px;white-space:pre-wrap;word-break:break-all;margin:8px 0 0;color:#374151;">(watch to populate)</pre>
+    </details>
+    <p style="font-size:14px;color:#6b7280">If a break shows content instead of the bunny ad, our bid
+       lost that break to a competitor whose creative can't be stitched (a slate backs it up).
+       Content playback fires no beacons — an ad platform only measures ads, not content.</p>
+  </article>
+  <aside></aside>
+</main>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<!-- hls.js (Apache-2.0), vendored + self-hosted by the gateway, to play the stitched HLS manifest. -->
+<script src="{{.Cfg.MediaURL}}/static/vendor/hls.min.js"></script>
+<script>
+  // The stitcher has no public ingress of its own; the browser reaches it via the
+  // gateway proxy (SSAIURL = .../v1/api/ssai). The content origin (segmented in
+  // object storage) is served from the media/gateway base.
+  var SSAI_BASE  = {{.Cfg.SSAIURL}};                                  // e.g. https://gateway.<domain>/v1/api/ssai
+  var CONTENT    = {{.Cfg.MediaURL}} + '/v1/creatives/ssai/content/sample/master.m3u8';
+  var PLACEMENT  = {{.Cfg.VideoPlacement}};                           // the SSAI break placement
+  var ssaiHls = null;
+
+  function status(t){ document.getElementById('ssai-status').textContent = t; }
+  function setBadge(isAd){
+    var b = document.getElementById('ssai-badge'); b.style.display = '';
+    if (isAd) { b.textContent = '▶ AD PLAYING · server-side beacons'; b.style.background='rgba(180,30,30,.85)'; b.style.color='#fff'; }
+    else      { b.textContent = '● CONTENT';                          b.style.background='rgba(0,0,0,.7)';   b.style.color='#7ee787'; }
+  }
+
+  var consented = false;
+  window.__ads = window.__ads || {};
+  window.__ads.onConsent = function(){ consented = true; status('ready — press ▶ Watch live'); };
+
+  function playSSAIStream(){
+    if (!consented) { status('grant consent first (banner below)'); return; }
+    var v = document.getElementById('ssai-video');
+    var preview = document.getElementById('ssai-preview');
+    // Ask the stitcher (via the gateway proxy) to splice ad breaks into the live
+    // manifest. It runs the break auction, conditions the winning ad, and returns
+    // a manifest whose ad segments are /v1/ssai/seg beacon URLs (302 → conditioned .ts).
+    var url = SSAI_BASE + '/manifest.m3u8?placement_id=' + encodeURIComponent(PLACEMENT) +
+      '&geo=USA&device=ctv&channel=video&origin=' + encodeURIComponent(CONTENT) + '&t=' + Date.now();
+    status('requesting stitched manifest…');
+    preview.textContent = url + '\n\n(fetching…)';
+
+    fetch(url, { credentials:'omit' }).then(function(r){ return r.text(); }).then(function(manifest){
+      preview.textContent = url + '\n\n' + manifest;
+      if (!window.Hls || !window.Hls.isSupported()) {
+        if (v.canPlayType('application/vnd.apple.mpegurl')) { v.src = url; v.play().catch(function(){}); status('playing (native HLS)'); return; }
+        status('this browser can’t play HLS'); return;
+      }
+      if (ssaiHls) { ssaiHls.destroy(); ssaiHls = null; }
+      ssaiHls = new Hls();
+      v.loop = false; // play once through so content→ad→content reads cleanly
+      ssaiHls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); status('streaming ✓ — watch the badge flip at each break'); });
+      // Flip the AD / CONTENT badge as the player crosses each stitched break. An
+      // ad fragment is one whose URL is the /v1/ssai/seg server-side-beacon endpoint.
+      var wasAd = null;
+      ssaiHls.on(Hls.Events.FRAG_CHANGED, function(e, data){
+        var u = (data && data.frag && data.frag.url) || '';
+        var isAd = u.indexOf('/v1/ssai/seg') >= 0 || u.indexOf('/ssai/seg') >= 0;
+        if (isAd !== wasAd) { wasAd = isAd; setBadge(isAd); }
+      });
+      v.addEventListener('ended', function(){ var b=document.getElementById('ssai-badge'); b.style.display=''; b.textContent='■ Stream ended'; b.style.background='rgba(0,0,0,.7)'; b.style.color='#8b949e'; status('stream ended'); }, { once:true });
+      ssaiHls.on(Hls.Events.ERROR, function(e, data){ if (data.fatal) { status('playback error: ' + data.details); } });
+      ssaiHls.loadSource(url);
+      ssaiHls.attachMedia(v);
+    }).catch(function(err){ status('SSAI error: ' + err); preview.textContent = url + '\n\n(failed: ' + err + ')'; });
+  }
+</script>
+</body>
+</html>{{end}}
