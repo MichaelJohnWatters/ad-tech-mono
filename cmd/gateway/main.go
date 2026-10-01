@@ -608,6 +608,15 @@ func main() {
 	// Shading insights — staff read-only view of the DSP's per-placement
 	// win/loss shading state, proxied server-side (support:read).
 	mux.Handle(routes.APIStaffShading, authMiddleware(http.HandlerFunc(staffShadingHandler(dspURL, log))))
+	// Advertiser-facing bid-shading transparency (reports:read). Composes the
+	// caller's OWN per-placement spend/clearing (account-forced reporting query)
+	// with DSP-wide marketplace shading context for those placements — labelled so
+	// the DSP-wide numbers are never presented as the advertiser's own.
+	mux.Handle(routes.APIShading, authMiddleware(
+		middleware.RequirePermission("reports:read")(http.HandlerFunc(shadingHandler(shadingDeps{
+			placementSpend:   reportingPlacementSpend(reportingURL, log),
+			marketplaceStats: dspMarketplaceStats(dspURL),
+		}, log)))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic
 	// account). GET support:read (state), POST /run support:update (reset+run).

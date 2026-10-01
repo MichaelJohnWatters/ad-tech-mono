@@ -74,6 +74,9 @@ var advertiserNav = []NavItem{
 	{Label: "Conversions", Href: "#conversions", Icon: "◈", Perm: "campaigns:read"},
 	{Label: "Attribution", Href: "#attribution", Icon: "◔", Perm: "reports:read"},
 	{Label: "Reports", Href: "#reports", Icon: "▧", Perm: "reports:read"},
+	// Bid-shading transparency: marketplace competitiveness on the inventory you
+	// bid on + the clearing price you actually paid. reports:read (read-only).
+	{Label: "Bid Shading", Href: "#shading", Icon: "◑", Perm: "reports:read"},
 	{Label: "Billing", Href: "#billing", Icon: "▦", Perm: "billing:view"},
 	{Label: "Support", Href: "#support", Icon: "✉", Perm: "support:contact"},
 	{Label: "Webhooks", Href: "#webhooks", Icon: "⇄", Perm: "webhooks:read"},

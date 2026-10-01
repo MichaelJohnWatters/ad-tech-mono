@@ -506,6 +506,34 @@
       {{ template "card-end" . }}
     </section>
 
+    <!-- ============ Bid Shading ============ -->
+    <section id="section-shading" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Bid-shading transparency — how much you actually paid on the inventory you win, plus how competitive that inventory is marketplace-wide. We don't fake anything: your own numbers and marketplace-wide numbers are clearly separated." }}
+
+      {{ template "card-start" (dict "title" "What bid shading is" "subtitle" "Honest by design — read which numbers are yours and which are the whole marketplace's") }}
+      <div class="text-sm text-gray-600 dark:text-gray-300 space-y-2">
+        <p>In a <strong>first-price auction</strong> the winner pays exactly what they bid. <strong>Bid shading</strong> is our DSP lowering its bid toward the real clearing price so you win without overpaying — it lowers what you pay, it doesn't change that the auction is first-price.</p>
+        <p><strong class="text-gray-800 dark:text-gray-100">Your numbers</strong> (the "You paid" / "Your impressions" columns and the totals) are <em>genuinely yours</em>: they come from your own account's delivered impressions and the price <em>you</em> actually paid per impression.</p>
+        <p><strong class="text-gray-800 dark:text-gray-100">Marketplace numbers</strong> (win rate, below-floor, outbid) are <em>DSP-wide</em> — aggregated across every advertiser our DSP bids for on that placement. They show how competitive the inventory you bid on is. <em>They are NOT your personal win rate.</em></p>
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Your paid clearing price" "subtitle" "The real, per-advertiser figures: your delivered impressions and what you paid, last 30 days") }}
+      <div id="shadeTotals" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-2 text-sm text-gray-500">
+        <div class="py-6 text-center text-gray-400 col-span-full">loading…</div>
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Inventory you bid on" "subtitle" "Per placement: YOUR paid clearing price + DSP-wide marketplace competitiveness (clearly labelled)") }}
+      <div id="shadeOut" class="overflow-x-auto">
+        {{ template "table-start" (dict "headers" (slice "Placement" "Your impressions" "You paid (avg CPM)" "Your spend" "Marketplace win rate" "Marketplace avg clearing" "Below floor" "Outbid")) }}
+          <tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">loading…</td></tr>
+        {{ template "table-end" . }}
+      </div>
+      <p class="mt-3 text-xs text-gray-400">The last four columns are <strong>DSP-wide marketplace</strong> stats for that placement (all advertisers we bid for) — not your own win/loss. "—" means the DSP's shading tracker has no marketplace data for that placement yet.</p>
+      {{ template "card-end" . }}
+    </section>
+
     <!-- ============ Billing ============ -->
     <section id="section-billing" class="portal-section p-6 space-y-6 hidden">
       {{ template "section-intro" "Your money-out — balance, top-ups, payment terms, invoices, and spend." }}
@@ -1195,11 +1223,12 @@ const fmtInt = (n) => Number(n || 0).toLocaleString();
 
 // ---- Section switching (portal-core initSectionRouter) ----
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'billing', 'support', 'team', 'webhooks'],
+  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'shading', 'billing', 'support', 'team', 'webhooks'],
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
     creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), marketplace: () => loadMarketplace(), conversions: () => loadConversions(),
     attribution: () => loadARA(),
     reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
+    shading: () => loadShading(),
     billing: () => loadBilling(), support: () => loadSupport(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
   // The New-campaign action belongs to the Campaigns tab only (it was in
@@ -1237,6 +1266,56 @@ async function loadARA() {
         <tr><th class="px-3 py-2 text-left">Type</th><th class="px-3 py-2 text-left">Destination</th><th class="px-3 py-2 text-left">Source id</th><th class="px-3 py-2 text-left">Trigger</th><th class="px-3 py-2 text-left">Received</th></tr>
       </thead><tbody>${rows}</tbody></table>
     </div>`;
+}
+
+// ---- Bid-shading transparency ----
+// Renders the advertiser's OWN paid clearing price (genuinely per-advertiser)
+// alongside DSP-WIDE marketplace competitiveness for the placements they bid on.
+// The two are kept in visually + textually distinct columns so a DSP-wide number
+// is never shown as the advertiser's own (the honesty constraint).
+async function loadShading() {
+  const totalsEl = $('shadeTotals'), outEl = $('shadeOut');
+  if (!totalsEl || !outEl) return;
+  const pct = (r) => r == null ? '—' : `${(r * 100).toFixed(1)}%`;
+  const cpm = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4});
+  let data;
+  try {
+    data = await fetchJSON('/v1/api/shading');
+  } catch (err) {
+    totalsEl.innerHTML = `<span class="text-error col-span-full">Load failed — ${esc(err.message)}</span>`;
+    return;
+  }
+  const t = data.your_totals || {};
+  totalsEl.innerHTML = `
+    <div><div class="text-xs uppercase text-gray-400">Placements you bid on</div><div class="text-xl font-semibold">${t.placements | 0}</div></div>
+    <div><div class="text-xs uppercase text-gray-400">Your impressions</div><div class="text-xl font-semibold">${Number(t.impressions || 0).toLocaleString()}</div></div>
+    <div><div class="text-xs uppercase text-gray-400">Your spend</div><div class="text-xl font-semibold">${fmtUSD(t.spend_usd)}</div></div>
+    <div><div class="text-xs uppercase text-gray-400">Your avg clearing CPM</div><div class="text-xl font-semibold">${cpm(t.avg_clearing_cpm)}</div></div>`;
+  const rows = (data.placements || []);
+  const body = rows.length ? rows.map(p => `<tr class="border-t border-gray-100 dark:border-gray-800">
+      <td class="px-3 py-2 font-mono text-xs">${esc(p.placement_id || '')}</td>
+      <td class="px-3 py-2 font-mono">${Number(p.your_impressions || 0).toLocaleString()}</td>
+      <td class="px-3 py-2 font-mono">${cpm(p.your_avg_clearing_cpm)}</td>
+      <td class="px-3 py-2 font-mono">${fmtUSD(p.your_spend_usd)}</td>
+      <td class="px-3 py-2 font-mono text-gray-500">${p.has_marketplace_stats ? pct(p.marketplace_win_rate) : '—'}</td>
+      <td class="px-3 py-2 font-mono text-gray-500">${p.has_marketplace_stats ? cpm(p.marketplace_avg_clearing) : '—'}</td>
+      <td class="px-3 py-2 font-mono text-gray-500">${p.has_marketplace_stats ? (p.marketplace_below_floor | 0) : '—'}</td>
+      <td class="px-3 py-2 font-mono text-gray-500">${p.has_marketplace_stats ? (p.marketplace_outbid | 0) : '—'}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="8" class="px-3 py-8 text-center text-sm text-gray-400">No impressions yet — once your campaigns win inventory, your paid clearing prices and the marketplace competitiveness of that inventory appear here.</td></tr>`;
+  outEl.innerHTML = `<table class="min-w-full text-sm">
+      <thead class="bg-gray-50 dark:bg-surface-3 text-xs uppercase text-gray-500">
+        <tr>
+          <th class="px-3 py-2 text-left">Placement</th>
+          <th class="px-3 py-2 text-left" title="Your own delivered impressions on this placement">Your impressions</th>
+          <th class="px-3 py-2 text-left" title="The average price YOU actually paid per impression (clearing_price_usd)">You paid (avg CPM)</th>
+          <th class="px-3 py-2 text-left" title="Your total paid on this placement">Your spend</th>
+          <th class="px-3 py-2 text-left text-gray-500" title="DSP-WIDE: our win rate on this placement across ALL advertisers we bid for — not your personal win rate">Marketplace win rate</th>
+          <th class="px-3 py-2 text-left text-gray-500" title="DSP-WIDE average clearing price observed on this placement">Marketplace avg clearing</th>
+          <th class="px-3 py-2 text-left text-gray-500" title="DSP-WIDE count of bids that lost for falling below the floor">Below floor</th>
+          <th class="px-3 py-2 text-left text-gray-500" title="DSP-WIDE count of bids that lost by being outbid">Outbid</th>
+        </tr>
+      </thead><tbody>${body}</tbody></table>`;
 }
 
 // ---- Reporting queries ----
