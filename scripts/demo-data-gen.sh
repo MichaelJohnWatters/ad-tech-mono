@@ -133,6 +133,14 @@ echo "▶ [8/8] external partners: register demand/supply partners + walk the on
 # lifecycle. Platform-global; needs partners:manage (admin token). Idempotent:
 # skip if any partner already exists. The registry enforces transition ORDER, so
 # walk each step (with a brief settle to avoid a compare-and-swap race).
+#
+# IMPORTANT: no DEMO DSP is left `active`. An active DSP partner is merged into the
+# exchange's LIVE auction fan-out (feature #112), so an active partner with a
+# placeholder `.example` endpoint would be dialed on every auction and fail DNS —
+# noise + wasted latency for zero bids. The one `active` partner here is an SSP
+# (Nova), which the fan-out excludes (kind='dsp' only). The DSPs stay in onboarding
+# states (paused/certified/sandbox/pending), which is also the honest picture:
+# they're demo onboarding records, not live bidders.
 STAFF=$(curl -s --max-time 6 -X POST "$GW/v1/auth/token" -H 'Content-Type: application/json' -d '{}' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 PCOUNT=$(curl -s --max-time 6 "$GW/v1/api/partners" -H "Authorization: Bearer ${STAFF:-}" 2>/dev/null \
@@ -149,7 +157,7 @@ else
       -d "{\"name\":\"$1\",\"kind\":\"$2\",\"endpoint_bid\":\"$3\",\"channels\":$4,\"formats\":[\"display\",\"video\"],\"timeout_ms\":120,\"openrtb_version\":\"2.6\",\"contact_tech\":\"ops@example.com\"}" 2>/dev/null \
       | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
     [ -z "$id" ] && { echo "  ⚠ register failed: $1"; return; }
-    case "$5" in sandbox) steps="sandbox";; certified) steps="sandbox certified";; active) steps="sandbox certified active";; *) steps="";; esac
+    case "$5" in sandbox) steps="sandbox";; certified) steps="sandbox certified";; paused) steps="sandbox certified paused";; active) steps="sandbox certified active";; *) steps="";; esac
     for s in $steps; do
       curl -s -o /dev/null --max-time 6 -X POST "$GW/v1/api/partners/status" -H "Authorization: Bearer $STAFF" \
         -H 'Content-Type: application/json' -d "{\"id\":\"$id\",\"status\":\"$s\"}" 2>/dev/null
@@ -157,7 +165,7 @@ else
     done
     echo "  ✔ $1 ($2) → ${5:-pending}"
   }
-  regpartner "Acme Exchange DSP"   dsp "https://bid.acme-dsp.example/openrtb" '["display","video","native"]' active
+  regpartner "Acme Exchange DSP"   dsp "https://bid.acme-dsp.example/openrtb" '["display","video","native"]' paused
   regpartner "Zenith Programmatic" dsp "https://rtb.zenith.example/bid"       '["display","video"]'          certified
   regpartner "Coinflip Media DSP"  dsp "https://bid.coinflip.example/rtb"     '["display"]'                  sandbox
   regpartner "Nova Supply SSP"     ssp "https://ssp.nova.example/req"         '["display","video","audio"]'  active
