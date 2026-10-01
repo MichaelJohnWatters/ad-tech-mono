@@ -80,6 +80,7 @@
 
     <!-- ============ Portfolio (agency-only) ============ -->
     <section id="section-portfolio" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "The top of your buying hierarchy — insertion orders group your line items and set overall budgets and flight dates." }}
       {{ template "card-start" (dict "title" "Managed accounts — today") }}
       <p class="mb-3 text-xs text-gray-400">Spend, impressions, and clicks across every advertiser account you manage. Use the switcher (top right) to drill into one.</p>
       {{ template "table-start" (dict "headers" (slice "Client" "Spend" "Impressions" "Clicks" "CTR")) }}
@@ -90,6 +91,7 @@
 
     <!-- ============ Campaigns ============ -->
     <section id="section-campaigns" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Your line items (the bidding units) — set budget, flight, targeting, bid strategy, and pacing; each one buys impressions on your behalf." }}
       {{ template "card-start" (dict "title" "Campaigns" "subtitle" "Performance is last 7 days") }}
       {{ template "table-start" (dict "headers" (slice "Name" "Advertiser" "Status" "Bid model" "Daily budget" "Spend / used" "Impr. 7d" "Clicks 7d" "CTR" "Spend 7d" "")) }}
         <tr><td colspan="11" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
@@ -99,6 +101,7 @@
 
     <!-- ============ Creatives ============ -->
     <section id="section-creatives" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Your ad library — upload and manage display, video, native, and audio creatives, then assign them to campaigns." }}
       {{ template "card-start" (dict "title" "Creative library") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload creative" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newCreative').classList.remove('hidden')") }}
@@ -111,6 +114,7 @@
 
     <!-- ============ Audiences ============ -->
     <section id="section-audiences" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Who you target — build and manage segments (first-party uploads, retargeting, lookalikes, and licensed third-party data)." }}
       {{ template "card-start" (dict "title" "Audience segments" "subtitle" "First-party & derived lists used for targeting and suppression") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
@@ -282,6 +286,7 @@
          queue, and strict validation as audience files. Later slices read this
          at render time (dynamic creatives) and per-SKU suppression. -->
     <section id="section-products" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Product catalog for dynamic & retargeting ads — feed your SKUs so ads can render the exact products a shopper viewed." }}
       {{ template "card-start" (dict "title" "Product catalog" "subtitle" "Your product feed — dynamic ads assemble creatives from these rows at render time") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload feed" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newProductFeed').classList.remove('hidden')") }}
@@ -296,6 +301,7 @@
          owners have listed for sale, and list your own PUBLIC segments. A
          listing shows aggregate reach + the CPM surcharge — never members. -->
     <section id="section-marketplace" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Buy audience data — browse and license publisher/provider segments to widen your targeting, and list your own public segments for sale." }}
       {{ template "card-start" (dict "title" "Browse the data marketplace" "subtitle" "Audience segments other data owners have listed — buy targeting access without ever seeing members") }}
       {{ template "table-start" (dict "headers" (slice "Segment" "Seller" "Reach" "CPM surcharge" "Description" "")) }}
         <tbody id="marketplaceCatalog"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
@@ -339,6 +345,7 @@
     </section>
 
     <section id="section-conversions" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Measure outcomes — define conversion events (purchase, signup) and the pixels/postbacks that record them, with a signing key for server-to-server." }}
       {{ template "card-start" (dict "title" "Conversion events" "subtitle" "Define named conversions and embed the pixel on your site's confirmation pages") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New conversion" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newConversion').classList.remove('hidden')") }}
@@ -360,6 +367,7 @@
 
     <!-- ============ Attribution ============ -->
     <section id="section-attribution" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "How impressions and clicks earn credit for conversions — click-through, view-through, and cross-device multi-touch attribution." }}
       {{ template "card-start" (dict "title" "Multi-touch attribution" "subtitle" "Trace a conversion's exposure chain and see how each touchpoint shares the credit") }}
       <div class="flex flex-wrap gap-3 items-end">
         <label class="block text-sm flex-1 min-w-[16rem]">
@@ -393,6 +401,7 @@
 
     <!-- ============ Reports ============ -->
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Custom analytics — query your spend, impressions, clicks, and conversions; group, filter, save, and schedule exports." }}
       {{ template "card-start" (dict "title" "Query") }}
       <form id="reportForm" class="grid grid-cols-2 md:grid-cols-7 gap-3 items-end" onsubmit="runReport(event)">
         <label class="block text-sm">
@@ -499,6 +508,7 @@
 
     <!-- ============ Billing ============ -->
     <section id="section-billing" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Your money-out — balance, top-ups, payment terms, invoices, and spend." }}
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         {{ template "stat" (dict "label" "Balance" "value" "—" "id" "kpiBalance" "hint" "prepay funds available") }}
         {{ template "stat" (dict "label" "Billing mode" "value" "—" "id" "kpiTerms" "hint" "set by your account manager") }}
@@ -543,6 +553,7 @@
     <!-- ============ Team ============ -->
     <!-- ============ Support ============ -->
     <section id="section-support" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Get help — open support tickets and billing disputes and track their resolution." }}
       {{ template "card-start" (dict "title" "Support & disputes" "subtitle" "Open a ticket for a question, technical issue, or a billing dispute — our team replies on the thread") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New ticket" "variant" "secondary" "size" "sm" "onclick" "openSupportNew()") }}
@@ -582,6 +593,7 @@
     {{ template "modal-end" . }}
 
     <section id="section-team" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Access control — invite teammates, set roles/permissions, export your data, or close the account." }}
       {{ template "card-start" (dict "title" "Team members" "subtitle" "People who can sign in to this account") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Invite member" "variant" "secondary" "size" "sm" "onclick" "openInvite()") }}
@@ -605,6 +617,7 @@
 
     <!-- ============ Webhooks ============ -->
     <section id="section-webhooks" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Event callbacks — register HTTPS endpoints to receive events (budget depleted, report ready) programmatically." }}
       {{ template "card-start" (dict "title" "Webhook subscriptions" "subtitle" "HMAC-signed HTTP POSTs to your endpoint when platform events fire") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New webhook" "variant" "secondary" "size" "sm" "onclick" "openNewWebhook()") }}
