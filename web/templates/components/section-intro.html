@@ -1,0 +1,11 @@
+{{/* section-intro: a one-line "what is this tab for" banner at the top of a
+     portal section. Keeps each tab self-explanatory.
+
+     Usage (pass the description string directly):
+       {{ template "section-intro" "Your ad slots — create and manage placements." }}
+*/}}
+{{ define "section-intro" }}
+<div class="rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-surface-3 px-4 py-3">
+  <p class="text-sm text-gray-600 dark:text-gray-300">{{ . }}</p>
+</div>
+{{ end }}
