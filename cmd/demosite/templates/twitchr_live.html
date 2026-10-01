@@ -1,0 +1,117 @@
+{{define "twitchr_live.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+<style>
+  .tw { display:grid; grid-template-columns:1fr 340px; gap:0; height:calc(100vh - 56px); }
+  @media (max-width:900px){ .tw{ grid-template-columns:1fr; height:auto; } }
+  .tw-main { padding:16px 20px; overflow:auto; }
+  .tw-stage { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:8px; overflow:hidden; }
+  .tw-stage video { width:100%; height:100%; background:#000; }
+  .tw-live { position:absolute; top:10px; left:10px; background:#eb0400; color:#fff; font:700 12px sans-serif; padding:3px 8px; border-radius:4px; letter-spacing:.5px; }
+  .tw-ad { position:absolute; top:10px; left:70px; display:none; background:#9147ff; color:#fff; font:700 12px sans-serif; padding:3px 8px; border-radius:4px; }
+  .tw-viewers { position:absolute; top:10px; right:10px; background:rgba(0,0,0,.6); color:#fff; font:12px sans-serif; padding:3px 8px; border-radius:4px; }
+  .tw-info { display:flex; gap:12px; align-items:center; margin:14px 2px; }
+  .tw-pic { width:48px; height:48px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; }
+  .tw-info h2 { margin:0; font-size:18px; } .tw-info .s { color:var(--muted); font-size:13px; }
+  .tw-start { background:var(--accent); color:#fff; border:0; padding:8px 16px; border-radius:4px; font:600 13px sans-serif; cursor:pointer; margin-left:auto; }
+  .tw-note { font-size:13px; color:var(--muted); line-height:1.6; }
+  .tw-chat { background:var(--surface); border-left:1px solid var(--line); display:flex; flex-direction:column; }
+  .tw-chat h3 { margin:0; padding:12px 14px; font-size:13px; border-bottom:1px solid var(--line); color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+  .tw-msgs { flex:1; overflow:auto; padding:10px 14px; font-size:13px; line-height:1.5; }
+  .tw-msgs .m { margin-bottom:7px; }
+  .tw-msgs .u { font-weight:700; }
+  .tw-status { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:8px; }
+</style>
+</head>
+<body>
+{{template "nav" .}}
+<div class="tw">
+  <div class="tw-main">
+    <div class="tw-stage">
+      <video id="tw-video" playsinline></video>
+      <span class="tw-live">● LIVE</span>
+      <span class="tw-ad" id="tw-ad">AD · stitched server-side</span>
+      <span class="tw-viewers" id="tw-viewers">👁 0</span>
+    </div>
+    <div class="tw-info">
+      <div class="tw-pic">A</div>
+      <div><h2>adtech_live</h2><div class="s">Building a programmatic ad stack · SSAI demo</div></div>
+      <button class="tw-start" id="tw-start" onclick="startLive()">▶ Watch</button>
+    </div>
+    <p class="tw-note">This is a <b>continuous live-style stream</b> with <b>server-side ad insertion</b>:
+      the ad breaks are stitched into the manifest by the platform, so the player plays one
+      unbroken stream and can't skip or block the ads. Watch the <b>AD</b> badge flip at each
+      break — every break is a real SSP→Exchange→DSP auction on its own billable trace.</p>
+    <div class="tw-status" id="tw-status">awaiting consent…</div>
+  </div>
+  <div class="tw-chat">
+    <h3>Stream chat</h3>
+    <div class="tw-msgs" id="tw-msgs"></div>
+  </div>
+</div>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script src="{{.Cfg.MediaURL}}/static/vendor/hls.min.js"></script>
+<script>
+  var SSAI_BASE = {{.Cfg.SSAIURL}};
+  var CONTENT   = {{.Cfg.MediaURL}} + '/v1/creatives/ssai/content/sample/master.m3u8';
+  var PLACEMENT = {{.Cfg.VideoPlacement}};
+  var hls = null, consented = false, viewers = 0;
+  function status(t){ document.getElementById('tw-status').textContent = t; }
+  function setAd(on){ document.getElementById('tw-ad').style.display = on ? 'inline-block' : 'none'; }
+
+  // Fake-but-lively stream chat so the page reads like Twitch.
+  var CHATTERS = ['adops_amy','bidshader','rtb_randy','ctv_carol','pixelpusher','cpm_chris','vast_vera','yield_yan'];
+  var LINES = ['this stream is 🔥','how does SSAI work?','no adblock can touch this 😎','first price gang','clean fill rate','that pre-roll actually relevant lol','w stream','poggers','trace every impression 📊','auction go brrr'];
+  function chat(){
+    var m = document.getElementById('tw-msgs');
+    var u = CHATTERS[Math.floor(Math.random()*CHATTERS.length)];
+    var hue = (u.charCodeAt(0)*37)%360;
+    var div = document.createElement('div'); div.className='m';
+    div.innerHTML = '<span class="u" style="color:hsl('+hue+',60%,65%)">'+u+'</span>: '+LINES[Math.floor(Math.random()*LINES.length)];
+    m.appendChild(div); m.scrollTop = m.scrollHeight;
+    while (m.children.length > 60) m.removeChild(m.firstChild);
+  }
+
+  // Continuous stream: when the stitched clip ends, immediately re-fetch a FRESH
+  // stitched manifest (new cache-buster → new per-break auctions) and keep playing,
+  // so the channel never stops and each cycle runs new ad breaks.
+  function loadStitch(){
+    var v = document.getElementById('tw-video');
+    var url = SSAI_BASE + '/manifest.m3u8?placement_id=' + encodeURIComponent(PLACEMENT) +
+      '&geo=USA&device=ctv&channel=video&origin=' + encodeURIComponent(CONTENT) + '&t=' + Date.now();
+    status('fetching stitched manifest…');
+    if (!window.Hls || !window.Hls.isSupported()){
+      if (v.canPlayType('application/vnd.apple.mpegurl')){ v.src = url; v.play().catch(function(){}); }
+      else { status('this browser can’t play HLS'); }
+      return;
+    }
+    if (hls){ hls.destroy(); hls = null; }
+    hls = new Hls();
+    var wasAd = null;
+    hls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); status('● live — watch the AD badge flip at each break'); });
+    hls.on(Hls.Events.FRAG_CHANGED, function(e, data){
+      var u = (data && data.frag && data.frag.url) || '';
+      var isAd = u.indexOf('/ssai/seg') >= 0;
+      if (isAd !== wasAd){ wasAd = isAd; setAd(isAd); }
+    });
+    hls.on(Hls.Events.ERROR, function(e, data){ if (data.fatal){ status('reconnecting…'); setTimeout(loadStitch, 1500); } });
+    hls.loadSource(url); hls.attachMedia(v);
+    v.onended = function(){ setAd(false); status('↻ next segment of the live stream…'); loadStitch(); };
+  }
+  function startLive(){
+    if (!consented){ status('grant consent first (banner below)'); return; }
+    document.getElementById('tw-start').style.display = 'none';
+    loadStitch();
+  }
+  window.__ads.onConsent = function(){ consented = true; status('ready — press ▶ Watch'); };
+  // Chat + a jittering viewer count give the live feel even before play.
+  viewers = 1200 + Math.floor(Math.random()*800);
+  setInterval(chat, 1400);
+  setInterval(function(){ viewers += Math.floor(Math.random()*11)-5; if (viewers<50) viewers=50; document.getElementById('tw-viewers').textContent = '👁 ' + viewers.toLocaleString(); }, 2000);
+</script>
+</body>
+</html>{{end}}

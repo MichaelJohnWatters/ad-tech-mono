@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
@@ -65,38 +66,36 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 				adserving.ActiveSigningKey())
 		}
 
-		specs := []vmap.BreakSpec{
-			{
+		// The three break kinds, keyed by name. Mid-roll uses a PERCENT offset (50%)
+		// rather than an absolute 00:00:30 so it still fires on short demo clips (a
+		// 30s absolute offset never triggers on a 10s content clip).
+		breakByName := map[string]vmap.BreakSpec{
+			"pre": {
 				BreakID:       "pre-roll",
 				Offset:        vmap.TimeOffset{Start: true},
 				AdTagURL:      vastBase + "&break=pre",
 				AdTagTemplate: "vast4.2",
-				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{breakTracker("break_start", "pre")},
-					BreakEnd:   []string{breakTracker("break_end", "pre")},
-				},
+				Trackers:      vmap.BreakTrackers{BreakStart: []string{breakTracker("break_start", "pre")}, BreakEnd: []string{breakTracker("break_end", "pre")}},
 			},
-			{
+			"mid": {
 				BreakID:       "mid-roll-1",
-				Offset:        vmap.TimeOffset{AbsoluteAt: 30 * time.Second},
+				Offset:        vmap.TimeOffset{PercentOf: 50},
 				AdTagURL:      vastBase + "&break=mid",
 				AdTagTemplate: "vast4.2",
-				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{breakTracker("break_start", "mid")},
-					BreakEnd:   []string{breakTracker("break_end", "mid")},
-				},
+				Trackers:      vmap.BreakTrackers{BreakStart: []string{breakTracker("break_start", "mid")}, BreakEnd: []string{breakTracker("break_end", "mid")}},
 			},
-			{
+			"post": {
 				BreakID:       "post-roll",
 				Offset:        vmap.TimeOffset{End: true},
 				AdTagURL:      vastBase + "&break=post",
 				AdTagTemplate: "vast4.2",
-				Trackers: vmap.BreakTrackers{
-					BreakStart: []string{breakTracker("break_start", "post")},
-					BreakEnd:   []string{breakTracker("break_end", "post")},
-				},
+				Trackers:      vmap.BreakTrackers{BreakStart: []string{breakTracker("break_start", "post")}, BreakEnd: []string{breakTracker("break_end", "post")}},
 			},
 		}
+		// ?breaks= selects which breaks to schedule (CSV subset of pre,mid,post), in
+		// that canonical order. Default = all three (back-compat). Unknown names are
+		// ignored; an empty/invalid result falls back to all three.
+		specs := selectBreaks(r.URL.Query().Get("breaks"), breakByName)
 
 		xmlBytes, err := vmap.BuildSchedule(specs)
 		if err != nil {
@@ -109,4 +108,31 @@ func vmapHandler(log *slog.Logger, publicBase string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(xmlBytes)
 	}
+}
+
+// selectBreaks resolves the ?breaks= CSV (subset of pre,mid,post) into the ordered
+// BreakSpecs to schedule. Canonical order (pre→mid→post) is always preserved
+// regardless of the CSV order. Empty or all-unknown input returns all three breaks
+// (back-compat: the old handler always scheduled pre+mid+post).
+func selectBreaks(csv string, byName map[string]vmap.BreakSpec) []vmap.BreakSpec {
+	order := []string{"pre", "mid", "post"}
+	want := map[string]bool{}
+	for _, name := range strings.Split(csv, ",") {
+		name = strings.TrimSpace(strings.ToLower(name))
+		if _, ok := byName[name]; ok {
+			want[name] = true
+		}
+	}
+	if len(want) == 0 { // empty or unknown → all three
+		for _, name := range order {
+			want[name] = true
+		}
+	}
+	out := make([]vmap.BreakSpec, 0, len(order))
+	for _, name := range order {
+		if want[name] {
+			out = append(out, byName[name])
+		}
+	}
+	return out
 }
