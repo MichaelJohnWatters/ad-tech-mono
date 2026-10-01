@@ -23,12 +23,12 @@ ADVS=$(PSQL -tAc "SELECT DISTINCT li.account_id::text
   WHERE ccs.settled_micros > 0 LIMIT 8" 2>/dev/null)
 echo "  advertisers with spend to work from: $(echo "$ADVS" | grep -c . )"
 
-echo "▶ [1/7] cleanup: purge orphaned marketplace_surcharge_earnings (seller account deleted)…"
+echo "▶ [1/8] cleanup: purge orphaned marketplace_surcharge_earnings (seller account deleted)…"
 N=$(PSQL -tAc "SELECT count(*) FROM marketplace_surcharge_earnings e WHERE NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id=e.seller_account_id)" 2>/dev/null | tr -d ' ')
 PSQL -q -c "DELETE FROM marketplace_surcharge_earnings e WHERE NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id=e.seller_account_id)" >/dev/null 2>&1 \
   && echo "  ✔ purged ${N:-0} orphaned earnings rows" || echo "  ⚠ cleanup skipped"
 
-echo "▶ [2/7] invoices: put 3 spenders on 'invoiced' terms (rest stay prepay) + run invoice-runner…"
+echo "▶ [2/8] invoices: put 3 spenders on 'invoiced' terms (rest stay prepay) + run invoice-runner…"
 # invoice-runner only bills accounts whose advertiser_balances.payment_terms='invoiced'
 # (prepay accounts already paid up front). Seed defaults to prepay → nobody's invoiced.
 # Flip a few so the Invoices section has content; leaves the rest realistically prepay.
@@ -41,7 +41,7 @@ DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/
   go run ./cmd/invoice-runner --month "$MONTH" 2>&1 | grep -iE 'invoices_written|complete' | tail -1
 echo "  ✔ invoices in DB: $(PSQL -tAc 'SELECT count(*) FROM invoices' 2>/dev/null | tr -d ' ')"
 
-echo "▶ [3/7] conversion configs: create purchase/signup pixels for the spenders…"
+echo "▶ [3/8] conversion configs: create purchase/signup pixels for the spenders…"
 made=0
 for ADV in $ADVS; do
   T=$(mint "$ADV"); [ -z "$T" ] && continue
@@ -54,7 +54,7 @@ for ADV in $ADVS; do
 done
 echo "  ✔ conversion configs created: $made"
 
-echo "▶ [4/7] webhooks: register a delivery endpoint for the top spender…"
+echo "▶ [4/8] webhooks: register a delivery endpoint for the top spender…"
 ADV1=$(echo "$ADVS" | head -1); T=$(mint "$ADV1"); code=000
 [ -n "$T" ] && code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 -X POST -H "Authorization: Bearer $T" \
   -H 'Content-Type: application/json' \
@@ -62,7 +62,7 @@ ADV1=$(echo "$ADVS" | head -1); T=$(mint "$ADV1"); code=000
   "$GW/v1/api/webhooks" 2>/dev/null)
 echo "  webhook create HTTP: $code"
 
-echo "▶ [5/7] payouts: give publisher accounts a payout method + run payout-runner…"
+echo "▶ [5/8] payouts: give publisher accounts a payout method + run payout-runner…"
 # payout-runner only pays publishers with an active payout_method whose minimum is
 # met (seed gives none) — mirror the invoice 'invoiced'-terms gate. minimum=0 so any
 # revenue pays out. payout-runner reads earnings from ClickHouse (LB :9010 from host).
@@ -76,7 +76,7 @@ DATABASE_URL="${DATABASE_URL:-postgres://adtech:adtech-local-dev@localhost:5432/
   go run ./cmd/payout-runner --month "$MONTH" 2>&1 | grep -iE 'payouts|written|complete|error' | tail -2
 echo "  ✔ payouts in DB: $(PSQL -tAc 'SELECT count(*) FROM payouts' 2>/dev/null | tr -d ' ')"
 
-echo "▶ [6/7] marketplace: a buyer purchases a public listing → grant…"
+echo "▶ [6/8] marketplace: a buyer purchases a public listing → grant…"
 LISTING=$(PSQL -tAc "SELECT id FROM marketplace_listings WHERE status='active' LIMIT 1" 2>/dev/null | tr -d ' ')
 if [ -n "$LISTING" ]; then
   SELLER=$(PSQL -tAc "SELECT account_id FROM marketplace_listings WHERE id='$LISTING'" 2>/dev/null | tr -d ' ')
@@ -89,7 +89,7 @@ else
   echo "  ⚠ no active listing to purchase"
 fi
 
-echo "▶ [7/7] audiences: load 1st-party segments (+members) + a 3rd-party data provider for demo advertisers…"
+echo "▶ [7/8] audiences: load 1st-party segments (+members) + a 3rd-party data provider for demo advertisers…"
 # The demo advertiser (e.g. de6b0145) owns NO segments (the 12 seeded ones live on
 # other accounts), so its Audiences tab looks empty. Load a realistic mix per demo
 # advertiser: first-party CRM/behavioral/lookalike segments (with real members via
@@ -126,6 +126,44 @@ SQL
   echo "  ✔ $ADV1: 1 third-party data provider + 2 licensed segments"
 fi
 
+echo "▶ [8/8] external partners: register demand/supply partners + walk the onboarding lifecycle…"
+# The "External partners" registry (partners table) is a SEPARATE system from the
+# exchange's bid demand (dsp_endpoints config) — staff onboard DSP/SSP partners
+# through pending→sandbox→certified→active. Seed a spread so the tab shows the
+# lifecycle. Platform-global; needs partners:manage (admin token). Idempotent:
+# skip if any partner already exists. The registry enforces transition ORDER, so
+# walk each step (with a brief settle to avoid a compare-and-swap race).
+STAFF=$(curl -s --max-time 6 -X POST "$GW/v1/auth/token" -H 'Content-Type: application/json' -d '{}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+PCOUNT=$(curl -s --max-time 6 "$GW/v1/api/partners" -H "Authorization: Bearer ${STAFF:-}" 2>/dev/null \
+  | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)
+if [ -z "${STAFF:-}" ]; then
+  echo "  ⚠ no admin token (debug endpoints off?) — skipping partners"
+elif [ "${PCOUNT:-0}" -gt 0 ]; then
+  echo "  ~ $PCOUNT partners already registered — skip"
+else
+  regpartner(){ # 1=name 2=kind 3=endpoint 4=channels-json 5=target-status
+    local id steps s
+    id=$(curl -s --max-time 8 -X POST "$GW/v1/api/partners" -H "Authorization: Bearer $STAFF" \
+      -H 'Content-Type: application/json' \
+      -d "{\"name\":\"$1\",\"kind\":\"$2\",\"endpoint_bid\":\"$3\",\"channels\":$4,\"formats\":[\"display\",\"video\"],\"timeout_ms\":120,\"openrtb_version\":\"2.6\",\"contact_tech\":\"ops@example.com\"}" 2>/dev/null \
+      | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null)
+    [ -z "$id" ] && { echo "  ⚠ register failed: $1"; return; }
+    case "$5" in sandbox) steps="sandbox";; certified) steps="sandbox certified";; active) steps="sandbox certified active";; *) steps="";; esac
+    for s in $steps; do
+      curl -s -o /dev/null --max-time 6 -X POST "$GW/v1/api/partners/status" -H "Authorization: Bearer $STAFF" \
+        -H 'Content-Type: application/json' -d "{\"id\":\"$id\",\"status\":\"$s\"}" 2>/dev/null
+      sleep 0.3
+    done
+    echo "  ✔ $1 ($2) → ${5:-pending}"
+  }
+  regpartner "Acme Exchange DSP"   dsp "https://bid.acme-dsp.example/openrtb" '["display","video","native"]' active
+  regpartner "Zenith Programmatic" dsp "https://rtb.zenith.example/bid"       '["display","video"]'          certified
+  regpartner "Coinflip Media DSP"  dsp "https://bid.coinflip.example/rtb"     '["display"]'                  sandbox
+  regpartner "Nova Supply SSP"     ssp "https://ssp.nova.example/req"         '["display","video","audio"]'  active
+  regpartner "Horizon Bidder"      dsp "https://bid.horizon.example/openrtb"  '["video"]'                    pending
+fi
+
 cat <<EOF
 
 ✔ Demo data generated. Now populated in the portals:
@@ -134,4 +172,5 @@ cat <<EOF
   • Advertiser → Marketplace → Purchased (grant from a buyer purchase)
   • Publisher  → Earnings → Payouts        ($GW/portal/publisher)
   • Marketplace earnings no longer shows stale/orphaned rows
+  • Staff     → External Partners          ($GW/portal/staff)  [5 partners across the lifecycle]
 EOF
