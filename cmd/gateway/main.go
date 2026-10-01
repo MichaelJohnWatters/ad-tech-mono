@@ -321,10 +321,12 @@ func main() {
 			Brand   string
 			Theme   landingTheme
 			TraceID string
+			Slug    string
 		}{
 			Brand:   theme.Brand,
 			Theme:   theme,
 			TraceID: r.URL.Query().Get("adtech_tid"),
+			Slug:    slug,
 		}
 		templates.Render(w, "brand.html", data)
 	})
@@ -342,6 +344,12 @@ func main() {
 			adminURL = dbURL
 		}
 		mux.HandleFunc(routes.DevResetReseed, resetAndReseedHandler(adminURL, redisAddr, resetBus, log))
+		// Clickable in-browser CONVERSION demo: the landing page (/dev/landing/{slug})
+		// POSTs the click's trace id here; the gateway resolves the advertiser that
+		// won the click, signs a /v1/t/conv postback with that advertiser's
+		// conversion key, and fires it server-side (strict-mode safe). Mirrors
+		// cmd/demoadv's /convert, but in-cluster so no second host process is needed.
+		mux.HandleFunc(routes.DevLandingConvert, landingConvertHandler(reportingURL, trackerURL, log))
 	}
 	// /dev/console is the canonical command-center URL. /dev/config-manager
 	// is an alias kept for backward compatibility — same template, just
