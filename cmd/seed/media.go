@@ -27,6 +27,21 @@ var adVideoMP4 []byte
 // media_url at (http://<base>/v1/creatives/media/ad-video.mp4).
 const adVideoKey = "media/ad-video.mp4"
 
+// adAudioMP3 is a locally-generated SPOKEN ad spot ("This is an advertisement…
+// AdTech Mono…") used as the AUDIO ad creative so a served audio ad is AUDIBLY
+// DISTINCT from the (music) podcast/stream content. Previously the audio
+// creatives were SoundHelix music tracks, so a played audio ad sounded just like
+// the content and the demo appeared to "just play music". Embedded (not fetched)
+// so it's always present after a seed with no external dependency. Regenerate:
+// see assets/ (macOS `say` → ffmpeg, a sine sting + synthesized speech).
+//
+//go:embed assets/ad-audio.mp3
+var adAudioMP3 []byte
+
+// adAudioKey is the object-store key the DSP creative profiles point their audio
+// media_url at (http://<base>/v1/creatives/media/ad-audio.mp3).
+const adAudioKey = "media/ad-audio.mp3"
+
 // sampleMedia is the curated set of video/audio files the demo uses for video
 // ad creatives, the content clip, and audio spots. They're pulled once from
 // their upstream sources into our own object store so the platform serves them
@@ -60,6 +75,13 @@ func uploadSampleMedia(ctx context.Context, store objects.Store, bucket string, 
 		log.Warn("ad-video creative upload failed", "key", adVideoKey, "error", err)
 	} else {
 		log.Info("ad-video creative synced", "key", adVideoKey, "bytes", len(adVideoMP4), "bucket", bucket)
+	}
+	// Same for the generated spoken AUDIO ad spot — always overwrite so a
+	// regenerated spot propagates on the next seed.
+	if err := store.Put(ctx, bucket, adAudioKey, bytes.NewReader(adAudioMP3), int64(len(adAudioMP3)), "audio/mpeg"); err != nil {
+		log.Warn("ad-audio creative upload failed", "key", adAudioKey, "error", err)
+	} else {
+		log.Info("ad-audio creative synced", "key", adAudioKey, "bytes", len(adAudioMP3), "bucket", bucket)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}

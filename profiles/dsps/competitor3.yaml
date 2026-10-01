@@ -54,7 +54,7 @@ campaigns:
           body: "Encrypt your connection on every device. 30-day guarantee."
           cta: "Get protected"
       - { id: c3-cr-001-audio-30s, format: audio, duration: 30,
-          media_url: "http://localhost:8080/v1/creatives/media/audio-1.mp3" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
 
   - id: c3-002
     account_id: dsp-perf-media-x3

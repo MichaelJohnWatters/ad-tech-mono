@@ -456,6 +456,35 @@
       <p class="mt-3 text-xs text-gray-400">Verify any of these landed: Reporting (impressions/conversions), the Trace inspector (follow one request end-to-end), or "view as" the publisher/advertiser in <a href="#impersonate" class="text-info hover:underline">Impersonate</a>. The Shop's advertiser is <code>Premium Dog Food Co</code>; rich pre-seeded audiences live on <code>adv-initech</code>.</p>
       {{ template "card-end" . }}
 
+      {{ template "card-start" (dict "title" "Generate live traffic (run after the manual demo)" "subtitle" "Copy-paste host commands to drive real traffic through the full path (auction → serve → beacons → reporting) so the dashboards fill live while you talk. Run from the repo root with the demo bridge up.") }}
+      <div class="mb-4 rounded-lg border border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-900/20 p-3 text-xs text-gray-600 dark:text-gray-300">
+        These run in your <b>host terminal</b> (not here) — they need <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">make demo-forward</code> running. Watch them land in the <a href="#overview" class="text-info hover:underline">Overview</a>, the advertiser/publisher dashboards, or Grafana.
+      </div>
+      <div class="space-y-3 text-sm">
+        <div>
+          <div class="font-medium mb-1">① Short, bounded load test — proves the money invariant live</div>
+          <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make loadtest RPS=40 DURATION=2m VERIFY=1</code></pre>
+          <p class="mt-1 text-xs text-gray-400">~2 min at 40 req/s. <code>VERIFY=1</code> asserts reporting counts match what was spent (zero slippage). Bump to <code>RPS=80 DURATION=5m</code> for a bigger fill; keep ≤110 on a laptop.</p>
+        </div>
+        <div>
+          <div class="font-medium mb-1">② Continuous trickle — leave running during the whole talk</div>
+          <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make traffic DEMO_RPS=10</code></pre>
+          <p class="mt-1 text-xs text-gray-400">Steady background traffic (Ctrl-C to stop) so every dashboard stays live instead of frozen.</p>
+        </div>
+        <div>
+          <div class="font-medium mb-1">③ Audience-density run — draws users from the seeded synthetic universe</div>
+          <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make loadtest RPS=50 DURATION=2m USER_POOL=2500 VERIFY=1</code></pre>
+          <p class="mt-1 text-xs text-gray-400">Hits real audience members so segment targeting + retargeting light up (the same 2,500-user pool the demo audiences are built from).</p>
+        </div>
+        <div>
+          <div class="font-medium mb-1">④ Re-light the wired-but-empty portal sections after a run</div>
+          <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make demo-data</code></pre>
+          <p class="mt-1 text-xs text-gray-400">Repopulates invoices / conversions / webhooks / marketplace / partners and prunes stale rows.</p>
+        </div>
+      </div>
+      <p class="mt-3 text-xs text-gray-400">Full protocol + baselines for a <i>measured</i> run (not a demo): the <code>perf-loadtest</code> skill. For a demo, ①–② are enough.</p>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Onboarding &amp; Expansion" "subtitle" "Watch a one-email upload become a cross-device audience — step by step, over an isolated synthetic account. Every run resets and replays.") }}
       <div class="flex items-center gap-3 mb-4">
         {{ template "button" (dict "label" "Run demo" "onclick" "runOnboardingDemo()") }}
