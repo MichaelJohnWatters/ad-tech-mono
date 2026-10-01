@@ -224,8 +224,16 @@
   try{ var proto=HTMLImageElement.prototype, d=Object.getOwnPropertyDescriptor(proto,'src');
     if(d&&d.set){ Object.defineProperty(proto,'src',{enumerable:d.enumerable,configurable:true,get:d.get,set:function(v){ try{add(String(v),'IMG');}catch(e){} return d.set.call(this,v);}}); } }catch(e){}
   if(navigator.sendBeacon){ var ob=navigator.sendBeacon.bind(navigator); navigator.sendBeacon=function(u,data){ add(String(u),'BEACON'); return ob(u,data); }; }
-  window.__atp={ toggle:function(){document.getElementById('atp').classList.toggle('open');}, clear:function(){rows=[];count=0;render();} };
-  document.addEventListener('DOMContentLoaded',render);
+  window.__atp={
+    toggle:function(){ var p=document.getElementById('atp'); p.classList.toggle('open'); try{localStorage.setItem('atp_open', p.classList.contains('open')?'1':'0');}catch(e){} },
+    clear:function(){ rows=[]; count=0; render(); }
+  };
+  // Open by default; remember the viewer's choice across pages/visits.
+  document.addEventListener('DOMContentLoaded',function(){
+    var o=null; try{o=localStorage.getItem('atp_open');}catch(e){}
+    if(o===null||o==='1'){ var p=document.getElementById('atp'); if(p)p.classList.add('open'); }
+    render();
+  });
 })();
 </script>
 {{end}}
