@@ -16,7 +16,9 @@ type landingTheme struct {
 	BG      string // hero background colour (CSS)
 	FG      string // primary text colour
 	Accent  string // CTA button colour
-	Muted   string // secondary text colour
+	CTAFg   string // CTA button TEXT colour — must contrast with Accent (not BG,
+	// which is a gradient and can't be used as a text colour)
+	Muted string // secondary text colour
 }
 
 var landingThemes = map[string]landingTheme{
@@ -28,6 +30,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#1a1a2e,#0f3460)",
 		FG:      "#fff",
 		Accent:  "#e94560",
+		CTAFg:   "#fff",
 		Muted:   "#aab3d1",
 	},
 	"megastore": {
@@ -38,6 +41,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#ff7043,#ff5252)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#b4232a",
 		Muted:   "rgba(255,255,255,0.75)",
 	},
 	"quickbite": {
@@ -48,6 +52,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#ff7043,#ff5252)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#b4232a",
 		Muted:   "rgba(255,255,255,0.75)",
 	},
 	"acme-shoes": {
@@ -58,6 +63,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#ff7043,#ff5252)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#b4232a",
 		Muted:   "rgba(255,255,255,0.75)",
 	},
 	"cryptoex": {
@@ -68,6 +74,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#0b132b,#1c2541)",
 		FG:      "#fff",
 		Accent:  "#5bc0be",
+		CTAFg:   "#071a33",
 		Muted:   "#9ba9c9",
 	},
 	"cloudcrm": {
@@ -78,6 +85,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#4361ee,#3a0ca3)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#2a0a73",
 		Muted:   "rgba(255,255,255,0.78)",
 	},
 	"initech": {
@@ -88,6 +96,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#4361ee,#3a0ca3)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#2a0a73",
 		Muted:   "rgba(255,255,255,0.78)",
 	},
 	"globex-tech": {
@@ -98,6 +107,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#4361ee,#3a0ca3)",
 		FG:      "#fff",
 		Accent:  "#fff",
+		CTAFg:   "#2a0a73",
 		Muted:   "rgba(255,255,255,0.78)",
 	},
 	"epicquest": {
@@ -108,6 +118,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#240046,#9d4edd)",
 		FG:      "#fff",
 		Accent:  "#ff6d00",
+		CTAFg:   "#2a1500",
 		Muted:   "#d6c2e8",
 	},
 	"vpnplus": {
@@ -118,6 +129,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#264653,#2a9d8f)",
 		FG:      "#fff",
 		Accent:  "#e9c46a",
+		CTAFg:   "#1b3a3a",
 		Muted:   "#a8c4c0",
 	},
 	// Direct-sold + house demand sources.
@@ -129,6 +141,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#1a1a2e,#16213e)",
 		FG:      "#fff",
 		Accent:  "#4cc9f0",
+		CTAFg:   "#063048",
 		Muted:   "#aab3d1",
 	},
 	"globex": {
@@ -139,6 +152,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#0a0a1a,#1a1a2e)",
 		FG:      "#fff",
 		Accent:  "#5bc0be",
+		CTAFg:   "#062a2a",
 		Muted:   "#9ba9c9",
 	},
 	"daily-news": {
@@ -149,6 +163,7 @@ var landingThemes = map[string]landingTheme{
 		BG:      "linear-gradient(135deg,#f5f5f5,#e0e0e0)",
 		FG:      "#1a1a2e",
 		Accent:  "#4361ee",
+		CTAFg:   "#fff",
 		Muted:   "#666",
 	},
 }
@@ -167,6 +182,7 @@ func landingThemeForSlug(slug string) landingTheme {
 		BG:      "linear-gradient(135deg,#2c3e50,#4a6491)",
 		FG:      "#fff",
 		Accent:  "#74c0fc",
+		CTAFg:   "#0b2545",
 		Muted:   "#b5c2d4",
 	}
 }

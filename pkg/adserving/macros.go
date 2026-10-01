@@ -127,6 +127,10 @@ func BuildClickURL(ctx MacroContext) string {
 	params.Set("crid", ctx.CreativeID)
 	params.Set("pid", ctx.PlacementID)
 	params.Set("pubid", ctx.PublisherID)
+	// advid rides signed (same as the impression pixel) so the tracker can stamp
+	// account_id on the click event — without it, clicks land in ClickHouse with
+	// an empty account_id and every advertiser's tenant-scoped "Clicks 7d" reads 0.
+	params.Set("advid", ctx.AdvertiserID)
 	if ctx.LandingURL != "" {
 		params.Set("redir", ctx.LandingURL)
 	}
