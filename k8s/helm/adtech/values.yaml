@@ -164,6 +164,46 @@ demosites:
     crt: ""     # base64 PEM cert (wildcard *.adtech.local), filled by dev loop
     key: ""     # base64 PEM key
 
+# External demo ADVERTISER shop (cmd/demoadv) — the EARNED-audience demo. Only
+# rendered when global.demosites=true (same gate as the demo publisher sites, so
+# one knob lights up the whole browsable demo world and `make hosts` /
+# `make deploy-demosites` pick it up). Deployed into the SAME `demosites`
+# namespace (another external third-party origin) at shop.<global.domain>.
+# A shopper browses it → the /v1/t/rt behaviour pixel enrolls them into the
+# retargeting segment in REAL TIME (audience-rt) → the retargeting campaign chases
+# them with the Dynamic Product Ad → a purchase (/convert → signed /v1/t/conv)
+# suppresses them. Points at a REAL seeded advertiser (Premium Dog Food Co =
+# adv-barkbox) so pixel tags match real retargeting rules, and hands the BROWSER
+# only PUBLIC ingress URLs (tracker/sdk), cross-origin, never in-cluster DNS —
+# the HTTPS/mixed-content lesson: the pixels must be ingress-reachable over HTTPS.
+# TLS cert is COPIED into the demosites namespace exactly like demosites.tls.*.
+demostore:
+  enabled: true              # subordinate to global.demosites; set false to skip the shop while keeping the publisher sites
+  namespace: demosites       # share the demo-origins namespace (reuses the copied *.adtech.local cert secret)
+  image: adtech-demoadv
+  imagePullPolicy: IfNotPresent
+  port: 9200
+  slug: shop                 # ingress subdomain → shop.<global.domain>
+  # The REAL seeded advertiser the retargeting audience + catalog belong to.
+  # adv-barkbox = "Premium Dog Food Co" (cmd/seed seedThemedSegments +
+  # seedProductCatalog): has the f150-interest/checkout retargeting segments, the
+  # cart-retargeting chase campaign (li-dogfood-cart-rt), and the dog-food product
+  # catalog. The UUID is idgen.Derive("account","adv-barkbox"). An empty string
+  # falls back to the demoadv default ("demo-advertiser"), which fires pixels but
+  # matches NO real rule — defeating the earned-audience demo.
+  accountId: "d824fb61-8ad8-53d8-ad80-275a3bfde7e6"
+  brand: "Premium Dog Food Co"
+  product: "Grain-Free Kibble 12kg"
+  sku: "DOG-KIBBLE-12KG"     # a real catalog SKU → the DPA chase renders the viewed product
+  # Browser-reachable PUBLIC ingress URLs (cross-origin fetch). Default to the
+  # HTTPS gateway/tracker ingress hosts so there is no mixed-content block.
+  urls:
+    tracker: ""   # default https://tracker.<domain>  (the /v1/t/* public base)
+    sdk: ""       # default https://gateway.<domain>/static/adtech-adv.js
+  tls:
+    crt: ""       # base64 PEM cert (wildcard *.adtech.local), filled by dev loop
+    key: ""       # base64 PEM key
+
 # Traefik ingress controller (own `traefik` namespace). Rendered verbatim from
 # files/traefik-install.yaml (a copy of k8s/base/traefik/install.yaml) because
 # it is itself pre-rendered helm output pinned by the repo.

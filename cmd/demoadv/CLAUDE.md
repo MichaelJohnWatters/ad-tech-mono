@@ -9,9 +9,23 @@ fires retargeting → checkout fires a signed S2S conversion → CPA settles.
 
 ## How it runs
 
+- **In-cluster (preferred for a browsable demo):** the Helm chart ships this
+  image as the demo ADVERTISER shop at `shop.<domain>` —
+  `k8s/helm/adtech/templates/demostore.yaml` (gated behind `global.demosites`,
+  the same knob as the demo publisher sites; `demostore:` values block). Deploy
+  with `make deploy-demostore` (scoped `helm template --show-only | kubectl
+  apply`, same pattern + copied wildcard cert as `deploy-demosites`; it also
+  runs as part of `make deploy-demosites`). It is pointed at the REAL seeded
+  retargeting advertiser (`demostore.accountId` = adv-barkbox = "Premium Dog
+  Food Co") and hands the browser HTTPS ingress pixel/SDK URLs
+  (`tracker.<domain>` / `gateway.<domain>`), so the pixel tags match real
+  retargeting rules and there is no mixed-content block. This is the EARNED-
+  audience demo: browse → `/v1/t/rt` → audience-rt enrolls in real time → the
+  chase campaign (`li-dogfood-cart-rt`) bids → DPA renders the viewed SKU →
+  purchase suppresses. `make hosts` picks up `shop.<domain>` from the chart.
 - `make demoadv` / `go run ./cmd/demoadv` — host process on `:9200`
-  (`DEMOADV_PORT`). Never deployed by the Helm chart; for a second cluster use
-  the self-contained manifest `cmd/demoadv/deploy/demoadv.yaml`.
+  (`DEMOADV_PORT`), the zero-k8s fallback; for a SECOND cluster use the
+  self-contained manifest `cmd/demoadv/deploy/demoadv.yaml`.
 - Needs the stack up + seeded. Full env table, audience-build walkthrough, and
   the `behaviour_signals` verification SQL: `cmd/demoadv/README.md`.
 - Re-skinnable without forking templates: `DEMOADV_BRAND` / `DEMOADV_PRODUCT` /

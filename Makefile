@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites hosts security-demo devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
+.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites deploy-demostore hosts security-demo devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -228,6 +228,22 @@ deploy-demosites: ## Deploy/refresh the 6 in-cluster demo publisher sites (own `
 	@for d in $$(kubectl -n demosites get deploy -o name 2>/dev/null); do kubectl -n demosites rollout status $$d --timeout=180s; done
 	@echo "demo sites → https://{chronicle,gadget,primereel,soundwave,twitchr,viewtube}.adtech.local"
 	@echo "browse the demo sites by name after: make hosts"
+	@$(MAKE) deploy-demostore
+
+deploy-demostore: ## Deploy/refresh the in-cluster demo ADVERTISER shop (cmd/demoadv, shop.adtech.local) — the EARNED-audience demo. Same `demosites` ns + scoped apply; points at the real adv-barkbox advertiser. Needs the stack up + seeded.
+	@[ "$$(kubectl config current-context)" = "rancher-desktop" ] || { echo "kubectl context is not rancher-desktop"; exit 1; }
+	@[ -f dev/tls/localhost.pem ] || { echo "dev/tls/localhost.pem missing — run scripts/gen-dev-tls.sh (mkcert) for HTTPS demo shop"; exit 1; }
+	scripts/stack-images.sh demoadv
+	@# Scoped `helm template … --show-only | kubectl apply` deploys ONLY the
+	@# demostore objects (same pattern + copied wildcard cert as demo sites).
+	@CRT=$$(base64 < dev/tls/localhost.pem | tr -d '\n'); \
+	 KEY=$$(base64 < dev/tls/localhost-key.pem | tr -d '\n'); \
+	 helm template adtech k8s/helm/adtech --set global.demosites=true --set tls.enabled=true \
+	   --set-string demostore.tls.crt="$$CRT" --set-string demostore.tls.key="$$KEY" \
+	   --show-only templates/demostore.yaml | kubectl apply -f -
+	@kubectl -n demosites rollout status deploy/demostore-shop --timeout=180s
+	@echo "demo shop → https://shop.adtech.local  (EARNED-audience demo: browse → real-time enroll → chased → suppressed)"
+	@echo "browse it by name after: make hosts"
 
 hosts: ## Point every *.adtech.local ingress host (core + demo sites, derived from the chart) at the local Traefik ingress in /etc/hosts (idempotent; needs sudo). Override IP with ADTECH_HOSTS_IP.
 	bash scripts/hosts-setup.sh

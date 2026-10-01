@@ -111,8 +111,9 @@ func main() {
 	uploadSampleMedia(ctx, objStore, bucket, log)
 	assetBase := cfg.Get(keys.Seed.CreativesURLBase.Key(), "http://localhost:8080"+routes.ProxyCreatives[:len(routes.ProxyCreatives)-1])
 	landingBase := keys.Seed.LandingURLBase.Get(cfg)
+	shopBase := keys.Seed.ShopURLBase.Get(cfg)
 
-	in := &inserter{db: db, log: log, creativeAssetBase: assetBase, landingURLBase: landingBase}
+	in := &inserter{db: db, log: log, creativeAssetBase: assetBase, landingURLBase: landingBase, shopURLBase: shopBase}
 	if err := in.SeedAll(ctx, profiles); err != nil {
 		log.Error("seed campaigns failed", "error", err)
 		os.Exit(1)

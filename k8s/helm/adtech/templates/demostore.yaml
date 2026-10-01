@@ -1,0 +1,210 @@
+{{- /*
+External demo ADVERTISER shop (cmd/demoadv) — the EARNED-audience demo deployed
+INTO the cluster as a real in-cluster workload, but in the external-origins
+`demosites` namespace and gated behind global.demosites (default FALSE) so it
+never touches the core `adtech` stack unless the demo world is explicitly enabled.
+
+Why a self-contained template (mirrors demosites.yaml) instead of the generic
+`services:` map:
+  - It lives in a SEPARATE namespace (a real "external advertiser" origin,
+    isolated from the app) — the generic template stamps everything into
+    adtech.namespace.
+  - The shop is a THIRD PARTY by design (cmd/demoadv/CLAUDE.md): plain env,
+    browser-reachable PUBLIC ingress URLs only — never in-cluster DNS. Its
+    tracker/SDK URLs are the ingress hostnames the BROWSER fetches cross-origin.
+
+The EARNED loop it demonstrates (vs the seeded demo audiences):
+  browse product/checkout → /v1/t/rt behaviour pixel → audience-rt enrolls the
+  visitor into adv-barkbox's retargeting segment in REAL TIME → the chase
+  campaign (li-dogfood-cart-rt) bids on them → the Dynamic Product Ad renders the
+  viewed SKU → /convert → signed /v1/t/conv → suppressed. Membership is EARNED by
+  the pixel, visible seconds after the visit — not hand-seeded.
+
+Enable:  helm upgrade adtech k8s/helm/adtech --reuse-values --set global.demosites=true
+Scoped:  make deploy-demostore   (helm template --show-only | kubectl apply)
+Verify:  curl -skL --resolve shop.adtech.local:443:<LB-IP> https://shop.adtech.local/
+
+TLS: identical to demosites.yaml — the per-shop Ingress terminates at Traefik's
+websecure(443). Locally the wildcard mkcert cert (secret adtech-tls) covers
+shop.adtech.local, but a Secret must live in the Ingress's OWN namespace, so we
+COPY the cert bytes into `demosites` (demostore.tls.crt/key, same material as
+demosites.tls.*). Absent cert → plain HTTP (:80). Prod uses cert-manager per the
+same tls.certManager knob as the core chart.
+*/ -}}
+{{- if and (eq (toString (($.Values.global | default dict).demosites)) "true") ($.Values.demostore | default dict).enabled }}
+{{- $s := .Values.demostore | default dict }}
+{{- $ns := $s.namespace | default "demosites" }}
+{{- $domain := (($.Values.global | default dict).domain | default "adtech.local") }}
+{{- $tls := $.Values.tls | default dict }}
+{{- $port := int ($s.port | default 9200) }}
+{{- $image := $s.image | default "adtech-demoadv" }}
+{{- $pullPolicy := $s.imagePullPolicy | default "IfNotPresent" }}
+{{- $slug := $s.slug | default "shop" }}
+{{- $host := printf "%s.%s" $slug $domain }}
+{{- $scheme := ternary "https" "http" ($tls.enabled | default false) }}
+{{- /* Browser-reachable ingress URLs the shop HTML hands to the browser —
+       the public tracker (/v1/t/*) + the advertiser tag, cross-origin. */ -}}
+{{- $urls := $s.urls | default dict }}
+{{- $trackerURL := $urls.tracker | default (printf "%s://tracker.%s" $scheme $domain) }}
+{{- $sdkURL := $urls.sdk | default (printf "%s://gateway.%s/static/adtech-adv.js" $scheme $domain) }}
+{{- /* Same copied-cert gating as demosites.yaml. */ -}}
+{{- $stls := $s.tls | default dict }}
+{{- $haveCopiedCert := and $stls.crt $stls.key }}
+{{- $tlsOn := and ($tls.enabled | default false) (or $haveCopiedCert $tls.certManager) }}
+---
+{{- /* Namespace + copied TLS cert are also emitted by demosites.yaml when the
+       demo publisher sites render. Emit them here too so the shop can deploy
+       standalone (make deploy-demostore) even if the publisher sites are off;
+       kubectl apply is idempotent when both templates render the same objects. */ -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: adtech-mono
+    adtech.io/purpose: external-demo-origins
+{{- if and $tlsOn $haveCopiedCert }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tls.secretName | default "adtech-tls" }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/part-of: adtech-mono
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $stls.crt }}
+  tls.key: {{ $stls.key }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demostore-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demostore-{{ $slug }}
+    adtech.io/component: demostore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demostore-{{ $slug }}
+  template:
+    metadata:
+      labels:
+        app: demostore-{{ $slug }}
+        adtech.io/component: demostore
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: demostore
+          image: {{ include "adtech.image" (dict "name" $image "g" $.Values.global) }}
+          imagePullPolicy: {{ $pullPolicy }}
+          ports:
+            - containerPort: {{ $port }}
+              name: http
+          env:
+            - name: DEMOADV_PORT
+              value: {{ $port | quote }}
+            {{- /* The REAL seeded advertiser the retargeting audience + catalog
+                   belong to (adv-barkbox = Premium Dog Food Co). Empty → the
+                   demoadv default "demo-advertiser" (fires pixels, matches no
+                   rule) — which would defeat the earned-audience demo. */ -}}
+            {{- if $s.accountId }}
+            - name: DEMOADV_ACCOUNT_ID
+              value: {{ $s.accountId | quote }}
+            {{- end }}
+            {{- if $s.brand }}
+            - name: DEMOADV_BRAND
+              value: {{ $s.brand | quote }}
+            {{- end }}
+            {{- if $s.product }}
+            - name: DEMOADV_PRODUCT
+              value: {{ $s.product | quote }}
+            {{- end }}
+            {{- if $s.sku }}
+            - name: DEMOADV_SKU
+              value: {{ $s.sku | quote }}
+            {{- end }}
+            # Browser-reachable PUBLIC ingress URLs — the browser fetches these
+            # cross-origin. MUST be HTTPS/ingress-reachable (no mixed content),
+            # NOT in-cluster service DNS.
+            - name: DEMOADV_TRACKER_URL
+              value: {{ $trackerURL | quote }}
+            - name: DEMOADV_SDK_URL
+              value: {{ $sdkURL | quote }}
+            {{- with $s.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            initialDelaySeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            periodSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demostore-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demostore-{{ $slug }}
+spec:
+  selector:
+    app: demostore-{{ $slug }}
+  ports:
+    - name: http
+      port: {{ $port }}
+      targetPort: {{ $port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demostore-{{ $slug }}
+  namespace: {{ $ns }}
+  labels:
+    app: demostore-{{ $slug }}
+  annotations:
+    {{- if $tlsOn }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    {{- if $tls.certManager }}
+    cert-manager.io/cluster-issuer: {{ $tls.certManager.clusterIssuer | quote }}
+    {{- end }}
+    {{- else }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
+spec:
+  ingressClassName: traefik
+  {{- if $tlsOn }}
+  tls:
+    - hosts:
+        - {{ $host }}
+      secretName: {{ if $tls.certManager }}demostore-{{ $slug }}-tls{{ else }}{{ $tls.secretName | default "adtech-tls" }}{{ end }}
+  {{- end }}
+  rules:
+    - host: {{ $host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: demostore-{{ $slug }}
+                port:
+                  number: {{ $port }}
+{{- end }}
