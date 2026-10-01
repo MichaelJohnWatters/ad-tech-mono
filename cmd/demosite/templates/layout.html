@@ -1,44 +1,44 @@
 {{define "styles"}}
 <style>
-  :root { --ink:#1a1a2e; --muted:#6b7280; --line:#e5e7eb; --accent:#b91c1c; }
+{{.Cfg.ThemeCSS}}
   * { box-sizing: border-box; }
-  body { margin:0; font-family: Georgia, 'Times New Roman', serif; color:var(--ink); background:#faf9f7; }
-  header.masthead { border-bottom:3px double var(--ink); text-align:center; padding:18px 12px 8px; }
-  .masthead h1 { margin:0; font-size:44px; letter-spacing:1px; }
-  .masthead .tagline { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:3px; }
-  nav { display:flex; gap:18px; justify-content:center; border-bottom:1px solid var(--line); padding:8px; font-family:-apple-system,system-ui,sans-serif; font-size:13px; }
-  nav a { color:var(--ink); text-decoration:none; text-transform:uppercase; letter-spacing:1px; padding:4px 6px; }
-  nav a.active { color:var(--accent); border-bottom:2px solid var(--accent); }
+  body { margin:0; font-family: var(--font); color:var(--ink); background:var(--bg); }
+  a { color:inherit; }
+  /* Top bar — per-site brand + nav (replaces the old uniform masthead). */
+  header.topbar { display:flex; align-items:center; gap:22px; padding:10px 20px; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:50; }
+  header.topbar .brand { font-weight:800; font-size:20px; letter-spacing:.3px; text-decoration:none; color:var(--ink); white-space:nowrap; }
+  header.topbar nav { display:flex; gap:4px; flex-wrap:wrap; }
+  header.topbar nav a { text-decoration:none; color:var(--muted); font-size:13px; font-weight:600; padding:6px 10px; border-radius:999px; }
+  header.topbar nav a:hover { color:var(--ink); background:color-mix(in srgb, var(--ink) 8%, transparent); }
+  header.topbar nav a.active { color:var(--accent-ink); background:var(--accent); }
+  /* Generic content shell kept for the not-yet-bespoke properties (home/video/
+     audio/native/page templates still use main+article+aside+ad-rail). */
   main { max-width:1080px; margin:0 auto; padding:24px 16px; display:grid; grid-template-columns: 1fr 320px; gap:32px; }
   @media (max-width:820px){ main{ grid-template-columns:1fr; } }
   article h2 { font-size:30px; margin:0 0 6px; line-height:1.15; }
-  article .byline { color:var(--muted); font-size:12px; font-family:sans-serif; margin-bottom:14px; }
+  article .byline { color:var(--muted); font-size:12px; margin-bottom:14px; }
   article p { line-height:1.7; font-size:18px; }
-  aside { font-family:-apple-system,system-ui,sans-serif; }
-  .ad-rail { position:sticky; top:16px; }
-  .ad-label { font-size:9px; letter-spacing:2px; text-transform:uppercase; color:#9ca3af; text-align:center; margin-bottom:4px; font-family:sans-serif;}
-  .ad-slot { min-height:250px; display:flex; align-items:center; justify-content:center; background:#f1f0ee; border:1px dashed #d1d5db; color:#9ca3af; font-size:12px; font-family:sans-serif; }
+  .ad-rail { position:sticky; top:72px; }
+  .ad-label { font-size:9px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); text-align:center; margin-bottom:4px; }
+  .ad-slot { min-height:250px; display:flex; align-items:center; justify-content:center; background:color-mix(in srgb, var(--ink) 5%, var(--surface)); border:1px dashed var(--line); color:var(--muted); font-size:12px; }
   .status { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:6px; text-align:center; }
-  .consent { position:fixed; left:0; right:0; bottom:0; background:#111827; color:#f9fafb; padding:14px 18px; display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; font-family:sans-serif; font-size:13px; z-index:9999; box-shadow:0 -2px 12px rgba(0,0,0,.25); }
-  .consent button { font-family:sans-serif; font-size:13px; border:0; border-radius:6px; padding:8px 16px; cursor:pointer; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .consent { position:fixed; left:0; right:0; bottom:0; background:#111827; color:#f9fafb; padding:14px 18px; display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; font-family:-apple-system,system-ui,sans-serif; font-size:13px; z-index:9999; box-shadow:0 -2px 12px rgba(0,0,0,.25); }
+  .consent button { font-family:inherit; font-size:13px; border:0; border-radius:6px; padding:8px 16px; cursor:pointer; }
   .consent .accept { background:#16a34a; color:#fff; }
   .consent .reject { background:#374151; color:#f9fafb; }
-  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; }
 </style>
 {{end}}
 
+{{/* Per-site top bar: brand wordmark + the site's own nav links (chrome.Nav).
+     Replaces the old one-size-fits-all Home/Video/Audio/Native/Pages masthead. */}}
 {{define "nav"}}
-<header class="masthead">
-  <h1>{{.Cfg.SiteName}}</h1>
-  <div class="tagline">{{.Cfg.SiteTagline}}</div>
+<header class="topbar">
+  <a class="brand" href="/" style="color:var(--accent)">{{if .Cfg.Theme.Wordmark}}{{.Cfg.Theme.Wordmark}}{{else}}{{.Cfg.SiteName}}{{end}}</a>
+  <nav>
+    {{range .Cfg.Nav}}<a href="{{.Href}}" class="{{if eq $.Active .Key}}active{{end}}">{{.Label}}</a>{{end}}
+  </nav>
 </header>
-<nav>
-  <a href="/" class="{{if eq .Active "home"}}active{{end}}">Home</a>
-  <a href="/video" class="{{if eq .Active "video"}}active{{end}}">Video</a>
-  <a href="/audio" class="{{if eq .Active "audio"}}active{{end}}">Audio</a>
-  <a href="/native" class="{{if eq .Active "native"}}active{{end}}">Native</a>
-  <a href="/pages" class="{{if eq .Active "pages"}}active{{end}}">Pages</a>
-</nav>
 {{end}}
 
 {{/* SDK load + init + consent controller. adtech.js is loaded from the platform's
@@ -53,33 +53,24 @@
   // The demo persona: the SAME email the demo advertiser (cmd/demoadv) knows
   // this visitor by. Both sides hash it identically, so the platform can bridge
   // this publisher-side visit to the advertiser-side pixels (retargeting +
-  // view-through). Was a baked-in constant — which silently re-linked every
-  // "fresh" incognito visitor to the same identity cluster. Now per-browser
-  // with a persona bar: "New visitor" = genuinely new person (new email +
-  // cleared first-party id); set the SAME email on both sites to be one person.
+  // view-through). Per-browser with a persona bar: "New visitor" = genuinely new
+  // person; set the SAME email on both sites to be one person.
   function personaEmail() {
     var e = localStorage.getItem('demo_persona_email');
     if (!e) { e = 'demo.shopper@example.com'; localStorage.setItem('demo_persona_email', e); }
     return e;
   }
-  // Each persona also gets its own HOUSEHOLD: the platform derives households
-  // from the client IP, and on a one-machine stack every browser visit shares
-  // one IP — so without this, "New visitor" would inherit the old persona's
-  // household frequency caps. The demo IP rides the allowlist-gated ?ip=
-  // override (private callers only — a public browser can't spoof it).
-  // Derived from the persona email's hash — NOT random — so the shop site
-  // (cmd/demoadv) computes the SAME address for the same persona and the two
-  // sites share one household. That household is how an anonymous guest cart
-  // (no email captured anywhere) still gets chased here: household id, not
-  // identity bridge.
+  // Each persona also gets its own HOUSEHOLD via the allowlist-gated ?ip= override
+  // (private callers only), derived from the email hash so this site and the shop
+  // site share one household for the same persona.
   function personaIPFromHash(he) {
     var b0 = parseInt(he.slice(0, 2), 16);
     return '203.0.113.' + (1 + (b0 % 254));
   }
   function personaReset(email) {
-    localStorage.setItem('demo_persona_email', email);     // household derives from this
-    document.cookie = 'adtech_uid=; Max-Age=0; path=/';   // drop the platform first-party id
-    localStorage.removeItem('demotimes_consent');          // re-ask consent as the new person
+    localStorage.setItem('demo_persona_email', email);
+    document.cookie = 'adtech_uid=; Max-Age=0; path=/';
+    localStorage.removeItem('demotimes_consent');
     location.reload();
   }
   function personaNew() {
@@ -91,7 +82,7 @@
   }
   document.addEventListener('DOMContentLoaded', function () {
     var bar = document.createElement('div');
-    bar.style.cssText = 'position:fixed;top:64px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9999;display:flex;gap:8px;align-items:center;';
+    bar.style.cssText = 'position:fixed;bottom:8px;left:8px;background:#1e293b;color:#e2e8f0;padding:6px 10px;border-radius:8px;font:12px -apple-system,sans-serif;z-index:9998;display:flex;gap:8px;align-items:center;opacity:.92;';
     bar.innerHTML = '👤 <b>' + personaEmail() + '</b>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaNew();return false">New visitor</a>' +
       ' <a href="#" style="color:#7dd3fc" onclick="personaChange();return false">Change</a>';
@@ -106,15 +97,11 @@
   }
 
   function applyConsent(personalized) {
-    // GDPR applies; personalized = full TCF purposes 1-4, else contextual-only
-    // (no cookie/personalization — the SDK drops the id cookie without purpose 1).
     adtech.setConsent({ gdpr: true, purposes: personalized ? [1,2,3,4] : [] });
     localStorage.setItem('demotimes_consent', personalized ? 'personalized' : 'contextual');
     var b = document.getElementById('consent'); if (b) b.style.display = 'none';
     var proceed = function () { if (window.__ads.onConsent) window.__ads.onConsent(personalized); };
     if (personalized) {
-      // Attach the hashed persona email BEFORE requesting ads, so the serve carries
-      // it and the SSP links this publisher user to the shared identity.
       sha256Hex(DEMO_PERSONA_EMAIL).then(function (he) { adtech.setUserData({ hashedEmail: he, demoIP: personaIPFromHash(he) }); proceed(); });
     } else {
       proceed();

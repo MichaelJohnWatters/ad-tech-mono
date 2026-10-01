@@ -45,6 +45,12 @@ type siteConfig struct {
 	SiteTagline string
 	Kind        string         // pages.Site.Kind — drives nav + which pages this origin shows
 	Layouts     []pages.Layout // the layouts this site shows (its "Pages" nav)
+	// Per-site visual identity + navigation (cmd/demosite/chrome.go). Theme paints
+	// the palette/typography (via ThemeCSS), Nav is the bespoke top bar, Home is the
+	// template the "/" route renders. Populated from siteChrome[slug].
+	Theme themeSpec
+	Nav   []navLink
+	Home  string
 	// Per-format seeded placement external IDs (idgen-derived server-side).
 	DisplayPlacement string
 	VideoPlacement   string
@@ -63,6 +69,31 @@ type page struct {
 	Title   string
 	Layout  pages.Layout   // the multi-slot page being rendered (page.html)
 	Layouts []pages.Layout // all layouts (pages_index.html)
+	Vid     *videoSpec     // the ViewTube watch page being rendered (viewtube_watch.html)
+}
+
+// videoSpec is one ViewTube "video". Breaks is the VMAP break subset the player
+// requests (publisher-adserver's /v1/pubad/video/vmap?breaks=…), so the three demo
+// videos show pre-roll / pre+mid / pre+mid+post without any new backend state.
+type videoSpec struct {
+	ID          string
+	Title       string
+	Channel     string
+	Views       string
+	Breaks      string // "pre" | "pre,mid" | "pre,mid,post"
+	BreaksLabel string
+}
+
+// VideoList returns the ViewTube demo videos in display order (for the home grid).
+func (page) VideoList() []videoSpec {
+	return []videoSpec{viewtubeVideos["1"], viewtubeVideos["2"], viewtubeVideos["3"]}
+}
+
+// viewtubeVideos — the three demo videos, each demonstrating one break schedule.
+var viewtubeVideos = map[string]videoSpec{
+	"1": {ID: "1", Title: "Building a bid request from scratch", Channel: "AdTech Explained", Views: "48K views", Breaks: "pre", BreaksLabel: "Pre-roll only"},
+	"2": {ID: "2", Title: "How a first-price auction clears", Channel: "AdTech Explained", Views: "12K views", Breaks: "pre,mid", BreaksLabel: "Pre-roll + mid-roll"},
+	"3": {ID: "3", Title: "SSAI vs client-side VAST, explained", Channel: "AdTech Explained", Views: "203K views", Breaks: "pre,mid,post", BreaksLabel: "Pre-roll + mid-roll + post-roll"},
 }
 
 // PlacementFor maps a page layout's Slot.Format to THIS site's own seeded
@@ -127,7 +158,8 @@ func main() {
 	// DEMOSITE_SITE picks one of the named "friend's website" properties
 	// (pkg/simulator/pages) — its branding + its own page set — so the same
 	// binary can be run as several distinct branded origins (see `make demosites`).
-	if slug := env("DEMOSITE_SITE", ""); slug != "" {
+	slug := env("DEMOSITE_SITE", "")
+	if slug != "" {
 		site, ok := pages.SiteBySlug(slug)
 		if !ok {
 			log.Fatalf("DEMOSITE_SITE=%q is not a known site (have: run `make demosites`)", slug)
@@ -137,6 +169,10 @@ func main() {
 		cfg.Kind = site.Kind
 		cfg.Layouts = site.Layouts()
 	}
+	// Per-site visual identity + nav (chrome.go). Unknown/empty slug → defaultChrome
+	// (the legacy look), so the plain `go run ./cmd/demosite` is unchanged.
+	ch := resolveChrome(slug)
+	cfg.Theme, cfg.Nav, cfg.Home = ch.Theme, ch.Nav, ch.Home
 	// Explicit masthead override — lets a deployment brand the site exactly (e.g.
 	// "DEMO SITE - The Daily Chronicle") independent of the DEMOSITE_SITE slug's
 	// pages.Site name, so the property is trivially findable by its "DEMO SITE -"
@@ -162,12 +198,25 @@ func main() {
 	// (SoundWave) opens on the player, an SSAI/live app (Twitchr) opens on the
 	// live stitched stream; everything else keeps the news homepage. The "/"
 	// handler is a catch-all in http.ServeMux, so 404 any non-root path here.
-	homeTmpl, homeActive := "home.html", "home"
-	switch cfg.Kind {
-	case "audio":
-		homeTmpl, homeActive = "audio.html", "audio"
-	case "ssai":
-		homeTmpl, homeActive = "ssai.html", "live"
+	// The home template comes from the site's chrome (bespoke properties). When a
+	// site has no bespoke home yet, fall back to the Kind-based default so it still
+	// renders exactly as before. The active nav key is whichever nav link points at "/".
+	homeTmpl := cfg.Home
+	if homeTmpl == "" {
+		homeTmpl = "home.html"
+		switch cfg.Kind {
+		case "audio":
+			homeTmpl = "audio.html"
+		case "ssai":
+			homeTmpl = "ssai.html"
+		}
+	}
+	homeActive := "home"
+	for _, l := range cfg.Nav {
+		if l.Href == "/" {
+			homeActive = l.Key
+			break
+		}
 	}
 	homeRender := render(homeTmpl, cfg.SiteName, homeActive)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +233,22 @@ func main() {
 	// the STITCHED manifest from the SSAI stitcher (via the gateway proxy) — the
 	// ad breaks are spliced server-side, never fetched by the client.
 	mux.HandleFunc("/live", render("ssai.html", "Live — "+cfg.SiteName, "live"))
+
+	// ViewTube watch pages: /watch/{1,2,3}. Each renders the same player template
+	// but requests a different VMAP break schedule (pre / pre+mid / pre+mid+post),
+	// so the three videos demonstrate escalating ad loads.
+	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/watch/")
+		v, ok := viewtubeVideos[id]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.ExecuteTemplate(w, "viewtube_watch.html", page{Cfg: cfg, Active: "w" + id, Title: v.Title + " — " + cfg.SiteName, Vid: &v}); err != nil {
+			log.Printf("render viewtube_watch: %v", err)
+		}
+	})
 
 	// Multi-slot combo pages, defined once in pkg/simulator/pages (the same
 	// layouts the e2e replays). /pages lists THIS site's set; /p/{slug} renders one

@@ -1,0 +1,144 @@
+{{define "viewtube_watch.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+<style>
+  .wt { max-width:1100px; margin:0 auto; padding:20px; display:grid; grid-template-columns:1fr 340px; gap:24px; }
+  @media (max-width:900px){ .wt{ grid-template-columns:1fr; } }
+  .wt-stage { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:12px; overflow:hidden; }
+  .wt-stage video { position:absolute; inset:0; width:100%; height:100%; background:#000; }
+  #vt-ad { display:none; z-index:2; }
+  .wt-badge { position:absolute; top:10px; left:10px; z-index:3; display:none; background:rgba(0,0,0,.82); color:#fff; font:12px/1 sans-serif; padding:5px 10px; border-radius:4px; cursor:pointer; }
+  .wt-title { font-size:20px; font-weight:700; margin:14px 0 6px; }
+  .wt-meta { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:13px; }
+  .wt-avatar { width:40px; height:40px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; }
+  .wt-sched { margin-top:14px; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px; font-size:13px; }
+  .wt-sched b { color:var(--accent); }
+  .wt-status { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:8px; }
+  .wt-up h3 { font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin:0 0 12px; }
+  .wt-up a { display:flex; gap:10px; text-decoration:none; color:var(--ink); margin-bottom:12px; }
+  .wt-up .t { width:120px; aspect-ratio:16/9; border-radius:8px; background:linear-gradient(135deg,#1f2937,#ff0000 240%); flex:0 0 auto; display:flex; align-items:center; justify-content:center; color:#fff; }
+  .wt-up .m { font-size:13px; } .wt-up .m .s { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+{{template "nav" .}}
+<div class="wt">
+  <div>
+    <div class="wt-stage">
+      <video id="vt-content" controls playsinline></video>
+      <video id="vt-ad" playsinline></video>
+      <div class="wt-badge" id="vt-badge">Ad · <span id="vt-count"></span> · visit ↗</div>
+    </div>
+    <div class="wt-title">{{.Vid.Title}}</div>
+    <div class="wt-meta"><div class="wt-avatar">A</div><div>{{.Vid.Channel}} · {{.Vid.Views}}</div></div>
+    <div class="wt-sched">Ad schedule for this video: <b>{{.Vid.BreaksLabel}}</b>. The player fetches a
+      <code>VMAP</code> from <code>/v1/pubad/video/vmap</code> and plays a real auction-won
+      <code>VAST</code> ad at each scheduled break.</div>
+    <div class="wt-status" id="vt-status">awaiting consent…</div>
+  </div>
+  <aside class="wt-up">
+    <h3>Up next</h3>
+    {{range .VideoList}}
+    <a href="/watch/{{.ID}}"><div class="t">▶</div><div class="m">{{.Title}}<div class="s">{{.Channel}} · {{.BreaksLabel}}</div></div></a>
+    {{end}}
+  </aside>
+</div>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  var CONTENT  = {{.Cfg.MediaURL}} + '/v1/creatives/media/bbb-720-10mb.mp4';
+  var VMAP_URL = {{.Cfg.PubadURL}} + '/v1/pubad/video/vmap?placement_id=' +
+                 encodeURIComponent({{.Cfg.VideoPlacement}}) + '&breaks=' + {{.Vid.Breaks}} +
+                 '&geo=USA&device=desktop';
+  var content = document.getElementById('vt-content');
+  var adv     = document.getElementById('vt-ad');
+  var badge   = document.getElementById('vt-badge');
+  var statusEl= document.getElementById('vt-status');
+  function status(t){ statusEl.textContent = t; }
+  function fire(u){ if(u){ var i=new Image(); i.src=u; } }
+
+  // Parse VMAP (namespace-agnostic: match by localName) into ordered breaks.
+  function parseVmap(xml){
+    var doc = new DOMParser().parseFromString(xml, 'text/xml');
+    var out = [];
+    var all = doc.getElementsByTagName('*');
+    for (var i=0;i<all.length;i++){
+      if (all[i].localName !== 'AdBreak') continue;
+      var off = all[i].getAttribute('timeOffset') || '';
+      var uri = '';
+      var kids = all[i].getElementsByTagName('*');
+      for (var j=0;j<kids.length;j++){ if (kids[j].localName === 'AdTagURI'){ uri = (kids[j].textContent||'').trim(); break; } }
+      out.push({ off: off, uri: uri });
+    }
+    return out;
+  }
+  // "start" => pre (at 0), "end" => post, "HH:MM:SS(.mmm)" => seconds, "NN%" => percent.
+  function offsetSeconds(off, dur){
+    if (off === 'start') return 0;
+    if (off === 'end')   return dur;
+    if (/%$/.test(off))  return dur * (parseFloat(off)/100);
+    var p = off.split(':').map(parseFloat);
+    if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
+    return parseFloat(off) || 0;
+  }
+
+  // Play one VAST ad on the overlay <video>, fire beacons, resolve cb() on complete.
+  function playAd(uri, cb){
+    fetch(uri, { credentials:'omit' }).then(function(r){ return r.text(); }).then(function(xml){
+      var doc = new DOMParser().parseFromString(xml, 'text/xml');
+      var media = doc.querySelector('MediaFile');
+      if (!media){ cb(); return; }
+      var imp = (doc.querySelector('Impression')||{}).textContent;
+      var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')] = t.textContent.trim(); });
+      var clickThrough = ((doc.querySelector('ClickThrough')||{}).textContent||'').trim();
+      var clickTrack   = ((doc.querySelector('ClickTracking')||{}).textContent||'').trim();
+      content.style.display = 'none'; adv.style.display = 'block';
+      badge.style.display = 'block';
+      badge.onclick = function(){ if (clickTrack) fire(clickTrack); if (clickThrough) window.open(clickThrough,'_blank'); status('ad clicked ✓ — click recorded'); };
+      adv.src = media.textContent.trim(); adv.play();
+      var f = {};
+      adv.onplay = function(){ if(!f.i){ f.i=1; fire(imp); fire(track.start); } };
+      adv.ontimeupdate = function(){ if(!adv.duration) return; var p=adv.currentTime/adv.duration;
+        document.getElementById('vt-count').textContent = Math.ceil(adv.duration-adv.currentTime)+'s';
+        if(p>=.25&&!f.q1){f.q1=1;fire(track.firstQuartile);} if(p>=.5&&!f.q2){f.q2=1;fire(track.midpoint);} if(p>=.75&&!f.q3){f.q3=1;fire(track.thirdQuartile);} };
+      adv.onended = function(){ if(f.d) return; f.d=1; fire(track.complete);
+        adv.onplay=adv.ontimeupdate=adv.onended=null; adv.style.display='none'; badge.style.display='none'; content.style.display='block'; cb(); };
+    }).catch(function(){ cb(); });
+  }
+  // Play a list of breaks in sequence, then done().
+  function playSeq(list, done){ if(!list.length){ done(); return; } playAd(list[0].uri, function(){ playSeq(list.slice(1), done); }); }
+
+  window.__ads.onConsent = function(){
+    status('requesting VMAP schedule…');
+    fetch(VMAP_URL, { credentials:'omit' }).then(function(r){ return r.text(); }).then(function(xml){
+      var breaks = parseVmap(xml);
+      var pre = breaks.filter(function(b){ return b.off==='start'; });
+      var post= breaks.filter(function(b){ return b.off==='end'; });
+      var mid = breaks.filter(function(b){ return b.off!=='start' && b.off!=='end'; });
+      status(breaks.length + ' break(s): ' + breaks.map(function(b){return b.off;}).join(', '));
+
+      function startContent(){
+        content.src = CONTENT; content.style.display='block'; content.play();
+        var midFired = {};
+        content.ontimeupdate = function(){
+          if (!content.duration) return;
+          mid.forEach(function(b, idx){
+            if (midFired[idx]) return;
+            if (content.currentTime >= offsetSeconds(b.off, content.duration)){
+              midFired[idx] = 1; content.pause();
+              status('mid-roll break…');
+              playAd(b.uri, function(){ status('mid-roll done — resuming'); content.play(); });
+            }
+          });
+        };
+        content.onended = function(){ content.ontimeupdate=null; status('content ended'); playSeq(post, function(){ status('all breaks played ✓'); }); };
+      }
+      if (pre.length){ status('pre-roll…'); playSeq(pre, startContent); } else { startContent(); }
+    }).catch(function(e){ status('VMAP error: '+e.message+' — playing content'); content.src=CONTENT; content.play(); });
+  };
+</script>
+</body>
+</html>{{end}}
