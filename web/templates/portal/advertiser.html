@@ -345,7 +345,21 @@
     </section>
 
     <section id="section-conversions" class="portal-section p-6 space-y-6 hidden">
-      {{ template "section-intro" "Measure outcomes — define conversion events (purchase, signup) and the pixels/postbacks that record them, with a signing key for server-to-server." }}
+      {{ template "section-intro" "Measure outcomes — see your recorded conversions, define conversion events (purchase, signup) and the pixels/postbacks that record them, with a signing key for server-to-server." }}
+
+      {{ template "card-start" (dict "title" "Recorded conversions (last 30 days)" "subtitle" "Actual conversions that fired to your tracker — e.g. a purchase from the shop. This is the money outcome; the &ldquo;Conversion events&rdquo; card below is just the named definitions + pixels.") }}
+      <div id="convTotals" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3 text-sm"></div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700"><tr>
+            <th class="px-3 py-2">Conversion type</th><th class="px-3 py-2">Count</th><th class="px-3 py-2">Revenue</th>
+          </tr></thead>
+          <tbody id="convRecBody"><tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="mt-3 text-xs text-gray-400">Fired via a signed <code>/v1/t/conv</code> postback (server-to-server). Lands async through tracker → NATS → reporting, so a brand-new purchase can take a few seconds to appear here.</p>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Conversion events" "subtitle" "Define named conversions and embed the pixel on your site's confirmation pages") }}
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ New conversion" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newConversion').classList.remove('hidden')") }}
@@ -2622,11 +2636,40 @@ async function exportSegment(id, name) {
 }
 
 // ---- Conversions ----
+// loadRecordedConversions shows the ACTUAL recorded conversions (purchases etc.)
+// from the reporting conversions table — distinct from the event DEFINITIONS the
+// /v1/api/conversions config endpoint returns. This is what a user expects to see
+// after a purchase; the definitions tab previously only showed config.
+async function loadRecordedConversions() {
+  const body = document.getElementById('convRecBody');
+  const totals = document.getElementById('convTotals');
+  if (!body) return;
+  try {
+    const rows = await reportQuery({table: 'conversions', metrics: ['count', 'sum_revenue'],
+      dimensions: ['conversion_type'], time_from: daysAgo(30)}) || [];
+    let tc = 0, tr = 0;
+    rows.forEach(r => { tc += Number(r.count || 0); tr += Number(r.sum_revenue || 0); });
+    if (totals) totals.innerHTML =
+      `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Conversions</div><div class="text-2xl font-semibold font-mono">${tc}</div></div>` +
+      `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Revenue (30d)</div><div class="text-2xl font-semibold font-mono">$${tr.toFixed(2)}</div></div>`;
+    body.innerHTML = rows.length
+      ? rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-3 py-2 font-mono text-xs">${esc(r.conversion_type || '—')}</td>
+          <td class="px-3 py-2 font-mono">${Number(r.count || 0)}</td>
+          <td class="px-3 py-2 font-mono">$${Number(r.sum_revenue || 0).toFixed(2)}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No conversions recorded in the last 30 days yet. Complete a purchase on the shop — it appears here within a few seconds.</td></tr>';
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
 // Cache keyed by config id so the copy buttons can read the server-rendered
 // pixel/snippet without re-deriving the URL client-side.
 let conversionCache = {};
 async function loadConversions() {
-  const tbody = tbodyOf('conversions');
+  loadRecordedConversions(); // the actual recorded conversions (records, not definitions)
+  // Target the EVENTS table specifically (the records table above also has a tbody).
+  const tbody = [...document.querySelectorAll('#section-conversions tbody')].find(t => t.id !== 'convRecBody');
   try {
     const list = await fetchJSON('/v1/api/conversions') || [];
     conversionCache = {};
@@ -2644,7 +2687,7 @@ async function loadConversions() {
         </td>
         <td class="px-3 py-2 text-right"><button onclick="deleteConversion('${esc(c.id)}', '${esc(c.name)}')" class="text-xs px-2 py-1 rounded border border-error/40 text-error hover:bg-error/10">Delete</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No conversions yet — define your first event above.</td></tr>';
+      : '<tr><td colspan="6" class="px-3 py-8 text-center text-sm text-gray-400">No conversion <em>events</em> defined — these optional named events + pixels are for your own site. Your actual recorded conversions appear in the card above.</td></tr>';
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
