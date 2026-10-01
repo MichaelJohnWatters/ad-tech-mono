@@ -8,6 +8,7 @@
     --bg: {{ .Theme.BG }};
     --fg: {{ .Theme.FG }};
     --accent: {{ .Theme.Accent }};
+    --cta-fg: {{ .Theme.CTAFg }};
     --muted: {{ .Theme.Muted }};
   }
   * { box-sizing: border-box; }
@@ -42,7 +43,7 @@
     display: inline-block;
     padding: 14px 32px;
     background: var(--accent);
-    color: var(--bg);
+    color: var(--cta-fg);
     border-radius: 6px;
     font-size: 16px;
     font-weight: 600;

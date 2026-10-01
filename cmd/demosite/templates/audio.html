@@ -28,7 +28,11 @@
 {{template "consentBanner" .}}
 {{template "sdkboot" .}}
 <script>
-  var EPISODE = {{.Cfg.MediaURL}} + '/v1/creatives/media/sample-audio.mp3';
+  // The episode CONTENT is a music track (audio-1.mp3) — deliberately distinct
+  // from the spoken ad spot (ad-audio.mp3) so the ad→content handoff is audible.
+  // (sample-audio.mp3 was never uploaded by the seed → 404 → content silently
+  // never played after the ad; audio-1/2.mp3 are the seeded sample tracks.)
+  var EPISODE = {{.Cfg.MediaURL}} + '/v1/creatives/media/audio-1.mp3';
   function fire(url){ if(!url) return; var i=new Image(); i.src=url; }
   var consented = false;
   window.__ads.onConsent = function(){ consented = true; document.getElementById('a-status').textContent = 'ready — press play'; };
