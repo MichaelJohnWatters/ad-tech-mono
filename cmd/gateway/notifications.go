@@ -47,7 +47,12 @@ func notificationsHandler(store notifications.Store, log *slog.Logger) http.Hand
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, notificationsListResponse{Notifications: []notifications.Notification{}}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, notificationsListResponse{Notifications: []notifications.Notification{}}) {
 			return
 		}
 		if store == nil {
@@ -61,13 +66,13 @@ func notificationsHandler(store notifications.Store, log *slog.Logger) http.Hand
 
 		switch {
 		case r.Method == http.MethodGet && !isRead:
-			list, err := store.ListForAccount(r.Context(), claims.AccountID, notificationListLimit)
+			list, err := store.ListForAccount(r.Context(), accountID, notificationListLimit)
 			if err != nil {
 				log.Error("notification list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
-			unread, err := store.UnreadCount(r.Context(), claims.AccountID)
+			unread, err := store.UnreadCount(r.Context(), accountID)
 			if err != nil {
 				log.Error("notification unread count failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -82,7 +87,7 @@ func notificationsHandler(store notifications.Store, log *slog.Logger) http.Hand
 				return
 			}
 			if req.All {
-				if err := store.MarkAllRead(r.Context(), claims.AccountID); err != nil {
+				if err := store.MarkAllRead(r.Context(), accountID); err != nil {
 					log.Error("notification mark-all-read failed", "error", err)
 					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 					return
@@ -95,7 +100,7 @@ func notificationsHandler(store notifications.Store, log *slog.Logger) http.Hand
 				http.Error(w, `{"error":"id or all is required"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.MarkRead(r.Context(), claims.AccountID, id)
+			err := store.MarkRead(r.Context(), accountID, id)
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, `{"error":"notification not found"}`, http.StatusNotFound)
 				return

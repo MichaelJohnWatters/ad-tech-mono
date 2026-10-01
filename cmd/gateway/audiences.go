@@ -250,7 +250,12 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []audiencepg.Segment{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []audiencepg.Segment{}) {
 			return
 		}
 		if store == nil || deps.proc == nil || deps.ingestStore == nil || deps.objects == nil {
@@ -260,11 +265,11 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "audiences:read") {
+			if !canAs(r, claims, "audiences:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			segs, err := store.ListSegments(r.Context(), claims.AccountID)
+			segs, err := store.ListSegments(r.Context(), accountID)
 			if err != nil {
 				log.Error("audience list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -273,11 +278,11 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(segs)
 
 		case http.MethodPost:
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			deps.handleUpload(w, r, claims)
+			deps.handleUpload(w, r, claims, accountID)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -288,8 +293,7 @@ func audienceHandler(deps audienceDeps) http.HandlerFunc {
 // handleUpload validates the upload synchronously, stages the raw bytes, and
 // enqueues an ingest job. Small + due-now → claim + inline Process → 200 with a
 // match rate; otherwise → leave queued → 202 with the job id.
-func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
-	accountID := claims.AccountID
+func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, claims *auth.Claims, accountID string) {
 	var req audienceUploadRequest
 	var raw []byte // the CSV bytes staged to object storage
 	var src string
@@ -592,7 +596,12 @@ func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger)
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "audiences:read") {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if !canAs(r, claims, "audiences:read") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -609,7 +618,7 @@ func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger)
 		// No id → LIST the account's recent ingest jobs (the portal's upload
 		// history: success/failed/queued/running + reason). Tenant-scoped.
 		if id == "" {
-			jobs, err := ingestStore.ListByAccount(r.Context(), claims.AccountID, 50)
+			jobs, err := ingestStore.ListByAccount(r.Context(), accountID, 50)
 			if err != nil {
 				log.Error("audience ingest list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -631,7 +640,7 @@ func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger)
 			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": out})
 			return
 		}
-		job, err := ingestStore.GetByAccount(r.Context(), claims.AccountID, id)
+		job, err := ingestStore.GetByAccount(r.Context(), accountID, id)
 		if err != nil {
 			log.Error("audience ingest status failed", "job", id, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

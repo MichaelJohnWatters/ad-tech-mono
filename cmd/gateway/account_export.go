@@ -45,25 +45,30 @@ func accountExportHandler(store accountexport.Store, objStore objects.Store, log
 		if !isDownload {
 			w.Header().Set("Content-Type", "application/json")
 		}
-		if devTenantGuard(w, r, claims, accountExportView{Status: "none"}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, accountExportView{Status: "none"}) {
 			return
 		}
 		if store == nil {
 			http.Error(w, `{"error":"account export unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		if !can(claims, "account:export") {
+		if !canAs(r, claims, "account:export") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 
 		switch {
 		case isDownload && r.Method == http.MethodGet:
-			accountExportDownload(w, r, store, objStore, claims.AccountID, log)
+			accountExportDownload(w, r, store, objStore, accountID, log)
 
 		case r.Method == http.MethodGet:
 			// Status only — never enqueues (so merely opening the tab is cheap).
-			job, err := store.LatestForAccount(r.Context(), claims.AccountID)
+			job, err := store.LatestForAccount(r.Context(), accountID)
 			if err != nil {
 				log.Error("account export status failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -73,13 +78,13 @@ func accountExportHandler(store accountexport.Store, objStore objects.Store, log
 
 		case r.Method == http.MethodPost:
 			// Enqueue a fresh export, coalescing onto an in-flight job.
-			job, err := store.Enqueue(r.Context(), claims.AccountID, claims.UserID, accountexport.DefaultTTL)
+			job, err := store.Enqueue(r.Context(), accountID, claims.UserID, accountexport.DefaultTTL)
 			if err != nil {
 				log.Error("account export enqueue failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
-			log.Info("account export requested", "account", claims.AccountID, "job", job.ID)
+			log.Info("account export requested", "account", accountID, "job", job.ID)
 			writeJSON(w, exportView(&job, time.Now()), http.StatusOK)
 
 		default:

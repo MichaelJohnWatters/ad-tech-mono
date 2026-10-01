@@ -74,11 +74,17 @@ func invoicesHandler(store invoiceStore, log *slog.Logger) http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "billing:view") {
+		if !canAs(r, claims, "billing:view") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 
 		// Both the list route (routes.APIInvoices, no trailing slash) and the
 		// detail subtree (routes.APIInvoiceDetail, trailing slash) register this
@@ -90,12 +96,12 @@ func invoicesHandler(store invoiceStore, log *slog.Logger) http.HandlerFunc {
 		}
 
 		if id == "" {
-			if devTenantGuard(w, r, claims, invoicesResponse{Invoices: []invoiceView{}}) {
+			if devTenantGuard(w, r, accountID, invoicesResponse{Invoices: []invoiceView{}}) {
 				return
 			}
-			resp, err := store.ListInvoices(r.Context(), claims.AccountID)
+			resp, err := store.ListInvoices(r.Context(), accountID)
 			if err != nil {
-				log.Error("invoice list failed", "error", err, "account_id", claims.AccountID)
+				log.Error("invoice list failed", "error", err, "account_id", accountID)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -103,12 +109,12 @@ func invoicesHandler(store invoiceStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		if devTenantGuard(w, r, claims, invoiceDetail{Lines: []invoiceLineView{}}) {
+		if devTenantGuard(w, r, accountID, invoiceDetail{Lines: []invoiceLineView{}}) {
 			return
 		}
-		detail, found, err := store.GetInvoice(r.Context(), claims.AccountID, id)
+		detail, found, err := store.GetInvoice(r.Context(), accountID, id)
 		if err != nil {
-			log.Error("invoice get failed", "error", err, "account_id", claims.AccountID, "invoice_id", id)
+			log.Error("invoice get failed", "error", err, "account_id", accountID, "invoice_id", id)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}

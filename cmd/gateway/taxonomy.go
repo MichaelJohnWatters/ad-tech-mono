@@ -64,7 +64,7 @@ func audienceEarningsHandler(store *audiencepg.Store, log *slog.Logger) http.Han
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "audiences:read") {
+		if !canAs(r, claims, "audiences:read") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -72,7 +72,12 @@ func audienceEarningsHandler(store *audiencepg.Store, log *slog.Logger) http.Han
 			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		rows, err := store.DataEarnings(r.Context(), claims.AccountID)
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		rows, err := store.DataEarnings(r.Context(), accountID)
 		if err != nil {
 			log.Error("data earnings query failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -104,7 +109,7 @@ func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "audiences:upload") {
+		if !canAs(r, claims, "audiences:upload") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -121,7 +126,12 @@ func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.
 			http.Error(w, `{"error":"data_fee_micros must be >= 0"}`, http.StatusBadRequest)
 			return
 		}
-		if err := store.SetSegmentDataFee(r.Context(), claims.AccountID, req.SegmentID, req.DataFeeMicros); err != nil {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if err := store.SetSegmentDataFee(r.Context(), accountID, req.SegmentID, req.DataFeeMicros); err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				http.Error(w, `{"error":"segment not found"}`, http.StatusNotFound)
 				return
@@ -140,7 +150,7 @@ func audienceFeeHandler(store *audiencepg.Store, bus events.EventBus, log *slog.
 		if bus != nil {
 			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
 				SchemaVersion: events.CurrentSchemaVersion, Source: "data-fee",
-				SegmentID: req.SegmentID, AccountID: claims.AccountID,
+				SegmentID: req.SegmentID, AccountID: accountID,
 			})
 			if err := bus.Publish(r.Context(), events.SubjectCacheInvalidateAudience, payload); err != nil {
 				log.Warn("data-fee invalidate publish failed", "segment", req.SegmentID, "error", err)
@@ -169,7 +179,7 @@ func audienceTaxonomyHandler(store *audiencepg.Store, bus events.EventBus, log *
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "audiences:upload") {
+		if !canAs(r, claims, "audiences:upload") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -182,7 +192,12 @@ func audienceTaxonomyHandler(store *audiencepg.Store, bus events.EventBus, log *
 			http.Error(w, `{"error":"segment_id required"}`, http.StatusBadRequest)
 			return
 		}
-		if err := store.SetSegmentTaxonomy(r.Context(), claims.AccountID, req.SegmentID, req.TaxonomyID); err != nil {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if err := store.SetSegmentTaxonomy(r.Context(), accountID, req.SegmentID, req.TaxonomyID); err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				http.Error(w, `{"error":"segment not found"}`, http.StatusNotFound)
 				return
@@ -194,7 +209,7 @@ func audienceTaxonomyHandler(store *audiencepg.Store, bus events.EventBus, log *
 		if bus != nil {
 			payload, _ := json.Marshal(events.AudienceInvalidateEvent{
 				SchemaVersion: events.CurrentSchemaVersion, Source: "taxonomy",
-				SegmentID: req.SegmentID, AccountID: claims.AccountID,
+				SegmentID: req.SegmentID, AccountID: accountID,
 			})
 			if err := bus.Publish(r.Context(), events.SubjectCacheInvalidateAudience, payload); err != nil {
 				log.Warn("taxonomy invalidate publish failed", "segment", req.SegmentID, "error", err)

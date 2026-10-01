@@ -64,17 +64,22 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []qualityControlView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []qualityControlView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "quality:read") {
+			if !canAs(r, claims, "quality:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			controls, err := store.ListQualityControls(r.Context(), claims.AccountID)
+			controls, err := store.ListQualityControls(r.Context(), accountID)
 			if err != nil {
 				log.Error("quality control list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -83,7 +88,7 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 			_ = json.NewEncoder(w).Encode(controls)
 
 		case http.MethodPost:
-			if !can(claims, "quality:update") {
+			if !canAs(r, claims, "quality:update") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -101,7 +106,7 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 				return
 			}
 			in.Values = cleanEvents(in.Values) // trim/dedup/drop-empty (shared helper)
-			id, err := store.UpsertQualityControl(r.Context(), claims.AccountID, in)
+			id, err := store.UpsertQualityControl(r.Context(), accountID, in)
 			if errors.Is(err, errQCPublisherNotOwned) {
 				http.Error(w, `{"error":"forbidden: publisher not in your account"}`, http.StatusForbidden)
 				return
@@ -114,7 +119,7 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "type": in.Type, "values": in.Values})
 
 		case http.MethodDelete:
-			if !can(claims, "quality:update") {
+			if !canAs(r, claims, "quality:update") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -123,7 +128,7 @@ func qualityControlsHandler(store qualityControlStore, log *slog.Logger) http.Ha
 				http.Error(w, `{"error":"id query param required"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.DeleteQualityControl(r.Context(), claims.AccountID, id)
+			err := store.DeleteQualityControl(r.Context(), accountID, id)
 			if err == sql.ErrNoRows {
 				http.Error(w, `{"error":"quality control not found"}`, http.StatusNotFound)
 				return

@@ -90,26 +90,31 @@ func topupHandler(store topupStore, bus events.EventBus, log *slog.Logger) http.
 		}
 		w.Header().Set("Content-Type", "application/json")
 
-		if devTenantGuard(w, r, claims, topupBalanceResponse{Currency: "USD", PaymentTerms: "prepay", Topups: []topupView{}}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, topupBalanceResponse{Currency: "USD", PaymentTerms: "prepay", Topups: []topupView{}}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "billing:view") {
+			if !canAs(r, claims, "billing:view") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			resp, err := store.TopupHistory(r.Context(), claims.AccountID)
+			resp, err := store.TopupHistory(r.Context(), accountID)
 			if err != nil {
-				log.Error("topup history failed", "error", err, "account_id", claims.AccountID)
+				log.Error("topup history failed", "error", err, "account_id", accountID)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 
 		case http.MethodPost:
-			if !can(claims, "billing:topup") {
+			if !canAs(r, claims, "billing:topup") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -133,13 +138,13 @@ func topupHandler(store topupStore, bus events.EventBus, log *slog.Logger) http.
 			if in.Currency == "" {
 				in.Currency = "USD"
 			}
-			res, err := store.Topup(r.Context(), claims.AccountID, claims.UserID, in)
+			res, err := store.Topup(r.Context(), accountID, claims.UserID, in)
 			if errors.Is(err, errTopupKeyReused) {
 				http.Error(w, `{"error":"idempotency key already used with a different amount"}`, http.StatusConflict)
 				return
 			}
 			if err != nil {
-				log.Error("topup failed", "error", err, "account_id", claims.AccountID)
+				log.Error("topup failed", "error", err, "account_id", accountID)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -151,11 +156,11 @@ func topupHandler(store topupStore, bus events.EventBus, log *slog.Logger) http.
 				// unblocks within NATS RTT instead of the next poll.
 				if bus != nil {
 					_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateAdvertiserBalances,
-						[]byte(`{"source":"gateway-topup","account_id":"`+claims.AccountID+`"}`))
+						[]byte(`{"source":"gateway-topup","account_id":"`+accountID+`"}`))
 				}
 				// Money moved — always leave an operational trail.
 				log.Info("topup credited",
-					"account_id", claims.AccountID, "topup_id", res.ID,
+					"account_id", accountID, "topup_id", res.ID,
 					"amount", res.Amount, "currency", res.Currency, "balance", res.Balance)
 			}
 			w.WriteHeader(status)

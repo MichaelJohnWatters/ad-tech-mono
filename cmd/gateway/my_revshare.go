@@ -41,15 +41,20 @@ func myRevshareHandler(store myRevshareStore, log *slog.Logger) http.HandlerFunc
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "earnings:view") {
+		if !canAs(r, claims, "earnings:view") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []myRevshareView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		rows, err := store.RevshareForAccount(r.Context(), claims.AccountID)
+		if devTenantGuard(w, r, accountID, []myRevshareView{}) {
+			return
+		}
+		rows, err := store.RevshareForAccount(r.Context(), accountID)
 		if err != nil {
 			log.Error("my-revshare query failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

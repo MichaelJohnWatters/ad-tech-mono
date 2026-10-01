@@ -135,23 +135,21 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// Tenant scope + effective account. Same rule as report_jobs.go's
-		// effectiveReportAccount so staff "viewing as" / agency act-as works:
+		// Tenant scope + effective account, via the shared effectiveAccount helper
+		// so staff "viewing as" / agency act-as works the same everywhere:
 		//   - act-as target present (staff impersonating, or agency on a managed
 		//     account) + CanAccessAccount → scope to the IMPERSONATED account,
 		//     regardless of the caller's own type (a staff session is type=staff).
-		//   - otherwise require an advertiser/agency session and scope to its own
-		//     account (a publisher, or staff with no act-as, is refused — staff
-		//     have the dedicated /v1/api/staff/shading view).
-		accountID := claims.AccountID
-		if target := middleware.ActAsTarget(r); target != "" {
-			_, id := middleware.ParseActAsTarget(target)
-			if id == "" || !auth.CanAccessAccount(claims, id) {
-				http.Error(w, `{"error":"forbidden: cannot act as that account"}`, http.StatusForbidden)
-				return
-			}
-			accountID = id
-		} else if claims.AccountType != auth.AccountAdvertiser && claims.AccountType != auth.AccountAgency {
+		//   - otherwise scope to the session account, BUT additionally require an
+		//     advertiser/agency session (a publisher, or staff with no act-as, is
+		//     refused — staff have the dedicated /v1/api/staff/shading view).
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden: cannot act as that account"}`, http.StatusForbidden)
+			return
+		}
+		if middleware.ActAsTarget(r) == "" &&
+			claims.AccountType != auth.AccountAdvertiser && claims.AccountType != auth.AccountAgency {
 			http.Error(w, `{"error":"forbidden: advertiser view only"}`, http.StatusForbidden)
 			return
 		}

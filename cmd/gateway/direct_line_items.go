@@ -105,17 +105,22 @@ func directLineItemsHandler(store directLineItemStore, bus events.EventBus, log 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []directLineItemView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []directLineItemView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "deals:read") {
+			if !canAs(r, claims, "deals:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			items, err := store.ListDirectLineItems(r.Context(), claims.AccountID)
+			items, err := store.ListDirectLineItems(r.Context(), accountID)
 			if err != nil {
 				log.Error("direct line items list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -124,7 +129,7 @@ func directLineItemsHandler(store directLineItemStore, bus events.EventBus, log 
 			_ = json.NewEncoder(w).Encode(items)
 
 		case http.MethodPost:
-			if !can(claims, "deals:create") {
+			if !canAs(r, claims, "deals:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -160,7 +165,7 @@ func directLineItemsHandler(store directLineItemStore, bus events.EventBus, log 
 				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 				return
 			}
-			id, err := store.CreateDirectLineItem(r.Context(), claims.AccountID, in)
+			id, err := store.CreateDirectLineItem(r.Context(), accountID, in)
 			if errors.Is(err, errDealPublisherNotOwned) {
 				http.Error(w, `{"error":"forbidden: publisher not in your account"}`, http.StatusForbidden)
 				return
@@ -197,14 +202,19 @@ func directLineItemByIDHandler(store directLineItemStore, bus events.EventBus, l
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, nil) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, nil) {
 			return
 		}
 		if r.Method != http.MethodPatch {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "deals:update") {
+		if !canAs(r, claims, "deals:update") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -248,7 +258,7 @@ func directLineItemByIDHandler(store directLineItemStore, bus events.EventBus, l
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 			return
 		}
-		err := store.UpdateDirectLineItem(r.Context(), claims.AccountID, id, in)
+		err := store.UpdateDirectLineItem(r.Context(), accountID, id, in)
 		if errors.Is(err, errDealPlacementNotOwned) {
 			http.Error(w, `{"error":"forbidden: a placement is not in your account"}`, http.StatusForbidden)
 			return

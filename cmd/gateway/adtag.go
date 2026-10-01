@@ -89,10 +89,17 @@ func adTagHandler(store adTagStore, sdkSrc string, log *slog.Logger) http.Handle
 			return
 		}
 
-		// Platform users (staff/admin, dev bypass) may generate a tag for any
-		// placement — empty accountID skips the tenant filter in the store.
-		tenant := claims.AccountID
-		if auth.IsPlatformUser(claims) {
+		// Tenant scope. When impersonating (staff "viewing as" / agency act-as)
+		// scope to the IMPERSONATED account so the generated tag matches the
+		// portal being viewed — not the platform-wide bypass. Otherwise a
+		// platform user (staff/admin, dev bypass) with no act-as may generate a
+		// tag for any placement (empty accountID skips the tenant filter).
+		tenant, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if middleware.ActAsTarget(r) == "" && auth.IsPlatformUser(claims) {
 			tenant = ""
 		}
 		p, err := store.GetPlacementForTag(r.Context(), tenant, placementID)

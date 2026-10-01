@@ -86,7 +86,12 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []conversionConfig{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []conversionConfig{}) {
 			return
 		}
 		if store == nil {
@@ -96,11 +101,11 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "campaigns:read") {
+			if !canAs(r, claims, "campaigns:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			list, err := store.List(r.Context(), claims.AccountID)
+			list, err := store.List(r.Context(), accountID)
 			if err != nil {
 				log.Error("conversion list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -114,7 +119,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			_ = json.NewEncoder(w).Encode(list)
 
 		case http.MethodPost:
-			if !can(claims, "campaigns:create") {
+			if !canAs(r, claims, "campaigns:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -140,7 +145,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			if in.Currency == "" {
 				in.Currency = "USD"
 			}
-			cfg, err := store.Create(r.Context(), claims.AccountID, in)
+			cfg, err := store.Create(r.Context(), accountID, in)
 			if err != nil {
 				log.Error("conversion create failed", "name", in.Name, "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -154,7 +159,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 			_ = json.NewEncoder(w).Encode(cfg)
 
 		case http.MethodDelete:
-			if !can(claims, "campaigns:delete") {
+			if !canAs(r, claims, "campaigns:delete") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -163,7 +168,7 @@ func conversionsHandler(store conversionStore, trackerURL string, log *slog.Logg
 				http.Error(w, `{"error":"id query param required"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.Delete(r.Context(), claims.AccountID, id)
+			err := store.Delete(r.Context(), accountID, id)
 			if err == sql.ErrNoRows {
 				http.Error(w, `{"error":"conversion not found"}`, http.StatusNotFound)
 				return

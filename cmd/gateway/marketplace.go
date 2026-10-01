@@ -47,7 +47,12 @@ func marketplaceHandler(store marketplace.Store, audStore *audiencepg.Store, log
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []marketplace.Listing{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []marketplace.Listing{}) {
 			return
 		}
 		if store == nil || audStore == nil {
@@ -57,12 +62,12 @@ func marketplaceHandler(store marketplace.Store, audStore *audiencepg.Store, log
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "marketplace:read") {
+			if !canAs(r, claims, "marketplace:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
 			if r.URL.Query().Get("scope") == "mine" {
-				listings, err := store.ListByAccount(r.Context(), claims.AccountID, 200)
+				listings, err := store.ListByAccount(r.Context(), accountID, 200)
 				if err != nil {
 					log.Error("marketplace list mine failed", "error", err)
 					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -72,7 +77,7 @@ func marketplaceHandler(store marketplace.Store, audStore *audiencepg.Store, log
 				return
 			}
 			// Catalog: cross-tenant active listings, excluding the caller's own.
-			catalog, err := store.Catalog(r.Context(), claims.AccountID, 200)
+			catalog, err := store.Catalog(r.Context(), accountID, 200)
 			if err != nil {
 				log.Error("marketplace catalog failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -81,11 +86,11 @@ func marketplaceHandler(store marketplace.Store, audStore *audiencepg.Store, log
 			_ = json.NewEncoder(w).Encode(catalog)
 
 		case http.MethodPost:
-			if !can(claims, "marketplace:list") {
+			if !canAs(r, claims, "marketplace:list") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			handleMarketplaceListing(w, r, store, audStore, claims.AccountID, log)
+			handleMarketplaceListing(w, r, store, audStore, accountID, log)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -196,7 +201,12 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, map[string]string{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, map[string]string{}) {
 			return
 		}
 		if store == nil {
@@ -229,9 +239,9 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 
 		switch action {
 		case "purchase":
-			marketplaceDoPurchase(w, r, store, listing, claims, auditDB, log)
+			marketplaceDoPurchase(w, r, store, listing, claims, accountID, auditDB, log)
 		case "estimate":
-			marketplaceDoEstimate(w, r, audStore, listing, claims, log)
+			marketplaceDoEstimate(w, r, audStore, listing, claims, accountID, log)
 		default:
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		}
@@ -239,12 +249,12 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 }
 
 // marketplaceDoPurchase (slice 2): the caller buys targeting access → a grant.
-func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, auditDB *sql.DB, log *slog.Logger) {
-	if !can(claims, "marketplace:buy") {
+func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, accountID string, auditDB *sql.DB, log *slog.Logger) {
+	if !canAs(r, claims, "marketplace:buy") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
-	if listing.AccountID == claims.AccountID {
+	if listing.AccountID == accountID {
 		http.Error(w, `{"error":"you cannot purchase your own listing"}`, http.StatusBadRequest)
 		return
 	}
@@ -252,7 +262,7 @@ func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *market
 		ListingID:          listing.ID,
 		SegmentID:          listing.SegmentID,
 		SellerAccountID:    listing.AccountID,
-		BuyerAccountID:     claims.AccountID,
+		BuyerAccountID:     accountID,
 		CPMSurchargeMicros: listing.CPMSurchargeMicros,
 	})
 	if err != nil {
@@ -260,11 +270,11 @@ func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *market
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
-	log.Info("marketplace purchase", "grant", id, "listing", listing.ID, "buyer", claims.AccountID, "seller", listing.AccountID)
+	log.Info("marketplace purchase", "grant", id, "listing", listing.ID, "buyer", accountID, "seller", listing.AccountID)
 	// Money action (drives the buyer-debit / seller-credit CPM surcharge
 	// settlement) — audit the grant against the buyer account.
 	_ = audit.Log(r.Context(), auditDB, audit.Entry{
-		AccountID:    claims.AccountID,
+		AccountID:    accountID,
 		ActorID:      "user:" + claims.UserID,
 		Action:       "marketplace:purchase",
 		ResourceType: "marketplace_grant",
@@ -288,8 +298,8 @@ func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *market
 // so no raw data can leave, returning only aggregates — a deliberately deferred
 // hardening (documented boundary), not built here. The min-aggregation floor +
 // aggregate-only response are the privacy guarantees that ARE enforced.
-func marketplaceDoEstimate(w http.ResponseWriter, r *http.Request, audStore *audiencepg.Store, listing *marketplace.Listing, claims *auth.Claims, log *slog.Logger) {
-	if !can(claims, "marketplace:read") {
+func marketplaceDoEstimate(w http.ResponseWriter, r *http.Request, audStore *audiencepg.Store, listing *marketplace.Listing, claims *auth.Claims, accountID string, log *slog.Logger) {
+	if !canAs(r, claims, "marketplace:read") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -311,7 +321,7 @@ func marketplaceDoEstimate(w http.ResponseWriter, r *http.Request, audStore *aud
 	}
 	// The buyer can only estimate against their OWN audience (no probing another
 	// tenant's data). Validate ownership.
-	segs, err := audStore.ListSegments(r.Context(), claims.AccountID)
+	segs, err := audStore.ListSegments(r.Context(), accountID)
 	if err != nil {
 		log.Error("marketplace estimate: segment validation failed", "error", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -363,7 +373,7 @@ func marketplaceDoEstimate(w http.ResponseWriter, r *http.Request, audStore *aud
 	if o.SizeA > 0 {
 		resp.ExpansionFactor = float64(o.SizeA+resp.NewReachableUsers) / float64(o.SizeA)
 	}
-	log.Info("marketplace estimate", "listing", listing.ID, "buyer", claims.AccountID,
+	log.Info("marketplace estimate", "listing", listing.ID, "buyer", accountID,
 		"your_size", o.SizeA, "overlap_suppressed", resp.OverlapSuppressed, "new_reachable", resp.NewReachableUsers)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
@@ -379,7 +389,12 @@ func marketplaceGrantsHandler(store *marketplacepg.Store, log *slog.Logger) http
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []marketplace.Grant{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []marketplace.Grant{}) {
 			return
 		}
 		if store == nil {
@@ -390,16 +405,16 @@ func marketplaceGrantsHandler(store *marketplacepg.Store, log *slog.Logger) http
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "marketplace:read") {
+		if !canAs(r, claims, "marketplace:read") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 		var grants []marketplace.Grant
 		var err error
 		if r.URL.Query().Get("scope") == "sales" {
-			grants, err = store.SellerSales(r.Context(), claims.AccountID, 200)
+			grants, err = store.SellerSales(r.Context(), accountID, 200)
 		} else {
-			grants, err = store.BuyerGrants(r.Context(), claims.AccountID, 200)
+			grants, err = store.BuyerGrants(r.Context(), accountID, 200)
 		}
 		if err != nil {
 			log.Error("marketplace grants failed", "error", err)
@@ -431,7 +446,12 @@ func marketplaceEarningsHandler(store *marketplacepg.Store, log *slog.Logger) ht
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, marketplaceEarningsResponse{BySegment: []marketplace.SellerEarning{}}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, marketplaceEarningsResponse{BySegment: []marketplace.SellerEarning{}}) {
 			return
 		}
 		if store == nil {
@@ -442,11 +462,11 @@ func marketplaceEarningsHandler(store *marketplacepg.Store, log *slog.Logger) ht
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "marketplace:read") {
+		if !canAs(r, claims, "marketplace:read") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		earnings, err := store.SellerEarnings(r.Context(), claims.AccountID, 200)
+		earnings, err := store.SellerEarnings(r.Context(), accountID, 200)
 		if err != nil {
 			log.Error("marketplace earnings failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

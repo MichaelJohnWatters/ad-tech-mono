@@ -51,15 +51,10 @@ type reportJobStore interface {
 // effectiveReportAccount resolves which account a report-jobs request acts
 // for: the session account, or — for a platform user / agency with a valid
 // act-as target — the impersonated account (same rule as enforceReportTenant).
+// Thin alias for the shared effectiveAccount helper so the act-as rule lives in
+// exactly one place.
 func effectiveReportAccount(r *http.Request, claims *auth.Claims) (string, bool) {
-	if target := middleware.ActAsTarget(r); target != "" {
-		_, id := middleware.ParseActAsTarget(target)
-		if !auth.CanAccessAccount(claims, id) {
-			return "", false
-		}
-		return id, true
-	}
-	return claims.AccountID, true
+	return effectiveAccount(r, claims)
 }
 
 // reportJobsHandler serves the collection: GET list (reports:read), POST
@@ -75,12 +70,12 @@ func reportJobsHandler(store reportJobStore, scope reportjobs.ScopeLookup, log *
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []reportjobs.Job{}) {
-			return
-		}
 		accountID, ok := effectiveReportAccount(r, claims)
 		if !ok {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []reportjobs.Job{}) {
 			return
 		}
 
@@ -259,12 +254,12 @@ func reportJobByIDHandler(store reportJobStore, objStore objects.Store, log *slo
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if devTenantGuard(w, r, claims, map[string]string{}) {
-			return
-		}
 		accountID, ok := effectiveReportAccount(r, claims)
 		if !ok {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, map[string]string{}) {
 			return
 		}
 
