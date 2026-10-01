@@ -33,5 +33,13 @@ function stopImpersonation(){
   location.href = '/portal/staff';
 }
 </script>
+{{ else if .StaffNoAccount }}
+{{/* Staff/admin opened this persona portal but hasn't picked an account to
+     act as, so every tenant-scoped section is empty. Explain it + link to the
+     account picker — not a silently blank portal. */}}
+<div id="staffNoAcctBanner" class="sticky top-0 z-40 bg-info text-white text-sm px-6 py-2 flex items-center justify-between shadow">
+  <span>👁 Staff session — <b>no account selected</b>. This portal is empty until you pick an account to view as. Staff act <i>as</i> a named account (scoped + audited) rather than with blanket access.</span>
+  <a href="/portal/staff#impersonate" class="px-2.5 py-1 rounded bg-black/25 hover:bg-black/40 text-xs font-medium whitespace-nowrap">Pick an account to view as →</a>
+</div>
 {{ end }}
 {{ end }}
