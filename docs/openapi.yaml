@@ -1765,6 +1765,17 @@ paths:
       responses:
         "200": { description: "{ id } on create, or the updated incident object" }
         "404": { description: "incident id not found (update)" }
+  /v1/api/glossary:
+    get:
+      tags: [Platform]
+      summary: Ad-tech glossary reference (staff)
+      description: >-
+        Staff-only (support:read). Returns the static, code-grounded ad-tech
+        term/definition set grouped by category — a read-only learning aid,
+        platform-global (the same list for every staff caller), no DB.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "grouped term/definition set: [{ category, terms: [{ term, definition }] }]" }
   /v1/api/changelog:
     get:
       tags: [Platform]
