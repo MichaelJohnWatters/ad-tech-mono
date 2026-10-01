@@ -521,6 +521,12 @@ const (
 	// Gated by debug.endpoints_enabled. Used by the pub sim's "Reset &
 	// reseed" button so you don't need to drop to a terminal between runs.
 	DevResetReseed = "/dev/reset-and-reseed"
+	// DevLandingConvert is the demo "Complete purchase" postback: the landing
+	// page (/dev/landing/{slug}) POSTs the click's trace id here; the gateway
+	// resolves the advertiser that won the click, signs a /v1/t/conv postback
+	// with that advertiser's conversion key, and fires it server-side (so
+	// strict-mode signature validation passes). Gated by debug.endpoints_enabled.
+	DevLandingConvert = "/dev/landing/convert"
 
 	// Health
 	Healthz = "/healthz"

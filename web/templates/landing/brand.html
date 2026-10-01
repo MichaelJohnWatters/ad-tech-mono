@@ -48,6 +48,20 @@
     font-weight: 600;
     text-decoration: none;
   }
+  .shop {
+    max-width: 560px;
+    margin: 40px auto 0;
+    padding: 24px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+  }
+  .shop-line { font-size: 15px; opacity: 0.9; margin: 0 0 18px; }
+  .shop-cta { border: none; cursor: pointer; }
+  .shop-cta[disabled] { opacity: 0.6; cursor: default; }
+  .shop-result { margin: 16px 0 0; font-size: 14px; min-height: 20px; }
+  .shop-result.ok { color: #4ade80; }
+  .shop-result.err { color: #f87171; }
   .trace-card {
     max-width: 720px;
     margin: 48px auto;
@@ -86,6 +100,14 @@
     <h1>{{ .Brand }}</h1>
     <p class="tagline">{{ .Theme.Tagline }}</p>
     <a class="cta" href="#">{{ .Theme.CTA }}</a>
+    {{ if .TraceID }}
+    <div class="shop">
+      <p class="shop-line">You clicked an ad for <strong>{{ .Brand }}</strong>. Complete a demo purchase to fire a conversion that attributes back to this exact click.</p>
+      <button id="buy" class="cta shop-cta" type="button"
+              data-tid="{{ .TraceID }}" data-slug="{{ .Slug }}">Complete purchase — $49.99</button>
+      <p id="buy-result" class="shop-result" role="status"></p>
+    </div>
+    {{ end }}
   </section>
 
   {{ if .TraceID }}
@@ -107,6 +129,46 @@
     This page is served from the ad-tech-mono gateway as a demo landing
     surface for seeded creatives. Brand is derived from the URL slug.
   </footer>
+
+  {{ if .TraceID }}
+  <script>
+  (function () {
+    var btn = document.getElementById("buy");
+    var out = document.getElementById("buy-result");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      out.className = "shop-result";
+      out.textContent = "Recording conversion…";
+      var body = new URLSearchParams();
+      body.set("tid", btn.dataset.tid || "");
+      body.set("slug", btn.dataset.slug || "");
+      fetch("/dev/landing/convert", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString()
+      }).then(function (r) {
+        return r.json().catch(function () { return { ok: false }; });
+      }).then(function (j) {
+        if (j && j.ok) {
+          out.className = "shop-result ok";
+          out.textContent = "✓ Purchase recorded — conversion attributed" +
+            (j.advertiser_id ? " to advertiser " + j.advertiser_id : "") + ".";
+        } else {
+          out.className = "shop-result err";
+          out.textContent = "Conversion failed (tracker status " +
+            ((j && j.tracker_status) || "?") + "). See gateway logs.";
+          btn.disabled = false;
+        }
+      }).catch(function () {
+        out.className = "shop-result err";
+        out.textContent = "Request failed. Is the stack up?";
+        btn.disabled = false;
+      });
+    });
+  })();
+  </script>
+  {{ end }}
 </body>
 </html>
 {{end}}
