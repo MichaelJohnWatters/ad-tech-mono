@@ -305,13 +305,20 @@ func main() {
 	startInternalGRPC(lc, cfg, log, metrics, bid)
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
-	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
-		placements := shadingTracker.AllPlacements()
-		result := make(map[string]bidshading.PlacementStats)
-		for _, pid := range placements {
-			result[pid] = shadingTracker.Stats(pid)
+		// ?advertiser=<account> → that advertiser's OWN per-placement win/loss
+		// (reporting; powers the advertiser portal's bid-shading view). No param →
+		// the POOLED per-placement view that drives shading (the staff view).
+		var result map[string]bidshading.PlacementStats
+		if adv := r.URL.Query().Get("advertiser"); adv != "" {
+			result = shadingTracker.AdvertiserStats(adv)
+		} else {
+			result = make(map[string]bidshading.PlacementStats)
+			for _, pid := range shadingTracker.AllPlacements() {
+				result[pid] = shadingTracker.Stats(pid)
+			}
 		}
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		json.NewEncoder(w).Encode(result)
@@ -1512,6 +1519,7 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 		placementID := q.Get("placement_id")
 		campaignID := q.Get("campaign_id")
 
+		var acct string // winning campaign's account — for per-advertiser shading
 		if campaignID != "" {
 			// price is the auction CPM (OpenRTB bid.price = cost per 1000
 			// impressions). The budget + balance meters track realized
@@ -1524,16 +1532,20 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 			// Mirror the spend into the account-level balance counter so
 			// the prepay gate sees it before the billing drawdown lands in
 			// Postgres (money loop).
-			if balanceGate != nil && campaigns != nil {
+			if campaigns != nil {
 				if c, ok := campaigns.ByID(campaignID); ok {
-					balanceGate.RecordWin(c.AccountID, impCost)
+					acct = c.AccountID
+					if balanceGate != nil {
+						balanceGate.RecordWin(acct, impCost)
+					}
 				}
 			}
 		}
 		if placementID != "" {
 			// Bid-shading reasons in CPM rates, not booked dollars — pass the
-			// raw clearing CPM.
-			tracker.RecordWin(placementID, price, price)
+			// raw clearing CPM. acct tags the per-advertiser reporting tally (the
+			// pooled placement tally that drives shading is recorded regardless).
+			tracker.RecordWin(placementID, acct, price, price)
 		}
 
 		log.Info("win notification", "bid_id", bidID, "price", price, "campaign_id", campaignID)
@@ -1543,7 +1555,7 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 
 // lossHandler processes loss notifications from the exchange.
 // Records loss data for the bid shading model.
-func lossHandler(log *slog.Logger, tracker *bidshading.Tracker) http.HandlerFunc {
+func lossHandler(log *slog.Logger, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		bidID := q.Get("bid_id")
@@ -1552,8 +1564,16 @@ func lossHandler(log *slog.Logger, tracker *bidshading.Tracker) http.HandlerFunc
 		campaignID := q.Get("campaign_id")
 		placementID := q.Get("placement_id")
 
+		// Resolve the losing campaign's account for the per-advertiser tally; ""
+		// (unknown campaign) just means the loss lands only in the pooled view.
+		var acct string
+		if campaignID != "" && campaigns != nil {
+			if c, ok := campaigns.ByID(campaignID); ok {
+				acct = c.AccountID
+			}
+		}
 		if placementID != "" {
-			tracker.RecordLoss(placementID, clearingPrice, clearingPrice, bidshading.LossReason(reason))
+			tracker.RecordLoss(placementID, acct, clearingPrice, clearingPrice, bidshading.LossReason(reason))
 		}
 
 		log.Info("loss notification", "bid_id", bidID, "reason", reason, "clearing_price", clearingPrice, "campaign_id", campaignID)

@@ -616,6 +616,7 @@ func main() {
 		middleware.RequirePermission("reports:read")(http.HandlerFunc(shadingHandler(shadingDeps{
 			placementSpend:   reportingPlacementSpend(reportingURL, log),
 			marketplaceStats: dspMarketplaceStats(dspURL),
+			advertiserStats:  dspAdvertiserStats(dspURL),
 		}, log)))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic
