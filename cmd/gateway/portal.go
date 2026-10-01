@@ -121,6 +121,12 @@ type portalData struct {
 	// banner; ImpersonatingID is the account being viewed.
 	Impersonating   bool
 	ImpersonatingID string
+	// StaffNoAccount is true when a staff/admin session opens a PERSONA portal
+	// (advertiser/publisher/partner) WITHOUT an act-as target selected. Those
+	// sessions have no tenant, so every tenant-scoped section renders empty
+	// (devTenantGuard) — this flags a prompt banner that explains the emptiness
+	// and links to the account picker, instead of a silently blank portal.
+	StaffNoAccount bool
 	// HasOpsDeploy gates the staff Ops section's action buttons (restart /
 	// run-now) client-side; the API re-checks ops:deploy server-side so this
 	// is presentation only. True under the dev bypass (admin view).
@@ -157,6 +163,10 @@ func portalHandler(templates *templateManager, signingKey, page string, nav []Na
 					_, id := middleware.ParseActAsTarget(target)
 					data.Impersonating = true
 					data.ImpersonatingID = id
+				} else {
+					// Staff/admin on a persona portal with no account picked —
+					// the portal will render empty; prompt them to choose one.
+					data.StaffNoAccount = true
 				}
 			}
 			if !data.Impersonating {
