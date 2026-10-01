@@ -62,7 +62,12 @@ func conversionKeyHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) htt
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []conversionKeyItem{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []conversionKeyItem{}) {
 			return
 		}
 		if db == nil {
@@ -72,17 +77,17 @@ func conversionKeyHandler(db *sql.DB, bus events.EventBus, log *slog.Logger) htt
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "campaigns:read") {
+			if !canAs(r, claims, "campaigns:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			listConversionKeys(w, r, db, cipher, claims.AccountID, log)
+			listConversionKeys(w, r, db, cipher, accountID, log)
 		case http.MethodPost:
-			if !can(claims, "campaigns:create") {
+			if !canAs(r, claims, "campaigns:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			rotateConversionKey(w, r, db, bus, cipher, claims.AccountID, log)
+			rotateConversionKey(w, r, db, bus, cipher, accountID, log)
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		}

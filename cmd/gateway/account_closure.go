@@ -43,21 +43,26 @@ func accountClosureHandler(deps *closureDeps, log *slog.Logger) http.HandlerFunc
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, closureStatusResponse{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, closureStatusResponse{}) {
 			return
 		}
 		if deps == nil || deps.store == nil {
 			http.Error(w, `{"error":"account closure unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		if !can(claims, "account:close") {
+		if !canAs(r, claims, "account:close") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			active, err := deps.store.ActiveClosure(r.Context(), claims.AccountID)
+			active, err := deps.store.ActiveClosure(r.Context(), accountID)
 			if err != nil {
 				log.Error("account closure status failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -70,7 +75,7 @@ func accountClosureHandler(deps *closureDeps, log *slog.Logger) http.HandlerFunc
 				Reason string `json:"reason,omitempty"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req) // reason optional
-			cr, err := deps.store.RequestClosure(r.Context(), claims.AccountID, claims.UserID, req.Reason, accountlifecycle.DefaultGraceDays)
+			cr, err := deps.store.RequestClosure(r.Context(), accountID, claims.UserID, req.Reason, accountlifecycle.DefaultGraceDays)
 			if err != nil {
 				if errors.Is(err, accountlifecycle.ErrAlreadyClosing) {
 					http.Error(w, `{"error":"a closure is already in progress"}`, http.StatusConflict)
@@ -81,11 +86,11 @@ func accountClosureHandler(deps *closureDeps, log *slog.Logger) http.HandlerFunc
 				return
 			}
 			_ = audit.Log(r.Context(), deps.db, audit.Entry{
-				AccountID:    claims.AccountID,
+				AccountID:    accountID,
 				ActorID:      "user:" + claims.UserID,
 				Action:       "account:close",
 				ResourceType: "account",
-				ResourceID:   claims.AccountID,
+				ResourceID:   accountID,
 				Changes: map[string]any{
 					"grace_ends_at":          cr.GraceEndsAt,
 					"paused_line_items":      len(cr.PausedLineItems),
@@ -93,7 +98,7 @@ func accountClosureHandler(deps *closureDeps, log *slog.Logger) http.HandlerFunc
 				},
 				Reason: req.Reason,
 			})
-			log.Info("account closure initiated", "account", claims.AccountID, "grace_ends_at", cr.GraceEndsAt)
+			log.Info("account closure initiated", "account", accountID, "grace_ends_at", cr.GraceEndsAt)
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(cr)
 
@@ -111,7 +116,12 @@ func accountCloseCancelHandler(deps *closureDeps, log *slog.Logger) http.Handler
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, map[string]string{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, map[string]string{}) {
 			return
 		}
 		if deps == nil || deps.store == nil {
@@ -122,11 +132,11 @@ func accountCloseCancelHandler(deps *closureDeps, log *slog.Logger) http.Handler
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "account:close") {
+		if !canAs(r, claims, "account:close") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		cr, err := deps.store.CancelClosure(r.Context(), claims.AccountID)
+		cr, err := deps.store.CancelClosure(r.Context(), accountID)
 		if err != nil {
 			if errors.Is(err, accountlifecycle.ErrNotClosing) {
 				http.Error(w, `{"error":"no closure in progress"}`, http.StatusNotFound)
@@ -137,13 +147,13 @@ func accountCloseCancelHandler(deps *closureDeps, log *slog.Logger) http.Handler
 			return
 		}
 		_ = audit.Log(r.Context(), deps.db, audit.Entry{
-			AccountID:    claims.AccountID,
+			AccountID:    accountID,
 			ActorID:      "user:" + claims.UserID,
 			Action:       "account:close:cancel",
 			ResourceType: "account",
-			ResourceID:   claims.AccountID,
+			ResourceID:   accountID,
 		})
-		log.Info("account closure cancelled", "account", claims.AccountID)
+		log.Info("account closure cancelled", "account", accountID)
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(cr)
 	}

@@ -28,16 +28,21 @@ func araReportsHandler(gwDB *sql.DB, log *slog.Logger) http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 
-		reports, err := store.ListReports(r.Context(), claims.AccountID, 200)
+		reports, err := store.ListReports(r.Context(), accountID, 200)
 		if err != nil {
-			log.Error("ara reports list failed", "account", claims.AccountID, "error", err)
+			log.Error("ara reports list failed", "account", accountID, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
-		summary, err := store.SummaryForAccount(r.Context(), claims.AccountID)
+		summary, err := store.SummaryForAccount(r.Context(), accountID)
 		if err != nil {
-			log.Error("ara summary failed", "account", claims.AccountID, "error", err)
+			log.Error("ara summary failed", "account", accountID, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}

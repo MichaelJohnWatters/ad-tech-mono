@@ -123,22 +123,27 @@ func payoutMethodHandler(store payoutMethodStore, log *slog.Logger) http.Handler
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 
 		// Unconfigured is the empty-form shape (also the dev-bypass GET response).
 		empty := payoutMethodView{Configured: false, Currency: "USD"}
-		if devTenantGuard(w, r, claims, empty) {
+		if devTenantGuard(w, r, accountID, empty) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "earnings:view") {
+			if !canAs(r, claims, "earnings:view") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			m, found, err := store.Get(r.Context(), claims.AccountID)
+			m, found, err := store.Get(r.Context(), accountID)
 			if err != nil {
-				log.Error("payout method get failed", "error", err, "account_id", claims.AccountID)
+				log.Error("payout method get failed", "error", err, "account_id", accountID)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -149,7 +154,7 @@ func payoutMethodHandler(store payoutMethodStore, log *slog.Logger) http.Handler
 			_ = json.NewEncoder(w).Encode(m.masked())
 
 		case http.MethodPut:
-			if !can(claims, "earnings:manage") {
+			if !canAs(r, claims, "earnings:manage") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -166,31 +171,31 @@ func payoutMethodHandler(store payoutMethodStore, log *slog.Logger) http.Handler
 				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 				return
 			}
-			m, err := store.Upsert(r.Context(), claims.AccountID, in, raw)
+			m, err := store.Upsert(r.Context(), accountID, in, raw)
 			if err == errPayoutDetailRequired {
 				http.Error(w, `{"error":"`+detailField(in.MethodType)+` is required for `+in.MethodType+`"}`, http.StatusBadRequest)
 				return
 			}
 			if err != nil {
-				log.Error("payout method upsert failed", "error", err, "account_id", claims.AccountID)
+				log.Error("payout method upsert failed", "error", err, "account_id", accountID)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
 			// Money-destination change — always leave an audit trail. The masked
 			// tail (not the raw destination) is what lands in the log.
 			_ = audit.Log(r.Context(), auditDBFrom(store), audit.Entry{
-				AccountID:    claims.AccountID,
+				AccountID:    accountID,
 				ActorID:      claims.UserID,
 				Action:       "payout_method:update",
 				ResourceType: "payout_method",
-				ResourceID:   claims.AccountID,
+				ResourceID:   accountID,
 				Changes: map[string]any{
 					"method_type": m.MethodType, "display_name": m.DisplayName,
 					"masked_tail":          maskTail(m.MethodType, m.Last4),
 					"minimum_payout_cents": m.MinimumPayoutCents, "currency": m.Currency,
 				},
 			})
-			log.Info("payout method updated", "account_id", claims.AccountID,
+			log.Info("payout method updated", "account_id", accountID,
 				"method_type", m.MethodType, "min_payout_cents", m.MinimumPayoutCents,
 				"currency", m.Currency, "actor", claims.UserID)
 			_ = json.NewEncoder(w).Encode(m.masked())

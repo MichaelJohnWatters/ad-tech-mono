@@ -57,7 +57,16 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []support.Ticket{}) {
+		// The effective account scopes the CUSTOMER path (a staff user "viewing
+		// as" an advertiser/agency sees that account's own tickets). The staff
+		// cross-tenant queue (scope=all / GetAny) below is unaffected — it keys
+		// off isStaff(claims) and the platform hatch, not this account.
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []support.Ticket{}) {
 			return
 		}
 		if store == nil {
@@ -82,11 +91,11 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 				_ = json.NewEncoder(w).Encode(tickets)
 				return
 			}
-			if !can(claims, "support:contact") {
+			if !canAs(r, claims, "support:contact") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			tickets, err := store.ListByAccount(r.Context(), claims.AccountID, 100)
+			tickets, err := store.ListByAccount(r.Context(), accountID, 100)
 			if err != nil {
 				log.Error("support list mine failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -96,11 +105,11 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 			_ = json.NewEncoder(w).Encode(tickets)
 
 		case http.MethodPost:
-			if !can(claims, "support:contact") {
+			if !canAs(r, claims, "support:contact") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			handleSupportCreate(w, r, store, claims, log)
+			handleSupportCreate(w, r, store, claims, accountID, log)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -108,7 +117,7 @@ func supportTicketsHandler(store support.Store, log *slog.Logger) http.HandlerFu
 	}
 }
 
-func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, log *slog.Logger) {
+func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, accountID string, log *slog.Logger) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req struct {
 		Kind           string  `json:"kind"`
@@ -143,7 +152,7 @@ func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.S
 		return
 	}
 	t := support.Ticket{
-		AccountID: claims.AccountID,
+		AccountID: accountID,
 		Kind:      req.Kind,
 		Subject:   req.Subject,
 		Currency:  req.Currency,
@@ -159,7 +168,7 @@ func handleSupportCreate(w http.ResponseWriter, r *http.Request, store support.S
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
-	log.Info("support ticket opened", "id", id, "account", claims.AccountID, "kind", req.Kind)
+	log.Info("support ticket opened", "id", id, "account", accountID, "kind", req.Kind)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
 }
@@ -173,7 +182,15 @@ func supportTicketActionHandler(store support.Store, gwDB *sql.DB, log *slog.Log
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, support.Ticket{}) {
+		// Effective account scopes the CUSTOMER branches (GetForAccount /
+		// AddCustomerMessage) when the caller is impersonating; the staff
+		// (isStaff) branches stay cross-tenant via the platform hatch.
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, support.Ticket{}) {
 			return
 		}
 		if store == nil {
@@ -194,9 +211,9 @@ func supportTicketActionHandler(store support.Store, gwDB *sql.DB, log *slog.Log
 
 		switch {
 		case action == "" && r.Method == http.MethodGet:
-			supportGetDetail(w, r, store, claims, ticketID, log)
+			supportGetDetail(w, r, store, claims, accountID, ticketID, log)
 		case action == "messages" && r.Method == http.MethodPost:
-			supportReply(w, r, store, claims, ticketID, log)
+			supportReply(w, r, store, claims, accountID, ticketID, log)
 		case action == "resolve" && r.Method == http.MethodPost:
 			supportResolve(w, r, store, gwDB, claims, ticketID, log)
 		default:
@@ -205,7 +222,7 @@ func supportTicketActionHandler(store support.Store, gwDB *sql.DB, log *slog.Log
 	}
 }
 
-func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, ticketID string, log *slog.Logger) {
+func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, accountID, ticketID string, log *slog.Logger) {
 	var t *support.Ticket
 	var err error
 	if isStaff(claims) {
@@ -215,11 +232,11 @@ func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Stor
 		}
 		t, err = store.GetAny(r.Context(), ticketID)
 	} else {
-		if !can(claims, "support:contact") {
+		if !canAs(r, claims, "support:contact") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		t, err = store.GetForAccount(r.Context(), claims.AccountID, ticketID)
+		t, err = store.GetForAccount(r.Context(), accountID, ticketID)
 	}
 	if err != nil {
 		log.Error("support get failed", "error", err)
@@ -236,7 +253,7 @@ func supportGetDetail(w http.ResponseWriter, r *http.Request, store support.Stor
 	_ = json.NewEncoder(w).Encode(t)
 }
 
-func supportReply(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, ticketID string, log *slog.Logger) {
+func supportReply(w http.ResponseWriter, r *http.Request, store support.Store, claims *auth.Claims, accountID, ticketID string, log *slog.Logger) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSupportBodyBytes)
 	var req struct {
 		Body string `json:"body"`
@@ -257,11 +274,11 @@ func supportReply(w http.ResponseWriter, r *http.Request, store support.Store, c
 		}
 		err = store.AddStaffMessage(r.Context(), ticketID, claims.UserID, strings.TrimSpace(req.Body))
 	} else {
-		if !can(claims, "support:contact") {
+		if !canAs(r, claims, "support:contact") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		err = store.AddCustomerMessage(r.Context(), claims.AccountID, ticketID, claims.UserID, strings.TrimSpace(req.Body))
+		err = store.AddCustomerMessage(r.Context(), accountID, ticketID, claims.UserID, strings.TrimSpace(req.Body))
 	}
 	if err != nil {
 		log.Error("support reply failed", "error", err)

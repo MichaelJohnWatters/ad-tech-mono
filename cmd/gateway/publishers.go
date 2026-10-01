@@ -39,10 +39,15 @@ func publisherCreateHandler(store publisherCreateStore, bus events.EventBus, log
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, nil) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		if !can(claims, "placements:create") {
+		if devTenantGuard(w, r, accountID, nil) {
+			return
+		}
+		if !canAs(r, claims, "placements:create") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -57,7 +62,7 @@ func publisherCreateHandler(store publisherCreateStore, bus events.EventBus, log
 			http.Error(w, `{"error":"name and domain are required"}`, http.StatusBadRequest)
 			return
 		}
-		id, err := store.CreatePublisher(r.Context(), claims.AccountID, in)
+		id, err := store.CreatePublisher(r.Context(), accountID, in)
 		if err != nil {
 			log.Error("publisher create failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -71,7 +76,7 @@ func publisherCreateHandler(store publisherCreateStore, bus events.EventBus, log
 			_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateBillingRates, payload)
 		}
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "account_id": claims.AccountID, "status": "active"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "account_id": accountID, "status": "active"})
 	}
 }
 

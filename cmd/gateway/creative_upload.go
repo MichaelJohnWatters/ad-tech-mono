@@ -59,17 +59,22 @@ func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFu
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []creativeView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []creativeView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "creatives:read") {
+			if !canAs(r, claims, "creatives:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			list, err := store.ListCreatives(r.Context(), claims.AccountID)
+			list, err := store.ListCreatives(r.Context(), accountID)
 			if err != nil {
 				log.Error("creative list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -84,7 +89,7 @@ func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFu
 			return
 		}
 
-		if !can(claims, "creatives:upload") {
+		if !canAs(r, claims, "creatives:upload") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -114,7 +119,7 @@ func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFu
 				return
 			}
 		}
-		id, err := store.CreateCreative(r.Context(), claims.AccountID, in)
+		id, err := store.CreateCreative(r.Context(), accountID, in)
 		if err != nil {
 			log.Error("creative upload failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

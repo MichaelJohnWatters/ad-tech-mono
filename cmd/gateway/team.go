@@ -47,17 +47,22 @@ func teamHandler(store teamStore, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []teamMemberView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []teamMemberView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "team:read") {
+			if !canAs(r, claims, "team:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			members, err := store.ListTeam(r.Context(), claims.AccountID)
+			members, err := store.ListTeam(r.Context(), accountID)
 			if err != nil {
 				log.Error("team list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -66,7 +71,7 @@ func teamHandler(store teamStore, log *slog.Logger) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(members)
 
 		case http.MethodPost:
-			if !can(claims, "team:invite") {
+			if !canAs(r, claims, "team:invite") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -92,7 +97,7 @@ func teamHandler(store teamStore, log *slog.Logger) http.HandlerFunc {
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
-			id, err := store.CreateTeamMember(r.Context(), claims.AccountID, req.Email, req.Name, req.Role, string(hash))
+			id, err := store.CreateTeamMember(r.Context(), accountID, req.Email, req.Name, req.Role, string(hash))
 			if err != nil {
 				log.Error("team invite failed", "error", err)
 				http.Error(w, `{"error":"internal error (email may already exist)"}`, http.StatusInternalServerError)

@@ -52,15 +52,20 @@ func payoutsHandler(store payoutStore, log *slog.Logger) http.HandlerFunc {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "earnings:view") {
+		if !canAs(r, claims, "earnings:view") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, payoutsResponse{Payouts: []payoutView{}, Currency: "USD"}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
-		resp, err := store.ListPayouts(r.Context(), claims.AccountID)
+		if devTenantGuard(w, r, accountID, payoutsResponse{Payouts: []payoutView{}, Currency: "USD"}) {
+			return
+		}
+		resp, err := store.ListPayouts(r.Context(), accountID)
 		if err != nil {
 			log.Error("payout list failed", "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

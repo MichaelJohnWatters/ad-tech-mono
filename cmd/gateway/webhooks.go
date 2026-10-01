@@ -54,17 +54,22 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []webhookView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []webhookView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "webhooks:read") {
+			if !canAs(r, claims, "webhooks:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			hooks, err := store.ListWebhooks(r.Context(), claims.AccountID)
+			hooks, err := store.ListWebhooks(r.Context(), accountID)
 			if err != nil {
 				log.Error("webhook list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -73,7 +78,7 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 			_ = json.NewEncoder(w).Encode(hooks)
 
 		case http.MethodPost:
-			if !can(claims, "webhooks:create") {
+			if !canAs(r, claims, "webhooks:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -93,7 +98,7 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 				return
 			}
 			secret := randomToken()
-			id, err := store.CreateWebhook(r.Context(), claims.AccountID, in, secret)
+			id, err := store.CreateWebhook(r.Context(), accountID, in, secret)
 			if err != nil {
 				log.Error("webhook create failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -105,7 +110,7 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "url": in.URL, "events": in.Events, "secret": secret})
 
 		case http.MethodDelete:
-			if !can(claims, "webhooks:delete") {
+			if !canAs(r, claims, "webhooks:delete") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -114,7 +119,7 @@ func webhooksHandler(store webhookStore, bus events.EventBus, log *slog.Logger) 
 				http.Error(w, `{"error":"id query param required"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.DeleteWebhook(r.Context(), claims.AccountID, id)
+			err := store.DeleteWebhook(r.Context(), accountID, id)
 			if err == sql.ErrNoRows {
 				http.Error(w, `{"error":"webhook not found"}`, http.StatusNotFound)
 				return

@@ -29,7 +29,12 @@ func retargetingAudienceHandler(store *audiencepg.Store, log *slog.Logger) http.
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []audiencepg.RetargetingSegmentUI{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []audiencepg.RetargetingSegmentUI{}) {
 			return
 		}
 		if store == nil {
@@ -39,11 +44,11 @@ func retargetingAudienceHandler(store *audiencepg.Store, log *slog.Logger) http.
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "audiences:read") {
+			if !canAs(r, claims, "audiences:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			segs, err := store.ListRetargetingSegments(r.Context(), claims.AccountID)
+			segs, err := store.ListRetargetingSegments(r.Context(), accountID)
 			if err != nil {
 				log.Error("retargeting audience list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -52,7 +57,7 @@ func retargetingAudienceHandler(store *audiencepg.Store, log *slog.Logger) http.
 			_ = json.NewEncoder(w).Encode(segs)
 
 		case http.MethodPost:
-			if !can(claims, "audiences:create") {
+			if !canAs(r, claims, "audiences:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -71,7 +76,7 @@ func retargetingAudienceHandler(store *audiencepg.Store, log *slog.Logger) http.
 				http.Error(w, `{"error":"name and tag are required"}`, http.StatusBadRequest)
 				return
 			}
-			id, err := store.CreateRetargetingSegment(r.Context(), claims.AccountID, req.Name, req.Tag, req.WindowDays)
+			id, err := store.CreateRetargetingSegment(r.Context(), accountID, req.Name, req.Tag, req.WindowDays)
 			if err != nil {
 				log.Error("retargeting audience create failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

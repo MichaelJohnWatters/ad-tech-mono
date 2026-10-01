@@ -138,17 +138,22 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []dealView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []dealView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "deals:read") {
+			if !canAs(r, claims, "deals:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			deals, err := store.ListDeals(r.Context(), claims.AccountID)
+			deals, err := store.ListDeals(r.Context(), accountID)
 			if err != nil {
 				log.Error("deals list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -157,7 +162,7 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 			_ = json.NewEncoder(w).Encode(deals)
 
 		case http.MethodPost:
-			if !can(claims, "deals:create") {
+			if !canAs(r, claims, "deals:create") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -189,7 +194,7 @@ func dealsHandler(store dealStore, bus events.EventBus, log *slog.Logger) http.H
 				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 				return
 			}
-			id, err := store.CreateDeal(r.Context(), claims.AccountID, in)
+			id, err := store.CreateDeal(r.Context(), accountID, in)
 			if errors.Is(err, errDealPublisherNotOwned) {
 				http.Error(w, `{"error":"forbidden: publisher not in your account"}`, http.StatusForbidden)
 				return
@@ -226,14 +231,19 @@ func dealByIDHandler(store dealStore, bus events.EventBus, log *slog.Logger) htt
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, nil) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, nil) {
 			return
 		}
 		if r.Method != http.MethodPatch {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "deals:update") {
+		if !canAs(r, claims, "deals:update") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -270,7 +280,7 @@ func dealByIDHandler(store dealStore, bus events.EventBus, log *slog.Logger) htt
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 			return
 		}
-		err := store.UpdateDeal(r.Context(), claims.AccountID, id, in)
+		err := store.UpdateDeal(r.Context(), accountID, id, in)
 		if errors.Is(err, errDealPlacementNotOwned) {
 			http.Error(w, `{"error":"forbidden: a placement in the allowlist is not in your account"}`, http.StatusForbidden)
 			return

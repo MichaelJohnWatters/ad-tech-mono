@@ -57,7 +57,12 @@ func productsHandler(deps audienceDeps, cat *catalogpg.Store) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, productListResponse{Products: []catalog.Product{}}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, productListResponse{Products: []catalog.Product{}}) {
 			return
 		}
 		if cat == nil || deps.proc == nil || deps.ingestStore == nil || deps.objects == nil {
@@ -67,11 +72,11 @@ func productsHandler(deps audienceDeps, cat *catalogpg.Store) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "audiences:read") {
+			if !canAs(r, claims, "audiences:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			products, err := cat.ListByAccount(r.Context(), claims.AccountID, 500)
+			products, err := cat.ListByAccount(r.Context(), accountID, 500)
 			if err != nil {
 				deps.log.Error("product list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -80,11 +85,11 @@ func productsHandler(deps audienceDeps, cat *catalogpg.Store) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(productListResponse{Products: products, Count: len(products)})
 
 		case http.MethodPost:
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			deps.handleProductUpload(w, r, claims)
+			deps.handleProductUpload(w, r, claims, accountID)
 
 		default:
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -94,8 +99,7 @@ func productsHandler(deps audienceDeps, cat *catalogpg.Store) http.HandlerFunc {
 
 // handleProductUpload mirrors handleUpload for kind=product: pre-flight →
 // stage → enqueue → inline-or-202. Multipart only (feeds are files).
-func (deps audienceDeps) handleProductUpload(w http.ResponseWriter, r *http.Request, claims *auth.Claims) {
-	accountID := claims.AccountID
+func (deps audienceDeps) handleProductUpload(w http.ResponseWriter, r *http.Request, claims *auth.Claims, accountID string) {
 	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaType != "multipart/form-data" {
 		http.Error(w, `{"error":"product feeds are multipart/form-data uploads (fields: name, file)"}`, http.StatusBadRequest)

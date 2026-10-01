@@ -46,6 +46,11 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 		if store == nil {
 			http.Error(w, `{"error":"provider store unavailable"}`, http.StatusServiceUnavailable)
 			return
@@ -55,11 +60,11 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 		switch r.Method {
 		case http.MethodGet:
 			if id != "" {
-				if !can(claims, "audiences:read") {
+				if !canAs(r, claims, "audiences:read") {
 					http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 					return
 				}
-				p, err := store.GetByAccount(r.Context(), claims.AccountID, id)
+				p, err := store.GetByAccount(r.Context(), accountID, id)
 				if err != nil {
 					log.Error("data provider get failed", "id", id, "error", err)
 					http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -72,11 +77,11 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 				_ = json.NewEncoder(w).Encode(p)
 				return
 			}
-			if !can(claims, "audiences:read") {
+			if !canAs(r, claims, "audiences:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			list, err := store.ListByAccount(r.Context(), claims.AccountID)
+			list, err := store.ListByAccount(r.Context(), accountID)
 			if err != nil {
 				log.Error("data providers list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -89,7 +94,7 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 				return
 			}
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -99,7 +104,7 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 				return
 			}
 			p := dataproviders.Provider{
-				AccountID:          claims.AccountID, // never trust a body account_id
+				AccountID:          accountID, // never trust a body account_id
 				Name:               req.Name,
 				Kind:               req.Kind,
 				DefaultParty:       req.DefaultParty,
@@ -128,11 +133,11 @@ func audienceProvidersHandler(store dataproviders.Store, log *slog.Logger) http.
 				http.Error(w, `{"error":"provider id required"}`, http.StatusBadRequest)
 				return
 			}
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			if err := store.DeleteByAccount(r.Context(), claims.AccountID, id); err != nil {
+			if err := store.DeleteByAccount(r.Context(), accountID, id); err != nil {
 				log.Error("data provider delete failed", "id", id, "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return

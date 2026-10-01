@@ -47,7 +47,7 @@ func audienceMappingSampleHandler(maxBytes int, log *slog.Logger) http.HandlerFu
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-		if !can(claims, "audiences:upload") {
+		if !canAs(r, claims, "audiences:upload") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -124,6 +124,11 @@ func audienceMappingsHandler(store audiencemappings.Store, log *slog.Logger) htt
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
 		if store == nil {
 			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
 			return
@@ -137,11 +142,11 @@ func audienceMappingsHandler(store audiencemappings.Store, log *slog.Logger) htt
 				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 				return
 			}
-			if !can(claims, "audiences:read") {
+			if !canAs(r, claims, "audiences:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			list, err := store.ListByAccount(r.Context(), claims.AccountID)
+			list, err := store.ListByAccount(r.Context(), accountID)
 			if err != nil {
 				log.Error("audience mappings list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -154,7 +159,7 @@ func audienceMappingsHandler(store audiencemappings.Store, log *slog.Logger) htt
 				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 				return
 			}
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -174,7 +179,7 @@ func audienceMappingsHandler(store audiencemappings.Store, log *slog.Logger) htt
 				lowered[strings.ToLower(strings.TrimSpace(src))] = strings.TrimSpace(target)
 			}
 			m := audiencemappings.Mapping{
-				AccountID: claims.AccountID, // never trust a body account_id
+				AccountID: accountID, // never trust a body account_id
 				Name:      req.Name,
 				Mappings:  lowered,
 				IDType:    req.IDType,
@@ -197,11 +202,11 @@ func audienceMappingsHandler(store audiencemappings.Store, log *slog.Logger) htt
 				http.Error(w, `{"error":"mapping id required"}`, http.StatusBadRequest)
 				return
 			}
-			if !can(claims, "audiences:upload") {
+			if !canAs(r, claims, "audiences:upload") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			if err := store.DeleteByAccount(r.Context(), claims.AccountID, id); err != nil {
+			if err := store.DeleteByAccount(r.Context(), accountID, id); err != nil {
 				log.Error("audience mapping delete failed", "id", id, "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return

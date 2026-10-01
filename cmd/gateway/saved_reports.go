@@ -51,17 +51,22 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if devTenantGuard(w, r, claims, []savedReportView{}) {
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if devTenantGuard(w, r, accountID, []savedReportView{}) {
 			return
 		}
 
 		switch r.Method {
 		case http.MethodGet:
-			if !can(claims, "reports:read") {
+			if !canAs(r, claims, "reports:read") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
-			reports, err := store.ListSavedReports(r.Context(), claims.AccountID)
+			reports, err := store.ListSavedReports(r.Context(), accountID)
 			if err != nil {
 				log.Error("saved report list failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -70,7 +75,7 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 			_ = json.NewEncoder(w).Encode(reports)
 
 		case http.MethodPost:
-			if !can(claims, "reports:save") {
+			if !canAs(r, claims, "reports:save") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -103,7 +108,7 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 				http.Error(w, `{"error":"schedule must be @hourly/@daily/@weekly/@monthly or a 5-field cron expression"}`, http.StatusBadRequest)
 				return
 			}
-			id, err := store.CreateSavedReport(r.Context(), claims.AccountID, in)
+			id, err := store.CreateSavedReport(r.Context(), accountID, in)
 			if err != nil {
 				log.Error("saved report create failed", "error", err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -113,7 +118,7 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "name": in.Name})
 
 		case http.MethodDelete:
-			if !can(claims, "reports:save") {
+			if !canAs(r, claims, "reports:save") {
 				http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 				return
 			}
@@ -122,7 +127,7 @@ func savedReportsHandler(store savedReportStore, log *slog.Logger) http.HandlerF
 				http.Error(w, `{"error":"id query param required"}`, http.StatusBadRequest)
 				return
 			}
-			err := store.DeleteSavedReport(r.Context(), claims.AccountID, id)
+			err := store.DeleteSavedReport(r.Context(), accountID, id)
 			if err == sql.ErrNoRows {
 				http.Error(w, `{"error":"report not found"}`, http.StatusNotFound)
 				return
