@@ -448,12 +448,33 @@
               <td class="px-3 py-2 align-top"><a href="https://shop.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">The Shop</a><br><span class="text-xs text-gray-400">shop.adtech.local<br>(Premium Dog Food Co)</span></td>
               <td class="px-3 py-2 align-top">Advertiser e-commerce store</td>
               <td class="px-3 py-2 align-top">earned audiences · DPA · conversions</td>
-              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300"><strong>The full money + audience loop.</strong> (1) Open a product page → the <code>/v1/t/rt</code> pixel enrolls you into "Shop Product Viewers" in ~2s (real-time retargeting). (2) With a publisher site open in another tab, the chase campaign now retargets you with a <strong>Dynamic Product Ad</strong> showing that exact product. (3) Click <strong>Complete purchase</strong> → a signed <code>/v1/t/conv</code> books a CPA conversion and suppresses you from the chase.</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300"><strong>The full money + audience loop</strong> — browse a product → get chased by a Dynamic Product Ad on a publisher site → purchase converts. <strong>Follow the step-by-step guide just below ⬇</strong> (it's fiddly: both tabs need personalized consent + the same persona).</td>
             </tr>
           </tbody>
         </table>
       </div>
       <p class="mt-3 text-xs text-gray-400">Verify any of these landed: Reporting (impressions/conversions), the Trace inspector (follow one request end-to-end), or "view as" the publisher/advertiser in <a href="#impersonate" class="text-info hover:underline">Impersonate</a>. The Shop's advertiser is <code>Premium Dog Food Co</code>; rich pre-seeded audiences live on <code>adv-initech</code>.</p>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "🛍️ The earned-audience money loop — step by step" "subtitle" "Browse the shop → get chased by a Dynamic Product Ad on a publisher site → purchase converts. This is THE end-to-end demo; it's order- and consent-sensitive, so follow it exactly.") }}
+      <ol class="list-decimal ml-5 space-y-2 text-sm text-gray-700 dark:text-gray-200">
+        <li><b>Open the shop</b> → <a href="https://shop.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline">shop.adtech.local</a>. On the cookie banner click <b>“Accept personalized”</b> (NOT “Contextual only” — contextual drops the id cookie and nothing gets enrolled).</li>
+        <li><b>Click a product</b> — open the product page (the F‑150 / kibble item), not just the home page. That fires the <code>/v1/t/rt</code> pixel and enrolls you into <b>“Shop Product Viewers”</b>. Watch it in the <b>🔍 Trace</b> panel: an <span class="font-mono">RT</span> “retargeting pixel” row.</li>
+        <li><b>Wait ~3 seconds.</b> Enrollment is real-time but not instant (pixel → audience‑rt → Redis ≈ 3s).</li>
+        <li><b>Open a publisher site in the SAME browser</b> → e.g. <a href="https://chronicle.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline">chronicle.adtech.local</a>. Click <b>“Accept personalized”</b> here too. <b>Don’t</b> click “New visitor”/“Change” on either persona bar — both sites default to <code>demo.shopper@example.com</code>, which is what makes you one person (same household).</li>
+        <li><b>The display slot shows the chase</b>: the Premium Dog Food <b>Dynamic Product Ad</b> featuring the exact product you viewed. If it doesn’t, <b>reload</b> once (you may have beaten the ~3s enroll). The Trace panel shows the display <span class="font-mono">REQ</span> then an <span class="font-mono">IMP</span>.</li>
+        <li><b>Back on the shop → “Complete purchase”</b> → a signed <code>/v1/t/conv</code> books a CPA <b>conversion</b> and <b>suppresses</b> you from the chase (you won’t be re-shown the thing you bought).</li>
+      </ol>
+      <div class="mt-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-gray-600 dark:text-gray-300">
+        <b>If the chase doesn’t appear, it’s almost always one of these:</b>
+        <ul class="list-disc ml-5 mt-1 space-y-0.5">
+          <li><b>Contextual-only consent</b> on either tab → no identity → no match. Both must be “Accept personalized”.</li>
+          <li><b>Different persona</b> on the two tabs (someone clicked “New visitor”/“Change”). Keep the same email on both.</li>
+          <li><b>Too fast</b> — you opened/reloaded the publisher before the ~3s enroll. Wait, then reload.</li>
+          <li>You viewed only the shop <b>home</b>, not a <b>product</b> page (the product page is what fires the enroll pixel).</li>
+        </ul>
+        <span class="text-gray-500">Verified live: the chase LI <code>li-dogfood-cart-rt</code> wins the publisher display auction with the DPA, matched via the shared demo household — a non-enrolled visitor gets a different ad.</span>
+      </div>
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "Generate live traffic (run after the manual demo)" "subtitle" "Copy-paste host commands to drive real traffic through the full path (auction → serve → beacons → reporting) so the dashboards fill live while you talk. Run from the repo root with the demo bridge up.") }}
