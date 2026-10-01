@@ -2645,18 +2645,20 @@ async function loadRecordedConversions() {
   const totals = document.getElementById('convTotals');
   if (!body) return;
   try {
-    const rows = await reportQuery({table: 'conversions', metrics: ['count', 'sum_revenue'],
-      dimensions: ['conversion_type'], time_from: daysAgo(30)}) || [];
+    const res = await reportQuery({table: 'conversions', metrics: ['count', 'sum_revenue'],
+      dimensions: ['conversion_type'], time_from: daysAgo(30)}) || {};
+    const cols = res.columns || [], rows = res.rows || [];
+    const ti = cols.indexOf('conversion_type'), ci = cols.indexOf('count'), ri = cols.indexOf('sum_revenue');
     let tc = 0, tr = 0;
-    rows.forEach(r => { tc += Number(r.count || 0); tr += Number(r.sum_revenue || 0); });
+    rows.forEach(r => { tc += Number(r[ci] || 0); tr += Number(r[ri] || 0); });
     if (totals) totals.innerHTML =
       `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Conversions</div><div class="text-2xl font-semibold font-mono">${tc}</div></div>` +
       `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Revenue (30d)</div><div class="text-2xl font-semibold font-mono">$${tr.toFixed(2)}</div></div>`;
     body.innerHTML = rows.length
       ? rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
-          <td class="px-3 py-2 font-mono text-xs">${esc(r.conversion_type || '—')}</td>
-          <td class="px-3 py-2 font-mono">${Number(r.count || 0)}</td>
-          <td class="px-3 py-2 font-mono">$${Number(r.sum_revenue || 0).toFixed(2)}</td></tr>`).join('')
+          <td class="px-3 py-2 font-mono text-xs">${esc(r[ti] || '—')}</td>
+          <td class="px-3 py-2 font-mono">${Number(r[ci] || 0)}</td>
+          <td class="px-3 py-2 font-mono">$${Number(r[ri] || 0).toFixed(2)}</td></tr>`).join('')
       : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No conversions recorded in the last 30 days yet. Complete a purchase on the shop — it appears here within a few seconds.</td></tr>';
   } catch (err) {
     body.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
