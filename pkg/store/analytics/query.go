@@ -5,6 +5,17 @@ import (
 	"strings"
 )
 
+// tablesWithClearingPriceUSD are the analytics tables that carry a
+// clearing_price_usd column (the priced events). Cost metrics (sum_cost/avg_cost)
+// are only valid on these; on any other table (clicks, conversions, views,
+// auction_wins — which has clearing_price, not _usd) the column doesn't exist and
+// the query would fail, so cost resolves to 0 there. Keep in sync with the
+// clickhouse.go schema.
+var tablesWithClearingPriceUSD = map[string]bool{
+	"impressions": true,
+	"auctions":    true,
+}
+
 // BuildQuery constructs a SQL query from QueryParams against params.Table.
 // Used by the DuckDB and ClickHouse implementations.
 func BuildQuery(params QueryParams) (string, []interface{}) {
@@ -49,11 +60,28 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 				selectParts = append(selectParts, "COUNT(*) AS count")
 			}
 		case "sum_cost":
-			selectParts = append(selectParts, "SUM(clearing_price_usd) AS sum_cost")
+			// clearing_price_usd exists ONLY on the priced tables (impressions,
+			// auctions). clicks/conversions/views/auction_wins don't carry it, so
+			// querying it there is a ClickHouse "unknown identifier" error — a cost
+			// metric on an un-priced table resolves to 0 (clicks have no spend).
+			if tablesWithClearingPriceUSD[params.Table] {
+				selectParts = append(selectParts, "SUM(clearing_price_usd) AS sum_cost")
+			} else {
+				selectParts = append(selectParts, "0 AS sum_cost")
+			}
 		case "avg_cost":
-			selectParts = append(selectParts, "AVG(clearing_price_usd) AS avg_cost")
+			if tablesWithClearingPriceUSD[params.Table] {
+				selectParts = append(selectParts, "AVG(clearing_price_usd) AS avg_cost")
+			} else {
+				selectParts = append(selectParts, "0 AS avg_cost")
+			}
 		case "sum_revenue":
-			selectParts = append(selectParts, "SUM(revenue_usd) AS sum_revenue")
+			// revenue_usd exists only on conversions; 0 elsewhere (same reason).
+			if params.Table == "conversions" {
+				selectParts = append(selectParts, "SUM(revenue_usd) AS sum_revenue")
+			} else {
+				selectParts = append(selectParts, "0 AS sum_revenue")
+			}
 		case "avg_duration_ms":
 			selectParts = append(selectParts, "AVG(duration_ms) AS avg_duration_ms")
 		case "sum_bids":

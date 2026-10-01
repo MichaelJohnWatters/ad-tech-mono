@@ -398,6 +398,18 @@ func TestBuildQuery(t *testing.T) {
 			},
 			want: "SELECT COUNT(*) AS count FROM clicks",
 		},
+		{
+			// clicks have no clearing_price_usd column — a cost metric must resolve
+			// to 0, not emit SUM(clearing_price_usd) (ClickHouse "unknown
+			// identifier" error). Regression: the publisher Reports builder on the
+			// clicks table requested count+sum_cost and the query 500'd.
+			name: "clicks sum_cost resolves to 0",
+			params: QueryParams{
+				Table:   "clicks",
+				Metrics: []string{"count", "sum_cost"},
+			},
+			want: "SELECT COUNT(*) AS count, 0 AS sum_cost FROM clicks",
+		},
 	}
 
 	for _, tt := range tests {
