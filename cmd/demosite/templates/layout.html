@@ -45,6 +45,9 @@
      PUBLIC url (cross-origin script). Pages register window.__ads.onConsent to
      request their ads once a consent choice exists. */}}
 {{define "sdkboot"}}
+{{/* Behind-the-scenes trace panel — installs network interceptors FIRST (before the
+     SDK loads), so it captures every ad call + beacon this page makes. */}}
+{{template "tracePanel" .}}
 <script src="{{.Cfg.SDKURL}}"></script>
 <script>
   window.__ads = { onConsent: null };
@@ -121,4 +124,108 @@
   <button class="accept" onclick="applyConsent(true)">Accept personalized</button>
   <button class="reject" onclick="applyConsent(false)">Contextual only</button>
 </div>
+{{end}}
+
+{{/* tracePanel: a collapsible "behind the scenes" side panel on every demo site.
+     It monkey-patches fetch / XMLHttpRequest / Image.src / sendBeacon at load time
+     (before the SDK + page scripts run) and logs every ad call and tracker beacon
+     the page makes — ad requests, VAST/VMAP, SSAI manifest polls + ad segments, and
+     the impression/click/quartile/conversion pixels — so a viewer can SEE the
+     plumbing fire. Purely client-side (an external publisher can only observe its
+     own outbound calls); no server data, no per-page wiring. */}}
+{{define "tracePanel"}}
+<style>
+  #atp-tab { position:fixed; right:0; top:50%; transform:translateY(-50%); z-index:10000;
+    background:var(--accent,#6b21a8); color:var(--accent-ink,#fff); writing-mode:vertical-rl;
+    padding:14px 7px; border-radius:8px 0 0 8px; font:700 12px -apple-system,system-ui,sans-serif;
+    letter-spacing:.5px; cursor:pointer; box-shadow:-2px 0 10px rgba(0,0,0,.3); user-select:none; }
+  #atp-tab .n { margin-top:6px; background:rgba(0,0,0,.35); border-radius:9px; padding:1px 5px; writing-mode:horizontal-tb; font-size:10px; }
+  #atp { position:fixed; top:0; right:-440px; width:440px; max-width:94vw; height:100vh; z-index:10001;
+    background:#0b0f17; color:#e5e7eb; box-shadow:-4px 0 24px rgba(0,0,0,.55); transition:right .22s ease;
+    display:flex; flex-direction:column; font:12px -apple-system,system-ui,sans-serif; }
+  #atp.open { right:0; }
+  #atp header { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid #1f2937; }
+  #atp header h4 { margin:0; font-size:13px; flex:1; }
+  #atp header button { background:#1f2937; color:#e5e7eb; border:0; border-radius:5px; padding:5px 9px; cursor:pointer; font:inherit; }
+  #atp .legend { padding:8px 14px; color:#94a3b8; font-size:11px; line-height:1.4; border-bottom:1px solid #1f2937; }
+  #atp .log { flex:1; overflow:auto; padding:6px 8px; }
+  .atp-row { display:flex; gap:7px; padding:5px 6px; border-radius:5px; align-items:baseline; }
+  .atp-row:hover { background:#111827; }
+  .atp-t { color:#64748b; font-variant-numeric:tabular-nums; flex:0 0 46px; }
+  .atp-badge { flex:0 0 auto; font-weight:700; padding:1px 6px; border-radius:4px; font-size:10px; }
+  .atp-desc { flex:1; word-break:break-all; color:#cbd5e1; }
+  .atp-path { color:#475569; }
+  .atp-ok { color:#22c55e; } .atp-err { color:#f87171; }
+  .c-IMP{background:#064e3b;color:#6ee7b7}.c-CLICK{background:#7c2d12;color:#fdba74}
+  .c-CONV{background:#78350f;color:#fcd34d}.c-RT{background:#4c1d95;color:#c4b5fd}
+  .c-EVT{background:#1e3a8a;color:#93c5fd}.c-VIEW{background:#334155;color:#cbd5e1}
+  .c-REQ{background:#155e75;color:#67e8f9}.c-SSAI{background:#831843;color:#f9a8d4}
+  .c-SEG{background:#9a3412;color:#fdba74}.c-SDK{background:#374151;color:#9ca3af}
+</style>
+<div id="atp-tab" onclick="window.__atp&&window.__atp.toggle()">🔍 Trace<span class="n" id="atp-count">0</span></div>
+<div id="atp">
+  <header><h4>🔍 Behind the scenes</h4><button onclick="window.__atp.clear()">clear</button><button onclick="window.__atp.toggle()">✕</button></header>
+  <div class="legend">Live capture of this page's ad calls &amp; tracker beacons (client-side). Accept consent, then play/scroll to see impressions, VAST/VMAP, SSAI manifests &amp; ad segments, clicks and conversions fire.</div>
+  <div class="log" id="atp-log"></div>
+</div>
+<script>
+(function(){
+  var rows=[], count=0, logEl=null, countEl=null;
+  var SHOW=/(\/v1\/t\/|\/v1\/pubad\/|\/ssai\/|adtech(-adv)?\.js|\/sdk\/|\.m3u8|\.mpd)/;
+  function cat(u){
+    if(/\/v1\/t\/imp/.test(u))return['IMP','impression'];
+    if(/\/v1\/t\/click/.test(u))return['CLICK','click'];
+    if(/\/v1\/t\/conv/.test(u))return['CONV','conversion'];
+    if(/\/v1\/t\/rt/.test(u))return['RT','retargeting pixel'];
+    if(/\/v1\/t\/(video|audio)/.test(u)){var m=u.match(/[?&]event=([^&]+)/);return['EVT',m?decodeURIComponent(m[1]).replace(/,/g,' · '):'quartile'];}
+    if(/\/v1\/t\/view/.test(u))return['VIEW','viewability / break'];
+    if(/\/v1\/pubad\/video\/vmap/.test(u))return['REQ','VMAP schedule request'];
+    if(/\/v1\/pubad\/video\/vast/.test(u))return['REQ','VAST request'];
+    if(/\/v1\/pubad\/audio/.test(u))return['REQ','audio ad request'];
+    if(/\/v1\/pubad\/native/.test(u))return['REQ','native request'];
+    if(/\/v1\/pubad\/serve/.test(u))return['REQ','display request'];
+    if(/live\.m3u8/.test(u))return['SSAI','live manifest (poll)'];
+    if(/\.m3u8|\.mpd/.test(u))return['SSAI','SSAI manifest'];
+    if(/\/ssai\/seg/.test(u))return['SEG','ad segment → server beacons'];
+    if(/adtech(-adv)?\.js|\/sdk\//.test(u))return['SDK','SDK / asset'];
+    return null;
+  }
+  function now(){ var d=new Date(); return ('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2)+'.'+('00'+d.getMilliseconds()).slice(-3).slice(0,2); }
+  function pathOf(u){ try{var a=document.createElement('a');a.href=u;var s=a.search||'';if(s.length>44)s=s.slice(0,44)+'…';return a.pathname+s;}catch(e){return u;} }
+  function add(u,method){
+    if(!SHOW.test(u))return null; var c=cat(u); if(!c)return null;
+    var r={t:now(),cat:c[0],desc:c[1],url:''+u,method:method||'',status:''};
+    rows.push(r); if(rows.length>250)rows.shift(); count++; render(); return r;
+  }
+  function setStatus(r,s,ok){ if(r){r.status=s;r.ok=ok;render();} }
+  function esc(s){ return (''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+  function render(){
+    if(!logEl){logEl=document.getElementById('atp-log');countEl=document.getElementById('atp-count');}
+    if(!logEl)return; if(countEl)countEl.textContent=count;
+    logEl.innerHTML=rows.map(function(r){
+      return '<div class="atp-row"><span class="atp-t">'+r.t+'</span>'+
+        '<span class="atp-badge c-'+r.cat+'">'+r.cat+'</span>'+
+        '<span class="atp-desc" title="'+esc(r.url)+'">'+esc(r.desc)+
+        (r.method&&r.method!=='GET'&&r.method!=='IMG'?' ['+esc(r.method)+']':'')+
+        (r.status?' <span class="'+(r.ok?'atp-ok':'atp-err')+'">'+esc(r.status)+'</span>':'')+
+        '<br><span class="atp-path">'+esc(pathOf(r.url))+'</span></span></div>';
+    }).join('');
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+  // fetch
+  var of=window.fetch;
+  if(of){ window.fetch=function(i,init){ var u=(typeof i==='string')?i:(i&&i.url)||''; var m=(init&&init.method)||'GET'; var r=add(u,m); var p=of.apply(this,arguments); if(r&&p&&p.then){p.then(function(x){setStatus(r,x.status,x.ok);}).catch(function(){setStatus(r,'ERR',false);});} return p; }; }
+  // XHR (hls.js manifest + segment loads, some SDK calls)
+  var OX=window.XMLHttpRequest;
+  if(OX&&OX.prototype){ var oOpen=OX.prototype.open, oSend=OX.prototype.send;
+    OX.prototype.open=function(m,u){ this.__atp={m:m,u:u}; return oOpen.apply(this,arguments); };
+    OX.prototype.send=function(){ var info=this.__atp; if(info){ var r=add(info.u,info.m); if(r){ this.addEventListener('load',function(){setStatus(r,this.status,this.status<400);}); this.addEventListener('error',function(){setStatus(r,'ERR',false);}); } } return oSend.apply(this,arguments); }; }
+  // pixel beacons (new Image().src = tracker url)
+  try{ var proto=HTMLImageElement.prototype, d=Object.getOwnPropertyDescriptor(proto,'src');
+    if(d&&d.set){ Object.defineProperty(proto,'src',{enumerable:d.enumerable,configurable:true,get:d.get,set:function(v){ try{add(String(v),'IMG');}catch(e){} return d.set.call(this,v);}}); } }catch(e){}
+  if(navigator.sendBeacon){ var ob=navigator.sendBeacon.bind(navigator); navigator.sendBeacon=function(u,data){ add(String(u),'BEACON'); return ob(u,data); }; }
+  window.__atp={ toggle:function(){document.getElementById('atp').classList.toggle('open');}, clear:function(){rows=[];count=0;render();} };
+  document.addEventListener('DOMContentLoaded',render);
+})();
+</script>
 {{end}}
