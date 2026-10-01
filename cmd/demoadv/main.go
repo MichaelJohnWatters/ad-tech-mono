@@ -36,9 +36,17 @@ var templatesFS embed.FS
 
 type siteConfig struct {
 	TrackerURL string // public base of the tracker (/v1/t/*), browser-reachable
-	SDKURL     string // where the browser loads the advertiser tag (adtech-adv.js)
-	AccountID  string // the advertiser account id (the `aid`/`advid` param)
-	SigningKey string // the platform-issued HMAC key this advertiser signs its
+	// ConvTrackerURL is the base the SERVER-SIDE /convert postback fires to. It
+	// defaults to TrackerURL (host/real-external: the advertiser's server reaches
+	// the public tracker). But when this shop runs INSIDE the cluster (the
+	// demostore deploy), the public ingress hostname (tracker.<domain>) doesn't
+	// resolve from a pod — so the deploy sets DEMOADV_TRACKER_INTERNAL_URL to the
+	// in-cluster tracker service. The HMAC signs path+params, not host, so the
+	// signature is valid regardless of which base the postback uses.
+	ConvTrackerURL string
+	SDKURL         string // where the browser loads the advertiser tag (adtech-adv.js)
+	AccountID      string // the advertiser account id (the `aid`/`advid` param)
+	SigningKey     string // the platform-issued HMAC key this advertiser signs its
 	// server-to-server conversion postbacks with (a real advertiser is issued its
 	// own key; the demo uses the dev key).
 	Brand string
@@ -83,6 +91,9 @@ func main() {
 		// Default = the tracker's localhost-exposed port (zero-setup browser use).
 		// For the real public path use https://tracker.<domain> (needs /etc/hosts).
 		TrackerURL: env("DEMOADV_TRACKER_URL", "http://localhost:8083"),
+		// Server-side postback base: defaults to the public TrackerURL; the
+		// in-cluster demostore overrides it to the tracker's cluster service.
+		ConvTrackerURL: env("DEMOADV_TRACKER_INTERNAL_URL", env("DEMOADV_TRACKER_URL", "http://localhost:8083")),
 		// The advertiser tag is served from the platform's static assets (gateway),
 		// the same origin adtech.js ships from.
 		SDKURL: env("DEMOADV_SDK_URL", "http://localhost:8080/static/adtech-adv.js"),
@@ -178,7 +189,7 @@ func main() {
 		if sku := env2(r.FormValue("sku"), cfg.SKU); sku != "" {
 			params.Set("skus", sku)
 		}
-		signed := adserving.SignURL(cfg.TrackerURL+"/v1/t/conv?"+params.Encode(), cfg.SigningKey)
+		signed := adserving.SignURL(cfg.ConvTrackerURL+"/v1/t/conv?"+params.Encode(), cfg.SigningKey)
 		status := 0
 		if resp, err := http.Get(signed); err == nil {
 			status = resp.StatusCode

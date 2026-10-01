@@ -47,6 +47,14 @@ same tls.certManager knob as the core chart.
 {{- $urls := $s.urls | default dict }}
 {{- $trackerURL := $urls.tracker | default (printf "%s://tracker.%s" $scheme $domain) }}
 {{- $sdkURL := $urls.sdk | default (printf "%s://gateway.%s/static/adtech-adv.js" $scheme $domain) }}
+{{- /* The SERVER-SIDE /convert postback fires from the pod, so it needs the
+       in-cluster tracker service (the public ingress hostname doesn't resolve
+       inside the cluster). Cross-namespace to the CORE services' namespace — not
+       $.Release.Namespace, which is "default" under the scoped `helm template
+       --show-only` apply this chart deploys with. Override via
+       demostore.urls.trackerInternal if the core stack runs elsewhere. */ -}}
+{{- $coreNs := (($.Values.global | default dict).namespace | default "adtech") }}
+{{- $trackerInternal := $urls.trackerInternal | default (printf "http://tracker.%s.svc.cluster.local:8083" $coreNs) }}
 {{- /* Same copied-cert gating as demosites.yaml. */ -}}
 {{- $stls := $s.tls | default dict }}
 {{- $haveCopiedCert := and $stls.crt $stls.key }}
@@ -133,6 +141,10 @@ spec:
             # NOT in-cluster service DNS.
             - name: DEMOADV_TRACKER_URL
               value: {{ $trackerURL | quote }}
+            # Server-side /convert postback target — the in-cluster tracker svc
+            # (the ingress hostname above doesn't resolve from inside the pod).
+            - name: DEMOADV_TRACKER_INTERNAL_URL
+              value: {{ $trackerInternal | quote }}
             - name: DEMOADV_SDK_URL
               value: {{ $sdkURL | quote }}
             {{- with $s.extraEnv }}
