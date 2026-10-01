@@ -63,16 +63,32 @@ func advKey(placementID, advertiserID string) string {
 	return placementID + "\x00" + advertiserID
 }
 
+// maxRecordsPerKey bounds each per-key history so the tracker can't grow without
+// limit over a long-running pod (RecordWin/RecordLoss used to append forever).
+// It also keeps the win-rate curve RECENT — stale auctions shouldn't weight
+// today's bid. Plenty of samples for a stable curve.
+const maxRecordsPerKey = 2000
+
+// appendBounded appends r, keeping at most maxRecordsPerKey of the most recent
+// records. When full it compacts to the recent half in a fresh slice (freeing the
+// old backing array) — amortised O(1) per append, hard memory bound per key.
+func appendBounded(s []Record, r Record) []Record {
+	if len(s) >= maxRecordsPerKey {
+		s = append(make([]Record, 0, maxRecordsPerKey), s[maxRecordsPerKey/2:]...)
+	}
+	return append(s, r)
+}
+
 // RecordWin records a winning bid. advertiserID (the winning campaign's account)
 // may be "" — then only the pooled per-placement tally is updated.
 func (t *Tracker) RecordWin(placementID, advertiserID string, ourBid, clearingPrice float64) {
 	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: true}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.data[placementID] = append(t.data[placementID], rec)
+	t.data[placementID] = appendBounded(t.data[placementID], rec)
 	if advertiserID != "" {
 		k := advKey(placementID, advertiserID)
-		t.byAdv[k] = append(t.byAdv[k], rec)
+		t.byAdv[k] = appendBounded(t.byAdv[k], rec)
 	}
 }
 
@@ -81,10 +97,10 @@ func (t *Tracker) RecordLoss(placementID, advertiserID string, ourBid, clearingP
 	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: false, Reason: reason}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.data[placementID] = append(t.data[placementID], rec)
+	t.data[placementID] = appendBounded(t.data[placementID], rec)
 	if advertiserID != "" {
 		k := advKey(placementID, advertiserID)
-		t.byAdv[k] = append(t.byAdv[k], rec)
+		t.byAdv[k] = appendBounded(t.byAdv[k], rec)
 	}
 }
 
