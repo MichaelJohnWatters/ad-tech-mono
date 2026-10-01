@@ -150,6 +150,22 @@ func (c *ClickHouse) createTables() error {
 			currency String, bid_model String, deal_id String, channel String,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		// auction_losses: the durable, cross-pod per-advertiser LOSS record —
+		// the money-less counterpart to auction_wins. Published by the DSP's
+		// loss-notice handler (adtech.auction.loss) when our DSP's bid for a
+		// known advertiser account loses an auction. account_id is the RAW
+		// advertiser account (the same value the JWT session carries and
+		// impressions.account_id uses), so the advertiser bid-shading view can
+		// count losses account-scoped and reconcile them against delivered
+		// impressions (wins) on the SAME key. Before this table, losses lived
+		// only in the DSP's in-memory bidshading tracker (per-pod, wiped on
+		// redeploy); this makes the advertiser's win/loss survive a DSP
+		// restart. MergeTree, same shape/TTL family as auction_wins.
+		`CREATE TABLE IF NOT EXISTS auction_losses (
+			trace_id String, auction_id String, account_id String, campaign_id String,
+			placement_id String, clearing_price_usd Float64, loss_reason Int32, channel String,
+			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS media_events (
 			trace_id String, channel String, event_type String, position_ms Int64,
 			campaign_id String, creative_id String, placement_id String,
@@ -322,7 +338,7 @@ func (c *ClickHouse) createTables() error {
 	if c.ttlDays > 0 {
 		rawEventTables := []string{
 			"impressions", "clicks", "conversions", "views", "auctions",
-			"auction_wins", "media_events", "serve_no_fills", "freq_cap_blocks",
+			"auction_wins", "auction_losses", "media_events", "serve_no_fills", "freq_cap_blocks",
 			"render_failures", "campaign_state_changes", "budget_depletions", "dsp_calls",
 		}
 		for _, t := range rawEventTables {
@@ -410,6 +426,15 @@ func (c *ClickHouse) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) e
 		e.TraceID, e.AuctionID, e.WinnerDSP, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID,
 		e.AdvertiserID, e.ClearingPrice, e.Currency, e.BidModel, e.DealID, e.Channel,
 		int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+}
+
+func (c *ClickHouse) InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent) error {
+	return c.exec(ctx, "auction_loss",
+		`INSERT INTO auction_losses (trace_id, auction_id, account_id, campaign_id, placement_id,
+			clearing_price_usd, loss_reason, channel, schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		e.TraceID, e.AuctionID, e.AccountID, e.CampaignID, e.PlacementID,
+		e.ClearingPrice, e.LossReason, e.Channel, int32(schemaVer(e.SchemaVersion)), e.Timestamp)
 }
 
 func (c *ClickHouse) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {

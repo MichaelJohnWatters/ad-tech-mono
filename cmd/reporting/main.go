@@ -622,6 +622,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectView:                   c.handleView,
 		events.SubjectAuctionComplete:        c.handleAuction,
 		events.SubjectAuctionWin:             c.handleAuctionWin,
+		events.SubjectAuctionLoss:            c.handleAuctionLoss,
 		events.SubjectDirectWin:              c.handleDirectWin,
 		events.SubjectPrebidOutboundWin:      c.handlePrebidOutboundWin,
 		events.SubjectBudgetDepleted:         c.handleBudgetDepleted,
@@ -1208,6 +1209,38 @@ func (c *EventConsumer) handleBudgetDepleted(ctx context.Context, msg *events.Me
 		})
 	}
 	c.log.Info("campaign budget depleted", "campaign_id", src.CampaignID, "budget", src.Budget, "spent", src.Spent)
+	return msg.Ack()
+}
+
+// handleAuctionLoss lands the durable per-advertiser loss record (counterpart
+// to handleAuctionWin). It is what makes the advertiser bid-shading view's
+// win/loss survive a DSP redeploy — losses used to live only in the DSP's
+// in-memory tracker. Counts only, so at-least-once redelivery is fine.
+func (c *EventConsumer) handleAuctionLoss(ctx context.Context, msg *events.Message) error {
+	var src events.AuctionLossEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode auction loss event", "error", err)
+		return msg.Ack() // bad payload — don't redeliver
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	e := analytics.AuctionLossEvent{
+		TraceID:       src.TraceID,
+		AuctionID:     src.AuctionID,
+		AccountID:     src.AccountID,
+		CampaignID:    src.CampaignID,
+		PlacementID:   src.PlacementID,
+		ClearingPrice: src.ClearingPrice,
+		LossReason:    src.LossReason,
+		Channel:       src.Channel,
+		SchemaVersion: 1,
+		Timestamp:     src.Timestamp,
+	}
+	if err := c.store.InsertAuctionLoss(ctx, &e); err != nil {
+		c.log.Error("failed to write auction loss", "error", err, "placement_id", e.PlacementID)
+		return msg.Nak()
+	}
 	return msg.Ack()
 }
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"time"
 
@@ -38,10 +37,14 @@ type shadingPlacementRow struct {
 	YourAvgClearingCPM float64 `json:"your_avg_clearing_cpm"`
 	YourSpendUSD       float64 `json:"your_spend_usd"`
 
-	// --- The advertiser's OWN win/loss (genuinely per-advertiser). ---
-	// From the DSP's per-(placement,advertiser) tally — THIS account's own bids,
-	// wins, and losses on the placement. Unlike marketplace_* below, these ARE
-	// yours. HasYourStats says whether the DSP has recorded bids for you here.
+	// --- The advertiser's OWN win/loss (genuinely per-advertiser, DURABLE). ---
+	// Sourced from ClickHouse — wins from this account's delivered impressions
+	// (impressions.account_id), losses from the durable auction_losses table
+	// (account_id from the DSP loss-notice). Both keyed on the RAW advertiser
+	// account the session carries, so they reconcile on the same key. Unlike the
+	// old in-memory DSP tracker, these SURVIVE a DSP redeploy. YourBids =
+	// wins + losses; YourWinRate = wins / bids. HasYourStats says whether this
+	// account had any recorded bid activity (win or loss) on the placement.
 	HasYourStats bool    `json:"has_your_stats"`
 	YourBids     int     `json:"your_bids"`
 	YourWins     int     `json:"your_wins"`
@@ -96,12 +99,18 @@ type shadingExplanations struct {
 type shadingDeps struct {
 	// placementSpend returns this advertiser's own per-placement impressions,
 	// avg clearing CPM, and spend over the window (account-scoped — forced).
+	// YourImpressions here is ALSO the durable WIN count per placement (a
+	// delivered impression is an auction this account won and served).
 	placementSpend func(ctx context.Context, accountID string, since time.Time) ([]shadingPlacementRow, error)
-	// marketplaceStats returns the DSP-wide per-placement shading tracker state.
+	// advertiserLosses returns THIS advertiser's OWN per-placement LOSS counts,
+	// from the durable auction_losses ClickHouse table (account-scoped — forced).
+	// Keyed on the same raw account as placementSpend, so wins + losses reconcile.
+	// This is the phase-2 durability replacement for the DSP's in-memory tracker:
+	// it survives a DSP redeploy.
+	advertiserLosses func(ctx context.Context, accountID string, since time.Time) (map[string]int64, error)
+	// marketplaceStats returns the DSP-wide per-placement shading tracker state
+	// (live, in-memory — labelled as such; NOT this advertiser's own numbers).
 	marketplaceStats func(ctx context.Context) (map[string]bidshading.PlacementStats, error)
-	// advertiserStats returns THIS advertiser's OWN per-placement win/loss from the
-	// DSP tracker's per-(placement,advertiser) tally (genuinely per-advertiser).
-	advertiserStats func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error)
 }
 
 // shadingHandler serves GET /v1/api/shading — the advertiser-facing bid-shading /
@@ -126,16 +135,26 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// Tenant scope: this view is for a customer looking at their OWN
-		// inventory. Advertiser/agency scope to their own account. A platform user
-		// (staff/admin) already has the staff view (/v1/api/staff/shading) and has
-		// no single "own" account here — refuse rather than leak a platform-wide
-		// marketplace picture through the advertiser lens.
-		if claims.AccountType != auth.AccountAdvertiser && claims.AccountType != auth.AccountAgency {
+		// Tenant scope + effective account. Same rule as report_jobs.go's
+		// effectiveReportAccount so staff "viewing as" / agency act-as works:
+		//   - act-as target present (staff impersonating, or agency on a managed
+		//     account) + CanAccessAccount → scope to the IMPERSONATED account,
+		//     regardless of the caller's own type (a staff session is type=staff).
+		//   - otherwise require an advertiser/agency session and scope to its own
+		//     account (a publisher, or staff with no act-as, is refused — staff
+		//     have the dedicated /v1/api/staff/shading view).
+		accountID := claims.AccountID
+		if target := middleware.ActAsTarget(r); target != "" {
+			_, id := middleware.ParseActAsTarget(target)
+			if id == "" || !auth.CanAccessAccount(claims, id) {
+				http.Error(w, `{"error":"forbidden: cannot act as that account"}`, http.StatusForbidden)
+				return
+			}
+			accountID = id
+		} else if claims.AccountType != auth.AccountAdvertiser && claims.AccountType != auth.AccountAgency {
 			http.Error(w, `{"error":"forbidden: advertiser view only"}`, http.StatusForbidden)
 			return
 		}
-		accountID := claims.AccountID
 
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
@@ -148,30 +167,32 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// The advertiser's OWN per-placement win/loss (genuinely per-advertiser,
-		// from the DSP's per-(placement,advertiser) tally). Non-fatal if the DSP is
-		// unreachable — the money numbers above still stand.
-		mine, err := deps.advertiserStats(ctx, accountID)
+		// The advertiser's OWN per-placement LOSSES — durable, from ClickHouse
+		// (auction_losses), account-forced. Non-fatal if the query fails: the
+		// money numbers + wins (impressions) above still stand; losses just stay 0.
+		// This is the phase-2 durability source — it survives a DSP redeploy,
+		// unlike the old in-memory DSP tracker.
+		losses, err := deps.advertiserLosses(ctx, accountID, since)
 		if err != nil {
-			log.Warn("shading: per-advertiser stats unavailable", "account", accountID, "error", err)
-			mine = nil
+			log.Warn("shading: per-advertiser losses unavailable", "account", accountID, "error", err)
+			losses = nil
 		}
-		// DSP-wide marketplace context. Also non-fatal — marketplace_* just stays
-		// unpopulated if the DSP can't be reached.
+		// DSP-wide marketplace context (live, in-memory). Also non-fatal —
+		// marketplace_* just stays unpopulated if the DSP can't be reached.
 		mkt, err := deps.marketplaceStats(ctx)
 		if err != nil {
 			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
 			mkt = nil
 		}
 
-		// Union: the money rows are delivered impressions (wins only). Add any
-		// placement the advertiser BID on but never delivered (lost, or won but
-		// unserved) so the win/loss picture is complete, not win-only.
+		// Union: the money rows are delivered impressions (wins). Add any placement
+		// the advertiser LOST on but never delivered an impression, so the win/loss
+		// picture is complete, not win-only.
 		seen := make(map[string]bool, len(rows))
 		for i := range rows {
 			seen[rows[i].PlacementID] = true
 		}
-		for pid := range mine {
+		for pid := range losses {
 			if !seen[pid] {
 				rows = append(rows, shadingPlacementRow{PlacementID: pid})
 			}
@@ -179,15 +200,22 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 
 		var totals shadingTotals
 		for i := range rows {
-			if s, ok := mine[rows[i].PlacementID]; ok && s.TotalBids > 0 {
+			// Wins = this account's delivered impressions on the placement (durable,
+			// account-scoped). Losses = durable auction_losses count. Bids = the sum.
+			wins := int(rows[i].YourImpressions)
+			loss := int(losses[rows[i].PlacementID])
+			if wins > 0 || loss > 0 {
+				bids := wins + loss
 				rows[i].HasYourStats = true
-				rows[i].YourBids = s.TotalBids
-				rows[i].YourWins = s.Wins
-				rows[i].YourLosses = s.Losses
-				rows[i].YourWinRate = s.WinRate
-				totals.Bids += s.TotalBids
-				totals.Wins += s.Wins
-				totals.Losses += s.Losses
+				rows[i].YourBids = bids
+				rows[i].YourWins = wins
+				rows[i].YourLosses = loss
+				if bids > 0 {
+					rows[i].YourWinRate = float64(wins) / float64(bids)
+				}
+				totals.Bids += bids
+				totals.Wins += wins
+				totals.Losses += loss
 			}
 			if s, ok := mkt[rows[i].PlacementID]; ok && s.TotalBids > 0 {
 				rows[i].HasMarketplaceStats = true
@@ -222,9 +250,11 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 				WhatIsBidShading: "In a first-price auction the winner pays exactly what they bid. " +
 					"Bid shading lowers our DSP's bid toward the true clearing price so you win " +
 					"without overpaying — it reduces what you pay, not whether the auction is first-price.",
-				YourNumbers: "The 'your_*' figures are YOUR account's own: delivered impressions and the " +
-					"price YOU actually paid (clearing_price_usd) on each placement, plus your real " +
-					"bids / wins / losses and win rate on that inventory. Genuinely per-advertiser.",
+				YourNumbers: "The 'your_*' figures are YOUR account's own, sourced durably from " +
+					"ClickHouse: delivered impressions (your wins) and the price YOU actually paid " +
+					"(clearing_price_usd) on each placement, plus your losses (auction_losses) and the " +
+					"resulting win rate on that inventory. Genuinely per-advertiser, and they survive " +
+					"a DSP restart (no longer read from the DSP's in-memory counters).",
 				MarketplaceNumbers: "The 'marketplace_*' figures are our DSP's WHOLE-MARKETPLACE win/loss " +
 					"behaviour on this placement, aggregated across every advertiser we bid for — NOT " +
 					"your personal win rate. They show how competitive the inventory you bid on is.",
@@ -334,30 +364,73 @@ func dspMarketplaceStats(dspURL string) func(context.Context) (map[string]bidsha
 	}
 }
 
-// dspAdvertiserStats builds the advertiserStats dependency: it GETs the DSP's
-// per-(placement,advertiser) shading map for ONE account (?advertiser=) — the
-// advertiser's OWN win/loss, not the pooled marketplace view.
-func dspAdvertiserStats(dspURL string) func(context.Context, string) (map[string]bidshading.PlacementStats, error) {
-	return func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error) {
-		u := dspURL + routes.DSPShading + "?advertiser=" + url.QueryEscape(accountID)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+// reportingAdvertiserLosses builds the advertiserLosses dependency: it POSTs an
+// account-FORCED query to the reporting service for THIS advertiser's own durable
+// per-placement loss counts from the auction_losses ClickHouse table. The
+// account_id filter is set server-side (not from the client body), so it cannot
+// be widened. This is the phase-2 durability replacement for the DSP's in-memory
+// per-advertiser tally — the loss counts survive a DSP redeploy.
+func reportingAdvertiserLosses(reportingURL string, log *slog.Logger) func(context.Context, string, time.Time) (map[string]int64, error) {
+	return func(ctx context.Context, accountID string, since time.Time) (map[string]int64, error) {
+		params := analytics.QueryParams{
+			Table:      "auction_losses",
+			Metrics:    []string{"count"},
+			Dimensions: []string{"placement_id"},
+			Filters:    map[string]string{"account_id": accountID},
+			TimeFrom:   since,
+			TimeTo:     time.Now(),
+			Limit:      500,
+		}
+		body, err := json.Marshal(params)
 		if err != nil {
 			return nil, err
 		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reportingURL+routes.ReportingQuery, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("dsp shading (advertiser) returned %d", resp.StatusCode)
+			return nil, fmt.Errorf("reporting auction_losses query returned %d", resp.StatusCode)
 		}
-		var m map[string]bidshading.PlacementStats
-		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		var qr analytics.QueryResult
+		if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
 			return nil, err
 		}
-		return m, nil
+		return parseLossCounts(qr), nil
 	}
+}
+
+// parseLossCounts maps the reporting QueryResult (columns placement_id, count)
+// into a per-placement loss count map. Columns matched by name so a column-order
+// change upstream doesn't misalign.
+func parseLossCounts(qr analytics.QueryResult) map[string]int64 {
+	idx := map[string]int{}
+	for i, c := range qr.Columns {
+		idx[c] = i
+	}
+	pi, ci := idx["placement_id"], idx["count"]
+	out := map[string]int64{}
+	for _, row := range qr.Rows {
+		if pi < 0 || pi >= len(row) {
+			continue
+		}
+		pid := toStr(row[pi])
+		if pid == "" {
+			continue
+		}
+		var n int64
+		if ci >= 0 && ci < len(row) {
+			n = toInt64(row[ci])
+		}
+		out[pid] = n
+	}
+	return out
 }
 
 // --- JSON scalar coercion (the reporting result rows are []interface{}). ---

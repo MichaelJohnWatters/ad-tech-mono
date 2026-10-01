@@ -32,6 +32,32 @@ type AuctionWinEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// AuctionLossEvent is published by the DSP's loss-notice handler when our DSP's
+// bid for a KNOWN advertiser account loses an auction — the money-less,
+// durable counterpart to AuctionWinEvent. It exists to make the advertiser
+// bid-shading view's per-placement win/loss survive a DSP redeploy: losses used
+// to live ONLY in the DSP's in-memory bidshading tracker (per-pod, wiped on
+// restart). Consumed by Reporting → auction_losses (ClickHouse).
+//
+// AccountID is the RAW advertiser account (the DSP resolves it from the losing
+// campaign's warm-cache entry) — the SAME value the JWT session carries and
+// impressions.account_id uses, so the advertiser view can count losses
+// account-scoped and reconcile them against delivered impressions (wins).
+// Published best-effort and fire-and-forget off the nurl loss-notice path, so it
+// never adds latency to the DSP. Only emitted when account + placement are known.
+type AuctionLossEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id,omitempty"`
+	AuctionID     string    `json:"auction_id,omitempty"`
+	AccountID     string    `json:"account_id"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	PlacementID   string    `json:"placement_id"`
+	ClearingPrice float64   `json:"clearing_price_usd"`
+	LossReason    int32     `json:"loss_reason"`
+	Channel       string    `json:"channel,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
 // DataFeeSegment is one fee-bearing segment that rode a won bid request:
 // who owns the data and what it costs (CPM in MICRO-dollars).
 type DataFeeSegment struct {
