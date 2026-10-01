@@ -37,6 +37,11 @@ type inserter struct {
 	// back to https://{creative_domain} (legacy behaviour) so the seed
 	// still works in environments without a gateway.
 	landingURLBase string
+	// shopURLBase is the browser-reachable base of the demo advertiser shop
+	// (cmd/demoadv). Product-catalog product_url (the Dynamic Product Ad click
+	// target) becomes "{base}/models/{sku}". Default host-run shop (:9200);
+	// set to the in-cluster ingress for the browsable demo. See keys.Seed.ShopURLBase.
+	shopURLBase string
 }
 
 // brandSlugFromDomain reduces "acme-shoes.com" → "acme-shoes" and

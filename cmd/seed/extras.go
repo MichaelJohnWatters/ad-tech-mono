@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/idgen"
 	"github.com/lib/pq"
@@ -188,6 +189,13 @@ func (in *inserter) seedThemedSegments(ctx context.Context) error {
 		// (li-dogfood-cart-rt) targets both cart segments.
 		{"seg-shop-checkout", "adv-barkbox", "Shop Checkout Abandoners", "retargeting", "dsp_private",
 			`{"event":"site_visit","tag":"checkout","min_count":1,"window_days":30}`},
+		// The demo shop's PRODUCT page (/models/f150) fires tag "f150-interest"
+		// out of the box, so a single product-page view ENROLLS the visitor in
+		// real time (min_count 1 = the audience-rt fast path) — the clearest
+		// earned-audience beat: browse one product → retargetable in seconds.
+		// The chase campaign (li-dogfood-cart-rt) targets this segment too.
+		{"seg-shop-product", "adv-barkbox", "Shop Product Viewers", "retargeting", "dsp_private",
+			`{"event":"site_visit","tag":"f150-interest","min_count":1,"window_days":30}`},
 	}
 	for _, s := range segments {
 		if _, err := in.db.ExecContext(ctx, `
@@ -228,7 +236,11 @@ func (in *inserter) seedProductCatalog(ctx context.Context) error {
 		// "shop" → the retail theme SVG (no pet theme exists; retail is the
 		// closest catalog-shaped placeholder art).
 		imageURL := creativeAssetByTheme("barkbox-shop", 300, 250)
-		productURL := "http://localhost:9200/models/" + p.sku
+		shopBase := in.shopURLBase
+		if shopBase == "" {
+			shopBase = "http://localhost:9200"
+		}
+		productURL := strings.TrimRight(shopBase, "/") + "/models/" + p.sku
 		if _, err := in.db.ExecContext(ctx, `
 INSERT INTO products (account_id, sku, title, description, image_url, price_micros, currency, availability, product_url, category, complement_sku, source, origin_trace, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'in_stock', $7, $8, $9, 'seed', '', now(), now())
