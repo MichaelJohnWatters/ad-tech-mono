@@ -152,6 +152,13 @@ const (
 	// bid-shading state (win/loss counts, win rate, avg clearing price).
 	// Proxies to the DSP's internal DSPShading endpoint; JWT support:read.
 	APIStaffShading = apiPrefix + "/api/staff/shading"
+	// APIShading is the advertiser-facing bid-shading / win-rate transparency
+	// view. Tenant-scoped (reports:read): composes the advertiser's OWN competed-on
+	// placements + their OWN paid clearing CPM (from their account's impressions in
+	// ClickHouse) with the DSP-wide marketplace shading stats for those placements.
+	// Every number is labelled with what it measures — the DSP-wide per-placement
+	// stats are never dressed up as the advertiser's personal win/loss.
+	APIShading = apiPrefix + "/api/shading"
 	// APIAudienceRetargeting manages real-time retargeting audiences (the target
 	// of the /v1/t/rt pixel): GET lists them with live enrollment counts, POST
 	// creates one {name, tag, window_days}. Tenant-scoped.
