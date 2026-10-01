@@ -385,6 +385,77 @@
 
     <!-- ============ Demos (guided teaching flows) ============ -->
     <section id="section-demos" class="portal-section p-6 space-y-6 hidden">
+      {{ template "section-intro" "Two kinds of demo here. The cards lower down are IN-PORTAL guided runs (click &quot;Run demo&quot;). This first card is the MANUAL walkthrough: the browsable external demo sites (real third-party origins that embed the platform's live tags) and exactly what to click in each to show an end-to-end flow in a browser." }}
+
+      {{ template "card-start" (dict "title" "Demo sites — manual walkthrough" "subtitle" "Open each in a browser (no login — they're external origins). They embed the real adtech.js / VAST / pixel tags, so every click fires a live auction / impression / conversion against this stack.") }}
+      <div class="mb-4 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm">
+        <p class="font-medium mb-1">Before you start (one-time):</p>
+        <ol class="list-decimal ml-5 space-y-0.5 text-gray-600 dark:text-gray-300">
+          <li>Deploy the demo world: <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">global.demosites=true</code> → <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">make deploy-demosites</code> (publisher sites) + <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">make deploy-demostore</code> (the shop).</li>
+          <li>Map the hostnames: <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">make hosts</code> (points <code>*.adtech.local</code> at the Traefik ingress).</li>
+          <li>Seed demo data so ads fill + audiences exist: <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">make demo-data</code>.</li>
+        </ol>
+        <p class="mt-2 text-gray-500 text-xs">These are "outside" origins only in the sense that they run in a separate namespace and talk to the platform cross-origin over the public ingress — exactly as a real publisher/advertiser would. That's the development-time stand-in for true external traffic.</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700">
+            <tr>
+              <th class="px-3 py-2">Site</th>
+              <th class="px-3 py-2">Emulates</th>
+              <th class="px-3 py-2">Formats</th>
+              <th class="px-3 py-2">What to do (manual demo)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://primereel.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">PrimeReel</a><br><span class="text-xs text-gray-400">primereel.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">Netflix-style streaming home</td>
+              <td class="px-3 py-2 align-top">display · native · video · audio</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">Open the page — every slot fires a real auction. Watch the display + native slots fill and the video pre-roll play. Then check Reporting / the Trace inspector: the impressions attribute to <code>pub-demosite-primereel</code>.</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://chronicle.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">The Daily Chronicle</a><br><span class="text-xs text-gray-400">chronicle.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">News / article site</td>
+              <td class="px-3 py-2 align-top">display · native · video · audio</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">Multi-slot article page — best for the zero-slippage story: N slots on the page → exactly N impressions in ClickHouse. Open it, count the ad slots, then confirm the same count in Reporting.</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://gadget.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">Gadget Grotto</a><br><span class="text-xs text-gray-400">gadget.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">Tech review blog</td>
+              <td class="px-3 py-2 align-top">display · native · video · audio</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">A second distinct publisher tenant — open it alongside Chronicle to show per-publisher attribution + revshare differ by tenant, not one shared site.</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://soundwave.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">SoundWave</a><br><span class="text-xs text-gray-400">soundwave.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">Spotify-style audio app</td>
+              <td class="px-3 py-2 align-top">audio only</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">Press play — a real audio-ad auction runs and an audio ad plays in the stream. Shows the audio-only serving path (no display fallback).</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://twitchr.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">Twitchr</a><br><span class="text-xs text-gray-400">twitchr.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">Twitch-style live stream</td>
+              <td class="px-3 py-2 align-top">video (SSAI)</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">Start the live player. The ad is stitched <strong>server-side</strong> into the HLS manifest (SSAI) — not a client insert. Talking point: the ad and content are one continuous stream, beacons are HMAC-signed on segment fetch.</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 align-top"><a href="https://viewtube.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">ViewTube</a><br><span class="text-xs text-gray-400">viewtube.adtech.local</span></td>
+              <td class="px-3 py-2 align-top">YouTube-style UGC video</td>
+              <td class="px-3 py-2 align-top">video (client VAST) + display companion</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300">Play a video — the player fetches the <strong>VAST</strong> tag and inserts the pre-roll <strong>client-side</strong> (contrast Twitchr's server-side SSAI). A companion banner fills the display slot. Good for showing both insertion models side by side.</td>
+            </tr>
+            <tr class="bg-emerald-50 dark:bg-emerald-900/20">
+              <td class="px-3 py-2 align-top"><a href="https://shop.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline font-medium">The Shop</a><br><span class="text-xs text-gray-400">shop.adtech.local<br>(Premium Dog Food Co)</span></td>
+              <td class="px-3 py-2 align-top">Advertiser e-commerce store</td>
+              <td class="px-3 py-2 align-top">earned audiences · DPA · conversions</td>
+              <td class="px-3 py-2 align-top text-gray-600 dark:text-gray-300"><strong>The full money + audience loop.</strong> (1) Open a product page → the <code>/v1/t/rt</code> pixel enrolls you into "Shop Product Viewers" in ~2s (real-time retargeting). (2) With a publisher site open in another tab, the chase campaign now retargets you with a <strong>Dynamic Product Ad</strong> showing that exact product. (3) Click <strong>Complete purchase</strong> → a signed <code>/v1/t/conv</code> books a CPA conversion and suppresses you from the chase.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-3 text-xs text-gray-400">Verify any of these landed: Reporting (impressions/conversions), the Trace inspector (follow one request end-to-end), or "view as" the publisher/advertiser in <a href="#impersonate" class="text-info hover:underline">Impersonate</a>. The Shop's advertiser is <code>Premium Dog Food Co</code>; rich pre-seeded audiences live on <code>adv-initech</code>.</p>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Onboarding &amp; Expansion" "subtitle" "Watch a one-email upload become a cross-device audience — step by step, over an isolated synthetic account. Every run resets and replays.") }}
       <div class="flex items-center gap-3 mb-4">
         {{ template "button" (dict "label" "Run demo" "onclick" "runOnboardingDemo()") }}
