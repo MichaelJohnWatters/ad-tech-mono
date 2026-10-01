@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,20 @@ import (
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/objects"
 )
+
+// adVideoMP4 is a locally-generated "AD" card (big "AD" on a red background) used
+// as the VIDEO ad creative so a served ad is VISUALLY DISTINCT from the Big Buck
+// Bunny content clip. Previously both the content clip and the video creatives
+// were Big Buck Bunny, so a played pre-roll looked identical to the content and
+// the demo appeared to "just play content". Embedded (not fetched) so it's always
+// present after a seed with no external dependency. Regenerate: see assets/.
+//
+//go:embed assets/ad-video.mp4
+var adVideoMP4 []byte
+
+// adVideoKey is the object-store key the DSP creative profiles point their video
+// media_url at (http://<base>/v1/creatives/media/ad-video.mp4).
+const adVideoKey = "media/ad-video.mp4"
 
 // sampleMedia is the curated set of video/audio files the demo uses for video
 // ad creatives, the content clip, and audio spots. They're pulled once from
@@ -39,6 +54,14 @@ func uploadSampleMedia(ctx context.Context, store objects.Store, bucket string, 
 		log.Warn("object store unavailable, skipping sample media upload; video/audio will fall back to the external /v1/media proxy")
 		return
 	}
+	// The generated "AD" video creative is embedded (not fetched) — upload it
+	// first, always overwriting so a regenerated card propagates on the next seed.
+	if err := store.Put(ctx, bucket, adVideoKey, bytes.NewReader(adVideoMP4), int64(len(adVideoMP4)), "video/mp4"); err != nil {
+		log.Warn("ad-video creative upload failed", "key", adVideoKey, "error", err)
+	} else {
+		log.Info("ad-video creative synced", "key", adVideoKey, "bytes", len(adVideoMP4), "bucket", bucket)
+	}
+
 	client := &http.Client{Timeout: 60 * time.Second}
 	uploaded, skipped, failed := 0, 0, 0
 	for _, m := range sampleMedia {
