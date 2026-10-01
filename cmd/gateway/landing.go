@@ -132,6 +132,17 @@ var landingThemes = map[string]landingTheme{
 		CTAFg:   "#1b3a3a",
 		Muted:   "#a8c4c0",
 	},
+	"ford": {
+		Brand:   "Ford",
+		Glyph:   "🚙",
+		Tagline: "Built Ford Tough.",
+		CTA:     "Build & Price",
+		BG:      "linear-gradient(135deg,#00142e,#002a5c)",
+		FG:      "#fff",
+		Accent:  "#0276b3",
+		CTAFg:   "#fff",
+		Muted:   "#9fb6d4",
+	},
 	// Direct-sold + house demand sources.
 	"acme": {
 		Brand:   "Acme Corp",

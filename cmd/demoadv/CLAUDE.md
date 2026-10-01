@@ -16,13 +16,16 @@ fires retargeting → checkout fires a signed S2S conversion → CPA settles.
   with `make deploy-demostore` (scoped `helm template --show-only | kubectl
   apply`, same pattern + copied wildcard cert as `deploy-demosites`; it also
   runs as part of `make deploy-demosites`). It is pointed at the REAL seeded
-  retargeting advertiser (`demostore.accountId` = adv-barkbox = "Premium Dog
-  Food Co") and hands the browser HTTPS ingress pixel/SDK URLs
+  retargeting advertiser (`demostore.accountId` = adv-barkbox, display name
+  "Ford Motors") and hands the browser HTTPS ingress pixel/SDK URLs
   (`tracker.<domain>` / `gateway.<domain>`), so the pixel tags match real
   retargeting rules and there is no mixed-content block. This is the EARNED-
   audience demo: browse → `/v1/t/rt` → audience-rt enrolls in real time → the
-  chase campaign (`li-dogfood-cart-rt`) bids → DPA renders the viewed SKU →
-  purchase suppresses. `make hosts` picks up `shop.<domain>` from the chart.
+  chase campaign (`li-dogfood-cart-rt`, "Ford Motors - Cart Retargeting") bids →
+  DPA renders the viewed SKU → purchase suppresses. `make hosts` picks up
+  `shop.<domain>` from the chart. (The account/campaign/segment KEYS are still
+  `adv-barkbox`/`li-dogfood-*`/`seg-dog-*` for ID stability — only the display
+  names + catalog were re-themed to Ford.)
 - `make demoadv` / `go run ./cmd/demoadv` — host process on `:9200`
   (`DEMOADV_PORT`), the zero-k8s fallback; for a SECOND cluster use the
   self-contained manifest `cmd/demoadv/deploy/demoadv.yaml`.

@@ -20,8 +20,8 @@
          email, you're an anonymous guest — captured in the cart audience but unreachable on other sites.
          Saving it hashes the email in your browser and re-fires the pixel with the hash.</p>
     </div>
-    <p class="price">$38,000</p>
-    <button class="btn alt" onclick="convert('purchase', 38000); document.getElementById('done').style.display='block';">
+    <p class="price">${{.Cfg.Price}}</p>
+    <button class="btn alt" onclick="convert('purchase', {{.Cfg.Price}}); document.getElementById('done').style.display='block';">
       Complete purchase
     </button>
     <p id="done" style="display:none;color:#0a7d33;font-weight:600;margin-top:14px">

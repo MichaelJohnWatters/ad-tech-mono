@@ -117,7 +117,7 @@ spec:
             - name: DEMOADV_PORT
               value: {{ $port | quote }}
             {{- /* The REAL seeded advertiser the retargeting audience + catalog
-                   belong to (adv-barkbox = Premium Dog Food Co). Empty → the
+                   belong to (adv-barkbox = Ford Motors). Empty → the
                    demoadv default "demo-advertiser" (fires pixels, matches no
                    rule) — which would defeat the earned-audience demo. */ -}}
             {{- if $s.accountId }}
@@ -135,6 +135,10 @@ spec:
             {{- if $s.sku }}
             - name: DEMOADV_SKU
               value: {{ $s.sku | quote }}
+            {{- end }}
+            {{- if $s.price }}
+            - name: DEMOADV_PRICE
+              value: {{ $s.price | quote }}
             {{- end }}
             # Browser-reachable PUBLIC ingress URLs — the browser fetches these
             # cross-origin. MUST be HTTPS/ingress-reachable (no mixed content),

@@ -127,8 +127,8 @@ VALUES ($1, $2, $3, now()) ON CONFLICT (segment_id, user_id) DO NOTHING`,
 // publishers (profiles/publishers/themed.yaml) — the hourly profile-builder
 // evaluates the category rules over behaviour_signals and enrolls them. The
 // themed campaigns in profiles/dsps/internal.yaml target these segments, so
-// verification reads like English: the dog food ad wins for dog people once
-// (and only once) they've browsed enough dog pages.
+// verification reads like English: the Ford ad wins for truck intenders once
+// (and only once) they've browsed enough matching pages.
 //
 // The owning accounts are created by the campaign pass (upsertAccounts runs
 // before SeedFeatureBaseline), so this only has to attach segments — plus
@@ -136,7 +136,7 @@ VALUES ($1, $2, $3, now()) ON CONFLICT (segment_id, user_id) DO NOTHING`,
 // memorable-world purpose.
 func (in *inserter) seedThemedSegments(ctx context.Context) error {
 	names := map[string]string{
-		"adv-barkbox":   "Premium Dog Food Co",
+		"adv-barkbox":   "Ford Motors",
 		"adv-whiskerco": "Whisker & Co Cat Treats",
 		"adv-beanbarn":  "Bean Barn Roasters",
 		"adv-sweatlabs": "Sweat Labs Nutrition",
@@ -156,7 +156,7 @@ func (in *inserter) seedThemedSegments(ctx context.Context) error {
 	}{
 		// The four flagship interest segments: ≥3 (or ≥2) consented visits
 		// to matching-category pages inside 30 days.
-		{"seg-dog-lovers", "adv-barkbox", "Dog Lovers", "behavioral", "dsp_private",
+		{"seg-dog-lovers", "adv-barkbox", "Truck Intenders", "behavioral", "dsp_private",
 			`{"event":"request","category":"dogs","min_count":3,"window_days":30}`},
 		{"seg-cat-lovers", "adv-whiskerco", "Cat Lovers", "behavioral", "dsp_private",
 			`{"event":"request","category":"cats","min_count":3,"window_days":30}`},
@@ -166,21 +166,21 @@ func (in *inserter) seedThemedSegments(ctx context.Context) error {
 			`{"event":"request","category":"coffee","min_count":3,"window_days":30}`},
 		{"seg-fitness-fans", "adv-sweatlabs", "Fitness Fans", "behavioral", "dsp_private",
 			`{"event":"request","category":"fitness","min_count":2,"window_days":30}`},
-		// Barkbox's own coffee-interest rule, existing only so the composite
+		// Ford's own commuter-interest rule, existing only so the composite
 		// below can reference same-account segments (composite rules are
 		// account-scoped).
-		{"seg-coffee-browsers", "adv-barkbox", "Coffee Browsers (Barkbox)", "behavioral", "dsp_private",
+		{"seg-coffee-browsers", "adv-barkbox", "Commuters (Ford)", "behavioral", "dsp_private",
 			`{"event":"request","category":"coffee","min_count":2,"window_days":30}`},
 		// Derived kinds, one each, so every rule shape has a readable demo:
-		// composite (dog people who also browse coffee — the dog-cafe-regular
-		// persona) and lookalike (seeded from dog-lovers).
-		{"seg-dog-cafe-crowd", "adv-barkbox", "Dog Cafe Crowd", "composite", "dsp_private",
+		// composite (truck intenders who also commute — the weekend-adventurer
+		// persona) and lookalike (seeded from truck intenders).
+		{"seg-dog-cafe-crowd", "adv-barkbox", "Weekend Adventurers", "composite", "dsp_private",
 			fmt.Sprintf(`{"kind":"composite","all_of":[%q,%q]}`, dogLovers, coffeeBrowsers)},
-		{"seg-dog-lookalikes", "adv-barkbox", "Dog Lover Lookalikes", "lookalike", "dsp_private",
+		{"seg-dog-lookalikes", "adv-barkbox", "Truck Intender Lookalikes", "lookalike", "dsp_private",
 			fmt.Sprintf(`{"kind":"lookalike","seed_segment":%q,"min_similarity":0.5}`, dogLovers)},
 		// The fast-path demo: audience-rt enrolls a /v1/t/rt?tag=dogfood-cart
 		// visitor within seconds (min_count 1 = the real-time boundary).
-		{"seg-dogfood-cart", "adv-barkbox", "Dog Food Cart Abandoners", "retargeting", "dsp_private",
+		{"seg-dogfood-cart", "adv-barkbox", "Ford Cart Abandoners", "retargeting", "dsp_private",
 			`{"event":"site_visit","tag":"dogfood-cart","min_count":1,"window_days":30}`},
 		// Same rule, tag "checkout" — cmd/demoadv's checkout page fires that
 		// tag out of the box, so running the demo shop as this advertiser
@@ -212,7 +212,7 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type,
 	return nil
 }
 
-// seedProductCatalog gives Premium Dog Food Co (adv-barkbox — the demoadv shop
+// seedProductCatalog gives Ford Motors (adv-barkbox — the demoadv shop
 // advertiser) a product catalog so the Dynamic Product Ads path has something
 // to render (slice 3) and suppress by SKU (slice 4) out of the box. SKUs match
 // the demoadv shop grid; prices are micro-dollars (money convention). Idempotent
@@ -224,18 +224,22 @@ func (in *inserter) seedProductCatalog(ctx context.Context) error {
 		priceMicros          int64
 		complementSKU        string
 	}{
-		{"DOG-KIBBLE-12KG", "Grain-Free Kibble 12kg", "dry-food", 38_990_000, "DOG-TREAT-BOX"},
-		{"DOG-KIBBLE-3KG", "Grain-Free Kibble 3kg", "dry-food", 12_990_000, "DOG-TREAT-BOX"},
-		{"DOG-WET-24PK", "Wet Food Variety 24-pack", "wet-food", 29_990_000, "DOG-BOWL-STEEL"},
-		{"DOG-TREAT-BOX", "Training Treats Box", "treats", 8_490_000, "DOG-KIBBLE-12KG"},
-		{"DOG-BOWL-STEEL", "Stainless Steel Bowl", "accessories", 15_000_000, "DOG-KIBBLE-3KG"},
-		{"DOG-BED-LARGE", "Orthopedic Dog Bed (L)", "accessories", 64_990_000, "DOG-BLANKET"},
-		{"DOG-BLANKET", "Fleece Dog Blanket", "accessories", 19_990_000, "DOG-BED-LARGE"},
+		{"FORD-F150", "F-150", "trucks", 38_000_000_000, "FORD-MAVERICK"},
+		{"FORD-MUSTANG", "Mustang", "cars", 32_000_000_000, "FORD-MACHE"},
+		{"FORD-EXPLORER", "Explorer", "suv", 42_000_000_000, "FORD-BRONCO"},
+		{"FORD-BRONCO", "Bronco", "suv", 40_000_000_000, "FORD-EXPLORER"},
+		{"FORD-ESCAPE", "Escape", "suv", 30_000_000_000, "FORD-MAVERICK"},
+		{"FORD-MAVERICK", "Maverick", "trucks", 26_000_000_000, "FORD-F150"},
+		{"FORD-MACHE", "Mustang Mach-E", "ev", 45_000_000_000, "FORD-MUSTANG"},
 	}
 	for _, p := range products {
-		// "shop" → the retail theme SVG (no pet theme exists; retail is the
-		// closest catalog-shaped placeholder art).
-		imageURL := creativeAssetByTheme("barkbox-shop", 300, 250)
+		// The AUTO theme SVG (auto-300x250.svg) — catalog-shaped placeholder art
+		// for the Ford models. Must be an ABSOLUTE, browser-reachable URL: the DPA
+		// renders this <img> on the PUBLISHER's origin (cross-site chase), so a
+		// relative "themes/…" path would resolve against the publisher host and
+		// 404 (broken-image icon). Prefix with the same creatives base every other
+		// creative asset uses.
+		imageURL := strings.TrimRight(in.creativeAssetBase, "/") + "/" + creativeAssetByTheme("auto", 300, 250)
 		shopBase := in.shopURLBase
 		if shopBase == "" {
 			shopBase = "http://localhost:9200"
@@ -248,7 +252,7 @@ ON CONFLICT (account_id, sku) DO UPDATE SET
   title = EXCLUDED.title, image_url = EXCLUDED.image_url, price_micros = EXCLUDED.price_micros,
   product_url = EXCLUDED.product_url, category = EXCLUDED.category,
   complement_sku = EXCLUDED.complement_sku, updated_at = now()`,
-			account, p.sku, p.title, p.title+" — premium quality for your best friend.",
+			account, p.sku, p.title, "The all-new Ford "+p.title+" — built Ford tough.",
 			imageURL, p.priceMicros, productURL, p.category, p.complementSKU); err != nil {
 			return fmt.Errorf("seed product %s: %w", p.sku, err)
 		}
