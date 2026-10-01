@@ -714,6 +714,13 @@ services:
         value: "http://adserver:8085"
       - name: PUBLISHER_ADSERVER_TRACKER_URL
         value: "http://localhost:8080"
+      # HTTPS, browser-reachable base swapped in for ad media + beacons ONLY on
+      # requests arriving via the HTTPS ingress (X-Forwarded-Proto: https, set
+      # by Traefik). Prevents mixed-content blocking on the https://*.adtech.local
+      # demo sites. The localhost/bridge/e2e path (no such header) keeps using
+      # PUBLISHER_ADSERVER_TRACKER_URL unchanged.
+      - name: PUBLISHER_ADSERVER_PUBLIC_URL_SECURE
+        value: "https://gateway.adtech.local"
       - name: DATABASE_URL
         value: "postgres://adtech_app:adtech-app-local@postgres:5432/adtech?sslmode=disable"
       - name: NATS_URL

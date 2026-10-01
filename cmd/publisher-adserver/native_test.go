@@ -111,7 +111,7 @@ func TestNativeHandlerNoBidHouseAd(t *testing.T) {
 		ID: "33333333-3333-4333-8333-333333333333", Format: houseads.FormatNative,
 		Name: "House Native", Markup: houseNativeHTML, Enabled: true, Weight: 1,
 	})
-	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, houseFn)
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", alwaysStub, houseFn)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
 
@@ -132,7 +132,7 @@ func TestNativeHandlerNoBidNoHouseAd(t *testing.T) {
 	ssp := nobidNativeSSP(t)
 	defer ssp.Close()
 
-	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
+	h := nativeHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", alwaysStub, noHouseAds)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/native?placement_id=pl-1", nil))
 	if rec.Code != http.StatusNoContent {

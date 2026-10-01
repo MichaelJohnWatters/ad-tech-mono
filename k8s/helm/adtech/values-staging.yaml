@@ -115,6 +115,10 @@ services:
         value: "https://tracker.REPLACE.sslip.io"   # ← match global.domain
       - name: PUBLISHER_ADSERVER_PUBLIC_URL
         value: "https://pubad.REPLACE.sslip.io"     # ← match global.domain
+      # HTTPS base for media+beacons on X-Forwarded-Proto: https requests (the
+      # gateway origin the browser can reach); point at the public gateway host.
+      - name: PUBLISHER_ADSERVER_PUBLIC_URL_SECURE
+        value: "https://gateway.REPLACE.sslip.io"   # ← match global.domain
   tracker:
     hpa: { minReplicas: 3, maxReplicas: 8 }
     # Durable event spool (see exchange note above). Per-replica PVC — each tracker

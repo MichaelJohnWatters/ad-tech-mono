@@ -33,7 +33,7 @@ import (
 // Modern audio ad serving uses VAST 4.x audio MediaFiles rather than the
 // deprecated DAAST document, so we reuse pkg/vast — the only difference from
 // video is the MediaFile MIME type and the beacon endpoint.
-func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
+func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -41,6 +41,9 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() boo
 			traceID = fmt.Sprintf("audio-%d", time.Now().UnixMilli())
 		}
 		reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
+
+		// HTTPS ingress → secure base for beacons + re-hosted media; else unchanged.
+		beaconBase := secureTrackerBase(r, trackerURL, secureBase)
 
 		placementID := r.URL.Query().Get("placement_id")
 		if placementID == "" {
@@ -80,11 +83,13 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() boo
 			AdvertiserID: winner.AdvertiserID,
 			BidModel:     defaultStr2(winner.BidModel, "cpm"),
 			DealID:       winner.DealID,
-			TrackerURL:   trackerURL,
+			TrackerURL:   beaconBase,
 			LandingURL:   landingForDomain(winner.AdvertiserDomain),
 			URLTTL:       time.Hour,
 		}
 
+		// Re-host the audio media URL on an HTTPS ingress request; no-op otherwise.
+		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
 		spec := buildAudioVASTSpec(winner, macroCtx)
 		xmlBytes, err := vast.BuildLinearAd(spec)
 		if err != nil {

@@ -48,7 +48,7 @@ func TestAudioHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", alwaysStub, noHouseAds)
 
 	// Visitor is an EU GDPR-consented listener — signals must reach the SSP.
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio&geo=DEU&gdpr=1&consent=abc&device=mobile", nil)
@@ -109,7 +109,7 @@ func TestAudioHandlerNoBidHouseAd(t *testing.T) {
 		ID: "11111111-1111-4111-8111-111111111111", Format: houseads.FormatAudio,
 		Name: "House Audio", Markup: houseAudioVAST, Enabled: true, Weight: 1,
 	})
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, houseFn)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", alwaysStub, houseFn)
 	req := httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -135,7 +135,7 @@ func TestAudioHandlerNoBidNoHouseAd(t *testing.T) {
 	}))
 	defer ssp.Close()
 
-	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, alwaysStub, noHouseAds)
+	h := audioHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", alwaysStub, noHouseAds)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/audio?placement_id=pl-sim-audio", nil))
 	if rec.Code != 200 {
