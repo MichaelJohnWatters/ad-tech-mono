@@ -38,7 +38,20 @@ func TestShadingHandler(t *testing.T) {
 			"pl-cross": {TotalBids: 99, Wins: 90, WinRate: 0.9},
 		}, nil
 	}
-	deps := shadingDeps{placementSpend: spend, marketplaceStats: mkt}
+	// advStats is THIS advertiser's own per-placement win/loss. Asserts tenant
+	// scope, and includes pl-3 — a placement the advertiser bid on but never
+	// delivered an impression (lost), to exercise the union.
+	advStats := func(_ context.Context, accountID string) (map[string]bidshading.PlacementStats, error) {
+		if accountID != "adv-1" {
+			t.Fatalf("advertiserStats got account %q, want adv-1 (tenant scope leaked)", accountID)
+		}
+		return map[string]bidshading.PlacementStats{
+			"pl-1": {TotalBids: 8, Wins: 5, Losses: 3, WinRate: 0.625, AvgClearing: 2.1},
+			"pl-2": {TotalBids: 4, Wins: 2, Losses: 2, WinRate: 0.5},
+			"pl-3": {TotalBids: 6, Wins: 0, Losses: 6, WinRate: 0}, // bid, never delivered
+		}, nil
+	}
+	deps := shadingDeps{placementSpend: spend, marketplaceStats: mkt, advertiserStats: advStats}
 
 	// Advertiser GET → 200, their own numbers + marketplace context only for
 	// placements they competed on.
@@ -54,28 +67,39 @@ func TestShadingHandler(t *testing.T) {
 	if resp.AccountID != "adv-1" {
 		t.Errorf("account_id=%q, want adv-1", resp.AccountID)
 	}
-	if len(resp.Placements) != 2 {
-		t.Fatalf("placements=%d, want 2 (only inventory the advertiser bid on)", len(resp.Placements))
+	// 2 delivered (pl-1, pl-2) + pl-3 unioned in from the advertiser's own tracker
+	// stats (bid but never delivered). pl-cross (marketplace-only) must NOT appear.
+	if len(resp.Placements) != 3 {
+		t.Fatalf("placements=%d, want 3 (2 delivered + 1 bid-only union)", len(resp.Placements))
 	}
 	for _, p := range resp.Placements {
 		if p.PlacementID == "pl-cross" {
 			t.Fatalf("cross-tenant placement pl-cross leaked into advertiser view")
 		}
 	}
-	// Totals: 150 impressions, $350 spend, avg $350/150.
+	// Money totals: 150 impressions, $350 spend (pl-3 delivered nothing).
 	if resp.YourTotals.Impressions != 150 || resp.YourTotals.SpendUSD != 350 {
 		t.Errorf("totals imp=%d spend=%.2f, want 150 / 350", resp.YourTotals.Impressions, resp.YourTotals.SpendUSD)
 	}
-	// pl-1 sorts first (bigger spend), has marketplace stats; pl-2 has none.
+	// Per-advertiser win/loss totals: wins 5+2+0=7, losses 3+2+6=11, bids 8+4+6=18.
+	if resp.YourTotals.Wins != 7 || resp.YourTotals.Losses != 11 || resp.YourTotals.Bids != 18 {
+		t.Errorf("win/loss totals = %+v, want wins 7 / losses 11 / bids 18", resp.YourTotals)
+	}
 	byID := map[string]shadingPlacementRow{}
 	for _, p := range resp.Placements {
 		byID[p.PlacementID] = p
 	}
-	if p := byID["pl-1"]; !p.HasMarketplaceStats || p.MarketplaceWinRate != 0.4 || p.YourAvgClearingCPM != 2.00 {
+	// pl-1: own win/loss (genuinely per-advertiser) + marketplace context + own spend.
+	if p := byID["pl-1"]; !p.HasYourStats || p.YourWins != 5 || p.YourLosses != 3 || p.YourWinRate != 0.625 ||
+		!p.HasMarketplaceStats || p.MarketplaceWinRate != 0.4 || p.YourAvgClearingCPM != 2.00 {
 		t.Errorf("pl-1 wrong: %+v", p)
 	}
 	if p := byID["pl-2"]; p.HasMarketplaceStats {
 		t.Errorf("pl-2 should have NO marketplace stats (not in tracker): %+v", p)
+	}
+	// pl-3: bid-only union — own win/loss present, zero delivered impressions.
+	if p := byID["pl-3"]; !p.HasYourStats || p.YourBids != 6 || p.YourImpressions != 0 {
+		t.Errorf("pl-3 (bid-only union) wrong: %+v", p)
 	}
 
 	// Publisher → 403 (advertiser view only).
@@ -102,6 +126,8 @@ func TestShadingHandler(t *testing.T) {
 	// Marketplace unavailable → still 200 with the advertiser's own numbers
 	// (the per-advertiser part doesn't depend on the DSP).
 	degraded := shadingDeps{placementSpend: spend, marketplaceStats: func(context.Context) (map[string]bidshading.PlacementStats, error) {
+		return nil, context.DeadlineExceeded
+	}, advertiserStats: func(context.Context, string) (map[string]bidshading.PlacementStats, error) {
 		return nil, context.DeadlineExceeded
 	}}
 	rec = httptest.NewRecorder()

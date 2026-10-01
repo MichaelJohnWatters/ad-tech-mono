@@ -39,49 +39,61 @@ type Record struct {
 }
 
 // Tracker accumulates win/loss data per placement and campaign.
+//
+// `data` is the POOLED per-placement tally that DRIVES bid shading — aggregated
+// across every advertiser our DSP bids for on that placement (lots of data →
+// fast curve convergence; this is what the bid loop reads). `byAdv` is a SECOND,
+// reporting-only tally keyed by (placement, advertiser) so the advertiser portal
+// can show each advertiser its OWN win/loss without changing the bid decision.
+// Both are in-memory map appends on the win/loss nurl path — no hot-path I/O.
 type Tracker struct {
-	mu   sync.RWMutex
-	data map[string][]Record // key: "placement_id" or "placement_id:campaign_id"
+	mu    sync.RWMutex
+	data  map[string][]Record // pooled, key: placement_id — drives shading
+	byAdv map[string][]Record // reporting, key: advKey(placement, advertiser)
 }
 
 // NewTracker creates a win/loss tracker.
 func NewTracker() *Tracker {
-	return &Tracker{data: make(map[string][]Record)}
+	return &Tracker{data: make(map[string][]Record), byAdv: make(map[string][]Record)}
 }
 
-// RecordWin records a winning bid.
-func (t *Tracker) RecordWin(placementID string, ourBid, clearingPrice float64) {
+// advKey composes the (placement, advertiser) reporting key. The NUL separator
+// can't appear in an id, so there's no ambiguity between the two components.
+func advKey(placementID, advertiserID string) string {
+	return placementID + "\x00" + advertiserID
+}
+
+// RecordWin records a winning bid. advertiserID (the winning campaign's account)
+// may be "" — then only the pooled per-placement tally is updated.
+func (t *Tracker) RecordWin(placementID, advertiserID string, ourBid, clearingPrice float64) {
+	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: true}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.data[placementID] = append(t.data[placementID], Record{
-		OurBid:        ourBid,
-		ClearingPrice: clearingPrice,
-		Won:           true,
-	})
+	t.data[placementID] = append(t.data[placementID], rec)
+	if advertiserID != "" {
+		k := advKey(placementID, advertiserID)
+		t.byAdv[k] = append(t.byAdv[k], rec)
+	}
 }
 
-// RecordLoss records a losing bid.
-func (t *Tracker) RecordLoss(placementID string, ourBid, clearingPrice float64, reason LossReason) {
+// RecordLoss records a losing bid. advertiserID may be "" (pooled tally only).
+func (t *Tracker) RecordLoss(placementID, advertiserID string, ourBid, clearingPrice float64, reason LossReason) {
+	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: false, Reason: reason}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.data[placementID] = append(t.data[placementID], Record{
-		OurBid:        ourBid,
-		ClearingPrice: clearingPrice,
-		Won:           false,
-		Reason:        reason,
-	})
+	t.data[placementID] = append(t.data[placementID], rec)
+	if advertiserID != "" {
+		k := advKey(placementID, advertiserID)
+		t.byAdv[k] = append(t.byAdv[k], rec)
+	}
 }
 
-// Stats returns aggregate stats for a placement.
-func (t *Tracker) Stats(placementID string) PlacementStats {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	records := t.data[placementID]
+// statsFromRecords aggregates a record slice. Shared by the pooled Stats and the
+// per-advertiser StatsFor so the two can never diverge in how they count.
+func statsFromRecords(records []Record) PlacementStats {
 	if len(records) == 0 {
 		return PlacementStats{}
 	}
-
 	var stats PlacementStats
 	var totalClearing float64
 	for _, r := range records {
@@ -102,6 +114,38 @@ func (t *Tracker) Stats(placementID string) PlacementStats {
 	stats.WinRate = float64(stats.Wins) / float64(stats.TotalBids)
 	stats.AvgClearing = totalClearing / float64(stats.TotalBids)
 	return stats
+}
+
+// Stats returns POOLED aggregate stats for a placement (the shading view).
+func (t *Tracker) Stats(placementID string) PlacementStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return statsFromRecords(t.data[placementID])
+}
+
+// StatsFor returns one advertiser's OWN aggregate stats for a placement —
+// reporting only (this does NOT feed the bid decision). Empty if that advertiser
+// has no recorded bids on the placement.
+func (t *Tracker) StatsFor(placementID, advertiserID string) PlacementStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return statsFromRecords(t.byAdv[advKey(placementID, advertiserID)])
+}
+
+// AdvertiserStats returns every placement an advertiser has bid data on, mapped
+// to that advertiser's own stats. Powers the per-advertiser portal view.
+func (t *Tracker) AdvertiserStats(advertiserID string) map[string]PlacementStats {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]PlacementStats)
+	suffix := "\x00" + advertiserID
+	for k, recs := range t.byAdv {
+		if len(k) > len(suffix) && k[len(k)-len(suffix):] == suffix {
+			placementID := k[:len(k)-len(suffix)]
+			out[placementID] = statsFromRecords(recs)
+		}
+	}
+	return out
 }
 
 // PlacementStats summarises win/loss performance for a placement.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -37,6 +38,16 @@ type shadingPlacementRow struct {
 	YourAvgClearingCPM float64 `json:"your_avg_clearing_cpm"`
 	YourSpendUSD       float64 `json:"your_spend_usd"`
 
+	// --- The advertiser's OWN win/loss (genuinely per-advertiser). ---
+	// From the DSP's per-(placement,advertiser) tally — THIS account's own bids,
+	// wins, and losses on the placement. Unlike marketplace_* below, these ARE
+	// yours. HasYourStats says whether the DSP has recorded bids for you here.
+	HasYourStats bool    `json:"has_your_stats"`
+	YourBids     int     `json:"your_bids"`
+	YourWins     int     `json:"your_wins"`
+	YourLosses   int     `json:"your_losses"`
+	YourWinRate  float64 `json:"your_win_rate"`
+
 	// --- DSP-WIDE marketplace context for this placement (NOT this advertiser). ---
 	// These come from the DSP's per-placement shading tracker, which aggregates
 	// across ALL advertisers our DSP bids for. Populated only when the tracker has
@@ -66,6 +77,10 @@ type shadingTotals struct {
 	Impressions    int64   `json:"impressions"`
 	SpendUSD       float64 `json:"spend_usd"`
 	AvgClearingCPM float64 `json:"avg_clearing_cpm"`
+	Bids           int     `json:"bids"`
+	Wins           int     `json:"wins"`
+	Losses         int     `json:"losses"`
+	WinRate        float64 `json:"win_rate"`
 }
 
 // shadingExplanations is the machine-readable copy that labels exactly what each
@@ -84,6 +99,9 @@ type shadingDeps struct {
 	placementSpend func(ctx context.Context, accountID string, since time.Time) ([]shadingPlacementRow, error)
 	// marketplaceStats returns the DSP-wide per-placement shading tracker state.
 	marketplaceStats func(ctx context.Context) (map[string]bidshading.PlacementStats, error)
+	// advertiserStats returns THIS advertiser's OWN per-placement win/loss from the
+	// DSP tracker's per-(placement,advertiser) tally (genuinely per-advertiser).
+	advertiserStats func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error)
 }
 
 // shadingHandler serves GET /v1/api/shading — the advertiser-facing bid-shading /
@@ -130,17 +148,47 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// DSP-wide marketplace context. If the DSP is unreachable we still return
-		// the advertiser's own honest numbers (the per-advertiser part doesn't
-		// depend on it) — marketplace fields simply stay unpopulated.
+		// The advertiser's OWN per-placement win/loss (genuinely per-advertiser,
+		// from the DSP's per-(placement,advertiser) tally). Non-fatal if the DSP is
+		// unreachable — the money numbers above still stand.
+		mine, err := deps.advertiserStats(ctx, accountID)
+		if err != nil {
+			log.Warn("shading: per-advertiser stats unavailable", "account", accountID, "error", err)
+			mine = nil
+		}
+		// DSP-wide marketplace context. Also non-fatal — marketplace_* just stays
+		// unpopulated if the DSP can't be reached.
 		mkt, err := deps.marketplaceStats(ctx)
 		if err != nil {
 			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
 			mkt = nil
 		}
 
+		// Union: the money rows are delivered impressions (wins only). Add any
+		// placement the advertiser BID on but never delivered (lost, or won but
+		// unserved) so the win/loss picture is complete, not win-only.
+		seen := make(map[string]bool, len(rows))
+		for i := range rows {
+			seen[rows[i].PlacementID] = true
+		}
+		for pid := range mine {
+			if !seen[pid] {
+				rows = append(rows, shadingPlacementRow{PlacementID: pid})
+			}
+		}
+
 		var totals shadingTotals
 		for i := range rows {
+			if s, ok := mine[rows[i].PlacementID]; ok && s.TotalBids > 0 {
+				rows[i].HasYourStats = true
+				rows[i].YourBids = s.TotalBids
+				rows[i].YourWins = s.Wins
+				rows[i].YourLosses = s.Losses
+				rows[i].YourWinRate = s.WinRate
+				totals.Bids += s.TotalBids
+				totals.Wins += s.Wins
+				totals.Losses += s.Losses
+			}
 			if s, ok := mkt[rows[i].PlacementID]; ok && s.TotalBids > 0 {
 				rows[i].HasMarketplaceStats = true
 				rows[i].MarketplaceBids = s.TotalBids
@@ -155,6 +203,9 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 		totals.Placements = len(rows)
 		if totals.Impressions > 0 {
 			totals.AvgClearingCPM = totals.SpendUSD / float64(totals.Impressions)
+		}
+		if totals.Bids > 0 {
+			totals.WinRate = float64(totals.Wins) / float64(totals.Bids)
 		}
 
 		// Stable order: biggest spend first (what the advertiser cares about).
@@ -171,9 +222,9 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 				WhatIsBidShading: "In a first-price auction the winner pays exactly what they bid. " +
 					"Bid shading lowers our DSP's bid toward the true clearing price so you win " +
 					"without overpaying — it reduces what you pay, not whether the auction is first-price.",
-				YourNumbers: "The 'your_*' figures are YOUR account's own delivered impressions and the " +
-					"price YOU actually paid (clearing_price_usd) on each placement over the window. " +
-					"These are genuinely per-advertiser.",
+				YourNumbers: "The 'your_*' figures are YOUR account's own: delivered impressions and the " +
+					"price YOU actually paid (clearing_price_usd) on each placement, plus your real " +
+					"bids / wins / losses and win rate on that inventory. Genuinely per-advertiser.",
 				MarketplaceNumbers: "The 'marketplace_*' figures are our DSP's WHOLE-MARKETPLACE win/loss " +
 					"behaviour on this placement, aggregated across every advertiser we bid for — NOT " +
 					"your personal win rate. They show how competitive the inventory you bid on is.",
@@ -274,6 +325,32 @@ func dspMarketplaceStats(dspURL string) func(context.Context) (map[string]bidsha
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("dsp shading returned %d", resp.StatusCode)
+		}
+		var m map[string]bidshading.PlacementStats
+		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+			return nil, err
+		}
+		return m, nil
+	}
+}
+
+// dspAdvertiserStats builds the advertiserStats dependency: it GETs the DSP's
+// per-(placement,advertiser) shading map for ONE account (?advertiser=) — the
+// advertiser's OWN win/loss, not the pooled marketplace view.
+func dspAdvertiserStats(dspURL string) func(context.Context, string) (map[string]bidshading.PlacementStats, error) {
+	return func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error) {
+		u := dspURL + routes.DSPShading + "?advertiser=" + url.QueryEscape(accountID)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("dsp shading (advertiser) returned %d", resp.StatusCode)
 		}
 		var m map[string]bidshading.PlacementStats
 		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
