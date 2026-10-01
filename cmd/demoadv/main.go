@@ -55,6 +55,12 @@ type siteConfig struct {
 	// "Premium Dog Food Co" demo runs it as a 12kg dog-food bag — without
 	// forking templates. The /models/f150 route + its pixel tag stay stable.
 	Product string
+	// Price is the hero product's price as a bare number string (no currency
+	// symbol/commas) — used both for display ("$"+Price) and as the conversion
+	// revenue. Default 38000 suits the F-150; the dog-food skin overrides it to
+	// 38.99 (DEMOADV_PRICE) so the checkout + the billed CPA conversion match the
+	// seeded catalog, instead of a $38,000 bag of kibble.
+	Price string
 	// SKU is the catalog SKU the hero product maps to (Dynamic Product Ads).
 	// The product + checkout pages fire it on the retargeting pixel
 	// (setProductSKUs) so a dynamic creative renders THIS product. Default
@@ -112,7 +118,8 @@ func main() {
 		SigningKey: env("DEMOADV_SIGNING_KEY", ""),
 		Brand:      env("DEMOADV_BRAND", "Ford"),
 		Product:    env("DEMOADV_PRODUCT", "F-150"),
-		SKU:        env("DEMOADV_SKU", "DOG-KIBBLE-12KG"),
+		Price:      env("DEMOADV_PRICE", "38000"),
+		SKU:        env("DEMOADV_SKU", "FORD-F150"),
 	}
 	// No explicit key set → use the deterministic dev key the seed minted for
 	// this advertiser account, so S2S conversions validate under the strict

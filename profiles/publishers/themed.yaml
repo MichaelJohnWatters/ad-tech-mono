@@ -5,9 +5,9 @@
 # consented request's behaviour signal, the hourly profile-builder's seeded
 # category rules (cmd/seed seedThemedSegments) turn repeat visits into
 # segment membership, and the themed campaigns in profiles/dsps/internal.yaml
-# target the resulting segments. Verification reads like English: the dog
-# food ad wins on waggy-tails.blog for dog personas and never shows to pure
-# cat people.
+# target the resulting segments. Verification reads like English: the Ford
+# ad wins on waggy-tails.blog for dog personas (the truck-intender audience)
+# and never shows to pure cat people.
 #
 # The slugs are deliberately NOT IAB codes — they are matched verbatim by
 # both the profile-builder rule (behaviour_signals.categories) and the

@@ -201,8 +201,8 @@ campaigns:
     account_id: adv-barkbox
     advertiser_id: adv-barkbox
     io_id: io-barkbox
-    name: "Premium Dog Food Co - Dog Lovers"
-    creative_domain: premium-dog-food.co
+    name: "Ford Motors - Truck Intenders"
+    creative_domain: ford.com
     base_bid: 12.00
     currency: USD
     daily_budget: 300
@@ -278,14 +278,14 @@ campaigns:
       - { id: cr-protein-001, width: 300, height: 250 }
       - { id: cr-protein-001-mobile, width: 320, height: 50 }
 
-  # Targets the COMPOSITE segment (dog-lovers AND coffee-browsers) — the
-  # dog-cafe-regular persona is its natural audience.
+  # Targets the COMPOSITE segment (truck-intenders AND commuters) — the
+  # weekend-adventurer persona is its natural audience.
   - id: li-dogcafe-aud
     account_id: adv-barkbox
     advertiser_id: adv-barkbox
     io_id: io-barkbox
-    name: "Premium Dog Food Co - Cafe Crossover"
-    creative_domain: premium-dog-food.co
+    name: "Ford Motors - Adventure Crossover"
+    creative_domain: ford.com
     base_bid: 13.00
     currency: USD
     daily_budget: 150
@@ -299,14 +299,14 @@ campaigns:
     creatives:
       - { id: cr-dogcafe-001, width: 300, height: 250 }
 
-  # The retargeting payoff: chases dog-food cart abandoners (enrolled by
+  # The retargeting payoff: chases Ford cart abandoners (enrolled by
   # audience-rt within seconds of the /v1/t/rt?tag=dogfood-cart pixel).
   - id: li-dogfood-cart-rt
     account_id: adv-barkbox
     advertiser_id: adv-barkbox
     io_id: io-barkbox
-    name: "Premium Dog Food Co - Cart Retargeting"
-    creative_domain: premium-dog-food.co
+    name: "Ford Motors - Cart Retargeting"
+    creative_domain: ford.com
     # A deliberately DOMINANT retargeting bid: once you're in the cart/shop audience
     # this chase should reliably win the publisher display slot over open-market
     # demand (which clears ~$10 CPM here), so the demo chase ad shows every time.
@@ -322,7 +322,7 @@ campaigns:
       include:
         segments: [seg-dogfood-cart, seg-shop-checkout, seg-shop-product]
     # Dynamic Product Ads: the chase creative is assembled at render time from
-    # the barkbox catalog + the shopper's carted SKUs (recorded by the SKU-aware
+    # the Ford catalog + the shopper's carted SKUs (recorded by the SKU-aware
     # /v1/t/rt pixel). A visitor with no SKU context gets the static fallback.
     creatives:
       - { id: cr-dogfood-cart-001, width: 300, height: 250, format: dynamic_product }

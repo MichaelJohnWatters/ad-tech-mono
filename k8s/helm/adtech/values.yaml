@@ -172,7 +172,7 @@ demosites:
 # A shopper browses it → the /v1/t/rt behaviour pixel enrolls them into the
 # retargeting segment in REAL TIME (audience-rt) → the retargeting campaign chases
 # them with the Dynamic Product Ad → a purchase (/convert → signed /v1/t/conv)
-# suppresses them. Points at a REAL seeded advertiser (Premium Dog Food Co =
+# suppresses them. Points at a REAL seeded advertiser (Ford Motors =
 # adv-barkbox) so pixel tags match real retargeting rules, and hands the BROWSER
 # only PUBLIC ingress URLs (tracker/sdk), cross-origin, never in-cluster DNS —
 # the HTTPS/mixed-content lesson: the pixels must be ingress-reachable over HTTPS.
@@ -185,16 +185,17 @@ demostore:
   port: 9200
   slug: shop                 # ingress subdomain → shop.<global.domain>
   # The REAL seeded advertiser the retargeting audience + catalog belong to.
-  # adv-barkbox = "Premium Dog Food Co" (cmd/seed seedThemedSegments +
+  # adv-barkbox = "Ford Motors" (cmd/seed seedThemedSegments +
   # seedProductCatalog): has the f150-interest/checkout retargeting segments, the
-  # cart-retargeting chase campaign (li-dogfood-cart-rt), and the dog-food product
+  # cart-retargeting chase campaign (li-dogfood-cart-rt), and the Ford product
   # catalog. The UUID is idgen.Derive("account","adv-barkbox"). An empty string
   # falls back to the demoadv default ("demo-advertiser"), which fires pixels but
   # matches NO real rule — defeating the earned-audience demo.
   accountId: "d824fb61-8ad8-53d8-ad80-275a3bfde7e6"
-  brand: "Premium Dog Food Co"
-  product: "Grain-Free Kibble 12kg"
-  sku: "DOG-KIBBLE-12KG"     # a real catalog SKU → the DPA chase renders the viewed product
+  brand: "Ford"
+  product: "F-150"
+  sku: "FORD-F150"           # a real catalog SKU → the DPA chase renders the viewed product
+  price: "38000"             # matches the seeded catalog price (F-150 $38,000)
   # Browser-reachable PUBLIC ingress URLs (cross-origin fetch). Default to the
   # HTTPS gateway/tracker ingress hosts so there is no mixed-content block.
   urls:
