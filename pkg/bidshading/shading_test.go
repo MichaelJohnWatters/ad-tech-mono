@@ -142,3 +142,21 @@ func TestPerAdvertiserTally(t *testing.T) {
 		t.Error(`"" advertiser must not create a byAdv entry`)
 	}
 }
+
+// TestTrackerBounded proves the per-key history is capped (no unbounded growth)
+// while keeping plenty of recent samples for a stable curve.
+func TestTrackerBounded(t *testing.T) {
+	tr := NewTracker()
+	for i := 0; i < maxRecordsPerKey*3; i++ {
+		tr.RecordWin("pl-x", "adv-x", 1.0, 1.0)
+	}
+	if n := tr.Stats("pl-x").TotalBids; n > maxRecordsPerKey {
+		t.Errorf("pooled TotalBids=%d exceeds cap %d", n, maxRecordsPerKey)
+	}
+	if n := tr.StatsFor("pl-x", "adv-x").TotalBids; n > maxRecordsPerKey {
+		t.Errorf("per-adv TotalBids=%d exceeds cap %d", n, maxRecordsPerKey)
+	}
+	if n := tr.Stats("pl-x").TotalBids; n < maxRecordsPerKey/2 {
+		t.Errorf("pooled TotalBids=%d dropped below half the cap (lost too much history)", n)
+	}
+}
