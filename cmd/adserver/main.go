@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
@@ -208,13 +209,33 @@ func main() {
 		// the bandit warm-start path. Default = rich projection
 		// (id, name, format, dimensions, review_status, has_html).
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		// Tenant scope: the warm cache is cross-tenant (it serves every
+		// advertiser's creatives), so projecting All() to an EXTERNAL caller
+		// leaks every tenant's creatives. The gateway injects X-Account-ID from
+		// the caller's JWT (middleware/proxy.go) — when present, return ONLY that
+		// account's creatives. Internal callers (the bandit warm-start at boot)
+		// send no header → get the full set, unchanged.
+		acct := strings.TrimSpace(r.Header.Get(constants.HeaderAccountID))
 		if r.URL.Query().Get("format") == "ids" {
-			json.NewEncoder(w).Encode(resolver.ListIDs())
+			if acct == "" {
+				json.NewEncoder(w).Encode(resolver.ListIDs())
+				return
+			}
+			ids := make([]string, 0)
+			for _, c := range resolver.MetaCache().All() {
+				if c.AccountID == acct {
+					ids = append(ids, c.ID)
+				}
+			}
+			json.NewEncoder(w).Encode(ids)
 			return
 		}
 		rows := resolver.MetaCache().All()
 		out := make([]map[string]any, 0, len(rows))
 		for _, c := range rows {
+			if acct != "" && c.AccountID != acct {
+				continue // cross-tenant row — hide from this authenticated caller
+			}
 			out = append(out, map[string]any{
 				"id":            c.ID,
 				"name":          c.Name,
