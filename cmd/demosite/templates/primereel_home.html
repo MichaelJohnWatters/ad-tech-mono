@@ -1,0 +1,91 @@
+{{define "primereel_home.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+<style>
+  .pr-hero { position:relative; height:46vh; min-height:300px; display:flex; align-items:flex-end; padding:28px; background:linear-gradient(0deg,var(--bg),transparent),linear-gradient(135deg,#5b0a0f,#e50914 180%); }
+  .pr-hero h1 { font-size:40px; margin:0 0 8px; max-width:600px; }
+  .pr-hero p { max-width:560px; color:#e5e5e5; font-size:15px; line-height:1.5; margin:0 0 14px; }
+  .pr-hero button { background:var(--accent); color:#fff; border:0; padding:11px 26px; border-radius:4px; font:700 15px sans-serif; cursor:pointer; }
+  .pr-rows { padding:18px 28px 60px; }
+  .pr-row h3 { font-size:17px; margin:22px 0 10px; }
+  .pr-strip { display:flex; gap:10px; overflow-x:auto; padding-bottom:6px; }
+  .pr-card { flex:0 0 auto; width:180px; aspect-ratio:16/9; border-radius:5px; cursor:pointer; display:flex; align-items:flex-end; padding:8px; font-size:13px; font-weight:600; color:#fff; background:linear-gradient(135deg,#333,#e50914 260%); border:2px solid transparent; }
+  .pr-card:hover { border-color:#fff; }
+  .pr-player { display:none; padding:20px 28px; }
+  .pr-stage { position:relative; width:100%; max-width:900px; margin:0 auto; aspect-ratio:16/9; background:#000; border-radius:8px; overflow:hidden; }
+  .pr-stage video { width:100%; height:100%; }
+  .pr-badge { position:absolute; top:10px; left:10px; display:none; background:var(--accent); color:#fff; font:700 12px sans-serif; padding:4px 9px; border-radius:4px; cursor:pointer; }
+  .pr-status { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); text-align:center; margin-top:8px; }
+</style>
+</head>
+<body>
+{{template "nav" .}}
+<section class="pr-hero">
+  <div>
+    <h1>The Auction</h1>
+    <p>Every impression is decided in milliseconds. A limited series about the exchange that
+       clears a million auctions a second. Press play — a pre-roll ad runs first.</p>
+    <button onclick="prPlay('The Auction')">▶ Play</button>
+  </div>
+</section>
+<div class="pr-player" id="pr-player">
+  <div class="pr-stage">
+    <video id="pr-video" controls playsinline></video>
+    <div class="pr-badge" id="pr-badge">Ad · visit ↗</div>
+  </div>
+  <div class="pr-status" id="pr-status"></div>
+</div>
+<div class="pr-rows" id="pr-rows"></div>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  var CONTENT = {{.Cfg.MediaURL}} + '/v1/creatives/media/bbb-720-10mb.mp4';
+  var consented = false;
+  var ROWS = {
+    'Trending Now': ['The Auction','Bid & Shade','Clearing Price','Fill Rate','Last Look'],
+    'Documentaries': ['Inside the Exchange','Cookieless','The Walled Garden','Header Bidding'],
+    'Because you watched Ad Ops': ['Viewability','Fraud Squad','The Deal Desk','Attribution']
+  };
+  function status(t){ document.getElementById('pr-status').textContent = t; }
+  function fire(u){ if(u){ var i=new Image(); i.src=u; } }
+  (function(){ var root=document.getElementById('pr-rows');
+    Object.keys(ROWS).forEach(function(title){
+      var row=document.createElement('div'); row.className='pr-row';
+      var strip='<div class="pr-strip">'+ROWS[title].map(function(t){return '<div class="pr-card" onclick="prPlay(\''+t.replace(/'/g,'')+'\')">'+t+'</div>';}).join('')+'</div>';
+      row.innerHTML='<h3>'+title+'</h3>'+strip; root.appendChild(row);
+    });
+  })();
+  window.__ads.onConsent = function(){ consented = true; };
+
+  function prPlay(title){
+    if (!consented){ alert('Make a consent choice first (banner at the bottom).'); return; }
+    document.getElementById('pr-player').style.display='block';
+    document.getElementById('pr-player').scrollIntoView({behavior:'smooth'});
+    var v = document.getElementById('pr-video'), badge=document.getElementById('pr-badge');
+    status('requesting pre-roll VAST for “'+title+'”…');
+    fetch({{.Cfg.PubadURL}} + '/v1/pubad/video/vast?placement_id=' + encodeURIComponent({{.Cfg.VideoPlacement}}) + '&geo=USA&device=ctv', { credentials:'omit' })
+      .then(function(r){ return r.text(); }).then(function(xml){
+        var doc=new DOMParser().parseFromString(xml,'text/xml');
+        var media=doc.querySelector('MediaFile');
+        if(!media){ status('no ad fill — playing feature'); return playContent(v); }
+        var imp=(doc.querySelector('Impression')||{}).textContent;
+        var track={}; doc.querySelectorAll('Tracking').forEach(function(t){track[t.getAttribute('event')]=t.textContent.trim();});
+        var clickThrough=((doc.querySelector('ClickThrough')||{}).textContent||'').trim();
+        var clickTrack=((doc.querySelector('ClickTracking')||{}).textContent||'').trim();
+        status('pre-roll won ✓ — playing ad');
+        badge.style.display='block';
+        badge.onclick=function(){ if(clickTrack)fire(clickTrack); if(clickThrough)window.open(clickThrough,'_blank'); status('ad clicked ✓ — click recorded'); };
+        v.src=media.textContent.trim(); v.play();
+        var f={};
+        v.onplay=function(){ if(!f.i){f.i=1;fire(imp);fire(track.start);} };
+        v.ontimeupdate=function(){ if(!v.duration)return; var p=v.currentTime/v.duration; if(p>=.25&&!f.q1){f.q1=1;fire(track.firstQuartile);} if(p>=.5&&!f.q2){f.q2=1;fire(track.midpoint);} if(p>=.75&&!f.q3){f.q3=1;fire(track.thirdQuartile);} };
+        v.onended=function(){ if(f.d)return; f.d=1; fire(track.complete); badge.style.display='none'; v.onplay=v.ontimeupdate=v.onended=null; status('▶ now playing: '+title); playContent(v); };
+      }).catch(function(e){ status('VAST error: '+e.message); playContent(v); });
+  }
+  function playContent(v){ v.src=CONTENT; v.play(); }
+</script>
+</body>
+</html>{{end}}

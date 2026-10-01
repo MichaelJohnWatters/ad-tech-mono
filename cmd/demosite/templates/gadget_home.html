@@ -1,0 +1,68 @@
+{{define "gadget_home.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+{{template "styles" .}}
+<style>
+  .gg { max-width:1100px; margin:0 auto; padding:22px 20px; display:grid; grid-template-columns:1fr 300px; gap:30px; }
+  @media (max-width:820px){ .gg{ grid-template-columns:1fr; } }
+  .gg-feed { display:flex; flex-direction:column; gap:18px; }
+  .gg-card { display:flex; gap:16px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .gg-thumb { width:150px; aspect-ratio:4/3; border-radius:8px; flex:0 0 auto; background:linear-gradient(135deg,#0d9488,#334155); display:flex; align-items:center; justify-content:center; font-size:30px; }
+  .gg-card h3 { margin:0 0 6px; font-size:18px; }
+  .gg-card .meta { color:var(--muted); font-size:12px; margin-bottom:6px; }
+  .gg-card .score { display:inline-block; background:var(--accent); color:#fff; font-weight:700; font-size:12px; padding:2px 8px; border-radius:999px; margin-right:6px; }
+  .gg-card p { margin:6px 0 0; font-size:14px; color:#334155; line-height:1.5; }
+  .gg-native { margin-top:4px; }
+  .gg-label { font-size:9px; letter-spacing:2px; text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
+</style>
+</head>
+<body>
+{{template "nav" .}}
+<div class="gg">
+  <main class="gg-feed">
+    <div class="gg-card"><div class="gg-thumb">📱</div><div>
+      <h3>The Exchange Phone 15 — reviewed</h3><div class="meta">By The Demo Desk · Phones · 8 min read</div>
+      <div><span class="score">9.1</span>Great latency, superb fill rate</div>
+      <p>A flagship that clears auctions before you blink. Battery lasts a full programmatic day.</p></div></div>
+
+    <div class="gg-native">
+      <div class="gg-label">Advertisement — sponsored card</div>
+      <div id="native-slot" class="gg-card" style="min-height:100px;align-items:center;">Loading native ad…</div>
+      <div class="status" id="native-status"></div>
+    </div>
+
+    <div class="gg-card"><div class="gg-thumb">💻</div><div>
+      <h3>SSP Book Pro — the publisher's laptop</h3><div class="meta">By The Demo Desk · Laptops · 6 min read</div>
+      <div><span class="score">8.7</span>Best-in-class yield tools</div>
+      <p>Header bidding built in, a gorgeous dashboard, and rev-share reporting that actually adds up.</p></div></div>
+
+    <div class="gg-card"><div class="gg-thumb">🎧</div><div>
+      <h3>Audio Ad Buds — hands-on</h3><div class="meta">By The Demo Desk · Audio · 4 min read</div>
+      <div><span class="score">8.2</span>Podcast ads done right</div>
+      <p>Dynamic ad insertion that drops a spot before every episode without ruining the vibe.</p></div></div>
+  </main>
+  <aside>
+    <div class="gg-label" style="text-align:center">Advertisement</div>
+    <div id="ad-slot-mpu" class="ad-slot" style="width:300px;height:250px;margin:0 auto;">Loading ad…</div>
+    <div class="status" id="mpu-status">awaiting consent…</div>
+  </aside>
+</div>
+{{template "consentBanner" .}}
+{{template "sdkboot" .}}
+<script>
+  window.__ads.onConsent = function(personalized){
+    document.getElementById('mpu-status').textContent = 'requesting… ('+(personalized?'personalized':'contextual')+')';
+    adtech.requestAd({ placementId: {{.Cfg.DisplayPlacement}}, elementId: 'ad-slot-mpu', geo:'USA', device:'desktop' });
+    setTimeout(function(){ var s=document.getElementById('ad-slot-mpu'); document.getElementById('mpu-status').textContent = s.childElementCount ? 'filled ✓' : 'no fill'; }, 1500);
+    fetch({{.Cfg.PubadURL}} + '/v1/pubad/native?placement_id=' + encodeURIComponent({{.Cfg.NativePlacement}}) + '&geo=USA&device=desktop', { credentials:'omit' })
+      .then(function(r){ return r.status===204 ? '' : r.text(); })
+      .then(function(html){ var el=document.getElementById('native-slot');
+        if(html&&html.trim()){ el.innerHTML=html; document.getElementById('native-status').textContent='native filled ✓'; }
+        else { el.textContent='No native fill.'; document.getElementById('native-status').textContent='no fill'; } })
+      .catch(function(e){ document.getElementById('native-status').textContent='native error: '+e.message; });
+  };
+</script>
+</body>
+</html>{{end}}

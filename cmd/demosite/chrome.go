@@ -90,6 +90,64 @@ var siteChrome = map[string]chrome{
 		},
 		Home: "twitchr_live.html",
 	},
+	// Spotify — dark, green accent. Home is a now-playing + playlist; the audio ad
+	// spot plays before the track.
+	"soundwave": {
+		Theme: themeSpec{
+			Accent: "#1db954", AccentInk: "#000000",
+			Bg: "#121212", Surface: "#181818", Ink: "#ffffff", Muted: "#b3b3b3", Line: "#2a2a2a",
+			Font:     "'Circular', -apple-system, system-ui, sans-serif",
+			Wordmark: "◉ SoundWave", Dark: true,
+		},
+		Nav: []navLink{
+			{"Home", "/", "home"},
+			{"Your Library", "/pages", "pages"},
+		},
+		Home: "soundwave_home.html",
+	},
+	// Netflix — near-black, red accent. Home is a hero + rows of titles; a title
+	// plays a pre-roll VAST then the content.
+	"primereel": {
+		Theme: themeSpec{
+			Accent: "#e50914", AccentInk: "#ffffff",
+			Bg: "#141414", Surface: "#1f1f1f", Ink: "#ffffff", Muted: "#b3b3b3", Line: "#2a2a2a",
+			Font:     "'Netflix Sans', -apple-system, system-ui, sans-serif",
+			Wordmark: "PRIMEREEL", Dark: true,
+		},
+		Nav: []navLink{
+			{"Home", "/", "home"},
+			{"My List", "/pages", "pages"},
+		},
+		Home: "primereel_home.html",
+	},
+	// Newspaper — light, serif, a real front page with in-article display + native.
+	"chronicle": {
+		Theme: themeSpec{
+			Accent: "#8b0000", AccentInk: "#ffffff",
+			Bg: "#faf9f7", Surface: "#ffffff", Ink: "#1a1a2e", Muted: "#6b7280", Line: "#d9d4cc",
+			Font:     "Georgia, 'Times New Roman', serif",
+			Wordmark: "The Daily Chronicle",
+		},
+		Nav: []navLink{
+			{"Home", "/", "home"}, {"World", "/", "world"}, {"Business", "/", "business"},
+			{"Technology", "/", "tech"}, {"Opinion", "/", "opinion"},
+		},
+		Home: "chronicle_home.html",
+	},
+	// Tech blog — light, teal accent, modern sans. Review feed + inline display/native.
+	"gadget": {
+		Theme: themeSpec{
+			Accent: "#0d9488", AccentInk: "#ffffff",
+			Bg: "#f8fafc", Surface: "#ffffff", Ink: "#0f172a", Muted: "#64748b", Line: "#e2e8f0",
+			Font:     "-apple-system, 'Segoe UI', system-ui, sans-serif",
+			Wordmark: "⚙ Gadget Grotto",
+		},
+		Nav: []navLink{
+			{"Reviews", "/", "home"}, {"Deals", "/", "deals"},
+			{"Phones", "/", "phones"}, {"Laptops", "/", "laptops"},
+		},
+		Home: "gadget_home.html",
+	},
 }
 
 // resolveChrome returns the bespoke chrome for a slug, or the default.
