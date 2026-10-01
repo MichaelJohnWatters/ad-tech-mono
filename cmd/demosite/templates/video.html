@@ -19,7 +19,7 @@
     <div class="ad-label">Video player</div>
     <div style="position:relative;width:100%;max-width:640px;">
       <video id="player" width="640" height="360" controls style="background:#000;width:100%;height:auto;"></video>
-      <div id="ad-badge" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.7);color:#fff;font:11px sans-serif;padding:3px 8px;border-radius:4px;">Ad · <span id="ad-count"></span></div>
+      <div id="ad-badge" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.7);color:#fff;font:11px sans-serif;padding:3px 8px;border-radius:4px;">Ad · <span id="ad-count"></span> · visit ↗</div>
     </div>
     <div class="status" id="v-status">awaiting consent…</div>
     <p style="font-size:14px;color:#6b7280">Content clip: Big Buck Bunny (sample). The pre-roll is a real served ad.</p>
@@ -43,8 +43,23 @@
         var adUrl = media.textContent.trim();
         var imp = (doc.querySelector('Impression')||{}).textContent;
         var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')] = t.textContent.trim(); });
+        var clickThrough = ((doc.querySelector('ClickThrough')||{}).textContent||'').trim();
+        var clickTrack   = ((doc.querySelector('ClickTracking')||{}).textContent||'').trim();
         status.textContent = 'pre-roll won ✓ — playing ad';
-        document.getElementById('ad-badge').style.display = 'block';
+        // The ad badge doubles as the click-through CTA: clicking it fires the
+        // VAST ClickTracking beacon (records a click on the tracker) and opens the
+        // advertiser's landing page — so a manual click on the demo site shows up
+        // in reporting (Clicks / CTR), same as a display click-through.
+        var badge = document.getElementById('ad-badge'), adClicked = false;
+        badge.style.display = 'block';
+        badge.style.cursor = 'pointer';
+        badge.title = 'Click to visit the advertiser (records a click)';
+        badge.addEventListener('click', function(){
+          if (adClicked) return; adClicked = true;
+          if (clickTrack) fire(clickTrack);                       // record the click
+          if (clickThrough) window.open(clickThrough, '_blank');  // go to the landing page
+          status.textContent = 'ad clicked ✓ — click recorded';
+        });
         player.src = adUrl;
         player.play();
         var fired = {};
