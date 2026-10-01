@@ -29,7 +29,7 @@ func TestServeDisplayHouseAd(t *testing.T) {
 	t.Run("serves configured house ad", func(t *testing.T) {
 		d := &serveDeps{log: nullLogger(), stubFn: alwaysStub, houseAdFn: houseDisplayFn()}
 		rec := httptest.NewRecorder()
-		if !d.serveDisplayHouseAd(rec, nullLogger(), placement, "trace-1") {
+		if !d.serveDisplayHouseAd(httptest.NewRequest("GET", "/v1/pubad/serve", nil), rec, nullLogger(), placement, "trace-1") {
 			t.Fatal("expected serveDisplayHouseAd to serve (return true)")
 		}
 		var out struct {
@@ -55,7 +55,7 @@ func TestServeDisplayHouseAd(t *testing.T) {
 	t.Run("no house ad configured → honest no-fill", func(t *testing.T) {
 		d := &serveDeps{log: nullLogger(), stubFn: alwaysStub, houseAdFn: noHouseAds}
 		rec := httptest.NewRecorder()
-		if d.serveDisplayHouseAd(rec, nullLogger(), placement, "trace-2") {
+		if d.serveDisplayHouseAd(httptest.NewRequest("GET", "/v1/pubad/serve", nil), rec, nullLogger(), placement, "trace-2") {
 			t.Error("expected no serve when no display house ad is configured")
 		}
 	})
@@ -64,7 +64,7 @@ func TestServeDisplayHouseAd(t *testing.T) {
 	t.Run("fallback off → never serves", func(t *testing.T) {
 		d := &serveDeps{log: nullLogger(), stubFn: func() bool { return false }, houseAdFn: houseDisplayFn()}
 		rec := httptest.NewRecorder()
-		if d.serveDisplayHouseAd(rec, nullLogger(), placement, "trace-3") {
+		if d.serveDisplayHouseAd(httptest.NewRequest("GET", "/v1/pubad/serve", nil), rec, nullLogger(), placement, "trace-3") {
 			t.Error("expected no serve when the fallback master switch is off")
 		}
 	})

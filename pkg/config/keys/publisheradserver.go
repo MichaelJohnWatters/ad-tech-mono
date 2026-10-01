@@ -29,6 +29,8 @@ var PublisherAdServer = struct {
 
 	NATSURL   config.StringKey
 	PublicURL config.StringKey
+
+	PublicURLSecure config.StringKey
 }{
 	SSPURL:                             publisherAdServerSet.String("publisher_adserver.ssp_url", "http://localhost:8084", config.TierStatic, "Where the publisher ad server falls through to for programmatic auctions when no direct-sold line item wins.", config.Since("v1.3")),
 	AdserverURL:                        publisherAdServerSet.String("publisher_adserver.adserver_url", "http://localhost:8085", config.TierStatic, "Where to fetch rendered creative HTML when a direct-sold line item wins. Same ad server used by the SSP for programmatic.", config.Since("v1.3")),
@@ -43,4 +45,5 @@ var PublisherAdServer = struct {
 	Port:                               config.RawString("publisher_adserver.port", routes.PortPublisherAdServer),
 	NATSURL:                            config.RawString("publisher_adserver.nats_url", routes.DefaultNATSURL),
 	PublicURL:                          config.RawString("publisher_adserver.public_url", "http://localhost:8080"),
+	PublicURLSecure:                    publisherAdServerSet.String("publisher_adserver.public_url_secure", "https://gateway.adtech.local", config.TierStatic, "Browser-reachable HTTPS base (scheme+host) used for ad MEDIA and tracking BEACONS when the inbound serve request arrives over the HTTPS ingress (X-Forwarded-Proto: https, set by Traefik). Prevents mixed-content blocking on HTTPS demo publisher sites. Requests without that header (pub-simulator via the bridge, the e2e harness, CI) keep emitting publisher_adserver.tracker_url / the DB media host unchanged. Overridable per-environment via PUBLISHER_ADSERVER_PUBLIC_URL_SECURE.", config.Since("v1.7")),
 }

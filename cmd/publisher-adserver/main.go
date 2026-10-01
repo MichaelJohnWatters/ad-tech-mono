@@ -67,6 +67,13 @@ func main() {
 	sspURL := keys.PublisherAdServer.SSPURL.Get(cfg)
 	adserverURL := keys.PublisherAdServer.AdserverURL.Get(cfg)
 	trackerURL := keys.PublisherAdServer.TrackerURL.Get(cfg)
+	// secureBase is the HTTPS, browser-reachable base (scheme+host) swapped in
+	// for media + beacons ONLY on requests arriving via the HTTPS ingress
+	// (X-Forwarded-Proto: https). The localhost/bridge/e2e path (no such header)
+	// is untouched — see secureBase() helpers. publicBase is the current media
+	// base we rewrite FROM on the display passthrough (its HTML + beacons are
+	// built downstream and come back as opaque strings).
+	secureBase := keys.PublisherAdServer.PublicURLSecure.Get(cfg)
 
 	otelShutdown := tracing.Init(context.Background(), tracing.Config{
 		ServiceName:    constants.ServicePublisherAdServer,
@@ -174,6 +181,10 @@ func main() {
 	// the honest no-fill (we never invent canned content).
 	stubFn := func() bool { return keys.PublisherAdServer.StubOnNobid.Get(cfg) }
 	houseAdFn := houseAdPicker(houseAdCache)
+	// publisher_adserver.public_url is the current browser-reachable media/base
+	// origin. On the display passthrough it's the base we rewrite FROM → secureBase
+	// when the request arrives over the HTTPS ingress (see rewriteBaseIfSecure).
+	publicBase := keys.PublisherAdServer.PublicURL.Get(cfg)
 	mux.HandleFunc(routes.PublisherAdServe, serveHandler(serveDeps{
 		log:             log,
 		clk:             clk,
@@ -183,6 +194,8 @@ func main() {
 		sspURL:          sspURL,
 		adserverURL:     adserverURL,
 		trackerURL:      trackerURL,
+		secureBase:      secureBase,
+		publicBase:      publicBase,
 		prebidClient:    prebidCli,
 		prebidServersFn: prebidServersFn,
 		pub:             pub,
@@ -193,15 +206,14 @@ func main() {
 		return keys.PublisherAdServer.OmidVendor.Get(cfg),
 			keys.PublisherAdServer.OmidVerificationURL.Get(cfg)
 	}
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, omidFn, stubFn, houseAdFn))
-	// publisher_adserver.public_url is the browser-reachable origin
-	// the VMAP schedule will tell the player to call back into for
-	// each break's VAST. Defaults to the gateway's local origin since
-	// every demo path runs through it.
-	publicBase := keys.PublisherAdServer.PublicURL.Get(cfg)
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, secureBase, omidFn, stubFn, houseAdFn))
+	// publisher_adserver.public_url is the browser-reachable origin the VMAP
+	// schedule tells the player to call back into for each break's VAST.
+	// Defaults to the gateway's local origin since every demo path runs through
+	// it. (Reused above as the display-passthrough rewrite base.)
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
-	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, stubFn, houseAdFn))
-	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, stubFn, houseAdFn))
+	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, secureBase, stubFn, houseAdFn))
+	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, secureBase, stubFn, houseAdFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh
@@ -229,6 +241,8 @@ type serveDeps struct {
 	sspURL          string
 	adserverURL     string
 	trackerURL      string
+	secureBase      string // HTTPS browser-reachable base used for media+beacons on X-Forwarded-Proto: https requests
+	publicBase      string // current media base (publisher_adserver.public_url) — the display passthrough rewrites FROM this
 	prebidClient    *prebidclient.Client
 	prebidServersFn func() string     // CSV; re-read per request for live-tunable demand-source list
 	pub             *events.Publisher // nil-tolerant; emits DirectWin + PrebidOutboundWin events
@@ -297,7 +311,7 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 
 		switch decision.Type {
 		case arbitration.DecisionDirect:
-			d.serveDirect(ctx, w, reqLog, decision.LineItem, placement, traceID)
+			d.serveDirect(ctx, r, w, reqLog, decision.LineItem, placement, traceID)
 			return
 		case arbitration.DecisionProgrammatic:
 			if d.serveProgrammatic(ctx, w, r, reqLog, placement, placementExt, traceID, geo, device, userID) {
@@ -309,10 +323,10 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 			// display house ad (the platform advertising its own business).
 			house := arbitration.DecideHouse(req, d.lineItemCache.All())
 			if house.Type == arbitration.DecisionDirect && house.LineItem != nil {
-				d.serveDirect(ctx, w, reqLog, house.LineItem, placement, traceID)
+				d.serveDirect(ctx, r, w, reqLog, house.LineItem, placement, traceID)
 				return
 			}
-			if d.serveDisplayHouseAd(w, reqLog, placement, traceID) {
+			if d.serveDisplayHouseAd(r, w, reqLog, placement, traceID) {
 				return
 			}
 			d.publishNoFill(ctx, traceID, placement, "programmatic-nobid-and-no-house")
@@ -328,7 +342,7 @@ func serveHandler(d serveDeps) http.HandlerFunc {
 // a ServeRequest, then writes the result back to the visitor. CampaignID
 // carries the publisher line item ID so the ad server's freq-cap / event
 // flow has a stable key to attribute against.
-func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqLog *slog.Logger, li *publisheradserver.PublisherLineItem, placement postgres.PlacementRow, traceID string) {
+func (d *serveDeps) serveDirect(ctx context.Context, r *http.Request, w http.ResponseWriter, reqLog *slog.Logger, li *publisheradserver.PublisherLineItem, placement postgres.PlacementRow, traceID string) {
 	creativeID := ""
 	if len(li.CreativeIDs) > 0 {
 		creativeID = li.CreativeIDs[0]
@@ -419,15 +433,20 @@ func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqL
 		Height         int     `json:"height"`
 		CPM            float64 `json:"cpm"`
 	}{
-		TraceID:        traceID,
-		Source:         "direct",
-		LineItemID:     li.ID,
-		PriorityTier:   li.PriorityTier,
-		DemandSource:   li.DemandSource,
-		HTML:           sr.HTML,
-		ImpressionURL:  sr.ImpressionURL,
-		ClickURL:       sr.ClickURL,
-		ViewabilityURL: sr.ViewabilityURL,
+		TraceID:      traceID,
+		Source:       "direct",
+		LineItemID:   li.ID,
+		PriorityTier: li.PriorityTier,
+		DemandSource: li.DemandSource,
+		// The HTML (creative asset <img> src + baked-in beacons) and the three
+		// sibling beacon URLs are built downstream by the ad server with http://
+		// bases. On an HTTPS ingress request, re-base them so the browser on the
+		// HTTPS demo page doesn't block them as mixed content; path+query (and so
+		// the HMAC) are preserved. No-op on the localhost/bridge/e2e path.
+		HTML:           rewriteBaseIfSecure(r, sr.HTML, d.publicBase, d.secureBase),
+		ImpressionURL:  rewriteHostIfSecure(r, sr.ImpressionURL, d.secureBase),
+		ClickURL:       rewriteHostIfSecure(r, sr.ClickURL, d.secureBase),
+		ViewabilityURL: rewriteHostIfSecure(r, sr.ViewabilityURL, d.secureBase),
 		Width:          placement.Width,
 		Height:         placement.Height,
 		CPM:            li.CPM,
@@ -443,7 +462,7 @@ func (d *serveDeps) serveDirect(ctx context.Context, w http.ResponseWriter, reqL
 // are platform content, not auctioned demand, so there are no impression /
 // click / billing URLs. If the fallback is off or none is configured, returns
 // false and the caller writes the honest no-fill.
-func (d *serveDeps) serveDisplayHouseAd(w http.ResponseWriter, reqLog *slog.Logger, placement postgres.PlacementRow, traceID string) bool {
+func (d *serveDeps) serveDisplayHouseAd(r *http.Request, w http.ResponseWriter, reqLog *slog.Logger, placement postgres.PlacementRow, traceID string) bool {
 	if d.stubFn == nil || !d.stubFn() || d.houseAdFn == nil {
 		return false
 	}
@@ -459,7 +478,7 @@ func (d *serveDeps) serveDisplayHouseAd(w http.ResponseWriter, reqLog *slog.Logg
 		HTML    string `json:"html"`
 		Width   int    `json:"width"`
 		Height  int    `json:"height"`
-	}{TraceID: traceID, Source: "house", HTML: ad.Markup, Width: placement.Width, Height: placement.Height}
+	}{TraceID: traceID, Source: "house", HTML: rewriteBaseIfSecure(r, ad.Markup, d.publicBase, d.secureBase), Width: placement.Width, Height: placement.Height}
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(out)
 	return true
@@ -505,7 +524,7 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 		// Don't fail the whole request if Prebid demand is available.
 		// Otherwise propagate the original error shape.
 		if best, ok := prebidclient.Highest(prebidResults); ok {
-			d.writePrebidWinner(ctx, w, placement, traceID, best)
+			d.writePrebidWinner(ctx, r, w, placement, traceID, best)
 			return true
 		}
 		writeNoBid(w, traceID, "ssp_unavailable")
@@ -519,14 +538,14 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 		return false
 	}
 	if !sspWon && hasPrebid {
-		d.writePrebidWinner(ctx, w, placement, traceID, prebidBest)
+		d.writePrebidWinner(ctx, r, w, placement, traceID, prebidBest)
 		return true
 	}
 	if sspWon && hasPrebid && prebidBest.Price > sspRes.res.ClearingPrice {
 		reqLog.Info("programmatic source: prebid beat ssp",
 			"prebid_price", prebidBest.Price, "ssp_price", sspRes.res.ClearingPrice,
 			"prebid_endpoint", prebidBest.Endpoint)
-		d.writePrebidWinner(ctx, w, placement, traceID, prebidBest)
+		d.writePrebidWinner(ctx, r, w, placement, traceID, prebidBest)
 		return true
 	}
 
@@ -535,7 +554,12 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 		"ssp_price", sspRes.res.ClearingPrice,
 		"prebid_competing", hasPrebid)
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-	w.Write(sspRes.res.Raw)
+	// SSP-win passthrough: the raw JSON carries html + impression/click/view
+	// URLs + media_url built downstream with http:// bases. Re-base the whole
+	// body (scheme+host only) on an HTTPS ingress request so nothing renders as
+	// mixed content; the signed beacon path+params are unchanged. No-op on the
+	// localhost/bridge/e2e path.
+	w.Write([]byte(rewriteBaseIfSecure(r, string(sspRes.res.Raw), d.publicBase, d.secureBase)))
 	return true
 }
 
@@ -649,7 +673,7 @@ func (d *serveDeps) publishNoFill(ctx context.Context, traceID string, p postgre
 // (that would break the external buyer's click chain).
 //
 // Closes EVENT_PATHWAY_AUDIT Gap (Prebid viewability beacon).
-func (d *serveDeps) writePrebidWinner(ctx context.Context, w http.ResponseWriter, placement postgres.PlacementRow, traceID string, best prebidclient.Result) {
+func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w http.ResponseWriter, placement postgres.PlacementRow, traceID string, best prebidclient.Result) {
 	if d.pub != nil {
 		logger.WithContext(d.log, ctx).Info("prebid outbound win",
 			"publisher_id", placement.PublisherID,
@@ -685,7 +709,11 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, w http.ResponseWriter
 		DealID:       best.DealID,
 		Width:        placement.Width,
 		Height:       placement.Height,
-		TrackerURL:   d.trackerURL,
+		// HTTPS ingress request → sign OUR beacons against the secure base so the
+		// pixel/view/click fire from the HTTPS demo page without mixed-content
+		// blocking. Base chosen BEFORE signing; path+params (the signed material)
+		// are identical either way. No-op on the localhost/bridge/e2e path.
+		TrackerURL: secureTrackerBase(r, d.trackerURL, d.secureBase),
 	}
 	impressionURL := adserving.BuildImpressionURL(macroCtx)
 	clickURL := adserving.BuildClickURL(macroCtx)

@@ -66,7 +66,7 @@ type sspVideoWinner struct {
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken
 // player. The failure reason gets logged but the response stays valid.
-func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (vendor, scriptURL string), stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
+func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn func() (vendor, scriptURL string), stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -74,6 +74,12 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 			traceID = fmt.Sprintf("vast-%d", time.Now().UnixMilli())
 		}
 		reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
+
+		// On an HTTPS ingress request, beacons sign against the secure base and
+		// the media URL gets re-hosted to it — otherwise an HTTPS player blocks
+		// them as mixed content. The localhost/bridge/e2e path (no
+		// X-Forwarded-Proto: https) uses trackerURL / winner.MediaURL unchanged.
+		beaconBase := secureTrackerBase(r, trackerURL, secureBase)
 
 		placementID := r.URL.Query().Get("placement_id")
 		if placementID == "" {
@@ -85,7 +91,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 		// separation (no repeated advertiser within the pod). This is the
 		// defining CTV/long-form break shape.
 		if podSize := parsePodSize(r.URL.Query().Get("pod")); podSize > 1 {
-			if xmlBytes, n := buildPodVAST(ctx, sspURL, trackerURL, placementID, r.URL.Query(), podSize, omidFn, reqLog); n > 0 {
+			if xmlBytes, n := buildPodVAST(ctx, sspURL, beaconBase, secureBase, r, placementID, r.URL.Query(), podSize, omidFn, reqLog); n > 0 {
 				reqLog.Info("video pod served", "requested", podSize, "filled", n)
 				w.Header().Set("Content-Type", "text/xml")
 				w.Header().Set("Cache-Control", "no-store")
@@ -134,11 +140,14 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL string, omidFn func() (ven
 			DealID:       winner.DealID,
 			Width:        winner.Width,
 			Height:       winner.Height,
-			TrackerURL:   trackerURL,
+			TrackerURL:   beaconBase,
 			LandingURL:   landingForDomain(winner.AdvertiserDomain),
 			URLTTL:       time.Hour,
 		}
 
+		// Re-host the creative media URL (http://localhost:8080/...→ secure base)
+		// so the HTTPS player loads the <MediaFile>. No-op on non-https requests.
+		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
 		spec := buildVASTSpec(winner, macroCtx)
 		// Open Measurement: embed the configured OMID verification script as
 		// <AdVerifications> so measurement vendors can verify/measure the ad.
@@ -256,7 +265,7 @@ func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.Macr
 // why it may attempt more auctions than the pod size. Returns the rendered pod
 // XML and the number of ads actually filled (0 when nothing filled). Each ad
 // carries its own signed trackers, so quartile beacons fire per ad in the pod.
-func buildPodVAST(ctx context.Context, sspURL, trackerURL, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), reqLog *slog.Logger) ([]byte, int) {
+func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r *http.Request, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), reqLog *slog.Logger) ([]byte, int) {
 	var specs []vast.LinearSpec
 	seenAdv := map[string]bool{}
 	var excludeAdv []string // picked advertiser domains, threaded to each sub-auction as badv
@@ -279,6 +288,9 @@ func buildPodVAST(ctx context.Context, sspURL, trackerURL, placementID string, i
 			excludeAdv = append(excludeAdv, adv)
 		}
 
+		// Re-host the media URL per pod ad on an HTTPS ingress request (trackerURL
+		// here is already the per-request beacon base). No-op otherwise.
+		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
 		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL))
 		spec.Sequence = len(specs) + 1
 		if vendor, scriptURL := omidFn(); scriptURL != "" {

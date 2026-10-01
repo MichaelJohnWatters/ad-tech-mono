@@ -171,6 +171,10 @@ services:
         value: "https://tracker.adtech.example.com"   # ← match global.domain
       - name: PUBLISHER_ADSERVER_PUBLIC_URL
         value: "https://pubad.adtech.example.com"     # ← match global.domain
+      # HTTPS base for media+beacons on X-Forwarded-Proto: https requests (the
+      # gateway origin the browser can reach); point at the public gateway host.
+      - name: PUBLISHER_ADSERVER_PUBLIC_URL_SECURE
+        value: "https://gateway.adtech.example.com"   # ← match global.domain
   tracker:
     hpa: { minReplicas: 4, maxReplicas: 12 }
     # Durable event spool (see exchange note above). Per-replica PVC — each tracker

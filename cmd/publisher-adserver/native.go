@@ -34,7 +34,7 @@ import (
 //
 // On any failure (SSP unreachable, no bid, unparseable markup) we render a
 // demo native ad so the simulator never sees a broken slot.
-func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
+func nativeHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -42,6 +42,9 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bo
 			traceID = fmt.Sprintf("native-%d", time.Now().UnixMilli())
 		}
 		reqLog := logger.WithContext(log, logger.WithTraceID(ctx, traceID))
+
+		// HTTPS ingress → secure base for beacons; else trackerURL unchanged.
+		beaconBase := secureTrackerBase(r, trackerURL, secureBase)
 
 		placementID := r.URL.Query().Get("placement_id")
 		if placementID == "" {
@@ -76,7 +79,11 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL string, stubFn func() bo
 				noFill = true
 			} else {
 				resp = parsed
-				macroCtx = nativeMacroCtx(winner, trackerURL, resp.Native.Link.URL)
+				// Re-host native asset image URLs (main image + icon) to the secure
+				// base on an HTTPS ingress request so the card's <img> srcs don't
+				// trip mixed-content. No-op otherwise.
+				rehostNativeAssets(r, &resp, secureBase)
+				macroCtx = nativeMacroCtx(winner, beaconBase, resp.Native.Link.URL)
 				reqLog.Info("native bid served",
 					"trace_id", winner.TraceID,
 					"creative", winner.CreativeID,
@@ -129,6 +136,23 @@ func fetchNativeWinner(ctx context.Context, sspURL, placementID, traceID string,
 		return nil, fmt.Errorf("ssp decode: %w", err)
 	}
 	return &winner, nil
+}
+
+// rehostNativeAssets re-hosts the native response's image asset URLs (main image
+// + icon) to the secure base when the serve request arrived over the HTTPS
+// ingress. Only the image <img> srcs need it — text assets carry no URL, and the
+// click/impression beacons are re-based via the macro context's tracker base.
+// No-op on a non-https request.
+func rehostNativeAssets(r *http.Request, resp *native.Response, secureBase string) {
+	if !secureRequest(r) {
+		return
+	}
+	for i := range resp.Native.Assets {
+		a := &resp.Native.Assets[i]
+		if a.Img != nil && a.Img.URL != "" {
+			a.Img.URL = rewriteHost(a.Img.URL, secureBase)
+		}
+	}
 }
 
 // nativeMacroCtx builds the signing context for a native winner. LandingURL
