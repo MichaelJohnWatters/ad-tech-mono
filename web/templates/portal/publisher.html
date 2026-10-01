@@ -81,8 +81,8 @@
 
       {{ template "card-start" (dict "title" "Fill rate by placement" "subtitle" "Ad requests vs filled impressions, last 7 days") }}
       <div id="fillWrap">
-      {{ template "table-start" (dict "headers" (slice "Placement" "Ad requests" "Impressions" "Fill rate" "eCPM" "Gross" "Net")) }}
-        <tr><td colspan="7" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Placement" "Ad requests" "Impressions" "Clicks" "Fill rate" "CTR" "eCPM" "Gross" "Net")) }}
+        <tr><td colspan="9" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       </div>
       {{ template "card-end" . }}
@@ -1194,7 +1194,7 @@ async function loadPlacementFill() {
     // one grouped call; the auctions.count call feeds the "Ad requests" column.
     const [aucs, imps] = await Promise.all([
       reportQuery({table: 'auctions', metrics: ['count'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
-      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'fill_rate', 'ecpm', 'net_revenue', 'clicks', 'ctr'], dimensions: ['placement_id'], time_from: daysAgo(7)}),
     ]);
     const nameOf = Object.fromEntries(placementsCache.map(p => [p.ID, p.Name]));
     const rowsBy = (res, keyCol) => {
@@ -1208,29 +1208,32 @@ async function loadPlacementFill() {
     const ids = [...new Set([...Object.keys(aMap), ...Object.keys(iMap)])]
       .map(id => ({
         id, req: +(aMap[id]?.count) || 0, imp: +(iMap[id]?.count) || 0,
-        earn: +(iMap[id]?.sum_cost) || 0,
-        fill: iMap[id]?.fill_rate, ecpm: iMap[id]?.ecpm, net: iMap[id]?.net_revenue,
+        earn: +(iMap[id]?.sum_cost) || 0, clicks: +(iMap[id]?.clicks) || 0,
+        fill: iMap[id]?.fill_rate, ctr: iMap[id]?.ctr, ecpm: iMap[id]?.ecpm, net: iMap[id]?.net_revenue,
       }))
       .sort((a, b) => b.req - a.req);
     if (!ids.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="px-3 py-8 text-center text-sm text-gray-400">No auction activity in the last 7 days.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="px-3 py-8 text-center text-sm text-gray-400">No auction activity in the last 7 days.</td></tr>';
       return;
     }
     const usd = (v) => v == null ? '—' : fmtUSD(+v);
     tbody.innerHTML = ids.map(x => {
       const fill = x.fill == null ? null : +x.fill;
+      const ctr = x.ctr == null ? null : +x.ctr;
       return `<tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 font-medium">${esc(nameOf[x.id] || x.id || '—')}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(x.req)}</td>
         <td class="px-3 py-2 font-mono">${fmtInt(x.imp)}</td>
+        <td class="px-3 py-2 font-mono">${fmtInt(x.clicks)}</td>
         <td class="px-3 py-2 font-mono ${fill != null && fill < 40 ? 'text-warn' : ''}">${fill == null ? '—' : fill.toFixed(1) + '%'}</td>
+        <td class="px-3 py-2 font-mono">${ctr == null ? '—' : ctr.toFixed(2) + '%'}</td>
         <td class="px-3 py-2 font-mono">${usd(x.ecpm)}</td>
         <td class="px-3 py-2 font-mono text-gray-500">${fmtUSD(x.earn)}</td>
         <td class="px-3 py-2 font-mono">${usd(x.net)}</td>
       </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
 }
 

@@ -75,6 +75,18 @@ var derivedMetrics = map[string]derivedMetric{
 			return clk / imp * 100, true
 		},
 	},
+	// Raw click count — exposed as a derived metric so it can ride alongside
+	// impression-table metrics (count/fill_rate/ecpm/ctr) in ONE grouped query;
+	// the engine pulls clicks.count per key cross-table. Absent key → 0 clicks
+	// (a real zero, not "—").
+	"clicks": {
+		name:    "clicks",
+		sources: []metricSource{{"clicks", "count"}},
+		compute: func(c computeCtx) (float64, bool) {
+			clk, _ := c.get("clicks", "count")
+			return clk, true
+		},
+	},
 	// Fill rate = filled impressions / ad requests (auctions), percent. Cross-table.
 	"fill_rate": {
 		name:    "fill_rate",
