@@ -307,10 +307,14 @@ campaigns:
     io_id: io-barkbox
     name: "Premium Dog Food Co - Cart Retargeting"
     creative_domain: premium-dog-food.co
-    base_bid: 22.00
+    # A deliberately DOMINANT retargeting bid: once you're in the cart/shop audience
+    # this chase should reliably win the publisher display slot over open-market
+    # demand (which clears ~$10 CPM here), so the demo chase ad shows every time.
+    # Budget is generous so it never paces out during a walkthrough.
+    base_bid: 45.00
     currency: USD
-    daily_budget: 100
-    total_budget: 1500
+    daily_budget: 1000
+    total_budget: 20000
     bid_model: cpm
     pacing_mode: even
     status: live
