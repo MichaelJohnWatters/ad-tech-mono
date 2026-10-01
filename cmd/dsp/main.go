@@ -305,7 +305,7 @@ func main() {
 	startInternalGRPC(lc, cfg, log, metrics, bid)
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
-	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker, pub))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
 		// ?advertiser=<account> → that advertiser's OWN per-placement win/loss
@@ -1554,8 +1554,12 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 }
 
 // lossHandler processes loss notifications from the exchange.
-// Records loss data for the bid shading model.
-func lossHandler(log *slog.Logger, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker) http.HandlerFunc {
+// Records loss data for the bid shading model (in-memory tracker, used for the
+// bid DECISION + staff view) AND — when the losing account + placement are
+// known — publishes a durable AuctionLossEvent so the advertiser bid-shading
+// view's per-placement win/loss survives a DSP redeploy (the in-memory tracker
+// is per-pod and wiped on restart).
+func lossHandler(log *slog.Logger, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker, pub *events.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		bidID := q.Get("bid_id")
@@ -1574,6 +1578,24 @@ func lossHandler(log *slog.Logger, campaigns *warm.Cache[models.Campaign], track
 		}
 		if placementID != "" {
 			tracker.RecordLoss(placementID, acct, clearingPrice, clearingPrice, bidshading.LossReason(reason))
+		}
+
+		// Durable loss record for the advertiser bid-shading view. Fire-and-forget
+		// off the nurl path: a dedicated goroutine with a detached context so NATS
+		// (or spool) latency NEVER blocks this loss-notice response — the hot-path
+		// iron rule. Only emit when BOTH account and placement are known (an
+		// unknown-campaign loss has no advertiser to attribute to). Best-effort:
+		// the Publisher is spool-armed, and a dropped loss only slightly
+		// undercounts an analytics view, never money.
+		if pub != nil && acct != "" && placementID != "" {
+			go pub.AuctionLoss(context.WithoutCancel(r.Context()), events.AuctionLossEvent{
+				AccountID:     acct,
+				CampaignID:    campaignID,
+				PlacementID:   placementID,
+				ClearingPrice: clearingPrice,
+				LossReason:    int32(reason),
+				Timestamp:     time.Now(),
+			})
 		}
 
 		log.Info("loss notification", "bid_id", bidID, "reason", reason, "clearing_price", clearingPrice, "campaign_id", campaignID)

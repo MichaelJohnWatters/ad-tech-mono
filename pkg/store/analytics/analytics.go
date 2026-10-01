@@ -31,6 +31,10 @@ type Store interface {
 	InsertView(ctx context.Context, e *ViewEvent) error
 	InsertAuction(ctx context.Context, e *AuctionEvent) error
 	InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error
+	// InsertAuctionLoss stores one auction-loss record (durable per-advertiser
+	// loss, counterpart to InsertAuctionWin). Powers the advertiser
+	// bid-shading view's win/loss, which now survives a DSP restart.
+	InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent) error
 	// InsertMediaEvent stores one video / audio engagement record
 	// (start / firstQuartile / midpoint / thirdQuartile / complete /
 	// mute / pause / resume / skip / fullscreen, plus the analogous
@@ -223,6 +227,7 @@ type BatchInserter interface {
 	InsertViews(ctx context.Context, es []*ViewEvent) error
 	InsertAuctions(ctx context.Context, es []*AuctionEvent) error
 	InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error
+	InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error
 	InsertMediaEvents(ctx context.Context, es []*MediaEvent) error
 	InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error
 	// Profile-store tables (ADR 0006 phase 1): land the consent-gated
@@ -461,6 +466,28 @@ type AuctionWinEvent struct {
 	Currency      string    `json:"currency,omitempty"`
 	BidModel      string    `json:"bid_model,omitempty"`
 	DealID        string    `json:"deal_id,omitempty"`
+	Channel       string    `json:"channel,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+// AuctionLossEvent records our DSP's LOSS of an auction for a known advertiser
+// account — the money-less counterpart to AuctionWinEvent. Published by the DSP
+// loss-notice handler (adtech.auction.loss) so the advertiser bid-shading view
+// can count per-placement losses durably (survives a DSP redeploy, unlike the
+// in-memory bidshading tracker). AccountID is the RAW advertiser account (the
+// JWT-session / impressions.account_id value), so losses reconcile against
+// delivered impressions (wins) on the same key.
+//
+// Wire-format mirror of pkg/events.AuctionLossEvent.
+type AuctionLossEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id,omitempty"`
+	AuctionID     string    `json:"auction_id,omitempty"`
+	AccountID     string    `json:"account_id"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	PlacementID   string    `json:"placement_id"`
+	ClearingPrice float64   `json:"clearing_price_usd"`
+	LossReason    int32     `json:"loss_reason"`
 	Channel       string    `json:"channel,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
 }

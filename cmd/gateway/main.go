@@ -609,14 +609,17 @@ func main() {
 	// win/loss shading state, proxied server-side (support:read).
 	mux.Handle(routes.APIStaffShading, authMiddleware(http.HandlerFunc(staffShadingHandler(dspURL, log))))
 	// Advertiser-facing bid-shading transparency (reports:read). Composes the
-	// caller's OWN per-placement spend/clearing (account-forced reporting query)
-	// with DSP-wide marketplace shading context for those placements — labelled so
-	// the DSP-wide numbers are never presented as the advertiser's own.
+	// caller's OWN per-placement spend/clearing + durable win/loss, all from
+	// ClickHouse (account-forced reporting queries: impressions for wins,
+	// auction_losses for losses), with DSP-wide marketplace shading context for
+	// those placements — labelled so the DSP-wide numbers are never presented as
+	// the advertiser's own. The per-advertiser win/loss is now CH-sourced so it
+	// survives a DSP redeploy (phase 2), not the DSP's in-memory tracker.
 	mux.Handle(routes.APIShading, authMiddleware(
 		middleware.RequirePermission("reports:read")(http.HandlerFunc(shadingHandler(shadingDeps{
 			placementSpend:   reportingPlacementSpend(reportingURL, log),
+			advertiserLosses: reportingAdvertiserLosses(reportingURL, log),
 			marketplaceStats: dspMarketplaceStats(dspURL),
-			advertiserStats:  dspAdvertiserStats(dspURL),
 		}, log)))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic

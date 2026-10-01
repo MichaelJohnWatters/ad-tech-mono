@@ -12,13 +12,14 @@ import (
 // MemoryStore is an in-memory analytics store for testing.
 // Not suitable for production - no persistence, no SQL.
 type MemoryStore struct {
-	mu          sync.RWMutex
-	impressions []ImpressionEvent
-	clicks      []ClickEvent
-	conversions []ConversionEvent
-	views       []ViewEvent
-	auctions    []AuctionEvent
-	auctionWins []AuctionWinEvent
+	mu            sync.RWMutex
+	impressions   []ImpressionEvent
+	clicks        []ClickEvent
+	conversions   []ConversionEvent
+	views         []ViewEvent
+	auctions      []AuctionEvent
+	auctionWins   []AuctionWinEvent
+	auctionLosses []AuctionLossEvent
 	// Operational signal counters — not bid events, but observable
 	// state transitions the analytics layer surfaces to dashboards.
 	budgetDepletions     []BudgetDepletion
@@ -179,6 +180,13 @@ func (s *MemoryStore) InsertAuctionWin(_ context.Context, e *AuctionWinEvent) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auctionWins = append(s.auctionWins, *e)
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctionLoss(_ context.Context, e *AuctionLossEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auctionLosses = append(s.auctionLosses, *e)
 	return nil
 }
 
@@ -534,6 +542,15 @@ func (s *MemoryStore) InsertAuctions(ctx context.Context, es []*AuctionEvent) er
 func (s *MemoryStore) InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error {
 	for _, e := range es {
 		if err := s.InsertAuctionWin(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error {
+	for _, e := range es {
+		if err := s.InsertAuctionLoss(ctx, e); err != nil {
 			return err
 		}
 	}

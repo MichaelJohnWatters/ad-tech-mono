@@ -161,6 +161,28 @@ func (c *ClickHouse) InsertAuctionWins(ctx context.Context, es []*AuctionWinEven
 	return b.Send()
 }
 
+func (c *ClickHouse) InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error {
+	if len(es) == 0 {
+		return nil
+	}
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO auction_losses
+		(trace_id, auction_id, account_id, campaign_id, placement_id,
+		 clearing_price_usd, loss_reason, channel, schema_version, timestamp)`)
+	if err != nil {
+		return fmt.Errorf("prepare auction_losses batch: %w", err)
+	}
+	for _, e := range es {
+		if err := b.Append(
+			e.TraceID, e.AuctionID, e.AccountID, e.CampaignID, e.PlacementID,
+			e.ClearingPrice, e.LossReason, e.Channel, int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+		); err != nil {
+			b.Abort()
+			return fmt.Errorf("append auction_loss: %w", err)
+		}
+	}
+	return b.Send()
+}
+
 func (c *ClickHouse) InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error {
 	if len(es) == 0 {
 		return nil

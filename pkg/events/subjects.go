@@ -38,6 +38,15 @@ const (
 	SubjectAuctionWin      = "adtech.auction.win"
 	SubjectAuctionComplete = "adtech.auction.complete"
 
+	// SubjectAuctionLoss carries AuctionLossEvent: the DSP → Reporting durable
+	// per-advertiser LOSS record (counterpart to auction.win). Published
+	// best-effort by the DSP's loss-notice handler when our DSP's bid for a
+	// KNOWN advertiser account loses, so the advertiser bid-shading view's
+	// win/loss survives a DSP redeploy (it was in-memory-only before).
+	// Reporting lands it in the auction_losses ClickHouse table. Best-effort,
+	// off the nurl hot path — never blocks the loss-notice response.
+	SubjectAuctionLoss = "adtech.auction.loss"
+
 	// SubjectDataFee carries DataFeeEvent: SSP → reporting attribution for
 	// data monetization (an EXTERNAL bidder won an auction whose request
 	// carried fee-bearing audience data). Accrual happens at impression

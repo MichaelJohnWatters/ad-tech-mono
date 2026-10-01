@@ -10989,6 +10989,7 @@ All messages are protobuf-encoded. Subjects follow the pattern `adtech.{domain}.
 | `adtech.events.view` | Tracker | Reporting (analytics + vCPM settle) | ViewabilityEvent |
 | `adtech.events.conversion` | Tracker | Reporting (analytics + CPA settle) | ConversionEvent |
 | `adtech.auction.win` | Exchange | DSP (budget reservation), Reporting (analytics + billing accrual in one consumer) | AuctionWinEvent (single source of truth for cost) |
+| `adtech.auction.loss` | DSP (loss-notice handler, best-effort fire-and-forget off the nurl path) | Reporting (analytics → `auction_losses`) | AuctionLossEvent{account_id (raw advertiser), placement_id, campaign_id, clearing_price_usd, loss_reason, trace/auction/channel optional}. Durable per-advertiser LOSS record — makes the advertiser bid-shading view's win/loss survive a DSP redeploy (losses used to live only in the DSP's in-memory tracker). Emitted ONLY when the losing account + placement are known. |
 | `adtech.auction.complete` | Exchange | Reporting | AuctionCompleteEvent (includes all bids, winner, timing) |
 | `adtech.datafee.observed` | SSP | Reporting (data-monetization accrual) | DataFeeEvent (external win on a request carrying fee-bearing segments; parked in data_fee_pending, accrues at impression — owner credited net of reporting.data_fee_margin_pct, external seat accrues a receivable) |
 | `adtech.budget.depleted` | DSP | Exchange (stop bidding for this campaign) | BudgetDepletedEvent |

@@ -119,6 +119,16 @@ func (p *Publisher) AuctionWin(ctx context.Context, event AuctionWinEvent) error
 	return p.publishJSONID(ctx, SubjectAuctionWin, "win:"+event.TraceID, event)
 }
 
+// AuctionLoss publishes the durable per-advertiser loss record. Stable dedup ID
+// keyed on (trace, placement) — one loss per losing (auction, placement) — so a
+// JetStream redelivery inside the Duplicates window can't double-count a loss.
+func (p *Publisher) AuctionLoss(ctx context.Context, event AuctionLossEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.publishJSONID(ctx, SubjectAuctionLoss, "loss:"+event.TraceID+":"+event.PlacementID, event)
+}
+
 func (p *Publisher) AuctionComplete(ctx context.Context, event AuctionCompleteEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion

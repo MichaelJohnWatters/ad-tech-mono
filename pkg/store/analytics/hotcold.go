@@ -296,6 +296,9 @@ func (t *HotColdStore) InsertAuction(ctx context.Context, e *AuctionEvent) error
 func (t *HotColdStore) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error {
 	return t.hot.InsertAuctionWin(ctx, e)
 }
+func (t *HotColdStore) InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent) error {
+	return t.hot.InsertAuctionLoss(ctx, e)
+}
 func (t *HotColdStore) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {
 	return t.hot.InsertMediaEvent(ctx, e)
 }
@@ -374,6 +377,17 @@ func (t *HotColdStore) InsertAuctionWins(ctx context.Context, es []*AuctionWinEv
 	}
 	for _, e := range es {
 		if err := t.hot.InsertAuctionWin(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (t *HotColdStore) InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error {
+	if bi, ok := t.hot.(BatchInserter); ok {
+		return bi.InsertAuctionLosses(ctx, es)
+	}
+	for _, e := range es {
+		if err := t.hot.InsertAuctionLoss(ctx, e); err != nil {
 			return err
 		}
 	}
