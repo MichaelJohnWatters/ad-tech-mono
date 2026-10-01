@@ -76,23 +76,24 @@
     while (m.children.length > 60) m.removeChild(m.firstChild);
   }
 
-  // Continuous stream: when the stitched clip ends, immediately re-fetch a FRESH
-  // stitched manifest (new cache-buster → new per-break auctions) and keep playing,
-  // so the channel never stops and each cycle runs new ad breaks.
+  // TRUE live channel: a sliding-window HLS playlist (no #EXT-X-ENDLIST). hls.js
+  // detects it as live, starts at the live edge, and keeps polling for new segments
+  // on its own — the stream never ends, and the server injects a fresh ad break
+  // (its own auction) every ~15s of content.
   function loadStitch(){
     var v = document.getElementById('tw-video');
-    var url = SSAI_BASE + '/manifest.m3u8?placement_id=' + encodeURIComponent(PLACEMENT) +
-      '&geo=USA&device=ctv&channel=video&origin=' + encodeURIComponent(CONTENT) + '&t=' + Date.now();
-    status('fetching stitched manifest…');
+    var url = SSAI_BASE + '/live.m3u8?placement_id=' + encodeURIComponent(PLACEMENT) +
+      '&geo=USA&device=ctv&channel=video&break_every=15&origin=' + encodeURIComponent(CONTENT);
+    status('joining live channel…');
     if (!window.Hls || !window.Hls.isSupported()){
       if (v.canPlayType('application/vnd.apple.mpegurl')){ v.src = url; v.play().catch(function(){}); }
       else { status('this browser can’t play HLS'); }
       return;
     }
     if (hls){ hls.destroy(); hls = null; }
-    hls = new Hls();
+    hls = new Hls({ liveSyncDurationCount: 3 });
     var wasAd = null;
-    hls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); status('● live — watch the AD badge flip at each break'); });
+    hls.on(Hls.Events.MANIFEST_PARSED, function(){ v.play().catch(function(){}); status('● LIVE — watch the AD badge flip at each break'); });
     hls.on(Hls.Events.FRAG_CHANGED, function(e, data){
       var u = (data && data.frag && data.frag.url) || '';
       var isAd = u.indexOf('/ssai/seg') >= 0;
@@ -100,7 +101,6 @@
     });
     hls.on(Hls.Events.ERROR, function(e, data){ if (data.fatal){ status('reconnecting…'); setTimeout(loadStitch, 1500); } });
     hls.loadSource(url); hls.attachMedia(v);
-    v.onended = function(){ setAd(false); status('↻ next segment of the live stream…'); loadStitch(); };
   }
   function startLive(){
     if (!consented){ status('grant consent first (banner below)'); return; }

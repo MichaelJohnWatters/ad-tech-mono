@@ -695,6 +695,12 @@ const (
 	// SSAIManifestMPD is the DASH counterpart of SSAIManifest: the same stitch
 	// pipeline rendered as a multi-period MPEG-DASH MPD (over CMAF segments).
 	SSAIManifestMPD = "/v1/ssai/manifest.mpd"
+	// SSAILive is the continuous LIVE channel: a sliding-window HLS media playlist
+	// (live edge, no #EXT-X-ENDLIST) whose content loops over a wall-clock timeline
+	// with a fresh ad break + auction every ~break_every seconds. Unlike SSAIManifest
+	// (a finite VOD stitch), the player sits at the live edge and polls for new
+	// segments. Query: origin, placement_id, break_every, geo, device, channel.
+	SSAILive = "/v1/ssai/live.m3u8"
 	// SSAISegment is the per-ad-segment beacon+redirect endpoint referenced by
 	// the stitched manifest. When the player fetches an ad segment, this fires
 	// the segment's quartile beacon server-side (the SSAI beacon model) and

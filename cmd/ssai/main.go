@@ -179,6 +179,7 @@ func main() {
 	mux.HandleFunc(routes.SSAIContent, serveContentManifest)
 	mux.HandleFunc(routes.SSAIManifest, deps.manifestHandler)
 	mux.HandleFunc(routes.SSAIManifestMPD, deps.manifestHandler) // DASH (same pipeline, MPD output)
+	mux.HandleFunc(routes.SSAILive, deps.liveManifestHandler)    // continuous live channel (sliding window)
 	mux.HandleFunc(routes.SSAISegment, deps.segmentHandler)
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSAI)(metrics.Wrap(middleware.CORS(mux)))
