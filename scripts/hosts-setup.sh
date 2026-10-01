@@ -9,16 +9,22 @@
 # never drifts when a service or demo site is added/removed. Writes ONE managed
 # block into /etc/hosts (idempotent — re-running rewrites just that block).
 #
-#   make hosts            # 127.0.0.1 (default; IP-stable across VM restarts)
-#   ADTECH_HOSTS_IP=192.168.64.2 make hosts   # or the Traefik node IP
+#   make hosts                               # auto: the Traefik LB IP (instant)
+#   ADTECH_HOSTS_IP=127.0.0.1 make hosts      # force loopback (has the IPv6 lag)
 #
-# 127.0.0.1 works because k3s klipper-lb also binds the Traefik LoadBalancer on
-# the host's localhost:80/443. Editing /etc/hosts needs sudo; if that's not
-# available the script prints the block for you to paste.
+# DEFAULT = the Traefik LoadBalancer's real IPv4 IP, NOT 127.0.0.1. A loopback
+# name makes macOS synthesize an IPv4-mapped IPv6 address (::ffff:127.0.0.1) that
+# the browser's Happy-Eyeballs tries FIRST — and since the host :443 tunnel is
+# IPv4-only, that IPv6 attempt hangs ~5s per first-connect before falling back.
+# The node IP is plain IPv4 (no synthesis) and reachable directly (no tunnel), so
+# loads are instant. Re-run after an RD restart if the node IP changes. Editing
+# /etc/hosts needs sudo; if unavailable the script prints the block to paste.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IP="${ADTECH_HOSTS_IP:-127.0.0.1}"
+# Auto-detect the Traefik LoadBalancer IP; fall back to loopback if unavailable.
+IP="${ADTECH_HOSTS_IP:-$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)}"
+IP="${IP:-127.0.0.1}"
 CHART="k8s/helm/adtech"
 HOSTS_FILE="${ADTECH_HOSTS_FILE:-/etc/hosts}"
 BEGIN="# BEGIN adtech-hosts — managed by scripts/hosts-setup.sh (make hosts)"
