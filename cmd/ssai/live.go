@@ -114,22 +114,26 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 	isAd := func(t int) bool { return t >= 0 && t%cycle == contentRun }
 
 	var segs []ssai.Segment
-	// Track the newest ad-break slot in this window so we can report the auction
-	// outcome (fill/advertiser/price vs slate vs content) in a response header the
-	// browser trace panel surfaces. Nil → no break in the window (pure content).
+	// Track the auction outcome of any ad actually stitched into THIS window so the
+	// manifest can report it in a response header the browser trace panel surfaces.
+	// We only flag FILL when a real ad segment is in the window (the player is
+	// buffering it now); windows with no ad — between breaks, or a break that
+	// slated/didn't fill — read as "content", which is what the viewer sees. (A
+	// persistent "NO-BID" per content poll would be misleading: most content polls
+	// are simply between breaks.)
 	var windowOutcome *adserving.Outcome
 	for t := startIdx; t < pos; t++ {
 		disc := t >= 1 && isAd(t) != isAd(t-1) // discontinuity at each content↔ad boundary
 		if isAd(t) {
 			breakOrd := t / cycle
 			ad := d.liveAdForBreak(ctx, r, channel, placement, breakOrd, adProfile, reqLog)
-			if oc, ok := liveOutcomeFor(placement, breakOrd); ok {
-				o := oc
-				windowOutcome = &o // later breaks overwrite earlier → newest wins
-			}
 			if len(ad) > 0 {
 				ad[0].Discontinuity = true
 				segs = append(segs, ad[0]) // one ad segment per live break slot
+				if oc, ok := liveOutcomeFor(placement, breakOrd); ok && oc.Result == adserving.OutcomeFill {
+					o := oc
+					windowOutcome = &o // later filled breaks overwrite → newest wins
+				}
 				continue
 			}
 			// No ad/slate available → show content in the slot (never gap the stream).
@@ -140,7 +144,7 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 	if windowOutcome != nil {
 		adserving.SetOutcome(w, *windowOutcome)
 	} else {
-		adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeContent, Type: "ctv", Reason: "between breaks"})
+		adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeContent, Type: "ctv", Reason: "content (no ad in window)"})
 	}
 
 	m := &ssai.Manifest{
@@ -314,6 +318,14 @@ func (d *stitcherDeps) liveAdForBreak(ctx context.Context, r *http.Request, chan
 	}
 	liveOutcomeMu.Unlock()
 
+	// Only cache a DECIDED break (a real ad or a slate filled the slot). An empty
+	// result means neither bid nor slate was ready — usually the winner's ad
+	// conditioning is still warming (minutes) — so caching it would pin the slot to
+	// "content" forever; leave it uncached so the next poll retries and the break
+	// fills the moment conditioning lands (the content-cache self-heal lesson).
+	if len(result) == 0 {
+		return result
+	}
 	liveAdMu.Lock()
 	liveAdCache[key] = result
 	// Evict stale breaks so the cache stays bounded.
