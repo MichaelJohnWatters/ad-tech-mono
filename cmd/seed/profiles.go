@@ -46,6 +46,12 @@ type CampaignConfig struct {
 	TotalBudget float64        `yaml:"total_budget"`
 	BidModel    string         `yaml:"bid_model"`
 	PacingMode  string         `yaml:"pacing_mode"`
+	// ShadingMode opts a line item into bid shading (disabled / conservative /
+	// moderate / aggressive). Defaults to "disabled" (opt-in). When set, the DSP
+	// lowers the bid toward the clearing price to avoid overpaying — see
+	// pkg/bidshading. The shading-showcase seed campaigns set this to demonstrate
+	// real, durable "dollars saved" on the advertiser portal.
+	ShadingMode string         `yaml:"shading_mode,omitempty"`
 	Status      string         `yaml:"status"`
 	// Format is the line item's primary format (line_items.format). Defaults
 	// to "display"; set to "native"/"video"/"audio" for those line items.

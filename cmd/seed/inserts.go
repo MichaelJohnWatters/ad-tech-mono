@@ -286,16 +286,18 @@ INSERT INTO line_items (
   id, account_id, insertion_order_id, name, status, format, bid_strategy,
   base_bid, bid_currency, daily_budget, pacing_mode, shading_mode,
   creative_rotation, timezone, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, $10, 'disabled', 'bandit', 'UTC', now(), now())
+) VALUES ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, $10, $12, 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name, status = EXCLUDED.status, base_bid = EXCLUDED.base_bid,
   daily_budget = EXCLUDED.daily_budget, pacing_mode = EXCLUDED.pacing_mode,
+  shading_mode = EXCLUDED.shading_mode,
   format = EXCLUDED.format,
   updated_at = now()`
 		_, err := tx.ExecContext(ctx, liQ,
 			lineItemID, accountID, ioID, c.Name, defaultStr(c.Status, "live"),
 			defaultStr(c.BidModel, "cpm"), c.BaseBid, defaultStr(c.Currency, "USD"),
 			c.DailyBudget, defaultStr(c.PacingMode, "even"), defaultStr(c.Format, "display"),
+			defaultStr(c.ShadingMode, "disabled"),
 		)
 		if err != nil {
 			return fmt.Errorf("line_items insert: %w", err)
