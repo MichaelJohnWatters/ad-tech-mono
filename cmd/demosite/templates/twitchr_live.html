@@ -13,6 +13,8 @@
   .tw-live { position:absolute; top:10px; left:10px; background:#eb0400; color:#fff; font:700 12px sans-serif; padding:3px 8px; border-radius:4px; letter-spacing:.5px; }
   .tw-ad { position:absolute; top:10px; left:70px; display:none; background:#9147ff; color:#fff; font:700 12px sans-serif; padding:3px 8px; border-radius:4px; }
   .tw-viewers { position:absolute; top:10px; right:10px; background:rgba(0,0,0,.6); color:#fff; font:12px sans-serif; padding:3px 8px; border-radius:4px; }
+  .tw-sound { position:absolute; bottom:12px; right:12px; background:rgba(0,0,0,.72); color:#fff; border:0; font:600 12px sans-serif; padding:6px 11px; border-radius:6px; cursor:pointer; }
+  .tw-sound:hover { background:rgba(0,0,0,.9); }
   .tw-info { display:flex; gap:12px; align-items:center; margin:14px 2px; }
   .tw-pic { width:48px; height:48px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; }
   .tw-info h2 { margin:0; font-size:18px; } .tw-info .s { color:var(--muted); font-size:13px; }
@@ -31,10 +33,11 @@
 <div class="tw">
   <div class="tw-main">
     <div class="tw-stage">
-      <video id="tw-video" playsinline></video>
+      <video id="tw-video" playsinline autoplay muted></video>
       <span class="tw-live">● LIVE</span>
       <span class="tw-ad" id="tw-ad">AD · stitched server-side</span>
       <span class="tw-viewers" id="tw-viewers">👁 0</span>
+      <button class="tw-sound" id="tw-sound" onclick="toggleMute()" style="display:none">🔇 Muted — click for sound</button>
     </div>
     <div class="tw-info">
       <div class="tw-pic">A</div>
@@ -105,9 +108,22 @@
   function startLive(){
     if (!consented){ status('grant consent first (banner below)'); return; }
     document.getElementById('tw-start').style.display = 'none';
+    // Muted autoplay is allowed without a user gesture; surface a one-click
+    // unmute so a viewer (or a demo recording) gets sound on demand.
+    document.getElementById('tw-sound').style.display = 'inline-block';
     loadStitch();
   }
-  window.__ads.onConsent = function(){ consented = true; status('ready — press ▶ Watch'); };
+  function toggleMute(){
+    var v = document.getElementById('tw-video');
+    v.muted = !v.muted;
+    if (!v.muted) v.play().catch(function(){});
+    document.getElementById('tw-sound').textContent = v.muted ? '🔇 Muted — click for sound' : '🔊 Sound on';
+  }
+  // Autoplay the moment a consent choice exists (muted, so the browser allows it):
+  // first visit auto-starts right after the banner choice, a returning visitor
+  // (consent remembered) auto-starts on load. The ▶ Watch button stays as a manual
+  // fallback if an autoplay policy still blocks it.
+  window.__ads.onConsent = function(){ consented = true; startLive(); };
   // Chat + a jittering viewer count give the live feel even before play.
   viewers = 1200 + Math.floor(Math.random()*800);
   setInterval(chat, 1400);

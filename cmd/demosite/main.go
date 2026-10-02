@@ -17,6 +17,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -279,6 +280,27 @@ func main() {
 			log.Printf("render page %s: %v", slug, err)
 		}
 	})
+
+	// Themed favicon so each demo site has a branded tab icon (and no 404 noise in
+	// the trace/dev-tools during a demo recording). An inline SVG tinted with the
+	// site's accent + its wordmark initial — one handler covers all six sites.
+	faviconInitial := "●"
+	for _, r := range cfg.SiteName {
+		faviconInitial = string(r)
+		break
+	}
+	favicon := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">`+
+		`<rect width="64" height="64" rx="12" fill="%s"/>`+
+		`<text x="32" y="46" font-size="40" font-family="Arial,sans-serif" font-weight="bold" `+
+		`text-anchor="middle" fill="%s">%s</text></svg>`,
+		cfg.Theme.Accent, cfg.Theme.AccentInk, faviconInitial)
+	faviconHandler := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write([]byte(favicon))
+	}
+	mux.HandleFunc("/favicon.ico", faviconHandler)
+	mux.HandleFunc("/favicon.svg", faviconHandler)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 
