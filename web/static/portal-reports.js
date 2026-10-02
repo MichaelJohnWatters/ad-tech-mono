@@ -7,6 +7,49 @@
 const savedTbody = () => document.querySelector('#savedWrap tbody');
 let savedCache = [];
 
+// ---- Report-builder schema (backend-driven dropdowns) ----
+// GET /v1/api/reports/schema is the SOURCE OF TRUTH for the queryable tables and
+// each table's valid metrics + group-by dimensions, so the Table / Metrics /
+// Group-by dropdowns never drift from what the reporting engine supports.
+let REPORT_SCHEMA = [];
+function reportTableSchema(name) { return REPORT_SCHEMA.find(t => t.name === name); }
+
+// Read selected values from a (possibly multi-)select; falls back to a
+// comma-split value for a plain input (back-compat / defensive).
+function selVals(id) {
+  const el = $(id);
+  if (!el) return [];
+  if (el.multiple) return [...el.selectedOptions].map(o => o.value);
+  return (el.value || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+function fillReportSelect(id, fields, selected) {
+  const el = $(id); if (!el) return;
+  const want = new Set(selected || []);
+  el.innerHTML = fields.map(f => `<option value="${esc(f.value)}"${want.has(f.value) ? ' selected' : ''}>${esc(f.label)}</option>`).join('');
+}
+// Rebuild Metrics + Group-by for the selected table, applying prior/explicit
+// selections or a sensible default (first metric).
+function renderReportFields(selMetrics, selDims) {
+  const sch = reportTableSchema(($('repTable') || {}).value);
+  if (!sch) return;
+  const metrics = (selMetrics && selMetrics.length) ? selMetrics : [sch.metrics[0].value];
+  fillReportSelect('repMetrics', sch.metrics, metrics);
+  fillReportSelect('repDims', sch.dimensions, selDims || []);
+}
+function onReportTableChange() { renderReportFields(null, null); }
+// Loaded once when the Reports section first opens; leaves the static fallback
+// options in place on failure.
+async function loadReportSchema() {
+  if (!$('repTable') || REPORT_SCHEMA.length) return;
+  try {
+    const data = await fetchJSON('/v1/api/reports/schema');
+    REPORT_SCHEMA = (data && data.tables) || [];
+  } catch (err) { return; }
+  if (!REPORT_SCHEMA.length) return;
+  fillReportSelect('repTable', REPORT_SCHEMA.map(t => ({value: t.name, label: t.label})), [REPORT_SCHEMA[0].name]);
+  renderReportFields(['count', 'sum_cost'], []);
+}
+
 async function loadSaved() {
   try {
     savedCache = await fetchJSON('/v1/api/reports/saved') || [];
@@ -38,11 +81,10 @@ function toggleCronInput() {
 }
 
 function currentQueryConfig() {
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
   return {
     table: $('repTable').value,
-    metrics: split($('repMetrics').value),
-    dimensions: split($('repDims').value),
+    metrics: selVals('repMetrics'),
+    dimensions: selVals('repDims'),
     range_days: parseInt($('repRange').value, 10),
   };
 }
@@ -75,9 +117,14 @@ function runSaved(id) {
   const s = savedCache.find(x => x.id === id);
   if (!s) return;
   const q = s.query_config || {};
-  $('repTable').value = q.table || 'impressions';
-  $('repMetrics').value = (q.metrics || []).join(',');
-  $('repDims').value = (q.dimensions || []).join(',');
+  if ($('repTable')) $('repTable').value = q.table || 'impressions';
+  if (REPORT_SCHEMA.length) {
+    renderReportFields(q.metrics || [], q.dimensions || []); // schema-driven (advertiser)
+  } else {
+    // plain-input portals (publisher): set comma values directly
+    if ($('repMetrics')) $('repMetrics').value = (q.metrics || []).join(',');
+    if ($('repDims')) $('repDims').value = (q.dimensions || []).join(',');
+  }
   if (q.range_days) $('repRange').value = String(q.range_days);
   runReport(new Event('submit'));
 }
@@ -145,11 +192,10 @@ async function submitReportJob(body, label) {
 // ---- Reports console (sync run into the results pane) ----
 async function runReport(ev) {
   ev.preventDefault();
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
   const body = {
     table: $('repTable').value,
-    metrics: split($('repMetrics').value),
-    dimensions: split($('repDims').value),
+    metrics: selVals('repMetrics'),
+    dimensions: selVals('repDims'),
     time_from: daysAgo(parseInt($('repRange').value, 10)),
   };
   const out = $('reportOut');

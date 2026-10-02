@@ -420,19 +420,17 @@
       <form id="reportForm" class="grid grid-cols-2 md:grid-cols-7 gap-3 items-end" onsubmit="runReport(event)">
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
-          <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option>impressions</option><option>clicks</option><option>conversions</option>
-            <option>views</option><option>auctions</option><option>auction_wins</option>
-            <option>media_events</option>
+          <select id="repTable" onchange="onReportTableChange()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">loading…</option>
           </select>
         </label>
         <label class="block text-sm">
-          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics</span>
-          <input id="repMetrics" value="count,sum_cost" title="count, sum_cost, ctr, ecpm — on media_events (video/audio quartiles): media_starts, media_completes, completion_rate" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics <span class="text-gray-400">(⌘/Ctrl-click for several)</span></span>
+          <select id="repMetrics" multiple size="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
         </label>
         <label class="block text-sm">
-          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by</span>
-          <input id="repDims" placeholder="campaign_id,day" title="campaign_id, creative_id, placement_id, deal_id, day, hour — media_events also groups by channel and event_type" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by <span class="text-gray-400">(optional)</span></span>
+          <select id="repDims" multiple size="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
@@ -476,6 +474,7 @@
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Schedule</span>
           <select id="svSchedule" onchange="toggleCronInput()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="">Manual</option>
+            <option value="* * * * *">Every minute (demo)</option>
             <option value="@hourly">Hourly</option>
             <option value="@daily">Daily</option>
             <option value="@weekly">Weekly</option>
@@ -1241,7 +1240,7 @@ const showSection = initSectionRouter({
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
     creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), marketplace: () => loadMarketplace(), conversions: () => loadConversions(),
     attribution: () => loadARA(),
-    reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
+    reports: () => { loadReportSchema(); loadSaved(); loadJobs(); loadRecentImpressions(); },
     shading: () => loadShading(),
     billing: () => loadBilling(), support: () => loadSupport(), team: () => loadTeam(), webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
@@ -2808,14 +2807,13 @@ async function deleteConversion(id, name) {
 // ---- Report jobs (async) ----
 function runAsJob(ev) {
   ev.preventDefault();
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
   const days = parseInt($('repRange').value, 10);
   submitReportJob({
     name: `${$('repTable').value} last ${days}d`,
     query_config: {
       table: $('repTable').value,
-      metrics: split($('repMetrics').value),
-      dimensions: split($('repDims').value),
+      metrics: selVals('repMetrics'),
+      dimensions: selVals('repDims'),
       time_from: daysAgo(days),
     },
     format: $('repFormat').value,

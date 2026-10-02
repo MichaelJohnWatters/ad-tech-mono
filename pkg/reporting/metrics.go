@@ -133,6 +133,45 @@ var derivedMetrics = map[string]derivedMetric{
 			return done / starts * 100, true
 		},
 	},
+	// Average order value = conversion revenue / conversions. Same-table (conversions).
+	"aov": {
+		name:    "aov",
+		sources: []metricSource{{"conversions", "sum_revenue"}, {"conversions", "count"}},
+		compute: func(c computeCtx) (float64, bool) {
+			rev, ok1 := c.get("conversions", "sum_revenue")
+			cnt, ok2 := c.get("conversions", "count")
+			if !ok1 || !ok2 || cnt == 0 {
+				return 0, false
+			}
+			return rev / cnt, true
+		},
+	},
+	// CPA = ad spend / conversions. Cross-table (spend lives on impressions).
+	"cpa": {
+		name:    "cpa",
+		sources: []metricSource{{"impressions", "sum_cost"}, {"conversions", "count"}},
+		compute: func(c computeCtx) (float64, bool) {
+			cost, _ := c.get("impressions", "sum_cost") // absent key → 0 spend
+			cnt, ok := c.get("conversions", "count")
+			if !ok || cnt == 0 {
+				return 0, false
+			}
+			return cost / cnt, true
+		},
+	},
+	// Conversion rate = conversions / clicks (percent). Cross-table (post-click).
+	"conversion_rate": {
+		name:    "conversion_rate",
+		sources: []metricSource{{"conversions", "count"}, {"clicks", "count"}},
+		compute: func(c computeCtx) (float64, bool) {
+			conv, _ := c.get("conversions", "count") // absent key → 0 conversions
+			clk, ok := c.get("clicks", "count")
+			if !ok || clk == 0 {
+				return 0, false
+			}
+			return conv / clk * 100, true
+		},
+	},
 	// Net revenue = gross × (1 − platform fee), computed via the publisher's
 	// contract. Requires publisher scope (see engine).
 	"net_revenue": {

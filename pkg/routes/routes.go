@@ -54,6 +54,10 @@ const (
 	APIPlacements = apiPrefix + "/api/placements/"
 	APICreatives  = apiPrefix + "/api/creatives/"
 	APIReports    = apiPrefix + "/api/reports/"
+	// APIReportsSchema serves the report-builder schema (tables + their valid
+	// metrics & group-by dimensions) so the portal dropdowns are backend-driven.
+	// Static (no tenant data); the gateway serves it from pkg/reporting.Schema().
+	APIReportsSchema = apiPrefix + "/api/reports/schema"
 	// APITrace / APIRecentImpressions back the portal trace inspector; the
 	// gateway proxies them to reporting's ReportingTrace / RecentImpressions.
 	APITrace             = apiPrefix + "/api/trace"

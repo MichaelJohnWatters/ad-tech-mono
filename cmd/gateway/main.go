@@ -46,6 +46,7 @@ import (
 	partnerpg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/partner/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pgp"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reporting"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/reportjobs"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/sdkasset"
@@ -1045,6 +1046,14 @@ func main() {
 	reportsProxy := middleware.RequirePermission("reports:read")(
 		enforceReportTenant(pgPublisherLookup{db: gwDB}, log)(
 			middleware.StripPrefix(reportsBase, middleware.ReverseProxy(reportingURL+routes.ReportingQuery, log))))
+	// Report-builder schema (tables + valid metrics/dimensions) — static, backend
+	// source of truth for the portal dropdowns. More specific than the APIReports
+	// catch-all, so it wins the mux match. reports:read; no tenant data.
+	mux.Handle(routes.APIReportsSchema, authMiddleware(
+		middleware.RequirePermission("reports:read")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			_ = json.NewEncoder(w).Encode(map[string]any{"tables": reporting.Schema()})
+		}))))
 	mux.Handle(reportsBase, authMiddleware(reportsProxy))
 	mux.Handle(routes.APIReports, authMiddleware(reportsProxy))
 	// Privacy Sandbox ARA reporting-only overlay (advertiser-scoped, reports:read).
