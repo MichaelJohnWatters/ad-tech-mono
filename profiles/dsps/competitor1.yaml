@@ -85,9 +85,9 @@ campaigns:
       # /v1/creatives/media/* proxy — seeded once by cmd/seed/media.go,
       # so there is no live third-party dependency per request.
       - { id: c1-cr-002-video-15s, format: video, width: 640, height: 360, duration: 15,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-luxauto.mp4" }
       - { id: c1-cr-002-video-30s, format: video, width: 640, height: 360, duration: 30,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-luxauto.mp4" }
 
   - id: c1-003
     account_id: agency-omnicom
@@ -116,6 +116,6 @@ campaigns:
       - { id: c1-cr-003-mobile, width: 320, height: 50 }
       - { id: c1-cr-003-halfpage, width: 300, height: 600 }
       - { id: c1-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-quickbite.mp4" }
       - { id: c1-cr-003-audio-30s, format: audio, duration: 30,
           media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
