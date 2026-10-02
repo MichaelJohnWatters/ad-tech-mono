@@ -205,8 +205,16 @@ func main() {
 	mux.Handle(routes.Readyz, hlth.ReadinessHandler())
 	mux.Handle(routes.Metrics, metrics.Handler())
 
-	// Static files (no auth)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static"))))
+	// Static files (no auth). Cache-Control: no-cache forces the browser to
+	// REVALIDATE before using a cached copy — the FileServer's ETag/Last-Modified
+	// still yield cheap 304s when unchanged, but a deploy that changes portal JS/CSS
+	// is picked up immediately instead of serving a stale script (which broke the
+	// report builder: new HTML + old cached portal-reports.js = undefined functions).
+	staticFS := http.StripPrefix("/static/", http.FileServer(http.Dir("web/static")))
+	mux.Handle("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		staticFS.ServeHTTP(w, r)
+	}))
 
 	// Versioned SDK serving (#106): publishers embed /sdk/v<major>/adtech.js with
 	// per-channel cache headers + a /sdk/version.json metadata + integrity. Falls
