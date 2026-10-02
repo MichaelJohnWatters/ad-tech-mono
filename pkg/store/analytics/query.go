@@ -82,6 +82,14 @@ func BuildQueryFrom(params QueryParams, fromExpr string) (string, []interface{})
 			} else {
 				selectParts = append(selectParts, "0 AS sum_revenue")
 			}
+		case "sum_savings":
+			// savings_usd (realized bid-shading saving per win) exists only on
+			// auction_shades; 0 elsewhere so the metric is harmless on other tables.
+			if params.Table == "auction_shades" {
+				selectParts = append(selectParts, "SUM(savings_usd) AS sum_savings")
+			} else {
+				selectParts = append(selectParts, "0 AS sum_savings")
+			}
 		case "avg_duration_ms":
 			selectParts = append(selectParts, "AVG(duration_ms) AS avg_duration_ms")
 		case "sum_bids":

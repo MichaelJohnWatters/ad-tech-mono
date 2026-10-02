@@ -305,7 +305,7 @@ func main() {
 	// industry-standard path exercised in every auction.
 	startInternalGRPC(lc, cfg, log, metrics, bid)
 
-	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker, shades))
+	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker, shades, pub))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker, pub))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
@@ -1556,7 +1556,7 @@ func dspRequestChannel(req *openrtb.BidRequest) string {
 // DSPs alike are notified through this endpoint. The parallel NATS
 // adtech.auction.win event is for non-DSP consumers (reporting analytics,
 // future billing ledger), not for re-driving the DSP's own budget.
-func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGate, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
+func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGate, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker, shades *shadeStash, pub *events.Publisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		bidID := q.Get("bid_id")
@@ -1595,6 +1595,28 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 			// "dollars saved". 0 for unshaded/competitor wins.
 			savings := shades.take(bidID)
 			tracker.RecordWinShaded(placementID, acct, price, price, savings)
+
+			// Durable per-advertiser saving record for the advertiser's "dollars
+			// saved" view. Emitted ONLY for a genuinely shaded win of a KNOWN
+			// advertiser — mirrors lossHandler's AuctionLoss emit (fire-and-forget
+			// off the nurl path, detached context so NATS/spool latency never
+			// blocks the win-notice response — the hot-path iron rule). Best-effort:
+			// the Publisher is spool-armed, and a dropped saving only slightly
+			// undercounts an analytics view, never money. savings is CPM; the win
+			// books impCost = price/1000 dollars, so the dollar saving is the same
+			// CPM→dollars conversion. bid_id is the unique+stable dedup key (one
+			// shaded win per bid), carried as TraceID.
+			if pub != nil && acct != "" && savings > 0 {
+				go pub.AuctionShade(context.WithoutCancel(r.Context()), events.AuctionShadeEvent{
+					TraceID:       bidID,
+					AccountID:     acct,
+					CampaignID:    campaignID,
+					PlacementID:   placementID,
+					SavingsUSD:    savings / 1000,
+					ClearingPrice: price,
+					Timestamp:     time.Now(),
+				})
+			}
 		}
 
 		log.Info("win notification", "bid_id", bidID, "price", price, "campaign_id", campaignID)

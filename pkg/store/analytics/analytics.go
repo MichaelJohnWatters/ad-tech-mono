@@ -35,6 +35,11 @@ type Store interface {
 	// loss, counterpart to InsertAuctionWin). Powers the advertiser
 	// bid-shading view's win/loss, which now survives a DSP restart.
 	InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent) error
+	// InsertAuctionShade stores one bid-shading saving record (durable
+	// per-advertiser realized saving, win-side sibling of InsertAuctionLoss).
+	// Powers the advertiser's "dollars saved", globally aggregated across pods
+	// and durable across a DSP restart.
+	InsertAuctionShade(ctx context.Context, e *AuctionShadeEvent) error
 	// InsertMediaEvent stores one video / audio engagement record
 	// (start / firstQuartile / midpoint / thirdQuartile / complete /
 	// mute / pause / resume / skip / fullscreen, plus the analogous
@@ -228,6 +233,7 @@ type BatchInserter interface {
 	InsertAuctions(ctx context.Context, es []*AuctionEvent) error
 	InsertAuctionWins(ctx context.Context, es []*AuctionWinEvent) error
 	InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error
+	InsertAuctionShades(ctx context.Context, es []*AuctionShadeEvent) error
 	InsertMediaEvents(ctx context.Context, es []*MediaEvent) error
 	InsertDSPCalls(ctx context.Context, es []*DSPCallEvent) error
 	// Profile-store tables (ADR 0006 phase 1): land the consent-gated
@@ -488,6 +494,23 @@ type AuctionLossEvent struct {
 	PlacementID   string    `json:"placement_id"`
 	ClearingPrice float64   `json:"clearing_price_usd"`
 	LossReason    int32     `json:"loss_reason"`
+	Channel       string    `json:"channel,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
+// AuctionShadeEvent records the realized bid-shading SAVING on a won auction for
+// a known advertiser — the win-side sibling of AuctionLossEvent. SavingsUSD is
+// the per-win dollar saving (pre-shade valuation − shaded price). account_id is
+// the RAW advertiser account, so savings sum on the same key as the advertiser's
+// delivered impressions. Wire-format mirror of pkg/events.AuctionShadeEvent.
+type AuctionShadeEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id,omitempty"`
+	AccountID     string    `json:"account_id"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	PlacementID   string    `json:"placement_id"`
+	SavingsUSD    float64   `json:"savings_usd"`
+	ClearingPrice float64   `json:"clearing_price_usd"`
 	Channel       string    `json:"channel,omitempty"`
 	Timestamp     time.Time `json:"timestamp"`
 }

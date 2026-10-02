@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"time"
 
@@ -76,10 +75,11 @@ type shadingResponse struct {
 	Explanations shadingExplanations   `json:"explanations"`
 	// ShadingSavingsUSD is the REALIZED bid-shading saving for this advertiser: the
 	// summed (pre-shade valuation − shaded price) over the account's shaded wins,
-	// converted CPM→dollars (÷1000). 0 when no campaigns have shading enabled or
-	// none have shaded wins yet. Sourced from the DSP's per-advertiser shading
-	// tracker (live/in-memory, like marketplace_*), so it's a true realized figure,
-	// not the vs-market estimate the UI also shows.
+	// in dollars. 0 when no campaigns have shading enabled or none have shaded wins
+	// yet. Sourced DURABLY from ClickHouse (the auction_shades table, SUM(savings_usd)
+	// account-scoped) — a true realized figure that is aggregated across EVERY DSP
+	// pod and survives a DSP restart, unlike the per-pod in-memory counter it
+	// replaced. Not the vs-market estimate the UI also shows.
 	ShadingSavingsUSD float64 `json:"shading_savings_usd"`
 }
 
@@ -119,10 +119,11 @@ type shadingDeps struct {
 	// marketplaceStats returns the DSP-wide per-placement shading tracker state
 	// (live, in-memory — labelled as such; NOT this advertiser's own numbers).
 	marketplaceStats func(ctx context.Context) (map[string]bidshading.PlacementStats, error)
-	// advertiserShading returns THIS advertiser's own per-placement shading tracker
-	// stats (DSP /shading?advertiser=<acct>), whose TotalSavings carries the realized
-	// shade (pre-shade − shaded, CPM) per placement. Live/in-memory; non-fatal.
-	advertiserShading func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error)
+	// advertiserSavings returns THIS advertiser's realized bid-shading saving in
+	// dollars over the window, summed DURABLY from ClickHouse (auction_shades,
+	// SUM(savings_usd), account-forced). This is the cross-pod, restart-durable
+	// replacement for the DSP's in-memory per-advertiser TotalSavings. Non-fatal.
+	advertiserSavings func(ctx context.Context, accountID string, since time.Time) (float64, error)
 }
 
 // shadingHandler serves GET /v1/api/shading — the advertiser-facing bid-shading /
@@ -194,17 +195,16 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
 			mkt = nil
 		}
-		// Realized bid-shading savings for THIS advertiser (CPM savings summed per
-		// win → dollars). Non-fatal: stays 0 if the DSP is unreachable or no shaded
-		// wins exist yet.
+		// Realized bid-shading savings for THIS advertiser, summed durably from
+		// ClickHouse (auction_shades) and account-scoped — aggregated across every
+		// DSP pod, survives a DSP restart. Non-fatal: stays 0 if reporting is
+		// unreachable or no shaded wins exist yet.
 		var shadingSavingsUSD float64
-		if deps.advertiserShading != nil {
-			if advStats, aerr := deps.advertiserShading(ctx, accountID); aerr != nil {
+		if deps.advertiserSavings != nil {
+			if sv, aerr := deps.advertiserSavings(ctx, accountID, since); aerr != nil {
 				log.Warn("shading: per-advertiser realized savings unavailable", "account", accountID, "error", aerr)
 			} else {
-				for _, s := range advStats {
-					shadingSavingsUSD += s.TotalSavings / 1000 // CPM saving per win → dollars (1 imp each)
-				}
+				shadingSavingsUSD = sv
 			}
 		}
 
@@ -388,29 +388,61 @@ func dspMarketplaceStats(dspURL string) func(context.Context) (map[string]bidsha
 	}
 }
 
-// dspAdvertiserShading builds the advertiserShading dependency: it GETs the DSP's
-// per-placement shading map SCOPED to one advertiser (?advertiser=<acct>), whose
-// TotalSavings is the realized shade for that advertiser.
-func dspAdvertiserShading(dspURL string) func(context.Context, string) (map[string]bidshading.PlacementStats, error) {
-	return func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, dspURL+routes.DSPShading+"?advertiser="+url.QueryEscape(accountID), nil)
-		if err != nil {
-			return nil, err
+// reportingAdvertiserSavings builds the advertiserSavings dependency: it POSTs an
+// account-FORCED query to the reporting service for THIS advertiser's realized
+// bid-shading saving — SUM(savings_usd) over the durable auction_shades ClickHouse
+// table, account-scoped. The account_id filter is set server-side (not from the
+// client body), so it cannot be widened. This is the durable, cross-pod
+// replacement for the DSP's in-memory per-advertiser TotalSavings: the figure is
+// aggregated across EVERY DSP pod and survives a DSP redeploy.
+func reportingAdvertiserSavings(reportingURL string, log *slog.Logger) func(context.Context, string, time.Time) (float64, error) {
+	return func(ctx context.Context, accountID string, since time.Time) (float64, error) {
+		params := analytics.QueryParams{
+			Table:    "auction_shades",
+			Metrics:  []string{"sum_savings"},
+			Filters:  map[string]string{"account_id": accountID},
+			TimeFrom: since,
+			TimeTo:   time.Now(),
 		}
+		body, err := json.Marshal(params)
+		if err != nil {
+			return 0, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reportingURL+routes.ReportingQuery, bytes.NewReader(body))
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("dsp advertiser shading returned %d", resp.StatusCode)
+			return 0, fmt.Errorf("reporting auction_shades query returned %d", resp.StatusCode)
 		}
-		var m map[string]bidshading.PlacementStats
-		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-			return nil, err
+		var qr analytics.QueryResult
+		if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
+			return 0, err
 		}
-		return m, nil
+		return parseSingleMetric(qr, "sum_savings"), nil
 	}
+}
+
+// parseSingleMetric pulls one aggregate metric value out of an ungrouped
+// QueryResult (one row, columns matched by name).
+func parseSingleMetric(qr analytics.QueryResult, metric string) float64 {
+	ci := -1
+	for i, c := range qr.Columns {
+		if c == metric {
+			ci = i
+			break
+		}
+	}
+	if ci < 0 || len(qr.Rows) == 0 || ci >= len(qr.Rows[0]) {
+		return 0
+	}
+	return toFloat(qr.Rows[0][ci])
 }
 
 // reportingAdvertiserLosses builds the advertiserLosses dependency: it POSTs an

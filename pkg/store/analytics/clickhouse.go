@@ -166,6 +166,18 @@ func (c *ClickHouse) createTables() error {
 			placement_id String, clearing_price_usd Float64, loss_reason Int32, channel String,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		// auction_shades: the durable, cross-pod per-advertiser bid-shading SAVING
+		// record — a win-side sibling of auction_losses. Published by the DSP's
+		// win-notice handler (adtech.auction.shade) when a SHADED bid for a known
+		// advertiser wins. savings_usd is the per-win dollar saving (pre-shade
+		// valuation − shaded price); account_id is the RAW advertiser account so the
+		// portal can SUM(savings_usd) account-scoped across EVERY DSP pod, instead of
+		// reading one pod's in-memory counter. MergeTree, same family as auction_wins.
+		`CREATE TABLE IF NOT EXISTS auction_shades (
+			trace_id String, account_id String, campaign_id String,
+			placement_id String, savings_usd Float64, clearing_price_usd Float64, channel String,
+			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS media_events (
 			trace_id String, channel String, event_type String, position_ms Int64,
 			campaign_id String, creative_id String, placement_id String,
@@ -338,7 +350,7 @@ func (c *ClickHouse) createTables() error {
 	if c.ttlDays > 0 {
 		rawEventTables := []string{
 			"impressions", "clicks", "conversions", "views", "auctions",
-			"auction_wins", "auction_losses", "media_events", "serve_no_fills", "freq_cap_blocks",
+			"auction_wins", "auction_losses", "auction_shades", "media_events", "serve_no_fills", "freq_cap_blocks",
 			"render_failures", "campaign_state_changes", "budget_depletions", "dsp_calls",
 		}
 		for _, t := range rawEventTables {
@@ -435,6 +447,15 @@ func (c *ClickHouse) InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent)
 		VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.AuctionID, e.AccountID, e.CampaignID, e.PlacementID,
 		e.ClearingPrice, e.LossReason, e.Channel, int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+}
+
+func (c *ClickHouse) InsertAuctionShade(ctx context.Context, e *AuctionShadeEvent) error {
+	return c.exec(ctx, "auction_shade",
+		`INSERT INTO auction_shades (trace_id, account_id, campaign_id, placement_id,
+			savings_usd, clearing_price_usd, channel, schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		e.TraceID, e.AccountID, e.CampaignID, e.PlacementID,
+		e.SavingsUSD, e.ClearingPrice, e.Channel, int32(schemaVer(e.SchemaVersion)), e.Timestamp)
 }
 
 func (c *ClickHouse) InsertMediaEvent(ctx context.Context, e *MediaEvent) error {

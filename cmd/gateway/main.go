@@ -637,7 +637,7 @@ func main() {
 			placementSpend:    reportingPlacementSpend(reportingURL, log),
 			advertiserLosses:  reportingAdvertiserLosses(reportingURL, log),
 			marketplaceStats:  dspMarketplaceStats(dspURL),
-			advertiserShading: dspAdvertiserShading(dspURL),
+			advertiserSavings: reportingAdvertiserSavings(reportingURL, log),
 		}, log)))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic

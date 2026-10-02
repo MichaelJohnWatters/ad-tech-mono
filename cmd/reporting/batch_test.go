@@ -61,6 +61,9 @@ func (f *fakeBatchInserter) InsertAuctionWins(_ context.Context, es []*analytics
 func (f *fakeBatchInserter) InsertAuctionLosses(_ context.Context, es []*analytics.AuctionLossEvent) error {
 	return f.record(len(es))
 }
+func (f *fakeBatchInserter) InsertAuctionShades(_ context.Context, es []*analytics.AuctionShadeEvent) error {
+	return f.record(len(es))
+}
 func (f *fakeBatchInserter) InsertMediaEvents(_ context.Context, es []*analytics.MediaEvent) error {
 	return f.record(len(es))
 }

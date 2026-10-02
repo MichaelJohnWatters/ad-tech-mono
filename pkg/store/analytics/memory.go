@@ -20,6 +20,7 @@ type MemoryStore struct {
 	auctions      []AuctionEvent
 	auctionWins   []AuctionWinEvent
 	auctionLosses []AuctionLossEvent
+	auctionShades []AuctionShadeEvent
 	// Operational signal counters — not bid events, but observable
 	// state transitions the analytics layer surfaces to dashboards.
 	budgetDepletions     []BudgetDepletion
@@ -187,6 +188,13 @@ func (s *MemoryStore) InsertAuctionLoss(_ context.Context, e *AuctionLossEvent) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auctionLosses = append(s.auctionLosses, *e)
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctionShade(_ context.Context, e *AuctionShadeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auctionShades = append(s.auctionShades, *e)
 	return nil
 }
 
@@ -551,6 +559,15 @@ func (s *MemoryStore) InsertAuctionWins(ctx context.Context, es []*AuctionWinEve
 func (s *MemoryStore) InsertAuctionLosses(ctx context.Context, es []*AuctionLossEvent) error {
 	for _, e := range es {
 		if err := s.InsertAuctionLoss(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) InsertAuctionShades(ctx context.Context, es []*AuctionShadeEvent) error {
+	for _, e := range es {
+		if err := s.InsertAuctionShade(ctx, e); err != nil {
 			return err
 		}
 	}

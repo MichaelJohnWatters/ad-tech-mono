@@ -29,6 +29,7 @@ func TestAllEventPayloadsHaveSchemaVersion(t *testing.T) {
 		// Wire types — pkg/events/payloads.go
 		{"events.AuctionWinEvent", reflect.TypeOf(events.AuctionWinEvent{})},
 		{"events.AuctionLossEvent", reflect.TypeOf(events.AuctionLossEvent{})},
+		{"events.AuctionShadeEvent", reflect.TypeOf(events.AuctionShadeEvent{})},
 		{"events.AuctionCompleteEvent", reflect.TypeOf(events.AuctionCompleteEvent{})},
 		{"events.BudgetDepletedEvent", reflect.TypeOf(events.BudgetDepletedEvent{})},
 		{"events.CampaignStateEvent", reflect.TypeOf(events.CampaignStateEvent{})},
@@ -54,6 +55,7 @@ func TestAllEventPayloadsHaveSchemaVersion(t *testing.T) {
 		{"analytics.AuctionEvent", reflect.TypeOf(analytics.AuctionEvent{})},
 		{"analytics.AuctionWinEvent", reflect.TypeOf(analytics.AuctionWinEvent{})},
 		{"analytics.AuctionLossEvent", reflect.TypeOf(analytics.AuctionLossEvent{})},
+		{"analytics.AuctionShadeEvent", reflect.TypeOf(analytics.AuctionShadeEvent{})},
 	}
 
 	for _, tc := range cases {
