@@ -30,6 +30,9 @@ func (in *inserter) SeedFeatureBaseline(ctx context.Context) error {
 	if err := in.seedProductCatalog(ctx); err != nil {
 		return err
 	}
+	if err := in.seedConversionConfigs(ctx); err != nil {
+		return err
+	}
 	if err := in.seedMarketplaceListings(ctx); err != nil {
 		return err
 	}
@@ -258,6 +261,38 @@ ON CONFLICT (account_id, sku) DO UPDATE SET
 		}
 	}
 	in.log.Info("seeded product catalog", "account", "adv-barkbox", "products", len(products))
+	return nil
+}
+
+// seedConversionConfigs gives the demo advertisers a named conversion EVENT
+// definition (migration 048) each, so the advertiser portal's Conversions tab
+// shows a "Purchase" event + its embed pixel out of the box instead of a bare
+// "no events defined" table. These are just the setup-layer definitions; the
+// actual recorded conversions come from the tracker /v1/t/conv path. Idempotent
+// (unique on account_id+name). Seeded as the owner role, which bypasses the RLS
+// policy, so cross-tenant inserts work like the rest of SeedFeatureBaseline.
+func (in *inserter) seedConversionConfigs(ctx context.Context) error {
+	configs := []struct {
+		account, name, eventType string
+		defaultValue             float64
+	}{
+		{"adv-barkbox", "Vehicle Purchase", "purchase", 38000}, // Ford Motors — the shop/DPA demo
+		{"adv-barkbox", "Request a Quote", "lead", 0},
+		{"adv-globex", "Purchase", "purchase", 50},
+		{"adv-acme", "Purchase", "purchase", 50},
+		{"adv-initech", "Free Trial Signup", "signup", 0},
+	}
+	for _, c := range configs {
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO conversion_configs (account_id, name, event_type, default_value, currency, status, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'USD', 'active', now(), now())
+ON CONFLICT (account_id, name) DO UPDATE SET
+  event_type = EXCLUDED.event_type, default_value = EXCLUDED.default_value, status = 'active', updated_at = now()`,
+			idgen.Derive("account", c.account), c.name, c.eventType, c.defaultValue); err != nil {
+			return fmt.Errorf("seed conversion config %s/%s: %w", c.account, c.name, err)
+		}
+	}
+	in.log.Info("seeded conversion configs", "count", len(configs))
 	return nil
 }
 
