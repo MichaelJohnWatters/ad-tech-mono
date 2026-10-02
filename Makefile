@@ -1,4 +1,4 @@
-.PHONY: setup proto test test-integration lint build seed simulate reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites deploy-demostore hosts security-demo devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
+.PHONY: setup proto test test-integration lint build seed simulate reset demo-reset diagrams chaos help ssai-smoke stack-images stack-up stack-down stack-doctor deploy deploy-demosites deploy-demostore hosts security-demo devconsole demo-forward demo-setup demosite demosites extbidder demoadv security-harness secrets-encrypt secrets-edit secrets-decrypt deploy-staging
 
 # --- Setup ---
 setup: ## Install prerequisites and start local k3s
@@ -119,6 +119,9 @@ demo: ## One-command rich local setup: seed + baseline traffic (needs `tilt up`)
 
 reset: ## Wipe ALL data (Postgres+ClickHouse+Redis) then re-populate — a clean fresh run.
 	bash scripts/reset.sh
+
+demo-reset: ## Reliable demo reset: in-cluster wipe+reseed + warm SSAI content/ad videos + verify the first-party-audience (Lumière) demo. Works after a plain run OR a PURGE teardown; no demo-forward needed.
+	bash scripts/demo-reset.sh
 
 traffic: ## Continuous simulator at a set speed (override with DEMO_RPS, default 5). Ctrl-C to stop.
 	go run ./cmd/simulator run --profile steady --duration 12h --rps $${DEMO_RPS:-5}
