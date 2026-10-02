@@ -82,6 +82,7 @@ type Campaign struct {
 	ProductCategory string
 	BidModel        string // cpm, cpc, cpa, vcpm, cpcv
 	PacingMode      string // even, asap, front_loaded
+	ShadingMode     string // disabled (bid full value) | conservative | moderate | aggressive
 	Status          string // live, paused, ended, ...
 	// Timezone is the IANA name (line_items.timezone) used to evaluate
 	// time-of-day bid modifiers. Empty → UTC.

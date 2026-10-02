@@ -218,6 +218,7 @@ func campaignByIDHandler(db *sql.DB, bus events.EventBus, accountIDs []string, l
 var validBidStrategies = map[string]bool{"cpm": true, "cpc": true, "cpa": true, "vcpm": true, "cpcv": true}
 var validCampaignFormats = map[string]bool{"display": true, "native": true, "video": true, "audio": true}
 var validPacingModes = map[string]bool{"even": true, "asap": true, "front_loaded": true}
+var validShadingModes = map[string]bool{"disabled": true, "conservative": true, "moderate": true, "aggressive": true}
 var validCreativeRotations = map[string]bool{"even": true, "weighted": true, "bandit": true, "sequential": true}
 
 // uuidRe validates a creative_id before it reaches a ::uuid[] cast (a clear
@@ -388,6 +389,9 @@ type createCampaignRequest struct {
 	BidStrategy string `json:"bid_strategy,omitempty"`
 	// PacingMode spreads the daily budget: even (default), asap, front_loaded.
 	PacingMode string `json:"pacing_mode,omitempty"`
+	// ShadingMode controls bid shading: disabled (default — bid full value),
+	// conservative | moderate | aggressive (shade toward the win-rate-curve target).
+	ShadingMode string `json:"shading_mode,omitempty"`
 	// TotalBudget is the campaign-level (IO) budget cap. Zero → daily×30.
 	TotalBudget float64 `json:"total_budget,omitempty"`
 	// Flight window (IO start/end). Empty → today .. +90d. Format YYYY-MM-DD.
@@ -440,6 +444,13 @@ func handleCreate(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events
 	}
 	if !validPacingModes[req.PacingMode] {
 		http.Error(w, "pacing_mode must be even, asap or front_loaded", http.StatusBadRequest)
+		return
+	}
+	if req.ShadingMode == "" {
+		req.ShadingMode = "disabled" // default OFF — bid the full valuation unless opted in
+	}
+	if !validShadingModes[req.ShadingMode] {
+		http.Error(w, "shading_mode must be disabled, conservative, moderate or aggressive", http.StatusBadRequest)
 		return
 	}
 	if req.StartDate != "" || req.EndDate != "" {
@@ -625,8 +636,8 @@ ON CONFLICT (id) DO NOTHING`, ioID, accountID, "mgmt-"+req.Name, totalBudget, re
 	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, viewability_target_pct, product_category, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $13, $5, $6, $7, 'USD', $8, $9, 'moderate', $10, $11, $12, NULLIF($14, ''), now(), now())`,
-		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget, initialStatus, req.ProductCategory); err != nil {
+VALUES ($1, $2, $3, $4, $13, $5, $6, $7, 'USD', $8, $9, $15, $10, $11, $12, NULLIF($14, ''), now(), now())`,
+		lineItemID, accountID, ioID, req.Name, req.Format, req.BidStrategy, req.BaseBid, req.DailyBudget, req.PacingMode, req.CreativeRotation, req.Timezone, viewTarget, initialStatus, req.ProductCategory, req.ShadingMode); err != nil {
 		return fmt.Errorf("line_item insert: %w", err)
 	}
 	// Targeting — geo/device/domain/category include+exclude. The DSP
@@ -688,6 +699,7 @@ type patchCampaignRequest struct {
 	Status      *string  `json:"status,omitempty"`
 	BidStrategy *string  `json:"bid_strategy,omitempty"`
 	PacingMode  *string  `json:"pacing_mode,omitempty"`
+	ShadingMode *string  `json:"shading_mode,omitempty"`
 	Timezone    *string  `json:"timezone,omitempty"`
 	// ProductCategory replaces line_items.product_category (retail relevance).
 	ProductCategory *string `json:"product_category,omitempty"`
@@ -761,10 +773,14 @@ func handlePatch(w http.ResponseWriter, r *http.Request, db *sql.DB, bus events.
 		return
 	}
 	if req.BaseBid == nil && req.DailyBudget == nil && req.Status == nil &&
-		req.BidStrategy == nil && req.PacingMode == nil && req.Timezone == nil &&
+		req.BidStrategy == nil && req.PacingMode == nil && req.ShadingMode == nil && req.Timezone == nil &&
 		req.CreativeRotation == nil && req.Creatives == nil && req.ProductCategory == nil &&
 		!req.hasIOFields() && !req.hasTargeting() {
 		http.Error(w, "no fields to update", http.StatusBadRequest)
+		return
+	}
+	if req.ShadingMode != nil && !validShadingModes[*req.ShadingMode] {
+		http.Error(w, "shading_mode must be disabled, conservative, moderate or aggressive", http.StatusBadRequest)
 		return
 	}
 	if req.TotalBudget != nil && *req.TotalBudget <= 0 {
@@ -914,6 +930,10 @@ func updateLineItem(ctx context.Context, db *sql.DB, accountID, lineItemID strin
 	if req.PacingMode != nil {
 		args = append(args, *req.PacingMode)
 		sets = append(sets, fmt.Sprintf("pacing_mode = $%d", len(args)))
+	}
+	if req.ShadingMode != nil {
+		args = append(args, *req.ShadingMode)
+		sets = append(sets, fmt.Sprintf("shading_mode = $%d", len(args)))
 	}
 	if req.Timezone != nil {
 		args = append(args, *req.Timezone)

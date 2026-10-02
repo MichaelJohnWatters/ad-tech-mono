@@ -286,7 +286,7 @@ INSERT INTO line_items (
   id, account_id, insertion_order_id, name, status, format, bid_strategy,
   base_bid, bid_currency, daily_budget, pacing_mode, shading_mode,
   creative_rotation, timezone, created_at, updated_at
-) VALUES ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, $10, 'moderate', 'bandit', 'UTC', now(), now())
+) VALUES ($1, $2, $3, $4, $5, $11, $6, $7, $8, $9, $10, 'disabled', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name, status = EXCLUDED.status, base_bid = EXCLUDED.base_bid,
   daily_budget = EXCLUDED.daily_budget, pacing_mode = EXCLUDED.pacing_mode,

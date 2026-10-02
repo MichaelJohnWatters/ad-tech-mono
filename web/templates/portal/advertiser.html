@@ -814,6 +814,15 @@
         </select>
       </label>
       <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid shading</span>
+        <select id="nc_shading" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="Lower your bid toward the clearing price to avoid overpaying. Off = bid full value. More aggressive = lower bid, more savings, fewer wins.">
+          <option value="disabled">Disabled — bid full value</option>
+          <option value="conservative">Conservative — shade a little (~90% win target)</option>
+          <option value="moderate">Moderate — balanced (~80% win target)</option>
+          <option value="aggressive">Aggressive — maximise savings (~65% win target)</option>
+        </select>
+      </label>
+      <label class="block text-sm">
         <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Creative rotation</span>
         <select id="nc_rotation" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
           <option value="bandit">Bandit — optimise for CTR</option>
@@ -1170,6 +1179,15 @@
         <option value="even">Even</option><option value="asap">ASAP</option><option value="front_loaded">Front-loaded</option>
       </select>
     </label>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid shading</span>
+      <select id="ec_shading" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="Lower your bid toward the clearing price. Off = bid full value. More aggressive = more savings, fewer wins.">
+        <option value="disabled">Disabled — bid full value</option>
+        <option value="conservative">Conservative (~90% win)</option>
+        <option value="moderate">Moderate (~80% win)</option>
+        <option value="aggressive">Aggressive (~65% win)</option>
+      </select>
+    </label>
     <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
       <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Targeting</summary>
       <div class="mt-3 grid grid-cols-2 gap-x-4">
@@ -1357,7 +1375,7 @@ async function loadShading() {
     <div><div class="text-xs uppercase text-gray-400">Your spend</div><div class="text-xl font-semibold">${fmtUSD(t.spend_usd)}</div></div>
     <div><div class="text-xs uppercase text-gray-400">Your avg clearing CPM</div><div class="text-xl font-semibold">${cpm(t.avg_clearing_cpm)}</div></div>
     <div><div class="text-xs uppercase text-gray-400" title="Your own bids that won — genuinely per-advertiser">Your win rate</div><div class="text-xl font-semibold">${t.bids ? pct(t.win_rate) : '—'}</div><div class="text-xs text-gray-400">${(t.wins|0)}W / ${(t.losses|0)}L</div></div>
-    <div><div class="text-xs uppercase text-gray-400" title="Dollars you did NOT overpay vs the DSP-wide marketplace average clearing price on the inventory you won. This is efficiency vs the market — NOT a pre-shade-vs-paid delta (the DSP tracks shading but doesn't lower the submitted bid).">Saved vs market (est.)</div><div class="text-xl font-semibold text-success">${savedVsMarket > 0 ? fmtUSD(savedVsMarket) : '—'}</div></div>`;
+    <div><div class="text-xs uppercase text-gray-400" title="REALIZED bid-shading savings = the pre-shade valuation minus the shaded price actually bid, summed over your shaded wins (shown when campaigns have a shading mode on). Falls back to the vs-market estimate (dollars not overpaid vs the marketplace average) when there are no shaded wins yet.">Shading savings</div><div class="text-xl font-semibold text-success">${Number(data.shading_savings_usd) > 0 ? fmtUSD(data.shading_savings_usd) : (savedVsMarket > 0 ? fmtUSD(savedVsMarket) : '—')}</div><div class="text-xs text-gray-400">${Number(data.shading_savings_usd) > 0 ? 'realized' : (savedVsMarket > 0 ? 'est. vs market' : '')}</div></div>`;
   const rows = (data.placements || []);
   const body = rows.length ? rows.map(p => `<tr class="border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-mono text-xs">${esc(p.placement_id || '')}</td>
@@ -1875,6 +1893,7 @@ async function createCampaign(ev) {
     daily_budget: parseFloat($('nc_daily_budget').value) || 0,
     bid_strategy: $('nc_bid_strategy').value,
     pacing_mode: $('nc_pacing').value,
+    shading_mode: $('nc_shading').value,
     creative_rotation: $('nc_rotation').value,
   };
   const mods = bidModifiersBody('nc_mod_dev', 'nc_mod_geo', 'nc_mod_tod');
@@ -1933,6 +1952,7 @@ function openEdit(id) {
   $('ec_end').value = c.EndDate || '';
   $('ec_bid_strategy').value = c.BidModel || 'cpm';
   $('ec_pacing').value = c.PacingMode || 'even';
+  $('ec_shading').value = c.ShadingMode || 'disabled';
   // Prefill targeting from the campaign's current rules (Include/Exclude sets).
   const inc = (c.Targeting && c.Targeting.Include) || {}, exc = (c.Targeting && c.Targeting.Exclude) || {};
   const join = (a) => (a || []).join(', ');
@@ -1998,6 +2018,7 @@ async function saveCampaign(ev) {
     base_bid: parseFloat($('ec_base_bid').value),
     bid_strategy: $('ec_bid_strategy').value,
     pacing_mode: $('ec_pacing').value,
+    shading_mode: $('ec_shading').value,
     // Targeting is always sent (arrays replace) so clearing a field clears it.
     include_geo: csv('ec_geo_inc'), exclude_geo: csv('ec_geo_exc'),
     include_device: csv('ec_dev_inc'),

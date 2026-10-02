@@ -90,7 +90,8 @@ SELECT
     li.viewability_target_pct,
     COALESCE(cv.creatives_json, '[]')::text AS creatives_json,
     io.start_date,
-    io.end_date
+    io.end_date,
+    COALESCE(li.shading_mode, 'disabled')
 FROM line_items li
 JOIN insertion_orders io ON io.id = li.insertion_order_id
 JOIN accounts acc ON acc.id = li.account_id
@@ -181,6 +182,7 @@ func scanCampaign(scan func(dest ...any) error) (models.Campaign, error) {
 		&viewTarget,
 		&creativesJSON,
 		&flightStart, &flightEnd,
+		&c.ShadingMode,
 	); err != nil {
 		return models.Campaign{}, fmt.Errorf("scan campaign: %w", err)
 	}
