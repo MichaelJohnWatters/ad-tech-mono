@@ -2,6 +2,7 @@ package objects
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -103,6 +104,20 @@ func (h *selfHealingStore) PresignedGetURL(ctx context.Context, bucket, key stri
 
 func (h *selfHealingStore) EnsureBucket(ctx context.Context, bucket string) error {
 	return h.get().EnsureBucket(ctx, bucket)
+}
+
+// SetPublicRead forwards to the live backend's SetPublicRead (the s3 client).
+// Returns an error while the store is still on the fs fallback (which has no
+// public-read concept), so a caller retrying until success keeps trying until the
+// real S3 backend has swapped in — important for making the creatives bucket
+// anonymously readable on a fresh/racing Minio.
+func (h *selfHealingStore) SetPublicRead(ctx context.Context, bucket string) error {
+	if pub, ok := h.get().(interface {
+		SetPublicRead(context.Context, string) error
+	}); ok {
+		return pub.SetPublicRead(ctx, bucket)
+	}
+	return errors.New("object store not S3-backed yet (fs fallback); public-read unavailable")
 }
 
 var _ Store = (*selfHealingStore)(nil)

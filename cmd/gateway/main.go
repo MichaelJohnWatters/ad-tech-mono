@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -444,6 +445,13 @@ func main() {
 		if err := ingestObjects.EnsureBucket(context.Background(), onboardingBucket); err != nil {
 			log.Warn("audience ingest: ensure onboarding bucket failed", "bucket", onboardingBucket, "error", err)
 		}
+		// Ensure the PUBLIC-READ creatives bucket exists at boot. On a fresh object
+		// store (e.g. after a PURGE teardown drops the Minio PVC) nothing else
+		// creates it until a seed runs, and a host-run seed can't create buckets
+		// over the localhost endpoint — so every creative asset 403s through the
+		// /v1/creatives proxy and all ads render blank. Retry in the background
+		// until the (self-healing) S3 backend is live + the bucket is public-read.
+		go ensureCreativesBucket(ingestObjects, keys.S3.Bucket.Get(cfg), log)
 	}
 	if gwDB != nil {
 		audStore = audiencepg.New(gwDB)
@@ -1285,4 +1293,32 @@ func swaggerUIHandler() http.HandlerFunc {
 </body>
 </html>`))
 	}
+}
+
+// ensureCreativesBucket creates the public-read creatives bucket on a fresh/racing
+// object store and keeps retrying until the S3 backend is live (the fs fallback
+// has no public-read, so SetPublicRead errors until the real S3 swaps in). Bounded
+// so a never-arriving Minio doesn't leak a goroutine forever; logs once on success.
+func ensureCreativesBucket(store objects.Store, bucket string, log *slog.Logger) {
+	type publicReader interface {
+		SetPublicRead(context.Context, string) error
+	}
+	for attempt := 1; attempt <= 60; attempt++ {
+		errEnsure := store.EnsureBucket(context.Background(), bucket)
+		var errPublic error = errEnsure
+		if errEnsure == nil {
+			if pr, ok := store.(publicReader); ok {
+				errPublic = pr.SetPublicRead(context.Background(), bucket)
+			}
+		}
+		if errEnsure == nil && errPublic == nil {
+			if attempt > 1 {
+				log.Info("creatives bucket ensured + public-read", "bucket", bucket, "attempt", attempt)
+			}
+			return
+		}
+		log.Warn("ensuring creatives bucket (will retry)", "bucket", bucket, "attempt", attempt, "ensure_err", errEnsure, "public_err", errPublic)
+		time.Sleep(15 * time.Second)
+	}
+	log.Error("gave up ensuring creatives bucket public-read; creative assets may 403", "bucket", bucket)
 }
