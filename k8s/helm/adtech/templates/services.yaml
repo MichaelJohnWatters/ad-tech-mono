@@ -98,7 +98,18 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
-            {{- toYaml $svc.env | nindent 12 }}
+            {{- /* $otel: when global.otelSampleRatio is set it OVERRIDES each
+                   service's per-service OTEL_SAMPLE_RATIO. Drop the per-service
+                   entry here and emit the global one ONCE below — appending a
+                   second entry instead yields a duplicate env key, which
+                   server-side apply rejects outright (client-side apply used to
+                   silently keep the last). Empty → per-service default stands. */}}
+            {{- $otel := (($.Values.global | default dict).otelSampleRatio) }}
+            {{- range $svc.env }}
+            {{- if not (and $otel (eq .name "OTEL_SAMPLE_RATIO")) }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
+            {{- end }}
             {{- /* Global debug-endpoints toggle. debug.endpoints_enabled defaults
                    to true (dev); prod/staging set global.debugEndpoints=false to
                    turn OFF /debug/*, the dev token minter (/v1/auth/token) and the
@@ -148,8 +159,9 @@ spec:
                    bump the whole fleet's trace sampling THROUGH helm, so
                    demo-setup no longer needs an out-of-band `kubectl set env`
                    (which created a competing field-manager that broke later
-                   `helm upgrade`s). Empty → no override, per-service default stands. */}}
-            {{- $otel := (($.Values.global | default dict).otelSampleRatio) }}
+                   `helm upgrade`s). Empty → no override, per-service default stands.
+                   $otel is already resolved above where the per-service entry is
+                   filtered out, so this emits the single, authoritative entry. */}}
             {{- if $otel }}
             - name: OTEL_SAMPLE_RATIO
               value: {{ $otel | quote }}

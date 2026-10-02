@@ -62,13 +62,14 @@ global:
 
   # OTEL trace sampling override for the WHOLE serving fleet, applied through
   # helm (injected LAST in templates/services.yaml → k8s takes the last value
-  # for the repeated OTEL_SAMPLE_RATIO env). Empty (default) → each service
-  # keeps its per-service default ("0.1"). Set to "1.0" to fully trace the
-  # fleet for a demo/deep-debug: `helm upgrade --reuse-values --set
-  # global.otelSampleRatio=1.0`. This is what `make demo-setup` now uses instead
-  # of an out-of-band `kubectl set env` — the latter created a competing
-  # field-manager that then broke every later `helm upgrade` (field conflict).
-  otelSampleRatio: ""
+  # for the repeated OTEL_SAMPLE_RATIO env). Empty → each service keeps its
+  # per-service default ("0.1"). LOCAL DEFAULTS TO "1.0" (full tracing): this is
+  # a demo/dev stack where seeing every SSP→Exchange→DSP→AdServer span in Jaeger
+  # for a single hand-fired request matters more than the sampling perf headroom.
+  # Set back to "0.1" (or "") for a measured /perf-loadtest run so the numbers
+  # stay comparable to the baselines. Staging/prod pin "0.1" in their own values
+  # files so this local full-trace default never leaks to a real deployment.
+  otelSampleRatio: "1.0"
 
 # TLS for the browser-facing ingresses (gateway/adserver/tracker/ssp/pubad).
 # Same Ingress wiring in every env (templates/services.yaml terminates at
