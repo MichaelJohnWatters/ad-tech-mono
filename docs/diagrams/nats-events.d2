@@ -102,6 +102,14 @@ subjects: Subjects {
     style.fill: "#1e3a5f"
     style.font-color: "#fff"
   }
+  loss: adtech.auction.loss {
+    style.fill: "#1e3a5f"
+    style.font-color: "#fff"
+  }
+  shade: adtech.auction.shade {
+    style.fill: "#1e3a5f"
+    style.font-color: "#fff"
+  }
   budget: adtech.budget.depleted {
     style.fill: "#7c2d12"
     style.font-color: "#fff"
@@ -215,6 +223,8 @@ publishers.exchange -> subjects.complete: all bids + timing
 
 publishers.dsp -> subjects.budget: campaign exhausted
 publishers.dsp -> subjects.state: live/paused/ended
+publishers.dsp -> subjects.loss: durable per-advertiser loss (off nurl, best-effort)
+publishers.dsp -> subjects.shade: shaded-win saving (off nurl, best-effort)
 
 publishers.gateway -> subjects.optout: user opt-out
 publishers.gateway -> subjects.deletion: GDPR deletion
@@ -239,6 +249,8 @@ subjects.conv -> consumers.reporting
 subjects.view -> consumers.reporting
 subjects.win -> consumers.reporting
 subjects.win -> consumers.dsp_consumer
+subjects.loss -> consumers.reporting: auction_losses (bid-shading loss view)
+subjects.shade -> consumers.reporting: auction_shades (bid-shading savings)
 subjects.complete -> consumers.reporting
 subjects.budget -> consumers.reporting
 subjects.state -> consumers.reporting
