@@ -129,6 +129,17 @@ func (p *Publisher) AuctionLoss(ctx context.Context, event AuctionLossEvent) err
 	return p.publishJSONID(ctx, SubjectAuctionLoss, "loss:"+event.TraceID+":"+event.PlacementID, event)
 }
 
+// AuctionShade publishes the durable per-advertiser bid-shading saving record.
+// Stable dedup ID keyed on (trace, placement) — one shaded win per (winning
+// auction, placement) — so a JetStream redelivery inside the Duplicates window
+// can't double-count a saving.
+func (p *Publisher) AuctionShade(ctx context.Context, event AuctionShadeEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.publishJSONID(ctx, SubjectAuctionShade, "shade:"+event.TraceID+":"+event.PlacementID, event)
+}
+
 func (p *Publisher) AuctionComplete(ctx context.Context, event AuctionCompleteEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion

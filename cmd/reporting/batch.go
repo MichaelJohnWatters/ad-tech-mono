@@ -373,6 +373,32 @@ func (c *EventConsumer) handleAuctionLossBatch(ctx context.Context, msgs []*even
 	)
 }
 
+func (c *EventConsumer) handleAuctionShadeBatch(ctx context.Context, msgs []*events.Message) error {
+	return batchProcess(ctx, c, msgs,
+		func(data []byte) (*analytics.AuctionShadeEvent, bool) {
+			var src events.AuctionShadeEvent
+			if err := json.Unmarshal(data, &src); err != nil {
+				c.log.Error("batch: decode auction shade", "error", err)
+				return nil, false
+			}
+			if src.Timestamp.IsZero() {
+				src.Timestamp = time.Now()
+			}
+			return &analytics.AuctionShadeEvent{
+				TraceID: src.TraceID, AccountID: src.AccountID, CampaignID: src.CampaignID,
+				PlacementID: src.PlacementID, SavingsUSD: src.SavingsUSD, ClearingPrice: src.ClearingPrice,
+				Channel: src.Channel, SchemaVersion: 1, Timestamp: src.Timestamp,
+			}, true
+		},
+		// Dedup key: (trace, placement) mirrors the publisher's "shade:trace:placement"
+		// msg ID — one saving per (winning auction, placement). Money is summed, so
+		// dedup MUST hold to avoid double-counting across a redelivery.
+		func(e *analytics.AuctionShadeEvent) string { return e.TraceID + ":" + e.PlacementID },
+		c.batch.InsertAuctionShades,
+		nil,
+	)
+}
+
 func (c *EventConsumer) handleDirectWinBatch(ctx context.Context, msgs []*events.Message) error {
 	return batchProcess(ctx, c, msgs,
 		func(data []byte) (*analytics.AuctionWinEvent, bool) {
@@ -650,6 +676,7 @@ func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
 		events.SubjectAuctionComplete:   c.handleAuctionBatch,
 		events.SubjectAuctionWin:        c.handleAuctionWinBatch,
 		events.SubjectAuctionLoss:       c.handleAuctionLossBatch,
+		events.SubjectAuctionShade:      c.handleAuctionShadeBatch,
 		events.SubjectDirectWin:         c.handleDirectWinBatch,
 		events.SubjectPrebidOutboundWin: c.handlePrebidOutboundWinBatch,
 		events.SubjectVideo:             c.handleVideoBatch,

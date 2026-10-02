@@ -58,6 +58,31 @@ type AuctionLossEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
+// AuctionShadeEvent records the realized bid-shading SAVING on a won auction for
+// a known advertiser account — the win-side sibling of AuctionLossEvent.
+// Published best-effort by the DSP's win-notice handler (adtech.auction.shade)
+// when a SHADED bid wins: SavingsUSD is the per-win dollar saving (pre-shade
+// valuation − shaded price, CPM ÷ 1000 — same units the win books as spend).
+// Reporting sums it in the auction_shades ClickHouse table so the advertiser's
+// "dollars saved" is globally aggregated across every DSP pod and survives a
+// redeploy, instead of living only in one pod's in-memory bidshading tracker.
+//
+// AccountID is the RAW advertiser account (the JWT-session / impressions
+// account_id value), so savings scope to the same key as the advertiser's
+// delivered impressions. Only emitted when account + placement are known AND the
+// win was actually shaded (SavingsUSD > 0).
+type AuctionShadeEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	TraceID       string    `json:"trace_id,omitempty"`
+	AccountID     string    `json:"account_id"`
+	CampaignID    string    `json:"campaign_id,omitempty"`
+	PlacementID   string    `json:"placement_id"`
+	SavingsUSD    float64   `json:"savings_usd"`
+	ClearingPrice float64   `json:"clearing_price_usd"` // the shaded price actually paid (CPM)
+	Channel       string    `json:"channel,omitempty"`
+	Timestamp     time.Time `json:"timestamp"`
+}
+
 // DataFeeSegment is one fee-bearing segment that rode a won bid request:
 // who owns the data and what it costs (CPM in MICRO-dollars).
 type DataFeeSegment struct {

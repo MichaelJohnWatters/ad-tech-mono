@@ -623,6 +623,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectAuctionComplete:        c.handleAuction,
 		events.SubjectAuctionWin:             c.handleAuctionWin,
 		events.SubjectAuctionLoss:            c.handleAuctionLoss,
+		events.SubjectAuctionShade:           c.handleAuctionShade,
 		events.SubjectDirectWin:              c.handleDirectWin,
 		events.SubjectPrebidOutboundWin:      c.handlePrebidOutboundWin,
 		events.SubjectBudgetDepleted:         c.handleBudgetDepleted,
@@ -1239,6 +1240,38 @@ func (c *EventConsumer) handleAuctionLoss(ctx context.Context, msg *events.Messa
 	}
 	if err := c.store.InsertAuctionLoss(ctx, &e); err != nil {
 		c.log.Error("failed to write auction loss", "error", err, "placement_id", e.PlacementID)
+		return msg.Nak()
+	}
+	return msg.Ack()
+}
+
+// handleAuctionShade lands the durable per-advertiser bid-shading saving record
+// (win-side sibling of handleAuctionLoss). It is what makes the advertiser's
+// "dollars saved" a globally-aggregated, restart-durable figure instead of a
+// per-pod in-memory counter. Summed money, so the (trace, placement) dedup on
+// the publisher side keeps at-least-once redelivery from double-counting.
+func (c *EventConsumer) handleAuctionShade(ctx context.Context, msg *events.Message) error {
+	var src events.AuctionShadeEvent
+	if err := json.Unmarshal(msg.Data, &src); err != nil {
+		c.log.Error("failed to decode auction shade event", "error", err)
+		return msg.Ack() // bad payload — don't redeliver
+	}
+	if src.Timestamp.IsZero() {
+		src.Timestamp = time.Now()
+	}
+	e := analytics.AuctionShadeEvent{
+		TraceID:       src.TraceID,
+		AccountID:     src.AccountID,
+		CampaignID:    src.CampaignID,
+		PlacementID:   src.PlacementID,
+		SavingsUSD:    src.SavingsUSD,
+		ClearingPrice: src.ClearingPrice,
+		Channel:       src.Channel,
+		SchemaVersion: 1,
+		Timestamp:     src.Timestamp,
+	}
+	if err := c.store.InsertAuctionShade(ctx, &e); err != nil {
+		c.log.Error("failed to write auction shade", "error", err, "placement_id", e.PlacementID)
 		return msg.Nak()
 	}
 	return msg.Ack()

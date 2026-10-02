@@ -47,6 +47,16 @@ const (
 	// off the nurl hot path — never blocks the loss-notice response.
 	SubjectAuctionLoss = "adtech.auction.loss"
 
+	// SubjectAuctionShade carries AuctionShadeEvent: the DSP → Reporting durable
+	// per-advertiser bid-shading SAVING record (a win-side sibling of
+	// auction.loss). Published best-effort by the DSP's win-notice handler when a
+	// shaded bid for a KNOWN advertiser account wins, carrying the realized saving
+	// (pre-shade valuation − shaded price). Reporting lands it in the
+	// auction_shades ClickHouse table so the advertiser's "dollars saved" is a
+	// globally-aggregated, restart-durable figure instead of a per-pod in-memory
+	// counter. Best-effort, off the nurl hot path — never blocks the win response.
+	SubjectAuctionShade = "adtech.auction.shade"
+
 	// SubjectDataFee carries DataFeeEvent: SSP → reporting attribution for
 	// data monetization (an EXTERNAL bidder won an auction whose request
 	// carried fee-bearing audience data). Accrual happens at impression
