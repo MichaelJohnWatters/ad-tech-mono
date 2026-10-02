@@ -51,8 +51,8 @@ type CampaignConfig struct {
 	// lowers the bid toward the clearing price to avoid overpaying — see
 	// pkg/bidshading. The shading-showcase seed campaigns set this to demonstrate
 	// real, durable "dollars saved" on the advertiser portal.
-	ShadingMode string         `yaml:"shading_mode,omitempty"`
-	Status      string         `yaml:"status"`
+	ShadingMode string `yaml:"shading_mode,omitempty"`
+	Status      string `yaml:"status"`
 	// Format is the line item's primary format (line_items.format). Defaults
 	// to "display"; set to "native"/"video"/"audio" for those line items.
 	Format    string         `yaml:"format,omitempty"`
