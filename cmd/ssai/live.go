@@ -163,6 +163,19 @@ func (d *stitcherDeps) liveContentSegments(ctx context.Context, r *http.Request,
 	liveContentMu.Unlock()
 
 	manifest, originURL := d.originManifest(ctx, r, channel, reqLog)
+	// originManifest returns ("…built-in sample…", "") when the real origin is
+	// unreadable/unset. The sample's content_NNN.ts segments don't exist in the
+	// bucket, so serving them 404s every content segment — and caching the
+	// sample would PERMANENTLY poison this origin key: a transient miss while the
+	// origin is still being packaged (e.g. right after a purge+reseed) would
+	// never self-heal, even once the real content lands. Bail WITHOUT caching so
+	// the handler 500s, the player re-polls, and the stream heals the instant the
+	// real origin is readable.
+	if originURL == "" {
+		reqLog.Warn("live content origin unavailable (fell back to built-in sample); not caching",
+			"channel", channel, "origin", r.URL.Query().Get("origin"))
+		return nil
+	}
 	if ssai.IsMaster(manifest) {
 		if vs := ssai.ParseMaster(manifest); len(vs) > 0 {
 			v := vs[0] // lowest rung is plenty for the live demo
@@ -189,6 +202,12 @@ func (d *stitcherDeps) liveContentSegments(ctx context.Context, r *http.Request,
 	for _, s := range m.Segments {
 		// Strip the VOD break markers — the live timeline inserts its own breaks.
 		out = append(out, ssai.Segment{Duration: s.Duration, URI: s.URI, Map: s.Map})
+	}
+	// Don't cache an empty parse (e.g. master resolved but its variant playlist
+	// was unreadable) — same poison-avoidance as the fallback guard above.
+	if len(out) == 0 {
+		reqLog.Warn("live content resolved to zero segments; not caching", "channel", channel, "origin", originURL)
+		return nil
 	}
 	liveContentMu.Lock()
 	liveContentCache[cacheKey] = out
