@@ -456,6 +456,7 @@ func (t *HotColdStore) Close() error {
 var additiveMetrics = map[string]bool{
 	"count": true, "sum_cost": true, "sum_revenue": true, "sum_bids": true,
 	"sum_viewable": true, "media_starts": true, "media_completes": true,
+	"sum_savings": true, // SUM(savings_usd) on auction_shades — plain sum, merges hot+cold
 }
 
 // hotOnlyTables are the tables absent from exportTables — the operational
@@ -473,6 +474,11 @@ var hotOnlyTables = func() map[string]bool {
 	for _, name := range []string{
 		"serve_no_fills", "freq_cap_blocks", "render_failures",
 		"campaign_state_changes", "budget_depletions", "tracker_rejections",
+		// auction_shades has no parquet export (like auction_losses), and the
+		// advertiser shading view only ever looks back shadingWindow (30d, inside
+		// the hot TTL). Route it hot-only so a spanning query doesn't fire a cold
+		// s3() read over Parquet that was never written (which flaps the answer).
+		"auction_shades",
 	} {
 		if !exported[name] {
 			out[name] = true
