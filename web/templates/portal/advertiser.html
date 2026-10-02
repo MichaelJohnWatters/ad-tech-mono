@@ -558,7 +558,7 @@
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "Your paid clearing price" "subtitle" "The real, per-advertiser figures: your delivered impressions and what you paid, last 30 days") }}
-      <div id="shadeTotals" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-2 text-sm text-gray-500">
+      <div id="shadeTotals" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-2 text-sm text-gray-500">
         <div class="py-6 text-center text-gray-400 col-span-full">loading…</div>
       </div>
       {{ template "card-end" . }}
@@ -1341,12 +1341,23 @@ async function loadShading() {
     return;
   }
   const t = data.your_totals || {};
+  // Efficiency vs market (honest): on placements where you paid BELOW the DSP-wide
+  // marketplace average clearing, the dollars you DIDN'T overpay =
+  // (market_avg_cpm − you_cpm) × your_impressions / 1000. This is a vs-marketplace
+  // figure (NOT a pre-shade delta — the DSP doesn't shade the submitted bid), so
+  // it's labelled as such.
+  const savedVsMarket = (data.placements || []).reduce((acc, p) => {
+    const you = Number(p.your_avg_clearing_cpm), mkt = Number(p.marketplace_avg_clearing), imp = Number(p.your_impressions) || 0;
+    if (p.has_marketplace_stats && you > 0 && mkt > you) acc += (mkt - you) * imp / 1000;
+    return acc;
+  }, 0);
   totalsEl.innerHTML = `
     <div><div class="text-xs uppercase text-gray-400">Placements you bid on</div><div class="text-xl font-semibold">${t.placements | 0}</div></div>
     <div><div class="text-xs uppercase text-gray-400">Your impressions</div><div class="text-xl font-semibold">${Number(t.impressions || 0).toLocaleString()}</div></div>
     <div><div class="text-xs uppercase text-gray-400">Your spend</div><div class="text-xl font-semibold">${fmtUSD(t.spend_usd)}</div></div>
     <div><div class="text-xs uppercase text-gray-400">Your avg clearing CPM</div><div class="text-xl font-semibold">${cpm(t.avg_clearing_cpm)}</div></div>
-    <div><div class="text-xs uppercase text-gray-400" title="Your own bids that won — genuinely per-advertiser">Your win rate</div><div class="text-xl font-semibold">${t.bids ? pct(t.win_rate) : '—'}</div><div class="text-xs text-gray-400">${(t.wins|0)}W / ${(t.losses|0)}L</div></div>`;
+    <div><div class="text-xs uppercase text-gray-400" title="Your own bids that won — genuinely per-advertiser">Your win rate</div><div class="text-xl font-semibold">${t.bids ? pct(t.win_rate) : '—'}</div><div class="text-xs text-gray-400">${(t.wins|0)}W / ${(t.losses|0)}L</div></div>
+    <div><div class="text-xs uppercase text-gray-400" title="Dollars you did NOT overpay vs the DSP-wide marketplace average clearing price on the inventory you won. This is efficiency vs the market — NOT a pre-shade-vs-paid delta (the DSP tracks shading but doesn't lower the submitted bid).">Saved vs market (est.)</div><div class="text-xl font-semibold text-success">${savedVsMarket > 0 ? fmtUSD(savedVsMarket) : '—'}</div></div>`;
   const rows = (data.placements || []);
   const body = rows.length ? rows.map(p => `<tr class="border-t border-gray-100 dark:border-gray-800">
       <td class="px-3 py-2 font-mono text-xs">${esc(p.placement_id || '')}</td>
