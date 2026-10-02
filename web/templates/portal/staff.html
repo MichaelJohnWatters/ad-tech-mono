@@ -469,21 +469,18 @@
       </div>
 
       <div class="mb-3 rounded-lg border border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-900/20 p-3 text-sm">
-        <div class="font-medium mb-1">B · Live CRM upload ("upload myself")</div>
+        <div class="font-medium mb-1">B · Live CRM upload in the advertiser portal ("upload myself")</div>
+        <div class="mb-2 rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs">
+          <b>Log in as the real advertiser</b> for this — a separate browser/incognito window, <b>not</b> staff “View as”. The upload binds the segment to the logged-in account, and only a real advertiser session carries the <code>audiences:upload</code> permission.<br>
+          <b>Lumière Diamonds login:</b> <code>lumi-re-diamonds@adtech.local</code> / <code>admin</code> (seeded; every demo advertiser is loginable with password <code>admin</code>).
+        </div>
         <ol class="list-decimal ml-5 space-y-1 text-gray-700 dark:text-gray-200">
-          <li>Pick your email and compute its hash (the SDK sends <code>sha256(lowercased email)</code>):<br>
-            <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">printf '%s' you@example.com | tr 'A-Z' 'a-z' | shasum -a 256</code></li>
-          <li><b>Act as Lumière Diamonds</b> (<a href="#impersonate" class="text-info hover:underline">View as account</a> → Lumière Diamonds) and upload the hash into the targeted segment — name it <b>exactly</b> <code>Diamond &amp; Jewelry Intenders</code>, visibility <b>public</b>, so it merges into the segment the campaign already targets:
-            <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs mt-1"><code>curl -sk https://gateway.adtech.local/v1/api/audiences \
-  -H "Authorization: Bearer &lt;lumiere-session-jwt&gt;" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Diamond &amp; Jewelry Intenders","visibility":"public",
-       "user_ids":["&lt;your-sha256-hash&gt;"]}'</code></pre>
-            (or the advertiser portal's <b>Audiences → New upload</b> with a CSV whose <code>hashed_email</code> column holds your hash).</li>
-          <li>On a demo site, set your persona to that <b>same email</b> (persona bar bottom-left → <b>Change</b>), accept personalized consent, and reload. Same result as A — Lumière Diamonds wins your impressions.</li>
+          <li>Log in at <a href="https://gateway.adtech.local/login" target="_blank" rel="noopener" class="text-info hover:underline">/login</a> as <code>lumi-re-diamonds@adtech.local</code> / <code>admin</code> (lands on the advertiser portal) → open the <b>Audiences</b> section.</li>
+          <li>Click <b>+ Upload audience</b>. Choose the ready-made file <code>~/Desktop/jewelry-intenders.csv</code> (an <code>email</code> column; the browser SHA-256-hashes it client-side — raw email never leaves the page). Set <b>Name</b> to <b>exactly</b> <code>Diamond &amp; Jewelry Intenders</code>, <b>Type</b> First party, <b>Visibility</b> <b>Public</b> → <b>Upload</b>. (Add your own email to the CSV to “upload yourself”.)</li>
+          <li>Wait <b>~3 seconds</b> (the membership cache drains on a 3s poll — see Upload history for the match rate), then on a demo site browse as one of those emails (persona bar bottom-left → <b>Change</b> → e.g. <code>demo.shopper@example.com</code>), <b>Accept personalized</b>, reload. Lumière Diamonds now wins your display + video — same as A.</li>
         </ol>
       </div>
-      <p class="text-xs text-gray-500">How it works: the SSP matches segments on the <code>hashed_email</code> the SDK forwards (consent-gated); these two segments are <b>public</b>, so the SSP stamps them on <code>user.ext.segments</code>, our DSP reads them for targeting, and <code>profiles/dsps/luxe.yaml</code> applies a big per-segment bid modifier on a high base bid → the dominant, first-price clearing price you see. After a reset: <code>make demo-data</code> re-seeds the segments + persona; <code>make deploy-demosites</code> for the branded video.</p>
+      <p class="text-xs text-gray-500">How it works: the SSP matches segments on the <code>hashed_email</code> the SDK forwards (consent-gated); these two segments are <b>public</b>, so the SSP stamps them on <code>user.ext.segments</code>, our DSP reads them for targeting, and the Lumière campaign in <code>profiles/dsps/internal.yaml</code> applies a big per-segment bid modifier on a high base bid → the dominant, first-price clearing price you see. Naming the upload <code>Diamond &amp; Jewelry Intenders</code> merges it into the <i>same</i> segment the seed pre-populates (one id, both flows). After a reset: <code>make demo-data</code> re-seeds the segments + persona; <code>make deploy-demosites</code> for the branded video.</p>
       {{ template "card-end" . }}
 
       {{ template "card-start" (dict "title" "🛍️ The earned-audience money loop — step by step" "subtitle" "Browse the shop → get chased by a Dynamic Product Ad on a publisher site → purchase converts. This is THE end-to-end demo; it's order- and consent-sensitive, so follow it exactly.") }}
