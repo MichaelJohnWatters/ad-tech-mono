@@ -25,6 +25,9 @@
 # cluster-wide — staging shares prod's posture.
 global:
   debugEndpoints: false
+  # Keep trace sampling at the per-service default (0.1) — the base values.yaml
+  # local default of "1.0" (full tracing for demos) must not leak to a deployed env.
+  otelSampleRatio: "0.1"
   # ONE domain knob: every ingress host + cert SAN derives from it
   # (templates/services.yaml). No registered domain? Point at the node IP with
   # sslip.io — `<node-ip>.sslip.io` resolves anywhere and Let's Encrypt HTTP-01
