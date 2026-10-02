@@ -29,6 +29,7 @@ BRANDS=(
   "luxauto|LuxAuto|luxauto.com|17 24 39|234 179 8"
   "quickbite|QuickBite|quickbite.app|234 88 12|255 237 213"
   "epicquest|Epic Quest|epicquest.game|109 40 217|221 214 254"
+  "luxe|Lumiere Diamonds|lumiere-diamonds.com|10 10 15|212 175 55"
 )
 
 cat > "$TMP/main.go" <<'GO'

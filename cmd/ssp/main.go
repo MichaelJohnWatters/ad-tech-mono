@@ -591,6 +591,11 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// make the user addressable. The segment lookup falls back to the UID2
 	// token when there's no first-party user_id.
 	uid2 := r.URL.Query().Get("uid2")
+	// First-party hashed email (sha256, client-hashed per the privacy rule) — only
+	// sent by the SDK AFTER personalisation consent. Used purely as an audience
+	// MATCH key (CRM/first-party onboarding: a segment uploaded by hashed email
+	// matches this visitor), never stamped as an EID on the outgoing request.
+	hashedEmail := r.URL.Query().Get("hashed_email")
 	// Household (CTV): derive the platform household id from the end user's
 	// IP and carry it as an EID. The IP is resolved ONCE here — shared
 	// trusted-proxy parse plus the allowlist-gated ?ip= override (see
@@ -611,7 +616,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// when) fee-bearing user.data is stamped below; consumed after the
 	// auction resolves.
 	var feeSegs []events.DataFeeSegment
-	if userID != "" || uid2 != "" || householdID != "" {
+	if userID != "" || uid2 != "" || householdID != "" || hashedEmail != "" {
 		user := &openrtb.User{ID: userID}
 		if uid2 != "" {
 			user.EIDs = []openrtb.EID{openrtb.UID2EID(uid2)}
@@ -628,7 +633,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		// both lookups (user + household; household runs on EVERY request,
 		// anonymous included, so an unbounded query here would be a hot-path
 		// latency risk).
-		if audienceStore != nil && (lookupKey != "" || householdID != "") {
+		if audienceStore != nil && (lookupKey != "" || householdID != "" || hashedEmail != "") {
 			// The two lookups are independent reads, so they run CONCURRENTLY
 			// under the shared 25ms budget (serialized they were worst-case
 			// 2×25ms — and before the Redis client honoured ctx deadlines on
@@ -636,7 +641,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			// Sub-phase histogram pins that decomposition on the dashboard.
 			segStart := time.Now()
 			segCtx, cancelSeg := context.WithTimeout(ctx, 25*time.Millisecond)
-			var userSegs, hhSegs []string
+			var userSegs, hhSegs, heSegs []string
 			var wg sync.WaitGroup
 			if lookupKey != "" {
 				wg.Add(1)
@@ -666,9 +671,26 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 					}
 				}()
 			}
+			// First-party / CRM audience: segments onboarded by hashed email
+			// (e.g. a "diamond intenders" list uploaded via /v1/api/audiences).
+			// Keyed by the raw sha256 the SDK forwards, so an uploaded member and
+			// this visitor line up without any identity-graph round-trip.
+			if hashedEmail != "" {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					looked, err := audienceStore.SegmentsForUser(segCtx, hashedEmail)
+					if err != nil {
+						reqLog.Warn("hashed-email segment lookup failed (degrading to none)", "error", err)
+					} else {
+						heSegs = looked
+					}
+				}()
+			}
 			wg.Wait()
 			cancelSeg()
 			segs = append(userSegs, hhSegs...)
+			segs = append(segs, heSegs...)
 			obsServePhase("pre_auction_segments", segStart)
 		}
 		// Explicit ?segments= (comma-separated) lets a publisher/test pass the

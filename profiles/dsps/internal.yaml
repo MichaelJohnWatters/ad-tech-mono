@@ -327,3 +327,48 @@ campaigns:
     creatives:
       - { id: cr-dogfood-cart-001, name: "Ford F-150 Dynamic Ad (300x250)", width: 300, height: 250, format: dynamic_product }
       - { id: cr-dogfood-cart-001-leader, name: "Ford F-150 Dynamic Ad (728x90)", width: 728, height: 90, format: dynamic_product }
+
+  # Lumière Diamonds — the "first-party audience" demo advertiser. Lives HERE (dsp
+  # "internal") so the deployed dsp-internal pod actually serves it. Aggressive
+  # audience bidding: a visitor in the uploaded/seeded luxury segments (diamond &
+  # jewelry intenders + affluent) draws a DOMINANT CPM, winning display + video and
+  # showing a premium clearing price in the trace panel. Segments seeded + the demo
+  # persona enrolled in cmd/seed seedJewelryDemo; a viewer can self-onboard live via
+  # POST /v1/api/audiences (CRM upload by hashed email). See the staff portal
+  # "First-party audience demo" section. The segment keys are the account-UUID/name
+  # form the CRM-upload path derives (Derive("segment", accountUUID+"/"+name)), so a
+  # live upload of these named segments as Lumière merges into the SAME segment the
+  # seed pre-populates. accountUUID = Derive("account","adv-luxe") =
+  # 7744054e-29ad-5733-837a-c537428c92ed (deterministic).
+  - id: li-luxe-001
+    account_id: adv-luxe
+    advertiser_id: adv-luxe
+    io_id: io-luxe
+    name: "Lumière Diamonds - High-Intent Luxury"
+    creative_domain: lumiere-diamonds.com
+    base_bid: 40.00
+    currency: USD
+    daily_budget: 2000
+    total_budget: 50000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    targeting:
+      include:
+        segments:
+          - "7744054e-29ad-5733-837a-c537428c92ed/Diamond & Jewelry Intenders"
+          - "7744054e-29ad-5733-837a-c537428c92ed/Affluent / High Net Worth"
+    modifiers:
+      # Per-segment bid uplift (%). Stacks when a visitor is in both — the clearest
+      # "aggressively bid high on MY audience" demo.
+      audience:
+        "7744054e-29ad-5733-837a-c537428c92ed/Diamond & Jewelry Intenders": 80
+        "7744054e-29ad-5733-837a-c537428c92ed/Affluent / High Net Worth": 50
+    # Display across the standard sizes + an instream video spot, so the jeweler
+    # competes (and wins) on BOTH display and video/SSAI for its audience.
+    creatives:
+      - { id: cr-luxe-001, width: 300, height: 250 }
+      - { id: cr-luxe-001-leader, width: 728, height: 90 }
+      - { id: cr-luxe-001-sky, width: 160, height: 600 }
+      - { id: cr-luxe-001-video-15s, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-luxe.mp4" }

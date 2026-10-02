@@ -456,6 +456,36 @@
       <p class="mt-3 text-xs text-gray-400">Verify any of these landed: Reporting (impressions/conversions), the Trace inspector (follow one request end-to-end), or "view as" the publisher/advertiser in <a href="#impersonate" class="text-info hover:underline">Impersonate</a>. The Shop's advertiser is <code>Premium Dog Food Co</code>; rich pre-seeded audiences live on <code>adv-initech</code>.</p>
       {{ template "card-end" . }}
 
+      {{ template "card-start" (dict "title" "💎 First-party audience demo — upload a segment, watch an advertiser bid it up" "subtitle" "Onboard a high-value audience (diamond & jewelry intenders + affluent) and watch Lumière Diamonds bid a DOMINANT CPM to win that visitor's display + video — the premium shows up as a high clearing price in the trace panel.") }}
+      <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">Two ways to run it. <b>A</b> is pre-seeded and always works (great for a recording); <b>B</b> is the live "I'll upload myself right now" moment. Both feed the <i>same</i> segment, so the advertiser bids the same way.</p>
+
+      <div class="mb-4 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 p-3 text-sm">
+        <div class="font-medium mb-1">A · Seeded persona (reliable — nothing to upload)</div>
+        <ol class="list-decimal ml-5 space-y-1 text-gray-700 dark:text-gray-200">
+          <li>Open any demo publisher site (e.g. <a href="https://chronicle.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline">chronicle.adtech.local</a> for display, <a href="https://twitchr.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline">twitchr.adtech.local</a> for video/CTV).</li>
+          <li>On the cookie banner click <b>“Accept personalized”</b> (the hashed email only rides the request under personalization consent).</li>
+          <li>The default persona (<code>demo.shopper@example.com</code>) is pre-enrolled in <b>Diamond &amp; Jewelry Intenders</b> + <b>Affluent</b>. Watch the <b>🔍 Trace</b> panel: the ad request shows <span style="background:#064e3b;color:#6ee7b7;padding:1px 6px;border-radius:4px;font-weight:700;font-size:11px;">✓ FILL</span> <b>lumiere-diamonds.com</b> at a high price (≈ $70–90 CPM vs the ~$10 open market), and the video/CTV spot is the branded <b>Lumière Diamonds</b> card.</li>
+        </ol>
+      </div>
+
+      <div class="mb-3 rounded-lg border border-sky-300 dark:border-sky-700 bg-sky-50 dark:bg-sky-900/20 p-3 text-sm">
+        <div class="font-medium mb-1">B · Live CRM upload ("upload myself")</div>
+        <ol class="list-decimal ml-5 space-y-1 text-gray-700 dark:text-gray-200">
+          <li>Pick your email and compute its hash (the SDK sends <code>sha256(lowercased email)</code>):<br>
+            <code class="px-1 bg-gray-100 dark:bg-surface-3 rounded">printf '%s' you@example.com | tr 'A-Z' 'a-z' | shasum -a 256</code></li>
+          <li><b>Act as Lumière Diamonds</b> (<a href="#impersonate" class="text-info hover:underline">View as account</a> → Lumière Diamonds) and upload the hash into the targeted segment — name it <b>exactly</b> <code>Diamond &amp; Jewelry Intenders</code>, visibility <b>public</b>, so it merges into the segment the campaign already targets:
+            <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs mt-1"><code>curl -sk https://gateway.adtech.local/v1/api/audiences \
+  -H "Authorization: Bearer &lt;lumiere-session-jwt&gt;" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Diamond &amp; Jewelry Intenders","visibility":"public",
+       "user_ids":["&lt;your-sha256-hash&gt;"]}'</code></pre>
+            (or the advertiser portal's <b>Audiences → New upload</b> with a CSV whose <code>hashed_email</code> column holds your hash).</li>
+          <li>On a demo site, set your persona to that <b>same email</b> (persona bar bottom-left → <b>Change</b>), accept personalized consent, and reload. Same result as A — Lumière Diamonds wins your impressions.</li>
+        </ol>
+      </div>
+      <p class="text-xs text-gray-500">How it works: the SSP matches segments on the <code>hashed_email</code> the SDK forwards (consent-gated); these two segments are <b>public</b>, so the SSP stamps them on <code>user.ext.segments</code>, our DSP reads them for targeting, and <code>profiles/dsps/luxe.yaml</code> applies a big per-segment bid modifier on a high base bid → the dominant, first-price clearing price you see. After a reset: <code>make demo-data</code> re-seeds the segments + persona; <code>make deploy-demosites</code> for the branded video.</p>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "🛍️ The earned-audience money loop — step by step" "subtitle" "Browse the shop → get chased by a Dynamic Product Ad on a publisher site → purchase converts. This is THE end-to-end demo; it's order- and consent-sensitive, so follow it exactly.") }}
       <ol class="list-decimal ml-5 space-y-2 text-sm text-gray-700 dark:text-gray-200">
         <li><b>Open the shop</b> → <a href="https://shop.adtech.local" target="_blank" rel="noopener" class="text-info hover:underline">shop.adtech.local</a>. On the cookie banner click <b>“Accept personalized”</b> (NOT “Contextual only” — contextual drops the id cookie and nothing gets enrolled).</li>
