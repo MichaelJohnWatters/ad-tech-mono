@@ -167,11 +167,22 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-		defer cancel()
-
+		reqCtx := r.Context()
 		since := time.Now().Add(-shadingWindow)
-		rows, err := deps.placementSpend(ctx, accountID, since)
+
+		// Each dependency is INDEPENDENT, so each gets its OWN timeout derived from
+		// the request — NOT a single shared, sequentially-draining budget. Sharing
+		// one deadline let the slow DSP in-memory marketplace dump eat the whole
+		// budget and starve the (fast, durable) savings read → it silently returned
+		// 0. Per-call deadlines keep a slow optional fetch from poisoning the others.
+		withTimeout := func(d time.Duration) (context.Context, context.CancelFunc) {
+			return context.WithTimeout(reqCtx, d)
+		}
+
+		// placementSpend is the critical money read (fatal on error) — main budget.
+		psCtx, psCancel := withTimeout(15 * time.Second)
+		rows, err := deps.placementSpend(psCtx, accountID, since)
+		psCancel()
 		if err != nil {
 			log.Error("shading: advertiser placement spend query failed", "account", accountID, "error", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -183,29 +194,38 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 		// money numbers + wins (impressions) above still stand; losses just stay 0.
 		// This is the phase-2 durability source — it survives a DSP redeploy,
 		// unlike the old in-memory DSP tracker.
-		losses, err := deps.advertiserLosses(ctx, accountID, since)
+		lossCtx, lossCancel := withTimeout(10 * time.Second)
+		losses, err := deps.advertiserLosses(lossCtx, accountID, since)
+		lossCancel()
 		if err != nil {
 			log.Warn("shading: per-advertiser losses unavailable", "account", accountID, "error", err)
 			losses = nil
 		}
-		// DSP-wide marketplace context (live, in-memory). Also non-fatal —
-		// marketplace_* just stays unpopulated if the DSP can't be reached.
-		mkt, err := deps.marketplaceStats(ctx)
-		if err != nil {
-			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
-			mkt = nil
-		}
 		// Realized bid-shading savings for THIS advertiser, summed durably from
 		// ClickHouse (auction_shades) and account-scoped — aggregated across every
 		// DSP pod, survives a DSP restart. Non-fatal: stays 0 if reporting is
-		// unreachable or no shaded wins exist yet.
+		// unreachable or no shaded wins exist yet. Fetched BEFORE the DSP marketplace
+		// dump below so this durable number always gets a clean deadline.
 		var shadingSavingsUSD float64
 		if deps.advertiserSavings != nil {
-			if sv, aerr := deps.advertiserSavings(ctx, accountID, since); aerr != nil {
+			svCtx, svCancel := withTimeout(10 * time.Second)
+			sv, aerr := deps.advertiserSavings(svCtx, accountID, since)
+			svCancel()
+			if aerr != nil {
 				log.Warn("shading: per-advertiser realized savings unavailable", "account", accountID, "error", aerr)
 			} else {
 				shadingSavingsUSD = sv
 			}
+		}
+		// DSP-wide marketplace context (live, in-memory — can be slow to serialize).
+		// Non-fatal + a SHORT own timeout so it can't starve the reads above:
+		// marketplace_* just stays unpopulated if the DSP is slow/unreachable.
+		mktCtx, mktCancel := withTimeout(5 * time.Second)
+		mkt, err := deps.marketplaceStats(mktCtx)
+		mktCancel()
+		if err != nil {
+			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
+			mkt = nil
 		}
 
 		// Union: the money rows are delivered impressions (wins). Add any placement
