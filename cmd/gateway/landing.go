@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"html/template"
+)
+
 // Themed mock landing pages for the seeded demo creatives. The tracker
 // click handler redirects to /dev/landing/{slug}; this table maps the
 // slug to a brand name, palette, glyph, tagline, and CTA so the page
@@ -177,6 +182,18 @@ var landingThemes = map[string]landingTheme{
 		CTAFg:   "#fff",
 		Muted:   "#666",
 	},
+}
+
+// StyleVars renders the theme's :root custom properties as trusted template.CSS.
+// Must be template.CSS, not a plain string interpolated per-property: html/template
+// BLANKS a linear-gradient value to "ZgotmplZ" in a CSS context, which made
+// --bg invalid → the page fell back to a white background with white --fg text
+// (unreadable). The values are compile-time constants, so trusting them is safe.
+func (t landingTheme) StyleVars() template.CSS {
+	return template.CSS(fmt.Sprintf(
+		"--bg:%s;--fg:%s;--accent:%s;--cta-fg:%s;--muted:%s;",
+		t.BG, t.FG, t.Accent, t.CTAFg, t.Muted,
+	))
 }
 
 // landingThemeForSlug returns the theme record for the slug, falling
