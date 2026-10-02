@@ -56,6 +56,25 @@
         {{ template "stat" (dict "label" "CTR today" "value" "—" "id" "kpiCTR") }}
       </div>
 
+      <!-- Performance overview: outcome KPIs over the last 7 days (conversions +
+           revenue are where the money story lives; ROAS/CPA are THE advertiser
+           numbers). All composed from the reporting query API. -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {{ template "stat" (dict "label" "Conversions (7d)" "value" "—" "id" "kpiConv") }}
+        {{ template "stat" (dict "label" "Revenue (7d)" "value" "—" "id" "kpiRevenue") }}
+        {{ template "stat" (dict "label" "ROAS (7d)" "value" "—" "id" "kpiROAS") }}
+        {{ template "stat" (dict "label" "CPA (7d)" "value" "—" "id" "kpiCPA") }}
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        {{ template "card-start" (dict "title" "Conversion funnel — last 7 days" "subtitle" "Impressions → Clicks → Conversions, with drop-off rates") }}
+        <div id="funnel" class="space-y-3"><span class="text-xs text-gray-400">loading…</span></div>
+        {{ template "card-end" . }}
+        {{ template "card-start" (dict "title" "Spend by channel — last 7 days") }}
+        <div id="channelMix" class="h-24 flex items-end gap-1"><span class="text-xs text-gray-400">loading…</span></div>
+        {{ template "card-end" . }}
+      </div>
+
       {{ template "card-start" (dict "title" "Spend — last 7 days") }}
       <div id="spendTrend" class="text-brand h-20 flex items-end">
         <span class="text-xs text-gray-400">loading…</span>
@@ -74,6 +93,12 @@
       {{ template "card-start" (dict "title" "Top campaigns" "subtitle" "Top 5 by spend today; performance is last 7 days") }}
       {{ template "table-start" (dict "headers" (slice "Name" "Status" "Spend / used" "Impr. 7d" "Clicks 7d" "CTR 7d")) }}
         <tbody id="topCampaignsBody"><tr><td colspan="6" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
+      {{ template "table-end" . }}
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "Top creatives" "subtitle" "Top 5 by spend — last 7 days") }}
+      {{ template "table-start" (dict "headers" (slice "Creative" "Impr." "Spend" "CTR")) }}
+        <tbody id="topCreativesBody"><tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
     </section>
@@ -1419,7 +1444,84 @@ async function loadDashboard(withInsights = true) {
     const trend = await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['day'], time_from: daysAgo(7)});
     renderTrend(trend);
   } catch (err) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no trend data</span>'; }
-  if (withInsights) await loadDashboardInsights();
+  if (withInsights) { await loadDashboardInsights(); loadPerformanceOverview(); }
+}
+
+// ---- Performance overview (7d): outcome KPIs + funnel + channel mix + top creatives.
+// All composed from the reporting query API; every leg is best-effort so one slow
+// query never blanks the rest. Runs on the insights cadence (~60s), not every tick.
+async function loadPerformanceOverview() {
+  try {
+    const [imps, clk, conv] = await Promise.all([
+      reportQuery({table: 'impressions', metrics: ['count', 'sum_cost'], time_from: daysAgo(7)}),
+      reportQuery({table: 'clicks', metrics: ['count'], time_from: daysAgo(7)}),
+      reportQuery({table: 'conversions', metrics: ['count', 'sum_revenue'], time_from: daysAgo(7)}),
+    ]);
+    const i = firstRow(imps), c = firstRow(clk), v = firstRow(conv);
+    const impN = Number(i.count) || 0, spend = Number(i.sum_cost) || 0;
+    const clkN = Number(c.count) || 0, convN = Number(v.count) || 0, rev = Number(v.sum_revenue) || 0;
+    $('kpiConv').textContent = fmtInt(convN);
+    $('kpiRevenue').textContent = fmtUSD(rev);
+    $('kpiROAS').textContent = spend > 0 ? (rev / spend).toFixed(2) + '×' : '—';
+    $('kpiCPA').textContent = convN > 0 ? fmtUSD(spend / convN) : '—';
+    renderFunnel(impN, clkN, convN);
+  } catch (err) { /* best-effort */ }
+  try {
+    renderChannelMix(await reportQuery({table: 'impressions', metrics: ['sum_cost'], dimensions: ['channel'], time_from: daysAgo(7)}));
+  } catch (err) { const el = $('channelMix'); if (el) el.innerHTML = '<span class="text-xs text-gray-400">no data</span>'; }
+  try {
+    renderTopCreatives(await reportQuery({table: 'impressions', metrics: ['count', 'sum_cost', 'ctr'], dimensions: ['creative_id'], time_from: daysAgo(7)}));
+  } catch (err) { /* best-effort */ }
+}
+
+// Horizontal funnel: bar width ∝ stage count vs impressions; drop-off rates
+// (CTR, CVR) shown per stage. data-w → width set in JS (the ui lint bans inline style).
+function renderFunnel(imp, clk, conv) {
+  const el = $('funnel'); if (!el) return;
+  const ctr = imp > 0 ? clk / imp * 100 : 0, cvr = clk > 0 ? conv / clk * 100 : 0;
+  const stages = [
+    {label: 'Impressions', val: imp, rate: ''},
+    {label: 'Clicks', val: clk, rate: 'CTR ' + ctr.toFixed(2) + '%'},
+    {label: 'Conversions', val: conv, rate: 'CVR ' + cvr.toFixed(2) + '%'},
+  ];
+  const max = Math.max(imp, 1);
+  el.innerHTML = stages.map(s => {
+    const w = Math.max(6, Math.round(100 * s.val / max));
+    return `<div>
+      <div class="flex justify-between text-xs mb-1"><span class="font-medium">${s.label}</span><span class="text-gray-400">${fmtInt(s.val)}${s.rate ? ' · ' + esc(s.rate) : ''}</span></div>
+      <div class="h-4 rounded bg-brand/70" data-w="${w}"></div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-w]').forEach(e => { e.style.width = e.dataset.w + '%'; });
+}
+
+function renderChannelMix(res) {
+  const el = $('channelMix'); if (!el) return;
+  const ci = res.columns.indexOf('channel'), si = res.columns.indexOf('sum_cost');
+  const rows = (res.rows || []).filter(r => Number(r[si]) > 0).sort((a, b) => Number(b[si]) - Number(a[si]));
+  if (!rows.length) { el.innerHTML = '<span class="text-xs text-gray-400">no spend in the last 7 days</span>'; return; }
+  const max = Math.max(...rows.map(r => Number(r[si]) || 0), 0.01);
+  el.innerHTML = rows.map(r => {
+    const vv = Number(r[si]) || 0, h = Math.max(4, Math.round(72 * vv / max));
+    return `<div class="flex-1 flex flex-col items-center justify-end gap-1" title="${esc(r[ci] || 'unknown')}: ${fmtUSD(vv)}">
+      <div class="w-full rounded-t bg-brand/70 hover:bg-brand" data-h="${h}"></div>
+      <div class="text-[10px] text-gray-400">${esc(r[ci] || '—')}</div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-h]').forEach(e => { e.style.height = e.dataset.h + 'px'; });
+}
+
+function renderTopCreatives(res) {
+  const tb = $('topCreativesBody'); if (!tb) return;
+  const idi = res.columns.indexOf('creative_id'), ni = res.columns.indexOf('count'),
+    si = res.columns.indexOf('sum_cost'), ti = res.columns.indexOf('ctr');
+  const rows = (res.rows || []).slice().sort((a, b) => Number(b[si]) - Number(a[si])).slice(0, 5);
+  tb.innerHTML = rows.length ? rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
+    <td class="px-3 py-2 font-mono text-xs">${esc(r[idi] || '—')}</td>
+    <td class="px-3 py-2">${fmtInt(r[ni])}</td>
+    <td class="px-3 py-2">${fmtUSD(r[si])}</td>
+    <td class="px-3 py-2">${r[ti] == null ? '—' : (+r[ti]).toFixed(2) + '%'}</td>
+  </tr>`).join('') : '<tr><td colspan="4" class="px-3 py-6 text-center text-sm text-gray-400">no delivery in the last 7 days</td></tr>';
 }
 
 // ---- Dashboard insights (needs-attention + top campaigns) ----
