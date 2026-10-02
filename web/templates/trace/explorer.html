@@ -45,6 +45,10 @@
         <span class="controls-sep">|</span>
         <input type="number" id="batchN" value="10" min="1" max="50" title="how many ads to fire" />
         <button class="btn" onclick="reconcileBatch()">Reconcile Batch</button>
+        <span class="controls-sep">|</span>
+        <span class="controls-sep" style="margin-right:0">view:</span>
+        <button class="btn btn-primary" id="modeFlow" onclick="setMode('flow')" title="Service-to-service flow diagram">Flow</button>
+        <button class="btn" id="modeTimeline" onclick="setMode('timeline')" title="Chronological event timeline">Timeline</button>
     </div>
 
     <div class="page-content" id="content">
@@ -59,6 +63,22 @@
     </div>
 
     <script>
+    // Flow mode: render the same trace data as a service-flow diagram (default) or
+    // the chronological timeline. draw() remembers the last data so the toggle
+    // re-renders it in place.
+    let traceMode = 'flow';
+    let lastTraceData = null;
+    function draw(el, data) {
+      lastTraceData = data;
+      (traceMode === 'flow' ? window.renderFlow : window.renderTrace)(el, data);
+    }
+    function setMode(m) {
+      traceMode = m;
+      document.getElementById('modeFlow').classList.toggle('btn-primary', m === 'flow');
+      document.getElementById('modeTimeline').classList.toggle('btn-primary', m === 'timeline');
+      if (lastTraceData) draw(document.getElementById('content'), lastTraceData);
+    }
+
     async function lookupTrace() {
         const traceId = document.getElementById('traceInput').value.trim();
         if (!traceId) return;
@@ -111,7 +131,7 @@
             steps.push({ time: '', service: 'reporting', cls: 'warn', msg: 'No events found for this trace', detail: 'It may not have impressed, or is still in-flight' });
             note = 'No analytics events for this trace_id.';
         }
-        renderTrace(content, { traceId: traceId, jaegerBase: 'http://localhost:16686', note: note, steps: steps, panels: panels });
+        draw(content, { traceId: traceId, jaegerBase: 'http://localhost:16686', note: note, steps: steps, panels: panels });
     }
 
     async function fireSingleRequest() {
@@ -134,7 +154,7 @@
         // Shared renderer (static/trace-render.js). The step shape here
         // ({time, service, cls, msg, detail}) is exactly what renderTrace draws.
         function renderSteps(status) {
-            renderTrace(content, {
+            draw(content, {
                 traceId: traceId,
                 jaegerBase: 'http://localhost:16686',
                 note: traceId ? status : '<em>pending exchange response</em> &mdash; ' + status,
@@ -283,7 +303,7 @@
             panels.push({ title: 'Creative', value: bid.crid, label: 'Creative ID', cls: 'yellow' });
             panels.push({ title: 'Pipeline', value: totalMs + 'ms', label: 'End-to-end', cls: 'purple' });
         }
-        renderTrace(content, {
+        draw(content, {
             traceId: traceId,
             note: 'Full pipeline executed end-to-end in ' + totalMs + 'ms. All data is real.',
             steps: steps,
