@@ -498,7 +498,12 @@
           <p class="mt-1 text-xs text-gray-400">Hits real audience members so segment targeting + retargeting light up (the same 2,500-user pool the demo audiences are built from).</p>
         </div>
         <div>
-          <div class="font-medium mb-1">④ Re-light the wired-but-empty portal sections after a run</div>
+          <div class="font-medium mb-1">④ High-throughput fill &amp; money run — the "under real pressure" demo</div>
+          <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make loadtest RPS=150 DURATION=5m VERIFY=1</code></pre>
+          <p class="mt-1 text-xs text-gray-400">~5 min at 150 req/s — pushes the stack near its knee so fill, pacing, freq-cap re-auction and the money invariant all work under load. <b>At 150+ rps <code>VERIFY</code> can read RED mid-run</b> because it samples while the event spool is still draining — re-check the ClickHouse counts a few minutes after the run before calling loss. Keep ≤110 for <i>latency</i> work; 150–200 is for fill/money.</p>
+        </div>
+        <div>
+          <div class="font-medium mb-1">⑤ Re-light the wired-but-empty portal sections after a run</div>
           <pre class="bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto text-xs"><code>make demo-data</code></pre>
           <p class="mt-1 text-xs text-gray-400">Repopulates invoices / conversions / webhooks / marketplace / partners and prunes stale rows.</p>
         </div>
