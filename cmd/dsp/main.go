@@ -154,6 +154,7 @@ func main() {
 	l2 := connectRedis(cfg, log)
 	budget := NewBudgetTracker(l2, knobs.BudgetResetInterval.Value, log)
 	shadingTracker := bidshading.NewTracker()
+	shades := newShadeStash() // bid→win realized-shading-saving carrier
 
 	// NATS bus for warm-cache invalidate subscription. nil-tolerant — the
 	// warm cache degrades to poll-only mode if NATS is unreachable.
@@ -295,7 +296,7 @@ func main() {
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
-	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn)
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingTracker, shades)
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
@@ -304,7 +305,7 @@ func main() {
 	// industry-standard path exercised in every auction.
 	startInternalGRPC(lc, cfg, log, metrics, bid)
 
-	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker))
+	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker, shades))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker, pub))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
@@ -793,7 +794,36 @@ func connectRedis(cfg *config.Config, log *slog.Logger) cache.L2Cache {
 	}, 10*time.Second, addr, log)
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool) http.HandlerFunc {
+// shadeStash remembers the realized bid-shading saving (CPM) per bid id between
+// the bid and its (possible) win notice — the win nurl echoes only the bid id, so
+// we can't carry the pre-shade delta on the request itself. Bounded + self-wiping:
+// bid→win is seconds, losers are never taken, and the map resets past a cap so a
+// long-running pod can't grow it without limit.
+type shadeStash struct {
+	mu sync.Mutex
+	m  map[string]float64
+}
+
+func newShadeStash() *shadeStash { return &shadeStash{m: make(map[string]float64)} }
+
+func (s *shadeStash) put(bidID string, savings float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.m) >= 20000 { // crude bound — far above in-flight bids; winners are taken in seconds
+		s.m = make(map[string]float64)
+	}
+	s.m[bidID] = savings
+}
+
+func (s *shadeStash) take(bidID string) float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.m[bidID]
+	delete(s.m, bidID)
+	return v
+}
+
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool, shadingTracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -1212,13 +1242,28 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				continue
 			}
 
+			// Bid shading: lower OUR bid toward the placement's clearing price per the
+			// campaign's shading mode (never below floor, never above valuation), and
+			// stash the realized saving by bid id so the win notice can book it as real
+			// "dollars saved". Competitors represent the market and are never shaded;
+			// disabled/empty mode bids the full valuation (today's behaviour).
+			bidPrice := adjustedBid
+			if !isCompetitor && c.ShadingMode != "" && c.ShadingMode != "disabled" {
+				if placementID := bidReq.Imp[0].TagID; placementID != "" {
+					bidPrice = bidshading.ShadedBid(shadingTracker.WinRateCurve(placementID), c.ShadingMode, adjustedBid, floor)
+					if bidPrice < adjustedBid {
+						shades.put("bid-"+bidReq.ID+"-"+c.ID, adjustedBid-bidPrice)
+					}
+				}
+			}
+
 			// Build the candidate bid once. Cat carries the sponsored product's IAB
 			// category so the exchange can score retail relevance (product category
 			// vs the shopper's browsed categories); harmless on other channels.
 			cand := &openrtb.BidObj{
 				ID:       "bid-" + bidReq.ID + "-" + c.ID,
 				ImpID:    bidReq.Imp[0].ID,
-				Price:    adjustedBid,
+				Price:    bidPrice,
 				CID:      c.ID,
 				CrID:     crid,
 				ADomain:  []string{c.CreativeDomain},
@@ -1511,7 +1556,7 @@ func dspRequestChannel(req *openrtb.BidRequest) string {
 // DSPs alike are notified through this endpoint. The parallel NATS
 // adtech.auction.win event is for non-DSP consumers (reporting analytics,
 // future billing ledger), not for re-driving the DSP's own budget.
-func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGate, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker) http.HandlerFunc {
+func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGate, campaigns *warm.Cache[models.Campaign], tracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		bidID := q.Get("bid_id")
@@ -1542,10 +1587,14 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 			}
 		}
 		if placementID != "" {
-			// Bid-shading reasons in CPM rates, not booked dollars — pass the
-			// raw clearing CPM. acct tags the per-advertiser reporting tally (the
-			// pooled placement tally that drives shading is recorded regardless).
-			tracker.RecordWin(placementID, acct, price, price)
+			// Bid-shading reasons in CPM rates, not booked dollars — pass the raw
+			// clearing CPM. acct tags the per-advertiser reporting tally (the pooled
+			// placement tally that drives shading is recorded regardless). savings is
+			// the realized shade on THIS win (pre-shade valuation − shaded price),
+			// stashed at bid time and taken here — powers the advertiser's true
+			// "dollars saved". 0 for unshaded/competitor wins.
+			savings := shades.take(bidID)
+			tracker.RecordWinShaded(placementID, acct, price, price, savings)
 		}
 
 		log.Info("win notification", "bid_id", bidID, "price", price, "campaign_id", campaignID)

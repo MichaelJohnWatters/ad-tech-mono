@@ -634,9 +634,10 @@ func main() {
 	// survives a DSP redeploy (phase 2), not the DSP's in-memory tracker.
 	mux.Handle(routes.APIShading, authMiddleware(
 		middleware.RequirePermission("reports:read")(http.HandlerFunc(shadingHandler(shadingDeps{
-			placementSpend:   reportingPlacementSpend(reportingURL, log),
-			advertiserLosses: reportingAdvertiserLosses(reportingURL, log),
-			marketplaceStats: dspMarketplaceStats(dspURL),
+			placementSpend:    reportingPlacementSpend(reportingURL, log),
+			advertiserLosses:  reportingAdvertiserLosses(reportingURL, log),
+			marketplaceStats:  dspMarketplaceStats(dspURL),
+			advertiserShading: dspAdvertiserShading(dspURL),
 		}, log)))))
 
 	// Guided "Onboarding & Expansion" demo (staff-only, isolated synthetic

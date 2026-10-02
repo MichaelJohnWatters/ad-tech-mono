@@ -30,12 +30,56 @@ const (
 	ReasonTimeout    LossReason = 2
 )
 
+// TargetWinRate maps a per-line-item shading mode to the win rate the DSP aims to
+// HOLD while shading the bid down toward the clearing price. disabled / empty /
+// unknown → 0 (no shading). More aggressive = lower target = lower bid = more
+// saving but fewer wins.
+func TargetWinRate(mode string) float64 {
+	switch mode {
+	case "conservative":
+		return 0.90
+	case "moderate":
+		return 0.80
+	case "aggressive":
+		return 0.65
+	}
+	return 0
+}
+
+// ShadedBid returns the price to submit for a valuation under a shading mode,
+// given the placement's win-rate curve. Invariants: never bids ABOVE the valuation
+// (never pay more than the impression is worth) and never BELOW the floor. Returns
+// the valuation unchanged when shading is off, the curve has no data, or the
+// curve's estimate for the target win rate is already ≥ the valuation (market too
+// expensive to shade). The realized saving is valuation − ShadedBid (≥ 0).
+func ShadedBid(c Curve, mode string, valuation, floor float64) float64 {
+	target := TargetWinRate(mode)
+	if target <= 0 || c.Midpoint <= 0 || valuation <= 0 {
+		return valuation
+	}
+	want := c.BidForWinRate(target)
+	if want <= 0 || want >= valuation {
+		return valuation // already bidding at/below the curve target — nothing to shade
+	}
+	if want < floor {
+		want = floor // can't shade below the floor
+	}
+	if want >= valuation {
+		return valuation
+	}
+	return want
+}
+
 // Record is a single win or loss data point.
 type Record struct {
 	OurBid        float64
 	ClearingPrice float64
 	Won           bool
 	Reason        LossReason // only for losses
+	// Savings is the realized bid-shading saving on a WIN: the pre-shade valuation
+	// minus the (shaded) price bid/paid, in CPM. 0 when shading wasn't applied or
+	// on losses.
+	Savings float64
 }
 
 // Tracker accumulates win/loss data per placement and campaign.
@@ -82,7 +126,18 @@ func appendBounded(s []Record, r Record) []Record {
 // RecordWin records a winning bid. advertiserID (the winning campaign's account)
 // may be "" — then only the pooled per-placement tally is updated.
 func (t *Tracker) RecordWin(placementID, advertiserID string, ourBid, clearingPrice float64) {
-	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: true}
+	t.recordWin(placementID, advertiserID, ourBid, clearingPrice, 0)
+}
+
+// RecordWinShaded is RecordWin plus the realized shading saving (pre-shade
+// valuation − shaded price, CPM) so the advertiser's true "dollars saved" can be
+// summed from the per-advertiser tally.
+func (t *Tracker) RecordWinShaded(placementID, advertiserID string, ourBid, clearingPrice, savings float64) {
+	t.recordWin(placementID, advertiserID, ourBid, clearingPrice, savings)
+}
+
+func (t *Tracker) recordWin(placementID, advertiserID string, ourBid, clearingPrice, savings float64) {
+	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: true, Savings: savings}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.data[placementID] = appendBounded(t.data[placementID], rec)
@@ -115,6 +170,7 @@ func statsFromRecords(records []Record) PlacementStats {
 	for _, r := range records {
 		stats.TotalBids++
 		totalClearing += r.ClearingPrice
+		stats.TotalSavings += r.Savings
 		if r.Won {
 			stats.Wins++
 		} else {
@@ -173,6 +229,9 @@ type PlacementStats struct {
 	AvgClearing float64
 	BelowFloor  int
 	Outbid      int
+	// TotalSavings is the summed realized bid-shading saving (CPM) across the wins
+	// in this tally — pre-shade valuation minus shaded price. 0 when no shading.
+	TotalSavings float64
 }
 
 // WinRateCurve builds a win-rate curve for a placement.

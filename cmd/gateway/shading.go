@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -73,6 +74,13 @@ type shadingResponse struct {
 	Placements   []shadingPlacementRow `json:"placements"`
 	YourTotals   shadingTotals         `json:"your_totals"`
 	Explanations shadingExplanations   `json:"explanations"`
+	// ShadingSavingsUSD is the REALIZED bid-shading saving for this advertiser: the
+	// summed (pre-shade valuation − shaded price) over the account's shaded wins,
+	// converted CPM→dollars (÷1000). 0 when no campaigns have shading enabled or
+	// none have shaded wins yet. Sourced from the DSP's per-advertiser shading
+	// tracker (live/in-memory, like marketplace_*), so it's a true realized figure,
+	// not the vs-market estimate the UI also shows.
+	ShadingSavingsUSD float64 `json:"shading_savings_usd"`
 }
 
 type shadingTotals struct {
@@ -111,6 +119,10 @@ type shadingDeps struct {
 	// marketplaceStats returns the DSP-wide per-placement shading tracker state
 	// (live, in-memory — labelled as such; NOT this advertiser's own numbers).
 	marketplaceStats func(ctx context.Context) (map[string]bidshading.PlacementStats, error)
+	// advertiserShading returns THIS advertiser's own per-placement shading tracker
+	// stats (DSP /shading?advertiser=<acct>), whose TotalSavings carries the realized
+	// shade (pre-shade − shaded, CPM) per placement. Live/in-memory; non-fatal.
+	advertiserShading func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error)
 }
 
 // shadingHandler serves GET /v1/api/shading — the advertiser-facing bid-shading /
@@ -182,6 +194,19 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 			log.Warn("shading: marketplace stats unavailable; returning advertiser-own numbers only", "error", err)
 			mkt = nil
 		}
+		// Realized bid-shading savings for THIS advertiser (CPM savings summed per
+		// win → dollars). Non-fatal: stays 0 if the DSP is unreachable or no shaded
+		// wins exist yet.
+		var shadingSavingsUSD float64
+		if deps.advertiserShading != nil {
+			if advStats, aerr := deps.advertiserShading(ctx, accountID); aerr != nil {
+				log.Warn("shading: per-advertiser realized savings unavailable", "account", accountID, "error", aerr)
+			} else {
+				for _, s := range advStats {
+					shadingSavingsUSD += s.TotalSavings / 1000 // CPM saving per win → dollars (1 imp each)
+				}
+			}
+		}
 
 		// Union: the money rows are delivered impressions (wins). Add any placement
 		// the advertiser LOST on but never delivered an impression, so the win/loss
@@ -240,10 +265,11 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 		})
 
 		resp := shadingResponse{
-			AccountID:  accountID,
-			WindowDays: int(shadingWindow / (24 * time.Hour)),
-			Placements: rows,
-			YourTotals: totals,
+			AccountID:         accountID,
+			WindowDays:        int(shadingWindow / (24 * time.Hour)),
+			Placements:        rows,
+			YourTotals:        totals,
+			ShadingSavingsUSD: shadingSavingsUSD,
 			Explanations: shadingExplanations{
 				WhatIsBidShading: "In a first-price auction the winner pays exactly what they bid. " +
 					"Bid shading lowers our DSP's bid toward the true clearing price so you win " +
@@ -353,6 +379,31 @@ func dspMarketplaceStats(dspURL string) func(context.Context) (map[string]bidsha
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("dsp shading returned %d", resp.StatusCode)
+		}
+		var m map[string]bidshading.PlacementStats
+		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+			return nil, err
+		}
+		return m, nil
+	}
+}
+
+// dspAdvertiserShading builds the advertiserShading dependency: it GETs the DSP's
+// per-placement shading map SCOPED to one advertiser (?advertiser=<acct>), whose
+// TotalSavings is the realized shade for that advertiser.
+func dspAdvertiserShading(dspURL string) func(context.Context, string) (map[string]bidshading.PlacementStats, error) {
+	return func(ctx context.Context, accountID string) (map[string]bidshading.PlacementStats, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, dspURL+routes.DSPShading+"?advertiser="+url.QueryEscape(accountID), nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("dsp advertiser shading returned %d", resp.StatusCode)
 		}
 		var m map[string]bidshading.PlacementStats
 		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
