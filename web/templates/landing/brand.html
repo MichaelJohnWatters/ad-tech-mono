@@ -99,7 +99,7 @@
     <div class="shop">
       <p class="shop-line">You clicked an ad for <strong>{{ .Brand }}</strong>. Complete a demo purchase to fire a conversion that attributes back to this exact click.</p>
       <button id="buy" class="cta shop-cta" type="button"
-              data-tid="{{ .TraceID }}" data-slug="{{ .Slug }}">Complete purchase — $49.99</button>
+              data-tid="{{ .TraceID }}" data-slug="{{ .Slug }}">Complete purchase — {{ .Theme.PurchaseLabel }}</button>
       <p id="buy-result" class="shop-result" role="status"></p>
     </div>
     {{ end }}
