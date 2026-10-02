@@ -40,7 +40,7 @@ func TestVMAPHandler(t *testing.T) {
 	for _, want := range []string{
 		// Three breaks at the right offsets with the right break IDs.
 		`<vmap:AdBreak breakType="linear" timeOffset="start" breakId="pre-roll">`,
-		`<vmap:AdBreak breakType="linear" timeOffset="00:00:30" breakId="mid-roll-1">`,
+		`<vmap:AdBreak breakType="linear" timeOffset="50%" breakId="mid-roll-1">`,
 		`<vmap:AdBreak breakType="linear" timeOffset="end" breakId="post-roll">`,
 		// Each break calls back into /v1/pubad/video/vast with its break fragment.
 		`<vmap:AdTagURI templateType="vast4.2">`,

@@ -22,7 +22,10 @@ func CORS(next http.Handler) http.Handler {
 		// Expose dev-mode response headers so the pub sim UI can read
 		// them from the fetch response. Custom headers are otherwise
 		// invisible to JS even with permissive Access-Control-Allow-Origin.
-		w.Header().Set("Access-Control-Expose-Headers", "X-Dev-Fraud-Blocked, X-Dev-Fraud-Reasons, X-Trace-Id, X-IAB-Viewable")
+		// X-Adtech-Outcome (adserving.OutcomeHeader) lets the demo-site trace
+		// panel show the auction outcome (fill/no-bid/house + advertiser + price)
+		// uniformly across display JSON, VAST/DAAST XML and SSAI manifests.
+		w.Header().Set("Access-Control-Expose-Headers", "X-Dev-Fraud-Blocked, X-Dev-Fraud-Reasons, X-Trace-Id, X-IAB-Viewable, X-Adtech-Outcome")
 		// Chrome Private Network Access (CORS-RFC1918): when a page on
 		// a public origin (e.g. https://imasdk.googleapis.com inside the
 		// IMA SDK iframe) fetches a resource on a private/loopback

@@ -93,6 +93,10 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 		if podSize := parsePodSize(r.URL.Query().Get("pod")); podSize > 1 {
 			if xmlBytes, n := buildPodVAST(ctx, sspURL, beaconBase, secureBase, r, placementID, r.URL.Query(), podSize, omidFn, reqLog); n > 0 {
 				reqLog.Info("video pod served", "requested", podSize, "filled", n)
+				adserving.SetOutcome(w, adserving.Outcome{
+					Result: adserving.OutcomeFill, Type: "video",
+					Reason: fmt.Sprintf("pod %d/%d ads", n, podSize),
+				})
 				w.Header().Set("Content-Type", "text/xml")
 				w.Header().Set("Cache-Control", "no-store")
 				w.Write(xmlBytes)
@@ -171,6 +175,12 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 			"advertiser", winner.AdvertiserDomain,
 			"duration_s", winner.DurationSeconds,
 			"price", winner.ClearingPrice)
+		adserving.SetOutcome(w, adserving.Outcome{
+			Result: adserving.OutcomeFill, Type: "video",
+			Advertiser: winner.AdvertiserDomain, Price: winner.ClearingPrice,
+			Currency: defaultStr2(winner.Currency, "USD"),
+			Model:    defaultStr2(winner.BidModel, "cpm"), Deal: winner.DealID,
+		})
 		// text/xml without a charset suffix — some VAST parsers (notably
 		// older builds of the IMA SDK) refuse application/xml or
 		// charset-qualified content types as "unknown ad response".
@@ -434,6 +444,7 @@ func serveVideoNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() b
 	if stubFn() && houseAdFn != nil {
 		if ad, ok := houseAdFn(houseads.FormatVideo, seedFromTrace(traceID)); ok {
 			reqLog.Info("video no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+			adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeHouse, Type: "video", Reason: "no-demand"})
 			w.Header().Set("Content-Type", "text/xml")
 			w.Header().Set("Cache-Control", "no-store")
 			w.Write([]byte(ad.Markup))
@@ -443,6 +454,7 @@ func serveVideoNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() b
 	} else {
 		reqLog.Info("video no-bid: empty VAST")
 	}
+	adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeNoBid, Type: "video", Reason: "no-demand"})
 	writeNoFillVAST(w)
 }
 

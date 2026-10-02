@@ -451,6 +451,12 @@ func (d *serveDeps) serveDirect(ctx context.Context, r *http.Request, w http.Res
 		Height:         placement.Height,
 		CPM:            li.CPM,
 	}
+	outcome := adserving.Outcome{Result: adserving.OutcomeFill, Type: "display", Price: li.CPM, Currency: defaultStr2(li.Currency, "USD"), Model: "cpm", Reason: "direct-sold"}
+	if li.DemandSource == "house" {
+		outcome.Result = adserving.OutcomeHouse
+		outcome.Reason = "house line item"
+	}
+	adserving.SetOutcome(w, outcome)
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(out)
 }
@@ -479,6 +485,7 @@ func (d *serveDeps) serveDisplayHouseAd(r *http.Request, w http.ResponseWriter, 
 		Width   int    `json:"width"`
 		Height  int    `json:"height"`
 	}{TraceID: traceID, Source: "house", HTML: rewriteBaseIfSecure(r, ad.Markup, d.publicBase, d.secureBase), Width: placement.Width, Height: placement.Height}
+	adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeHouse, Type: "display", Reason: "no-demand"})
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(out)
 	return true
@@ -553,6 +560,10 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 	reqLog.Info("programmatic source: ssp won",
 		"ssp_price", sspRes.res.ClearingPrice,
 		"prebid_competing", hasPrebid)
+	adserving.SetOutcome(w, adserving.Outcome{
+		Result: adserving.OutcomeFill, Type: "display",
+		Price: sspRes.res.ClearingPrice, Currency: "USD", Model: "cpm", Reason: "ssp",
+	})
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	// SSP-win passthrough: the raw JSON carries html + impression/click/view
 	// URLs + media_url built downstream with http:// bases. Re-base the whole
@@ -674,6 +685,11 @@ func (d *serveDeps) publishNoFill(ctx context.Context, traceID string, p postgre
 //
 // Closes EVENT_PATHWAY_AUDIT Gap (Prebid viewability beacon).
 func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w http.ResponseWriter, placement postgres.PlacementRow, traceID string, best prebidclient.Result) {
+	adserving.SetOutcome(w, adserving.Outcome{
+		Result: adserving.OutcomeFill, Type: "display",
+		Advertiser: best.Seat, Price: best.Price,
+		Currency: defaultStr2(best.Currency, "USD"), Model: "cpm", Deal: best.DealID, Reason: "prebid",
+	})
 	if d.pub != nil {
 		logger.WithContext(d.log, ctx).Info("prebid outbound win",
 			"publisher_id", placement.PublisherID,
@@ -883,6 +899,7 @@ func splitCSV(s string) []string {
 // without parsing log lines. Same shape across every no-fill path —
 // gives ops a single field to filter / count by.
 func writeNoBid(w http.ResponseWriter, traceID, reason string) {
+	adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeNoBid, Type: "display", Reason: reason})
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(map[string]any{
 		"trace_id": traceID,

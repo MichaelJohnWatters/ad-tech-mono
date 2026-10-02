@@ -103,6 +103,12 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubF
 			"advertiser", winner.AdvertiserDomain,
 			"duration_s", winner.DurationSeconds,
 			"price", winner.ClearingPrice)
+		adserving.SetOutcome(w, adserving.Outcome{
+			Result: adserving.OutcomeFill, Type: "audio",
+			Advertiser: winner.AdvertiserDomain, Price: winner.ClearingPrice,
+			Currency: defaultStr2(winner.Currency, "USD"),
+			Model:    defaultStr2(winner.BidModel, "cpm"), Deal: winner.DealID,
+		})
 		w.Header().Set("Content-Type", "text/xml")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(xmlBytes)
@@ -209,6 +215,7 @@ func serveAudioNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() b
 	if stubFn() && houseAdFn != nil {
 		if ad, ok := houseAdFn(houseads.FormatAudio, seedFromTrace(traceID)); ok {
 			reqLog.Info("audio no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+			adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeHouse, Type: "audio", Reason: "no-demand"})
 			w.Header().Set("Content-Type", "text/xml")
 			w.Header().Set("Cache-Control", "no-store")
 			w.Write([]byte(ad.Markup))
@@ -218,5 +225,6 @@ func serveAudioNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() b
 	} else {
 		reqLog.Info("audio no-bid: empty VAST")
 	}
+	adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeNoBid, Type: "audio", Reason: "no-demand"})
 	writeNoFillVAST(w)
 }
