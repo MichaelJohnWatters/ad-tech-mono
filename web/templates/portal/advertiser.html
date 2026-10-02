@@ -374,6 +374,7 @@
 
       {{ template "card-start" (dict "title" "Recorded conversions (last 30 days)" "subtitle" "Every conversion that fired to your tracker, row by row (newest / highest value first) — e.g. your $38,000 F-150 purchase from the shop. The money outcome; the &ldquo;Conversion events&rdquo; card below is just the named definitions + pixels.") }}
       <div id="convTotals" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3 text-sm"></div>
+      <div class="flex items-center gap-2 mb-2 text-xs text-gray-400"><span class="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span> Live — new conversions appear within ~5s of a purchase (no reload needed)</div>
       <div class="overflow-x-auto">
         <table class="min-w-full text-sm">
           <thead class="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700"><tr>
@@ -559,6 +560,17 @@
       {{ template "card-start" (dict "title" "Your paid clearing price" "subtitle" "The real, per-advertiser figures: your delivered impressions and what you paid, last 30 days") }}
       <div id="shadeTotals" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-2 text-sm text-gray-500">
         <div class="py-6 text-center text-gray-400 col-span-full">loading…</div>
+      </div>
+      {{ template "card-end" . }}
+
+      {{ template "card-start" (dict "title" "You paid vs the market" "subtitle" "Per placement: your avg clearing CPM vs the DSP-wide marketplace avg — paying below the market is bid shading working for you") }}
+      <div class="flex justify-end mb-3">
+        {{ template "button" (dict "label" "Export CSV" "variant" "secondary" "size" "sm" "onclick" "exportShadingCSV()") }}
+      </div>
+      <div id="shadeChart" class="space-y-3"><span class="text-xs text-gray-400">loading…</span></div>
+      <div class="mt-3 flex items-center gap-4 text-xs text-gray-400">
+        <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-brand/70"></span> You paid (avg CPM)</span>
+        <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-3 rounded bg-gray-400"></span> Marketplace avg</span>
       </div>
       {{ template "card-end" . }}
 
@@ -1271,8 +1283,13 @@ const showSection = initSectionRouter({
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
   // The New-campaign action belongs to the Campaigns tab only (it was in
   // the global header, so it showed on every section).
-  onShow: (name) => $('newCampaignBtn')?.classList.toggle('hidden', name !== 'campaigns'),
+  onShow: (name) => { window.__activeSection = name; $('newCampaignBtn')?.classList.toggle('hidden', name !== 'campaigns'); },
 });
+
+// Live conversions feed: while the Conversions tab is open (and the browser tab is
+// visible), refresh the recorded-conversions table every 5s so a money-loop
+// purchase appears within seconds — no manual reload.
+setInterval(() => { if (window.__activeSection === 'conversions' && !document.hidden) loadRecordedConversions(); }, 5000);
 
 // ---- Privacy Sandbox ARA overlay (reporting-only; never bills) ----
 async function loadARA() {
@@ -1359,6 +1376,46 @@ async function loadShading() {
           <th class="px-3 py-2 text-left text-gray-500" title="DSP-WIDE count of bids that lost by being outbid">Outbid</th>
         </tr>
       </thead><tbody>${body}</tbody></table>`;
+  window.__shadeRows = rows; // for CSV export
+  renderShadeChart(rows);
+}
+
+// Per-placement "you paid vs market" chart: two scaled bars per placement (your
+// avg clearing CPM vs the DSP-wide marketplace avg). Paying below the market bar
+// is bid shading visibly working. data-w → width set in JS (ui lint bans inline style).
+function renderShadeChart(rows) {
+  const el = $('shadeChart'); if (!el) return;
+  const cmp = (rows || []).filter(p => Number(p.your_avg_clearing_cpm) > 0 && p.has_marketplace_stats && Number(p.marketplace_avg_clearing) > 0).slice(0, 8);
+  if (!cmp.length) { el.innerHTML = '<span class="text-xs text-gray-400">Not enough data yet — once you win impressions on inventory the DSP also has marketplace stats for, the comparison appears here.</span>'; return; }
+  const cpm = (n) => '$' + Number(n || 0).toFixed(2);
+  const max = Math.max(...cmp.flatMap(p => [Number(p.your_avg_clearing_cpm), Number(p.marketplace_avg_clearing)]), 0.01);
+  el.innerHTML = cmp.map(p => {
+    const you = Number(p.your_avg_clearing_cpm), mkt = Number(p.marketplace_avg_clearing);
+    const yw = Math.max(2, Math.round(100 * you / max)), mw = Math.max(2, Math.round(100 * mkt / max));
+    const below = you < mkt;
+    return `<div>
+      <div class="flex justify-between text-xs mb-1"><span class="font-mono">${esc(p.placement_id || '')}</span>
+        <span class="${below ? 'text-success' : 'text-gray-400'}">${below ? '▼ below market' : 'at/above market'}</span></div>
+      <div class="flex items-center gap-2"><div class="h-3 rounded bg-brand/70" data-w="${yw}"></div><span class="text-xs text-gray-500 w-20">${cpm(you)}</span></div>
+      <div class="flex items-center gap-2 mt-0.5"><div class="h-3 rounded bg-gray-400" data-w="${mw}"></div><span class="text-xs text-gray-500 w-20">${cpm(mkt)}</span></div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-w]').forEach(e => { e.style.width = e.dataset.w + '%'; });
+}
+
+// Download the per-placement shading table as CSV (the data already on screen).
+function exportShadingCSV() {
+  const rows = window.__shadeRows || [];
+  if (!rows.length) { toast('Nothing to export yet', 'error'); return; }
+  const cols = ['placement_id', 'your_impressions', 'your_avg_clearing_cpm', 'your_spend_usd', 'your_win_rate', 'your_wins', 'your_losses', 'marketplace_win_rate', 'marketplace_avg_clearing'];
+  const esc2 = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = [cols.join(',')].concat(rows.map(r => cols.map(c => esc2(r[c])).join(','))).join('\n');
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bid-shading-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
 }
 
 // ---- Reporting queries ----
