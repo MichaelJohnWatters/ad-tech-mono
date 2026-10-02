@@ -119,24 +119,33 @@ campaigns:
       - { id: cr-shoes-002-mobile, width: 320, height: 50 }
       - { id: cr-shoes-002-halfpage, width: 300, height: 600 }
 
+  # Globex runs MODERATE bid shading (the only seeded advertiser that does), so
+  # the advertiser portal's Bid Shading page shows the feature live: per-placement
+  # "you paid vs the market", the shading-mode control, and any realized saving
+  # (DSP win-notice → adtech.auction.shade → auction_shades in ClickHouse). Log in
+  # as advertiser@adtech.local / admin. NOTE: realized savings are modest in the
+  # local market because our win-rate curve only learns from OUR wins/losses, not
+  # competitors' bids, so it can't shade far below the (competitive) clearing
+  # without losing — see docs on the curve-calibration follow-up. Nothing faked.
   - id: li-003
     account_id: adv-globex
     advertiser_id: adv-globex
     io_id: io-002
     name: "Globex Tech - Desktop Worldwide"
     creative_domain: globex-tech.com
-    base_bid: 6.50
+    base_bid: 10.00
     currency: USD
-    daily_budget: 300
+    daily_budget: 500
     total_budget: 5000
     bid_model: cpm
     pacing_mode: even
     status: live
+    shading_mode: moderate
     modifiers:
       geo_country:
         USA: 20
         GBR: 10
-    # Desktop-leaning tech brand — MPU + leaderboard + sky, plus native +
+    # Tech brand — MPU + leaderboard + sky, plus native +
     # instream video so Globex competes across formats (not display only).
     creatives:
       - { id: cr-tech-001, width: 300, height: 250 }
