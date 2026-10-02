@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"math"
+	"strconv"
+	"strings"
 )
 
 // Themed mock landing pages for the seeded demo creatives. The tracker
@@ -24,6 +27,35 @@ type landingTheme struct {
 	CTAFg   string // CTA button TEXT colour — must contrast with Accent (not BG,
 	// which is a gradient and can't be used as a text colour)
 	Muted string // secondary text colour
+	// ConvValue is the headline purchase value the landing "Complete purchase" CTA
+	// books (and shows). 0 → the generic demoConvertRevenue. Set it per brand so a
+	// Ford landing books $38,000, not a $49.99 "car".
+	ConvValue float64
+}
+
+// PurchaseValue is the revenue the landing demo-purchase books for this theme.
+func (t landingTheme) PurchaseValue() float64 {
+	if t.ConvValue > 0 {
+		return t.ConvValue
+	}
+	return demoConvertRevenue
+}
+
+// PurchaseLabel formats PurchaseValue for the CTA ("$38,000" / "$49.99").
+func (t landingTheme) PurchaseLabel() string {
+	v := t.PurchaseValue()
+	if v == math.Trunc(v) {
+		s := strconv.FormatInt(int64(v), 10)
+		var b strings.Builder
+		for i, c := range s {
+			if i > 0 && (len(s)-i)%3 == 0 {
+				b.WriteByte(',')
+			}
+			b.WriteRune(c)
+		}
+		return "$" + b.String()
+	}
+	return fmt.Sprintf("$%.2f", v)
 }
 
 var landingThemes = map[string]landingTheme{
@@ -138,15 +170,16 @@ var landingThemes = map[string]landingTheme{
 		Muted:   "#a8c4c0",
 	},
 	"ford": {
-		Brand:   "Ford",
-		Glyph:   "🚙",
-		Tagline: "Built Ford Tough.",
-		CTA:     "Build & Price",
-		BG:      "linear-gradient(135deg,#00142e,#002a5c)",
-		FG:      "#fff",
-		Accent:  "#0276b3",
-		CTAFg:   "#fff",
-		Muted:   "#9fb6d4",
+		Brand:     "Ford",
+		Glyph:     "🚙",
+		Tagline:   "Built Ford Tough.",
+		CTA:       "Build & Price",
+		BG:        "linear-gradient(135deg,#00142e,#002a5c)",
+		FG:        "#fff",
+		Accent:    "#0276b3",
+		CTAFg:     "#fff",
+		Muted:     "#9fb6d4",
+		ConvValue: 38000, // an F-150, not a $49.99 "car"
 	},
 	// Direct-sold + house demand sources.
 	"acme": {

@@ -347,12 +347,12 @@
     <section id="section-conversions" class="portal-section p-6 space-y-6 hidden">
       {{ template "section-intro" "Measure outcomes — see your recorded conversions, define conversion events (purchase, signup) and the pixels/postbacks that record them, with a signing key for server-to-server." }}
 
-      {{ template "card-start" (dict "title" "Recorded conversions (last 30 days)" "subtitle" "Actual conversions that fired to your tracker — e.g. a purchase from the shop. This is the money outcome; the &ldquo;Conversion events&rdquo; card below is just the named definitions + pixels.") }}
+      {{ template "card-start" (dict "title" "Recorded conversions (last 30 days)" "subtitle" "Every conversion that fired to your tracker, row by row (newest / highest value first) — e.g. your $38,000 F-150 purchase from the shop. The money outcome; the &ldquo;Conversion events&rdquo; card below is just the named definitions + pixels.") }}
       <div id="convTotals" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-3 text-sm"></div>
       <div class="overflow-x-auto">
         <table class="min-w-full text-sm">
           <thead class="text-left text-gray-500 border-b border-gray-200 dark:border-gray-700"><tr>
-            <th class="px-3 py-2">Conversion type</th><th class="px-3 py-2">Count</th><th class="px-3 py-2">Revenue</th>
+            <th class="px-3 py-2">Order (trace id)</th><th class="px-3 py-2">Type</th><th class="px-3 py-2 text-right">Revenue</th>
           </tr></thead>
           <tbody id="convRecBody"><tr><td colspan="3" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr></tbody>
         </table>
@@ -2645,20 +2645,22 @@ async function loadRecordedConversions() {
   const totals = document.getElementById('convTotals');
   if (!body) return;
   try {
-    const res = await reportQuery({table: 'conversions', metrics: ['count', 'sum_revenue'],
-      dimensions: ['conversion_type'], time_from: daysAgo(30)}) || {};
-    const cols = res.columns || [], rows = res.rows || [];
-    const ti = cols.indexOf('conversion_type'), ci = cols.indexOf('count'), ri = cols.indexOf('sum_revenue');
-    let tc = 0, tr = 0;
-    rows.forEach(r => { tc += Number(r[ci] || 0); tr += Number(r[ri] || 0); });
+    // One row per conversion (trace_id makes each row unique), so the user sees
+    // each purchase individually — not just an aggregate by type.
+    const res = await reportQuery({table: 'conversions', metrics: ['sum_revenue'],
+      dimensions: ['conversion_type', 'trace_id'], time_from: daysAgo(30), limit: 200}) || {};
+    const cols = res.columns || [];
+    const ti = cols.indexOf('conversion_type'), idi = cols.indexOf('trace_id'), ri = cols.indexOf('sum_revenue');
+    const rows = (res.rows || []).slice().sort((a, b) => Number(b[ri] || 0) - Number(a[ri] || 0)); // highest value first
+    const tc = rows.length, tr = rows.reduce((s, r) => s + Number(r[ri] || 0), 0);
     if (totals) totals.innerHTML =
       `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Conversions</div><div class="text-2xl font-semibold font-mono">${tc}</div></div>` +
       `<div class="rounded-lg border border-gray-200 dark:border-gray-800 p-3"><div class="text-xs text-gray-500">Revenue (30d)</div><div class="text-2xl font-semibold font-mono">$${tr.toFixed(2)}</div></div>`;
     body.innerHTML = rows.length
       ? rows.map(r => `<tr class="border-t border-gray-100 dark:border-gray-800">
+          <td class="px-3 py-2 font-mono text-xs">${esc(String(r[idi] || '—').slice(0, 20))}</td>
           <td class="px-3 py-2 font-mono text-xs">${esc(r[ti] || '—')}</td>
-          <td class="px-3 py-2 font-mono">${Number(r[ci] || 0)}</td>
-          <td class="px-3 py-2 font-mono">$${Number(r[ri] || 0).toFixed(2)}</td></tr>`).join('')
+          <td class="px-3 py-2 font-mono text-right">$${Number(r[ri] || 0).toFixed(2)}</td></tr>`).join('')
       : '<tr><td colspan="3" class="px-3 py-8 text-center text-sm text-gray-400">No conversions recorded in the last 30 days yet. Complete a purchase on the shop — it appears here within a few seconds.</td></tr>';
   } catch (err) {
     body.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;

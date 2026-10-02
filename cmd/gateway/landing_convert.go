@@ -69,6 +69,7 @@ func landingConvertHandler(reportingURL, trackerURL string, log *slog.Logger) ht
 		_ = r.ParseForm()
 		tid := strings.TrimSpace(r.FormValue("tid"))
 		slug := strings.TrimSpace(r.FormValue("slug"))
+		rev := landingThemeForSlug(slug).PurchaseValue() // per-brand (Ford=$38,000), not a flat $49.99
 		if tid == "" {
 			http.Error(w, `{"ok":false,"error":"missing trace id"}`, http.StatusBadRequest)
 			return
@@ -96,7 +97,7 @@ func landingConvertHandler(reportingURL, trackerURL string, log *slog.Logger) ht
 		params := url.Values{}
 		params.Set("tid", "order-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 		params.Set("type", "purchase")
-		params.Set("rev", strconv.FormatFloat(demoConvertRevenue, 'f', 2, 64))
+		params.Set("rev", strconv.FormatFloat(rev, 'f', 2, 64))
 		params.Set("cur", "USD")
 		params.Set("advid", res.AdvertiserID)
 		// ctid = the earning click's trace; rides INSIDE the signed URL so it can't
@@ -138,7 +139,7 @@ func landingConvertHandler(reportingURL, trackerURL string, log *slog.Logger) ht
 		}
 		reqLog.Info("landing convert: S2S conversion postback",
 			"advid", res.AdvertiserID, "campaign_id", res.CampaignID, "ctid", tid,
-			"rev", demoConvertRevenue, "tracker_status", status)
+			"rev", rev, "tracker_status", status)
 
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		if err != nil || status != http.StatusOK {
@@ -151,7 +152,7 @@ func landingConvertHandler(reportingURL, trackerURL string, log *slog.Logger) ht
 			"advertiser_id": res.AdvertiserID,
 			"campaign_id":   res.CampaignID,
 			"ctid":          tid,
-			"revenue":       demoConvertRevenue,
+			"revenue":       rev,
 		})
 	}
 }
