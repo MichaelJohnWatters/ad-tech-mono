@@ -4,13 +4,7 @@
 <meta charset="utf-8" />
 <title>{{ .Brand }} — landing page (demo)</title>
 <style>
-  :root {
-    --bg: {{ .Theme.BG }};
-    --fg: {{ .Theme.FG }};
-    --accent: {{ .Theme.Accent }};
-    --cta-fg: {{ .Theme.CTAFg }};
-    --muted: {{ .Theme.Muted }};
-  }
+  :root { {{ .Theme.StyleVars }} }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
