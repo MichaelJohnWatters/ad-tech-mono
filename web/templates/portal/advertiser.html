@@ -1613,15 +1613,25 @@ setInterval(refreshDashboard, 15000);
 // data arrives after render, so the bars are built client-side).
 function renderTrend(res) {
   const di = res.columns.indexOf('day'), mi = res.columns.indexOf('sum_cost');
-  const rows = (res.rows || []).slice().sort((a, b) => String(a[di]).localeCompare(String(b[di])));
-  if (!rows.length) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no spend in the last 7 days</span>'; return; }
-  const max = Math.max(...rows.map(r => Number(r[mi]) || 0), 0.01);
-  $('spendTrend').innerHTML = rows.map(r => {
-    const v = Number(r[mi]) || 0;
-    const h = Math.max(4, Math.round(64 * v / max));
-    return `<div class="flex-1 mx-0.5 flex flex-col items-center justify-end gap-1" title="${esc(r[di])}: ${fmtUSD(v)}">
-      <div class="w-full rounded-t bg-brand/70 hover:bg-brand" data-h="${h}"></div>
-      <div class="text-[10px] text-gray-400 font-mono">${esc(String(r[di]).slice(5))}</div>
+  // Index spend by day (first 10 chars = YYYY-MM-DD).
+  const byDay = {};
+  (res.rows || []).forEach(r => { byDay[String(r[di]).slice(0, 10)] = Number(r[mi]) || 0; });
+  // Render a FIXED 7-day axis (today-6 … today) so a single day of data shows as
+  // one 1/7-width bar instead of stretching the full width; days with no spend get
+  // a faint empty bar so the week always reads as 7 slots.
+  const days = [];
+  const now = new Date();
+  for (let n = 6; n >= 0; n--) { const d = new Date(now); d.setDate(now.getDate() - n); days.push(d.toISOString().slice(0, 10)); }
+  const vals = days.map(d => byDay[d] || 0);
+  if (vals.reduce((a, b) => a + b, 0) <= 0) { $('spendTrend').innerHTML = '<span class="text-xs text-gray-400">no spend in the last 7 days</span>'; return; }
+  const max = Math.max(...vals, 0.01);
+  $('spendTrend').innerHTML = days.map((d, idx) => {
+    const v = vals[idx];
+    const h = v > 0 ? Math.max(4, Math.round(64 * v / max)) : 2;
+    const cls = v > 0 ? 'bg-brand/70 hover:bg-brand' : 'bg-gray-200 dark:bg-gray-700';
+    return `<div class="flex-1 mx-0.5 flex flex-col items-center justify-end gap-1" title="${esc(d)}: ${fmtUSD(v)}">
+      <div class="w-full rounded-t ${cls}" data-h="${h}"></div>
+      <div class="text-[10px] text-gray-400 font-mono">${esc(d.slice(5))}</div>
     </div>`;
   }).join('');
   // Bar heights are data-driven pixel values — set as a style property
