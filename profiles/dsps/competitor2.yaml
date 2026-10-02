@@ -123,7 +123,7 @@ campaigns:
       - { id: c2-cr-003-mobile, width: 320, height: 50 }
       - { id: c2-cr-003-halfpage, width: 300, height: 600 }
       - { id: c2-cr-003-video-15s, format: video, width: 640, height: 360, duration: 15,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-epicquest.mp4" }
       - id: c2-cr-003-native
         format: native
         native:
@@ -163,4 +163,4 @@ campaigns:
       - { id: c2-cr-004-sky, width: 160, height: 600 }
       - { id: c2-cr-004-halfpage, width: 300, height: 600 }
       - { id: c2-cr-004-video-30s, format: video, width: 640, height: 360, duration: 30,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-cloudcrm.mp4" }

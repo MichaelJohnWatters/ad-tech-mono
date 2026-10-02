@@ -42,6 +42,39 @@ var adAudioMP3 []byte
 // media_url at (http://<base>/v1/creatives/media/ad-audio.mp3).
 const adAudioKey = "media/ad-audio.mp3"
 
+// brandAdVideos are PER-ADVERTISER video ad creatives — a brand-coloured card with
+// the advertiser's name + domain — so a stitched video/SSAI ad VISUALLY identifies
+// which advertiser won the auction (before this, every video line item shared
+// ad-video.mp4 and all ads looked identical). Embedded like ad-video.mp4 so a plain
+// seed restores them; the DSP profiles point each video line item at its brand's
+// key. Regenerate: scripts/gen-brand-ad-videos.sh.
+//
+//go:embed assets/ad-video-globex.mp4
+var adVideoGlobex []byte
+
+//go:embed assets/ad-video-cloudcrm.mp4
+var adVideoCloudCRM []byte
+
+//go:embed assets/ad-video-luxauto.mp4
+var adVideoLuxAuto []byte
+
+//go:embed assets/ad-video-quickbite.mp4
+var adVideoQuickBite []byte
+
+//go:embed assets/ad-video-epicquest.mp4
+var adVideoEpicQuest []byte
+
+var brandAdVideos = []struct {
+	key  string
+	data []byte
+}{
+	{"media/ad-video-globex.mp4", adVideoGlobex},
+	{"media/ad-video-cloudcrm.mp4", adVideoCloudCRM},
+	{"media/ad-video-luxauto.mp4", adVideoLuxAuto},
+	{"media/ad-video-quickbite.mp4", adVideoQuickBite},
+	{"media/ad-video-epicquest.mp4", adVideoEpicQuest},
+}
+
 // sampleMedia is the curated set of video/audio files the demo uses for video
 // ad creatives, the content clip, and audio spots. They're pulled once from
 // their upstream sources into our own object store so the platform serves them
@@ -82,6 +115,16 @@ func uploadSampleMedia(ctx context.Context, store objects.Store, bucket string, 
 		log.Warn("ad-audio creative upload failed", "key", adAudioKey, "error", err)
 	} else {
 		log.Info("ad-audio creative synced", "key", adAudioKey, "bytes", len(adAudioMP3), "bucket", bucket)
+	}
+	// Per-advertiser branded video cards — always overwrite so regenerated cards
+	// propagate on the next seed. Each video line item's media_url points at one of
+	// these so a stitched ad visually names its advertiser.
+	for _, v := range brandAdVideos {
+		if err := store.Put(ctx, bucket, v.key, bytes.NewReader(v.data), int64(len(v.data)), "video/mp4"); err != nil {
+			log.Warn("brand ad-video upload failed", "key", v.key, "error", err)
+		} else {
+			log.Info("brand ad-video synced", "key", v.key, "bytes", len(v.data), "bucket", bucket)
+		}
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}

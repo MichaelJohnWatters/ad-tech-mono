@@ -154,7 +154,7 @@ campaigns:
           body: "The developer platform trusted by 10,000 teams."
           cta: "Start free"
       - { id: cr-tech-001-video-15s, format: video, width: 640, height: 360, duration: 15,
-          media_url: "http://localhost:8080/v1/creatives/media/ad-video.mp4" }
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-globex.mp4" }
 
   - id: li-004
     account_id: adv-initech
