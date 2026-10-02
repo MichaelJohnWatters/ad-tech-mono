@@ -161,11 +161,16 @@
   .c-EVT{background:#1e3a8a;color:#93c5fd}.c-VIEW{background:#334155;color:#cbd5e1}
   .c-REQ{background:#155e75;color:#67e8f9}.c-SSAI{background:#831843;color:#f9a8d4}
   .c-SEG{background:#9a3412;color:#fdba74}.c-SDK{background:#374151;color:#9ca3af}
+  /* Auction-outcome chip (parsed from the X-Adtech-Outcome response header). */
+  .atp-oc{display:inline-block;margin-top:3px;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.3px;}
+  .atp-oc small{font-weight:500;opacity:.85;margin-left:5px;}
+  .o-fill{background:#064e3b;color:#6ee7b7}.o-nobid{background:#3f1d1d;color:#fca5a5}
+  .o-house{background:#422006;color:#fcd34d}.o-content{background:#1e293b;color:#94a3b8}
 </style>
 <div id="atp-tab" onclick="window.__atp&&window.__atp.toggle()">🔍 Trace<span class="n" id="atp-count">0</span></div>
 <div id="atp">
   <header><h4>🔍 Behind the scenes</h4><button onclick="window.__atp.clear()">clear</button><button onclick="window.__atp.toggle()">✕</button></header>
-  <div class="legend">Live capture of this page's ad calls &amp; tracker beacons (client-side). Accept consent, then play/scroll to see impressions, VAST/VMAP, SSAI manifests &amp; ad segments, clicks and conversions fire.</div>
+  <div class="legend">Live capture of this page's ad calls &amp; tracker beacons (client-side). Accept consent, then play/scroll to see impressions, VAST/VMAP, SSAI manifests &amp; ad segments, clicks and conversions fire. Ad requests show the auction <b>outcome</b> — <span class="atp-oc o-fill">✓ FILL</span> (advertiser · price) · <span class="atp-oc o-nobid">∅ NO-BID</span> · <span class="atp-oc o-house">🏠 HOUSE AD</span> · <span class="atp-oc o-content">▸ content</span>.</div>
   <div class="log" id="atp-log"></div>
 </div>
 <script>
@@ -198,6 +203,22 @@
     rows.push(r); if(rows.length>250)rows.shift(); count++; render(); return r;
   }
   function setStatus(r,s,ok){ if(r){r.status=s;r.ok=ok;render();} }
+  // Parse the X-Adtech-Outcome header ("result=fill; type=video; adv=…; price=…")
+  // into an object + attach it to the row so render() can show WHAT the auction did
+  // (fill / no-bid / house / content) — not just the HTTP status.
+  function parseOutcome(h){ var o={}; (''+h).split(';').forEach(function(p){ var i=p.indexOf('='); if(i>0){o[p.slice(0,i).trim()]=p.slice(i+1).trim();} }); return o; }
+  function setOutcome(r,h){ if(r&&h){ r.outcome=parseOutcome(h); render(); } }
+  function outcomeHTML(o){
+    if(!o||!o.result)return '';
+    var cls={fill:'o-fill',nobid:'o-nobid',house:'o-house',content:'o-content'}[o.result]||'o-content';
+    var label={fill:'✓ FILL',nobid:'∅ NO-BID',house:'🏠 HOUSE AD',content:'▸ content'}[o.result]||o.result.toUpperCase();
+    var detail='';
+    if(o.result==='fill'){
+      var bits=[]; if(o.adv)bits.push(o.adv); if(o.price)bits.push('$'+o.price+(o.cur&&o.cur!=='USD'?' '+o.cur:'')); if(o.model)bits.push(o.model);
+      detail=bits.join(' · ');
+    } else if(o.reason){ detail=o.reason; }
+    return '<div><span class="atp-oc '+cls+'">'+label+(detail?'<small>'+esc(detail)+'</small>':'')+'</span></div>';
+  }
   function esc(s){ return (''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
   function render(){
     if(!logEl){logEl=document.getElementById('atp-log');countEl=document.getElementById('atp-count');}
@@ -208,18 +229,19 @@
         '<span class="atp-desc" title="'+esc(r.url)+'">'+esc(r.desc)+
         (r.method&&r.method!=='GET'&&r.method!=='IMG'?' ['+esc(r.method)+']':'')+
         (r.status?' <span class="'+(r.ok?'atp-ok':'atp-err')+'">'+esc(r.status)+'</span>':'')+
-        '<br><span class="atp-path">'+esc(pathOf(r.url))+'</span></span></div>';
+        '<br><span class="atp-path">'+esc(pathOf(r.url))+'</span>'+
+        outcomeHTML(r.outcome)+'</span></div>';
     }).join('');
     logEl.scrollTop=logEl.scrollHeight;
   }
   // fetch
   var of=window.fetch;
-  if(of){ window.fetch=function(i,init){ var u=(typeof i==='string')?i:(i&&i.url)||''; var m=(init&&init.method)||'GET'; var r=add(u,m); var p=of.apply(this,arguments); if(r&&p&&p.then){p.then(function(x){setStatus(r,x.status,x.ok);}).catch(function(){setStatus(r,'ERR',false);});} return p; }; }
+  if(of){ window.fetch=function(i,init){ var u=(typeof i==='string')?i:(i&&i.url)||''; var m=(init&&init.method)||'GET'; var r=add(u,m); var p=of.apply(this,arguments); if(r&&p&&p.then){p.then(function(x){setStatus(r,x.status,x.ok); try{var oc=x.headers&&x.headers.get&&x.headers.get('X-Adtech-Outcome'); if(oc)setOutcome(r,oc);}catch(e){}}).catch(function(){setStatus(r,'ERR',false);});} return p; }; }
   // XHR (hls.js manifest + segment loads, some SDK calls)
   var OX=window.XMLHttpRequest;
   if(OX&&OX.prototype){ var oOpen=OX.prototype.open, oSend=OX.prototype.send;
     OX.prototype.open=function(m,u){ this.__atp={m:m,u:u}; return oOpen.apply(this,arguments); };
-    OX.prototype.send=function(){ var info=this.__atp; if(info){ var r=add(info.u,info.m); if(r){ this.addEventListener('load',function(){setStatus(r,this.status,this.status<400);}); this.addEventListener('error',function(){setStatus(r,'ERR',false);}); } } return oSend.apply(this,arguments); }; }
+    OX.prototype.send=function(){ var info=this.__atp; if(info){ var r=add(info.u,info.m); if(r){ this.addEventListener('load',function(){setStatus(r,this.status,this.status<400); try{var oc=this.getResponseHeader('X-Adtech-Outcome'); if(oc)setOutcome(r,oc);}catch(e){}}); this.addEventListener('error',function(){setStatus(r,'ERR',false);}); } } return oSend.apply(this,arguments); }; }
   // pixel beacons (new Image().src = tracker url)
   try{ var proto=HTMLImageElement.prototype, d=Object.getOwnPropertyDescriptor(proto,'src');
     if(d&&d.set){ Object.defineProperty(proto,'src',{enumerable:d.enumerable,configurable:true,get:d.get,set:function(v){ try{add(String(v),'IMG');}catch(e){} return d.set.call(this,v);}}); } }catch(e){}

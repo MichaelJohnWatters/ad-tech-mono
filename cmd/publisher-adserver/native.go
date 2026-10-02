@@ -93,6 +93,7 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stub
 		}
 
 		if noFill {
+			adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeNoBid, Type: "native", Reason: "no-demand"})
 			w.WriteHeader(http.StatusNoContent) // 204: honest no-ad
 			return
 		}
@@ -103,6 +104,12 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stub
 			http.Error(w, "native render failed", http.StatusInternalServerError)
 			return
 		}
+		adserving.SetOutcome(w, adserving.Outcome{
+			Result: adserving.OutcomeFill, Type: "native",
+			Advertiser: winner.AdvertiserDomain, Price: winner.ClearingPrice,
+			Currency: defaultStr2(winner.Currency, "USD"),
+			Model:    defaultStr2(winner.BidModel, "cpm"), Deal: winner.DealID,
+		})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte(html))
@@ -268,6 +275,7 @@ func serveNativeNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() 
 		return false
 	}
 	reqLog.Info("native no-bid: serving configured house ad", "house_ad", ad.ID, "name", ad.Name)
+	adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeHouse, Type: "native", Reason: "no-demand"})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write([]byte(ad.Markup))

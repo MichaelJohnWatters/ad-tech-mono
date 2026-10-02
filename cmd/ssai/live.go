@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/logger"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/ssai"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
@@ -55,6 +56,23 @@ var (
 	liveAdCache = map[string][]ssai.Segment{}
 )
 
+// liveAdOutcomes records, per break ordinal, what the break's auction produced
+// (fill + advertiser/price, or a slate/no-fill) so the live manifest can stamp
+// an X-Adtech-Outcome header the browser trace panel reads — the SSAI analogue
+// of the display/VAST outcome. Populated alongside liveAdCache (same key), same
+// eviction. Demo/observability only; never consulted by the stitch path.
+var (
+	liveOutcomeMu sync.Mutex
+	liveOutcomes  = map[string]adserving.Outcome{} // "placement|ord" -> outcome
+)
+
+func liveOutcomeFor(placement string, breakOrd int) (adserving.Outcome, bool) {
+	liveOutcomeMu.Lock()
+	defer liveOutcomeMu.Unlock()
+	o, ok := liveOutcomes[placement+"|"+strconv.Itoa(breakOrd)]
+	return o, ok
+}
+
 // liveManifestHandler serves the continuous live channel playlist.
 func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -96,11 +114,19 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 	isAd := func(t int) bool { return t >= 0 && t%cycle == contentRun }
 
 	var segs []ssai.Segment
+	// Track the newest ad-break slot in this window so we can report the auction
+	// outcome (fill/advertiser/price vs slate vs content) in a response header the
+	// browser trace panel surfaces. Nil → no break in the window (pure content).
+	var windowOutcome *adserving.Outcome
 	for t := startIdx; t < pos; t++ {
 		disc := t >= 1 && isAd(t) != isAd(t-1) // discontinuity at each content↔ad boundary
 		if isAd(t) {
 			breakOrd := t / cycle
 			ad := d.liveAdForBreak(ctx, r, channel, placement, breakOrd, adProfile, reqLog)
+			if oc, ok := liveOutcomeFor(placement, breakOrd); ok {
+				o := oc
+				windowOutcome = &o // later breaks overwrite earlier → newest wins
+			}
 			if len(ad) > 0 {
 				ad[0].Discontinuity = true
 				segs = append(segs, ad[0]) // one ad segment per live break slot
@@ -110,6 +136,11 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 		}
 		cs := content[((t%len(content))+len(content))%len(content)]
 		segs = append(segs, ssai.Segment{Duration: cs.Duration, URI: cs.URI, Map: cs.Map, Discontinuity: disc})
+	}
+	if windowOutcome != nil {
+		adserving.SetOutcome(w, *windowOutcome)
+	} else {
+		adserving.SetOutcome(w, adserving.Outcome{Result: adserving.OutcomeContent, Type: "ctv", Reason: "between breaks"})
 	}
 
 	m := &ssai.Manifest{
@@ -232,6 +263,7 @@ func (d *stitcherDeps) liveAdForBreak(ctx context.Context, r *http.Request, chan
 	session := adTrace
 	var result []ssai.Segment
 
+	adWon := false
 	winner := d.runAuction(ctx, r, channel, 0, traceparent, reqLog)
 	if winner != nil && !winner.NoBid && winner.MediaURL != "" {
 		if cond := d.conditionCached(ctx, winner, adProfile, reqLog); cond != nil && len(cond.Segments) > 0 {
@@ -240,6 +272,7 @@ func (d *stitcherDeps) liveAdForBreak(ctx context.Context, r *http.Request, chan
 			if len(built) > 0 {
 				result = built[:1] // one segment per live slot (impression rides seg 0)
 				d.recordFreqCap(ctx, r, channel, winner, adTrace)
+				adWon = true
 			}
 		} else {
 			d.warmCondition(winner, adProfile) // ready for a later break
@@ -250,6 +283,36 @@ func (d *stitcherDeps) liveAdForBreak(ctx context.Context, r *http.Request, chan
 			result = slate[:1]
 		}
 	}
+
+	// Record what this break produced for the manifest's X-Adtech-Outcome header.
+	outcome := adserving.Outcome{Result: adserving.OutcomeNoBid, Type: "ctv", Reason: "no ad (content shown)"}
+	switch {
+	case adWon:
+		cur, model := winner.Currency, winner.BidModel
+		if cur == "" {
+			cur = "USD"
+		}
+		if model == "" {
+			model = "cpm"
+		}
+		outcome = adserving.Outcome{
+			Result: adserving.OutcomeFill, Type: "ctv",
+			Advertiser: winner.AdvertiserDomain, Price: winner.ClearingPrice,
+			Currency: cur, Model: model,
+		}
+	case len(result) > 0: // a slate filled the slot (no real demand)
+		outcome = adserving.Outcome{Result: adserving.OutcomeHouse, Type: "ctv", Reason: "slate (no demand)"}
+	}
+	liveOutcomeMu.Lock()
+	liveOutcomes[key] = outcome
+	for k := range liveOutcomes {
+		if i := indexAfterPipe(k); i >= 0 {
+			if ord, err := strconv.Atoi(k[i:]); err == nil && ord < breakOrd-liveAdKeepBack {
+				delete(liveOutcomes, k)
+			}
+		}
+	}
+	liveOutcomeMu.Unlock()
 
 	liveAdMu.Lock()
 	liveAdCache[key] = result
