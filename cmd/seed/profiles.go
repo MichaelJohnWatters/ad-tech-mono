@@ -70,6 +70,7 @@ type CampaignConfig struct {
 // (every entry in practice shares the parent's domain).
 type CreativeYAML struct {
 	ID       string `yaml:"id"`
+	Name     string `yaml:"name,omitempty"` // display name in the creative library; falls back to ID
 	Width    int    `yaml:"width"`
 	Height   int    `yaml:"height"`
 	Domain   string `yaml:"domain,omitempty"`

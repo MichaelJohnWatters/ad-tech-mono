@@ -214,9 +214,9 @@ campaigns:
       include:
         segments: [seg-dog-lovers]
     creatives:
-      - { id: cr-dogfood-001, width: 300, height: 250 }
-      - { id: cr-dogfood-001-leader, width: 728, height: 90 }
-      - { id: cr-dogfood-001-mobile, width: 320, height: 50 }
+      - { id: cr-dogfood-001, name: "Ford Truck Intenders (300x250)", width: 300, height: 250 }
+      - { id: cr-dogfood-001-leader, name: "Ford Truck Intenders (728x90)", width: 728, height: 90 }
+      - { id: cr-dogfood-001-mobile, name: "Ford Truck Intenders (320x50)", width: 320, height: 50 }
 
   - id: li-cattreats-aud
     account_id: adv-whiskerco
@@ -297,7 +297,7 @@ campaigns:
       include:
         segments: [seg-dog-cafe-crowd]
     creatives:
-      - { id: cr-dogcafe-001, width: 300, height: 250 }
+      - { id: cr-dogcafe-001, name: "Ford Adventure (300x250)", width: 300, height: 250 }
 
   # The retargeting payoff: chases Ford cart abandoners (enrolled by
   # audience-rt within seconds of the /v1/t/rt?tag=dogfood-cart pixel).
@@ -325,5 +325,5 @@ campaigns:
     # the Ford catalog + the shopper's carted SKUs (recorded by the SKU-aware
     # /v1/t/rt pixel). A visitor with no SKU context gets the static fallback.
     creatives:
-      - { id: cr-dogfood-cart-001, width: 300, height: 250, format: dynamic_product }
-      - { id: cr-dogfood-cart-001-leader, width: 728, height: 90, format: dynamic_product }
+      - { id: cr-dogfood-cart-001, name: "Ford F-150 Dynamic Ad (300x250)", width: 300, height: 250, format: dynamic_product }
+      - { id: cr-dogfood-cart-001-leader, name: "Ford F-150 Dynamic Ad (728x90)", width: 728, height: 90, format: dynamic_product }

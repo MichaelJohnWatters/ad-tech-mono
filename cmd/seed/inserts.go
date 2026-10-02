@@ -428,7 +428,11 @@ ON CONFLICT (id) DO UPDATE SET
   duration_seconds = EXCLUDED.duration_seconds,
   native_assets = EXCLUDED.native_assets,
   updated_at = now()`
-			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, cv.ID, format, cv.Width, cv.Height, landing, domain, html, assetURL, durationPtr, nativeJSON); err != nil {
+			crName := cv.Name
+			if crName == "" {
+				crName = cv.ID // back-compat: no explicit name → the id, as before
+			}
+			if _, err := tx.ExecContext(ctx, crQ, creativeID, accountID, crName, format, cv.Width, cv.Height, landing, domain, html, assetURL, durationPtr, nativeJSON); err != nil {
 				return fmt.Errorf("creatives insert (%s): %w", cv.ID, err)
 			}
 
