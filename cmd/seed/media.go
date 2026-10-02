@@ -64,6 +64,9 @@ var adVideoQuickBite []byte
 //go:embed assets/ad-video-epicquest.mp4
 var adVideoEpicQuest []byte
 
+//go:embed assets/ad-video-luxe.mp4
+var adVideoLuxe []byte
+
 var brandAdVideos = []struct {
 	key  string
 	data []byte
@@ -73,6 +76,7 @@ var brandAdVideos = []struct {
 	{"media/ad-video-luxauto.mp4", adVideoLuxAuto},
 	{"media/ad-video-quickbite.mp4", adVideoQuickBite},
 	{"media/ad-video-epicquest.mp4", adVideoEpicQuest},
+	{"media/ad-video-luxe.mp4", adVideoLuxe},
 }
 
 // sampleMedia is the curated set of video/audio files the demo uses for video

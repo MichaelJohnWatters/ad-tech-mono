@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -9,6 +11,21 @@ import (
 	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// demoPersonaEmail is the email the demo publisher sites identify the walkthrough
+// visitor by (cmd/demosite's sdkboot calls setUserData({hashedEmail: sha256(this)})).
+// The jewelry demo enrols THIS persona's hashed email into the luxury segments so
+// that browsing a demo site as the default persona (after accepting personalised
+// consent) triggers Lumière Diamonds' aggressive audience bid — no upload needed.
+const demoPersonaEmail = "demo.shopper@example.com"
+
+// demoPersonaHashedEmail is sha256(lowercased email) hex — the SAME value the SDK
+// forwards as ?hashed_email= and the SSP matches segments on. A CRM upload of this
+// hash (or the raw email, hashed the same way) lands the same member key.
+func demoPersonaHashedEmail() string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(demoPersonaEmail))))
+	return hex.EncodeToString(sum[:])
+}
 
 // SeedFeatureBaseline seeds the recent-feature entities the original
 // profiles never covered. Found the hard way after a factory reset
@@ -25,6 +42,9 @@ func (in *inserter) SeedFeatureBaseline(ctx context.Context) error {
 		return err
 	}
 	if err := in.seedThemedSegments(ctx); err != nil {
+		return err
+	}
+	if err := in.seedJewelryDemo(ctx); err != nil {
 		return err
 	}
 	if err := in.seedProductCatalog(ctx); err != nil {
@@ -121,6 +141,47 @@ VALUES ($1, $2, $3, now()) ON CONFLICT (segment_id, user_id) DO NOTHING`,
 		}
 	}
 	in.log.Info("seeded audience segments", "count", len(segments), "members_per", 5)
+	return nil
+}
+
+// seedJewelryDemo wires the "first-party audience" demo (staff portal → Audience
+// targeting demo): two PUBLIC luxury segments owned by Lumière Diamonds (adv-luxe)
+// with the demo persona pre-enrolled by hashed email, plus the account name. The
+// segments are PUBLIC on purpose — the SSP stamps public segments on
+// user.ext.segments (consent-gated), which is what our DSP reads for targeting +
+// the audience bid modifier (profiles/dsps/luxe.yaml). A viewer can also self-
+// onboard live via POST /v1/api/audiences (CRM upload by hashed email).
+func (in *inserter) seedJewelryDemo(ctx context.Context) error {
+	account := idgen.Derive("account", "adv-luxe")
+	// Name the account auto-created from profiles/dsps/luxe.yaml.
+	if _, err := in.db.ExecContext(ctx,
+		`UPDATE accounts SET name = 'Lumière Diamonds', updated_at = now() WHERE id = $1`, account); err != nil {
+		return fmt.Errorf("name luxe account: %w", err)
+	}
+	// Segment ids use the SAME convention the CRM-upload path derives
+	// (pkg/audience UpsertSegment: Derive("segment", accountID+"/"+name)), so a
+	// live upload of these named segments as Lumière Diamonds merges into the SAME
+	// segment this seeds — one id, both demo flows. profiles/dsps/luxe.yaml targets
+	// these ids via the matching account-UUID/name keys.
+	names := []string{"Diamond & Jewelry Intenders", "Affluent / High Net Worth"}
+	he := demoPersonaHashedEmail()
+	for _, name := range names {
+		segID := idgen.Derive("segment", account+"/"+name)
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO audience_segments (id, account_id, name, type, visibility, status, source, created_at, updated_at)
+VALUES ($1, $2, $3, 'first_party', 'public', 'active', 'seed', now(), now())
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, visibility = 'public', status = 'active', updated_at = now()`,
+			segID, account, name); err != nil {
+			return fmt.Errorf("seed jewelry segment %s: %w", name, err)
+		}
+		if _, err := in.db.ExecContext(ctx, `
+INSERT INTO audience_segment_members (segment_id, user_id, account_id, added_at)
+VALUES ($1, $2, $3, now()) ON CONFLICT (segment_id, user_id) DO NOTHING`,
+			segID, he, account); err != nil {
+			return fmt.Errorf("enroll demo persona in %s: %w", name, err)
+		}
+	}
+	in.log.Info("seeded jewelry demo", "segments", len(names), "persona_hashed_email_prefix", he[:12])
 	return nil
 }
 
