@@ -382,6 +382,12 @@ type auctionContext struct {
 	// household derivation is disabled or no IP was resolvable). Rides to
 	// the ad server on the ServeRequest so freq caps can key per household.
 	HouseholdID string
+	// BidReq + DevHeaders are kept so the serve handler can RE-RUN the exchange
+	// auction excluding a freq-capped winner (via BAdv) to serve the runner-up
+	// instead of no-filling. The identity/behaviour/data-fee side-effects already
+	// fired once in runSSPAuction; re-auctioning only re-hits the exchange.
+	BidReq     openrtb.BidRequest
+	DevHeaders map[string]string
 }
 
 // uuidPattern matches Postgres's canonical lowercase 8-4-4-4-12 hex UUID
@@ -737,7 +743,6 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		"size", fmt.Sprintf("%dx%d", p.Width, p.Height),
 	)
 
-	body, _ := json.Marshal(bidReq)
 	// Propagate the inbound X-Dev-Slow-DSPs only when debug endpoints are
 	// enabled. Real publisher requests don't set this header so prod is
 	// effectively unaffected, but defence-in-depth: prod with the flag
@@ -749,39 +754,10 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		}
 	}
 	phaseMark := obsServePhase("pre_auction", serveStart)
-	var respBody []byte
-	if grpcx.IsURL(exchangeURL) {
-		// Internal fast path: the exchange is ours, so this edge rides the
-		// gRPC twin of /v1/openrtb/auction. Same JSON, same handler on the
-		// far side — a non-200 falls through to the decode below and lands
-		// on the no-winner path, exactly like the HTTP branch.
-		_, rb, err := grpcx.RunAuction(ctx, grpcx.Target(exchangeURL), body, devHeaders)
-		if err != nil {
-			reqLog.Error("exchange call failed", "error", err)
-			http.Error(w, "exchange unavailable", http.StatusBadGateway)
-			return auctionContext{}, false
-		}
-		respBody = rb
-	} else {
-		exReq, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
-		if err != nil {
-			reqLog.Error("build exchange request", "error", err)
-			http.Error(w, "exchange request build failed", http.StatusInternalServerError)
-			return auctionContext{}, false
-		}
-		exReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		for k, v := range devHeaders {
-			exReq.Header.Set(k, v)
-		}
-		tracing.InjectHTTP(ctx, exReq)
-		resp, err := http.DefaultClient.Do(exReq)
-		if err != nil {
-			reqLog.Error("exchange call failed", "error", err)
-			http.Error(w, "exchange unavailable", http.StatusBadGateway)
-			return auctionContext{}, false
-		}
-		defer resp.Body.Close()
-		respBody, _ = io.ReadAll(resp.Body)
+	respBody, exOK := callExchange(ctx, exchangeURL, bidReq, devHeaders, reqLog)
+	if !exOK {
+		http.Error(w, "exchange unavailable", http.StatusBadGateway)
+		return auctionContext{}, false
 	}
 
 	obsServePhase("auction", phaseMark)
@@ -800,7 +776,41 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 	// forget; accrual happens at impression time in reporting).
 	dfPublisher.Observe(r, traceID, p, bidResp, feeSegs)
 
-	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp, HouseholdID: householdID}, true
+	return auctionContext{TraceID: traceID, Placement: p, BidResp: bidResp, HouseholdID: householdID, BidReq: bidReq, DevHeaders: devHeaders}, true
+}
+
+// callExchange runs ONE auction round against the exchange (gRPC twin or OpenRTB
+// HTTP, picked by URL scheme) and returns the raw response body. Extracted so the
+// serve handler can re-run the auction with an updated BAdv (excluding a
+// freq-capped winner) without re-firing runSSPAuction's one-time side-effects.
+func callExchange(ctx context.Context, exchangeURL string, bidReq openrtb.BidRequest, devHeaders map[string]string, reqLog *slog.Logger) ([]byte, bool) {
+	body, _ := json.Marshal(bidReq)
+	if grpcx.IsURL(exchangeURL) {
+		_, rb, err := grpcx.RunAuction(ctx, grpcx.Target(exchangeURL), body, devHeaders)
+		if err != nil {
+			reqLog.Error("exchange call failed", "error", err)
+			return nil, false
+		}
+		return rb, true
+	}
+	exReq, err := http.NewRequestWithContext(ctx, http.MethodPost, exchangeURL+routes.OpenRTBAuction, bytes.NewReader(body))
+	if err != nil {
+		reqLog.Error("build exchange request", "error", err)
+		return nil, false
+	}
+	exReq.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	for k, v := range devHeaders {
+		exReq.Header.Set(k, v)
+	}
+	tracing.InjectHTTP(ctx, exReq)
+	resp, err := http.DefaultClient.Do(exReq)
+	if err != nil {
+		reqLog.Error("exchange call failed", "error", err)
+		return nil, false
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	return rb, true
 }
 
 // originSChain builds the one-node SupplyChain this platform originates as the
@@ -1219,88 +1229,127 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			})
 			return
 		}
-		serveReq := models.ServeRequest{
-			TraceID:    ac.TraceID,
-			CampaignID: winner.CID,
-			CreativeID: winner.CrID,
-			// DealID rides serve → adserver → tracker beacon (deal=) →
-			// billing, where the deal's TYPE drives contract fee modifiers.
-			// Was dropped here, so deal-won impressions billed as open market.
-			DealID:        winner.DealID,
-			PlacementID:   ac.Placement.ID,
-			PublisherID:   ac.Placement.PublisherID,
-			AdvertiserID:  ac.BidResp.SeatBid[0].Seat,
-			BidModel:      winner.BidModel,
-			ClearingPrice: winner.Price,
-			Currency:      ac.BidResp.Cur,
-			SiteDomain:    ac.Placement.PublisherDomain,
-			Width:         ac.Placement.Width,
-			Height:        ac.Placement.Height,
-			UserID:        r.URL.Query().Get("user_id"),
-			// Household cap key: co-viewing devices on one IP share a cap.
-			HouseholdID: ac.HouseholdID,
-			// Behavioural capture key: only under personalisation consent —
-			// same gate as the SSP's own request-row capture (behaviour.go).
-			BehaviourUserID: behaviourUserKey(r),
-			// geo/device ride the same serve request the SSP received; bake
-			// them into the tracker beacons so impression analytics carry them.
-			Geo:    r.URL.Query().Get("geo"),
-			Device: r.URL.Query().Get("device"),
-		}
-		body, _ := json.Marshal(serveReq)
-		adStatus, adBody, adErr := doAdServe(ctx, adServerURL, body)
-		if adErr != nil {
-			reqLog.Error("ad server call failed", "error", adErr)
-			http.Error(w, "ad server unavailable", http.StatusBadGateway)
-			return
-		}
+		// Display: render via the ad server, with a bounded re-auction fallback.
 		// The ad server can decline to render even after an auction win — most
 		// commonly a frequency cap (429), which is a normal no-fill, not an
-		// error. Treat any non-200 as an unfilled opportunity and return the
-		// same nobid response the no-winner path uses, instead of JSON-decoding
-		// a plain-text error body (which produced spurious "decode failed"
-		// ERRORs + 502s: "frequency cap exceeded" parses as a bad `false`).
-		if adStatus != http.StatusOK {
-			if adStatus == http.StatusTooManyRequests {
-				reqLog.Debug("ad server declined: frequency cap", "status", adStatus)
-			} else {
-				reqLog.Warn("ad server declined to render", "status", adStatus)
+		// error. Rather than immediately no-filling the slot, exclude the capped
+		// advertiser's domain and re-run the auction so the runner-up can win —
+		// reusing the same BAdv (blocked-advertiser) mechanism the DSPs already
+		// honour for competitive separation, so no exchange/DSP change is needed.
+		// Bounded; falls back to an honest no-fill when no un-capped bidder
+		// remains. Only callExchange re-fires (never runSSPAuction), so the SSP's
+		// one-time per-request side effects (identity/behaviour/data-fee publish)
+		// are NOT duplicated across rounds.
+		resp := ac.BidResp
+		excluded := append([]string(nil), ac.BidReq.BAdv...)
+		const maxReauctions = 4
+		for attempt := 0; ; attempt++ {
+			winner := resp.SeatBid[0].Bid[0]
+			serveReq := models.ServeRequest{
+				TraceID:    ac.TraceID,
+				CampaignID: winner.CID,
+				CreativeID: winner.CrID,
+				// DealID rides serve → adserver → tracker beacon (deal=) →
+				// billing, where the deal's TYPE drives contract fee modifiers.
+				// Was dropped here, so deal-won impressions billed as open market.
+				DealID:        winner.DealID,
+				PlacementID:   ac.Placement.ID,
+				PublisherID:   ac.Placement.PublisherID,
+				AdvertiserID:  resp.SeatBid[0].Seat,
+				BidModel:      winner.BidModel,
+				ClearingPrice: winner.Price,
+				Currency:      resp.Cur,
+				SiteDomain:    ac.Placement.PublisherDomain,
+				Width:         ac.Placement.Width,
+				Height:        ac.Placement.Height,
+				UserID:        r.URL.Query().Get("user_id"),
+				// Household cap key: co-viewing devices on one IP share a cap.
+				HouseholdID: ac.HouseholdID,
+				// Behavioural capture key: only under personalisation consent —
+				// same gate as the SSP's own request-row capture (behaviour.go).
+				BehaviourUserID: behaviourUserKey(r),
+				// geo/device ride the same serve request the SSP received; bake
+				// them into the tracker beacons so impression analytics carry them.
+				Geo:    r.URL.Query().Get("geo"),
+				Device: r.URL.Query().Get("device"),
 			}
-			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-			json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
-			return
-		}
-		var sr models.ServeResponse
-		if err := json.Unmarshal(adBody, &sr); err != nil {
-			reqLog.Error("ad server response decode failed", "error", err)
-			http.Error(w, "ad server bad response", http.StatusBadGateway)
-			return
-		}
+			body, _ := json.Marshal(serveReq)
+			adStatus, adBody, adErr := doAdServe(ctx, adServerURL, body)
+			if adErr != nil {
+				reqLog.Error("ad server call failed", "error", adErr)
+				http.Error(w, "ad server unavailable", http.StatusBadGateway)
+				return
+			}
+			if adStatus == http.StatusOK {
+				var sr models.ServeResponse
+				if err := json.Unmarshal(adBody, &sr); err != nil {
+					reqLog.Error("ad server response decode failed", "error", err)
+					http.Error(w, "ad server bad response", http.StatusBadGateway)
+					return
+				}
 
-		// Macro substitution. Creative HTML can carry standard ad-tech tokens
-		// (${IMP_PIXEL}, ${CLICK_URL}, ${VIEWABILITY_URL}) so the same row
-		// in the creatives table serves any auction outcome. SSP substitutes
-		// them with the per-auction signed URLs before the HTML reaches the
-		// browser — clients should never see raw macros.
-		expandedHTML := strings.NewReplacer(
-			"${IMP_PIXEL}", sr.ImpressionURL,
-			"${CLICK_URL}", sr.ClickURL,
-			"${VIEWABILITY_URL}", sr.ViewabilityURL,
-			"${TRACE_ID}", ac.TraceID,
-		).Replace(sr.HTML)
+				// Macro substitution. Creative HTML can carry standard ad-tech
+				// tokens (${IMP_PIXEL}, ${CLICK_URL}, ${VIEWABILITY_URL}) so the
+				// same row in the creatives table serves any auction outcome. SSP
+				// substitutes them with the per-auction signed URLs before the
+				// HTML reaches the browser — clients should never see raw macros.
+				expandedHTML := strings.NewReplacer(
+					"${IMP_PIXEL}", sr.ImpressionURL,
+					"${CLICK_URL}", sr.ClickURL,
+					"${VIEWABILITY_URL}", sr.ViewabilityURL,
+					"${TRACE_ID}", ac.TraceID,
+				).Replace(sr.HTML)
 
+				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				json.NewEncoder(w).Encode(serveAdResponse{
+					TraceID:        ac.TraceID,
+					HTML:           expandedHTML,
+					ImpressionURL:  sr.ImpressionURL,
+					ClickURL:       sr.ClickURL,
+					ViewabilityURL: sr.ViewabilityURL,
+					Width:          ac.Placement.Width,
+					Height:         ac.Placement.Height,
+					ClearingPrice:  winner.Price,
+					DealID:         winner.DealID,
+				})
+				return
+			}
+			// Non-200. Only a frequency cap (429) is worth re-auctioning around;
+			// any other decline is a genuine no-fill (don't JSON-decode the
+			// plain-text error body — "frequency cap exceeded" parses as a bad
+			// `false`, which produced spurious "decode failed" ERRORs + 502s).
+			if adStatus != http.StatusTooManyRequests {
+				reqLog.Warn("ad server declined to render", "status", adStatus)
+				break
+			}
+			reqLog.Debug("ad server declined: frequency cap", "status", adStatus, "attempt", attempt)
+			// Out of re-auction budget, or the capped winner carries no domain
+			// to exclude (can't express the exclusion as BAdv) → honest no-fill.
+			if attempt >= maxReauctions || len(winner.ADomain) == 0 {
+				break
+			}
+			excluded = append(excluded, winner.ADomain[0])
+			reBid := ac.BidReq
+			reBid.BAdv = excluded
+			rb, exOK := callExchange(ctx, exchangeURL, reBid, ac.DevHeaders, reqLog)
+			if !exOK {
+				break
+			}
+			var reResp openrtb.BidResponse
+			json.Unmarshal(rb, &reResp)
+			if reResp.NoBid || len(reResp.SeatBid) == 0 || len(reResp.SeatBid[0].Bid) == 0 {
+				reqLog.Debug("re-auction after freq cap: no un-capped runner-up", "excluded", excluded)
+				break
+			}
+			resp = reResp
+			reqLog.Debug("re-auction after freq cap: runner-up won",
+				"excluded", excluded, "advertiser", resp.SeatBid[0].Seat)
+		}
+		// No fillable winner remained after the capped advertiser(s) were
+		// excluded — same honest no-fill the no-winner path returns.
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
-		json.NewEncoder(w).Encode(serveAdResponse{
-			TraceID:        ac.TraceID,
-			HTML:           expandedHTML,
-			ImpressionURL:  sr.ImpressionURL,
-			ClickURL:       sr.ClickURL,
-			ViewabilityURL: sr.ViewabilityURL,
-			Width:          ac.Placement.Width,
-			Height:         ac.Placement.Height,
-			ClearingPrice:  winner.Price,
-			DealID:         winner.DealID,
-		})
+		json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
+		return
 	}
 }
 
