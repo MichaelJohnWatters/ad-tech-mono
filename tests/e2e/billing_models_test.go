@@ -121,7 +121,10 @@ func waitForDelta(t *testing.T, h *harness.Harness, key string, base, expected f
 	if tol < 0.000005 {
 		tol = 0.000005
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	// 20s window: the billing summary trails the win/beacon by the NATS
+	// consume + ledger apply, which stretches under full-suite load (5s
+	// flaked); a passing test returns on the first matching poll.
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		summary := h.BillingSummary(t)
 		got := summaryFloat(t, summary, key) - base
@@ -131,7 +134,7 @@ func waitForDelta(t *testing.T, h *harness.Harness, key string, base, expected f
 		time.Sleep(100 * time.Millisecond)
 	}
 	final := summaryFloat(t, h.BillingSummary(t), key) - base
-	t.Errorf("%s delta = %.6f, want ~%.6f (5s timeout)", key, final, expected)
+	t.Errorf("%s delta = %.6f, want ~%.6f (20s timeout)", key, final, expected)
 	return final
 }
 

@@ -79,10 +79,14 @@ func TestAttributionViewThrough(t *testing.T) {
 	}
 }
 
-// waitCH polls a COUNT query until it returns >=1, failing after 15s.
+// waitCH polls a COUNT query until it returns >=1, failing after 45s. The
+// window is sized for FULL-SUITE load, where the NATS→ClickHouse batch
+// consumers can lag tens of seconds behind the beacons (15s flaked ~1-2
+// tests per full run); a passing test still returns on the first poll that
+// sees the row.
 func waitCH(t *testing.T, h *harness.Harness, query, what string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		if h.ClickHouseScalar(t, query) >= 1 {
 			return

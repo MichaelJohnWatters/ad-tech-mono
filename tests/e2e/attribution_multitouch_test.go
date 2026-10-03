@@ -97,10 +97,11 @@ func TestAttributionMultiTouchChain(t *testing.T) {
 	}
 }
 
-// waitCHCount polls until a COUNT query returns at least `want`, failing at 15s.
+// waitCHCount polls until a COUNT query returns at least `want`, failing at
+// 45s — sized for full-suite consumer lag like waitCH (15s flaked under load).
 func waitCHCount(t *testing.T, h *harness.Harness, query string, want int, what string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		if h.ClickHouseScalar(t, query) >= want {
 			return
