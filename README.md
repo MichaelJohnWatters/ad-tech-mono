@@ -11,7 +11,7 @@ A full-stack programmatic advertising platform in a single Go monorepo. Every co
   nice `*.adtech.local` domains (run `make hosts` once), plus the `make demo-forward`
   localhost map.
 - **Architecture diagrams (C4 model):** the staff portal **Architecture** page
-  (`https://adtech.local` → log in as staff → Architecture) renders the Context /
+  (`https://gateway.adtech.local` → log in as staff → Architecture) renders the Context /
   Containers / per-service Component views. Source is the one C4 model in
   [`docs/diagrams/workspace.dsl`](docs/diagrams/workspace.dsl); `make c4` re-exports
   the rendered Mermaid into `web/static/diagrams/`.
