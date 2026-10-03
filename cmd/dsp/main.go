@@ -149,6 +149,7 @@ func main() {
 		return dspRowLive.Load().NoBidRate
 	}
 	flightPacingFn := knobs.FlightPacingEnabled
+	shadingEnabledFn := knobs.ShadingEnabled
 
 	// Redis budget tracker.
 	l2 := connectRedis(cfg, log)
@@ -296,7 +297,7 @@ func main() {
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
-	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingTracker, shades)
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingEnabledFn, shadingTracker, shades)
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
@@ -823,7 +824,7 @@ func (s *shadeStash) take(bidID string) float64 {
 	return v
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool, shadingTracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool, shadingEnabledFn func() bool, shadingTracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -1246,9 +1247,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			// campaign's shading mode (never below floor, never above valuation), and
 			// stash the realized saving by bid id so the win notice can book it as real
 			// "dollars saved". Competitors represent the market and are never shaded;
-			// disabled/empty mode bids the full valuation (today's behaviour).
+			// disabled/empty mode bids the full valuation (today's behaviour). The
+			// dsp.shading_enabled live knob is the GLOBAL kill-switch over all of it —
+			// an ops lever when learned curves misbehave, and what exact-price tests
+			// flip for determinism.
 			bidPrice := adjustedBid
-			if !isCompetitor && c.ShadingMode != "" && c.ShadingMode != "disabled" {
+			if !isCompetitor && shadingEnabledFn() && c.ShadingMode != "" && c.ShadingMode != "disabled" {
 				if placementID := bidReq.Imp[0].TagID; placementID != "" {
 					bidPrice = bidshading.ShadedBid(shadingTracker.WinRateCurve(placementID), c.ShadingMode, adjustedBid, floor)
 					if bidPrice < adjustedBid {

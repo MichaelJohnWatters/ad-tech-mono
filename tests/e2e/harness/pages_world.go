@@ -202,7 +202,7 @@ func (h *Harness) createNativeCampaign(t *testing.T, owner Account, io Insertion
 	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
 		const liQ = `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'native', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())
+VALUES ($1, $2, $3, $4, 'live', 'native', 'cpm', $5, 'USD', $6, 'asap', 'disabled', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET status = 'live', format = 'native', base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
 		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
 			t.Fatalf("native line_items insert: %v", err)
@@ -240,7 +240,7 @@ func (h *Harness) createAudioCampaign(t *testing.T, owner Account, io InsertionO
 	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
 		const liQ = `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'audio', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())
+VALUES ($1, $2, $3, $4, 'live', 'audio', 'cpm', $5, 'USD', $6, 'asap', 'disabled', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET status = 'live', format = 'audio', base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
 		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
 			t.Fatalf("audio line_items insert: %v", err)

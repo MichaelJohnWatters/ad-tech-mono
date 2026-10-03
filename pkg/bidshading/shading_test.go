@@ -44,6 +44,38 @@ func TestTracker_EmptyPlacement(t *testing.T) {
 	}
 }
 
+// TestShadedBidInvariants pins ShadedBid's three safety properties: the shade
+// never drops below the request floor (a below-floor bid is an automatic loss
+// — shading exists to save money, not to forfeit winnable auctions), never
+// exceeds the valuation, and no-data / disabled-mode leave the bid untouched.
+func TestShadedBidInvariants(t *testing.T) {
+	// Train a curve whose clearing prices sit WELL below the floor we'll pass,
+	// so an unclamped shader would want to bid under the floor.
+	tracker := NewTracker()
+	for i := 0; i < 50; i++ {
+		tracker.RecordWin("pl", "", 1.20, 1.00)
+	}
+	curve := tracker.WinRateCurve("pl")
+
+	const valuation, floor = 9.0, 3.0
+	got := ShadedBid(curve, "aggressive", valuation, floor)
+	if got < floor {
+		t.Errorf("ShadedBid = %.2f, below floor %.2f — the floor clamp must hold", got, floor)
+	}
+	if got > valuation {
+		t.Errorf("ShadedBid = %.2f, above valuation %.2f", got, valuation)
+	}
+
+	// No data → no shade.
+	if got := ShadedBid(NewTracker().WinRateCurve("empty"), "aggressive", valuation, floor); got != valuation {
+		t.Errorf("empty curve: ShadedBid = %.2f, want full valuation %.2f", got, valuation)
+	}
+	// Disabled / unknown mode → no shade.
+	if got := ShadedBid(curve, "disabled", valuation, floor); got != valuation {
+		t.Errorf("disabled mode: ShadedBid = %.2f, want full valuation %.2f", got, valuation)
+	}
+}
+
 func TestTracker_WinRateCurve(t *testing.T) {
 	tracker := NewTracker()
 
