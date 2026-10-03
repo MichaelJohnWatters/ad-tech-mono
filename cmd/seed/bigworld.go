@@ -61,6 +61,13 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 			if premium {
 				baseBid = 9 + float64(n%4)*3.5 // 9 / 12.5 / 16 / 19.5
 			}
+			// Spread bid shading across the big world so a LOAD TEST leaves rich,
+			// comparable savings data to inspect: ~half the campaigns shade (one of
+			// each mode), half stay off (realistic — not every advertiser shades).
+			// With the second-price signal (exchange clear_price → curve midpoint),
+			// these shade STABLY toward the real clearing under sustained load
+			// instead of decaying to zero.
+			shadingMode := []string{"conservative", "moderate", "aggressive", "disabled", "disabled", "disabled"}[n%6]
 			cc := CampaignConfig{
 				ID:          fmt.Sprintf("%s-c%d", acctKey, c),
 				AccountID:   acctKey,
@@ -72,6 +79,7 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 				BidModel:    "cpm",
 				PacingMode:  "even",
 				Status:      "live",
+				ShadingMode: shadingMode,
 				Format:      format,
 				// A real display creative so the campaign SERVES (a bare
 				// campaign silently no-bids — the exact trap the small
