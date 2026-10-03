@@ -1,8 +1,6 @@
 [
   {"title":"★ Data lifecycle (start here)","file":"data-lifecycle.md","type":"mermaid","level":"★"},
   {"title":"★ E2E trace (one request)","file":"e2e-trace.md",    "type":"mermaid", "level":"★"},
-  {"title":"System context",        "file":"context.svg",       "type":"svg",     "level":"L0"},
-  {"title":"Architecture · 5 planes","file":"architecture.svg",  "type":"svg",     "level":"L1"},
   {"title":"Ad-request lifecycle",   "file":"auction-flow.svg",  "type":"svg",     "level":"flow"},
   {"title":"Async event fan-out",    "file":"nats-events.svg",   "type":"svg",     "level":"flow"},
   {"title":"Money loop",             "file":"billing-flow.svg",  "type":"svg",     "level":"flow"},
