@@ -133,18 +133,14 @@ campaigns:
     io_id: io-002
     name: "Globex Tech - Desktop Worldwide"
     creative_domain: globex-tech.com
-    base_bid: 11.00
+    base_bid: 10.00
     currency: USD
     daily_budget: 1500
     total_budget: 30000
     bid_model: cpm
     pacing_mode: even
     status: live
-    # Shading A/B/C across competing advertisers (same ~$11 bid band, same auctions):
-    # Globex = CONSERVATIVE (hold ~90% win rate, save least per win). Acme =
-    # MODERATE, Sweat Labs = AGGRESSIVE (win fewer, save most). Initech/Whisker/
-    # Bean Barn = OFF (control). Compare win-rate vs savings on the Shading page.
-    shading_mode: conservative
+    shading_mode: moderate
     modifiers:
       geo_country:
         USA: 20
@@ -552,14 +548,14 @@ campaigns:
     io_id: io-ron-sweatlabs
     name: "Sweat Labs - Run of Network (All Formats)"
     creative_domain: sweatlabs.com
-    base_bid: 11.00
+    base_bid: 12.00
     currency: USD
     daily_budget: 1500
     total_budget: 30000
     bid_model: cpm
     pacing_mode: even
     status: live
-    shading_mode: aggressive # A/B/C: the AGGRESSIVE arm (wins fewer, saves most per win)
+    shading_mode: moderate
     targeting:
       include:
         geo: [USA, GBR]
