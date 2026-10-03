@@ -77,3 +77,4 @@ If you change this service, check if diagrams need updating:
 - **New gRPC proxy target?** Update `docs/diagrams/architecture.d2` (Gateway -> service connection)
 - **Changed auth/RBAC?** Update `docs/PLAN.md` -> Authentication, Roles, and Permissions
 - **New Traefik route?** Update `docs/diagrams/architecture.d2` ingress section
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

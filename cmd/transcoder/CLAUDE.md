@@ -55,3 +55,4 @@ If you change this service, check if diagrams need updating:
 - **New endpoint or caller?** Update `docs/PLAN.md` -> Video Services Architecture
 - **New NATS subject (currently none)?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **New dependency?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

@@ -74,3 +74,4 @@ If you change this service, check if diagrams need updating:
 - **New NATS subject published?** Update `docs/PLAN.md` -> NATS Subjects table and NATS Event Flow diagram
 - **New dependency (Redis, Postgres, another service)?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
 - **Changed auction strategy or channel routing?** Update `docs/PLAN.md` -> Unified Auction Engine section
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

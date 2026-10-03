@@ -44,3 +44,7 @@ starts when the previous actually finishes. Replaced the time-staggered CronJob 
   Memberships → Export)"
 - New NATS subject or chain step? Update the NATS Subjects table + check
   `docs/diagrams/README.md` "Update when" column, then `make diagrams`.
+
+## Diagram Updates
+
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

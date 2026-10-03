@@ -77,3 +77,4 @@ If you change this service, check if diagrams need updating:
 - **New NATS subject published?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **New dependency (e.g. a new store or service call)?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
 - **New job source/delivery mode?** Update `docs/PLAN.md` -> Custom Report Builder
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

@@ -41,3 +41,4 @@ If you change this service, check if diagrams need updating:
 - **New gRPC method?** Update `docs/PLAN.md` -> gRPC Services + Gateway HTTP Endpoints
 - **Changed bid request format?** Update `docs/PLAN.md` -> OpenRTB sections + Ad Request Flow sequence diagram
 - **New dependency?** Update `docs/diagrams/architecture.d2`
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.
