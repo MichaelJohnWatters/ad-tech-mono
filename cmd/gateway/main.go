@@ -411,9 +411,20 @@ func main() {
 
 	// Service registry - shows all running services and their config (topology
 	// recon if open) — require an authenticated caller with config:read.
-	if sc.Registry != nil {
-		mux.Handle(routes.ServicesRegistry, authMiddleware(middleware.RequirePermission("config:read")(sc.Registry.HTTPHandler())))
-	}
+	// Registered UNCONDITIONALLY, registry resolved per request: when the
+	// gateway boots during a Postgres race, sc.Registry is nil (MemorySource
+	// path) and retryAttachPostgres attaches the real registry minutes later —
+	// gating registration on the boot-time value latched the route out of
+	// existence until a restart (unauth callers saw 404 where the security
+	// posture promises 401; found by the security e2e after a VM restart).
+	mux.Handle(routes.ServicesRegistry, authMiddleware(middleware.RequirePermission("config:read")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reg := sc.Manager.Registry()
+		if reg == nil {
+			http.Error(w, `{"error":"service registry warming (config store not yet attached)"}`, http.StatusServiceUnavailable)
+			return
+		}
+		reg.HTTPHandler().ServeHTTP(w, r)
+	}))))
 
 	// Dev-only token minter: /v1/auth/token issues a signed JWT for an arbitrary
 	// account/role with NO credential — a total auth bypass if reachable. Gated
