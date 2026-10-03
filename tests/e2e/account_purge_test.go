@@ -142,6 +142,18 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		 WHERE account_id = $1::uuid AND status = 'closed'`, adv.ID); err != nil {
 		t.Fatalf("backdate closed_at: %v", err)
 	}
+	// Count invoices just BEFORE the purge: on top of the seeded one, the
+	// closeout above legitimately generates a FINAL invoice when the async
+	// billing settle has landed by then (timing-dependent — it had under
+	// full-suite load, not in isolation). The purge invariant is "deletes NO
+	// invoice", so assert before == after rather than a hardcoded count.
+	var invoicesBefore int
+	if err := h.DB.QueryRow(`SELECT count(*) FROM invoices WHERE account_id = $1::uuid`, adv.ID).Scan(&invoicesBefore); err != nil {
+		t.Fatalf("invoices before purge: %v", err)
+	}
+	if invoicesBefore < 1 {
+		t.Fatalf("invoices before purge = %d, want >= 1 (seeded financial record missing)", invoicesBefore)
+	}
 	runCloseout()
 
 	// Postgres data is gone.
@@ -172,14 +184,16 @@ func TestAccountPurgeAfterRetention(t *testing.T) {
 		t.Errorf("transcoded creative segments after purge = %d, want 0 (creative blobs not purged): %v", len(segs), segs)
 	}
 
-	// The financial record SURVIVES — the purge must not destroy settlement/tax
-	// records (the allowlist excludes invoices/payouts/adjustments).
+	// The financial records SURVIVE — the purge must not destroy settlement/tax
+	// records (the allowlist excludes invoices/payouts/adjustments). Compared
+	// against the pre-purge count because the closeout may have added a final
+	// invoice on top of the seeded one (see invoicesBefore above).
 	var invoicesAfter int
 	if err := h.DB.QueryRow(`SELECT count(*) FROM invoices WHERE account_id = $1::uuid`, adv.ID).Scan(&invoicesAfter); err != nil {
 		t.Fatalf("invoices after: %v", err)
 	}
-	if invoicesAfter != 1 {
-		t.Errorf("invoices after purge = %d, want 1 (financial records must be retained)", invoicesAfter)
+	if invoicesAfter != invoicesBefore {
+		t.Errorf("invoices after purge = %d, want %d (financial records must be retained)", invoicesAfter, invoicesBefore)
 	}
 
 	// Closure flipped to the terminal 'purged' state with purged_at set.
