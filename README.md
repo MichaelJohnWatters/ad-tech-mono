@@ -4,6 +4,18 @@
 
 A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking to analytics - runs locally on K8s (Colima + k3s). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
 
+## Browsing & diagrams
+
+- **Where to click:** [`docs/DEMO-URLS.md`](docs/DEMO-URLS.md) — the portal, the six
+  branded demo publisher sites, the demo advertiser, and platform services, all on
+  nice `*.adtech.local` domains (run `make hosts` once), plus the `make demo-forward`
+  localhost map.
+- **Architecture diagrams (C4 model):** the staff portal **Architecture** page
+  (`https://adtech.local` → log in as staff → Architecture) renders the Context /
+  Containers / per-service Component views. Source is the one C4 model in
+  [`docs/diagrams/workspace.dsl`](docs/diagrams/workspace.dsl); `make c4` re-exports
+  the rendered Mermaid into `web/static/diagrams/`.
+
 ## Architecture
 
 ```
