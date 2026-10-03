@@ -557,6 +557,13 @@
       </div>
       {{ template "card-end" . }}
 
+      {{ template "card-start" (dict "title" "Bid shading controls" "subtitle" "Turn shading on or off per campaign — right here, next to the results. Changes apply within ~1 minute.") }}
+      <div id="shadeControls" class="text-sm">
+        <div class="py-4 text-center text-gray-400">loading…</div>
+      </div>
+      <p class="mt-3 text-xs text-gray-400"><strong>Off</strong> = bid full value (no shading). <strong>Conservative → Moderate → Aggressive</strong> lower your bid toward the clearing price — more aggressive saves more per win but wins fewer auctions. Only active campaigns are shown; paused/ended campaigns and the full editor live under <em>Campaigns</em>.</p>
+      {{ template "card-end" . }}
+
       {{ template "card-start" (dict "title" "Your paid clearing price" "subtitle" "The real, per-advertiser figures: your delivered impressions and what you paid, last 30 days") }}
       <div id="shadeTotals" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-2 text-sm text-gray-500">
         <div class="py-6 text-center text-gray-400 col-span-full">loading…</div>
@@ -1349,6 +1356,7 @@ async function loadARA() {
 async function loadShading() {
   const totalsEl = $('shadeTotals'), outEl = $('shadeOut');
   if (!totalsEl || !outEl) return;
+  loadShadeControls(); // per-campaign on/off controls — independent of the stats fetch below
   const pct = (r) => r == null ? '—' : `${(r * 100).toFixed(1)}%`;
   const cpm = (n) => '$' + Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4});
   let data;
@@ -1407,6 +1415,51 @@ async function loadShading() {
       </thead><tbody>${body}</tbody></table>`;
   window.__shadeRows = rows; // for CSV export
   renderShadeChart(rows);
+}
+
+// loadShadeControls renders a per-campaign shading-mode dropdown for the account's
+// ACTIVE campaigns, right on the Shading page. Changing one PATCHes the campaign
+// (same endpoint the campaign editor uses) so you can flip modes where you read
+// the results. Independent of the stats fetch so it still works if that fails.
+async function loadShadeControls() {
+  const el = $('shadeControls'); if (!el) return;
+  let camps;
+  try { camps = await fetchJSON('/v1/api/campaigns') || []; }
+  catch (err) { el.innerHTML = `<span class="text-error text-xs">Couldn't load campaigns — ${esc(err.message)}</span>`; return; }
+  const active = camps.filter(c => c.Status === 'live' || c.Status === 'active');
+  if (!active.length) {
+    el.innerHTML = '<span class="text-xs text-gray-400">No active campaigns. Resume or create one (under Campaigns) to control its shading.</span>';
+    return;
+  }
+  const modes = ['disabled', 'conservative', 'moderate', 'aggressive'];
+  const label = {disabled: 'Off', conservative: 'Conservative', moderate: 'Moderate', aggressive: 'Aggressive'};
+  el.innerHTML = active.map(c => {
+    const cur = c.ShadingMode || 'disabled';
+    const opts = modes.map(m => `<option value="${m}" ${m === cur ? 'selected' : ''}>${label[m]}</option>`).join('');
+    return `<div class="flex items-center justify-between gap-3 py-2 border-t border-gray-100 dark:border-gray-800 first:border-t-0">
+        <span class="font-medium truncate" title="${esc(c.Name)}">${esc(c.Name)}</span>
+        <select data-cid="${esc(c.ID)}" onchange="setCampaignShading(this)" class="shrink-0 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-sm" title="Off = bid full value. More aggressive = lower bid, more savings, fewer wins.">${opts}</select>
+      </div>`;
+  }).join('');
+}
+
+// setCampaignShading PATCHes one campaign's shading mode from the Shading-page
+// dropdown. The DSP warm cache picks the change up on its next refresh (~1 min).
+async function setCampaignShading(sel) {
+  const id = sel.getAttribute('data-cid'), mode = sel.value;
+  sel.disabled = true;
+  try {
+    await fetchJSON('/v1/api/campaigns/' + encodeURIComponent(id), {method: 'PATCH', body: JSON.stringify({shading_mode: mode})});
+    toast('Bid shading set to ' + mode + ' — applies within ~1 min', 'success');
+    if (typeof campaignsCache !== 'undefined' && Array.isArray(campaignsCache)) {
+      const c = campaignsCache.find(x => x.ID === id); if (c) c.ShadingMode = mode; // keep the editor in sync
+    }
+  } catch (err) {
+    toast('Update failed: ' + err.message, 'error');
+    loadShadeControls(); // reset the dropdown to the true server state
+  } finally {
+    sel.disabled = false;
+  }
 }
 
 // Per-placement "you paid vs market" chart: two scaled bars per placement (your
