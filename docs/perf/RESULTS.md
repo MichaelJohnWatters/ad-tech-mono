@@ -47,3 +47,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-07 15:35 | 45d606c | 150 | 10m | 91.9 | GREEN | 0 | 39.02 | 207.35 | 46.42 | 232.2 | 86.91 | 0.9 | 45.35 | 47.82 | -0.325 | 94.21 | 9.05 | knee test: log sampling at 150rps (vs 2026-08-06 19:42 667ms / post-trim 00:55 346ms) |
 | 2026-08-07 16:28 | 598e0df | 179.8 | 10m | 91.9 | GREEN | 0 | 125.43 | 462.59 | 87.59 | 522.83 | 221.54 | 1.08 | 88.45 | 144.78 | -10.33 | 92.22 | 8.63 | push test: 180rps on trimmed+log-sampled stack (pre-trim 188rps ref: fanout p95 920, canary -25.58) |
 | 2026-10-03 19:15 | 82b7e11+dirty | 109.8 | 10m | 90.7 | GREEN | 0 | 29.17 | 246.41 | 49.72 | 348 | 94.84 | 0.5 | 46.89 | 45.8 | 3.305 | 88.73 | 14.31 | A/B after trace-segments 9b73215 |
+| 2026-10-03 19:45 | 4d956f7+dirty | 110 | 10m | 90.1 | GREEN | 0 | 11.58 | 88.06 | 30.01 | 111.11 | 42.23 | 0.49 | 23.79 | 18.62 | 4.9175 | 90.55 | 15.29 | A/B after trace-segments 9b73215, post rdctl-restart (clean VM) |
