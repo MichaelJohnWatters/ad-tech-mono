@@ -175,7 +175,10 @@ func TestParsePlacementSpend(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("rows=%d, want 1 (blank id dropped)", len(got))
 	}
-	if got[0].PlacementID != "pl-1" || got[0].YourImpressions != 100 || got[0].YourSpendUSD != 200 || got[0].YourAvgClearingCPM != 2.0 {
+	// avg_cost is AVG(clearing_price_usd) = PER-IMPRESSION dollars ($2.00); the
+	// parser converts it to a CPM (×1000 = $2000) so it's comparable to the
+	// marketplace avg clearing, which is already a CPM. See parsePlacementSpend.
+	if got[0].PlacementID != "pl-1" || got[0].YourImpressions != 100 || got[0].YourSpendUSD != 200 || got[0].YourAvgClearingCPM != 2000.0 {
 		t.Errorf("parsed wrong: %+v", got[0])
 	}
 }
