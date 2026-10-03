@@ -104,6 +104,19 @@ func (m *Manager) SetRegistry(registry *Registry, serviceName string) {
 	m.serviceName = serviceName
 }
 
+// Registry returns the currently-attached registry, or nil while the service
+// is still on the MemorySource boot path (Postgres unreachable at boot).
+// retryAttachPostgres swaps the real registry in later via SetRegistry, so a
+// caller that gates a FEATURE on the registry must read it lazily per use —
+// capturing ServiceConfig.Registry at boot latches nil forever (boot-latch
+// doctrine; a gateway that booted during a Postgres race served 404 on
+// /v1/services until restart).
+func (m *Manager) Registry() *Registry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.registry
+}
+
 // SetSource sets the backing store for live config.
 func (m *Manager) SetSource(source ConfigSource) {
 	m.mu.Lock()
