@@ -390,6 +390,16 @@ type auctionContext struct {
 	DevHeaders map[string]string
 }
 
+// stampedSegments returns the public audience segments that actually rode the
+// bid request — nil when the consent gate suppressed stamping (so callers echo
+// exactly what left the platform, never the pre-gate lookup result).
+func (ac auctionContext) stampedSegments() []string {
+	if ac.BidReq.User != nil && ac.BidReq.User.Ext != nil {
+		return ac.BidReq.User.Ext.Segments
+	}
+	return nil
+}
+
 // uuidPattern matches Postgres's canonical lowercase 8-4-4-4-12 hex UUID
 // representation. Used to discriminate "looks like a real placement UUID"
 // from "looks like an external key we need to derive".
@@ -1041,6 +1051,13 @@ type serveAdResponse struct {
 	// AdM carries the winner's ad markup for native bids: the OpenRTB Native
 	// response JSON the publisher-adserver renders into HTML + trackers.
 	AdM string `json:"adm,omitempty"`
+	// Segments echoes the consent-gated public audience segments that actually
+	// rode the bid request (user.ext.segments) — a demo/observability
+	// affordance so the publisher-adserver can stamp them on the
+	// X-Adtech-Outcome header the demosite trace panel reads. Empty when the
+	// consent gate suppressed stamping. The durable record is the exchange's
+	// AuctionWinEvent; this is display convenience fed by the same data.
+	Segments []string `json:"segments,omitempty"`
 	// Slots is the retail sponsored-results grid: one entry per filled slot,
 	// ranked (position 1 = top). The retailer's page renders its own product
 	// cards and fires each slot's impression on its ImpressionID (sub-trace).
@@ -1333,6 +1350,7 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 					Height:         ac.Placement.Height,
 					ClearingPrice:  winner.Price,
 					DealID:         winner.DealID,
+					Segments:       ac.stampedSegments(),
 				})
 				return
 			}

@@ -52,7 +52,7 @@ func (s *MemoryStore) EventsByTrace(_ context.Context, traceID string, scope Tra
 				Kind: "auction_win", Timestamp: w.Timestamp, WinnerDSP: w.WinnerDSP,
 				CampaignID: w.CampaignID, CreativeID: w.CreativeID, PlacementID: w.PlacementID,
 				PublisherID: w.PublisherID, AdvertiserID: w.AdvertiserID, ClearingPriceUSD: w.ClearingPrice,
-				BidModel: w.BidModel, DealID: w.DealID,
+				BidModel: w.BidModel, DealID: w.DealID, Segments: w.Segments,
 			})
 		}
 	}
@@ -198,9 +198,9 @@ func (c *ClickHouse) EventsByTrace(ctx context.Context, traceID string, scope Tr
 	}
 
 	if err := scan("auction_win",
-		`SELECT winner_dsp, campaign_id, creative_id, placement_id, publisher_id, advertiser_id, clearing_price, bid_model, deal_id, timestamp FROM auction_wins WHERE trace_id = ?`,
+		`SELECT winner_dsp, campaign_id, creative_id, placement_id, publisher_id, advertiser_id, clearing_price, bid_model, deal_id, segments, timestamp FROM auction_wins WHERE trace_id = ?`,
 		func(e *TraceEvent) []any {
-			return []any{&e.WinnerDSP, &e.CampaignID, &e.CreativeID, &e.PlacementID, &e.PublisherID, &e.AdvertiserID, &e.ClearingPriceUSD, &e.BidModel, &e.DealID, &e.Timestamp}
+			return []any{&e.WinnerDSP, &e.CampaignID, &e.CreativeID, &e.PlacementID, &e.PublisherID, &e.AdvertiserID, &e.ClearingPriceUSD, &e.BidModel, &e.DealID, &e.Segments, &e.Timestamp}
 		}); err != nil {
 		return nil, err
 	}

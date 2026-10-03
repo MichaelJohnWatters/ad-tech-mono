@@ -175,6 +175,7 @@
   .atp-oc small{font-weight:500;opacity:.85;margin-left:5px;}
   .o-fill{background:#064e3b;color:#6ee7b7}.o-nobid{background:#3f1d1d;color:#fca5a5}
   .o-house{background:#422006;color:#fcd34d}.o-content{background:#1e293b;color:#94a3b8}
+  .o-seg{background:#312e81;color:#c7d2fe}
 </style>
 <div id="atp-tab" onclick="window.__atp&&window.__atp.toggle()">🔍 Trace<span class="n" id="atp-count">0</span></div>
 <div id="atp">
@@ -226,7 +227,11 @@
       var bits=[]; if(o.adv)bits.push(o.adv); if(o.price)bits.push('$'+o.price+(o.cur&&o.cur!=='USD'?' '+o.cur:'')); if(o.model)bits.push(o.model);
       detail=bits.join(' · ');
     } else if(o.reason){ detail=o.reason; }
-    return '<div><span class="atp-oc '+cls+'">'+label+(detail?'<small>'+esc(detail)+'</small>':'')+'</span></div>';
+    var html='<div><span class="atp-oc '+cls+'">'+label+(detail?'<small>'+esc(detail)+'</small>':'')+'</span></div>';
+    // seg= rides the same header on a fill: the consent-gated public audience
+    // segments the SSP resolved and sent to the DSPs for this request.
+    if(o.seg){ html+='<div><span class="atp-oc o-seg">👥 audience<small>'+esc(o.seg.replace(/,/g,', '))+' → DSPs</small></span></div>'; }
+    return html;
   }
   function esc(s){ return (''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
   function render(){

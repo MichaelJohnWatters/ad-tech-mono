@@ -921,6 +921,13 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				} else {
 					wins = []winRec{{bid: winnerBid, price: clearingPrice, trace: traceID}}
 				}
+				// Public audience segments the SSP stamped on this request
+				// (consent-gated there). Request-level context, so every
+				// winner of a multi-winner auction carries the same list.
+				var reqSegments []string
+				if bidReq.User != nil && bidReq.User.Ext != nil {
+					reqSegments = bidReq.User.Ext.Segments
+				}
 				for _, wn := range wins {
 					pub.AuctionWin(pubCtx, events.AuctionWinEvent{
 						TraceID:       wn.trace,
@@ -935,6 +942,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 						BidModel:      wn.bid.BidModel,
 						Channel:       routingChannel,
 						DealID:        wn.bid.DealID,
+						Segments:      reqSegments,
 						Timestamp:     clk.Now(),
 					})
 				}

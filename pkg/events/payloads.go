@@ -15,21 +15,27 @@ const CurrentSchemaVersion = 1
 // AuctionWinEvent is published by the Exchange after an auction completes.
 // Single source of truth for cost. Consumed by DSP (budget) and Reporting (billing).
 type AuctionWinEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	TraceID       string    `json:"trace_id"`
-	AuctionID     string    `json:"auction_id"`
-	WinnerDSP     string    `json:"winner_dsp"`
-	CampaignID    string    `json:"campaign_id"`
-	CreativeID    string    `json:"creative_id"`
-	PlacementID   string    `json:"placement_id"`
-	PublisherID   string    `json:"publisher_id"`
-	AdvertiserID  string    `json:"advertiser_id"`
-	ClearingPrice float64   `json:"clearing_price"`
-	Currency      string    `json:"currency"`
-	BidModel      string    `json:"bid_model"`
-	DealID        string    `json:"deal_id,omitempty"`
-	Channel       string    `json:"channel"`
-	Timestamp     time.Time `json:"timestamp"`
+	SchemaVersion int     `json:"schema_version"`
+	TraceID       string  `json:"trace_id"`
+	AuctionID     string  `json:"auction_id"`
+	WinnerDSP     string  `json:"winner_dsp"`
+	CampaignID    string  `json:"campaign_id"`
+	CreativeID    string  `json:"creative_id"`
+	PlacementID   string  `json:"placement_id"`
+	PublisherID   string  `json:"publisher_id"`
+	AdvertiserID  string  `json:"advertiser_id"`
+	ClearingPrice float64 `json:"clearing_price"`
+	Currency      string  `json:"currency"`
+	BidModel      string  `json:"bid_model"`
+	DealID        string  `json:"deal_id,omitempty"`
+	Channel       string  `json:"channel"`
+	// Segments are the consent-gated PUBLIC audience segments the SSP stamped
+	// on the bid request (user.ext.segments) — the sell-side enrichment the
+	// DSPs bid against. Carried here so the trace system can surface
+	// "Audience resolved: …" from the durable win record. Empty when consent
+	// suppressed stamping or the user matched no public segment.
+	Segments  []string  `json:"segments,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // AuctionLossEvent is published by the DSP's loss-notice handler when our DSP's

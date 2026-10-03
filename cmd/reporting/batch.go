@@ -339,7 +339,7 @@ func (c *EventConsumer) handleAuctionWinBatch(ctx context.Context, msgs []*event
 				CampaignID: src.CampaignID, CreativeID: src.CreativeID, PlacementID: src.PlacementID,
 				PublisherID: src.PublisherID, AdvertiserID: src.AdvertiserID, ClearingPrice: src.ClearingPrice,
 				Currency: src.Currency, BidModel: src.BidModel, DealID: src.DealID, Channel: src.Channel,
-				SchemaVersion: 1, Timestamp: src.Timestamp,
+				Segments: src.Segments, SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
 		func(e *analytics.AuctionWinEvent) string { return e.TraceID },

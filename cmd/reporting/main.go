@@ -897,6 +897,7 @@ func (c *EventConsumer) handleAuctionWin(ctx context.Context, msg *events.Messag
 		BidModel:      src.BidModel,
 		DealID:        src.DealID,
 		Channel:       src.Channel,
+		Segments:      src.Segments,
 		SchemaVersion: 1,
 		Timestamp:     src.Timestamp,
 	}

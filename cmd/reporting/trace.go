@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
@@ -194,6 +195,18 @@ func buildTraceSteps(events []analytics.TraceEvent, acctType string) []traceStep
 		cls := "active"
 		switch e.Kind {
 		case "auction_win":
+			// Audience context first: the public segments the SSP resolved and
+			// stamped on the bid request (consent-gated there), carried on the
+			// durable win record. Internal bidding detail — staff + the winning
+			// advertiser only; a publisher must not learn which audience
+			// segments their visitor belongs to.
+			if len(e.Segments) > 0 && (isStaff(acctType) || isAdvertiser(acctType)) {
+				steps = append(steps, traceStep{
+					Time: tlabel, Service: "ssp", Cls: "active",
+					Msg:    "Audience resolved: " + strings.Join(e.Segments, ", "),
+					Detail: fmt.Sprintf("%d public segment(s), consent-gated → sent to DSPs", len(e.Segments)),
+				})
+			}
 			svc = "exchange"
 			price := fmt.Sprintf("clearing $%.2f CPM", e.ClearingPriceUSD)
 			if e.DealID != "" {

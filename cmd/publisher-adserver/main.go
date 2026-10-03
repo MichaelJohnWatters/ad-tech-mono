@@ -499,6 +499,10 @@ type sspProgrammaticResult struct {
 	NoBid         bool    `json:"nobid"`
 	HTML          string  `json:"html"`
 	ClearingPrice float64 `json:"clearing_price"`
+	// Segments: the consent-gated public audience segments the SSP echoed from
+	// the bid request — stamped onto X-Adtech-Outcome on an SSP win so the
+	// demosite trace panel can show the audience the auction ran with.
+	Segments []string `json:"segments"`
 }
 
 // serveProgrammatic fans out to (a) our SSP and (b) every configured
@@ -563,6 +567,7 @@ func (d *serveDeps) serveProgrammatic(ctx context.Context, w http.ResponseWriter
 	adserving.SetOutcome(w, adserving.Outcome{
 		Result: adserving.OutcomeFill, Type: "display",
 		Price: sspRes.res.ClearingPrice, Currency: "USD", Model: "cpm", Reason: "ssp",
+		Segments: sspRes.res.Segments,
 	})
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	// SSP-win passthrough: the raw JSON carries html + impression/click/view

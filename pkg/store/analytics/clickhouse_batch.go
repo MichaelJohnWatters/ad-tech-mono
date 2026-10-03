@@ -144,7 +144,10 @@ func (c *ClickHouse) InsertAuctionWins(ctx context.Context, es []*AuctionWinEven
 	if len(es) == 0 {
 		return nil
 	}
-	b, err := c.conn.PrepareBatch(ctx, "INSERT INTO auction_wins")
+	b, err := c.conn.PrepareBatch(ctx, `INSERT INTO auction_wins
+		(trace_id, auction_id, winner_dsp, campaign_id, creative_id, placement_id,
+		 publisher_id, advertiser_id, clearing_price, currency, bid_model, deal_id, channel,
+		 schema_version, timestamp, segments)`)
 	if err != nil {
 		return fmt.Errorf("prepare auction_wins batch: %w", err)
 	}
@@ -152,7 +155,7 @@ func (c *ClickHouse) InsertAuctionWins(ctx context.Context, es []*AuctionWinEven
 		if err := b.Append(
 			e.TraceID, e.AuctionID, e.WinnerDSP, e.CampaignID, e.CreativeID, e.PlacementID,
 			e.PublisherID, e.AdvertiserID, e.ClearingPrice, e.Currency, e.BidModel, e.DealID, e.Channel,
-			int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp),
+			int32(schemaVer(e.SchemaVersion)), bts(e.Timestamp), nonNilStrs(e.Segments),
 		); err != nil {
 			b.Abort()
 			return fmt.Errorf("append auction_win: %w", err)
