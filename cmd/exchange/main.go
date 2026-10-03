@@ -235,6 +235,7 @@ func main() {
 		if raw := keys.Exchange.RoutingNeverSkip.Get(cfg); raw != "" {
 			k.NeverSkip = parseNeverSkip(raw)
 		}
+		k.NeverSkip = addInternalNeverSkip(k.NeverSkip, keys.Exchange.DSPEndpoints.Get(cfg))
 		return k
 	})
 	// Warm-start routing from reporting's dsp_calls history (ADR 0003) so a
@@ -1031,6 +1032,28 @@ func parseNeverSkip(raw string) map[string]struct{} {
 		if e = strings.TrimSpace(e); e != "" {
 			endpoint, _, _ := splitDSPEndpoint(e)
 			set[endpoint] = struct{}{}
+		}
+	}
+	return set
+}
+
+// addInternalNeverSkip exempts our OWN demand from the skip rules: every
+// grpc:// entry in exchange.dsp_endpoints is the internal DSP (gRPC rides only
+// edges we own both ends of — same rule trustedSeatFor keys on). Skipping
+// ourselves on a learned bid rate silently starves our advertisers' campaigns
+// platform-wide (seen after a world reset left stale stats: the display
+// fan-out excluded dsp-internal while competitors were called), and the call
+// it would save is a cheap in-cluster hop. The configured
+// exchange.routing_never_skip list (`set`) stays for external deal-holders;
+// entries are normalised through parseNeverSkip so they match the clean bid
+// endpoints the router keys stats by.
+func addInternalNeverSkip(set map[string]struct{}, endpointsCSV string) map[string]struct{} {
+	for ep := range parseNeverSkip(endpointsCSV) {
+		if grpcx.IsURL(ep) {
+			if set == nil {
+				set = make(map[string]struct{})
+			}
+			set[ep] = struct{}{}
 		}
 	}
 	return set
