@@ -43,3 +43,36 @@ func TestParseNeverSkipNormalisesEntries(t *testing.T) {
 		t.Errorf("set size = %d, want 2 (empty trailing entry dropped)", len(set))
 	}
 }
+
+// addInternalNeverSkip must exempt OUR OWN (grpc://) demand from the skip
+// rules automatically — a learned skip of the internal DSP starves every
+// platform advertiser — while leaving external (http://) entries subject to
+// routing and preserving anything the operator configured explicitly.
+func TestAddInternalNeverSkipExemptsOwnDemand(t *testing.T) {
+	endpoints := "grpc://dsp-internal-grpc:8182;notify=http://dsp-internal:8082,http://dsp-competitor1:8089,http://dsp-competitor2:8090"
+
+	// nil configured set → internal endpoint still exempted, externals not.
+	set := addInternalNeverSkip(nil, endpoints)
+	if _, ok := set["grpc://dsp-internal-grpc:8182"]; !ok {
+		t.Error("internal grpc:// endpoint must be auto-exempted from skip rules")
+	}
+	if _, ok := set["http://dsp-competitor1:8089"]; ok {
+		t.Error("external http:// endpoints must stay subject to routing")
+	}
+	if len(set) != 1 {
+		t.Errorf("set size = %d, want 1 (internal only)", len(set))
+	}
+
+	// Configured entries (external deal-holders) survive alongside.
+	set = addInternalNeverSkip(parseNeverSkip("http://partner:9100"), endpoints)
+	for _, want := range []string{"grpc://dsp-internal-grpc:8182", "http://partner:9100"} {
+		if _, ok := set[want]; !ok {
+			t.Errorf("merged set missing %q", want)
+		}
+	}
+
+	// No grpc:// entries (external-only deployment) → nil stays nil.
+	if set := addInternalNeverSkip(nil, "http://a:1,http://b:2"); set != nil {
+		t.Errorf("no internal endpoints should leave the set untouched, got %v", set)
+	}
+}
