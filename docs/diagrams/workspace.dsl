@@ -599,12 +599,32 @@ workspace "Ad Tech Mono" "C4 model of the full-stack programmatic advertising pl
     }
 
     styles {
-      element "Person"    { shape person; background "#08427b"; color "#ffffff" }
-      element "Container" { background "#1168bd"; color "#ffffff" }
-      element "Component" { background "#4a90d9"; color "#ffffff" }
-      element "Datastore" { shape cylinder; background "#438dd5"; color "#ffffff" }
-      element "External"  { background "#999999"; color "#ffffff" }
-      element "Software System" { background "#1168bd"; color "#ffffff" }
+      element "Person" {
+        shape person
+        background #08427b
+        color #ffffff
+      }
+      element "Container" {
+        background #1168bd
+        color #ffffff
+      }
+      element "Component" {
+        background #4a90d9
+        color #ffffff
+      }
+      element "Datastore" {
+        shape cylinder
+        background #438dd5
+        color #ffffff
+      }
+      element "External" {
+        background #999999
+        color #ffffff
+      }
+      element "Software System" {
+        background #1168bd
+        color #ffffff
+      }
     }
   }
 }
