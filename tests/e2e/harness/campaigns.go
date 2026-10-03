@@ -80,9 +80,14 @@ func (h *Harness) CreateCampaign(t *testing.T, owner Account, io InsertionOrder,
 	targetingID := idgen.Derive("targeting", externalKey)
 
 	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
+		// shading_mode is 'disabled' on every harness-built campaign (here and
+		// in pages_world.go): the DSP's shading tracker learns in-memory across
+		// the whole suite, so a shaded world makes exact-price assertions
+		// (first-price clearing, deal-floor beats, µ$ costs) fail
+		// suite-order-dependently. Shading tests opt IN via SetShadingMode.
 		const liQ = `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'display', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())
+VALUES ($1, $2, $3, $4, 'live', 'display', 'cpm', $5, 'USD', $6, 'asap', 'disabled', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
 		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
 			t.Fatalf("line_items insert: %v", err)
@@ -138,7 +143,7 @@ func (h *Harness) CreateVideoCampaign(t *testing.T, owner Account, io InsertionO
 	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
 		const liQ = `
 INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'live', 'video', 'cpm', $5, 'USD', $6, 'asap', 'moderate', 'bandit', 'UTC', now(), now())
+VALUES ($1, $2, $3, $4, 'live', 'video', 'cpm', $5, 'USD', $6, 'asap', 'disabled', 'bandit', 'UTC', now(), now())
 ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, format = 'video', base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
 		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
 			t.Fatalf("video line_items insert: %v", err)
