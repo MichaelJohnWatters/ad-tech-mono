@@ -177,3 +177,11 @@ Don't duplicate that table here (it drifts); check it there.
 it MUST update the matching diagram in the same PR** — find it via the "Update
 when" column in `docs/diagrams/README.md`, then `make diagrams` to re-render. CI
 can flag `cmd/`/`k8s/` changes that touch no `.d2`.
+
+**Also update the C4 model** (`docs/diagrams/workspace.dsl`, Structurizr DSL — one
+model, Context/Container/Component views, viewable in structurizr-lite): if you
+**add/remove/rename a service** update the Container view; if you **add, remove, or
+rewire a major component or dependency inside a service** update that service's
+`component` block + view. Keep ids service-prefixed + the DSL valid (balanced
+braces, declared relationship ids, unique view keys). Each service's own
+`CLAUDE.md` → "Diagram Updates" repeats this at the point of change.
