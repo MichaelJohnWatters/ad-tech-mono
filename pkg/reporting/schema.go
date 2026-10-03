@@ -87,5 +87,20 @@ func Schema() []ReportTable {
 				campaign, creative, placement, {"channel", "Channel"}, day, hour,
 			},
 		},
+		{
+			// Bid-shading savings — the durable auction_shades table (one row per
+			// shaded win). sum_savings = realized dollars saved; count = shaded wins.
+			// Lets the report builder break savings down by placement / campaign /
+			// day, not just the single total on the Shading page.
+			Name:  "auction_shades",
+			Label: "Bid-shading savings",
+			Metrics: []ReportField{
+				{"sum_savings", "Savings ($)"},
+				{"count", "Shaded wins"},
+			},
+			Dimensions: []ReportField{
+				campaign, placement, {"channel", "Channel"}, day, hour,
+			},
+		},
 	}
 }
