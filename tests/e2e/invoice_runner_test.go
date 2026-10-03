@@ -30,7 +30,9 @@ func TestInvoiceRunnerGeneratesInvoiceFromSettledSpend(t *testing.T) {
 		auc.PlacementID, auc.PublisherID, w.AdvAcc.ID, "USD", win.Price)
 
 	var settledMicros int64
-	harness.WaitFor(t, 30*time.Second, "settled spend to land in campaign_committed_spend", func() bool {
+	// 60s: settle rides win event → NATS → billing engine → Postgres write,
+	// which lags under full-suite consumer load (30s flaked in suite runs).
+	harness.WaitFor(t, 60*time.Second, "settled spend to land in campaign_committed_spend", func() bool {
 		err := h.DB.QueryRow(
 			`SELECT COALESCE(SUM(settled_micros),0) FROM campaign_committed_spend WHERE campaign_id = $1`,
 			win.CampaignID).Scan(&settledMicros)
