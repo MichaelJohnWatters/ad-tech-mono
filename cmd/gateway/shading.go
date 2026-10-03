@@ -273,7 +273,11 @@ func shadingHandler(deps shadingDeps, log *slog.Logger) http.HandlerFunc {
 		}
 		totals.Placements = len(rows)
 		if totals.Impressions > 0 {
-			totals.AvgClearingCPM = totals.SpendUSD / float64(totals.Impressions)
+			// clearing_price_usd is PER-IMPRESSION dollars (the win books CPM/1000),
+			// so ×1000 to express the advertiser's average as a CPM — the same unit
+			// the marketplace_avg_clearing is in (the DSP tracker records CPM), so
+			// the two are comparable on the page.
+			totals.AvgClearingCPM = totals.SpendUSD / float64(totals.Impressions) * 1000
 		}
 		if totals.Bids > 0 {
 			totals.WinRate = float64(totals.Wins) / float64(totals.Bids)
@@ -377,7 +381,10 @@ func parsePlacementSpend(qr analytics.QueryResult) []shadingPlacementRow {
 			r.YourSpendUSD = toFloat(row[si])
 		}
 		if ai >= 0 && ai < len(row) {
-			r.YourAvgClearingCPM = toFloat(row[ai])
+			// avg_cost = AVG(clearing_price_usd), which is PER-IMPRESSION dollars.
+			// ×1000 → CPM, so "You paid (avg CPM)" is a true CPM comparable to the
+			// marketplace_avg_clearing (also CPM) on the same row.
+			r.YourAvgClearingCPM = toFloat(row[ai]) * 1000
 		}
 		out = append(out, r)
 	}
