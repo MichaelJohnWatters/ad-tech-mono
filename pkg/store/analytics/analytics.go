@@ -459,21 +459,25 @@ type AuctionEvent struct {
 // Wire-format mirror of pkg/events.AuctionWinEvent. Kept here so the
 // analytics layer doesn't need to import pkg/events.
 type AuctionWinEvent struct {
-	SchemaVersion int       `json:"schema_version"`
-	TraceID       string    `json:"trace_id"`
-	AuctionID     string    `json:"auction_id,omitempty"`
-	WinnerDSP     string    `json:"winner_dsp"`
-	CampaignID    string    `json:"campaign_id"`
-	CreativeID    string    `json:"creative_id,omitempty"`
-	PlacementID   string    `json:"placement_id"`
-	PublisherID   string    `json:"publisher_id"`
-	AdvertiserID  string    `json:"advertiser_id"`
-	ClearingPrice float64   `json:"clearing_price"`
-	Currency      string    `json:"currency,omitempty"`
-	BidModel      string    `json:"bid_model,omitempty"`
-	DealID        string    `json:"deal_id,omitempty"`
-	Channel       string    `json:"channel,omitempty"`
-	Timestamp     time.Time `json:"timestamp"`
+	SchemaVersion int     `json:"schema_version"`
+	TraceID       string  `json:"trace_id"`
+	AuctionID     string  `json:"auction_id,omitempty"`
+	WinnerDSP     string  `json:"winner_dsp"`
+	CampaignID    string  `json:"campaign_id"`
+	CreativeID    string  `json:"creative_id,omitempty"`
+	PlacementID   string  `json:"placement_id"`
+	PublisherID   string  `json:"publisher_id"`
+	AdvertiserID  string  `json:"advertiser_id"`
+	ClearingPrice float64 `json:"clearing_price"`
+	Currency      string  `json:"currency,omitempty"`
+	BidModel      string  `json:"bid_model,omitempty"`
+	DealID        string  `json:"deal_id,omitempty"`
+	Channel       string  `json:"channel,omitempty"`
+	// Segments mirrors events.AuctionWinEvent.Segments: the consent-gated
+	// public audience segments the SSP stamped on the bid request. Lands in
+	// the auction_wins `segments Array(String)` column for the trace reader.
+	Segments  []string  `json:"segments,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // AuctionLossEvent records our DSP's LOSS of an auction for a known advertiser
@@ -599,6 +603,12 @@ type TraceEvent struct {
 	// trace so the block isn't lost in the aggregated no-bid.
 	DSPEndpoint string `json:"dsp_endpoint,omitempty"`
 	NoBidReason string `json:"no_bid_reason,omitempty"`
+	// Segments is set on "auction_win" events: the consent-gated public
+	// audience segments the SSP stamped on the bid request. Internal bidding
+	// detail — the reporting handler shows it to staff + the winning
+	// advertiser only, never the publisher (redaction happens there, per the
+	// rule above: the store never redacts).
+	Segments []string `json:"segments,omitempty"`
 }
 
 // ImpressionRow is one recent impression for the portal "View trace" drill-down

@@ -144,11 +144,13 @@ func (c *ClickHouse) createTables() error {
 			winner_dsp String, duration_ms Int64, deal_id String, schema_version Int32 DEFAULT 1,
 			timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
+		// segments sits AFTER timestamp so a fresh CREATE matches the column
+		// order of a live table upgraded by the ADD COLUMN migration below.
 		`CREATE TABLE IF NOT EXISTS auction_wins (
 			trace_id String, auction_id String, winner_dsp String, campaign_id String, creative_id String,
 			placement_id String, publisher_id String, advertiser_id String, clearing_price Float64,
 			currency String, bid_model String, deal_id String, channel String,
-			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
+			schema_version Int32 DEFAULT 1, timestamp DateTime64(3), segments Array(String)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		// auction_losses: the durable, cross-pod per-advertiser LOSS record —
 		// the money-less counterpart to auction_wins. Published by the DSP's
@@ -326,6 +328,11 @@ func (c *ClickHouse) createTables() error {
 		// CREATE-d table — the batch insert appends by column order, so a mismatch
 		// (ALTER defaults to appending at the end) would corrupt every batched row.
 		`ALTER TABLE impressions ADD COLUMN IF NOT EXISTS impression_qty Int32 DEFAULT 1 AFTER deal_id`,
+		// Audience context on the win record: the consent-gated public segments
+		// the SSP stamped on the bid request, surfaced by the trace inspector
+		// ("Audience resolved: …"). Appended at the end — the fresh CREATE above
+		// lists it after timestamp for the same reason. Old rows read as [].
+		`ALTER TABLE auction_wins ADD COLUMN IF NOT EXISTS segments Array(String)`,
 		// Media-event attribution (quartile reporting): campaign/creative/
 		// placement/publisher/account, mirroring the impression row so quartile
 		// reports slice and tenant-scope the same way. AFTER position_ms (chained)
@@ -365,6 +372,15 @@ func (c *ClickHouse) createTables() error {
 	}
 
 	return nil
+}
+
+// nonNilStrs guards Array(String) binds: the driver wants a slice, never nil
+// (a nil Segments is the common case — most requests resolve no segments).
+func nonNilStrs(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }
 
 func b2u(b bool) uint8 {
@@ -433,11 +449,11 @@ func (c *ClickHouse) InsertAuction(ctx context.Context, e *AuctionEvent) error {
 func (c *ClickHouse) InsertAuctionWin(ctx context.Context, e *AuctionWinEvent) error {
 	return c.exec(ctx, "auction_win",
 		`INSERT INTO auction_wins (trace_id, auction_id, winner_dsp, campaign_id, creative_id, placement_id,
-			publisher_id, advertiser_id, clearing_price, currency, bid_model, deal_id, channel, schema_version, timestamp)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			publisher_id, advertiser_id, clearing_price, currency, bid_model, deal_id, channel, schema_version, timestamp, segments)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.AuctionID, e.WinnerDSP, e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID,
 		e.AdvertiserID, e.ClearingPrice, e.Currency, e.BidModel, e.DealID, e.Channel,
-		int32(schemaVer(e.SchemaVersion)), e.Timestamp)
+		int32(schemaVer(e.SchemaVersion)), e.Timestamp, nonNilStrs(e.Segments))
 }
 
 func (c *ClickHouse) InsertAuctionLoss(ctx context.Context, e *AuctionLossEvent) error {

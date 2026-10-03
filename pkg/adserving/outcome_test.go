@@ -17,6 +17,18 @@ func TestOutcomeStringOmitsEmptyAndZero(t *testing.T) {
 	}
 }
 
+func TestOutcomeRendersSegments(t *testing.T) {
+	got := Outcome{Result: OutcomeFill, Type: "display", Segments: []string{"sports_fans", "auto_intenders"}}.String()
+	want := "result=fill; type=display; seg=sports_fans,auto_intenders"
+	if got != want {
+		t.Fatalf("segments String()\n got=%q\nwant=%q", got, want)
+	}
+	// No segments → no seg key at all.
+	if g := (Outcome{Result: OutcomeFill, Type: "display"}).String(); g != "result=fill; type=display" {
+		t.Fatalf("empty-segments String()=%q", g)
+	}
+}
+
 func TestOutcomeSanitizesSeparators(t *testing.T) {
 	// A deal id with the grammar separators must not corrupt the header.
 	got := Outcome{Result: OutcomeFill, Type: "video", Deal: "a;b=c\nd"}.String()

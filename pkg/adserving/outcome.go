@@ -35,6 +35,11 @@ type Outcome struct {
 	Model      string // cpm | cpc | cpa …
 	Deal       string
 	Reason     string // nobid reason / note
+	// Segments are the consent-gated public audience segments that rode the
+	// bid request (echoed by the SSP on a win) — rendered as "seg=a,b" so the
+	// demo-site trace panel can show WHO the auction thought it was serving.
+	// Same demo/observability-only status as the rest of this header.
+	Segments []string
 }
 
 // String renders the header value, omitting empty/zero fields.
@@ -57,6 +62,9 @@ func (o Outcome) String() string {
 	}
 	if o.Deal != "" {
 		kv = append(kv, "deal="+sanitizeOutcome(o.Deal))
+	}
+	if len(o.Segments) > 0 {
+		kv = append(kv, "seg="+sanitizeOutcome(strings.Join(o.Segments, ",")))
 	}
 	if o.Reason != "" {
 		kv = append(kv, "reason="+sanitizeOutcome(o.Reason))

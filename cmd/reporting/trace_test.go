@@ -22,6 +22,10 @@ const (
 	advOwnerID  = "acct-advertiser-A"
 	pubID       = "pub-site-X"
 	winnerDSPID = "dsp-internal-SECRET"
+	// Public audience segments on the win record — internal bidding detail
+	// that must never reach the publisher view.
+	segA = "sports_fans_SEGSECRET"
+	segB = "auto_intenders_SEGSECRET"
 )
 
 func seedTraceFixture(t *testing.T) (analytics.Store, billing.Ledger) {
@@ -31,7 +35,7 @@ func seedTraceFixture(t *testing.T) (analytics.Store, billing.Ledger) {
 	if err := store.InsertAuctionWin(context.Background(), &analytics.AuctionWinEvent{
 		TraceID: traceT, WinnerDSP: winnerDSPID, CampaignID: "camp1", CreativeID: "crea1",
 		PlacementID: "plc1", PublisherID: pubID, AdvertiserID: advOwnerID, ClearingPrice: 5.00,
-		BidModel: "cpm", Timestamp: now,
+		BidModel: "cpm", Segments: []string{segA, segB}, Timestamp: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +88,9 @@ func TestTrace_StaffSeesEverything(t *testing.T) {
 	if !strings.Contains(body, "margin") {
 		t.Errorf("staff should see platform margin; body=%s", body)
 	}
+	if !strings.Contains(body, "Audience resolved") || !strings.Contains(body, segA) || !strings.Contains(body, segB) {
+		t.Errorf("staff should see the Audience resolved step with both segments; body=%s", body)
+	}
 }
 
 // TestTrace_AdvertiserRedacted: the owning advertiser sees their spend but NOT
@@ -102,6 +109,10 @@ func TestTrace_AdvertiserRedacted(t *testing.T) {
 	}
 	if !strings.Contains(body, "Your spend") {
 		t.Errorf("advertiser should see their spend; body=%s", body)
+	}
+	// The winning advertiser DOES see the audience the request resolved to.
+	if !strings.Contains(body, "Audience resolved") || !strings.Contains(body, segA) {
+		t.Errorf("advertiser should see the Audience resolved step; body=%s", body)
 	}
 	// Decodes cleanly + has steps.
 	var resp traceResponse
@@ -142,6 +153,11 @@ func TestTrace_PublisherNeedsValidatedID(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, winnerDSPID) || strings.Contains(body, advOwnerID) || strings.Contains(body, "margin") {
 		t.Errorf("publisher response leaked advertiser/winner/margin; body=%s", body)
+	}
+	// Audience segments are internal bidding detail — a publisher must not
+	// learn which segments their visitor is in.
+	if strings.Contains(body, "Audience resolved") || strings.Contains(body, segA) || strings.Contains(body, segB) {
+		t.Errorf("publisher response leaked audience segments; body=%s", body)
 	}
 	if !strings.Contains(body, "Your revenue") {
 		t.Errorf("publisher should see their revenue; body=%s", body)
