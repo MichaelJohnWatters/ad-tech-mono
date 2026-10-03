@@ -1074,6 +1074,19 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 	)
 	defer span.End()
 
+	// minToWin is the TRUE market clearing for the winner: the highest competing
+	// (losing) bid — what the winner actually had to beat — floored at the auction
+	// floor. This is the honest price signal for the DSP's bid-shading curve. The
+	// winner's own paid bid (`clearingPrice`, first-price) just echoes what they
+	// bid and tells the curve nothing about the market, so we send BOTH: `price`
+	// (what they pay, for budget) and `clear_price` (minToWin, for the curve).
+	minToWin := floorPrice
+	for _, rec := range records {
+		if rec.Bid.DSPID != winnerDSP && rec.Bid.Price > minToWin {
+			minToWin = rec.Bid.Price
+		}
+	}
+
 	for _, rec := range records {
 		isWin := rec.Bid.DSPID == winnerDSP
 		// Notices are OpenRTB HTTP even when the bid edge rode the internal
@@ -1092,8 +1105,8 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 			// Win notification — campaign_id is required so the DSP can
 			// decrement the right budget counter (Redis IncrBy keyed on
 			// campaign_id). Without it, budget caps never trigger.
-			url = fmt.Sprintf("%s/v1/openrtb/win?bid_id=%s&price=%.4f&campaign_id=%s&placement_id=%s",
-				base, rec.BidID, clearingPrice, rec.Bid.CampaignID, placementID)
+			url = fmt.Sprintf("%s/v1/openrtb/win?bid_id=%s&price=%.4f&clear_price=%.4f&campaign_id=%s&placement_id=%s",
+				base, rec.BidID, clearingPrice, minToWin, rec.Bid.CampaignID, placementID)
 		} else {
 			// Loss notification with reason
 			reason := 102 // outbid

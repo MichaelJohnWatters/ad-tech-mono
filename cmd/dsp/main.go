@@ -1563,6 +1563,18 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 		price, _ := strconv.ParseFloat(q.Get("price"), 64)
 		placementID := q.Get("placement_id")
 		campaignID := q.Get("campaign_id")
+		// clear_price is the TRUE market clearing the exchange saw — the second
+		// price (highest competing bid / floor), i.e. what we actually had to beat.
+		// This is the honest signal for the bid-shading curve; `price` on a win is
+		// just our own paid bid (first-price), which would make the curve learn
+		// itself and drift shading to zero. Fall back to `price` if an older
+		// exchange doesn't send it.
+		clearPrice := price
+		if v := q.Get("clear_price"); v != "" {
+			if cp, err := strconv.ParseFloat(v, 64); err == nil {
+				clearPrice = cp
+			}
+		}
 
 		var acct string // winning campaign's account — for per-advertiser shading
 		if campaignID != "" {
@@ -1594,7 +1606,10 @@ func winHandler(log *slog.Logger, budget *BudgetTracker, balanceGate *BalanceGat
 			// stashed at bid time and taken here — powers the advertiser's true
 			// "dollars saved". 0 for unshaded/competitor wins.
 			savings := shades.take(bidID)
-			tracker.RecordWinShaded(placementID, acct, price, price, savings)
+			// ourBid = price (what we bid/paid — drives the win-rate buckets);
+			// clearPrice = the TRUE market clearing (second price) — drives the
+			// curve's midpoint so it learns the market, not our own bid.
+			tracker.RecordWinShaded(placementID, acct, price, clearPrice, savings)
 
 			// Durable per-advertiser saving record for the advertiser's "dollars
 			// saved" view. Emitted ONLY for a genuinely shaded win of a KNOWN
