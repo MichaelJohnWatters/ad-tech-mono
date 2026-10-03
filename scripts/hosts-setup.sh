@@ -45,7 +45,7 @@ HOSTS="$(
     helm template adtech "$CHART" --set global.demosites=true --set tls.enabled=true \
       --set-string demostore.tls.crt=eHg= --set-string demostore.tls.key=eHg= \
       --show-only templates/demostore.yaml 2>/dev/null
-  } | grep -Eo 'host: [a-z0-9.-]+\.adtech\.local' | awk '{print $2}' | sort -u
+  } | grep -Eo 'host: ([a-z0-9.-]+\.)?adtech\.local' | awk '{print $2}' | sort -u
 )"
 [ -n "$HOSTS" ] || { echo "✗ no *.adtech.local hosts rendered from the chart"; exit 1; }
 echo "  ✔ $(printf '%s\n' "$HOSTS" | wc -l | tr -d ' ') hostnames → $IP"

@@ -16,8 +16,8 @@ Source of truth for this list: `kubectl get ingress -A`.
 
 | URL | What |
 |---|---|
-| https://adtech.local | Dashboard / portal (same as gateway) |
 | https://gateway.adtech.local | Gateway — portal, REST API (`/v1/api/*`), Swagger at `/docs` |
+| https://adtech.local | Same gateway (shorter alias) — **needs `make hosts` re-run** (older runs only added `*.adtech.local` subdomains, not the bare host) |
 
 The portal is one gateway; which sections you see (advertiser / publisher / staff /
 ops) depends on the account you log in as. Dev logins are planted by `make seed`
