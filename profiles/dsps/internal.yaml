@@ -381,3 +381,200 @@ campaigns:
       - { id: cr-luxe-001-sky, width: 160, height: 600 }
       - { id: cr-luxe-001-video-15s, format: video, width: 640, height: 360, duration: 15,
           media_url: "http://localhost:8080/v1/creatives/media/ad-video-luxe.mp4" }
+
+  # ============================================================================
+  # COMPETITIVE BROAD MARKET — makes auctions genuinely contested.
+  # Each advertiser below runs ONE broad "Run of Network" line item that bids
+  # across display + native + video + audio (multiple creative formats on a single
+  # line item, exactly like Globex above) on shared USA/GBR inventory, at
+  # OVERLAPPING bids (~$10–12 CPM). So every auction gets 5–6 real bidders at
+  # similar levels: real competition, realistic clearing prices, and enough price
+  # spread that bid shading (moderate on a couple here + Globex) has genuine room
+  # to work. The existing narrow/audience/geo campaigns above are kept for the
+  # targeting + audience-uplift demos — these just add a competitive baseline.
+  # ============================================================================
+
+  - id: li-ron-acme
+    account_id: adv-acme
+    advertiser_id: adv-acme
+    io_id: io-ron-acme
+    name: "Acme Shoes - Run of Network (All Formats)"
+    creative_domain: acme-shoes.com
+    base_bid: 11.00
+    currency: USD
+    daily_budget: 1500
+    total_budget: 30000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    shading_mode: moderate
+    targeting:
+      include:
+        geo: [USA, GBR]
+    creatives:
+      - { id: cr-ron-acme-mpu, width: 300, height: 250 }
+      - { id: cr-ron-acme-leader, width: 728, height: 90 }
+      - { id: cr-ron-acme-sky, width: 160, height: 600 }
+      - id: cr-ron-acme-native
+        format: native
+        native:
+          title: "Acme Running Shoes — 20% Off"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          sponsored: "Acme"
+          body: "Lightweight, all-day comfort. Free returns on every pair."
+          cta: "Shop now"
+      - { id: cr-ron-acme-video, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-luxauto.mp4" }
+      - { id: cr-ron-acme-audio, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
+
+  - id: li-ron-initech
+    account_id: adv-initech
+    advertiser_id: adv-initech
+    io_id: io-ron-initech
+    name: "Initech SaaS - Run of Network (All Formats)"
+    creative_domain: initech.com
+    base_bid: 10.50
+    currency: USD
+    daily_budget: 1500
+    total_budget: 30000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    shading_mode: disabled
+    targeting:
+      include:
+        geo: [USA, GBR]
+    creatives:
+      - { id: cr-ron-initech-mpu, width: 300, height: 250 }
+      - { id: cr-ron-initech-leader, width: 728, height: 90 }
+      - { id: cr-ron-initech-sky, width: 160, height: 600 }
+      - id: cr-ron-initech-native
+        format: native
+        native:
+          title: "Initech — ship software faster"
+          main_image: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          sponsored: "Initech"
+          body: "The SaaS platform trusted by modern engineering teams."
+          cta: "Start free"
+      - { id: cr-ron-initech-video, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-cloudcrm.mp4" }
+      - { id: cr-ron-initech-audio, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
+
+  - id: li-ron-whiskerco
+    account_id: adv-whiskerco
+    advertiser_id: adv-whiskerco
+    io_id: io-ron-whiskerco
+    name: "Whisker & Co - Run of Network (All Formats)"
+    creative_domain: whiskerco.com
+    base_bid: 11.50
+    currency: USD
+    daily_budget: 1500
+    total_budget: 30000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    shading_mode: disabled
+    targeting:
+      include:
+        geo: [USA, GBR]
+    creatives:
+      - { id: cr-ron-whiskerco-mpu, width: 300, height: 250 }
+      - { id: cr-ron-whiskerco-leader, width: 728, height: 90 }
+      - { id: cr-ron-whiskerco-sky, width: 160, height: 600 }
+      - id: cr-ron-whiskerco-native
+        format: native
+        native:
+          title: "Whisker & Co — treats cats love"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          sponsored: "Whisker & Co"
+          body: "All-natural cat treats. Vet-approved, grain-free."
+          cta: "Shop treats"
+      - { id: cr-ron-whiskerco-video, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-quickbite.mp4" }
+      - { id: cr-ron-whiskerco-audio, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
+
+  - id: li-ron-beanbarn
+    account_id: adv-beanbarn
+    advertiser_id: adv-beanbarn
+    io_id: io-ron-beanbarn
+    name: "Bean Barn Roasters - Run of Network (All Formats)"
+    creative_domain: beanbarn.com
+    base_bid: 10.50
+    currency: USD
+    daily_budget: 1500
+    total_budget: 30000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    shading_mode: disabled
+    targeting:
+      include:
+        geo: [USA, GBR]
+    creatives:
+      - { id: cr-ron-beanbarn-mpu, width: 300, height: 250 }
+      - { id: cr-ron-beanbarn-leader, width: 728, height: 90 }
+      - { id: cr-ron-beanbarn-sky, width: 160, height: 600 }
+      - id: cr-ron-beanbarn-native
+        format: native
+        native:
+          title: "Bean Barn — small-batch coffee"
+          main_image: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/retail-300x250.svg"
+          sponsored: "Bean Barn"
+          body: "Freshly roasted, shipped within 24 hours."
+          cta: "Order beans"
+      - { id: cr-ron-beanbarn-video, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-epicquest.mp4" }
+      - { id: cr-ron-beanbarn-audio, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
+
+  - id: li-ron-sweatlabs
+    account_id: adv-sweatlabs
+    advertiser_id: adv-sweatlabs
+    io_id: io-ron-sweatlabs
+    name: "Sweat Labs - Run of Network (All Formats)"
+    creative_domain: sweatlabs.com
+    base_bid: 12.00
+    currency: USD
+    daily_budget: 1500
+    total_budget: 30000
+    bid_model: cpm
+    pacing_mode: even
+    status: live
+    shading_mode: moderate
+    targeting:
+      include:
+        geo: [USA, GBR]
+    creatives:
+      - { id: cr-ron-sweatlabs-mpu, width: 300, height: 250 }
+      - { id: cr-ron-sweatlabs-leader, width: 728, height: 90 }
+      - { id: cr-ron-sweatlabs-sky, width: 160, height: 600 }
+      - id: cr-ron-sweatlabs-native
+        format: native
+        native:
+          title: "Sweat Labs Protein — fuel your training"
+          main_image: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          main_image_w: 300
+          main_image_h: 250
+          icon: "http://localhost:8080/v1/creatives/themes/tech-300x250.svg"
+          sponsored: "Sweat Labs"
+          body: "25g protein, zero junk. Loved by athletes."
+          cta: "Get yours"
+      - { id: cr-ron-sweatlabs-video, format: video, width: 640, height: 360, duration: 15,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-video-quickbite.mp4" }
+      - { id: cr-ron-sweatlabs-audio, format: audio, duration: 30,
+          media_url: "http://localhost:8080/v1/creatives/media/ad-audio.mp3" }
