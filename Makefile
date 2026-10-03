@@ -26,6 +26,9 @@ diagrams: ## Regenerate SVG diagrams from D2 source, then sync into the staff po
 	@# .md diagrams the portal renders (manifest type: mermaid) — data-lifecycle
 	@# is the ★ headline (portal extracts its ```mermaid block).
 	@cp docs/diagrams/data-lifecycle.md docs/diagrams/e2e-trace.md docs/diagrams/data-reporting.md docs/diagrams/end-to-end-flow.md web/static/diagrams/ 2>/dev/null || true
+	@# d2 writes SVGs mode 600 (owner-only); the gateway runs non-root in-container
+	@# and 403s on unreadable files. Force world-readable so the portal can serve them.
+	@chmod 644 docs/diagrams/*.svg web/static/diagrams/*.svg 2>/dev/null || true
 	@echo "Diagrams regenerated + synced. (manifest: web/static/diagrams/manifest.json)"
 
 c4: ## Export the C4 model (docs/diagrams/workspace.dsl) to mermaid + sync into the staff portal
