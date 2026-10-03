@@ -1,10 +1,30 @@
 [
   {"title":"★ Data lifecycle (start here)","file":"data-lifecycle.md","type":"mermaid","level":"★"},
+  {"title":"★ E2E trace (one request)","file":"e2e-trace.md",    "type":"mermaid", "level":"★"},
   {"title":"System context",        "file":"context.svg",       "type":"svg",     "level":"L0"},
   {"title":"Architecture · 5 planes","file":"architecture.svg",  "type":"svg",     "level":"L1"},
-  {"title":"★ E2E trace (one request)","file":"e2e-trace.md",    "type":"mermaid", "level":"★"},
   {"title":"Ad-request lifecycle",   "file":"auction-flow.svg",  "type":"svg",     "level":"flow"},
   {"title":"Async event fan-out",    "file":"nats-events.svg",   "type":"svg",     "level":"flow"},
   {"title":"Money loop",             "file":"billing-flow.svg",  "type":"svg",     "level":"flow"},
-  {"title":"Data & reporting",       "file":"data-reporting.md", "type":"mermaid", "level":"flow"}
+  {"title":"Data & reporting",       "file":"data-reporting.md", "type":"mermaid", "level":"flow"},
+
+  {"title":"C4 · Context",           "file":"structurizr-Context.md",               "type":"mermaid", "level":"C4"},
+  {"title":"C4 · Containers",        "file":"structurizr-Containers.md",            "type":"mermaid", "level":"C4"},
+  {"title":"C4 · DSP",               "file":"structurizr-DSP-Components.md",         "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · SSP",               "file":"structurizr-SSP-Components.md",         "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Exchange",          "file":"structurizr-Exchange-Components.md",    "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Ad Server",         "file":"structurizr-AdServer-Components.md",    "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Publisher Ad Server","file":"structurizr-PubAdServer-Components.md","type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Tracker",           "file":"structurizr-Tracker-Components.md",     "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Reporting + Billing","file":"structurizr-Reporting-Components.md",  "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Gateway",           "file":"structurizr-Gateway-Components.md",     "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Pipeline",          "file":"structurizr-Pipeline-Components.md",    "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Identity Consumer", "file":"structurizr-IdentityConsumer-Components.md","type":"mermaid","level":"C4 component"},
+  {"title":"C4 · Audience RT",       "file":"structurizr-AudienceRT-Components.md",  "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Report Runner",     "file":"structurizr-ReportRunner-Components.md","type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · SSAI",              "file":"structurizr-SSAI-Components.md",        "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Transcoder",        "file":"structurizr-Transcoder-Components.md",  "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Webhooks",          "file":"structurizr-Webhooks-Components.md",    "type":"mermaid", "level":"C4 component"},
+  {"title":"C4 · Notifications",     "file":"structurizr-Notifications-Components.md","type":"mermaid","level":"C4 component"},
+  {"title":"C4 · Batch Conductor",   "file":"structurizr-BatchConductor-Components.md","type":"mermaid","level":"C4 component"}
 ]

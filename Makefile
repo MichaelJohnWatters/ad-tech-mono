@@ -28,6 +28,19 @@ diagrams: ## Regenerate SVG diagrams from D2 source, then sync into the staff po
 	@cp docs/diagrams/data-lifecycle.md docs/diagrams/e2e-trace.md docs/diagrams/data-reporting.md docs/diagrams/end-to-end-flow.md web/static/diagrams/ 2>/dev/null || true
 	@echo "Diagrams regenerated + synced. (manifest: web/static/diagrams/manifest.json)"
 
+c4: ## Export the C4 model (docs/diagrams/workspace.dsl) to mermaid + sync into the staff portal
+	@echo "Exporting C4 model via structurizr/structurizr (the maintained image — cli/lite are dead)..."
+	@docker run --rm -v "$(PWD)/docs/diagrams:/data" structurizr/structurizr export -workspace /data/workspace.dsl -format mermaid -output /data >/dev/null 2>&1 || { echo "structurizr export failed (Docker up? DSL valid?)"; exit 1; }
+	@echo "Wrapping mermaid exports as portal .md + syncing..."
+	@mkdir -p web/static/diagrams
+	@rm -f web/static/diagrams/structurizr-*.md
+	@for f in docs/diagrams/structurizr-*.mmd; do \
+		name=$$(basename "$$f" .mmd); \
+		{ printf '```mermaid\n'; cat "$$f"; printf '\n```\n'; } > "web/static/diagrams/$${name}.md"; \
+	done
+	@rm -f docs/diagrams/structurizr-*.mmd
+	@echo "C4 synced to web/static/diagrams/structurizr-*.md. Keep manifest.json C4 entries in sync (type: mermaid)."
+
 # --- Testing ---
 test: ## Run unit tests
 	go test ./pkg/... ./cmd/...
