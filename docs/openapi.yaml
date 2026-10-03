@@ -380,6 +380,39 @@ paths:
               schema:
                 $ref: "#/components/schemas/QueryResult"
 
+  /v1/api/reports/schema:
+    get:
+      tags: [Reports]
+      summary: Report-builder schema (tables, metrics, dimensions)
+      description: >-
+        Requires reports:read. Returns the queryable tables and, per table, the
+        valid metrics and group-by dimensions the custom report builder should
+        offer — so the portal drives its Table / Metrics / Group-by dropdowns off
+        the backend instead of hardcoding them. Includes the bid-shading savings
+        table (sum_savings) alongside impressions/clicks/conversions/media_events.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "[{ name, label, metrics: [{value,label}], dimensions: [{value,label}] }]"
+
+  /v1/api/shading:
+    get:
+      tags: [Reports]
+      summary: Advertiser bid-shading transparency
+      description: >-
+        Requires reports:read; advertiser/agency session (or staff acting-as).
+        Per placement the advertiser bids on: their OWN delivered impressions, the
+        price THEY paid (avg clearing CPM), their win/loss, plus clearly-separated
+        DSP-wide marketplace context — and the realized bid-shading savings
+        (shading_savings_usd), sourced durably from ClickHouse (auction_shades).
+        Account-forced; never cross-tenant.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: "{ account_id, window_days, placements: [...], your_totals: {...}, shading_savings_usd, explanations: {...} }"
+
   /v1/api/trace:
     get:
       tags: [Reports]
