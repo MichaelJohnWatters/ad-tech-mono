@@ -12,10 +12,10 @@ func TestBidOptimiser_Overpaying(t *testing.T) {
 	tracker := bidshading.NewTracker()
 	// Simulate overpaying: win rate > 80%
 	for i := 0; i < 90; i++ {
-		tracker.RecordWin("pl-1", 5.00, 3.00)
+		tracker.RecordWin("pl-1", "adv-1", 5.00, 3.00)
 	}
 	for i := 0; i < 10; i++ {
-		tracker.RecordLoss("pl-1", 4.00, 6.00, bidshading.ReasonOutbid)
+		tracker.RecordLoss("pl-1", "adv-1", 4.00, 6.00, bidshading.ReasonOutbid)
 	}
 
 	log := logger.New("test")
@@ -37,10 +37,10 @@ func TestBidOptimiser_Underbidding(t *testing.T) {
 	tracker := bidshading.NewTracker()
 	// Win rate < 20%
 	for i := 0; i < 15; i++ {
-		tracker.RecordWin("pl-2", 2.00, 1.80)
+		tracker.RecordWin("pl-2", "adv-2", 2.00, 1.80)
 	}
 	for i := 0; i < 85; i++ {
-		tracker.RecordLoss("pl-2", 2.00, 4.00, bidshading.ReasonOutbid)
+		tracker.RecordLoss("pl-2", "adv-2", 2.00, 4.00, bidshading.ReasonOutbid)
 	}
 
 	log := logger.New("test")
@@ -61,10 +61,10 @@ func TestBidOptimiser_Underbidding(t *testing.T) {
 func TestScorePlacements(t *testing.T) {
 	tracker := bidshading.NewTracker()
 	for i := 0; i < 50; i++ {
-		tracker.RecordWin("pl-good", 2.00, 1.50)
+		tracker.RecordWin("pl-good", "adv-3", 2.00, 1.50)
 	}
 	for i := 0; i < 50; i++ {
-		tracker.RecordLoss("pl-bad", 1.00, 3.00, bidshading.ReasonOutbid)
+		tracker.RecordLoss("pl-bad", "adv-3", 1.00, 3.00, bidshading.ReasonOutbid)
 	}
 
 	scores := ScorePlacements(tracker)
