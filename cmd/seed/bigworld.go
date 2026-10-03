@@ -61,13 +61,17 @@ func (in *inserter) SeedBigWorld(ctx context.Context, advertisers, publishers, c
 			if premium {
 				baseBid = 9 + float64(n%4)*3.5 // 9 / 12.5 / 16 / 19.5
 			}
-			// Spread bid shading across the big world so a LOAD TEST leaves rich,
-			// comparable savings data to inspect: ~half the campaigns shade (one of
-			// each mode), half stay off (realistic — not every advertiser shades).
-			// With the second-price signal (exchange clear_price → curve midpoint),
-			// these shade STABLY toward the real clearing under sustained load
-			// instead of decaying to zero.
-			shadingMode := []string{"conservative", "moderate", "aggressive", "disabled", "disabled", "disabled"}[n%6]
+			// Bid shading only produces savings on campaigns that actually WIN, and in
+			// the big world the winners are the PREMIUM (high-bid) stratum — the low-bid
+			// majority loses every auction, so shading them would do nothing. So give the
+			// premium campaigns a shading mode, spread across all three, so a LOAD TEST
+			// leaves rich, comparable savings data (one arm per mode). The second-price
+			// signal (exchange clear_price → curve midpoint) keeps them shading STABLY
+			// toward the real clearing under sustained load instead of decaying to zero.
+			shadingMode := "disabled"
+			if premium {
+				shadingMode = []string{"conservative", "moderate", "aggressive"}[n%3]
+			}
 			cc := CampaignConfig{
 				ID:          fmt.Sprintf("%s-c%d", acctKey, c),
 				AccountID:   acctKey,
