@@ -49,3 +49,4 @@ If you change this service, check if diagrams need updating:
 - **New analytics table/column?** Update ER diagram + `migrations/ANALYTICS_SCHEMA.md`
 - **New report type or metric?** Update relevant reporting metrics section in PLAN.md
 - **Changed billing flow?** Update Billing Flow diagram in PLAN.md
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

@@ -59,3 +59,4 @@ must carry `account_id`.
 If you change this service, check if diagrams need updating:
 - **New webhook event type?** Update the event catalog table above + NATS Event Flow diagram
 - **New dependency?** Update `docs/diagrams/architecture.d2`
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

@@ -57,3 +57,4 @@ If you change this service, check if diagrams need updating:
 - **New SSAI endpoint or beacon path?** Update `docs/PLAN.md` -> Video Services Architecture + the relevant flow diagram in `docs/diagrams/` (see its README "Update when" column)
 - **New dependency (e.g. a new upstream for auctions/conditioning)?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
 - **Changed beacon/quartile semantics?** Update `docs/PLAN.md` -> Server-Side Ad Insertion section
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

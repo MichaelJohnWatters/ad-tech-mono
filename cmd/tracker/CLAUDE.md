@@ -63,3 +63,4 @@ If you change this service, check if diagrams need updating:
 - **New NATS event type published?** Update NATS Subjects table + NATS Event Flow diagram + Stream Design table
 - **New fraud check added?** Update `docs/PLAN.md` -> Fraud Detection section
 - **Changed Traefik routing?** Update `docs/diagrams/architecture.d2`
+- **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.
