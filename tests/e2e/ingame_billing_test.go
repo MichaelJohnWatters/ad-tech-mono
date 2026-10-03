@@ -71,7 +71,8 @@ func TestInGamePerSurfaceBilling(t *testing.T) {
 	}
 
 	// The single-source-of-cost auction_wins table also records all 3 surfaces.
-	if n := h.ClickHouseScalar(t, fmt.Sprintf("SELECT count() FROM adtech.auction_wins WHERE trace_id LIKE '%s::s%%'", auc.TraceID)); n != 3 {
-		t.Errorf("auction_wins recorded %d surfaces, want 3", n)
-	}
+	// Waited, not read bare: win events ride a different consumer than the
+	// impressions asserted above, so the last surface's win row can trail
+	// them under full-suite load.
+	waitCHCount(t, h, fmt.Sprintf("SELECT count() FROM adtech.auction_wins WHERE trace_id LIKE '%s::s%%'", auc.TraceID), 3, "the 3 surface auction_wins rows")
 }

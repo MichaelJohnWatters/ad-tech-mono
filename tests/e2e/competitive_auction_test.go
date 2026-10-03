@@ -48,6 +48,7 @@ package e2e
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -711,39 +712,52 @@ func TestCompetitiveG2_PrebidInboundVsInternalDSPsHighestWins(t *testing.T) {
 	h := harness.WaitReady(t, 60*time.Second)
 	h.SeedStandard(t)
 	h.WithDeterministicCompetitors(t)
+	// comp1 is the scenario SLOWPOKE by design (500ms ±25% jitter, built to
+	// straddle the bid timeout so the SmartRouter learns to skip it) — but
+	// this test's premise is that comp1's MegaStore bid WINS. Zero its delay
+	// for the duration and reset the router so a previously-learned
+	// timeout-skip (from whatever ran before in the suite) can't exclude the
+	// expected winner from the fan-out.
+	h.SetConfigForPod(t, "dsp.response_delay", "0s", harness.PodDSPCompetitor1)
+	t.Cleanup(func() {
+		h.SetConfigForPod(t, "dsp.response_delay", "500ms", harness.PodDSPCompetitor1)
+	})
+	h.ResetSmartRouter(t)
 	h.RefreshAllCaches(t)
 
-	req := openrtb.BidRequest{
-		ID: "comp-g2-trace",
-		Imp: []openrtb.Imp{{
-			ID:       "imp-1",
-			TagID:    placementUUIDFromExternal("pl-news-mpu"),
-			BidFloor: 0.50,
-			Banner:   &openrtb.Banner{W: 300, H: 250},
-		}},
-		Site: &openrtb.Site{
-			Domain:    "daily-news.com",
-			Publisher: &openrtb.Publisher{ID: publisherUUIDFromExternal("pub-daily-news")},
-		},
-		Device: &openrtb.Device{
-			Geo:        &openrtb.Geo{Country: "GBR"},
-			DeviceType: 1,
-		},
-		TMax: 500,
-	}
-	resp, status := h.PostPrebidAuction(t, req)
-	if status != 200 {
-		t.Fatalf("prebid status = %d; want 200", status)
-	}
-	if resp.NoBid {
-		t.Fatal("expected a winning bid (3 deterministic DSPs, comp1 MegaStore should win)")
-	}
-	if len(resp.SeatBid) == 0 || len(resp.SeatBid[0].Bid) == 0 {
-		t.Fatalf("missing bid in response: %+v", resp)
-	}
-	price := resp.SeatBid[0].Bid[0].Price
-	if price < 4.0 {
-		t.Errorf("clearing price %v < 4.0 — competitor1 didn't win, internal (~2.50) did?", price)
+	// Poll: the delay-zeroing config row propagates on the DSP's next poll
+	// tick, and the router needs comp1's first few answers to rank it. Each
+	// attempt is a fresh auction (unique request id — the exchange dedups win
+	// events per trace).
+	var lastPrice float64
+	harness.WaitFor(t, 45*time.Second, "comp1's MegaStore bid to win the inbound Prebid auction", func() bool {
+		req := openrtb.BidRequest{
+			ID: fmt.Sprintf("comp-g2-trace-%d", time.Now().UnixNano()),
+			Imp: []openrtb.Imp{{
+				ID:       "imp-1",
+				TagID:    placementUUIDFromExternal("pl-news-mpu"),
+				BidFloor: 0.50,
+				Banner:   &openrtb.Banner{W: 300, H: 250},
+			}},
+			Site: &openrtb.Site{
+				Domain:    "daily-news.com",
+				Publisher: &openrtb.Publisher{ID: publisherUUIDFromExternal("pub-daily-news")},
+			},
+			Device: &openrtb.Device{
+				Geo:        &openrtb.Geo{Country: "GBR"},
+				DeviceType: 1,
+			},
+			TMax: 500,
+		}
+		resp, status := h.PostPrebidAuction(t, req)
+		if status != 200 || resp.NoBid || len(resp.SeatBid) == 0 || len(resp.SeatBid[0].Bid) == 0 {
+			return false
+		}
+		lastPrice = resp.SeatBid[0].Bid[0].Price
+		return lastPrice >= 4.0
+	})
+	if lastPrice < 4.0 {
+		t.Errorf("clearing price %v < 4.0 — competitor1 didn't win, internal (~2.50) did?", lastPrice)
 	}
 }
 
