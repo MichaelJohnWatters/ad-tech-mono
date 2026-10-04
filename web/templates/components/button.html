@@ -35,7 +35,7 @@
 {{- $size := or .size "md" -}}
 <button type="{{ or .type "button" }}"
         {{ with .id }}id="{{ . }}"{{ end }}
-        {{ with .onclick }}onclick="{{ . }}"{{ end }}
+        {{ with .onclick }}onclick="{{ js . }}"{{ end }}
         {{ with .hx_get }}hx-get="{{ . }}"{{ end }}
         {{ with .hx_post }}hx-post="{{ . }}"{{ end }}
         {{ with .hx_target }}hx-target="{{ . }}"{{ end }}
