@@ -50,5 +50,5 @@ See `docs/PLAN.md` -> "Identity and First-Party Data", "Identity Graph", "NATS S
 If you change this service, check if diagrams need updating:
 - **New NATS subject consumed/published?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **New publisher of `adtech.identity.observed`?** Update the NATS Event Flow diagram
-- **New dependency?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **New dependency?** update the C4 model (`docs/diagrams/workspace.dsl`) and run `make c4`
 - **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

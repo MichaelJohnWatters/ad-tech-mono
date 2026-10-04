@@ -3,8 +3,8 @@
 **Current as of 2026-07-06.** The single "how everything flows" reference:
 one ad request from the user's browser all the way through auction, serve,
 tracking, billing — annotated with the transparency/trust, privacy, format, and
-identity standards layered on top. Companion to `architecture.d2` (static
-topology) and `e2e-trace.md` (one `trace_id` across all planes).
+identity standards layered on top. Companion to the C4 model (`workspace.dsl` — static
+topology, browse in the staff portal) and `e2e-trace.md` (one `trace_id` across all planes).
 
 Legend for the standards annotations: 🔗 supply-chain/trust · 🔒 privacy ·
 🎯 identity · 🎬 format.

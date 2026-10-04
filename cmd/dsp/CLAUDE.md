@@ -68,5 +68,5 @@ If you change this service, check if diagrams need updating:
 - **New gRPC method?** Update `docs/PLAN.md` -> gRPC Services + Gateway HTTP Endpoints
 - **New NATS subject?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **Changed bid evaluation pipeline (pacing/targeting/shading order)?** Update `docs/PLAN.md` -> Ad Request Flow sequence diagram
-- **New dependency?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **New dependency?** update the C4 model (`docs/diagrams/workspace.dsl`) and run `make c4`
 - **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

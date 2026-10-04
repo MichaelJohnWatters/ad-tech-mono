@@ -4,19 +4,25 @@ The single source of truth for **what each diagram shows and when to update it**
 CLAUDE.md points here instead of carrying its own copy, so there's nothing to
 keep in sync in two places.
 
-## Tooling (two, no third)
+## Tooling (three, no fourth)
 
-- **D2** (`*.d2` → `*.svg`) for **structure** — "what connects to what". Render all
-  with `make diagrams` (needs `d2` on PATH). Edit the `.d2`, never the `.svg`.
-- **Mermaid** (fenced ` ```mermaid ` blocks in `.md`) for **flows/sequences** —
+- **Structurizr / C4** (`workspace.dsl` → `structurizr-*.md` via `make c4`) for
+  **structure** — what exists and what talks to what, as drillable layers
+  (Context → Containers → per-service components, one identity colour per
+  service). Browse it in the staff portal's Architecture tab. This RETIRED the
+  old hand-drawn D2 structural maps (`architecture.d2`, `context.d2`, 2026-10-04).
+- **D2** (`*.d2` → `*.svg`) for **flow maps** — a specific journey drawn as a
+  picture (serving, money, events, caches). Render with `make diagrams`
+  (needs `d2` on PATH). Edit the `.d2`, never the `.svg`.
+- **Mermaid** (fenced ` ```mermaid ` blocks in `.md`) for **sequences** —
   "what happens in what order". Renders natively on GitHub; no tooling needed.
 
-Rule of thumb: **D2 for maps, Mermaid for sequences.**
+Rule of thumb: **C4 for structure, D2 for flow maps, Mermaid for sequences.**
 
 ## Reading order (new here? start at the top)
 
-1. **`context`** — the platform and the outside world (1 screen).
-2. **`architecture`** — every service + store, grouped by plane (the reference map).
+1. **C4 Context** — the platform and the outside world (portal → Architecture, or `structurizr-Context`).
+2. **C4 Containers** — every service + store and their links; click a service to drill into its components.
 3. **flow diagrams** — pick the journey you care about (serving / money / data / async).
 4. **`e2e-trace`** — one `trace_id` followed across *all* planes (the whole story).
 
@@ -26,8 +32,7 @@ Status: ✅ current · ⚠️ stale (needs a refresh) · 🚧 planned (not built
 
 | Diagram | File | Level | Tool | Shows | **Update when** | Covers |
 |---|---|---|---|---|---|---|
-| Context | `context.d2` | L0 | D2 | platform box + external actors (browser/SDK, publisher, advertiser, competitor DSPs, S3) | ✅ an external integration is added/removed | boundary |
-| Architecture | `architecture.d2` | L1 | D2 | all services + datastores + infra, grouped into the 5 planes | ✅ a **service, datastore, or service→service link** changes | `cmd/*`, `k8s/*` |
+| **C4 model** (Context + Containers + 17 component views) | `workspace.dsl` | L0–L2 | Structurizr | the platform boundary, every service/datastore/link, and each service's internals — drillable layers, one identity colour per service | ✅ a **service, component, datastore, or link** changes → `make c4` | `cmd/*`, `pkg/*`, `k8s/*` |
 | Ad-request lifecycle | `auction-flow.d2` | flow | D2 | bid req → auction → win → serve → track | ✅ the serving/auction path changes | ssp, exchange, dsp, adserver, tracker |
 | Async event fan-out | `nats-events.d2` | flow | D2 | NATS subjects → reporting/pipeline/billing/webhooks/identity | ✅ a **NATS subject or consumer** changes | `pkg/events`, consumers |
 | Money loop | `billing-flow.d2` | flow | D2 | budget gate → win → impression → billing accrual → **TigerBeetle** → committed-spend snapshot → DSP reconcile | ✅ billing/budget/ledger flow changes | dsp budget, `pkg/billing`, reporting |

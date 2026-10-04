@@ -50,4 +50,4 @@ ingress — that an in-cluster page would paper over. Not in the Helm chart on p
 
 If you change this component, check if diagrams need updating:
 - **New platform surface called (new pubad/gateway endpoint)?** Update `docs/PLAN.md` → the relevant endpoint section
-- **New external-origin topology (extra site, second cluster)?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **New external-origin topology (extra site, second cluster)?** update the C4 model (`docs/diagrams/workspace.dsl`) and run `make c4`
