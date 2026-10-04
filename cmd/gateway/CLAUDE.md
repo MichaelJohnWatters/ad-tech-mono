@@ -74,7 +74,7 @@ See `docs/PLAN.md` -> "Gateway", "Signup and Onboarding", "API Access Tiers"
 
 If you change this service, check if diagrams need updating:
 - **New API endpoint group?** Update `docs/PLAN.md` -> Gateway HTTP Endpoints (consolidated) + OpenAPI spec
-- **New gRPC proxy target?** Update `docs/diagrams/architecture.d2` (Gateway -> service connection)
+- **New gRPC proxy target?** update the C4 model (`docs/diagrams/workspace.dsl`, Gateway → service link) and run `make c4`
 - **Changed auth/RBAC?** Update `docs/PLAN.md` -> Authentication, Roles, and Permissions
-- **New Traefik route?** Update `docs/diagrams/architecture.d2` ingress section
+- **New Traefik route?** update the C4 model (`docs/diagrams/workspace.dsl`) ingress links and run `make c4`
 - **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

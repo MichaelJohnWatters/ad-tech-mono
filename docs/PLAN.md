@@ -1209,216 +1209,20 @@ erDiagram
     }
 ```
 
-### Comprehensive Architecture Diagram (D2)
+### Comprehensive Architecture Model (C4 / Structurizr)
 
-For the full system with all 20+ services, infrastructure, data flows, and channel-specific exchanges, we use D2 because Mermaid can't handle the complexity.
+The full structural map — every service, datastore, and link — is the **C4
+model**: one source, `docs/diagrams/workspace.dsl`, exported to Mermaid by
+`make c4` and browsed in the staff portal's **Architecture** tab (Context →
+Containers → per-service component views, click-to-drill layers, one identity
+colour per service in every view).
 
-**D2 source file:** `docs/diagrams/architecture.d2`
+The hand-maintained D2 structural maps (`architecture.d2`, `context.d2`) were
+retired in favour of the C4 model (2026-10-04). D2 stays for the **flow**
+diagrams — `auction-flow`, `nats-events`, `billing-flow`, `cache-freshness`,
+`targeting-data-flow` — see `docs/diagrams/README.md` for the full index and
+per-diagram "update when" rules.
 
-```d2
-# docs/diagrams/architecture.d2
-# Generate: d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg
-
-direction: right
-
-internet: Internet {
-    shape: cloud
-}
-
-traefik: Traefik {
-    shape: hexagon
-    style.fill: "#4DC0B5"
-}
-
-internet -> traefik: HTTPS
-
-# --- External-facing services ---
-gateway: Gateway {
-    style.fill: "#6366F1"
-    auth: Auth + RBAC
-    api: REST API
-    htmx: HTMX Dashboard
-    swagger: Swagger UI
-}
-
-tracker: Tracker {
-    style.fill: "#EF4444"
-    imp: /v1/t/imp
-    click: /v1/t/click
-    conv: /v1/t/conv
-    view: /v1/t/view
-    video: /v1/t/video
-}
-
-exchange: Exchange Cluster {
-    style.fill: "#F59E0B"
-    display: Display
-    video: Video/Audio
-    dooh: DOOH
-    retail: Retail
-    game: In-Game
-}
-
-traefik -> gateway: /v1/api/*
-traefik -> tracker: /v1/t/*
-traefik -> exchange: /v1/openrtb/*
-
-# --- Internal services ---
-dsp: DSP {
-    style.fill: "#10B981"
-    campaigns: Campaigns
-    targeting: Targeting
-    bidding: Bidding
-    pacing: Pacing
-    budget: Budget
-}
-
-ssp: SSP {
-    style.fill: "#8B5CF6"
-    placements: Placements
-    deals: Deals
-    quality: Quality Controls
-}
-
-adserver: Ad Server {
-    style.fill: "#EC4899"
-    creatives: Creatives
-    serving: Serving
-    macros: Macros
-    freqcap: Freq Cap
-}
-
-reporting: Reporting + Billing {
-    style.fill: "#06B6D4"
-    analytics: Analytics
-    billing: Billing
-    reports: Reports
-    rollups: Rollups
-}
-
-pipeline: Pipeline {
-    style.fill: "#84CC16"
-    ingest: Ingest
-    validate: Validate
-    normalise: Normalise
-    enrich: Enrich
-}
-
-ssai_svc: SSAI Stitcher {
-    style.fill: "#F97316"
-    manifest: Manifest Manipulation
-    sessions: Session Manager
-    beacons: Beacon Server
-}
-
-transcoder: Transcoder {
-    style.fill: "#A855F7"
-}
-
-webhooks: Webhooks {
-    style.fill: "#64748B"
-}
-
-# --- service-to-service connections ---
-gateway -> dsp: HTTP proxy
-gateway -> ssp: HTTP proxy
-gateway -> reporting: HTTP proxy
-gateway -> adserver: HTTP proxy
-
-ssp -> exchange: gRPC (internal)
-exchange -> dsp: gRPC (ours) · OpenRTB HTTP (3rd-party)
-ssp -> adserver: gRPC (internal)
-adserver -> tracker: signed pixel URLs (browser fires)
-ssai_svc -> exchange: HTTP (VAST)
-
-# --- Infrastructure ---
-postgres: PostgreSQL {
-    shape: cylinder
-    style.fill: "#336791"
-    primary: Primary
-    standby: Standby
-}
-
-pgbouncer: PgBouncer {
-    style.fill: "#336791"
-}
-
-redis: Redis {
-    shape: cylinder
-    style.fill: "#DC382D"
-}
-
-nats: NATS JetStream {
-    shape: queue
-    style.fill: "#27AAE1"
-}
-
-minio: Minio / S3 {
-    shape: cylinder
-    style.fill: "#C72C48"
-}
-
-duckdb: DuckDB / ClickHouse {
-    shape: cylinder
-    style.fill: "#FFC107"
-}
-
-# --- Service to infra connections ---
-dsp -> pgbouncer
-ssp -> pgbouncer
-gateway -> pgbouncer
-reporting -> pgbouncer
-pipeline -> pgbouncer
-pgbouncer -> postgres
-
-dsp -> redis
-adserver -> redis
-tracker -> redis
-reporting -> redis
-
-tracker -> nats
-exchange -> nats
-dsp -> nats
-nats -> reporting
-nats -> webhooks
-
-adserver -> minio
-pipeline -> minio
-transcoder -> minio
-ssai_svc -> minio
-
-reporting -> duckdb
-
-# --- Observability ---
-prometheus: Prometheus {shape: cylinder; style.fill: "#E6522C"}
-grafana: Grafana {style.fill: "#F46800"}
-loki: Loki {shape: cylinder; style.fill: "#F46800"}
-jaeger: Jaeger {style.fill: "#66CFE0"}
-
-prometheus -> grafana
-loki -> grafana
-jaeger -> grafana
-```
-
-**Generate SVG:** `d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg`
-
-### Diagram Directory
-
-```
-docs/
-    diagrams/
-        architecture.d2         # Full system architecture (D2 source)
-        architecture.svg        # Generated SVG (committed, auto-generated)
-        Makefile                # make diagrams -> regenerates all SVGs from .d2 files
-```
-
-**Makefile target:**
-```makefile
-diagrams:
-	d2 docs/diagrams/architecture.d2 docs/diagrams/architecture.svg
-```
-
-**CI check:** GitHub Actions verifies that committed SVGs match the D2 source. If a developer changes the `.d2` file but forgets to regenerate, CI fails.
 
 ### How These Components Interact
 
@@ -1699,9 +1503,9 @@ ad-tech-mono/
     openapi.yaml        # OpenAPI 3.x spec for REST, OpenRTB, and Tracker endpoints
     CHANGELOG.md        # API changelog for external consumers
     diagrams/
-      architecture.d2   # Full system architecture diagram (D2 source)
-      architecture.svg  # Generated SVG (auto-generated from .d2)
-      Makefile          # make diagrams -> regenerates SVGs
+      workspace.dsl     # C4 model (Structurizr source) — make c4 exports to the portal
+      *.d2 / *.svg      # Flow diagrams (D2 source + generated SVGs) — make diagrams
+      README.md         # Diagram index + per-diagram "update when" rules
 ```
 
 ---

@@ -53,5 +53,5 @@ See `docs/PLAN.md` -> "NATS Subjects (Async Events)" (subject catalog) and "Webh
 If you change this service, check if diagrams need updating:
 - **New NATS subject consumed?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **New notification kind / gateway endpoint?** Update `docs/PLAN.md` -> Gateway HTTP Endpoints + `docs/openapi.yaml`
-- **New dependency?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **New dependency?** update the C4 model (`docs/diagrams/workspace.dsl`) and run `make c4`
 - **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

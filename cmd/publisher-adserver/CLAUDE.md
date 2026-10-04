@@ -54,8 +54,8 @@ See `docs/PLAN.md` -> "Publisher-Side Ad Server (\"GAM-shaped\" features)", "Pre
 ## Diagram Updates
 
 If you change this service, check if diagrams need updating:
-- **New serve endpoint or demand source?** Update `docs/PLAN.md` -> Publisher-Side Ad Server + `docs/diagrams/architecture.d2`
+- **New serve endpoint or demand source?** Update `docs/PLAN.md` -> Publisher-Side Ad Server + the C4 model (`docs/diagrams/workspace.dsl`, `make c4`)
 - **New NATS subject?** Update `docs/PLAN.md` -> NATS Subjects table + NATS Event Flow diagram
 - **Changed arbitration ladder or fall-through order?** Update the serving-flow diagram (see `docs/diagrams/README.md` "Update when" column)
-- **New dependency?** Update `docs/diagrams/architecture.d2` and run `make diagrams`
+- **New dependency?** update the C4 model (`docs/diagrams/workspace.dsl`) and run `make c4`
 - **C4 model:** update this service's `component` block + `component <id>` view in `docs/diagrams/workspace.dsl` if you add/remove/rename a component or change a dependency. Keep ids service-prefixed and the DSL valid.

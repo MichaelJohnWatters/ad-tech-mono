@@ -6,7 +6,7 @@ threaded through every hop (HTTP `X-Trace-Id` / W3C `traceparent` / NATS message
 header), across all five planes: **serving → async/events → data → money →
 control**.
 
-Renders on GitHub. For the structural map see [`architecture`](architecture.svg);
+Renders on GitHub. For the structural map see the C4 model (portal → Architecture, or `structurizr-Containers`);
 for the index + legend see [`README`](README.md).
 
 ```mermaid
