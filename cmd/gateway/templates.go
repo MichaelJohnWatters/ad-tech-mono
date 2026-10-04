@@ -28,6 +28,13 @@ var templateFuncs = template.FuncMap{
 	"dict":      dict,
 	"slice":     sliceOf,
 	"sparkline": sparkline,
+	// js marks a component argument as a trusted JS handler. Without it,
+	// html/template's contextual autoescape renders onclick="{{ .onclick }}"
+	// as a QUOTED JS STRING LITERAL — a click evaluates a string and does
+	// nothing (the "+ Upload audience" dead-button bug). Only component
+	// partials use this, and only on operator-authored template literals —
+	// never on user-supplied data.
+	"js": func(s string) template.JS { return template.JS(s) }, //nolint:gosec // template-literal handlers only
 }
 
 // sparkline maps a series of numbers to an SVG polyline `points` string over a
