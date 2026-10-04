@@ -95,18 +95,30 @@ the proof is the pre-wired "High-Intent Luxury" campaign ($40 base bid)
 WINNING the moment the list lands. Upload binds by name into the SAME segment
 id, so the campaign's targeting is already wired — no targeting step needed.
 
-**Pre-flight for this scene** (makes the upload live-on-camera; the seed
-pre-loads the list otherwise):
+**Pre-flight for this scene** (run in order; each matters — found the hard way):
 
 ```sh
+# 1. Campaign must target Diamond ONLY. The seed wires it to Diamond AND the
+#    public "Affluent" segment (which the test persona is in) — OR-semantics
+#    would make Lumière win BEFORE the upload and kill the causality.
 kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
-  "DELETE FROM audience_segment_members WHERE segment_id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';"
-# identity resolution must be ON for the internal DSP (how a page visitor
-# resolves to the hashed-email member; flipped 2026-10-04, survives reseed
-# unless the row is reset to default):
+  "UPDATE targeting_rules SET include_segments='{d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7}' WHERE line_item_id='1d731db6-7c55-5092-8171-b598836f45cf';"
+# 2. Virgin list: wipe members + the stats/history any rehearsal left behind.
+kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
+  "DELETE FROM audience_segment_members WHERE segment_id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';
+   UPDATE audience_segments SET match_rate=NULL,last_upload_at=NULL,size_estimate=0 WHERE id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';
+   DELETE FROM audience_ingest_jobs WHERE segment_id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';"
+# 3. Buy-side knobs: identity resolution ON (page visitor → graph → hashed
+#    member) + fast audience-cache refresh so upload→win is ~10s not 5min.
 kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
   "UPDATE config SET value='\"true\"' WHERE key='dsp.identity_resolution_enabled' AND pod_id='dsp-internal-0';"
+kubectl -n adtech set env deploy/dsp-internal AUDIENCE_PRELOAD_INTERVAL=15s
+# 4. Fresh DSP cache so the BEFORE shot honestly loses (the in-process
+#    audience cache keeps positive entries up to 15m after a wipe).
+kubectl -n adtech rollout restart deploy/dsp-internal
 ```
+
+(Reseeds/`make stack-up` revert 1 and 3-4 — re-run this block after either.)
 
 1. **BEFORE shot** (terminal): auction as the linked persona — a random
    campaign wins at ~$9:
@@ -118,7 +130,7 @@ kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
    `profiles/audiences/diamond-intenders.csv`. Response: 10 added, 1 matched
    (match rate = fraction resolvable via the identity graph). **Say:** "hashed
    ids only — the platform never sees raw emails."
-3. **AFTER shot** (~5s later, same curl): **Lumière wins at $60 CPM** —
+3. **AFTER shot** (~10s later, same curl): **Lumière wins at ~$60-70 CPM** —
    the $40-base campaign crushes the ~$9 field because the visitor now
    resolves, through the identity graph, to a member of my private list.
 4. **Say:** "my customer list never touched the bid request — no other bidder
